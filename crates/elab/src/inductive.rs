@@ -3438,15 +3438,7 @@ impl Inductives<'_> {
                 else {
                     return None;
                 };
-                if let TyKind::Named { name, args } = &written.kind
-                    && args.is_empty()
-                    && let Some(p) = ind.params.iter().position(|param| param == name)
-                    && sols[p].is_none()
-                    && let Some(candidate) =
-                        crate::strengthen_ty(&cx.gamma, fst, crossed + under)
-                {
-                    sols[p] = Some((candidate, fst_level.clone()));
-                }
+                learn_targs(cx, ind, written, fst, fst_level, crossed + under, &mut sols);
                 fields = Rc::clone(snd);
                 crossed += 1;
             }
@@ -3470,6 +3462,38 @@ impl Inductives<'_> {
     /// inference in [`Constructors::infer_ctor`].
     pub(crate) fn ctor_fields(&self, ind: &Inductive, i: usize) -> Vec<Ty> {
         ind.ctors[i].fields.iter().map(|(_, t)| t.clone()).collect()
+    }
+}
+
+/// [`Inductives::display_targs`]'s candidates from one payload field: a
+/// field written as exactly one declaration parameter gives that parameter
+/// its type, and one written as a non-dependent arrow gives what its two
+/// ends do (`Iff`'s `mp: P → Q`). `actual` is scoped `crossed` binders below
+/// where the arguments live. Candidates only: the caller re-lowers the
+/// declaration at them and compares.
+fn learn_targs(
+    cx: &Cx,
+    ind: &Inductive,
+    written: &Ty,
+    actual: &Type,
+    level: &Level,
+    crossed: u32,
+    sols: &mut [Option<(Type, Level)>],
+) {
+    match (&written.kind, actual) {
+        (TyKind::Named { name, args }, _) if args.is_empty() => {
+            if let Some(p) = ind.params.iter().position(|param| param == name)
+                && sols[p].is_none()
+                && let Some(candidate) = crate::strengthen_ty(&cx.gamma, actual, crossed)
+            {
+                sols[p] = Some((candidate, level.clone()));
+            }
+        }
+        (TyKind::Fn { binder: None, implicit: false, dom: wd, cod: wc }, Type::Pi { dom_level, cod_level, dom, cod }) => {
+            learn_targs(cx, ind, wd, dom, dom_level, crossed, sols);
+            learn_targs(cx, ind, wc, cod, cod_level, crossed + 1, sols);
+        }
+        _ => {}
     }
 }
 

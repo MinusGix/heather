@@ -63,6 +63,22 @@ fn simp_children(v: Head) → List<Handle> {
 
 // The types of the values in a goal: every subterm the views reach, at most
 // `fuel` of them.
+// What sits under a binder: the body of a function type (a `∀`, an
+// implication) or of a λ (an `∃`'s predicate), which `Open` reaches.
+fn simp_below(h: Handle, v: Head) → Tac<List<Handle>> {
+    match v {
+        HPi(dom) => open(h, "x").bind(λ o => match o {
+            Accepted(o) => pure([dom, o.body]),
+            Refused(_) => pure([dom]),
+        }),
+        HLam(_) => open(h, "x").bind(λ o => match o {
+            Accepted(o) => pure([o.body]),
+            Refused(_) => pure([]),
+        }),
+        _ => pure([]),
+    }
+}
+
 fn simp_types(fuel: Nat, todo: List<Handle>, seen: List<SimpType>) → Tac<List<SimpType>> {
     match fuel {
         Zero => pure(seen),
@@ -71,7 +87,8 @@ fn simp_types(fuel: Nat, todo: List<Handle>, seen: List<SimpType>) → Tac<List<
             Cons(h, rest) => {
                 let ty <- simp_type_of(h);
                 let v <- view(h);
-                simp_types(f, simp_children(v) ++ rest, simp_add(seen, ty))
+                let below <- simp_below(h, v);
+                simp_types(f, simp_children(v) ++ below ++ rest, simp_add(seen, ty))
             },
         },
     }

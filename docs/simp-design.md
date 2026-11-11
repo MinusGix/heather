@@ -503,10 +503,86 @@ that is unification of the two; and nothing forces a registered set to
 have its check, so an unchecked set is only caught by the loop report at a
 call.
 
-Not built: the `--json` report, unfolding by name. Known gaps: a law between statements,
-`P ↔ Q` (`issues/simp-iff-laws.md`); an equation's instance under a binder
-(`issues/simp-under-binders.md`); a goal a named case split left unfolded
+Not built: the `--json` report, unfolding by name. Known gaps: a goal a named case split left unfolded
 past its relation, which is restated in a one-step `calc`
 (`issues/case-split-unfolds-the-goals-relation.md`). Each step is one walk
 of the goal (`issues/rewrite-every-instance.md`), and a default set is
 tried law by law at each step, so a set's size is a cost at every call.
+
+## 12. Laws between statements, as built
+
+`P ↔ Q` as a law (2026-11-11, `crates/elab/src/rewrite/statement.rs`,
+`issues/simp-iff-laws.md`).
+
+- **The positions** are a statement's, not a term's: the goal itself, the
+  operands of `∧`, `∨`, `↔`, `¬` and a non-dependent `→`, and the body of a
+  `∀`, one binder down. Each is matched against the law's left side on its
+  own, so two positions may be two instances and an instance may mention a
+  bound variable. A position that is an instance is not walked into; the
+  next step sees what replaced it.
+- **The proof** is `goal ↔ next`, built from `logic`'s congruences for `↔`,
+  one per former (`iff_and_congr`, `iff_or_congr`, `iff_imp_congr`,
+  `iff_not_congr`, `iff_iff_congr`, `iff_forall_congr`), with `iff_refl()`
+  at an operand that did not change. A closing call uses its `mpr`, a
+  `using :=` fact its `mp`.
+- **The left side** is matched by its shape: an application along its spine
+  (`Mem(a, xs ++ ys)`), an equation side by side (`Succ(a) = Succ(b) ↔ a =
+  b`), a connective operand by operand, a statement variable by the whole
+  statement (`P ∧ True ↔ P`). `¬` is the call `Not(P)` as written, never a
+  definition that unfolds to an implication into `False`; and a relation
+  that is defined as a `↔` (`Regex::Same`) is that relation, read by §5.
+- **Equations and relation steps reach the same positions.** A connective
+  lowers to a record or a sum whose operands sit below the lowering's own
+  binders, where the equation form's motive does not look, so before this
+  an equation fired at `Mem(a, xs ++ Nil)` and not at `Mem(a, xs ++ Nil) ∧
+  R`. A law that has no instance at the goal as a whole is now tried at
+  each operand; where it fires, its two directions are that operand's `↔`,
+  and the same congruences carry it out. This also takes an equation below
+  a `∀`.
+- **Sets and checks** take such laws unchanged: `List::shape` has
+  `List::mem_append_iff`, the types inside a statement bring their
+  defaults (a record's type arguments are now read through a field typed
+  as an arrow between them, which is also why a diagnostic prints
+  `Iff<P, Q>` where it printed `Iff<…>`), and `simp_check` compares the
+  two sides of a `↔` law as statements.
+
+Not reached: a statement inside a user's own predicate former. A law's two
+sides have to live at one universe level.
+
+## 13. Under binders, as built
+
+A law whose instance sits under a binder (2026-11-11,
+`issues/simp-under-binders.md`). There are three kinds of binder and each
+is crossed its own way.
+
+- **`∀`**: the body is a statement one binder down (§12).
+- **`∃`**: `Exists(λ x => B(x))` holds its predicate as a value. The
+  statement walk reads the λ off the record's lowering, walks `B(x)` as a
+  statement one binder down, and crosses back by `logic`'s
+  `iff_exists_congr` over the pointwise `↔`. Laws of every kind fire there.
+- **A λ handed to a function** (`xs.map(λ x => …)`). Heather assumes no
+  function extensionality, so two λs equal at every point are not equal,
+  and nothing crosses a λ for free. What is true is a theorem about each
+  consumer: `xs.map(f) = xs.map(g)` when `f` and `g` agree pointwise. So an
+  equation that the transport finds no instance for, at a goal with a term
+  under a λ, is walked as a step of the identity relation `RelId` by the
+  relation walk (`Relations::identity_step_or`), which already finds an
+  instance under a binder and relates the two λs by `Pointwise(RelId)`
+  (`docs/equation-rewrite-design.md` §10). Every ordinary context preserves
+  `RelId` with no evidence; the λ's consumer needs
+  `PreservesRelation(Pointwise(RelId), RelId, λ f => xs.map(f))`, an
+  `evidence theorem` beside the function. `lib/std/data/list_pointwise.hthr`
+  has it for `map`, `filter` and `count`, each with the lemma a proof cites
+  (`List::map_ext`). A consumer without it is named in the report's blocked
+  line, with the statement it needs.
+
+The route spells an instance where it was found, with the walk's name for
+the binder (`f(x0) ++ []`).
+
+Gaps left: `by simp()` does not find the default sets of types that occur
+only inside an `∃`, because a view of `Exists(P)` does not present `P`
+(`issues/view-of-value-parameterised-record.md`; `simp_only`, `extra :=`
+and `simp_with` are unaffected); a side condition of a law fired under a
+binder is not discharged there; the evidence exists for three list
+functions, and each further consumer (`foldr`, `any`, a `∑`'s at `=`) is
+one lemma.

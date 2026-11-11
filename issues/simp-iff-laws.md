@@ -1,6 +1,6 @@
 ---
 title: simp: rewrite along a law between statements (P ↔ Q)
-status: open
+status: closed
 labels: [tactics,proofs,relations]
 area: tactics
 milestone: [tac-general]
@@ -35,3 +35,7 @@ sides are statements.
 Done when `iff_law` and a membership probe
 (`x ∈ (xs ++ ys) ++ zs` to a disjunction by `List::mem_append`) close by
 `simp_only`.
+
+## Log
+
+- 2026-11-11: Built (docs/simp-design.md §12, `crates/elab/src/rewrite/statement.rs`): a statement walk beside the term walk. Positions are the goal, the operands of `∧`, `∨`, `↔`, `¬`, a non-dependent `→`, and a `∀`'s body; each matched on its own; the proof is `goal ↔ next` from `logic`'s new `iff_*_congr` lemmas. Equations and relation steps are carried to the same positions (they did not fire inside a connective before: the lowering puts an operand under a binder). `List::mem_append_iff` joined `List::shape`. Both done-when probes close (`iff_law`, `mem_three` in `lib/_tests/std/tactic/simp_tests.hthr`). Left: `∃` bodies, on simp-under-binders.

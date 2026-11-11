@@ -6,7 +6,7 @@
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
 import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
-import simp_laws; import simp;
+import simp_laws; import simp; import list_pointwise;
 
 // ---------------------------------------------------------------------------
 // Equations: both sides normalised, the goal closed where they meet.
@@ -126,15 +126,34 @@ theorem no_laws(a: Nat): a + 0 = a { simp_only() }
 // expect-error: `a` is not a law
 theorem not_a_law(a: Nat): a + 0 = a { simp_only(a) }
 
-// A law between statements is not rewritten yet (issues/simp-iff-laws.md).
-// expect-error: a law `P ↔ Q` between statements is not rewritten yet
-theorem iff_law(P, Q: Type, h: P ↔ Q, q: Q): P { simp_only(h, then := q) }
-
-// An instance under a binder is not reached by an equation
-// (issues/simp-under-binders.md): the route says no law fired.
-// expect-error: route: no law fired
+// An instance under a λ (docs/simp-design.md §13): the equation is walked
+// as a step of the identity relation, and the λ is crossed by its
+// consumer's pointwise evidence (`list_pointwise`), since there is no
+// function extensionality to cross it by.
 theorem under_a_binder<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) ++ Nil).len()) = xs.map(λ x => f(x).len()) {
     simp_only(List::append_nil)
+}
+
+theorem under_a_filter<A>(xs: List<List<A>>, ys: List<A>):
+    xs.filter(λ x => (x ++ Nil).len().leb((ys ++ Nil).len())).len() = xs.filter(λ x => x.len().leb(ys.len())).len()
+{
+    simp_only(List::append_nil)
+}
+
+theorem under_a_count<A>(xs: List<List<A>>, ys: List<A>): xs.count(λ x => (x ++ Nil).len().leb(ys.len())) + 0 = xs.count(λ x => x.len().leb(ys.len())) {
+    simp_only(List::append_nil)
+}
+
+// The route spells the instance where it was found.
+// expect-error: 1. `List::append_nil`: `f(x0) ++ []` ⟶ `f(x0)`
+theorem under_a_binder_route<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) ++ Nil).len()).len() = 0 {
+    simp_show(List::append_nil)
+}
+
+// A consumer with no pointwise evidence is named.
+// expect-error: PreservesRelation(Pointwise
+theorem under_a_binder_no_evidence<A>(xs: List<List<A>>): xs.foldr(λ x n => (x ++ Nil).len() + n, 0) = xs.foldr(λ x n => x.len() + n, 0) {
+    simp_show(List::append_nil)
 }
 
 // A statement that is not a relation application gives the relation no
@@ -203,3 +222,137 @@ register def simp_tests_overlap: SimpSet = simp_set("simp_tests::overlap", [name
 
 // expect-error: law 2 `len_append_swapped` overlaps another law, and the two results do not join
 theorem overlapping_set(): True { by simp_check([simp_tests_overlap]) }
+
+// ---------------------------------------------------------------------------
+// Laws between statements, `P ↔ Q` (docs/simp-design.md §12): the goal
+// itself, the operands of `∧`, `∨`, `↔`, `¬` and `→`, and the body of a `∀`.
+
+theorem iff_law(P, Q: Type, h: P ↔ Q, q: Q): P { simp_only(h, then := q) }
+
+theorem iff_in_and(P, Q, R: Type, h: P ↔ Q, q: Q, r: R): R ∧ P { simp_only(h, then := And(r, q)) }
+
+theorem iff_in_or_not(P, Q, R: Type, h: P ↔ Q, nq: ¬Q): ¬P ∨ R { simp_only(h, then := Inl(nq)) }
+
+theorem iff_in_premise(P, Q, R: Type, h: P ↔ Q, f: Q → R): P → R { simp_only(h, then := f) }
+
+// Both sides of a goal that is itself `↔` are rewritten, and it closes
+// where they meet.
+theorem iff_both_sides(P, Q, R: Type, h: P ↔ Q): (P ∧ R) ↔ (Q ∧ R) { simp_only(h) }
+
+// The done-when of issues/simp-iff-laws.md: an unapplied law, instantiated
+// at each position it matches.
+theorem mem_three<A>(xs, ys, zs: List<A>, a: A): Mem(a, (xs ++ ys) ++ zs) ↔ (Mem(a, xs) ∨ Mem(a, ys)) ∨ Mem(a, zs) {
+    simp_only(List::mem_append_iff)
+}
+
+theorem mem_then<A>(xs, ys: List<A>, a: A, m: Mem(a, ys)): Mem(a, xs ++ ys) {
+    simp_only(List::mem_append_iff, then := Inr(m))
+}
+
+theorem mem_using<A>(xs, ys: List<A>, a: A, m: Mem(a, xs ++ ys)): Mem(a, xs) ∨ Mem(a, ys) {
+    simp_only(List::mem_append_iff, using := m)
+}
+
+// Below a `∀` the instance mentions the bound variable.
+theorem mem_forall<A>(xs, ys: List<A>, f: (a: A) → Mem(a, xs) ∨ Mem(a, ys)): (a: A) → Mem(a, xs ++ ys) {
+    simp_only(List::mem_append_iff, then := f)
+}
+
+// A left side that is a connective over statement variables, matched
+// operand by operand; and one that is an equation, matched side by side.
+theorem and_true_iff<P>(): P ∧ True ↔ P { Iff(mp := λ (h: P ∧ True) => h.left, mpr := λ (p: P) => And(p, trivial)) }
+theorem true_and_iff<P>(): True ∧ P ↔ P { Iff(mp := λ (h: True ∧ P) => h.right, mpr := λ (p: P) => And(trivial, p)) }
+theorem and_comm_iff<P, Q>(): P ∧ Q ↔ Q ∧ P { Iff(mp := λ (h: P ∧ Q) => and_swap(h), mpr := λ (h: Q ∧ P) => and_swap(h)) }
+theorem succ_eq_iff(a, b: Nat): Succ(a) = Succ(b) ↔ a = b {
+    Iff(mp := λ (e: Succ(a) = Succ(b)) => Nat::succ_inj(a, b, e), mpr := λ (e: a = b) => Nat::cong_succ(e))
+}
+
+theorem statement_variables(R, S: Type, r: R, s: S): (True ∧ R) ∧ (S ∧ True) {
+    simp_only(and_true_iff, true_and_iff, then := And(r, s))
+}
+
+theorem equation_sides(x, y: Nat, R: Type, r: R, e: x = y): R ∧ Succ(Succ(x)) = Succ(Succ(y)) {
+    simp_only(succ_eq_iff, then := And(r, e))
+}
+
+// A side condition is a hypothesis in scope, as for an equation.
+theorem mem_append_nonempty<A>(xs, ys: List<A>, a: A, ne: ¬(xs = Nil)): Mem(a, xs ++ ys) ↔ Mem(a, xs) ∨ Mem(a, ys) {
+    xs.mem_append_iff(ys, a)
+}
+theorem iff_side_condition<A>(xs, ys: List<A>, a: A, ne: ¬(xs = Nil), m: Mem(a, ys)): Mem(a, xs ++ ys) {
+    simp_only(mem_append_nonempty, then := Inr(m))
+}
+// expect-error: its side condition `xs = [] -> False` is not a hypothesis here
+theorem iff_side_condition_missing<A>(xs, ys: List<A>, a: A, m: Mem(a, ys)): Mem(a, xs ++ ys) {
+    simp_show(mem_append_nonempty)
+}
+
+// The route names each instance where it was found, a bound variable
+// included.
+// expect-error: 1. `List::mem_append_iff`: `Mem(x, xs ++ ys)` ⟶ `Or<Mem(x, xs), Mem(x, ys)>`
+theorem iff_route<A>(xs, ys: List<A>): (a: A) → Mem(a, xs ++ ys) → Mem(a, ys ++ xs) {
+    simp_show(List::mem_append_iff)
+}
+
+// Two laws that undo each other loop, as two equations do.
+// expect-error: these laws loop: step 2 returns to the goal as written
+theorem iff_loop(P, Q: Type, h: P ↔ Q, g: Q ↔ P, q: Q): P { simp_only(h, g, then := q) }
+
+// An equation or a relation step reaches the same positions: an operand of
+// a connective is below a binder of the connective's lowering, where the
+// equation form's own motive does not look.
+theorem equation_in_and<A>(zs: List<A>, a: A, m: Mem(a, zs)): Mem(a, zs ++ Nil) ∧ Mem(a, (zs ++ Nil) ++ Nil) {
+    simp_only(List::append_nil, then := And(m, m))
+}
+
+theorem equation_in_iff<A>(zs: List<A>, a: A): Mem(a, zs ++ Nil) ↔ Mem(a, zs) { simp_only(List::append_nil) }
+
+theorem equation_below_forall<A>(zs: List<A>, f: (a: A) → Mem(a, zs)): (a: A) → ¬¬Mem(a, zs ++ Nil) {
+    simp_only(List::append_nil, then := λ (a: A) (n: ¬Mem(a, zs)) => n(f(a)))
+}
+
+theorem equation_using<A>(zs: List<A>, a: A, R: Type, h: R ∨ Mem(a, zs ++ Nil)): R ∨ Mem(a, zs) {
+    simp_only(List::append_nil, using := h)
+}
+
+theorem equations_and_statements<A>(xs, ys: List<A>, a: A, m: Mem(a, xs)): Mem(a, (xs ++ Nil) ++ ys) {
+    simp_only(List::append_nil, List::mem_append_iff, then := Inl(m))
+}
+
+// `List`'s default set has the membership law, and the types inside a
+// statement bring their defaults.
+theorem mem_by_default<A>(xs, ys, zs: List<A>, a: A): Mem(a, (xs ++ ys) ++ (zs ++ Nil)) ↔ Mem(a, xs) ∨ (Mem(a, ys) ∨ Mem(a, zs)) {
+    by simp()
+}
+
+// A set of laws between statements is checked as any other.
+register def simp_tests_units: SimpSet = simp_set("simp_tests::units", [name_of(and_true_iff), name_of(true_and_iff)]);
+theorem simp_tests_units_checked(): True { by simp_check([simp_tests_units]) }
+
+register def simp_tests_and_comm: SimpSet = simp_set("simp_tests::and_comm", [name_of(and_comm_iff)]);
+// expect-error: rewriting its own statement loops
+theorem simp_tests_and_comm_checked(): True { by simp_check([simp_tests_and_comm]) }
+
+// Below an `∃`: the predicate's body is a statement one binder down.
+theorem below_exists<A>(xs, ys: List<A>, w: Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys))): Exists(λ (a: A) => Mem(a, xs ++ ys)) {
+    simp_only(List::mem_append_iff, then := w)
+}
+
+theorem below_exists_both<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) ↔ Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys)) {
+    simp_only(List::mem_append_iff)
+}
+
+theorem equation_below_exists<A>(xs: List<A>, R: Type): R ∧ Exists(λ (a: A) => Mem(a, xs ++ Nil)) ↔ R ∧ Exists(λ (a: A) => Mem(a, xs)) {
+    simp_only(List::append_nil)
+}
+
+theorem below_two_exists<A>(xs, ys: List<A>, w: Exists<A>(λ (a: A) => Exists<A>(λ (b: A) => a = b ∧ (Mem(b, xs) ∨ Mem(b, ys))))):
+    Exists<A>(λ (a: A) => Exists<A>(λ (b: A) => a = b ∧ Mem(b, xs ++ ys)))
+{
+    simp_only(List::mem_append_iff, then := w)
+}
+
+// expect-error: 1. `List::mem_append_iff`: `Mem(x, xs ++ ys)` ⟶ `Or<Mem(x, xs), Mem(x, ys)>`
+theorem below_exists_route<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → False {
+    simp_show(List::mem_append_iff)
+}

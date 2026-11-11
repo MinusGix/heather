@@ -1,0 +1,63 @@
+// Functions over a list respect their function argument pointwise: two
+// functions equal at every point give equal results.
+//
+// Heather assumes no function extensionality, so `xs.map(f) = xs.map(g)`
+// from `(x: A) → f(x) = g(x)` is a theorem about `map`, by induction, and
+// not an instance of congruence. Each is stated twice: as the lemma a proof
+// cites (`List::map_ext`), and as the evidence a rewrite crosses the λ by
+// (`PreservesRelation(Pointwise(RelId), RelId, …)`,
+// docs/equation-rewrite-design.md §10), which is what lets `simp_only`
+// reach an instance in the body of a λ handed to one of these
+// (docs/simp-design.md §13).
+//
+// A module of its own because the evidence is stated with
+// `relation_props`, which `list` is below.
+
+import logic;
+import bool;
+import nat;
+import list;
+import relation;
+import relation_props;
+
+theorem List::map_ext<A, B>(self xs: List<A>, f, g: A → B, h: (x: A) → f(x) = g(x)): xs.map(f) = xs.map(g) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), t.map_ext(f, g, h)),
+    }
+}
+
+theorem List::filter_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.filter(p) = xs.filter(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), then := match q(a) {
+            True => List::cong_cons(a, t.filter_ext(p, q, h)),
+            False => t.filter_ext(p, q, h),
+        }),
+    }
+}
+
+theorem List::count_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.count(p) = xs.count(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), t.count_ext(p, q, h)),
+    }
+}
+
+evidence theorem List::map_pointwise<A, B>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, B>(RelId<B>), RelId<List<B>>, λ f => xs.map(f))
+{
+    λ f g h => xs.map_ext(f, g, h)
+}
+
+evidence theorem List::filter_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<List<A>>, λ p => xs.filter(p))
+{
+    λ p q h => xs.filter_ext(p, q, h)
+}
+
+evidence theorem List::count_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<Nat>, λ p => xs.count(p))
+{
+    λ p q h => xs.count_ext(p, q, h)
+}
