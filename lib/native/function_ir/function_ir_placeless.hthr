@@ -16,10 +16,19 @@
 // for a loop nested in loops, whose taints its enclosing loops recompute;
 // `program_eval_placeless` is the theorem
 // (docs/native-one-compiler-design.md §2.3).
+//
+// A function that writes its buffer is placeless by the same check: a
+// store reads its index and its value, neither of them an address id, and
+// the file it leaves is a function of those. `program_run_placeless` is
+// the theorem with the file threaded (`function_ir_run`): the word
+// answered and the file left are the same at every address word (§2.6,
+// U4 step 4b).
 
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
 import bitvec;
 import bool;
 import list;
@@ -558,6 +567,284 @@ theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>): p
                 (match d { Inl(_) => last.eval(below, words, buffers := buffers), Inr(_) => below(f, words) }) {
                 Inl(_) => λ h => last.eval_apart(buffers, below, program_lent(earlier), ih, parts.left, words, others, h),
                 Inr(_) => λ h => ih(f, words, others, h),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The same, with the file threaded
+
+// Two states alike off `hidden`: the valuations agree there, and the files
+// are one file.
+fn State::Apart(hidden: List<Nat>, one, two: State) → Type {
+    Valuation::Apart(hidden, one.values, two.values) ∧ two.buffers = one.buffers
+}
+
+// What runs alike from valuations alike over one file runs alike from
+// states alike.
+theorem State::then_apart(first, later: List<Nat>, k: Valuation() → Buffers() → State,
+    runs: (v, o: Valuation()) → (file: Buffers()) → Valuation::Apart(first, v, o) → State::Apart(later, k(v, file), k(o, file)),
+    one, two: State, alike: State::Apart(first, one, two)):
+    State::Apart(later, k(one.values, one.buffers), k(two.values, two.buffers)) {
+    j(sym(alike.right), λ file _ => State::Apart(later, k(one.values, one.buffers), k(two.values, file)),
+        runs(one.values, two.values, one.buffers, alike.left))
+}
+
+// A node's run is a function of what it reads: the value it names its
+// output, and for a store the file it leaves.
+theorem Node::run_apart(self node: Node, buffers: Buffers(), hidden: List<Nat>, values, other: Valuation(),
+    apart: Valuation::Apart(hidden, values, other)):
+    disjoint(hidden, node.reads()).IsTrue() → State::Apart(hidden, node.run(values, buffers), node.run(other, buffers)) {
+    match stores: node.stores() {
+        False => λ clear => {
+            let quiet: (!node.stores()).IsTrue() = j(sym(stores), λ b _ => (!b).IsTrue(), trivial);
+            let stepped: State::Apart(hidden, State(node.step(values, buffers := buffers), buffers),
+                State(node.step(other, buffers := buffers), buffers)) =
+                ⟨Valuation::set_apart(hidden, values, other, apart, node_output(node).id, node.value(values, buffers := buffers),
+                    node.value(other, buffers := buffers), node.value_reads(buffers, values, other,
+                        λ w id m => apart(w, id, disjoint_mem(hidden, node.reads(), clear, id, m)))), refl⟩;
+            j(sym(node.run_step(other, buffers, quiet)), λ t _ => State::Apart(hidden, node.run(values, buffers), t),
+                j(sym(node.run_step(values, buffers, quiet)),
+                    λ s _ => State::Apart(hidden, s, State(node.step(other, buffers := buffers), buffers)), stepped))
+        },
+        True => (match node as λ n => n.stores() = True → disjoint(hidden, n.reads()).IsTrue() →
+                State::Apart(hidden, n.run(values, buffers), n.run(other, buffers)) {
+            BufferStore(output, buffer, index, value) => λ _ clear => {
+                let at_index: (other(64, index) = values(64, index)) =
+                    apart(64, index, disjoint_mem(hidden, [index, value], clear, index, Inl(refl)));
+                let at_value: (other(64, value) = values(64, value)) =
+                    apart(64, value, disjoint_mem(hidden, [index, value], clear, value, Inr(Inl(refl))));
+                let file = λ (x: BitVec(64)) (y: BitVec(64)) => store_byte(buffers, buffer, x.toNat(), low_byte(y));
+                ⟨Valuation::set_apart(hidden, values, other, apart, output,
+                    load_value(file(values(64, index), values(64, value)), buffer, index, values),
+                    load_value(file(other(64, index), other(64, value)), buffer, index, other),
+                    λ w => eq2(λ (x: BitVec(64)) (y: BitVec(64)) => word_value(byte_word(buffer_byte(file(x, y), buffer, x.toNat())), w),
+                        at_index, at_value)), eq2(file, at_index, at_value)⟩
+            },
+            _ => λ no _ => absurd(no),
+        })(stores),
+    }
+}
+
+theorem run_nodes_apart(nodes: List<Node>, hidden: List<Nat>): nodes_clear(nodes, hidden).IsTrue() →
+    (values, other: Valuation()) → (buffers: Buffers()) → Valuation::Apart(hidden, values, other) →
+    State::Apart(hidden, run_nodes(nodes, values, buffers), run_nodes(nodes, other, buffers)) {
+    match nodes {
+        Nil => λ _ values other buffers apart => ⟨apart, refl⟩,
+        Cons(node, rest) => λ ok values other buffers apart => {
+            let parts = Bool::is_true_and(disjoint(hidden, node.reads()), nodes_clear(rest, hidden), ok);
+            State::then_apart(hidden, hidden, λ (v: Valuation()) (file: Buffers()) => run_nodes(rest, v, file),
+                λ v o file a => run_nodes_apart(rest, hidden, parts.right, v, o, file, a), node.run(values, buffers),
+                node.run(other, buffers), node.run_apart(buffers, hidden, values, other, apart, parts.left))
+        },
+    }
+}
+
+// Two loops ended alike: as one ran out or neither did, their states
+// agreeing at `mask`, over one file.
+fn LoopState::Apart(mask: List<Bool>, one, two: LoopState) → Type {
+    (two.end.exhausted = one.end.exhausted) ∧ (ListsApart(mask, one.end.state, two.end.state) ∧ two.buffers = one.buffers)
+}
+
+// A loop after a pass that left `words` and `buffers`: ended if the pass
+// left, and the passes that remain if not.
+fn loop_run_after(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, rest: Nat, left: Bool,
+    words: List<BitVec(64)>, buffers: Buffers()) → LoopState {
+    match left {
+        False => loop_run(step, parameters, count, exit, next, rest, words, buffers),
+        True => LoopState(LoopEnd(words, False), buffers),
+    }
+}
+
+// `loop_eval_apart` with the file carried: the passes leave one file.
+theorem loop_run_apart(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, mask: List<Bool>,
+    ended: List<Nat>,
+    passes: (v, o: Valuation()) → (file: Buffers()) → Valuation::Apart(taint_onto(parameters, mask, []), v, o) →
+        State::Apart(ended, step(v, file), step(o, file)),
+    exit_clear: absent(exit, ended).IsTrue(), next_clear: mask_covers(mask_of(next, ended), mask).IsTrue(), remaining: Nat):
+    (state, other: List<BitVec(64)>) → (buffers: Buffers()) → ListsApart(mask, state, other) →
+    LoopState::Apart(mask, loop_run(step, parameters, count, exit, next, remaining, state, buffers),
+        loop_run(step, parameters, count, exit, next, remaining, other, buffers)) {
+    match remaining {
+        Zero => λ state other buffers h => ⟨refl, ⟨h, refl⟩⟩,
+        Succ(rest) => λ state other buffers h => {
+            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
+            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let entry2 = pass_valuation(parameters, count, Succ(rest), other);
+            let entered: Valuation::Apart(taint_onto(parameters, mask, []), entry, entry2) =
+                Valuation::bind_apart(parameters, [], base, base, Valuation::apart_refl([], base), mask, state, other, h);
+            let after = step(entry, buffers);
+            let after2 = step(entry2, buffers);
+            let ran = passes(entry, entry2, buffers, entered);
+            let bit: (after2.values(1, exit).head_bit() = after.values(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), ran.left(1, exit, exit_clear));
+            let words: ListsApart(mask, words_of(after.values, next), words_of(after2.values, next)) =
+                lists_apart_weaken(mask, mask_of(next, ended), next_clear, words_of(after.values, next), words_of(after2.values, next),
+                    words_of_apart(next, ended, after.values, after2.values, ran.left));
+            let one = loop_run_after(step, parameters, count, exit, next, rest, after.values(1, exit).head_bit(), words_of(after.values, next),
+                after.buffers);
+            let aligned = match after.values(1, exit).head_bit() as λ b => LoopState::Apart(mask,
+                    loop_run_after(step, parameters, count, exit, next, rest, b, words_of(after.values, next), after.buffers),
+                    loop_run_after(step, parameters, count, exit, next, rest, b, words_of(after2.values, next), after.buffers)) {
+                False => loop_run_apart(step, parameters, count, exit, next, mask, ended, passes, exit_clear, next_clear, rest,
+                    words_of(after.values, next), words_of(after2.values, next), after.buffers, words),
+                True => ⟨refl, ⟨words, refl⟩⟩,
+            };
+            let turned = j(sym(bit), λ b _ => LoopState::Apart(mask, one,
+                loop_run_after(step, parameters, count, exit, next, rest, b, words_of(after2.values, next), after.buffers)), aligned);
+            j(sym(ran.right), λ file _ => LoopState::Apart(mask, one,
+                loop_run_after(step, parameters, count, exit, next, rest, after2.values(1, exit).head_bit(), words_of(after2.values, next), file)),
+                turned)
+        },
+    }
+}
+
+// The theorem for regions: a placeless region, its calls answered alike at
+// every address word over every file, runs alike off what it hides and to
+// one file, from valuations alike off what was hidden.
+theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers(), lent: Nat → Nat,
+    answers: (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) →
+        call(file, f, others) = call(file, f, words)):
+    (hidden: List<Nat>) → region.placeless(lent, hidden).IsTrue() → (values, other: Valuation()) → (buffers: Buffers()) →
+    Valuation::Apart(hidden, values, other) →
+    State::Apart(region.taints(hidden), region.run_writing(call, values, buffers), region.run_writing(call, other, buffers)) {
+    match region {
+        Dataflow(body) => λ hidden ok values other buffers apart => run_nodes_apart(body.nodes, hidden, ok, values, other, buffers, apart),
+        Sequence(prefix, continuation) => λ hidden ok values other buffers apart => {
+            let parts = Bool::is_true_and(nodes_clear(prefix.nodes, hidden), continuation.placeless(lent, hidden), ok);
+            State::then_apart(hidden, continuation.taints(hidden),
+                λ (v: Valuation()) (file: Buffers()) => continuation.run_writing(call, v, file),
+                λ v o file a => continuation.run_apart(call, lent, answers, hidden, parts.right, v, o, file, a),
+                run_nodes(prefix.nodes, values, buffers), run_nodes(prefix.nodes, other, buffers),
+                run_nodes_apart(prefix.nodes, hidden, parts.left, values, other, buffers, apart))
+        },
+        Compose(prefix, continuation) => λ hidden ok values other buffers apart => {
+            let parts = Bool::is_true_and(prefix.placeless(lent, hidden), continuation.placeless(lent, prefix.taints(hidden)), ok);
+            State::then_apart(prefix.taints(hidden), continuation.taints(prefix.taints(hidden)),
+                λ (v: Valuation()) (file: Buffers()) => continuation.run_writing(call, v, file),
+                λ v o file a => continuation.run_apart(call, lent, answers, prefix.taints(hidden), parts.right, v, o, file, a),
+                prefix.run_writing(call, values, buffers), prefix.run_writing(call, other, buffers),
+                prefix.run_apart(call, lent, answers, hidden, parts.left, values, other, buffers, apart))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ hidden ok values other buffers apart => {
+            let parts = Bool::is_true_and(absent(condition, hidden),
+                when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden), ok);
+            let arms = Bool::is_true_and(when_true.placeless(lent, hidden), when_false.placeless(lent, hidden), parts.right);
+            let bit: (values(1, condition).head_bit() = other(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), apart(1, condition, parts.left)));
+            let yes = when_true.run_apart(call, lent, answers, hidden, arms.left, values, other, buffers, apart);
+            let no = when_false.run_apart(call, lent, answers, hidden, arms.right, values, other, buffers, apart);
+            let aligned = match values(1, condition).head_bit() as λ b =>
+                ((w: Nat) → (id: Nat) → absent(id, when_true.taints(hidden) ++ when_false.taints(hidden)).IsTrue() →
+                    (match b {
+                        False => when_false.run_writing(call, other, buffers).values(w, id),
+                        True => when_true.run_writing(call, other, buffers).values(w, id),
+                    }) = (match b {
+                        False => when_false.run_writing(call, values, buffers).values(w, id),
+                        True => when_true.run_writing(call, values, buffers).values(w, id),
+                    })) ∧ ((match b {
+                        False => when_false.run_writing(call, other, buffers).buffers,
+                        True => when_true.run_writing(call, other, buffers).buffers,
+                    }) = (match b {
+                        False => when_false.run_writing(call, values, buffers).buffers,
+                        True => when_true.run_writing(call, values, buffers).buffers,
+                    })) {
+                False => ⟨λ w id clear => no.left(w, id,
+                    absent_append(id, when_true.taints(hidden), when_false.taints(hidden), clear).right), no.right⟩,
+                True => ⟨λ w id clear => yes.left(w, id,
+                    absent_append(id, when_true.taints(hidden), when_false.taints(hidden), clear).left), yes.right⟩,
+            };
+            j(bit, λ b _ => ((w: Nat) → (id: Nat) → absent(id, when_true.taints(hidden) ++ when_false.taints(hidden)).IsTrue() →
+                    (match b {
+                        False => when_false.run_writing(call, other, buffers).values(w, id),
+                        True => when_true.run_writing(call, other, buffers).values(w, id),
+                    }) = (match values(1, condition).head_bit() {
+                        False => when_false.run_writing(call, values, buffers).values(w, id),
+                        True => when_true.run_writing(call, values, buffers).values(w, id),
+                    })) ∧ ((match b {
+                        False => when_false.run_writing(call, other, buffers).buffers,
+                        True => when_true.run_writing(call, other, buffers).buffers,
+                    }) = (match values(1, condition).head_bit() {
+                        False => when_false.run_writing(call, values, buffers).buffers,
+                        True => when_true.run_writing(call, values, buffers).buffers,
+                    })), aligned)
+        },
+        Call(callee, arguments, result) => λ hidden ok values other buffers apart => {
+            let words = words_of(values, arguments);
+            let others = words_of(other, arguments);
+            let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
+                mask_of(arguments, hidden), ok, words, others, words_of_apart(arguments, hidden, values, other, apart));
+            let same: (call(buffers, callee, others) = call(buffers, callee, words)) = answers(buffers, callee, words, others, read);
+            ⟨Valuation::set_apart(hidden, values, other, apart, result, word_value(call(buffers, callee, words).word),
+                word_value(call(buffers, callee, others).word), λ w => cong_fn(λ (answer: Answer) => word_value(answer.word, w), same)),
+                cong_fn(λ (answer: Answer) => answer.buffers, same)⟩
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ hidden ok values other buffers apart => {
+            let mask = mask_of(inputs, hidden);
+            let entered = taint_onto(parameters, mask, []);
+            let ended = body.taints(entered);
+            let first = Bool::is_true_and(absent(bound, hidden),
+                body.placeless(lent, entered) && (absent(exit, ended) && mask_covers(mask_of(next, ended), mask)), ok);
+            let second = Bool::is_true_and(body.placeless(lent, entered), absent(exit, ended) && mask_covers(mask_of(next, ended), mask),
+                first.right);
+            let third = Bool::is_true_and(absent(exit, ended), mask_covers(mask_of(next, ended), mask), second.right);
+            let step = λ (pass: Valuation()) (held: Buffers()) => body.run_writing(call, pass, held);
+            let n = values(64, bound).toNat();
+            let passes: (other(64, bound).toNat() = n) = cong_fn(λ (x: BitVec(64)) => x.toNat(), apart(64, bound, first.left));
+            let end = loop_run(step, parameters, count, exit, next, n, words_of(values, inputs), buffers);
+            let end2 = loop_run(step, parameters, count, exit, next, n, words_of(other, inputs), buffers);
+            let ran = loop_run_apart(step, parameters, count, exit, next, mask, ended,
+                λ v o file a => body.run_apart(call, lent, answers, entered, second.left, v, o, file, a), third.left, third.right, n,
+                words_of(values, inputs), words_of(other, inputs), buffers, words_of_apart(inputs, hidden, values, other, apart));
+            let out = λ (v: Valuation()) (l: LoopState) =>
+                State(Valuation::set(Valuation::bind(v, outputs, l.end.state), exhausted, bit_value(l.end.exhausted)), l.buffers);
+            let core: State::Apart(taint_onto(outputs, mask, hidden), out(values, end), out(other, end2)) =
+                ⟨Valuation::set_apart(taint_onto(outputs, mask, hidden), Valuation::bind(values, outputs, end.end.state),
+                    Valuation::bind(other, outputs, end2.end.state),
+                    Valuation::bind_apart(outputs, hidden, values, other, apart, mask, end.end.state, end2.end.state, ran.right.left),
+                    exhausted, bit_value(end.end.exhausted), bit_value(end2.end.exhausted),
+                    λ w => cong_fn(λ (b: Bool) => bit_value(b, w), ran.left)), ran.right.right⟩;
+            j(sym(passes), λ m _ => State::Apart(taint_onto(outputs, mask, hidden), out(values, end),
+                out(other, loop_run(step, parameters, count, exit, next, m, words_of(other, inputs), buffers))), core)
+        },
+    }
+}
+
+// A placeless function answers alike, word and file, at word lists that
+// agree off its address places.
+theorem Function::run_apart(self function: Function, call: Writers(), lent: Nat → Nat,
+    answers: (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) →
+        call(file, f, others) = call(file, f, words),
+    ok: function.placeless(lent).IsTrue(), words, others: List<BitVec(64)>, buffers: Buffers(),
+    apart: ListsApart(base_mask(function.lent), words, others)): function.run(call, others, buffers) = function.run(call, words, buffers) {
+    let parts = Bool::is_true_and(function.body.placeless(lent, function.addresses()),
+        absent(function.result, function.body.taints(function.addresses())), ok);
+    let bound = Valuation::bind_apart(function.parameters, [], Valuation::zero(), Valuation::zero(),
+        Valuation::apart_refl([], Valuation::zero()), base_mask(function.lent), words, others, apart);
+    let ran = StructuredRegion::run_apart(function.body, call, lent, answers, function.addresses(), parts.left,
+        Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others),
+        buffers, bound);
+    eq2(λ (word: BitVec(64)) (file: Buffers()) => Answer(word, file), ran.left(64, function.result, parts.right), ran.right)
+}
+
+// The theorem for programs, the file threaded: a placeless program's
+// functions return one word and leave one file at every address word.
+theorem program_run_placeless(functions: List<Function>): program_placeless(functions).IsTrue() → (buffers: Buffers()) → (f: Nat) →
+    (words, others: List<BitVec(64)>) → ListsApart(base_mask(program_lent(functions, f)), words, others) →
+    program_run(functions, buffers, f, others) = program_run(functions, buffers, f, words) {
+    match functions {
+        Nil => λ _ buffers f words others _ => refl,
+        Cons(last, earlier) => λ ok buffers f words others => {
+            let parts = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
+            let ih = program_run_placeless(earlier, parts.right);
+            let below = program_run(earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
+                (match d as λ _ => Answer { Inl(_) => last.run(below, others, buffers), Inr(_) => below(buffers, f, others) }) =
+                (match d as λ _ => Answer { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) {
+                Inl(_) => λ h => last.run_apart(below, program_lent(earlier), ih, parts.left, words, others, buffers, h),
+                Inr(_) => λ h => ih(buffers, f, words, others, h),
             }
         },
     }

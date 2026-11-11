@@ -852,8 +852,32 @@ Each is a PR and ends with something that runs.
     in memory (`function_ir_lower_reads_tests.hthr`); a caller reading
     what its callee stored, which evaluation over a fixed file does not
     (`function_ir_run_tests.hthr`).
-  - *Step 4b:* a program's call of a function that writes. *Runs:* `tr`
-    with its byte map as a called function over the buffer, beside GNU's.
+  - *Step 4b:* a program's call of a function that writes, in four steps.
+    *Runs:* `tr` with its byte map as a called function over the buffer,
+    beside GNU's.
+    - *4b-1, built 2026-11-11:* the threaded run is placeless
+      (`function_ir_placeless.hthr`, `program_run_placeless`): under the
+      check a reading program already passes (`program_placeless`), two
+      calls whose words differ only at the addresses of lent buffers end
+      in the same word and the same file. A store's address is its
+      buffer's home plus an index, which the check keeps out of every
+      value, so the section is the reading one with the file carried
+      (`State::Apart`: values alike off the hidden ones, files equal).
+      *Runs:* a store under its bound answering the same at every
+      address, a caller of it, and refused: an address stored as a byte,
+      a store at an address, with the two files that differ shown
+      (`function_ir_placeless_tests.hthr`).
+    - *4b-2:* one evaluator. `StructuredRegion::run` answers a call with
+      the callee's word and file; a source's calls are its functions run
+      with the buffers they are lent, the file they leave put back in
+      the source's (`program_writers`), and a quiet program's call is
+      its word and the file as it was, so the tools keep their
+      statements.
+    - *4b-3:* the program compiler lends written spans (`Target::loan`
+      over `DataRegion::loan`), reads the caller's buffers back out of
+      the memory a callee leaves, and `Prog::links` no longer asks
+      `program_quiet`.
+    - *4b-4:* `tr`.
   - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
     *Runs:* the byte map as a `runtime fn`.
   - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,

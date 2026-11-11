@@ -507,7 +507,7 @@ fn program_run(functions: List<Function>) → Writers() {
         Nil => λ buffers _ _ => Answer(BitVec::zero(), buffers),
         Cons(last, earlier) => λ buffers f arguments => match f.eq_dec(earlier.len()) {
             Inl(_) => last.run(program_run(earlier), arguments, buffers),
-            Inr(_) => program_run(earlier)(buffers, f, arguments),
+            Inr(_) => program_run(earlier, buffers, f, arguments),
         },
     }
 }
@@ -517,8 +517,8 @@ fn program_run(functions: List<Function>) → Writers() {
 // may leave.
 theorem program_run_effects(functions: List<Function>, ok: program_evaluable(functions).IsTrue()):
     (before: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
-    program_effects(functions)(before, f, words, program_run(functions)(before, f, words).word,
-        program_run(functions)(before, f, words).buffers) {
+    program_effects(functions)(before, f, words, program_run(functions, before, f, words).word,
+        program_run(functions, before, f, words).buffers) {
     match functions {
         Nil => λ before f words never => false_elim(never),
         Cons(last, earlier) => λ before f words => {

@@ -1,9 +1,13 @@
 // Probes of `function_ir_placeless`: the functions that read a lent span
 // are placeless, the theorem gives their answer at every address word, and
-// each way an address could reach an answer is refused by the check.
+// each way an address could reach an answer is refused by the check. The
+// same of functions that write the span: the word they return and the file
+// they leave (`program_run_placeless`).
 
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
 import function_ir_placeless;
 import bitvec;
 import bool;
@@ -210,3 +214,99 @@ fn carries_out() → Function {
 
 theorem carries_placeless(): program_placeless([carries()]) = True { refl }
 theorem carries_out_refused(): program_placeless([carries_out()]) = False { refl }
+
+// ---------------------------------------------------------------------------
+// With the file threaded: functions that write the span they are lent
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// put(buffer, i, v): `v`'s low byte at `i` when `i` is inside, returning
+// the byte then there, and 256 past the end.
+fn put() → Function {
+    Function(parameters := [0, 1, 2, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(5)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(5), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(5), bit(3)]), 3, Ports([word(0), word(2), word(5)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 5)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+theorem put_placeless(): program_placeless([put()]) = True { refl }
+
+// The theorem, used: over any file, the word returned and the file left
+// are those stated at address zero.
+theorem put_anywhere(file: Buffers(), address, length, i, v: BitVec(64)):
+    program_run([put()], file, 0, [address, length, i, v]) = program_run([put()], file, 0, [BitVec::zero(), length, i, v]) {
+    program_run_placeless([put()], trivial, file, 0, [BitVec::zero(), length, i, v], [address, length, i, v],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// So what it does at a literal file is one evaluation, whatever the
+// address: 'X' at 1 of "abc".
+theorem put_runs(address: BitVec(64)):
+    program_run([put()], [[b(97), b(98), b(99)]], 0, [address, w(3), w(1), w(88)]) = Answer(w(88), [[b(97), b(88), b(99)]]) {
+    trans(put_anywhere([[b(97), b(98), b(99)]], address, w(3), w(1), w(88)), refl)
+}
+
+// A caller handing its home on to `put`, storing at the first byte.
+fn put_first() → Function {
+    Function(parameters := [0, 1, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(5)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2), word(5)])),
+            Call(0, [0, 1, 2, 5], 3)),
+        result := 3)
+}
+
+fn puts() → List<Function> { [put_first(), put()] }
+
+theorem puts_placeless(): program_placeless(puts()) = True { refl }
+
+theorem put_first_runs(address: BitVec(64)):
+    program_run(puts(), [[b(97), b(98), b(99)]], 1, [address, w(3), w(88)]) = Answer(w(88), [[b(88), b(98), b(99)]]) {
+    trans(program_run_placeless(puts(), trivial, [[b(97), b(98), b(99)]], 1, [BitVec::zero(), w(3), w(88)], [address, w(3), w(88)],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩), refl)
+}
+
+// Refused: the address stored. The file it leaves is the address word's.
+fn stores_address() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 0)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 2)
+}
+
+theorem stores_address_refused(): program_placeless([stores_address()]) = False { refl }
+theorem stores_address_at_one(): program_run([stores_address()], [[b(97)]], 0, [w(1), w(1), w(0)]) = Answer(w(0), [[b(1)]]) { refl }
+theorem stores_address_at_two(): program_run([stores_address()], [[b(97)]], 0, [w(2), w(1), w(0)]) = Answer(w(0), [[b(2)]]) { refl }
+
+// Refused: a store at the address as an index.
+fn stores_at_address() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [BufferStore(output := 4, buffer := 0, index := 0, value := 2)], outputs := Ports([word(4)]))),
+        result := 1)
+}
+
+theorem stores_at_address_refused(): program_placeless([stores_at_address()]) = False { refl }
+
+// The theorem asks for the check: at a program that fails it, it is not
+// had.
+// expect-error(mismatch)
+theorem stores_address_anywhere(file: Buffers(), address, length, i: BitVec(64)):
+    program_run([stores_address()], file, 0, [address, length, i]) = program_run([stores_address()], file, 0, [BitVec::zero(), length, i]) {
+    program_run_placeless([stores_address()], trivial, file, 0, [BitVec::zero(), length, i], [address, length, i],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}

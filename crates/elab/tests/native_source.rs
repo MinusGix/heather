@@ -19,6 +19,10 @@ fn checker_over(native_cat: &str) -> heather_elab::Elaborator {
         ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
         ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
         ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
+        // The placeless check is stated over the run with the file threaded too.
+        ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
+        ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
+        ("function_ir_run", include_str!("../../../lib/native/function_ir/function_ir_run.hthr")),
         ("function_ir_placeless", include_str!("../../../lib/native/function_ir/function_ir_placeless.hthr")),
         ("native_source", include_str!("../../../lib/native/native_source.hthr")),
         ("native_cat", native_cat),

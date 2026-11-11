@@ -100,7 +100,7 @@ theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), before: Buffers(), answer: Answer,
-    runs: program_run(functions)(before, f, arguments) = answer):
+    runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
