@@ -75,3 +75,13 @@ notion to build first, whether this is a horizon area of its own beside
   out needs whole-program analysis and is a separate, harder matter. Not
   for now, but calling and being called by outside functions will be
   wanted. Recorded in the note's §13.
+- 2026-11-11 (later): Minus corrected two readings of the dictated message
+  (SSE is wanted as a high-quality model regardless of this; the idea is
+  wanted but not essential) and rejected a per-declaration `ensures`: a
+  foreign library should be a namespace, since many proofs are wanted and
+  a large library (SDL2, OpenSSL) needs a model relating many pieces of
+  state and what its functions do to them. The note's §13.2 restates the
+  unit as a component with a model (calls as a command container, an
+  abstract world, theorems over it) and a per-function `refines` line
+  that is assumed or checked, which is the shape the Linux model already
+  has with its bridge assumed.

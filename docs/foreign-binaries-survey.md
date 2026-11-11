@@ -698,10 +698,12 @@ so.
    even for an AI, that might be a bit rough." Some good way of embedding,
    or something smarter, is needed.
 
-4. **Instructions.** Many of the missing ones "aren't that hard to add.
-   But SSE is going to be troublesome, but important." Inference: this
-   leans §12 question 3 toward continuing to write forms by hand for the
-   integer core, with SSE the part that needs its own design.
+4. **Instructions.** Corrected by Minus the same day (the first message
+   was dictated): instructions are not that hard to add; SSE is more
+   complex, "but we'll want a high quality model of it regardless". So
+   SSE is wanted for Heather's own sake, and foreign code is one more
+   client of that model, not the reason for it. §12 question 3 (hand-written
+   forms or an imported cross-check) is not answered by this.
 
 5. **Code that calls back out is the harder half.** Outside code "can do
    absurdly crazy things to you and requires analyzing the whole program,
@@ -710,9 +712,19 @@ so.
    allocator, system calls) needs §3.3's premises for everything it
    touches, or the whole-program statement of §4.3.
 
-6. **Not now, but it will be wanted in both directions**: "we will want to
-   call and be called by outside functions." Being called is `nh-library`;
-   calling is this note and `runtime-extern-c-abi`.
+6. **Wanted, not essential.** Corrected the same day: "while I do want
+   this, it isn't an essential feature quite so much even if very cool."
+   And in both directions: "we will want to call and be called by outside
+   functions." Being called is `nh-library`; calling is this note and
+   `runtime-extern-c-abi`.
+
+7. **Not an `ensures` clause: a namespace** (§13.2). Minus is sceptical of
+   §13.1's `ensures`: "this seems more like something [that] should be
+   more of a namespace: you might have many proofs you want associated."
+   The case to design for is "we want to link this large program with a
+   model of how it works", such as SDL2 or, more practically, OpenSSL,
+   "where you might want to relate many different state pieces and what
+   other functions do".
 
 §12 question 2 (which area) is still open.
 
@@ -762,6 +774,128 @@ foreign "vendor/sort.o" fn sort(xs: lent mut [u64]) ensures xs.sorted();     // 
 The probe was written without any of this on purpose, to show what the
 library gives today; its length is the measure of what the embedding and
 the tactic have to remove.
+
+The named contract predicate and the tactic stand. The `ensures` clause on
+a declaration does not survive answer 7: it gives a function one
+postcondition, fixed where the function is declared, and has nowhere to
+put state shared between functions. §13.2 replaces it.
+
+### 13.2 A library is a namespace with a model
+
+A leaf like `add2` has a result and nothing else. A real library is
+different in kind: `SSL_read` means nothing without the connection
+`SSL_new` made, the handshake `SSL_connect` did, and the context both
+came from. What a caller wants is not one fact per function but a
+**model**: the library's abstract state, what each function does to it,
+and theorems about how the functions relate. And different callers want
+different theorems, added over time, by people other than whoever wrote
+the import.
+
+Heather has already linked one large foreign program with a model of how
+it works: Linux. The pieces are worth naming, because each is generic:
+
+| for Linux today | what it is in general |
+|---|---|
+| `LinuxCmd`, `Events::linux()` (`linux_calls.hthr`, `linux_trees.hthr`) | the library's **calls** as a command container: one command per function, with its answer type |
+| `linux_world`, `linux_world_co` | the **model**: an abstract state and what each call does to it, as ordinary Heather functions |
+| `CallSystem<A, R>(E)` (`call_system.hthr`), `Sim`, `RunsAs` | a program that calls out, read along a tree over the container; nothing in `CallSystem` is about Linux |
+| `LinuxIo<M>`, `LinuxRequests`, `linux_meets` | the **bridge**: how a call and its answer appear in registers and memory, and that the machine meets the model |
+| theorems over worlds and trees (`Io::Only`, the tools' specs) | **facts about the model**, proved with no machine in sight, by anyone, anywhere |
+| capabilities, `mut self` methods (`docs/effects-capabilities-design.md`) | how `rt` code holds and threads the state |
+
+The bridge is the only part that mentions the binary, and for Linux it is
+*assumed*: the kernel is not verified, `LinuxIo` is the axiom. So Linux is
+this note's assumed mode, already built, for a library of about a dozen
+calls. A foreign library is the same shape with a different container and
+the bridge either assumed or checked.
+
+As a namespace (every spelling provisional):
+
+```
+// 1. The model: plain Heather, no machine. Written by hand, by whoever
+//    understands the library. This is "a model of how it works".
+module OpenSsl {
+    record Ctx { … }                                 // abstract state pieces
+    record Conn { ctx: CtxId, state: Handshake, pending: List<u8>, … }
+    record World { ctxs: Map<CtxId, Ctx>, conns: Map<ConnId, Conn>, errors: List<Error> }
+
+    fn World::new_conn(mut self, ctx: CtxId) → Option<ConnId> { … }
+    fn World::read(mut self, c: ConnId, n: Nat) → ReadResult { … }
+    fn World::shutdown(mut self, c: ConnId) → ShutdownResult { … }
+
+    // 2. Facts about the model: as many as anyone wants, added any time.
+    theorem read_needs_handshake(w, c, n, early: w.conn(c).state ≠ Established): w.read(c, n).is_error() { … }
+    theorem shutdown_twice(w, c): … { … }
+    theorem read_keeps_other_conns(w, c, d, n, apart: c ≠ d): w.read(c, n).world.conn(d) = w.conn(d) { … }
+}
+
+// 3. The link: which symbol of which bytes plays which model operation,
+//    and how the model's state appears in memory. One line per function,
+//    each with its own evidence.
+foreign "vendor/libssl.a" sha256 "…" as OpenSsl under sysv {
+    repr World by OpenSsl::Represents;               // memory ⇄ model, as datarepr relates a layout to a spec type
+    SSL_new      refines World::new_conn  assumed;
+    SSL_read     refines World::read      assumed;
+    SSL_shutdown refines World::shutdown  assumed;
+    ERR_get_error refines World::pop_error checked;  // a leaf: the `foreign` tactic can do this one
+}
+```
+
+What this arrangement gives:
+
+- **Many proofs, one namespace.** The theorems of part 2 are ordinary
+  theorems about ordinary functions. A client adds
+  `OpenSsl::my_protocol_never_reads_after_shutdown` in its own module
+  without touching the import. Nothing is attached to a declaration.
+- **State is related across functions** because the functions are methods
+  of one `World`, exactly as Linux's `read` and `open` share a file table.
+- **Trust is per function and visible.** Each `refines … assumed` is one
+  axiom with provenance (answer 1); each `checked` is discharged against
+  the bytes. The lifecycle of §6.3 moves one line at a time, and theorems
+  proved over the model do not notice.
+- **The model is the abstraction** (answer 2). `refines` says the
+  function's effect on memory, read through `Represents`, is *one of the
+  behaviours the model allows*. A model that says only "the output is
+  sorted" is a looser `World` method, not a different mechanism, and how
+  loose to make it is the modeller's choice.
+- **Callers use it like any effect.** An `rt` function holds a capability
+  for the library's world and calls `conn.read(n)`; its meaning is a tree
+  over `OpenSsl`'s commands; the compiler lowers each command to a call
+  through the bridge. This is `effect-interfaces-over-carriers` with a
+  foreign handler.
+
+What it costs, and what is new:
+
+- **`Represents` is the hard part of any checked line.** It relates heap
+  structures the library owns to the abstract state: a separation-style
+  invariant over memory Heather did not lay out. For assumed lines it is
+  only named; for checked ones it is where the proof effort goes, and
+  where answer 5's whole-program difficulty shows up, since a function
+  that follows pointers into library-owned state needs the invariant of
+  everything it can reach.
+- **Callbacks invert the direction.** SDL2 calls the program's event
+  handler; OpenSSL calls a verify callback. In the tree reading that is
+  the *library* issuing a command the *program* answers, so the container
+  needs commands in both directions. `CallSystem`'s `answered` is already
+  a predicate transformer over resumptions, which is the right shape, but
+  no current client uses it that way.
+- **An assumed model can be wrong**, and then everything proved over it
+  is about a library that does not exist. The mitigation is the one Linux
+  uses: differential tests of the model against the real thing
+  (`native-differential-harness`), and keeping models small and
+  conservative (a call the model does not describe has no command, so no
+  program using it compiles).
+- **Models are shared artifacts.** A model of OpenSSL is a library in its
+  own right, with a version it claims to describe. Which bytes it matches
+  is the hash in the `foreign` line; one model may be linked against
+  several builds, each with its own evidence lines.
+
+So the unit this note should have led with is not "a function with a
+contract" but "a component with a model and a per-function refinement",
+with the leaf function as its smallest case: one command, a trivial
+world, and a `checked` line. §6.1's reading still holds one level up: the
+`foreign … as OpenSsl` block is an instance, for the whole command
+container at once, of what `Compile(f)` is for one function.
 
 ---
 
