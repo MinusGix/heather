@@ -152,6 +152,18 @@ theorem Prog::within_word_from(self p: Prog, layout: Layout, out: List<Nat>, id:
     })
 }
 
+// Words into registers (`Prog::words_to`).
+theorem Prog::within_words_to(layout: Layout, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_to(layout, ids, registers)) {
+    match ids {
+        Nil => λ registers p => p.within_self(),
+        Cons(id, rest) => λ registers => match registers {
+            Nil => λ p => p.within_self(),
+            Cons(register, more) => λ p => p.within_trans(p.word_to(layout, id, register), p.word_to(layout, id, register).words_to(layout, rest, more),
+                p.within_word_to(layout, id, register), Prog::within_words_to(layout, rest, more, p.word_to(layout, id, register))),
+        },
+    }
+}
+
 // Where each piece's start sits, read off where the piece sits.
 theorem Prog::word_to_within(self p: Prog, layout: Layout, id: Nat, register: Gpr, program: Prog,
     within: p.word_to(layout, id, register).Within(program)): p.Within(program) {

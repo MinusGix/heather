@@ -5,7 +5,7 @@
 // literal the kernel checks equal to the source by `refl`, then compiles
 // the literal, so a tool's lowering is evaluated once and not again in
 // every statement of the certificate (crates/cli/src/native/elf.rs). A
-// source with functions is spelled `[0]`, and `write-elf` then compiles the
+// source this cannot spell is `[0]`, and `write-elf` then compiles the
 // source as it is. Untrusted: a misspelling is a literal the kernel refuses.
 import native_source;
 import function_ir;
@@ -125,12 +125,27 @@ fn List::spell_procedures(self procs: List<Procedure>) → Option<List<Nat>> {
     }
 }
 
+// Each function: its parameters' count and ids, its body, then its result.
+fn List::spell_functions(self functions: List<Function>) → List<Nat> {
+    match functions {
+        Nil => [],
+        Cons(f, rest) => List::append(f.parameters.spell_ids(), List::append(f.body.spelled_tagged(), Cons(f.result, rest.spell_functions()))),
+    }
+}
+
 // `[1]`, its words, its buffers' count and each buffer, then `main`; with
 // procedures `[2]`, its words, its depth, its buffers, the procedures'
-// count and each procedure, then `main`; or `[0]`.
+// count and each procedure, then `main`; with functions `[3]`, as `[2]`
+// with the functions' count and each function before the procedures'; or
+// `[0]`.
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
-        Cons(_, _) => [0],
+        Cons(_, _) => match Some(Cons(3, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(),
+                    Cons(src.functions.len(), List::append(src.functions.spell_functions(), [src.procedures.len()]))))))))
+                .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {
+            None => [0],
+            Some(spelled) => spelled,
+        },
         Nil => match src.procedures {
             Cons(_, _) => match Some(Cons(2, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), [src.procedures.len()]))))))
                     .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {

@@ -2568,6 +2568,98 @@ theorem emit_functions_calls<M>(site: Site<M>, laid: site.program.laid_out().IsT
     }
 }
 
+// A function's code comes after the code it was emitted after.
+theorem Function::closing_grows(self function: Function, prog: Prog, body: Emitted, grown: prog.Within(body.prog)):
+    Grows(prog, function.closing(body)) {
+    let outs: List<Port> = [Port(id := function.result, width := 64)];
+    match body.file.move_outputs(outs, [Rax]) as λ moved => Grows(prog, match moved {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(At(function_closed(body.prog, moves.code), 0, Ret), File::empty(), body.placement, body.names)),
+            },
+        }) {
+        None => trivial,
+        Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, callee_saved()) as λ c => Grows(prog, match c {
+                False => None,
+                True => Some(Emitted(At(function_closed(body.prog, moves.code), 0, Ret), File::empty(), body.placement, body.names)),
+            }) {
+            False => trivial,
+            True => prog.within_trans(body.prog, At(function_closed(body.prog, moves.code), 0, Ret), grown, closed_within(body.prog, moves.code)),
+        },
+    }
+}
+
+theorem Function::emit_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat):
+    Grows(prog, function.emit(prog, k, placement, names)) {
+    let opened = function_opened(prog, k);
+    let before: prog.Within(opened) = prog.within_step(At(prog, Succ(k), Block([])), 0, Block([frame_allocate()]), prog.within_then(Succ(k), Block([])));
+    match input_file(word_ports(function.parameters), argument_registers()) as λ entry => Grows(prog, match entry {
+            None => None,
+            Some(file) => function.emit_body(prog, k, file, placement, names),
+        }) {
+        None => trivial,
+        Some(file) =>
+            (match function.body.emit_calls(opened, file, placement, names, k) as λ e => Grows(opened, e) →
+                Grows(prog, match e { None => None, Some(body) => function.closing(body) }) {
+                None => λ _ => trivial,
+                Some(body) => λ grown => function.closing_grows(prog, body, prog.within_trans(opened, body.prog, before, grown)),
+            })(function.body.emit_calls_grows(k, opened, file, placement, names)),
+    }
+}
+
+// The same functions after code of someone else's (`start`): a program of
+// statements that calls them keeps its own code first and its entry at
+// offset zero (docs/native-one-compiler-design.md §2.2). Function `f` is
+// still at the label `Succ(f)`, so `start` names its own labels past the
+// functions'.
+fn emit_functions_after(start: Prog, functions: List<Function>, placement: List<Place>, names: Nat) → Option<Emitted> {
+    match functions {
+        Nil => Some(Emitted(start, File::empty(), placement, names)),
+        Cons(last, earlier) => match emit_functions_after(start, earlier, placement, names) {
+            None => None,
+            Some(before) => last.emit(before.prog, earlier.len(), before.placement, before.names),
+        },
+    }
+}
+
+theorem emit_functions_after_calls<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    start: Prog, placement: List<Place>, names: Nat, functions: List<Function>):
+    MayCall<M>(site, stack, functions, emit_functions_after(start, functions, placement, names)) {
+    match functions {
+        Nil => λ _ f below words result => false_elim(nothing_below_zero(f, below)),
+        Cons(last, earlier) =>
+            (match emit_functions_after(start, earlier, placement, names) as λ e => MayCall<M>(site, stack, earlier, e) →
+                MayCall<M>(site, stack, Cons(last, earlier), match e {
+                    None => None,
+                    Some(before) => last.emit(before.prog, earlier.len(), before.placement, before.names),
+                }) {
+                None => λ _ => trivial,
+                Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, last, earlier, before, earlier_calls,
+                    last.emit(before.prog, earlier.len(), before.placement, before.names),
+                    last.emit_returns(site, laid, stack, program_callees(earlier), earlier.len(), before.prog, before.placement, before.names)),
+            })(emit_functions_after_calls<M>(site, laid, stack, start, placement, names, earlier)),
+    }
+}
+
+// The code a program put first is still there.
+theorem emit_functions_after_grows(start: Prog, placement: List<Place>, names: Nat, functions: List<Function>):
+    Grows(start, emit_functions_after(start, functions, placement, names)) {
+    match functions {
+        Nil => start.within_self(),
+        Cons(last, earlier) =>
+            (match emit_functions_after(start, earlier, placement, names) as λ e => Grows(start, e) →
+                Grows(start, match e {
+                    None => None,
+                    Some(before) => last.emit(before.prog, earlier.len(), before.placement, before.names),
+                }) {
+                None => λ _ => trivial,
+                Some(before) => λ grown => grows_trans(start, before, grown, last.emit(before.prog, earlier.len(), before.placement, before.names),
+                    last.emit_grows(before.prog, earlier.len(), before.placement, before.names)),
+            })(emit_functions_after_grows(start, placement, names, earlier)),
+    }
+}
+
 // What a program does, resident at `origin` with `stack`: every function
 // meets its contract at its label.
 fn ProgramCalls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),

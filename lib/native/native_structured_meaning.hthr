@@ -751,6 +751,54 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
     ⟨sym(kept.left), ⟨⟨numbers, ⟨trans(kv.left, sym(kept.left)), trans(kv.right, sym(kept.right))⟩⟩, agrees_after⟩⟩
 }
 
+// A call's result, settled from a run over a valuation that agrees with
+// the environment, as from one over the environment's own.
+theorem StructuredRegion::call_settles(env: Env, values: Valuation(), s: Scope, agrees: Valuation::Agrees(values, env, s), result: Nat,
+    word: BitVec(64)):
+    Settles(State(Valuation::set(values, result, word_value(word)), env.buffers), [Port(result, 64)],
+        Env(env.words, env.buffers, env.args).settle(Valuation::set(env.valuation(), result, word_value(word)), [Port(result, 64)]),
+        env, s.put(result, True)) {
+    let wv = word_value(word);
+    let ports: List<Port> = [Port(result, 64)];
+    let v = Valuation::set(values, result, wv);
+    let v0 = Valuation::set(env.valuation(), result, wv);
+    let base = Env(env.words, env.buffers, env.args);
+    let m = base.settle(v0, ports);
+    let kept = Env::settle_kept(ports, base, v0);
+    let same64: (v(64, result) = v0(64, result)) = trans(Valuation::set_here(values, result, wv, 64), sym(Valuation::set_here(env.valuation(), result, wv, 64)));
+    let settled: (base.settle(v, ports) = m) =
+        cong_fn<BitVec(64), Env>(λ x => Env(env.words.put(result, x.toNat(), 0), env.buffers, env.args), same64);
+    let widths = λ (port: Port) (mp: Mem(port, ports)) (named: port.id = result) =>
+        match mp as λ _ => port.width = 64 { Inl(eq) => cong_fn<Port, Nat>(λ p => p.width, eq), Inr(never) => false_elim(never) };
+    let word_number: (m.number(result) = v0(64, result).toNat()) = Env::settle_width(ports, base, v0, result, 64, widths, Inl(refl));
+    let word_at: (m.word(result) = wv(64)) = trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), word_number),
+        trans(BitVec::ofNat_toNat(64, v0(64, result)), Valuation::set_here(env.valuation(), result, wv, 64)));
+    let here: (v(64, result) = m.word(result)) ∧ ((!s.put(result, True).loose(result)).IsTrue() → v(1, result).head_bit() = m.bit(result)) =
+        ⟨trans(Valuation::set_here(values, result, wv, 64), sym(word_at)),
+            λ _ => trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(values, result, wv, 1)),
+                trans(word_head(word), sym(cong_fn(λ (x: BitVec(64)) => x.head_bit(), word_at))))⟩;
+    let agrees_after: Valuation::Agrees(v, m, s.put(result, True)) = λ x def => match x.eq_dec(result) {
+        Inl(eq) => j(sym(eq), λ y _ => (v(64, y) = m.word(y)) ∧ ((!s.put(result, True).loose(y)).IsTrue() → v(1, y).head_bit() = m.bit(y)), here),
+        Inr(ne) => {
+            let sdef: s.defined(x).IsTrue() = j(s.put_defined_other(result, True, x, ne), λ b _ => b.IsTrue(), def);
+            let fresh: absent(x, port_ids(ports)).IsTrue() = Bool::is_true_and_intro(x.differs(result), True,
+                (match x.eq_dec(result) {
+                    Inl(eq) => false_elim(ne(eq)),
+                    Inr(_) => trivial,
+                }), trivial);
+            let kept_number: (m.number(x) = env.number(x)) = Env::settle_frame(ports, base, v0, x, fresh);
+            let kept_word: (m.word(x) = env.word(x)) = cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), kept_number);
+            let frame = λ (w: Nat) => Valuation::set_other(values, result, wv, w, x, ne);
+            let a = agrees(x, sdef);
+            ⟨trans(frame(64), trans(a.left, sym(kept_word))),
+                λ nl => trans(cong_fn(λ (y: BitVec(1)) => y.head_bit(), frame(1)),
+                    trans(a.right(j(s.put_loose_other(result, True, x, ne), λ b _ => (!b).IsTrue(), nl)),
+                        sym(cong_fn(λ (y: BitVec(64)) => y.head_bit(), kept_word))))⟩
+        },
+    };
+    ⟨sym(kept.left), ⟨j(sym(settled), λ e _ => e.Same(m), m.same_refl()), agrees_after⟩⟩
+}
+
 // A loop in counted form (`StructuredRegion::loop_shape`), its facts apart.
 record LoopShape(inputs: List<Nat>, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next: List<Nat>, outputs: List<Nat>,
     exhausted: Nat) {
@@ -886,7 +934,23 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers(
                 }),
             })
         },
-        Call(_, _, _) => λ s t none => absurd(none),
+        Call(callee, arguments, result) => λ s t =>
+            (match defined: s.all_defined(arguments) {
+                False => λ none => absurd(none),
+                True => λ same values env agrees => {
+                    let t_is: (s.put(result, True) = t) = Option::some_inj(s.put(result, True), t, same);
+                    let reads: s.all_defined(arguments).IsTrue() = j(sym(defined), λ b _ => b.IsTrue(), trivial);
+                    let args_eq: (words_of(values, arguments) = words_of(env.valuation(), arguments)) =
+                        words_agree(arguments, env.valuation(), values, λ id m => agrees(id, s.all_defined_mem(arguments, reads, id, m)).left);
+                    let m0 = Env(env.words, env.buffers, env.args).settle(
+                        Valuation::set(env.valuation(), result, word_value(call(callee, words_of(env.valuation(), arguments)))), [Port(result, 64)]);
+                    j(t_is, λ u _ => Settles(State(Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))), env.buffers),
+                            [Port(result, 64)], m0, env, u),
+                        j(sym(args_eq), λ ws _ => Settles(State(Valuation::set(values, result, word_value(call(callee, ws))), env.buffers),
+                                [Port(result, 64)], m0, env, s.put(result, True)),
+                            StructuredRegion::call_settles(env, values, s, agrees, result, call(callee, words_of(env.valuation(), arguments)))))
+                },
+            }),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {

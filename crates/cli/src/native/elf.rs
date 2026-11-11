@@ -33,6 +33,14 @@
 //! program, so stating them over the program itself, even a stretch at a
 //! time, was quadratic in it (issues/native-compile-linear-layout.md).
 //!
+//! A source that calls functions (`Source.functions`, a builder's `program`)
+//! has them compiled into the same file by the function compiler, after the
+//! program's own code (`Prog::links`, native_compile,
+//! docs/native-one-compiler-design.md §2.2): the literal spells each
+//! function, the homes carry where their values go (`plan_program`'s
+//! heuristic, run once here and checked by the lowering), and the functions'
+//! lowering onto the program is one statement (`<source>_elf_deep`).
+//!
 //! The read-back evaluates the emission alone, not `Source::compile`: the
 //! layout check is quadratic in the program, and a read keeps every value it
 //! forces until it returns, so checking the layout there made the read's
@@ -169,19 +177,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     // (`parts`); any other source is read as a literal whole.
     let tool_probe = format!("{p}_tool");
     let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
-        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n\
-        fn {p}_procedures() → Nat {{ {symbol}().opened(0).procedures.len() }}\n");
+        fn {p}_whole() → Nat {{ {symbol}().opened(0).procedures.len() + {symbol}().opened(0).functions.len() }}\n");
     let mut tool_fork = elab.fork();
     let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
-    // A tool that calls functions (`call`, native_build) has a meaning, the
-    // calls' `program_eval`, but no code yet: calls compile as procedures
-    // (issues/native-compiled-procedures.md).
-    if is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_functions")).map_err(|e| format!("`{symbol}` (functions): {e}"))? != 0 {
-        return Err(format!("`{symbol}` calls functions of its program, and calls do not compile yet (issues/native-compiled-procedures.md)"));
-    }
-    // A tool with procedures is lowered whole, as a literal like any source:
-    // the part-at-a-time lowering (`parts`) walks `main` only.
-    let in_parts = is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_procedures")).map_err(|e| format!("`{symbol}` (procedures): {e}"))? == 0;
+    // A tool with procedures, or one that calls functions of its program
+    // (`call`, native_build), is lowered whole, as a literal like any
+    // source: the part-at-a-time lowering (`parts`) walks `main` only.
+    let in_parts = is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_whole")).map_err(|e| format!("`{symbol}` (procedures): {e}"))? == 0;
     drop(tool_fork);
     let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
     let (src, lowered, lowered_is, shapes) = if in_parts {
@@ -217,8 +219,10 @@ fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacit
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
-fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len()] }}
+fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
+fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16 }} }}
+fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -255,17 +259,28 @@ fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().ma
     }
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
-    let [first, procedures] = numbers(&fork, &probe, &format!("{p}_first"))?[..] else {
+    let [first, procedures, functions] = numbers(&fork, &probe, &format!("{p}_first"))?[..] else {
         return Err(format!("`{symbol}`'s procedures did not read back"));
     };
     let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
-        first, (procedures > 0).then_some((src.as_str(), &bodies[..])))?;
+        first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: functions > 0 }))?;
+    // Where the values of the functions the source calls go, from the
+    // function compiler's heuristic (`plan_program`,
+    // function_ir_lower_calls), spelled: a proposal the functions' lowering
+    // checks (`Prog::links`), so the heuristic runs once, here.
+    let places = if functions == 0 { None } else {
+        let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
+            16 => Ok("Folded".to_string()),
+            n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
+        }).collect::<Result<Vec<_>, String>>()?;
+        Some(format!("[{}]", places.join(", ")))
+    };
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
         let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
-            homes_literal(spelled).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
+            homes_literal(spelled, places.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
         let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
             fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
             fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
@@ -361,25 +376,34 @@ fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().ma
     };
     // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
     // or with procedures `main` past their labels, then exit 0, the
-    // procedures and the shared exit (`Source::compile_calls_of`).
+    // procedures, the shared exit and the functions
+    // (`Source::compile_calls_of`; with functions and no procedure,
+    // `Source::compile_functions_of`).
     let (emitted, compiles) = match &calls {
         None => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
     j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
-"), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, {p}_emitted(), {p}_laid())")),
-        Some(emission::CallsStated { main, names, procedures, after }) => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})) {{
+"), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, refl, {p}_emitted(), {p}_laid())")),
+        Some(emission::CallsStated { main, names, procedures: procs, after }) => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})) {{
     j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})), {p}_e_0())
 }}
-"), format!("{src}().compile_calls_of({LOW}, {homes}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procedures}, {names}, {after},
-        {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")),
+"), if procedures > 0 {
+            format!("{src}().compile_calls_of({LOW}, {homes}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procs}, {names}, {after},
+        {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
+        } else {
+            format!("{src}().compile_functions_of({LOW}, {homes}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
+        {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
+        }),
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
 import {root};
 {imports}
 {lowered_is}
-// The words' homes and the loops' sets, as the greedy allocator gave them.
+// The words' homes and the loops' sets, as the greedy allocator gave them
+// (and, for a source that calls functions, where the function compiler's
+// heuristic puts their values).
 {homes_def}
 // The program: what `{src}().compile` computes.
 {code}
@@ -442,13 +466,14 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
-// bytes of stack below RSP, enough for the source's calls, and the command
+// bytes of stack below RSP, enough for the source's calls of procedures
+// and of functions, and the command
 // line `args` on the stack above,
 // simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().depth * (8 * ({src}().words + 1)) <= depth, args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().depth * (8 * ({src}().words + 1)) + 80 * {src}().functions.len() <= depth, args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
@@ -523,7 +548,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", 7 => "a procedure call", _ => "the program" };
     let reason = match reason {
         0 => format!("a {} region the compiler does not take: a node not at width 64 or reading a word not written before it, \
-            a branch on a bit that may not be its word's low bit, a loop not in counted form, or a call (native_structured)",
+            a branch on a bit that may not be its word's low bit, or a loop not in counted form (native_structured)",
             ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),
         1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}{NARROW}"),
         2 => format!("the leaf's nodes are not in evaluation order{NARROW}"),
@@ -541,6 +566,8 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
         14 => format!("the call of procedure {first} does not fit: no such procedure, other counts of arguments or results than it takes, more than six, a word past the slots, more saved words than slots, or a result not apart from what is live after it"),
         15 => format!("procedure {first} does not compile (`Procedure::code`)"),
+        16 => format!("the call of function {first} does not fit: no such function, another count of arguments than it takes, more than six, or a word past the slots"),
+        17 => "the functions it calls do not link (`Prog::links`): they are not evaluable, or the function compiler refused them with its own placement of their values".into(),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }
@@ -549,8 +576,9 @@ fn refused(symbol: &str, why: &[u64]) -> String {
 
 /// The homes `Homes::spelled` (native_alloc) reads back as, spelled: how
 /// many words have one, each (0 the slot, `k + 1` register `k`), then each
-/// loop's set, its length first.
-fn homes_literal(numbers: &[u64]) -> Option<String> {
+/// loop's set, its length first. With `places`, where the values of the
+/// functions the source calls go.
+fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
     let (&count, rest) = numbers.split_first()?;
     let count = usize::try_from(count).ok().filter(|&c| c <= rest.len())?;
     let of: Vec<String> = rest[..count].iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect();
@@ -561,7 +589,8 @@ fn homes_literal(numbers: &[u64]) -> Option<String> {
         sets.push(format!("[{}]", more[..len].iter().map(u64::to_string).collect::<Vec<_>>().join(", ")));
         at = &more[len..];
     }
-    Some(format!("Homes([{}], [{}])", of.join(", "), sets.join(", ")))
+    let places = places.map(|places| format!(", {places}")).unwrap_or_default();
+    Some(format!("Homes([{}], [{}]{places})", of.join(", "), sets.join(", ")))
 }
 
 /// `{p}_upto_c()`'s length for each piece `c`, from the program's start:

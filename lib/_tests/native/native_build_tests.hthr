@@ -17,6 +17,7 @@ import linux_x86_64_image;
 import native_tool_words;
 import native_tool_words_program;
 import function_ir_eval;
+import function_ir_lower_calls;
 import linux_trees;
 
 // An exit's status computed into a temporary, the first word.
@@ -199,10 +200,34 @@ theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree
         cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exited_with, BitVec::ofNat_toNat(64, raise_letter(byte_word(byte))))))
 }
 
-// Not compiled yet: the compiler takes no call region (statement 2, a
-// sequence ending in the call), and `write-elf` refuses a tool with a
-// program. Calls compile as procedures in issues/native-compiled-procedures.md.
-theorem raised_status_refused(): refused_slots(raised_status([BitVec::ofNat(97)]).source()) = [2, 0, 0, 1, 0] { refl }
+// It compiles (docs/native-one-compiler-design.md §2.2): the call is the
+// function's code after the program's, called by the System V convention.
+// The homes carry where the function's values go (`Homes::placed`), a
+// proposal like the words' own; with none the functions do not link.
+fn raised_status_source() → Source { raised_status([BitVec::ofNat(97)]).source() }
+theorem raised_status_compiles(): raised_status_source().refusal(region_low(),
+    Homes::slots(raised_status_source()).placed(plan_program(raised_status_source().functions))) = [] { refl }
+theorem raised_status_unplaced(): refused_slots(raised_status_source()) = [0, 5, 17, 0, 0] { refl }
+
+// A call of a function the program does not have is refused at the call.
+fn calls_missing() → Tool {
+    program(raise_letter_native_program(), buffer_of([BitVec::ofNat(97)], λ b => run(local(num(0), λ r => compute(call(7, [b.at(num(0))], r)) ++ exit(r.get())))))
+}
+theorem calls_missing_refused(): refused_slots(calls_missing().source()) = [2, 0, 16, 7, 0] { refl }
+
+// The source spelled for `write-elf` with its functions (`[3]`).
+theorem raised_status_spelled(): raised_status_source().spelled().head_or(0) = 3 { refl }
+
+// A procedure and a function in one program: the procedure's body calls
+// the function, and `main` calls both. 'a' and 'b' raised, summed: 131.
+fn raised_twice() → Tool {
+    program(raise_letter_native_program(), depth(4, proc(1, 1, λ p => compute(call(0, [p.param(0).get()], p.result(0))),
+        λ raise => run(local(num(0), λ a => local(num(0), λ b =>
+            perform(raise, [num(97)], [a]) ++ compute(call(0, [num(98)], b)) ++ exit(a.get() + b.get())))))))
+}
+theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::ofNat(131)) { refl }
+theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
+    Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

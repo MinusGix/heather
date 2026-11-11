@@ -30,6 +30,7 @@ import native_compile_homes;
 import native_compile_structured;
 import native_compile_pass;
 import native_compile_perform;
+import native_compile_function;
 import native_compile_frames;
 import function_ir_pass;
 import native_structured;
@@ -481,7 +482,7 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answer
 // A structured region compiled runs as its run settled: its code runs as
 // its meaning (`StructuredRegion::code_runs`), which is the run settled
 // where the region is scoped from every word (`compute_same`).
-theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, call: Answers(), p: Prog, out: List<Nat>, names: Nat, c: Compiled,
+theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, call: Answers(), fns: t.Functions(call), p: Prog, out: List<Nat>, names: Nat, c: Compiled,
     emitted: (match region.scopes() { False => None, True => region.code(p, t.layout(), out, names) }) = Some(c), within: c.prog.Within(t.program),
     checked: Bool::IsTrue(match t.homes.region_checked(region, out) { None => False, Some(_) => True })):
     (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → t.Exiting(k) →
@@ -505,7 +506,7 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
                         Bool::IsTrue(match o { None => False, Some(_) => True }) →
                         t.At(prog_len(p), match o { None => out, Some(l) => l }, tree, env) {
                     None => λ _ never => false_elim(never),
-                    Some(l) => λ got _ => region.code_runs(t, call, region.ok_of_scoped(Scope::all(), st, scoped), p, out, names, c, code, within, l, got,
+                    Some(l) => λ got _ => region.code_runs(t, call, fns, region.ok_of_scoped(Scope::all(), st, scoped), p, out, names, c, code, within, l, got,
                         env, tree, goes),
                 })(refl, checked)
             },
@@ -649,17 +650,18 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Answer
     })(refl, emitted)
 }
 
-theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform)): t.EmitsRun(s, call, perform) {
+theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)):
+    t.EmitsRun(s, call, perform) {
     let layout = t.layout();
     match s {
         Compute(region) => match region {
             Dataflow(body) => λ p out known names c emitted within checked n env k _ exits next => t.goes_computes_best(out, env, p, body.nodes, names, c, emitted, within,
                 k(Onward(env.compute(call, Dataflow(body)))), checked, next(env.compute(call, Dataflow(body)))),
-            Sequence(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Sequence(prefix, continuation).region_runs(t, call, p, out, names, c, emitted, within, checked)(n, env, k),
-            Compose(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Compose(prefix, continuation).region_runs(t, call, p, out, names, c, emitted, within, checked)(n, env, k),
-            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted within checked n env k _ => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_runs(t, call, p, out, names, c, emitted, within, checked)(n, env, k),
-            Call(callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Call(callee, arguments, result).region_runs(t, call, p, out, names, c, emitted, within, checked)(n, env, k),
-            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, p, out, names, c, emitted, within, checked)(n, env, k),
+            Sequence(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Sequence(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            Compose(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Compose(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted within checked n env k _ => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            Call(callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Call(callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
         },
         Invoke(shape) => λ p out known names c => match shape {
             Reads(fd, buf, len, result) => (match layout.words_fit([fd, len, result]) as λ b => layout.words_fit([fd, len, result]) = b → (match b {
@@ -744,8 +746,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Perf
             StatsFd(_, _, _) => λ none => absurd(none),
         },
         Then(first, rest) => {
-            let ih_first = first.emits_runs(t, call, perform, calls);
-            let ih_rest = rest.emits_runs(t, call, perform, calls);
+            let ih_first = first.emits_runs(t, call, perform, calls, fns);
+            let ih_rest = rest.emits_runs(t, call, perform, calls, fns);
             (match first as λ x => t.EmitsRun(x, call, perform) → t.EmitsRun(Then(x, rest), call, perform) {
                 Invoke(shape) => λ ih p out known names c emitted within checked =>
                     t.then_known(Invoke(shape), rest, call, perform, ih, ih_rest, p, out, known, names, c, emitted, within, checked),
@@ -810,8 +812,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Perf
                                     let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
                                     let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
                                     let w_tested = tested.within_trans(y.prog, t.program, yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
-                                    let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, ok.left));
-                                    let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, other, out, Nil, y.names, nc, n_is, w_no, ok.right));
+                                    let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, ok.left));
+                                    let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, ok.right));
                                     let inside = layout.word_inside(condition, j(sym(fit), λ v _ => v.IsTrue(), trivial));
                                     let arms = yes.live_in(t.homes, out).union(no.live_in(t.homes, out));
                                     let live = Cons(condition, arms);
@@ -862,7 +864,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Perf
                                 let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
                                 let w_body = cb.prog.within_trans(tested, t.program, cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
                                 let w_head = head.within_trans(cb.prog, t.program, body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
-                                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, ok.right));
+                                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, ok.right));
                                 let inside = layout.word_inside(again, j(sym(fit), λ v _ => v.IsTrue(), trivial));
                                 λ n env k _ exits next => t.goes_repeat(body, again, call, perform, n, p, names, cb.prog, out, set, inside, within, w_head,
                                     body.live_in(t.homes, loop_after(again, set, out)).within_mem(set, ok.left), runs, k, exits, next, n, env)
@@ -911,9 +913,9 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Perf
 }
 
 // Nothing known as the statement starts.
-theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform)): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
+theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
     s.emit(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → s.checks(t.homes, out).IsTrue() → t.Runs(s, call, perform, out, p, c.prog) {
-    λ p out names c emitted within checked => t.runs_of(s, call, perform, out, p, c.prog, s.emits_runs(t, call, perform, calls, p, out, Nil, names, c, emitted, within, checked))
+    λ p out names c emitted within checked => t.runs_of(s, call, perform, out, p, c.prog, s.emits_runs(t, call, perform, calls, fns, p, out, Nil, names, c, emitted, within, checked))
 }
 
 // ---------------------------------------------------------------------------
@@ -937,13 +939,19 @@ theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, prog
             None => None,
             Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
                 None => None,
-                Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                    None => None,
+                    Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+                },
             },
         }) = Some(program) → program.laid_out().IsTrue() {
         None => λ none => absurd(none),
         Some(c) => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
             None => λ none => absurd(none),
-            Some(d) => λ same => d.prog.deep_exit(layout).laid_of(program, same),
+            Some(d) => (match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                None => λ none => absurd(none),
+                Some(whole) => λ same => whole.laid_of(program, same),
+            }),
         }),
     })(compiled)
 }
@@ -956,36 +964,52 @@ theorem Source::compile_laid(self src: Source, low: BitVec(64), homes: Homes, pr
     let bare: Option<Prog> = match emitted { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => (match a {
             False => None,
-            True => match src.procedures { Nil => bare, Cons(_, _) => src.compile_calls(low, homes) },
+            True => match src.procedures {
+                Nil => match src.functions { Nil => bare, Cons(_, _) => src.compile_calls(low, homes) },
+                Cons(_, _) => src.compile_calls(low, homes),
+            },
         }) = Some(program) → program.laid_out().IsTrue() {
         False => λ none => absurd(none),
         True => (match src.procedures {
-            Nil => (match emitted {
-                None => λ none => absurd(none),
-                Some(c) => λ same => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, same),
+            Nil => (match src.functions {
+                Nil => (match emitted {
+                    None => λ none => absurd(none),
+                    Some(c) => λ same => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, same),
+                }),
+                Cons(_, _) => λ calls => src.calls_laid(low, homes, program, calls),
             }),
             Cons(_, _) => λ calls => src.calls_laid(low, homes, program, calls),
         }),
     })(compiled)
 }
 
-// A source without procedures compiles as before them: `main` from label
-// 0, then exit 0.
-theorem Source::compile_bare(self src: Source, low: BitVec(64), homes: Homes, bare: src.procedures = Nil):
+// A source without procedures or functions compiles as before them: `main`
+// from label 0, then exit 0.
+theorem Source::compile_bare(self src: Source, low: BitVec(64), homes: Homes, bare: src.procedures = Nil, none: src.functions = Nil):
     src.compile(low, homes) = (match src.allocation_ok(homes) {
         False => None,
         True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
     }) {
+    let plain: Option<Prog> = match src.allocation_ok(homes) {
+        False => None,
+        True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+    };
     j(sym(bare), λ ps _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
         False => None,
         True => match ps {
+            Nil => match src.functions {
+                Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+                Cons(_, _) => src.compile_calls(low, homes),
+            },
+            Cons(_, _) => src.compile_calls(low, homes),
+        },
+    }) = plain, j(sym(none), λ fs _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
+        False => None,
+        True => match fs {
             Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
             Cons(_, _) => src.compile_calls(low, homes),
         },
-    }) = (match src.allocation_ok(homes) {
-        False => None,
-        True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-    }), refl)
+    }) = plain, refl))
 }
 
 // The converse, for a reader that has the program: homes that pass the
@@ -994,6 +1018,7 @@ theorem Source::compile_bare(self src: Source, low: BitVec(64), homes: Homes, ba
 // the emission by evaluation and the layout a stretch at a time, since all
 // at once overrun one declaration's fuel.
 theorem Source::compile_of(self src: Source, low: BitVec(64), homes: Homes, program: Prog, allocated: src.allocation_ok(homes).IsTrue(), bare: src.procedures = Nil,
+    none: src.functions = Nil,
     emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0).map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program),
     laid: program.laid_out().IsTrue()):
     src.compile(low, homes) = Some(program) {
@@ -1009,44 +1034,95 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), homes: Homes, prog
                 λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(program), finished)
         },
     })(emitted);
-    trans(src.compile_bare(low, homes, bare), j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
+    trans(src.compile_bare(low, homes, bare, none), j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
             False => None,
             True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
         }) = Some(program), ran))
 }
 
-// The same with procedures: `main` emitted from past the procedures' and
-// the shared exit's labels, the procedures after its exit 0, and the shared
-// exit, laid out (`Source::compile_calls`).
+// What `compile_calls` runs: `main` emitted from past the procedures', the
+// functions' and the shared exit's labels, the procedures after its exit
+// 0, the shared exit, and the functions linked after it, laid out.
+theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Homes, program, main, procs: Prog, names, after: Nat,
+    emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(Compiled(main, names)),
+    code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes), 0, names) = Some(Compiled(procs, after)),
+    whole: procs.deep_exit(src.layout(low, homes)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
+    src.compile_calls(low, homes) = Some(program) {
+    let layout = src.layout(low, homes);
+    let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
+        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
+    let finished = j(sym(whole), λ o _ => (match o as λ _ => Option<Prog> {
+            None => None,
+            Some(x) => match x.laid_out() { False => None, True => Some(x) },
+        }) = Some(program), laid_here);
+    let after_main = j(sym(code), λ o _ => (match o {
+            None => None,
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                None => None,
+                Some(x) => match x.laid_out() { False => None, True => Some(x) },
+            },
+        }) = Some(program), finished);
+    j(sym(emitted), λ o _ => (match o {
+            None => None,
+            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
+                None => None,
+                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                    None => None,
+                    Some(x) => match x.laid_out() { False => None, True => Some(x) },
+                },
+            },
+        }) = Some(program), after_main)
+}
+
+// The same with procedures (`Source::compile_calls`): the converse
+// `write-elf` cites for a source that has them.
 theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes, first: Procedure, rest: List<Procedure>, program, main, procs: Prog, names, after: Nat,
     allocated: src.allocation_ok(homes).IsTrue(), calls: src.procedures = Cons(first, rest),
     emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes), 0, names) = Some(Compiled(procs, after)),
-    whole: procs.deep_exit(src.layout(low, homes)) = program, laid: program.laid_out().IsTrue()):
+    whole: procs.deep_exit(src.layout(low, homes)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile(low, homes) = Some(program) {
     let layout = src.layout(low, homes);
-    let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
-        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
-    let finished = j(sym(whole), λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(program), laid_here);
-    let after_main = j(sym(code), λ o _ => (match o {
-            None => None,
-            Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
-        }) = Some(program), finished);
-    let ran: (src.compile_calls(low, homes) = Some(program)) = j(sym(emitted), λ o _ => (match o {
-            None => None,
-            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
-                None => None,
-                Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
-            },
-        }) = Some(program), after_main);
+    let ran = src.compile_calls_ran(low, homes, program, main, procs, names, after, emitted, code, whole, laid);
+    let plain: Option<Prog> = match src.functions {
+        Nil => match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() },
+        Cons(_, _) => src.compile_calls(low, homes),
+    };
     j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
             False => None,
-            True => match src.procedures { Nil => match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() }, Cons(_, _) => src.compile_calls(low, homes) },
+            True => match src.procedures { Nil => plain, Cons(_, _) => src.compile_calls(low, homes) },
         }) = Some(program),
         j(sym(calls), λ ps _ => (match ps as λ _ => Option<Prog> {
-            Nil => match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() },
+            Nil => plain,
             Cons(_, _) => src.compile_calls(low, homes),
         }) = Some(program), ran))
+}
+
+// And with functions and no procedure: the same code, the procedures none.
+theorem Source::compile_functions_of(self src: Source, low: BitVec(64), homes: Homes, first: Function, rest: List<Function>, program, main, procs: Prog, names, after: Nat,
+    allocated: src.allocation_ok(homes).IsTrue(), bare: src.procedures = Nil, calls: src.functions = Cons(first, rest),
+    emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(Compiled(main, names)),
+    code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes), 0, names) = Some(Compiled(procs, after)),
+    whole: procs.deep_exit(src.layout(low, homes)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
+    src.compile(low, homes) = Some(program) {
+    let layout = src.layout(low, homes);
+    let ran = src.compile_calls_ran(low, homes, program, main, procs, names, after, emitted, code, whole, laid);
+    let plain: Option<Prog> = match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() };
+    j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
+            False => None,
+            True => match src.procedures {
+                Nil => match src.functions { Nil => plain, Cons(_, _) => src.compile_calls(low, homes) },
+                Cons(_, _) => src.compile_calls(low, homes),
+            },
+        }) = Some(program),
+        j(sym(bare), λ ps _ => (match ps as λ _ => Option<Prog> {
+            Nil => match src.functions { Nil => plain, Cons(_, _) => src.compile_calls(low, homes) },
+            Cons(_, _) => src.compile_calls(low, homes),
+        }) = Some(program),
+            j(sym(calls), λ fs _ => (match fs as λ _ => Option<Prog> {
+                Nil => plain,
+                Cons(_, _) => src.compile_calls(low, homes),
+            }) = Some(program), ran)))
 }
 
 // A procedure's code from its parts', so `heather write-elf` states a long
@@ -1319,12 +1395,13 @@ theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, p, q: 
 
 // A source without procedures: `main` from label 0, no call fitting.
 theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
-    compiled: src.compile(r.low, homes) = Some(program), bare: src.procedures = Nil, origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
+    compiled: src.compile(r.low, homes) = Some(program), bare: src.procedures = Nil, none: src.functions = Nil, origin: BitVec(64),
+    s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) + 80 * src.functions.len() <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
@@ -1349,12 +1426,13 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                             λ at_whole => {
                                 let framed: (stack.size + 8 * 0 <= stack.size) = omega();
                                 let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
-                                    src.procedures, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
+                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
                                 let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
                                 let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
                                 let live = src.main.live_in(homes, []);
                                 let saved = Start.saves_rsp(layout, src.depth);
-                                let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
+                                let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
+                                    t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
                                 let w_entry = entry.within_trans(c.prog, whole, src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), Exists(2, refl));
                                 let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
                                 let caps = λ (k: Nat) => {
@@ -1376,7 +1454,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                 },
             })
         },
-    })(refl, trans(sym(src.compile_bare(r.low, homes, bare)), compiled))
+    })(refl, trans(sym(src.compile_bare(r.low, homes, bare, none)), compiled))
 }
 
 // ---------------------------------------------------------------------------
@@ -1458,13 +1536,15 @@ theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p
 }
 
 // What `compile_calls` built: `main` emitted, exit 0 after it in the
-// program, and the program hosting every procedure and the shared exit.
+// program, the program hosting every procedure and the shared exit, laid
+// out, and the functions linked after some code of its own.
 fn Source::CallsBuilt(self src: Source, low: BitVec(64), homes: Homes, program: Prog) → Type {
     let layout = src.layout(low, homes);
     Exists<Compiled>(λ c => (src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = Some(c)) ∧
         (then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program) ∧
         (((i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → proc.Hosted(layout, i, program)) ∧
-        (Exists<Prog>(λ dp => dp.deep_exit(layout).Within(program)) ∧ program.laid_out().IsTrue()))))
+        (Exists<Prog>(λ dp => dp.deep_exit(layout).Within(program)) ∧ (program.laid_out().IsTrue() ∧
+        Exists<Prog>(λ base => Exists<Nat>(λ names => base.links(src.functions, homes.places, names) = Some(program))))))))
 }
 
 theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, program: Prog, compiled: src.compile_calls(low, homes) = Some(program)):
@@ -1477,29 +1557,44 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                 None => None,
                 Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
                     None => None,
-                    Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                        None => None,
+                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+                    },
                 },
             }) = Some(program) → src.CallsBuilt(low, homes, program) {
         None => λ _ none => absurd(none),
         Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
                 src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
                     None => None,
-                    Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                        None => None,
+                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+                    },
                 }) = Some(program) → src.CallsBuilt(low, homes, program) {
             None => λ _ none => absurd(none),
-            Some(d) => λ code same => {
-                let whole = d.prog.deep_exit(layout);
-                (match whole.laid_out() as λ b => (match b { False => None, True => Some(whole) }) = Some(program) → src.CallsBuilt(low, homes, program) {
-                    False => λ none => absurd(none),
-                    True => λ same2 => j(Option::some_inj(whole, program, same2), λ x _ => src.CallsBuilt(low, homes, x), {
-                        let w_d: d.prog.Within(whole) = Exists(3, refl);
-                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, whole, w_d);
-                        let laid2: whole.laid_out().IsTrue() = j(Option::some_inj(whole, program, same2), λ x _ => x.laid_out().IsTrue() → whole.laid_out().IsTrue(), λ l => l)(laid);
-                        Exists(c, ⟨emitted, ⟨exit0(c.prog).within_trans(d.prog, whole, hosted.left, w_d),
-                            ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, whole), hosted.right(i, proc, found)),
-                            ⟨Exists(d.prog, whole.within_self()), laid2⟩⟩⟩⟩)
+            Some(d) => λ code => {
+                let base = d.prog.deep_exit(layout);
+                (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
+                        (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
+                        src.CallsBuilt(low, homes, program) {
+                    None => λ _ none => absurd(none),
+                    Some(whole) => λ linked => (match whole.laid_out() as λ b => (match b as λ _ => Option<Prog> { False => None, True => Some(whole) }) = Some(program) →
+                            src.CallsBuilt(low, homes, program) {
+                        False => λ none => absurd(none),
+                        True => λ same => {
+                            let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
+                                j(Option::some_inj(whole, program, same), λ x _ => base.links(src.functions, homes.places, d.names) = Some(x), linked);
+                            let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
+                            let w_d: d.prog.Within(program) = d.prog.within_trans(base, program, Exists(3, refl), w_base);
+                            let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
+                            let r: src.CallsBuilt(low, homes, program) = Exists(c, ⟨emitted, ⟨exit0(c.prog).within_trans(d.prog, program, hosted.left, w_d),
+                                ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, program), hosted.right(i, proc, found)),
+                                ⟨Exists(d.prog, w_base), ⟨laid, Exists(base, Exists(d.names, linked_p))⟩⟩⟩⟩⟩);
+                            r
+                        },
                     }),
-                })(same)
+                })(refl)
             },
         })(refl),
     })(refl, compiled)
@@ -1514,19 +1609,6 @@ theorem Nat::same_as_eq(self n: Nat, m: Nat, same: n.same_as(m).IsTrue()): n = m
     let b: (m <= n) = Nat::leb_sound(m, n, both.right);
     let e: (n = m) = omega(a, b);
     e
-}
-
-theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → i < layout.words {
-    match ids {
-        Nil => λ i _ never => false_elim(never),
-        Cons(id, rest) => λ i fit m => {
-            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
-            match m {
-                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
-                Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
-            }
-        },
-    }
 }
 
 // What a fitting call gives the proof: its procedure, and each check.
@@ -1648,19 +1730,6 @@ theorem Gprs::holding_scratch(self g: Gprs, g2: Gprs, keeps: g2.KeepsScratch(g),
     }
 }
 
-// A near call's push, as a store to the stack.
-theorem Target::call_pushed(self t: Target, s: MachineState<X86Memory(t.r.profile)>, displacement: BitVec(32), i: Nat,
-    rsp: read_gpr(Rsp, s.gprs) = t.stack.at(i + 8)):
-    call_near_after(t.stack.writes, displacement, s).memory = t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5))) {
-    let pushed: (push_address(s.gprs) = t.stack.at(i)) =
-        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp), push_at(t.stack.low, i));
-    j(t.stack_writes, λ w _ => (w.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
-            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))) →
-            (t.stack.writes.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
-            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))), λ e => e)(
-        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ a => t.r.profile.store(s.memory, a, word_bytes(next_rip(s.rip, 5))), pushed))
-}
-
 // ---------------------------------------------------------------------------
 // Every call runs as the call
 
@@ -1699,7 +1768,8 @@ theorem Target::perform_deep(self t: Target, src: Source, call: Answers(), n: Na
 // passed, the call, the callee's body by the depth below, the return, the
 // words restored, the frame left, and the results taken.
 theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d: Nat, room: t.room = Succ(d), tp: t.procedures = src.procedures,
-    hosts: t.Hosts(), ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.room = d → c.Calls(call, src.performs(call, n, d))):
+    hosts: t.Hosts(), answers: t.Answered(call),
+    ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
     t.Calls(call, src.performs(call, n, Succ(d))) {
     let layout = t.layout();
     let regs = call_registers();
@@ -1727,7 +1797,7 @@ theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d:
         let w_exit = hosted.proof.proof.proof.right.right;
         let pf = proc.fits_parts(layout, fits_eq);
         let entry_live = proc.body.live_in(t.homes, proc.results);
-        let lbl = Prog::At(pre_i, Succ(index), Block([]));
+        let lbl = Prog::At(pre_i, layout.procedure_label(index), Block([]));
         let stored = then(then(lbl, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
         let entry = proc.entry_code(pre_i, layout, index);
         let moved = b_i.prog.words_to(layout, proc.results, regs);
@@ -1771,16 +1841,17 @@ theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d:
                 Inl(r) => saved.mem_rev(x, r),
                 Inr(never) => false_elim(never),
             };
-            let enter = λ (d2: Nat) (roomy: d2 * (8 * (t.words + 1)) <= t.index) (eq: t.room = Succ(d2)) => {
+            let enter = λ (d2: Nat) (roomy: d2 * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) (eq: t.room = Succ(d2)) => {
                 let u = t.activation(t.index, t.frames, d2, t.framed, roomy);
                 let d_eq: (d2 = d) = omega(eq, room);
                 let s_le: (saved.len() <= t.words) = fp.right.right.right.right.right.left;
-                let was0: (Succ(d2) * (8 * (t.words + 1)) <= t.index) = j(eq, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
-                let was1: ((8 * (t.words + 1)) * Succ(d2) <= t.index) = j(Nat::mul_comm(Succ(d2), 8 * (t.words + 1)), λ v _ => v <= t.index, was0);
-                let was: ((8 * (t.words + 1)) * d2 + 8 * (t.words + 1) <= t.index) = was1;
+                let was0: (Succ(d2) * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = j(eq, λ r _ => r * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index, t.roomy);
+                let was1: ((8 * (t.words + 1)) * Succ(d2) + 80 * t.functions.len() <= t.index) =
+                    j(Nat::mul_comm(Succ(d2), 8 * (t.words + 1)), λ v _ => v + 80 * t.functions.len() <= t.index, was0);
+                let was: (((8 * (t.words + 1)) * d2 + 8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = was1;
                 let comm: (d2 * (8 * (t.words + 1)) = (8 * (t.words + 1)) * d2) = Nat::mul_comm(d2, 8 * (t.words + 1));
                 let room8: (8 * saved.len() + 8 <= t.index) = omega(was, s_le);
-                let roomy2: (d2 * (8 * (t.words + 1)) <= t.index - 8 * saved.len() - 8) = omega(was, s_le, comm);
+                let roomy2: (d2 * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index - 8 * saved.len() - 8) = omega(was, s_le, comm);
                 let j_eq: (t.index - 8 * saved.len() - 8 + 8 = t.index - 8 * saved.len()) = omega(room8);
                 let top_eq: (t.index - 8 * saved.len() + 8 * saved.len() = t.index) = omega(room8);
                 let below_i2: (t.index - 8 * saved.len() - 8 + 8 <= t.index) = omega(room8);
@@ -1847,16 +1918,16 @@ theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d:
                             pops(s, rip_s, resident_s, ⟨held_m, ⟨rsp_w, ⟨frames_m, holding_w⟩⟩⟩)
                         })
                 };
-                let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, d_eq))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
+                let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
                     n, proc.enter(env, args), k2, exits, returned);
                 let next_c = c.at_like(prog_len(entry), entry_live, tree2, proc.enter(env, args), env.set_words(proc.params, va),
                     env.entered_like(proc.params, entry_live, va, long_params, entry_live.within_mem(proc.params, pf.right.left)), body);
                 // The call.
                 let q2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => u.Held(live, env, g, m) ∧ ((read_gpr(Rsp, g) = t.stack.at(t.index - 8 * saved.len())) ∧
                     (t.FramesAt(m, sv, t.index - 8 * saved.len()) ∧ g.Holding(regs, va)));
-                let displacement = asm_jump_of(asm_labels(t.program), prog_len(pa), CallTo(Succ(index)));
-                let called = t.io().goes_callto(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_ca.witness, pa, 0, Succ(index), w_ca.proof,
-                    prog_len(pre_i), t.program.lands_call(t.laid, w_ca.witness, pa, 0, index, w_ca.proof, w_lbl.witness, pre_i, Block([]), w_lbl.proof),
+                let displacement = asm_jump_of(asm_labels(t.program), prog_len(pa), CallTo(layout.procedure_label(index)));
+                let called = t.io().goes_callto(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_ca.witness, pa, 0, layout.procedure_label(index), w_ca.proof,
+                    prog_len(pre_i), t.program.lands_call(t.laid, w_ca.witness, pa, 0, index + t.functions.len(), w_ca.proof, w_lbl.witness, pre_i, Block([]), w_lbl.proof),
                     tree2, λ (s: MachineState<X86Memory(t.r.profile)>) => q2(s.gprs, s.memory), λ _ => t.index - 8 * saved.len() - 8,
                     λ s pre => ⟨trans(pre.right.left, cong_fn<Nat, BitVec(64)>(λ x => t.stack.at(x), sym(j_eq))), fits_i2⟩,
                     λ s pre => {
@@ -1915,22 +1986,23 @@ theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d:
 
 // Every call at depth `d` runs as the call, by induction on the depth.
 theorem Source::calls_at(self src: Source, call: Answers(), n: Nat, d: Nat):
-    (t: Target) → t.procedures = src.procedures → t.Hosts() → t.room = d → t.Calls(call, src.performs(call, n, d)) {
+    (t: Target) → t.procedures = src.procedures → t.Hosts() → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
     match d {
-        Zero => λ t tp hosts room => t.perform_deep(src, call, n, room, hosts),
-        Succ(d1) => λ t tp hosts room => t.perform_call(src, call, n, d1, room, tp, hosts, src.calls_at(call, n, d1)),
+        Zero => λ t tp hosts _ room => t.perform_deep(src, call, n, room, hosts),
+        Succ(d1) => λ t tp hosts answers room => t.perform_call(src, call, n, d1, room, tp, hosts, answers, src.calls_at(call, n, d1)),
     }
 }
 
-// A source with procedures: `main` from past their labels, every call by
-// the depth (`Source::calls_at`).
+// A source with procedures or functions: `main` from past their labels,
+// every call of a procedure by the depth (`Source::calls_at`), every call
+// of a function by its contract (`Target::functions_run`).
 theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
     allocated: src.allocation_ok(homes).IsTrue(), compiled: src.compile_calls(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) + 80 * src.functions.len() <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
@@ -1943,16 +2015,21 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let emitted = built.proof.left;
     let w_whole = built.proof.right.left;
     let framed: (stack.size + 8 * 0 <= stack.size) = omega();
-    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right, args,
-        src.procedures, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
+    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right.left, args,
+        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
     let hosts: t.Hosts() = ⟨built.proof.right.right.left, built.proof.right.right.right.left⟩;
+    let linked = built.proof.right.right.right.right.right;
+    let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
+        src.functions, linked.proof.proof);
+    let answers: t.Answered(call) = t.answers_of(meets.left, meets.right);
+    let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
     let live = src.main.live_in(homes, []);
     let saved = Start.saves_rsp(layout, src.depth);
     let w_c: c.prog.Within(program) = c.prog.within_trans(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
         program, Exists(2, refl), w_whole);
-    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, refl),
+    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, answers, refl), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
     let w_entry = entry.within_trans(c.prog, program, src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
     let w_saved = saved.within_trans(entry, program, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
@@ -1983,18 +2060,25 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) + 80 * src.functions.len() <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes), src.layout(r.low, homes), [], 0) { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
             False => None,
-            True => match src.procedures { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes) },
+            True => match src.procedures {
+                Nil => match src.functions { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes) },
+                Cons(_, _) => src.compile_calls(r.low, homes),
+            },
         }) = Some(program) → SimPaidProgram(r.profile.linux(), src.denote(args), s) {
         False => λ _ none => absurd(none),
-        True => λ allocated => (match none: src.procedures {
-            Nil => λ _ => native_compile_correct_bare(src, r, homes, fits, program, compiled, none, origin, s, here, resident, zero,
-                stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
+        True => λ allocated => (match no_procedures: src.procedures {
+            Nil => (match no_functions: src.functions {
+                Nil => λ _ => native_compile_correct_bare(src, r, homes, fits, program, compiled, no_procedures, no_functions, origin, s, here, resident, zero,
+                    stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
+                Cons(_, _) => λ calls => native_compile_correct_calls(src, r, homes, fits, program, j(sym(allocated), λ v _ => v.IsTrue(), trivial), calls,
+                    origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
+            }),
             Cons(_, _) => λ calls => native_compile_correct_calls(src, r, homes, fits, program, j(sym(allocated), λ v _ => v.IsTrue(), trivial), calls,
                 origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
         }),

@@ -38,8 +38,9 @@
 //   counted loop of leaves around its body (the count and the parameters
 //   moved in, a zero test at the head, the body, the next state moved into
 //   the parameters, a test of the exit bit, the count less one and a JMP
-//   back; the outputs moved out at the end). A call region is refused: the
-//   builder inlines.
+//   back; the outputs moved out at the end). A call region is a CALL of the
+//   function, compiled after the program's own code
+//   (docs/native-one-compiler-design.md §2.2).
 // - A byte node compares its index with its buffer's capacity (CMP and a
 //   JAE past the access), and loads or stores the byte at the buffer's
 //   address plus the index; a store then reads the byte back as a load
@@ -73,6 +74,7 @@ import native_structured;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
+import function_ir_lower_calls;
 import function_ir_state;
 import function_ir_pass;
 import x86_64;
@@ -110,12 +112,17 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // `Layout::of` computes from the homes once: every leaf reads them several
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
-// The procedures are the table a call names (docs/native-procedures-design.md).
+// The procedures are the table a call names (docs/native-procedures-design.md),
+// the functions the ones a region's `Call` does.
 record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
-    procedures: List<Procedure> := [] }
+    procedures: List<Procedure> := [], functions: List<Function> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures)
+    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions)
+}
+
+fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
+    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions)
 }
 
 // Word `id` has a slot.
@@ -771,9 +778,10 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
 fn call_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
 
 // Procedure `index`'s label, and the shared exit of a call too deep: the
-// labels below `main`'s own (§4.2).
-fn Layout::procedure_label(self layout: Layout, index: Nat) → Nat { Succ(index) }
-fn Layout::deep_label(self layout: Layout) → Nat { Succ(layout.procedures.len()) }
+// labels below `main`'s own (§4.2), past the functions' (function `f` is at
+// `Succ(f)`, function_ir_lower_calls).
+fn Layout::procedure_label(self layout: Layout, index: Nat) → Nat { Succ(index + layout.functions.len()) }
+fn Layout::deep_label(self layout: Layout) → Nat { Succ(layout.procedures.len() + layout.functions.len()) }
 
 // RSP down a word, through RBX, and up one.
 fn rsp_down() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8)), SubRR(Rsp, Rbx)] }
@@ -849,6 +857,24 @@ fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args
 
 fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
 
+// A call of function `callee` (docs/native-one-compiler-design.md §2.2),
+// `out` live after it: RSP the frame, the arguments in their registers,
+// R10 carried in RBX across the CALL (a function keeps RBX, RBP and R12 to
+// R15, so every register a word lives in is as it was), and RAX put in the
+// result's home.
+fn Prog::function_call(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat) → Prog {
+    let framed = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)));
+    let passed = framed.words_to(layout, arguments, call_registers());
+    then(then(then(passed, Block([MovRR(Rbx, R10)])), CallTo(Succ(callee))), Block([MovRR(R10, Rbx)])).word_from(layout, out, result, Rax)
+}
+
+// What a function's call needs to be emitted: the function, as many
+// arguments as it takes, at most six, and every word it names in the file.
+fn Layout::function_fits(self layout: Layout, callee: Nat, arguments: List<Nat>, result: Nat) → Bool {
+    Succ(callee).leb(layout.functions.len()) && (arity_fits(program_arity(layout.functions, callee), arguments.len()) &&
+        (arguments.len().leb(6) && layout.words_fit(Cons(result, arguments))))
+}
+
 // Each word apart from what is live after it in `words_from`.
 fn Homes::moves_apart(self homes: Homes, out, ids: List<Nat>) → Bool {
     match ids { Nil => True, Cons(id, rest) => homes.apart(id, out.minus(rest)) && homes.moves_apart(out, rest) }
@@ -888,7 +914,8 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
             when_true.code(p.tests(layout, condition, Succ(names)), layout, out, Succ(Succ(names))).and_then(λ y =>
             when_false.code(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, y.names).and_then(λ n =>
             Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))),
-        Call(_, _, _) => None,
+        Call(callee, arguments, result) => layout.function_fits(callee, arguments, result).guard(
+            Some(Compiled(p.function_call(layout, out, callee, arguments, result), names))),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let head = Succ(names);
             let enter = Succ(head);
@@ -1033,7 +1060,9 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures) }
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout {
+    Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures).with_functions(src.functions)
+}
 
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
     Start.saves_rsp(src.layout(low, homes), src.depth).inits(src.layout(low, homes), src.buffers, 0)
@@ -1096,8 +1125,22 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
     then(then(p.label(layout.deep_label()), Block([MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))])), Syscall)
 }
 
-// A source with procedures: `main` naming its labels past theirs and the
-// shared exit's, then exit 0, each procedure, and the shared exit.
+// The functions the regions call, after the program's own code `p`, their
+// values where `places` proposes; their inner labels from `names`. Checked
+// evaluable first: a call's answer is `program_eval`'s only then.
+fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
+    match functions {
+        Nil => Some(p),
+        Cons(_, _) => match program_evaluable(functions) {
+            False => None,
+            True => match emit_functions_after(p, functions, places, names) { None => None, Some(out) => Some(out.prog) },
+        },
+    }
+}
+
+// A source with procedures or functions: `main` naming its labels past
+// theirs and the shared exit's, then exit 0, each procedure, the shared
+// exit, and the functions.
 fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
     let layout = src.layout(low, homes);
     match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
@@ -1105,9 +1148,9 @@ fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Op
         Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
                 layout, 0, c.names) {
             None => None,
-            Some(d) => {
-                let whole = d.prog.deep_exit(layout);
-                match whole.laid_out() { False => None, True => Some(whole) }
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                None => None,
+                Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
             },
         },
     }
@@ -1117,7 +1160,10 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
     match src.allocation_ok(homes) {
         False => None,
         True => match src.procedures {
-            Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+            Nil => match src.functions {
+                Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+                Cons(_, _) => src.compile_calls(low, homes),
+            },
             Cons(_, _) => src.compile_calls(low, homes),
         },
     }
@@ -1142,7 +1188,7 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //   0  a structured region the compiler does not take
 //      (native_structured: a node not at width 64 or reading a word not
 //      written before it, a branch on a bit that may not be its word's low
-//      bit, a loop not in counted form, or a call): its kind (1 Sequence,
+//      bit, or a loop not in counted form): its kind (1 Sequence,
 //      2 Compose, 3 Conditional, 4 Call, 5 Loop)
 //   1  a leaf needs more registers than the pool holds (needed, the pool:
 //      the registers no word lives in)
@@ -1166,6 +1212,12 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //      a word past the slots, more saved words than slots, or a result
 //      not apart from what is live after it) (the procedure)
 //  15  a procedure that does not compile (`Procedure::code`) (its index)
+//  16  a call of a function that does not fit (`Layout::function_fits`: no
+//      such function, another count of arguments than it takes, more than
+//      six, or a word past the slots) (the function)
+//  17  the functions the regions call do not link (`Prog::links`: not
+//      evaluable, or lowered with the homes' placement of their values
+//      refused)
 //
 // Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
 // width 64: one with every node wide compiles a node at a time.
@@ -1309,7 +1361,7 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
             },
             Cons(reason, details) => Cons(reason, details),
         },
-        Call(_, _, _) => [0, 4, 0],
+        Call(callee, arguments, result) => match layout.function_fits(callee, arguments, result) { False => [16, callee, 0], True => [] },
         Loop(_, _, _, _, body, exit, _, _, exhausted) => match ids_refusal(layout, [exhausted, exit]) {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
@@ -1378,7 +1430,10 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat
             False => [0, 5, 12, 0, 0],
             True => match src.procedures.procedures_refusal(src.layout(low, homes), 0) {
                 Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
-                Nil => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+                Nil => match Start.links(src.functions, homes.places, 0) {
+                    None => [0, 5, 17, 0, 0],
+                    Some(_) => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+                },
             },
         },
     }
@@ -1457,7 +1512,12 @@ fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
 
 // The label name `main` is emitted from: 0, or past the procedures' and
 // the shared exit's with procedures (`Source::compile_calls`).
-fn Source::main_names(self src: Source) → Nat { match src.procedures { Nil => 0, Cons(_, _) => Succ(src.procedures.len()) } }
+fn Source::main_names(self src: Source) → Nat {
+    match src.procedures {
+        Nil => match src.functions { Nil => 0, Cons(_, _) => Succ(src.functions.len()) },
+        Cons(_, _) => Succ(src.procedures.len() + src.functions.len()),
+    }
+}
 
 fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(src.main_names(), [])).numbers }
 

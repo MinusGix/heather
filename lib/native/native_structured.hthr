@@ -160,7 +160,9 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
             False => None,
             True => when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ b => Some(a.join(b)))),
         },
-        Call(_, _, _) => None,
+        // A call reads its arguments and leaves a word, whose low bit a
+        // conditional may branch on.
+        Call(_, arguments, result) => match s.all_defined(arguments) { False => None, True => Some(s.put(result, True)) },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             match (s.defined(bound) && s.all_defined(inputs))
                 && Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).loop_shape() {

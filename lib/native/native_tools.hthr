@@ -3,13 +3,16 @@
 // `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native-procedures-design.md), written with the builder
-// (`native_build`) and lowered to sources `heather write-elf` compiles.
+// (`native_build`) and lowered to sources `heather write-elf` compiles;
+// and tr through a word function it calls (`native_tool_words`).
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
 // source the tool lowers to).
 import native_build;
 import native_decimal;
 import native_source;
+import native_tool_words;
+import native_tool_words_program;
 import list;
 import bitvec;
 import string;
@@ -46,6 +49,22 @@ fn tr_upper(capacity: Nat) → Tool {
 }
 
 fn tr_upper_tool() → Tool { tr_upper(256) }
+
+// tr once more, each byte through `raise_letter` (native_tool_words): a
+// call, in the bounded loop, of a function compiled into the same file by
+// the function compiler (docs/native-one-compiler-design.md §2.2). The
+// tool's program is the one `heather reflect` wrote of it.
+fn raise_bytes_called(buf: Buf, count: Val) → Calc {
+    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c => fresh(num(0), λ r =>
+        call(0, [c.get()], r).then(buf.store(i.get(), r.get())))))
+}
+
+fn tr_upper_called(capacity: Nat) → Tool {
+    program(raise_letter_native_program(), buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
+        compute(raise_bytes_called(buf, n.get())) ++ write_all(stdout(), buf, n.get())))))
+}
+
+fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
 
 // ---------------------------------------------------------------------------
 // yes

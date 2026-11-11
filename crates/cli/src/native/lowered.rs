@@ -1,5 +1,6 @@
 //! A source read back as a literal (`Source::spelled`, native_source_spelled): its
-//! words, its buffers, and its statement tree with each leaf's nodes. `write-elf`
+//! words, its buffers, the functions it calls, and its statement tree with
+//! each leaf's nodes. `write-elf`
 //! states the literal, checks it equal to the source by `refl`, and
 //! compiles it, so a source a builder lowers is evaluated once rather than
 //! in every statement of the certificate.
@@ -190,18 +191,30 @@ impl Printer<'_> {
 
 /// The definitions of `{p}_lowered()`, the source `numbers` spell, and its
 /// buffers' capacities and initial lengths; `None` when the source spelled
-/// itself `[0]` (a source with functions), which is compiled as it is.
+/// itself `[0]`, which is compiled as it is.
 /// A source with procedures spells itself `[2]`, its depth after its words
-/// and its procedures after its buffers.
+/// and its procedures after its buffers; one with functions `[3]`, as `[2]`
+/// with its functions before its procedures, each a definition
+/// (`{p}_fn_{k}()`).
 pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u64, usize)>)>, String> {
     let mut printer = Printer { reader: Reader { numbers, at: 0 }, p, defs: String::new(), count: 0 };
     let tag = printer.reader.next()?;
     if tag == 0 { return Ok(None); }
-    if tag > 2 { return Err(format!("source tag {tag}")); }
+    if tag > 3 { return Err(format!("source tag {tag}")); }
     let words = printer.reader.next()?;
-    let depth = if tag == 2 { Some(printer.reader.next()?) } else { None };
+    let depth = if tag >= 2 { Some(printer.reader.next()?) } else { None };
     let count = printer.reader.next()? as usize;
     let buffers = buffers(p, &mut printer.reader, count)?;
+    let mut functions = Vec::new();
+    if tag == 3 {
+        for k in 0..printer.reader.next()? {
+            let parameters = printer.reader.ids()?;
+            let (body, _) = printer.reader.region()?;
+            let result = printer.reader.next()?;
+            printer.defs.push_str(&format!("fn {p}_fn_{k}() → Function {{ Function({parameters}, {body}, {result}) }}\n"));
+            functions.push(format!("{p}_fn_{k}()"));
+        }
+    }
     let mut calls = String::new();
     if let Some(depth) = depth {
         let count = printer.reader.next()? as usize;
@@ -218,8 +231,8 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u
     if printer.reader.at != numbers.len() {
         return Err("the spelled source ran past its statement".into());
     }
-    Ok(Some((format!("{}{}fn {p}_lowered() → Source {{ Source(functions := [], buffers := {}, words := {words}, main := {main}{calls}) }}\n",
-        buffers.defs, printer.defs, buffers.list), buffers.shapes)))
+    Ok(Some((format!("{}{}fn {p}_lowered() → Source {{ Source(functions := [{}], buffers := {}, words := {words}, main := {main}{calls}) }}\n",
+        buffers.defs, printer.defs, functions.join(", "), buffers.list), buffers.shapes)))
 }
 
 /// Initial bytes in each definition of a buffer's bytes: `write-elf`

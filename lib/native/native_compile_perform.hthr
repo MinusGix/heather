@@ -56,8 +56,8 @@ import set_tactic;
 
 // The same target running another activation.
 fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, room: Nat, framed: index + 8 * frames.len() <= t.stack.size,
-    roomy: room * (8 * (t.words + 1)) <= index) → Target {
-    Target(t.r, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.stack, t.stack_writes,
+    roomy: room * (8 * (t.words + 1)) + 80 * t.functions.len() <= index) → Target {
+    Target(t.r, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
         t.stack_above, t.stack_canonical, index, frames, room, framed, roomy)
 }
 
@@ -105,7 +105,7 @@ theorem Target::read_at(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.p
 // The frame slot stored: the activation with its frame at offset `index`
 // of the stack and the frames from there those given.
 theorem Target::held_frame_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    index: Nat, frames: List<BitVec(64)>, framed: index + 8 * frames.len() <= t.stack.size, roomy: t.room * (8 * (t.words + 1)) <= index,
+    index: Nat, frames: List<BitVec(64)>, framed: index + 8 * frames.len() <= t.stack.size, roomy: t.room * (8 * (t.words + 1)) + 80 * t.functions.len() <= index,
     at: t.FramesAt(m, frames, index)):
     t.activation(index, frames, t.room, framed, roomy).Held(live, env, g, t.r.profile.store(m, t.layout().frame_at(), word_bytes(t.stack.at(index)))) {
     let layout = t.layout();
@@ -138,7 +138,7 @@ theorem Target::held_frame_store(self t: Target, live: List<Nat>, env: Env, g: G
 
 // The room slot stored.
 theorem Target::held_room_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    room: Nat, word: BitVec(64), value: word.toNat() = room, roomy: room * (8 * (t.words + 1)) <= t.index):
+    room: Nat, word: BitVec(64), value: word.toNat() = room, roomy: room * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index):
     t.activation(t.index, t.frames, room, t.framed, roomy).Held(live, env, g, t.r.profile.store(m, t.layout().room_at(), word_bytes(word))) {
     let layout = t.layout();
     let words = held.witness;
@@ -290,7 +290,7 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
     deep_k: Nat, deep_before: Prog, deep_item: Asm, deep_at: asm_back(t.program, deep_k) = Prog::At(deep_before, t.layout().deep_label(), deep_item),
     tree: ITree<BitVec(64)>(Events::linux()),
     zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
-    more: (d: Nat) → (roomy: d * (8 * (t.words + 1)) <= t.index) → t.room = Succ(d) →
+    more: (d: Nat) → (roomy: d * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) → t.room = Succ(d) →
         t.GoesR(prog_len(p.call_enters(t.layout())), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
             t.activation(t.index, t.frames, d, t.framed, roomy).Held(live, env, g, m) ∧ (read_gpr(Rsp, g) = t.frame()))):
     t.At(prog_len(p), live, tree, env) {
@@ -317,8 +317,8 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
     // One less, past the JE.
     let fall = λ (d: Nat) (same: t.room = Succ(d)) => {
         let fewer: (d * (8 * (t.words + 1)) <= Succ(d) * (8 * (t.words + 1))) = Nat::mul_le_mono_r(8 * (t.words + 1), d, Succ(d), omega());
-        let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(same, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
-        let roomy: (d * (8 * (t.words + 1)) <= t.index) = Nat::le_trans(d * (8 * (t.words + 1)), Succ(d) * (8 * (t.words + 1)), t.index, fewer, was);
+        let was: (Succ(d) * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = j(same, λ r _ => r * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index, t.roomy);
+        let roomy: (d * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = omega(fewer, was);
         let u = t.activation(t.index, t.frames, d, t.framed, roomy);
         let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => u.Held(live, env, g, m) ∧ (read_gpr(Rsp, g) = t.frame());
         let post = λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory);
@@ -366,7 +366,7 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
             });
         entered
     };
-    let lands = t.program.lands_jcc(t.laid, w_room.witness, p3, 0, E, t.procedures.len(), w_room.proof, deep_k, deep_before, deep_item, deep_at);
+    let lands = t.program.lands_jcc(t.laid, w_room.witness, p3, 0, E, t.procedures.len() + t.functions.len(), w_room.proof, deep_k, deep_before, deep_item, deep_at);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_room.witness, p3, 0, E, layout.deep_label(), w_room.proof,
         prog_len(deep_before), lands, tree, pre,
         λ u here resident held => match z: t.room {
@@ -408,17 +408,6 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
 // Where a call's pieces start, inside what they build
 
 // A call's code from its start (`Prog::performs`).
-theorem Prog::within_words_to(layout: Layout, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_to(layout, ids, registers)) {
-    match ids {
-        Nil => λ registers p => p.within_self(),
-        Cons(id, rest) => λ registers => match registers {
-            Nil => λ p => p.within_self(),
-            Cons(register, more) => λ p => p.within_trans(p.word_to(layout, id, register), p.word_to(layout, id, register).words_to(layout, rest, more),
-                p.within_word_to(layout, id, register), Prog::within_words_to(layout, rest, more, p.word_to(layout, id, register))),
-        },
-    }
-}
-
 theorem Prog::within_words_from(layout: Layout, out: List<Nat>, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_from(layout, out, ids, registers)) {
     match ids {
         Nil => λ registers p => p.within_self(),
@@ -1109,11 +1098,11 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
 
 // A room one past `d` still counts in a word.
 theorem Target::room_small(self t: Target, d: Nat, succ: t.room = Succ(d)): Succ(d) < Nat::pow(2, 64) {
-    let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
+    let was: (Succ(d) * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index, t.roomy);
     let one_le: (1 * Succ(d) <= (8 * (t.words + 1)) * Succ(d)) = Nat::mul_le_mono_r(Succ(d), 1, 8 * (t.words + 1), omega());
     let one: (Succ(d) <= Succ(d) * (8 * (t.words + 1))) = j(Nat::mul_comm(8 * (t.words + 1), Succ(d)), λ x _ => Succ(d) <= x,
         j(Nat::mul_left_one(Succ(d)), λ x _ => x <= (8 * (t.words + 1)) * Succ(d), one_le));
-    let below: (Succ(d) <= t.index) = Nat::le_trans(Succ(d), Succ(d) * (8 * (t.words + 1)), t.index, one, was);
+    let below: (Succ(d) <= t.index) = omega(one, was);
     omega(below, t.framed, t.stack_canonical, canonical_below_top())
 }
 
@@ -1121,7 +1110,7 @@ theorem Target::room_small(self t: Target, d: Nat, succ: t.room = Succ(d)): Succ
 // words above it and one less room, RSP back at the caller's frame and the
 // caller's frames there: the caller's activation again.
 theorem Target::goes_call_leave(self t: Target, live: List<Nat>, env: Env, p: Prog, d: Nat, succ: t.room = Succ(d),
-    index: Nat, framed: index + 8 * Nil<BitVec(64)>.len() <= t.stack.size, roomy: d * (8 * (t.words + 1)) <= index,
+    index: Nat, framed: index + 8 * Nil<BitVec(64)>.len() <= t.stack.size, roomy: d * (8 * (t.words + 1)) + 80 * t.functions.len() <= index,
     q: Gprs → Type, keep: (g, g2: Gprs) → q(g) → g2.KeepsScratch(g) → q(g2),
     within: p.call_leaves(t.layout()).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.GoesR(prog_len(p.call_leaves(t.layout())), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ q(g))):
@@ -1134,8 +1123,8 @@ theorem Target::goes_call_leave(self t: Target, live: List<Nat>, env: Env, p: Pr
     let slots: (so + 24 <= t.r.size) = t.fits;
     let u = t.activation(index, Nil, d, framed, roomy);
     let fewer: (d * (8 * (t.words + 1)) <= Succ(d) * (8 * (t.words + 1))) = Nat::mul_le_mono_r(8 * (t.words + 1), d, Succ(d), omega());
-    let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
-    let roomy_d: (d * (8 * (t.words + 1)) <= t.index) = Nat::le_trans(d * (8 * (t.words + 1)), Succ(d) * (8 * (t.words + 1)), t.index, fewer, was);
+    let was: (Succ(d) * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index, t.roomy);
+    let roomy_d: (d * (8 * (t.words + 1)) + 80 * t.functions.len() <= t.index) = omega(fewer, was);
     let v1 = t.activation(t.index, t.frames, d, t.framed, roomy_d);
     let small: (Succ(d) < Nat::pow(2, 64)) = t.room_small(d, succ);
     let f1 = then(p, Block([MovRI(Rbx, layout.frame_at())]));
@@ -1288,7 +1277,7 @@ theorem Target::held_args(self t: Target, live: List<Nat>, env: Env, g: Gprs, m:
 // stored, the callee's activation, and its parameters set to the values
 // where its body needs them.
 theorem Target::goes_callee_entry(self t: Target, live: List<Nat>, env: Env, pre: Prog, proc: Procedure, index, index2: Nat, frames2: List<BitVec(64)>,
-    framed2: index2 + 8 * frames2.len() <= t.stack.size, roomy2: t.room * (8 * (t.words + 1)) <= index2, values: List<BitVec(64)>,
+    framed2: index2 + 8 * frames2.len() <= t.stack.size, roomy2: t.room * (8 * (t.words + 1)) + 80 * t.functions.len() <= index2, values: List<BitVec(64)>,
     tree: ITree<BitVec(64)>(Events::linux()), within: proc.entry_code(pre, t.layout(), index).Within(t.program),
     inside: (i: Nat) → Mem(i, proc.params) → i < t.words, apart: t.homes.moves_apart(proc.body.live_in(t.homes, proc.results), proc.params).IsTrue(),
     covered: proc.body.live_in(t.homes, proc.results).within(proc.params).IsTrue(),

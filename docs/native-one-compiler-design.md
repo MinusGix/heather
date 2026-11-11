@@ -86,6 +86,35 @@ home. The proof uses the function's `Returns` as a silent run.
 This is where the two doors first become one program: a tool whose helper
 is a `runtime fn`, compiled once and called.
 
+**How, settled against the code (2026-11-11).**
+
+- *One `Prog`.* The program's code stays first, so its entry is offset
+  zero; the functions follow (`emit_functions_after`). The function
+  compiler's theorem is already about any site its code lies within
+  (`MayCall`), so nothing is proved twice. Function `f` keeps the label
+  `Succ(f)`; the program names its procedures, its deep exit and `main`'s
+  labels past the functions' (`Layout.functions`), and the functions'
+  inner labels start where the program's end.
+- *The call.* RSP is loaded from the frame slot, as a procedure call
+  does; the arguments go from their homes to the six registers
+  (`Prog::words_to`); R10 goes to RBX, CALL, and back; RAX goes to the
+  result's home. A function keeps RBX, RBP and R12 to R15, so with R10
+  carried in RBX every home register is as it was, and no allocator
+  learns anything.
+- *The proof.* `Site::moves_call` against the function's `Returns` is a
+  straight run, which a tree claim absorbs (`LinuxIo::goes_after`). What
+  the program holds between statements (`Target::Held`) is kept by a
+  word stored below its frame (`held_stack_store`), so it is kept by
+  `Wrote` (`Star::invariant`): this is where U1 is used.
+- *Room.* Each activation keeps `72 * functions + 8` bytes below what
+  its procedure calls need; the theorem's stack premise grows by that
+  (`Source::stack_need`).
+- *Checks.* The compile checks the functions evaluable
+  (`program_evaluable`), each call's callee and arity, and that the
+  result is apart from what is live after it; a region with a call is
+  scoped like one with a node that reads the arguments and writes the
+  result.
+
 ### 2.3 A buffer has one home, whoever lends it
 
 As the exports note has it (§3 there): a value in every meaning, a home in

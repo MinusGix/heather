@@ -21,6 +21,7 @@ import span_set;
 import native_compile;
 import native_alloc;
 import native_compile_facts;
+import function_ir;
 import function_ir_eval;
 import linux_calls;
 import linux_x86_64_io;
@@ -66,6 +67,9 @@ record Target {
     args: List<List<BitVec(8)>>,
     // The procedures a call may name (docs/native-procedures-design.md).
     procedures: List<Procedure>,
+    // The functions a region may call (docs/native-one-compiler-design.md
+    // §2.2), compiled after the program's own code.
+    functions: List<Function>,
     // The process's stack (§5): above the region and below the canonical
     // boundary, its stores Linux's.
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data),
@@ -76,15 +80,19 @@ record Target {
     // the words from there up (each call's return address and the words
     // its caller saved, innermost first), and how many calls deeper it may
     // go, each needing at most a word per word of the file and one more.
+    // Below them all is room for a function a region calls: each takes 72
+    // bytes a level and the CALL a word, within 80 a function.
     // `main`'s frame is the stack's top, with no words.
     index: Nat,
     frames: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * frames.len() <= stack.size,
-    roomy: room * (8 * (words + 1)) <= index,
+    roomy: room * (8 * (words + 1)) + 80 * functions.len() <= index,
 }
 
-fn Target::layout(self t: Target) → Layout { Layout::of(t.r.low, t.words, t.caps, t.homes).with_procedures(t.procedures) }
+fn Target::layout(self t: Target) → Layout {
+    Layout::of(t.r.low, t.words, t.caps, t.homes).with_procedures(t.procedures).with_functions(t.functions)
+}
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
 fn Target::writes(self t: Target) → ByteWrites<X86Memory(t.r.profile)> { linux_writes(t.io()) }

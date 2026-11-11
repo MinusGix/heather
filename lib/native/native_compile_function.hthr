@@ -1,0 +1,386 @@
+// A function called from a program (docs/native-one-compiler-design.md
+// §2.2): the code `Prog::function_call` emits runs as the `Call` region's
+// meaning, given the functions' contracts.
+//
+// The call is a silent run. Its code puts RSP at the running frame, the
+// arguments in their registers and R10 in RBX, and CALLs the function's
+// label. The function's contract (`Stack::CalleePost`,
+// function_ir_lower_calls) says what comes back: the answer in RAX, the
+// registers it keeps as they were, and memory as it was but for stores
+// into its own room below the return address (`Stack::Wrote`). The claim
+// between statements (`Target::Held`) is about the data region, the
+// command line above the stack and the frames from the running frame up,
+// and no such store reaches any of them (`Target::held_wrote`), so it
+// holds again once R10 is back; RAX then goes to the result's home.
+//
+// Room: each activation keeps 80 bytes a function below its frame
+// (`Target::roomy`), and function `f` asks 72 a level and the CALL a word.
+import native_source;
+import native_structured;
+import native_structured_meaning;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_homes;
+import native_compile_segments;
+import native_compile_steps;
+import native_compile_frames;
+import native_compile_structured;
+import native_compile_perform;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_calls;
+import native_alloc;
+import linux_calls;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
+import itree;
+import transition;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_byte_memory;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack;
+import x86_64_stack_runs;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// What a call's proof reads off the compile's checks and the machine
+
+// Every word a fitting list names is in the file.
+theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → i < layout.words {
+    match ids {
+        Nil => λ i _ never => false_elim(never),
+        Cons(id, rest) => λ i fit m => {
+            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
+            match m {
+                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
+                Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
+            }
+        },
+    }
+}
+
+// A near call's push, as a store to the stack.
+theorem Target::call_pushed(self t: Target, s: MachineState<X86Memory(t.r.profile)>, displacement: BitVec(32), i: Nat,
+    rsp: read_gpr(Rsp, s.gprs) = t.stack.at(i + 8)):
+    call_near_after(t.stack.writes, displacement, s).memory = t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5))) {
+    let pushed: (push_address(s.gprs) = t.stack.at(i)) =
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp), push_at(t.stack.low, i));
+    j(t.stack_writes, λ w _ => (w.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
+            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))) →
+            (t.stack.writes.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
+            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))), λ e => e)(
+        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ a => t.r.profile.store(s.memory, a, word_bytes(next_rip(s.rip, 5))), pushed))
+}
+
+// ---------------------------------------------------------------------------
+// The functions' contracts
+
+// Every function of the target, called at its label with as many words as
+// it takes in the argument registers and its room on the stack, returns
+// `call`'s answer and meets the callee's contract.
+fn Target::Answered(self t: Target, call: Answers()) → Type {
+    (f: Nat) → Succ(f) <= t.functions.len() → (words: List<BitVec(64)>) → arity_fits(program_arity(t.functions, f), words.len()).IsTrue() →
+        t.site().Returns(t.stack, asm_labels(t.program, Succ(f)),
+            λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+            t.stack.CalleePost(call(f, words)))
+}
+
+// What emitting the functions proves (`Site::Calls`) answers calls as
+// `program_eval` does, the functions evaluable.
+theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functions).IsTrue(),
+    calls: t.site().Calls(t.stack, program_callees(t.functions), t.functions.len())): t.Answered(program_eval(t.functions)) {
+    λ f below words fits => t.site().returns_weaken(t.stack, asm_labels(t.program, Succ(f)),
+        CalleePre<X86Memory(t.r.profile)>(program_callees(t.functions), f, words, program_eval(t.functions, f, words)),
+        λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        t.stack.CalleePost(program_eval(t.functions, f, words)),
+        calls(f, below, words, program_eval(t.functions, f, words)),
+        λ i s held => ⟨held.left, ⟨program_eval_computes(t.functions, evaluable, f, words, fits), held.right⟩⟩)
+}
+
+// With no functions there is no call to answer.
+theorem Target::answers_none(self t: Target, none: t.functions = Nil, call: Answers()): t.Answered(call) {
+    λ f below words fits => false_elim(nothing_below_zero(f, j(none, λ fs _ => Succ(f) <= fs.len(), below)))
+}
+
+// ---------------------------------------------------------------------------
+// The functions in the program (`Prog::links`)
+
+// The program's own code is still first.
+theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, program: Prog, functions: List<Function>):
+    base.links(functions, places, names) = Some(program) → base.Within(program) {
+    match functions {
+        Nil => λ same => j(Option::some_inj(base, program, same), λ x _ => base.Within(x), base.within_self()),
+        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) as λ b => (match b as λ _ => Option<Prog> {
+                False => None,
+                True => match emit_functions_after(base, Cons(last, earlier), places, names) { None => None, Some(out) => Some(out.prog) },
+            }) = Some(program) → base.Within(program) {
+            False => λ none => absurd(none),
+            True => (match emit_functions_after(base, Cons(last, earlier), places, names) as λ o => Grows(base, o) →
+                    (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) → base.Within(program) {
+                None => λ _ none => absurd(none),
+                Some(out) => λ grown same => j(Option::some_inj(out.prog, program, same), λ x _ => base.Within(x), grown),
+            })(emit_functions_after_grows(base, places, names, Cons(last, earlier))),
+        }),
+    }
+}
+
+// Linked, the functions are evaluable, and wherever the program is
+// resident each meets its contract at its label.
+theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, program: Prog, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), within: program.Within(site.program), functions: List<Function>):
+    base.links(functions, places, names) = Some(program) →
+    program_evaluable(functions).IsTrue() ∧ site.Calls(stack, program_callees(functions), functions.len()) {
+    match functions {
+        Nil => λ _ => ⟨trivial, λ f below words result => false_elim(nothing_below_zero(f, below))⟩,
+        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) as λ b => program_evaluable(Cons(last, earlier)) = b →
+                (match b as λ _ => Option<Prog> {
+                    False => None,
+                    True => match emit_functions_after(base, Cons(last, earlier), places, names) { None => None, Some(out) => Some(out.prog) },
+                }) = Some(program) →
+                program_evaluable(Cons(last, earlier)).IsTrue() ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
+            False => λ _ none => absurd(none),
+            True => λ evaluable => (match emit_functions_after(base, Cons(last, earlier), places, names) as λ o => MayCall<M>(site, stack, Cons(last, earlier), o) →
+                    (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) →
+                    program_evaluable(Cons(last, earlier)).IsTrue() ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
+                None => λ _ none => absurd(none),
+                Some(out) => λ may same => ⟨j(sym(evaluable), λ b _ => b.IsTrue(), trivial),
+                    may(j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩,
+            })(emit_functions_after_calls<M>(site, laid, stack, base, places, names, Cons(last, earlier))),
+        })(refl),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the callee's stores leave
+
+// Stores below the running frame keep the claim between statements: the
+// return address a CALL pushes, and whatever the function stores in its
+// own room.
+theorem Target::held_wrote(self t: Target, live: List<Nat>, env: Env, g: Gprs, m, m2: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    i: Nat, below: i <= t.index, wrote: t.stack.Wrote(i, m, m2)): t.Held(live, env, g, m2) {
+    Star::invariant(λ (a: X86Memory(t.r.profile)) (b: X86Memory(t.r.profile)) => t.stack.Own(i, a, b),
+        λ (a: X86Memory(t.r.profile)) => t.Held(live, env, g, a),
+        λ a b kept step => j(sym(step.proof.right.proof), λ x _ => t.Held(live, env, g, x),
+            j(t.stack_writes, λ ws _ => t.Held(live, env, g, ws.store(a, t.stack.at(step.witness), word_bytes(step.proof.right.witness))) →
+                    t.Held(live, env, g, t.stack.writes.store(a, t.stack.at(step.witness), word_bytes(step.proof.right.witness))), λ h => h)(
+                t.held_stack_store(live, env, g, a, kept, step.witness, omega(step.proof.left, below), step.proof.right.witness))),
+        m, m2, held, wrote)
+}
+
+// ---------------------------------------------------------------------------
+// Registers across the call
+
+// The call registers holding the arguments are the callee's `ArgsIn`, the
+// CALL having moved only RSP.
+theorem Gprs::args_in(self g: Gprs, pushed: BitVec(64), values: List<BitVec(64)>): (registers: List<Gpr>) → values.len() <= registers.len() →
+    Rsp.absent_from(registers).IsTrue() → g.Holding(registers, values) → ArgsIn(values, registers, write_gpr(Rsp, pushed, g)) {
+    match values {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(_, rest) => λ registers => match registers {
+            Nil => λ short _ _ => false_elim(nothing_below_zero(rest.len(), short)),
+            Cons(register, more) => λ short absent holding => {
+                let fewer: (Succ(rest.len()) <= Succ(more.len())) = short;
+                ⟨trans(read_gpr_other(Rsp, register, pushed, g, trans(Rsp.same_comm(register), Rsp.absent_head(register, more, absent))), holding.left),
+                    g.args_in(pushed, rest, more, omega(fewer), Rsp.absent_rest(register, more, absent), holding.right)⟩
+            },
+        },
+    }
+}
+
+// Every register a word lives in reads after the call as before it: the
+// function keeps RBP and R12 to R15, and R10 was carried in RBX, which it
+// keeps too.
+theorem homes_back(g, u: Gprs, pushed: BitVec(64), kept: Kept(callee_kept(), write_gpr(Rsp, pushed, g), u),
+    carried: read_gpr(Rbx, g) = read_gpr(R10, g)):
+    (k: Nat) → k < 6 → read_gpr(home_register(k), write_gpr(R10, read_gpr(Rbx, u), u)) = read_gpr(home_register(k), g) {
+    let v = read_gpr(Rbx, u);
+    λ k => match k {
+        Zero => λ _ => trans(read_gpr_other(R10, R12, v, u, refl), trans(kept.right.right.left, read_gpr_other(Rsp, R12, pushed, g, refl))),
+        Succ(k1) => match k1 {
+            Zero => λ _ => trans(read_gpr_other(R10, R13, v, u, refl), trans(kept.right.right.right.left, read_gpr_other(Rsp, R13, pushed, g, refl))),
+            Succ(k2) => match k2 {
+                Zero => λ _ => trans(read_gpr_other(R10, R14, v, u, refl), trans(kept.right.right.right.right.left, read_gpr_other(Rsp, R14, pushed, g, refl))),
+                Succ(k3) => match k3 {
+                    Zero => λ _ => trans(read_gpr_other(R10, R15, v, u, refl),
+                        trans(kept.right.right.right.right.right.left, read_gpr_other(Rsp, R15, pushed, g, refl))),
+                    Succ(k4) => match k4 {
+                        Zero => λ _ => trans(read_gpr_other(R10, Rbp, v, u, refl), trans(kept.right.left, read_gpr_other(Rsp, Rbp, pushed, g, refl))),
+                        Succ(k5) => match k5 {
+                            Zero => λ _ => trans(read_gpr_after_write(R10, v, u), trans(kept.left, trans(read_gpr_other(Rsp, Rbx, pushed, g, refl), carried))),
+                            Succ(_) => λ no => false_elim(no),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The call's meaning
+
+theorem Env::words_of_valuation(self env: Env, ids: List<Nat>): words_of(env.valuation(), ids) = env.words_at(ids) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => cong_fn<List<BitVec(64)>, List<BitVec(64)>>(λ ws => Cons(env.word(id), ws), env.words_of_valuation(rest)),
+    }
+}
+
+// A call sets its result's word to the answer at its arguments' words.
+theorem Env::call_meaning(self env: Env, call: Answers(), callee: Nat, arguments: List<Nat>, result: Nat):
+    Call(callee, arguments, result).meaning(call, env) = env.set_word(result, call(callee, env.words_at(arguments))) {
+    let answer = call(callee, words_of(env.valuation(), arguments));
+    trans(cong_fn<BitVec(64), Env>(λ x => Env(env.words.put(result, x.toNat(), 0), env.buffers, env.args),
+            Valuation::set_here(env.valuation(), result, word_value(answer), 64)),
+        cong_fn<List<BitVec(64)>, Env>(λ ws => env.set_word(result, call(callee, ws)), env.words_of_valuation(arguments)))
+}
+
+// ---------------------------------------------------------------------------
+// The call
+
+// Every call of a function the compile emits runs as the call's meaning,
+// the functions meeting their contracts.
+theorem Target::functions_run(self t: Target, call: Answers(), answers: t.Answered(call)): t.Functions(call) {
+    let layout = t.layout();
+    let regs = call_registers();
+    λ p out callee arguments result fit within apart env tree next => {
+        let region = Call(callee, arguments, result);
+        let live = live_before(arguments, result, out);
+        let f1 = Bool::is_true_and(Succ(callee).leb(layout.functions.len()), arity_fits(program_arity(layout.functions, callee), arguments.len()) &&
+            (arguments.len().leb(6) && layout.words_fit(Cons(result, arguments))), fit);
+        let f2 = Bool::is_true_and(arity_fits(program_arity(layout.functions, callee), arguments.len()),
+            arguments.len().leb(6) && layout.words_fit(Cons(result, arguments)), f1.right);
+        let f3 = Bool::is_true_and(arguments.len().leb(6), layout.words_fit(Cons(result, arguments)), f2.right);
+        let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), f1.left);
+        let few: (arguments.len() <= 6) = Nat::leb_sound(arguments.len(), 6, f3.left);
+        let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f3.right, m);
+        let words = env.words_at(arguments);
+        let answer = call(callee, words);
+        let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
+        let short: (words.len() <= 6) = omega(words_len, few);
+        let arity: arity_fits(program_arity(t.functions, callee), words.len()).IsTrue() =
+            j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), n).IsTrue(), f2.left);
+        let returns = answers(callee, below, words, arity);
+        let mean_eq: (region.meaning(call, env) = env.set_word(result, answer)) = env.call_meaning(call, callee, arguments, result);
+        // The room below the frame: the CALL's word, then the function's.
+        let big: (80 * t.functions.len() <= t.index) = omega(t.roomy);
+        let i0 = t.index - 8;
+        let back_i: (i0 + 8 = t.index) = omega(big, below);
+        let room_f: (72 * Succ(callee) <= i0) = omega(big, below);
+        let fits_i: (i0 + 8 <= t.stack.size) = omega(back_i, t.framed);
+        let frame_i: (t.frame() = t.stack.at(i0 + 8)) = cong_fn<Nat, BitVec(64)>(λ k => t.stack.at(k), sym(back_i));
+        // The call's code in the program.
+        let b1 = then(p, Block([MovRI(Rbx, layout.frame_at())]));
+        let framed = then(b1, Load(WordLoad(Rsp, Rbx)));
+        let passed = framed.words_to(layout, arguments, regs);
+        let carried = then(passed, Block([MovRR(Rbx, R10)]));
+        let called = then(carried, CallTo(Succ(callee)));
+        let back = then(called, Block([MovRR(R10, Rbx)]));
+        let whole = back.word_from(layout, out, result, Rax);
+        let w_back: back.Within(t.program) = back.within_trans(whole, t.program, back.within_word_from(layout, out, result, Rax), within);
+        let w_called: called.Within(t.program) = called.within_before(0, Block([MovRR(R10, Rbx)]), t.program, w_back);
+        let w_carried: carried.Within(t.program) = carried.within_before(0, CallTo(Succ(callee)), t.program, w_called);
+        let w_passed: passed.Within(t.program) = passed.within_before(0, Block([MovRR(Rbx, R10)]), t.program, w_carried);
+        let w_framed: framed.Within(t.program) = framed.within_trans(passed, t.program, Prog::within_words_to(layout, arguments, regs, framed), w_passed);
+        let w_b1: b1.Within(t.program) = b1.within_before(0, Load(WordLoad(Rsp, Rbx)), t.program, w_framed);
+        // RAX to the result's home.
+        let q6 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (env.set_word(result, read_gpr(Rax, g)) = region.meaning(call, env));
+        let taken = t.goes_result(live, out, env, region.meaning(call, env), back, result, inside(result, Inl(refl)),
+            λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
+        // R10 back from RBX.
+        let post5 = λ (s: MachineState<X86Memory(t.r.profile)>) => q6(s.gprs, s.memory);
+        let restored = t.goes_block(called, 0, [MovRR(R10, Rbx)], w_back, tree, post5, taken);
+        let post4 = λ (s: MachineState<X86Memory(t.r.profile)>) => post5(execute_block_normal([MovRR(R10, Rbx)], s));
+        // The CALL, by the function's contract.
+        let pre4 = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            ((read_gpr(Rsp, s.gprs) = t.frame()) ∧ (env.InRegisters(s.gprs, arguments, regs) ∧ (read_gpr(Rbx, s.gprs) = read_gpr(R10, s.gprs))));
+        let displacement = asm_jump_of(asm_labels(t.program), prog_len(carried), CallTo(Succ(callee)));
+        let lands = call_lands(asm_labels(t.program), w_called.witness, t.program, carried, 0, Succ(callee), t.program.laid_out_lands(t.laid), w_called.proof);
+        let moves = t.site().moves_call(t.stack, t.code_fits(), w_called.witness, carried, 0, Succ(callee), w_called.proof,
+            asm_labels(t.program, Succ(callee)), lands,
+            λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(callee) <= i,
+            t.stack.CalleePost(answer), returns, pre4, post4, λ _ => i0,
+            λ s held => ⟨trans(held.right.left, frame_i),
+                ⟨fits_i, ⟨s.gprs.args_in(push_address(s.gprs), words, argument_registers(), short, trivial, held.right.right.left), room_f⟩⟩⟩,
+            λ s u held rsp post => {
+                let entered = call_near_after(t.stack.writes, displacement, s);
+                let pushed = t.call_pushed(s, displacement, i0, trans(held.right.left, frame_i));
+                let held1: t.Held(live, env, s.gprs, entered.memory) = j(sym(pushed), λ x _ => t.Held(live, env, s.gprs, x),
+                    t.held_stack_store(live, env, s.gprs, s.memory, held.left, i0, omega(back_i), next_rip(s.rip, 5)));
+                let held2: t.Held(live, env, s.gprs, u.memory) = t.held_wrote(live, env, s.gprs, entered.memory, u.memory, held1, i0, omega(back_i),
+                    post.right.right);
+                let g2 = write_gpr(R10, read_gpr(Rbx, u.gprs), u.gprs);
+                let held3: t.Held(live, env, g2, u.memory) = t.held_regs(live, env, s.gprs, g2, u.memory, held2,
+                    λ k in_pool _ => homes_back(s.gprs, u.gprs, push_address(s.gprs), post.right.left, held.right.right.right, k, in_pool));
+                let rax: (read_gpr(Rax, g2) = answer) = trans(read_gpr_other(R10, Rax, read_gpr(Rbx, u.gprs), u.gprs, refl), post.left);
+                let r: post4(u) = ⟨held3, trans(cong_fn<BitVec(64), Env>(λ x => env.set_word(result, x), rax), sym(mean_eq))⟩;
+                r
+            });
+        let linux = j(t.stack_writes, λ ws _ => t.site().Moves(ws, prog_len(carried), prog_len(carried) + 5, pre4, post4), moves);
+        let did = t.io().goes_after(t.program, t.origin, prog_len(carried), prog_len(carried) + 5, tree, pre4, post4, linux, restored);
+        // R10 into RBX.
+        let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rsp, g) = t.frame()) ∧ env.InRegisters(g, arguments, regs));
+        let carry = t.goes_block(passed, 0, [MovRR(Rbx, R10)], w_carried, tree, pre4, did);
+        let carry2: t.GoesR(prog_len(passed), tree, q3) = t.goes_weaken(prog_len(passed), tree,
+            λ (s: MachineState<X86Memory(t.r.profile)>) => pre4(execute_block_normal([MovRR(Rbx, R10)], s)),
+            λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), carry, λ s h => {
+                let v = read_gpr(R10, s.gprs);
+                ⟨t.held_scratch(live, env, s.gprs, s.memory, h.left, Rbx, v, trivial),
+                    ⟨trans(read_gpr_other(Rbx, Rsp, v, s.gprs, refl), h.right.left),
+                    ⟨s.gprs.holding_write(Rbx, v, words, regs, trivial, h.right.right),
+                    trans(read_gpr_after_write(Rbx, v, s.gprs), sym(read_gpr_other(Rbx, R10, v, s.gprs, refl)))⟩⟩⟩
+            });
+        // The arguments into their registers.
+        let q2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+            ((g2: Gprs) → t.Held(live, env, g2, m) → env.InRegisters(g2, arguments, regs) → g2.KeepsOutside(g, regs) → q3(g2, m));
+        let passes = t.goes_words_to(live, env, tree, q3, arguments)(regs, framed,
+            λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, trivial, trivial, w_passed, carry2);
+        // RSP the running frame.
+        let post2 = λ (s: MachineState<X86Memory(t.r.profile)>) => q2(s.gprs, s.memory);
+        let loaded = t.goes_load(b1, 0, WordLoad(Rsp, Rbx), w_framed, tree, post2, passes);
+        let at_load: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word =>
+            (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+            ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ post2(word_load_after(WordLoad(Rsp, Rbx), word, s))));
+        let moved = t.goes_block(p, 0, [MovRI(Rbx, layout.frame_at())], w_b1, tree, at_load, loaded);
+        λ s here resident held => {
+            let g = s.gprs;
+            let m = s.memory;
+            let so = layout.stack_offset();
+            let fo = so + 8;
+            let slots: (so + 24 <= t.r.size) = t.fits;
+            let g1 = write_gpr(Rbx, layout.frame_at(), g);
+            let g2 = write_gpr(Rsp, t.frame(), g1);
+            let v = held.proof.left.witness;
+            let read = t.read_at(v, m, held.proof.left.proof.left, fo, omega(slots));
+            let frame: (word_in(v, fo) = t.frame()) = t.held_frame_slot(live, env, g, m, held);
+            let rip_f = sym(t.at_rip(fo));
+            let read_f: (read_word(t.site().data, m, layout.frame_at()) = Some(t.frame())) =
+                j(rip_f, λ a _ => read_word(t.site().data, m, a) = Some(t.frame()),
+                    trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), frame)));
+            let canonical_f: (layout.frame_at().toNat() + 8 <= Nat::pow(2, 47)) = j(rip_f, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left);
+            let held2: t.Held(live, env, g2, m) = t.held_scratch(live, env, g1, m, t.held_scratch(live, env, g, m, held, Rbx, layout.frame_at(), trivial),
+                Rsp, t.frame(), trivial);
+            moved(s, here, resident, Exists(t.frame(), ⟨canonical_f, ⟨read_f, ⟨held2, λ g3 held3 holding keeps =>
+                ⟨held3, ⟨trans(keeps(Rsp, trivial), read_gpr_after_write(Rsp, t.frame(), g1)), holding⟩⟩⟩⟩⟩))
+        }
+    }
+}
