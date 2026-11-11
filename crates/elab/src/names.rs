@@ -31,14 +31,33 @@ thread_local! {
     /// could have observed of the world's names beyond what its source
     /// spells — an operator's fallback name, a tactic's lemma
     /// (`docs/module-interface-cutoff-design.md` §2).
-    static QUERIED: std::cell::RefCell<Option<std::collections::BTreeSet<String>>> =
+    ///
+    /// Every lookup of every name in a file comes through here, most of them
+    /// for a name already in the record, so the question "is it noted" is
+    /// one hash of the segment and the record is sorted once, when taken
+    /// (`issues/name-lookup-record-cost.md`).
+    static QUERIED: std::cell::RefCell<Option<NameSet<String>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// The last `::` segment of `name`: what follows its last `::`, or all of it.
+fn last_segment(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    let mut at = bytes.len();
+    while at >= 2 {
+        if bytes[at - 1] == b':' && bytes[at - 2] == b':' {
+            // `:` is one byte and never part of another character's encoding.
+            return &name[at..];
+        }
+        at -= 1;
+    }
+    name
 }
 
 fn note(name: &str) {
     QUERIED.with(|q| {
         if let Some(set) = q.borrow_mut().as_mut() {
-            let last = name.rsplit("::").next().unwrap_or(name);
+            let last = last_segment(name);
             if !set.contains(last) {
                 set.insert(last.to_string());
             }
@@ -56,7 +75,7 @@ pub fn record_name_lookups() {
 /// [`record_name_lookups`]; `None` when nothing was recording.
 pub fn take_name_lookups() -> Option<std::collections::BTreeSet<String>> {
     RECORD.with(|r| r.set(r.get() + 1));
-    QUERIED.with(|q| q.borrow_mut().take())
+    QUERIED.with(|q| q.borrow_mut().take()).map(|noted| noted.into_iter().collect())
 }
 
 thread_local! {
@@ -256,7 +275,7 @@ impl CommonClosure {
                 _ => 0,
             };
             for m in self.popped.iter().take(upto).skip(done) {
-                let last = m.rsplit("::").next().unwrap_or(m);
+                let last = last_segment(m);
                 if !set.contains(last) {
                     set.insert(last.to_string());
                 }
@@ -955,6 +974,32 @@ mod layered_tests {
         ] {
             assert_eq!(split_qual(name), name.split_once("::"), "{name:?}");
         }
+    }
+
+    /// `last_segment` is `rsplit("::").next()`, written as a scan: what
+    /// follows the last `::`.
+    #[test]
+    fn a_names_last_segment_follows_its_last_double_colon() {
+        for name in [
+            "", ":", "::", ":::", "::::", "a", "a:", "a:b", "a::b", "a::b::c", "::a", "a::", "a:::b",
+            "int::Le::Decide", "naïve::é", "é::naïve::x", "x#1::y", "a: :b", "a::b:", "a::b:c",
+        ] {
+            assert_eq!(Some(last_segment(name)), name.rsplit("::").next(), "{name:?}");
+        }
+    }
+
+    /// The record is what was looked up, by last segment, each once and in
+    /// order, whatever order the lookups came in.
+    #[test]
+    fn the_lookup_record_is_the_sorted_last_segments() {
+        record_name_lookups();
+        for name in ["list::List::map", "zeta", "nat::Nat", "map", "alpha::zeta", "Nat", "b::"] {
+            note(name);
+        }
+        let noted: Vec<String> = take_name_lookups().expect("recording").into_iter().collect();
+        assert_eq!(noted, ["", "Nat", "map", "zeta"]);
+        note("unrecorded");
+        assert_eq!(take_name_lookups(), None, "nothing records after the record is taken");
     }
 
     fn scope(module: &str, imports: &[&str]) -> Scope {

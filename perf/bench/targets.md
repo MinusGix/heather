@@ -1,5 +1,9 @@
 # Probe targets, ranked (cloud, 2026-10-29)
 
+> A later ranking, after the native floor fell: `issues/performance-overview-2026-11-11.md`.
+> This file stays as the 2026-10-29 entry; three of its probe cases no longer
+> run (`issues/bench-probe-cases-stale-2026-11.md`).
+
 Where checking time goes, found without running the suite, and what to
 hillclimb on first. Native first, as asked. The numbers are a dated diary
 entry (`perf/README.md`'s rule: numbers live under `perf/` and in issue logs,
