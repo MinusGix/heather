@@ -173,6 +173,21 @@ in the reduced goal. The motive's instance at the scrutinee is the goal
 reduced, which converts to the goal, and the kernel is asked as for every
 other rung.
 
+**It changes proofs that were written for the constant motive.** Where no
+rung found anything, the arms used to keep the goal as written, and a proof
+could be written against that: prove each arm about the unreduced call, by
+a lemma that takes the arm's evidence (`t.assoc_get_hit(row, k, hit)`).
+Once this rung specialises the goal, such an arm no longer has the arm's
+type. Three library proofs were of that kind (`Bisim::after`,
+`List::assoc_get_present`, `StructuredRegion::loop_settles`) and were
+found only after the rung merged, because the PR lane replays unchanged
+library modules after a compiler edit. They are rewritten to the
+specialised goal, which is shorter, or pinned with `as λ _ => …`. A change
+to this ladder is verified by re-elaborating every library module, not by
+the PR lane alone. In all three the elaborator accepted the old arm and
+only the kernel refused it
+(`issues/match-arm-accepted-against-unspecialised-goal.md`).
+
 §4.3's objection to codomains was scope: a scrutinee scoped in `Γ` does not
 occur under a binder unshifted. The abstraction shifts its patterns as it
 descends, so the objection is to the *candidates*, and strengthening
@@ -185,6 +200,18 @@ What it does not reach, each pinned as a refusal in
   scope);
 - a call that is the argument of a variable head, `P(pick(n, a, a))`:
   that is a weak head normal form, and nothing is stuck;
+- a call that is an argument the reduction is not waiting on:
+  `k.leb(pick(n, a, a))` is stuck on `k`, so `pick`'s test is not a
+  position anything is stuck on. Reading it would mean normalising the
+  arguments of every neutral term in the goal
+  (`issues/case-split-reaches-arguments-of-stuck-calls.md`). Until then
+  the theorem is stated at a name, `(p: Nat) → p = pick(n, a, a) → …`,
+  where the equation is a position of its own;
+- a call in a summand of a disjunction, `f(n) = a ∨ f(n) = b`. Reading
+  summands was tried and taken back out: the reduced goal replaces a
+  defined type whose unfolding is a sum by that sum, and a proof that
+  builds it by its constructors (`BRet(…)` at `Bisim`, in
+  `lib/std/itree/coitree.hthr`) is then refused;
 - a goal that also writes the test. §4.1 finds the written occurrence and
   returns, so the call beside it is not specialised. Making the rungs
   cumulative would change motives that are found today, which this round

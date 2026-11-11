@@ -811,6 +811,18 @@ theorem List::mem_filter<A>(self xs: List<A>, a: A, p: A → Bool):
 }
 
 // What the filter keeps passes it.
+// Two tests that agree on a list's members keep the same members.
+theorem List::filter_cong_mem<A>(self xs: List<A>, p, q: A → Bool): ((a: A) → Mem(a, xs) → p(a) = q(a)) → xs.filter(p) = xs.filter(q) {
+    match xs {
+        Nil => λ same => refl,
+        Cons(h, t) => λ same => {
+            let rest: (t.filter(p) = t.filter(q)) = t.filter_cong_mem(p, q, λ a m => same(a, Inr(m)));
+            trans(cong_fn(λ (b: Bool) => match b { True => Cons(h, t.filter(p)), False => t.filter(p) }, same(h, Inl(refl))),
+                cong_fn(λ (r: List<A>) => match q(h) { True => Cons(h, r), False => r }, rest))
+        },
+    }
+}
+
 theorem List::mem_filter_holds<A>(self xs: List<A>, a: A, p: A → Bool): Mem(a, xs.filter(p)) → p(a) = True {
     match xs {
         Nil => λ m => false_elim(m),
@@ -951,6 +963,16 @@ theorem List::nth_drop<A>(self xs: List<A>, n: Nat): xs.nth(n) = xs.drop(n).nth(
 }
 
 // An index with an element is below the length.
+theorem List::nth_mem<A>(self xs: List<A>): (i: Nat) → (x: A) → xs.nth(i) = Some(x) → Mem(x, xs) {
+    match xs {
+        Nil => λ i x e => Option::none_ne_some(x, e, False),
+        Cons(h, t) => λ i => match i {
+            Zero => λ x e => Inl(sym(Option::some_inj(h, x, e))),
+            Succ(k) => λ x e => Inr(t.nth_mem(k, x, e)),
+        },
+    }
+}
+
 theorem List::nth_some_below<A>(self xs: List<A>, i: Nat, x: A, present: xs.nth(i) = Some(x)): i < xs.len() {
     Nat::lt_of_not_le(i, xs.len(), λ past => absurd(trans(sym(present), xs.nth_past_end(i, past))))
 }

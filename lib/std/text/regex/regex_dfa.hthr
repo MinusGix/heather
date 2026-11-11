@@ -17,8 +17,11 @@
 // reachable states few. `Regex::deriv_simp` is a first such step: the
 // derivative built with constructors that apply the units and zeros of
 // `Seq` and `Alt` (`Regex::seq`, `Regex::alt`), which is what keeps the
-// states of `(a|b)*` at one. Associativity, commutativity and idempotence
-// of `Alt`, which bound the reachable set, are later work.
+// states of `(a|b)*` at one. `Regex::alt` also drops a second operand the
+// first already has (`Regex::has_summand`, by the Boolean equality
+// `Regex::eqb`), which closes `a*a*`. `Alt` is not treated as commutative
+// or associative, so the reachable set is not bounded in general; the
+// table of `regex_table.hthr` is checked, not proved to exist.
 
 import logic;
 import bool;
@@ -187,11 +190,104 @@ theorem Regex::is_eps_nil(self r: Regex, w: List<Nat>): r.is_eps() = True → (r
     match r { Eps => λ h => iff_refl(), _ => λ h => absurd(h) }
 }
 
-// `Alt` without an operand that accepts nothing.
+// Equality of expressions, as a Bool.
+
+fn Regex::eqb(self r: Regex, q: Regex) → Bool {
+    match r {
+        NoMatch => q.is_no_match(),
+        Eps => q.is_eps(),
+        Range(lo, hi) => match q { Range(lo2, hi2) => lo.same(lo2) && hi.same(hi2), _ => False },
+        Seq(a, b) => match q { Seq(a2, b2) => a.eqb(a2) && b.eqb(b2), _ => False },
+        Alt(a, b) => match q { Alt(a2, b2) => a.eqb(a2) && b.eqb(b2), _ => False },
+        Star(s) => match q { Star(s2) => s.eqb(s2), _ => False },
+    }
+}
+
+theorem Regex::eqb_sound(self r: Regex): (q: Regex) → r.eqb(q) = True → r = q {
+    match r {
+        NoMatch => λ q => match q { NoMatch => λ h => refl, _ => λ h => absurd(h) },
+        Eps => λ q => match q { Eps => λ h => refl, _ => λ h => absurd(h) },
+        Range(lo, hi) => λ q => match q {
+            Range(lo2, hi2) => λ h => {
+                let parts = lo.same(lo2).and_true_parts(hi.same(hi2), h);
+                trans(cong_fn(λ (x: Nat) => Range(x, hi), lo.same_sound(lo2, parts.left)),
+                    cong_fn(λ (y: Nat) => Range(lo2, y), hi.same_sound(hi2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        Seq(a, b) => λ q => match q {
+            Seq(a2, b2) => λ h => {
+                let parts = a.eqb(a2).and_true_parts(b.eqb(b2), h);
+                trans(cong_fn(λ (x: Regex) => Seq(x, b), a.eqb_sound(a2, parts.left)),
+                    cong_fn(λ (y: Regex) => Seq(a2, y), b.eqb_sound(b2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        Alt(a, b) => λ q => match q {
+            Alt(a2, b2) => λ h => {
+                let parts = a.eqb(a2).and_true_parts(b.eqb(b2), h);
+                trans(cong_fn(λ (x: Regex) => Alt(x, b), a.eqb_sound(a2, parts.left)),
+                    cong_fn(λ (y: Regex) => Alt(a2, y), b.eqb_sound(b2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        Star(s) => λ q => match q {
+            Star(s2) => λ h => cong_fn(λ (x: Regex) => Star(x), s.eqb_sound(s2, h)),
+            _ => λ h => absurd(h),
+        },
+    }
+}
+
+theorem Regex::eqb_refl(self r: Regex): r.eqb(r) = True {
+    match r {
+        NoMatch => refl,
+        Eps => refl,
+        Range(lo, hi) => lo.same(lo).and_true_of(hi.same(hi), lo.same_self(), hi.same_self()),
+        Seq(a, b) => a.eqb(a).and_true_of(b.eqb(b), a.eqb_refl(), b.eqb_refl()),
+        Alt(a, b) => a.eqb(a).and_true_of(b.eqb(b), a.eqb_refl(), b.eqb_refl()),
+        Star(s) => s.eqb_refl(),
+    }
+}
+
+theorem Regex::eqb_denotes({a, b: Regex}, h: a.eqb(b) = True, w: List<Nat>, d: b.Denotes(w)): a.Denotes(w) {
+    subst(sym(a.eqb_sound(b, h)), d)
+}
+
+// `b` is `a` or one of the operands of `a`'s alternations: adding it to `a`
+// again would add nothing. This is what keeps the derivatives of an
+// expression like `a*a*` from growing without end.
+fn Regex::has_summand(self a: Regex, b: Regex) → Bool {
+    match a {
+        Alt(x, y) => match x.has_summand(b) {
+            True => True,
+            False => match y.has_summand(b) { True => True, False => a.eqb(b) },
+        },
+        _ => a.eqb(b),
+    }
+}
+
+theorem Regex::has_summand_sound(self a: Regex): (b: Regex) → a.has_summand(b) = True → (w: List<Nat>) → b.Denotes(w) → a.Denotes(w) {
+    match a {
+        Alt(x, y) => λ b => match hx: x.has_summand(b) {
+            True => λ _ w d => Inl(x.has_summand_sound(b, hx, w, d)),
+            False => match hy: y.has_summand(b) {
+                True => λ _ w d => Inr(y.has_summand_sound(b, hy, w, d)),
+                False => λ h w d => Regex::eqb_denotes(h, w, d),
+            },
+        },
+        _ => λ b h w d => Regex::eqb_denotes(h, w, d),
+    }
+}
+
+// `Alt` without an operand that accepts nothing, or a second operand the
+// first already has.
 fn Regex::alt(a, b: Regex) → Regex {
     match a.is_no_match() {
         True => b,
-        False => match b.is_no_match() { True => a, False => Alt(a, b) },
+        False => match b.is_no_match() {
+            True => a,
+            False => match a.has_summand(b) { True => a, False => Alt(a, b) },
+        },
     }
 }
 
@@ -204,7 +300,12 @@ theorem Regex::alt_same(a, b: Regex): Regex::alt(a, b) ≈ Alt(a, b) {
             True => λ w => Iff(
                 mp := λ d => Inl(d),
                 mpr := λ d => match d { Inl(x) => x, Inr(y) => false_elim(b.is_no_match_empty(w, hb, y)) }),
-            False => λ w => iff_refl(),
+            False => match hs: a.has_summand(b) {
+                True => λ w => Iff(
+                    mp := λ d => Inl(d),
+                    mpr := λ d => match d { Inl(x) => x, Inr(y) => a.has_summand_sound(b, hs, w, y) }),
+                False => λ w => iff_refl(),
+            },
         },
     }
 }
