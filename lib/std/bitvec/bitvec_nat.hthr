@@ -53,8 +53,9 @@ theorem BitVec::toNat_ofNat_mod(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).t
 // So it is at most the argument: a length kept as a word bounds no more
 // than the length.
 theorem BitVec::toNat_ofNat_le(n: Nat, x: Nat): BitVec::ofNat(x, n := n).toNat() <= x {
-    let parts = Nat::div_mul_add_mod(x, Nat::pow(2, n));
-    j(sym(BitVec::toNat_ofNat_mod(n, x)), λ v _ => v <= x, omega(parts))
+    let m = Nat::pow(2, n);
+    let below: (x.mod(m) <= x) = j(Nat::div_mul_add_mod(x, m), λ t _ => x.mod(m) <= t, Nat::le_add_r(x.div(m) * m, x.mod(m)));
+    j(sym(BitVec::toNat_ofNat_mod(n, x)), λ v _ => v <= x, below)
 }
 
 theorem BitVec::ofNat_mod(n, x: Nat): BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
