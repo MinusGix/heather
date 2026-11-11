@@ -323,8 +323,9 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
 // Called at its label with its arguments in RDI, RSI, …, a return address
 // at RSP and {room} bytes of stack below it, the code returns the source
 // function's value in RAX, keeps the callee-saved registers and RSP, and
-// leaves the stack above its return address as it was: resident anywhere,
-// whatever follows it, with any stack meeting the `Stack` laws.
+// leaves memory as it was but for stores into its own room below that
+// address (`Stack::Wrote`): resident anywhere, whatever follows it, with
+// any stack meeting the `Stack` laws.
 theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data){comma}{typed}):
     Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),

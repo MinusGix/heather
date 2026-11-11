@@ -374,6 +374,19 @@ theorem Site::returns_weaken<M>(self site: Site<M>, stack: Stack<M>(site.fetch, 
     λ s at resident i rsp room held ret saved => returns(s, at, resident, i, rsp, room, implies(i, s, held), ret, saved)
 }
 
+// A weaker promise, from the stronger one and the room it was entered with.
+theorem Site::returns_implies<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, post, weaker: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.Returns(stack, entry, pre, post),
+    implies: (i: Nat) → (s, t: MachineState<M>) → i + 8 <= stack.size → post(i, s, t) → weaker(i, s, t)):
+    site.Returns(stack, entry, pre, weaker) {
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, implies(i, s, ran.witness, room, ran.proof.right.right.right.right)⟩⟩⟩⟩)
+    }
+}
+
 // A CALL at a label, its callee's contract given: from the call to the item
 // after it. The stack has room for the return address below the stack
 // pointer, at offset `index(s)`; after the call the stack pointer is back.

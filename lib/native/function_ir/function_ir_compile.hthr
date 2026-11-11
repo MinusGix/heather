@@ -29,8 +29,9 @@ import option;
 
 // Called at function `f`'s label with its arguments in their registers and
 // its frame's room on the stack, the code returns `answer` in RAX, keeps
-// the callee-saved registers and the stack above its return address,
-// whenever the program evaluates `f` at those arguments to `answer`.
+// the callee-saved registers, and leaves memory as it was but for stores
+// into its own room below its return address (`Stack::Wrote`), whenever
+// the program evaluates `f` at those arguments to `answer`.
 theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, program: Prog,
     lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
@@ -52,6 +53,27 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
     j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
         λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
         stack.CalleePost(x)), returns)
+}
+
+// What the stores leave of the stack: the words from the return address
+// up are as they were. A caller with nothing but stack words to keep cites
+// this; one with data of its own cites `compiled_returns` and what its
+// data is under such stores.
+theorem compiled_returns_keeps<M>(functions: List<Function>, placement: List<Place>, program: Prog,
+    lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    evaluates: program_eval(functions, f, arguments) = answer):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleeKeeps(answer)) {
+    Site<M>(fetch, data, program, last, origin).returns_implies(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(answer), stack.CalleeKeeps(answer),
+        compiled_returns<M>(functions, placement, program, lowered, evaluable, fetch, data, last, origin, stack, f, below, arguments, fits,
+            answer, evaluates),
+        λ i s t room post => stack.callee_keeps(answer, i, s, t, room, post))
 }
 
 // ---------------------------------------------------------------------------

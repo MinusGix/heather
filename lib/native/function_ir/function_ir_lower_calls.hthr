@@ -18,7 +18,10 @@
 // with any stack meeting the stack laws, each function's code meets its
 // contract: entered with its arguments in their registers and the return
 // address on the stack, it returns there with its result in RAX, the
-// callee-saved registers kept, and its caller's stack words unchanged.
+// callee-saved registers kept, and memory as it was but for stores into its
+// own room below that address (`Stack::Wrote`,
+// docs/native-one-compiler-design.md §2.1). That clause is what a caller
+// keeps: its stack words, and for a program its data.
 
 import function_ir;
 import function_ir_lower;
@@ -130,14 +133,26 @@ theorem saved_kept(before, after: Gprs, kept: Kept(callee_saved(), before, after
 // functions say it may return `result`: entered at stack offset `i` with
 // room below for itself and its callees (`72` bytes a level: its frame,
 // and the return address of a call it makes), it returns with `result` in
-// RAX, the callee-saved registers kept, and the stack from `i + 8` up as it
-// was.
+// RAX, the callee-saved registers kept, and memory as it was but for
+// stores of its own below `i` (`Stack::Wrote`): its caller's words, the
+// return address among them, and whatever else such stores leave.
 fn CalleePre<M>(callees: Callees(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64)) → Nat → MachineState<M> → Type {
     λ i s => ArgsIn(arguments, argument_registers(), s.gprs) ∧ (callees(f, arguments, result) ∧ 72 * Succ(f) <= i)
 }
 fn Stack::CalleePost<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64)) →
     Nat → MachineState<M> → MachineState<M> → Type {
-    λ i s t => (read_gpr(Rax, t.gprs) = result) ∧ (Kept(callee_kept(), s.gprs, t.gprs) ∧ stack.Unchanged(i + 8, s.memory, t.memory))
+    λ i s t => (read_gpr(Rax, t.gprs) = result) ∧ (Kept(callee_kept(), s.gprs, t.gprs) ∧ stack.Wrote(i, s.memory, t.memory))
+}
+
+// The contract as it read before it stated the stores: the caller's stack
+// words unchanged, here from the return address up.
+fn Stack::CalleeKeeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64)) →
+    Nat → MachineState<M> → MachineState<M> → Type {
+    λ i s t => (read_gpr(Rax, t.gprs) = result) ∧ (Kept(callee_kept(), s.gprs, t.gprs) ∧ stack.Unchanged(i, s.memory, t.memory))
+}
+theorem Stack::callee_keeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64),
+    i: Nat, s, t: MachineState<M>, room: i + 8 <= stack.size, post: stack.CalleePost(result)(i, s, t)): stack.CalleeKeeps(result)(i, s, t) {
+    ⟨post.left, ⟨post.right.left, stack.wrote_unchanged(i, { omega }, s.memory, t.memory, post.right.right)⟩⟩
 }
 
 // Every function below `bound` meets its contract at its label.
@@ -147,10 +162,11 @@ fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), ca
 }
 
 // What a body keeps of where it started (`s0`, its frame at offset `d`):
-// the callee-saved registers, and the stack above its frame.
+// the callee-saved registers, and memory but for stores into its own frame
+// and below.
 fn Stack::Framed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0, s: MachineState<M>) → Type {
-    Kept(callee_saved(), s0.gprs, s.gprs) ∧ stack.Unchanged(d + 64, s0.memory, s.memory)
+    Kept(callee_saved(), s0.gprs, s.gprs) ∧ stack.Wrote(d + 64, s0.memory, s.memory)
 }
 
 // Words a callee leaves at and above `d` keep the slots there.
@@ -195,14 +211,14 @@ fn call_prog(prog: Prog, moves: List<Instruction>, callee: Nat) → Prog {
 fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0: MachineState<M>, g0: Gprs, words: List<BitVec(64)>, x: MachineState<M>) → Type {
     ArgsIn(words, argument_registers(), x.gprs) ∧ (Kept(callee_saved(), g0, x.gprs) ∧
-        (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory)))
+        (stack.Wrote(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory)))
 }
 
 // And after it: the stack pointer back, the answer in RAX, the rest kept.
 fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0: MachineState<M>, g0: Gprs, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rsp, t.gprs) = stack.at(d)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
-        (stack.Unchanged(d + 64, s0.memory, t.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, t.memory))))
+        (stack.Wrote(d + 64, s0.memory, t.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, t.memory))))
 }
 
 // The CALL, against the callee's contract.
@@ -233,16 +249,17 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
             let pushed: (push_address(x.gprs) = stack.at(d - 8)) =
                 trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, d - 8));
             let u = call_near_after(stack.writes, displacement, x);
-            let pushed_below: stack.Unchanged(d, x.memory, u.memory) =
-                j(sym(pushed), λ a _ => stack.Unchanged(d, x.memory, stack.writes.store(x.memory, a, word_bytes(next_rip(x.rip, 5)))),
-                    stack.store_below(x.memory, d - 8, d, { omega }, { omega }, next_rip(x.rip, 5)));
-            let callee_left: stack.Unchanged(d, u.memory, t.memory) =
-                j(back, λ n _ => stack.Unchanged(n, u.memory, t.memory), returned.right.right);
-            let unchanged = stack.unchanged_trans(d, x.memory, u.memory, t.memory, pushed_below, callee_left);
+            let push_wrote: stack.Wrote(d, x.memory, u.memory) =
+                j(sym(pushed), λ a _ => stack.Wrote(d, x.memory, stack.writes.store(x.memory, a, word_bytes(next_rip(x.rip, 5)))),
+                    stack.wrote_store(d, x.memory, d - 8, { omega }, next_rip(x.rip, 5)));
+            let callee_wrote: stack.Wrote(d, u.memory, t.memory) =
+                stack.wrote_deeper(d - 8, d, { omega }, u.memory, t.memory, returned.right.right);
+            let wrote = stack.wrote_trans(d, x.memory, u.memory, t.memory, push_wrote, callee_wrote);
+            let unchanged = stack.wrote_unchanged(d, { omega }, x.memory, t.memory, wrote);
             let kept_u: Kept(callee_kept(), x.gprs, t.gprs) = returned.right.left;
             ⟨trans(rsp_t, at_d), ⟨returned.left, ⟨kept_trans(callee_kept(), g0, x.gprs, t.gprs, saved_kept(g0, x.gprs, held.right.left), kept_u),
-              ⟨stack.unchanged_trans(d + 64, s0.memory, x.memory, t.memory, held.right.right.left,
-                  stack.unchanged_above(d, d + 64, { omega }, x.memory, t.memory, unchanged)),
+              ⟨stack.wrote_trans(d + 64, s0.memory, x.memory, t.memory, held.right.right.left,
+                  stack.wrote_deeper(d, d + 64, { omega }, x.memory, t.memory, wrote)),
                stack.saved_unchanged(d, g0, x.memory, t.memory, unchanged, saved_registers(), 0, slots, held.right.right.right)⟩⟩⟩⟩
         })
 }
@@ -279,18 +296,16 @@ theorem call_spills<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
     d: Nat, s0: MachineState<M>, fits: d + 64 <= stack.size, prog: Prog,
     g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), within: saved_registers().spills(prog, 0).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog), prog_len(saved_registers().spills(prog, 0)),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Wrote(d + 64, s0.memory, x.memory) ∧
             stack.Saved(d, saved_registers(), 0, g0, x.memory))) {
     let small: (0 + saved_registers().len() <= 16) = { omega };
     let slots: (d + 8 * (0 + saved_registers().len()) <= stack.size) = { omega };
     site.moves_spills(stack, site.program.laid_out_fits(laid), d, g0, rsp_g0, saved_registers(), prog, 0, small, slots,
-        λ (m: M) => stack.Unchanged(d + 64, s0.memory, m),
+        λ (m: M) => stack.Wrote(d + 64, s0.memory, m),
         λ memory i low high word kept => {
             let inside = slot_inside(d, i, stack.size, high, fits);
-            stack.unchanged_trans(d + 64, s0.memory, memory,
-                stack.writes.store(memory, stack.at(i), word_bytes(word)), kept,
-                stack.store_below(memory, i, d + 64, inside.left, inside.right, word))
+            stack.wrote_then(d + 64, s0.memory, memory, kept, i, inside.right, word)
         },
         within)
 }
@@ -303,10 +318,10 @@ theorem call_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
     g0: Gprs, represents: file.Represents(values, g0), k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(moves.code))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Wrote(d + 64, s0.memory, x.memory) ∧
             stack.Saved(d, saved_registers(), 0, g0, x.memory)),
         λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words_of(values, arguments), x)) {
-    let rest = λ (m: M) => stack.Unchanged(d + 64, s0.memory, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m);
+    let rest = λ (m: M) => stack.Wrote(d + 64, s0.memory, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m);
     let pre = λ (g: Gprs) (m: M) => (g = g0) ∧ rest(m);
     let post = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, arguments), argument_registers(), g) ∧ (Kept(callee_saved(), g0, g) ∧ rest(m));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
@@ -341,7 +356,7 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
     answered: callees(callee, words_of(values, arguments), values(64, result)),
     within: At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee))).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog), prog_len(At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee)))),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
         λ (t: MachineState<M>) => stack.Returned(d, s0, g0, values(64, result), t)) {
     let saved = saved_registers();
     let spilled = saved.spills(prog, 0);
@@ -351,12 +366,12 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
     let moved_in = moved.within_before(0, CallTo(Succ(callee)), site.program, within);
     let spilled_in = spilled.within_before(0, Block(moves.code), site.program, moved_in);
     site.moves_trans(stack.writes, prog_len(prog), prog_len(spilled), prog_len(moved) + 5,
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Wrote(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
         λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
         call_spills<M>(site, laid, stack, d, s0, fits, prog, g0, rsp_g0, spilled_in),
         site.moves_trans(stack.writes, prog_len(spilled), prog_len(moved), prog_len(moved) + 5,
-            λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+            λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Wrote(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
             λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x),
             λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
             call_moves<M>(site, laid, stack, values, d, s0, spilled, file, arguments, moves, moves_keeps, placed, leaves, g0, represents,
@@ -394,7 +409,7 @@ theorem call_finishes<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
     let out_file = file.write(Rax, Some(Held(result, Word)));
     λ s3 here resident after_call => {
         let reloading = site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g0, saved, called, 0, s3.gprs, sizes.left,
-            sizes.right, trivial, after_call.left, λ (m: M) => stack.Unchanged(d + 64, s0.memory, m), within);
+            sizes.right, trivial, after_call.left, λ (m: M) => stack.Wrote(d + 64, s0.memory, m), within);
         let e = reloading(s3, here, resident, ⟨refl, after_call.right.right.right⟩);
         let kept_s3: Kept(callee_saved(), s0.gprs, s3.gprs) =
             kept_saved(s0.gprs, s3.gprs, trans(after_call.left, sym(rsp0)),
@@ -424,7 +439,7 @@ theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
         let framed: stack.Framed(d, s0, s) = holds.right;
         let rsp_s: (read_gpr(Rsp, s.gprs) = stack.at(d)) = trans(framed.left.right.right.left, rsp0);
         site.moves_trans(stack.writes, prog_len(prog), prog_len(called), prog_len(out_prog),
-            λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+            λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
             λ (t: MachineState<M>) => stack.Returned(d, s0, s.gprs, values(64, result), t),
             λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
             call_returns<M>(site, laid, stack, callees, bound, calls, values, d, s0, room, fits, prog, file, callee, arguments,
@@ -859,9 +874,9 @@ theorem kept_block_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
     placement: List<Place>, names: Nat):
     EmitsIn<M>(site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Block(lowered.code)), lowered.file, placement, names)) {
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
-        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
     let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
-        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
     ⟨prog.within_then(0, Block(lowered.code)),
      λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(lowered.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
@@ -940,7 +955,7 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
     let to_second = prog.within_step(jumped, else_name, Block([]),
         prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
     let holds = StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
-    let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m);
+    let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧ framed(g, m);
     let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file, file.known).Represents(values, g) ∧ framed(g, m);
     let known = KnownHold(values, file.known);
@@ -1324,13 +1339,13 @@ theorem Site::loop_passes<M>(self site: Site<M>, writes: ByteWrites<M>, head_at,
 fn Stack::LoopHead<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0: MachineState<M>, registers: LoopRegisters, remaining: Nat, state: List<BitVec(64)>) → Gprs → M → Type {
     λ g m => (ArgsIn(state, registers.state, g) ∧ read_gpr(registers.counter, g) = BitVec::ofNat(remaining)) ∧
-        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m))
 }
 
 // After a pass's body: its file describes the pass's valuation.
 fn Stack::LoopPassed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0: MachineState<M>, file: File, values: Valuation()) → Gprs → M → Type {
-    λ g m => file.Represents(values, g) ∧ (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+    λ g m => file.Represents(values, g) ∧ (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m))
 }
 
 // At the loop's end: the final state in the state's registers, the
@@ -1338,7 +1353,7 @@ fn Stack::LoopPassed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self
 fn Stack::LoopDone<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s0: MachineState<M>, registers: LoopRegisters, final: List<BitVec(64)>, exhausted: Bool) → Gprs → M → Type {
     λ g m => (ArgsIn(final, registers.state, g) ∧ BitVec::ofBool(exhausted).zero_extend(63) = read_gpr(registers.flag, g)) ∧
-        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m))
 }
 
 // With no passes left the head's test jumps to X.
@@ -1476,7 +1491,7 @@ theorem loop_leaves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
         jmp_lands(asm_labels(program), jumped_in.witness, program, cleared, 0, j_name, lands, jumped_in.proof));
     let pre = stack.LoopPassed(d, s0, file, values);
     let moved = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, next), registers.state, g) ∧
-        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
     let post = stack.LoopDone(d, s0, registers, words_of(values, next), False);
     site.moves_test(stack.writes, fits, pass, out.register, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
         prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
@@ -1676,7 +1691,7 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
                     out_ok, names, again_in, c_lands, prog_len(head), h_lands, v, clear, rest, lt, counted));
         let n = values(64, limit).toNat();
         let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧
-            (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+            (Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
         let entering = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, entry.code, entered_in.proof,
             program.block_reads_at(laid, entered_in.witness, prog, 0, entry.code, entered_in.proof),
             pre, stack.LoopHead(d, s0, registers, n, words_of(values, inputs)),
@@ -1915,9 +1930,9 @@ theorem result_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
         λ (s: MachineState<M>) => file.Represents(values, s.gprs) ∧ stack.Framed(d, s1, s),
         λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = values(64, result)) ∧ stack.Framed(d, s1, t)) {
     let pre = λ (g: Gprs) (m: M) => file.Represents(values, g) ∧
-        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Wrote(d + 64, s1.memory, m));
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = values(64, result)) ∧
-        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Wrote(d + 64, s1.memory, m));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
             site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
@@ -1939,12 +1954,12 @@ theorem epilogue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free()]),
         λ (s: MachineState<M>) => (read_gpr(Rax, s.gprs) = answer) ∧ stack.Framed(d, s1, s),
         λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), s1.gprs, t.gprs) ∧
-            ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, t.memory)))) {
+            ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Wrote(d + 64, s1.memory, t.memory)))) {
     let c = BitVec::ofNat(64, n := 8).sign_extend(56);
     let pre = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧
-        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Wrote(d + 64, s1.memory, m));
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧ (Kept(callee_kept(), s1.gprs, g) ∧
-        ((read_gpr(Rsp, g) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, m)));
+        ((read_gpr(Rsp, g) = stack.at(d + 64)) ∧ stack.Wrote(d + 64, s1.memory, m)));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free()]), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_free()], at,
             site.program.block_reads_at(laid, k, prog, 0, [frame_free()], at),
@@ -1984,7 +1999,7 @@ theorem function_enters<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
         λ x held => held,
         λ x held => ⟨⟨j(sym(held.left), λ g _ => file.Represents(values, g), ready), holds⟩,
             ⟨j(sym(held.left), λ g _ => Kept(callee_saved(), s1.gprs, g), kept_refl(callee_saved(), s1.gprs)),
-             j(sym(held.right), λ m _ => stack.Unchanged(d + 64, s1.memory, m), stack.unchanged_refl(d + 64, s1.memory))⟩⟩)
+             j(sym(held.right), λ m _ => stack.Wrote(d + 64, s1.memory, m), stack.wrote_refl(d + 64, s1.memory))⟩⟩)
 }
 
 // A function's code after the label at `prog`: the frame, the body, the
@@ -1999,7 +2014,7 @@ fn function_closed(body: Prog, moves: List<Instruction>) → Prog {
 fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
     s1: MachineState<M>, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), s1.gprs, t.gprs) ∧
-        ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, t.memory)))
+        ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Wrote(d + 64, s1.memory, t.memory)))
 }
 
 theorem function_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
@@ -2108,14 +2123,15 @@ theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
             kept_trans(callee_kept(), s0.gprs, s1.gprs, t.gprs, kept_past_rsp(s0.gprs, stack.at(d)), done.right.left);
         let popped = read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8));
         let unchanged_top: (read_word(site.data, t.memory, stack.at(d + 64)) = read_word(site.data, s0.memory, stack.at(d + 64))) =
-            done.right.right.right(d + 64, (d + 64).le_refl(), sizes.right.right.right.left);
+            stack.wrote_unchanged(d + 64, sizes.right.right.left, s0.memory, t.memory, done.right.right.right)(
+                d + 64, (d + 64).le_refl(), sizes.right.right.right.left);
         Exists(t, ⟨a.proof.left, ⟨a.proof.right.left, ⟨a.proof.right.right.left,
             ⟨trans(done.right.right.left, at_back),
              ⟨trans(j(back, λ n _ => read_word(site.data, t.memory, stack.at(n)) = read_word(site.data, s0.memory, stack.at(n)),
                     unchanged_top), held.right.right.right.right),
               ⟨trans(done.left, computes.proof.right.right),
                ⟨kept_trans(callee_kept(), s0.gprs, t.gprs, write_gpr(Rsp, popped, t.gprs), kept, kept_past_rsp(t.gprs, popped)),
-                stack.unchanged_above(d + 64, i + 8, sizes.right.right.right.right, s0.memory, t.memory, done.right.right.right)⟩⟩⟩⟩⟩⟩⟩)
+                j(back, λ n _ => stack.Wrote(n, s0.memory, t.memory), done.right.right.right)⟩⟩⟩⟩⟩⟩⟩)
     }
 }
 

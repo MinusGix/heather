@@ -276,6 +276,76 @@ theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 }
 
 // ---------------------------------------------------------------------------
+// What a call may store (docs/native-one-compiler-design.md §2.1)
+
+// One store a function entered at stack offset `i` may make: a word of its
+// own room, below its return address.
+fn Stack::Own<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
+    Exists<Nat>(λ k => (k + 8 <= i) ∧ Exists<BitVec(64)>(λ word => after = stack.writes.store(before, stack.at(k), word_bytes(word))))
+}
+
+// What a call entered at `i` may have done to memory: stores of its own,
+// one after another. What a caller keeps across the call is what such
+// stores leave: its words at and above `i` (`wrote_unchanged`), the code
+// (`wrote_resident`), and anything else stable under them.
+fn Stack::Wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
+    Star(λ (m: M) (n: M) => stack.Own(i, m, n), before, after)
+}
+
+theorem Stack::wrote_refl<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M):
+    stack.Wrote(i, memory, memory) {
+    Star::refl(λ (m: M) (n: M) => stack.Own(i, m, n), memory)
+}
+
+theorem Stack::wrote_trans<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a, b, c: M,
+    first: stack.Wrote(i, a, b), second: stack.Wrote(i, b, c)): stack.Wrote(i, a, c) {
+    Star::trans(λ (m: M) (n: M) => stack.Own(i, m, n), a, b, c, first, second)
+}
+
+// A word stored wholly below `i`.
+theorem Stack::wrote_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M,
+    k: Nat, below: k + 8 <= i, word: BitVec(64)): stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    Star::one(λ (m: M) (n: M) => stack.Own(i, m, n), memory, stack.writes.store(memory, stack.at(k), word_bytes(word)),
+        Exists(k, ⟨below, Exists(word, refl)⟩))
+}
+
+// One more store after the others.
+theorem Stack::wrote_then<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, memory: M,
+    wrote: stack.Wrote(i, before, memory), k: Nat, below: k + 8 <= i, word: BitVec(64)):
+    stack.Wrote(i, before, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_trans(i, before, memory, stack.writes.store(memory, stack.at(k), word_bytes(word)), wrote,
+        stack.wrote_store(i, memory, k, below, word))
+}
+
+// What a call entered lower may store, one entered higher may.
+theorem Stack::wrote_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat, le: d <= i,
+    before, after: M, wrote: stack.Wrote(d, before, after)): stack.Wrote(i, before, after) {
+    Star::monotone(λ (m: M) (n: M) => stack.Own(d, m, n), λ (m: M) (n: M) => stack.Own(i, m, n),
+        λ m n step => Exists(step.witness, ⟨omega(step.proof.left, le), step.proof.right⟩), before, after, wrote)
+}
+
+// The caller's words at and above `i`, the return address included, are as
+// they were.
+theorem Stack::wrote_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, before, after: M, wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => stack.Unchanged(i, before, m),
+        λ m n held step => j(sym(step.proof.right.proof), λ x _ => stack.Unchanged(i, before, x),
+            stack.unchanged_trans(i, before, m, stack.writes.store(m, stack.at(step.witness), word_bytes(step.proof.right.witness)), held,
+                stack.store_below(m, step.witness, i, omega(step.proof.left, room), step.proof.left, step.proof.right.witness))),
+        before, after, stack.unchanged_refl(i, before), wrote)
+}
+
+// Code stays where it was.
+theorem Stack::wrote_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64), before, after: M, wrote: stack.Wrote(i, before, after),
+    resident: CodeResident(fetch, before, bytes, at)): CodeResident(fetch, after, bytes, at) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => CodeResident(fetch, m, bytes, at),
+        λ m n held step => j(sym(step.proof.right.proof), λ x _ => CodeResident(fetch, x, bytes, at),
+            stack.keeps_code(m, step.witness, omega(step.proof.left, room), step.proof.right.witness, bytes, at, held)),
+        before, after, resident, wrote)
+}
+
+// ---------------------------------------------------------------------------
 // Addresses as offsets
 
 // CALL's push from offset `i + 8` lands at `i`, and RET's pop from `i`

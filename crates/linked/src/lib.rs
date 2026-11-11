@@ -15,7 +15,9 @@
 //! label with its arguments in RDI, RSI, RDX, RCX, R8, R9, a return address
 //! at RSP and room on the stack below it, the code returns the source
 //! function's value in RAX, keeps the callee-saved registers and RSP, and
-//! leaves the stack above the return address as it was. That is the System V
+//! stores nowhere but in its own room below the return address
+//! (`Stack::Wrote`), so the caller's stack and everything else it owns are
+//! as they were. That is the System V
 //! contract for a function of words, which is why the declarations below are
 //! `safe fn`: nothing a caller passes can make the call misbehave.
 //!
