@@ -22,8 +22,8 @@ import string;
 
 // `name`: what a report calls the set. `default_for`: the types (by
 // `name_of`) whose goals get the set without naming it. `laws`: proofs of
-// equations or of a designated relation's instances, under any hypotheses,
-// each used left to right.
+// equations, of a designated relation's instances or of `P ↔ Q` between
+// statements, under any hypotheses, each used left to right.
 record SimpSet { name: String, default_for: List<String>, laws: List<String> }
 
 // A set a call names: `by simp([S])`.
@@ -45,7 +45,7 @@ register def simp_nat_arith: SimpSet = simp_default("Nat::arith", name_of(Nat), 
 ]);
 
 // `List`: appends nested to the right with no empty operand, `len` and
-// `map` pushed to the leaves.
+// `map` pushed to the leaves, membership in an append as a disjunction.
 register def simp_list_shape: SimpSet = simp_default("List::shape", name_of(List), [
     name_of(List::append_nil),
     name_of(List::append_assoc),
@@ -53,4 +53,5 @@ register def simp_list_shape: SimpSet = simp_default("List::shape", name_of(List
     name_of(List::len_map),
     name_of(List::map_append),
     name_of(List::map_map),
+    name_of(List::mem_append_iff),
 ]);

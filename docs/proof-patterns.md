@@ -115,8 +115,11 @@ property of Heather.
   scope does not hold. Write `simp_show(…)` to read the normal form and the
   route, then replace it: it never closes a goal. A refusal lists each step
   as `law: lhs ⟶ rhs` and the laws blocked with their unmet condition;
-  read that before adding a law. Not reached yet: a law `P ↔ Q`
-  ([[simp-iff-laws]]), an instance under a λ ([[simp-under-binders]]), and
+  read that before adding a law. A law may be `P ↔ Q` between statements
+  (`List::mem_append_iff`): it rewrites the goal, an operand of `∧`, `∨`,
+  `↔`, `¬`, `→`, and the body of a `∀`, and equations reach those places
+  too (§12 of the design). Not reached yet: an instance under a λ or below
+  an `∃` ([[simp-under-binders]]), and
   a goal a named `match h: test` left unfolded past its `≈`, which is
   restated in a one-step `calc` ([[case-split-unfolds-the-goals-relation]]).
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
