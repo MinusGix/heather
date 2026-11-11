@@ -1168,6 +1168,20 @@ paper too).
   telescopes' `shift_local`, neither of which moved to environments.
   A machinery that is invisible in a profile and load-bearing when removed
   is exactly what a good skip test looks like.
+- **A substituted variable is a node the substitution already had**
+  (2026-11-10, `issues/subst-variable-copies-payload-root.md`). The
+  traversal's variable hook answers with a node, not a value: the payload's
+  own under no binder, and wherever lifting does not change it (a payload
+  that reads no local variable, which its bounds answer); a shared leaf for
+  a variable payload; and otherwise one lifted node per payload and depth
+  within the call. So `t[s/x]` holds `s` itself, as shared as `x` was
+  used, and `s` keeps what is known about it by address: its bounds, the
+  typing memo's entry, conversion's shortcut against another holder of the
+  same node. Until then each occurrence was a copy of the payload's root,
+  equal to it and a stranger to all of those. Identity is still never part
+  of an answer: the node handed out is exactly the term the walk built, so
+  the laws of `tests/subst_laws.rs` are indifferent to the change, and the
+  sharing itself is stated on pointers in `subst.rs`'s tests.
 - Local contexts are `(base, entries)` where base is `·` or a context
   variable `g`; entries carry `(T, l)`.
 - Local substitutions mirror the paper's three-form syntax, `·` / `wk^k_g`
