@@ -32,12 +32,18 @@
 // function's own being bytes of the spans the program may write
 // (`Stack::WroteIn`). A leaf that stores nothing is proved over the file as
 // it is when the leaf starts, and lifted (`may_emit_over_of_in`). A leaf
-// with a store is refused, so what lowers stores into no buffer
-// (`lower_program_lent_quiet`): the contract without buffers
+// that is one store is a byte `MOV` through the buffer's home, under the
+// comparison that bounds its index as a load is, and the byte then there
+// loaded back as the store's output names it (`store_emits`); the theorems
+// ask that every buffer the program stores into (`program_stores`) is one
+// the lending lets be written (`allowed`). A store lowers only into a home,
+// so a program lowered with no buffers stores into none
+// (`lower_program_quiet`): the contract without buffers
 // (`lower_program_correct`, `Site::Calls`) is the one over the file at no
 // spans, which every stack lends (`Stack::loan_nothing`).
 
 import function_ir;
+import function_ir_state;
 import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_structured;
@@ -268,6 +274,42 @@ theorem Stack::trail_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
     ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stored, trail.left,
         stack.wrote_in_own(d + 64, lending.spans(), memory, stored, own)),
      stack.in_memory_wrote(top, lending, loan, d + 64, under, now, memory, stored, own, trail.right)⟩
+}
+
+// A byte stored into a buffer the lending lets a call write: the file with
+// that byte set is the one in memory.
+theorem Stack::in_memory_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
+    held: stack.InMemory(lending, now, memory), b, k: Nat, written: lending.written(b) = True,
+    inside: k < buffer_bytes(lending.buffers, b).len(), byte: BitVec(8)):
+    stack.InMemory(lending, store_byte(now, b, k, byte), stack.writes.store(memory, lending.spans().byte(b, k), [byte])) {
+    let set = λ (_: BitVec(8)) => byte;
+    let stored = stack.writes.store(memory, lending.spans().byte(b, k), [byte]);
+    λ c => match b.eq_dec(c) {
+        Inl(same) => j(same, λ x _ => (buffer_bytes(store_byte(now, b, k, byte), x).len() = buffer_bytes(lending.buffers, x).len()) ∧
+                Readable(data, stored, address_of(lending.addresses, x), buffer_bytes(store_byte(now, b, k, byte), x)),
+            j(sym(buffer_bytes_stored(now, b, k, byte)), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧
+                    Readable(data, stored, address_of(lending.addresses, b), ys),
+                ⟨trans(buffer_bytes(now, b).len_update(k, set), held(b).left),
+                 loan.put_reads(memory, b, k, written, inside, byte, buffer_bytes(now, b), held(b).left, held(b).right)⟩)),
+        Inr(differs) => {
+            let fits: (buffer_bytes(now, c).len() <= buffer_bytes(lending.buffers, c).len()) = omega(held(c).left);
+            j(sym(buffer_bytes_store_other(now, b, k, byte, c, differs)), λ ys _ =>
+                    (ys.len() = buffer_bytes(lending.buffers, c).len()) ∧ Readable(data, stored, address_of(lending.addresses, c), ys),
+                ⟨held(c).left, loan.put_keeps(memory, b, k, written, inside, byte, c, differs, buffer_bytes(now, c), fits, held(c).right)⟩)
+        },
+    }
+}
+
+// And the trail is kept, the file now the one with the byte set.
+theorem Stack::trail_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), d: Nat, entry: M, now: Buffers(), memory: M,
+    trail: stack.Trail(lending, d, entry, now, memory), b, k: Nat, written: lending.written(b) = True,
+    inside: k < buffer_bytes(lending.buffers, b).len(), byte: BitVec(8)):
+    stack.Trail(lending, d, entry, store_byte(now, b, k, byte), stack.writes.store(memory, lending.spans().byte(b, k), [byte])) {
+    ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), [byte]), trail.left,
+        stack.wrote_in_put(d + 64, lending.spans(), memory, b, k, written, inside, byte)),
+     stack.in_memory_put(top, lending, loan, now, memory, trail.right, b, k, written, inside, byte)⟩
 }
 
 // What a call gives function `f` of the file `now`: the homes of the
@@ -502,14 +544,18 @@ fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Pl
 // for (`function_ir_lower_reads`), or nodes that read none.
 fn emit_quiet_leaf(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → Option<Emitted> {
     match leaf_load(nodes) {
-        None => match nodes_pure(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
+        None => match nodes_blind(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
         Some(load) => file.emit_load(prog, homes, load, placement, names),
     }
 }
 
-// A leaf. One with a store is refused.
+// A leaf: one store into a buffer the scope has a home for, or nodes that
+// store nothing.
 fn emit_leaf(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → Option<Emitted> {
-    match nodes_quiet(nodes) { False => None, True => emit_quiet_leaf(prog, file, nodes, placement, names, homes) }
+    match leaf_store(nodes) {
+        None => match nodes_quiet(nodes) { False => None, True => emit_quiet_leaf(prog, file, nodes, placement, names, homes) },
+        Some(store) => file.emit_store(prog, homes, store, placement, names),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -831,7 +877,7 @@ theorem File::load_from_grows(self file: File, prog: Prog, load: Load, destinati
 theorem emit_quiet_leaf_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
     Grows(prog, emit_quiet_leaf(prog, file, nodes, placement, names, homes)) {
     match leaf_load(nodes) {
-        None => match nodes_pure(nodes) { False => trivial, True => emit_kept_nodes_grows(prog, file, nodes, placement, names) },
+        None => match nodes_blind(nodes) { False => trivial, True => emit_kept_nodes_grows(prog, file, nodes, placement, names) },
         Some(load) => match placement as λ p => Grows(prog, file.emit_load(prog, homes, load, p, names)) {
             Nil => trivial,
             Cons(place, rest) => match place as λ q => Grows(prog, file.emit_load(prog, homes, load, Cons(q, rest), names)) {
@@ -842,9 +888,57 @@ theorem emit_quiet_leaf_grows(prog: Prog, file: File, nodes: List<Node>, placeme
     }
 }
 
+theorem File::store_at_grows(self file: File, prog: Prog, home: Lent, store: Store, destination: Gpr, placement: List<Place>, names: Nat):
+    Grows(prog, file.store_at(prog, home, store, destination, placement, names)) {
+    match file.bounded(store.index, home.length) {
+        False => trivial,
+        True => match file.address(destination, home.base, store.index) {
+            None => trivial,
+            Some(address) => match address.file.find(Held(store.value, Word)) {
+                None => trivial,
+                Some(source) => match (leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                    store_base_plain(destination) {
+                    False => trivial,
+                    True => prog.within_step(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                        LoadByte(ByteLoad(destination, destination)),
+                        prog.within_step(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register)),
+                            prog.within_then(0, Block(address.code)))),
+                },
+            },
+        },
+    }
+}
+
+theorem File::store_from_grows(self file: File, prog: Prog, store: Store, destination: Gpr, placement: List<Place>, names: Nat,
+    homes: List<Lent>): Grows(prog, file.store_from(prog, homes, store, destination, placement, names)) {
+    match homes {
+        Nil => trivial,
+        Cons(home, rest) => match home.buffer.same(store.buffer) {
+            False => file.store_from_grows(prog, store, destination, placement, names, rest),
+            True => (match file.store_at(prog, home, store, destination, placement, names) as λ e => Grows(prog, e) →
+                Grows(prog, match e {
+                    None => file.store_from(prog, rest, store, destination, placement, names),
+                    Some(emitted) => Some(emitted),
+                }) {
+                None => λ _ => file.store_from_grows(prog, store, destination, placement, names, rest),
+                Some(emitted) => λ grown => grown,
+            })(file.store_at_grows(prog, home, store, destination, placement, names)),
+        },
+    }
+}
+
 theorem emit_leaf_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
     Grows(prog, emit_leaf(prog, file, nodes, placement, names, homes)) {
-    match nodes_quiet(nodes) { False => trivial, True => emit_quiet_leaf_grows(prog, file, nodes, placement, names, homes) }
+    match leaf_store(nodes) {
+        None => match nodes_quiet(nodes) { False => trivial, True => emit_quiet_leaf_grows(prog, file, nodes, placement, names, homes) },
+        Some(store) => match placement as λ p => Grows(prog, file.emit_store(prog, homes, store, p, names)) {
+            Nil => trivial,
+            Cons(place, rest) => match place as λ q => Grows(prog, file.emit_store(prog, homes, store, Cons(q, rest), names)) {
+                Folded => trivial,
+                Into(destination) => file.store_from_grows(prog, store, destination, rest, names, homes),
+            },
+        },
+    }
 }
 
 theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
@@ -1173,13 +1267,13 @@ theorem emit_quiet_leaf_emits<M>(site: Site<M>, laid: site.program.laid_out().Is
     let facts = NodesHoldOver(lending.buffers, values, nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
     (match leaf_load(nodes) as λ found => leaf_load(nodes) = found →
         MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match found {
-            None => match nodes_pure(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
+            None => match nodes_blind(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
             Some(load) => file.emit_load(prog, homes, load, placement, names),
         }) {
-        None => λ _ => match pure: nodes_pure(nodes) {
+        None => λ _ => match pure: nodes_blind(nodes) {
             False => trivial,
             True => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), facts,
-                λ held => nodes_hold_pure(values, lending.buffers, nodes, is_true_of_eq(nodes_pure(nodes), pure), held.left),
+                λ held => nodes_hold_blind(values, lending.buffers, nodes, is_true_of_eq(nodes_blind(nodes), pure), held.left),
                 emit_kept_nodes(prog, file, nodes, placement, names),
                 emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, nodes, placement, names)),
         },
@@ -1347,34 +1441,292 @@ theorem may_emit_over_of_in<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.d
     })(grows, emits)
 }
 
-// A leaf: it stores nothing, so it leaves the file and its nodes hold over
-// the file it starts from.
+// Code proved to leave the file its facts say it leaves.
+theorem emits_over_at<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, facts: Type, before, target, after: Buffers(), there: facts → after = target, out: Emitted,
+    emits: EmitsOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, target, out)):
+    EmitsOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, out) {
+    ⟨emits.left, λ within s here resident held =>
+        j(sym(there(held.left.right)), λ a _ => site.Arrives(stack.writes, s, prog_len(out.prog),
+                λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Trailed(lending, d, s0, a, t)),
+            emits.right(within)(s, here, resident, held))⟩
+}
+
+// ---------------------------------------------------------------------------
+// A store into a lent buffer (docs/native-one-compiler-design.md §2.6)
+
+// The address formed, the value's low byte stored over it, and the byte
+// loaded back: the home says where the buffer lies and how long it is, the
+// path that the index is inside, and the lending that the buffer may be
+// written, so under the laws the byte is writable, the code and the frame
+// are kept, and the file with that byte set is the one in memory. The load
+// then reads the byte there, which is what the store's output names.
+theorem store_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, home: Lent, store: Store, destination: Gpr, placement: List<Place>, names: Nat,
+    same: home.buffer = store.buffer, written: lending.written(store.buffer) = True,
+    bounded: file.bounded(store.index, home.length).IsTrue(), address: Lowered,
+    addressed: Addressed<M>(values, file, destination, home.base, store.index, address),
+    source: Found(address.file, Held(store.value, Word)),
+    kept: leaves_all(address.code, callee_saved()).IsTrue() ∧ destination.apart(callee_saved()).IsTrue(),
+    plain: store_base_plain(destination) = True, before: Buffers()):
+    EmitsOver<M>(site, stack, lending, values, d, s0, prog, file,
+        (values(64, store.output) = byte_word(buffer_byte(store.after(values, before), store.buffer, values(64, store.index).toNat()))) ∧
+            home.Holds(values, lending.addresses, lending.buffers),
+        before, store.after(values, before),
+        Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                LoadByte(ByteLoad(destination, destination))),
+            address.file.write(destination, Some(Held(store.output, Word))), placement, names)) {
+    let after = store.after(values, before);
+    let index = values(64, store.index);
+    let byte = low_byte(values(64, store.value));
+    let named = values(64, store.output) = byte_word(buffer_byte(after, store.buffer, index.toNat()));
+    let facts = named ∧ home.Holds(values, lending.addresses, lending.buffers);
+    let formed = At(prog, 0, Block(address.code));
+    let the_store = ByteStore(destination, source.register);
+    let put = At(formed, 0, StoreByte(the_store));
+    let the_load = ByteLoad(destination, destination);
+    let loaded = At(put, 0, LoadByte(the_load));
+    let out_file = address.file.write(destination, Some(Held(store.output, Word)));
+    let a = address_of(lending.addresses, store.buffer);
+    let xs = buffer_bytes(lending.buffers, store.buffer);
+    let spans = lending.spans();
+    let trailed = λ (now: Buffers()) (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Trail(lending, d, s0.memory, now, m);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ trailed(before, g, m);
+    let ready = λ (now: Buffers()) (g: Gprs) (m: M) =>
+        ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = a.add(index))) ∧ (named ∧ (index.toNat() < xs.len()))) ∧
+            trailed(now, g, m);
+    let post = λ (t: MachineState<M>) => out_file.Represents(values, t.gprs) ∧ stack.Trailed(lending, d, s0, after, t);
+    ⟨prog.within_step(put, 0, LoadByte(the_load), prog.within_step(formed, 0, StoreByte(the_store), prog.within_then(0, Block(address.code)))),
+     λ within => {
+        let put_in = put.within_before(0, LoadByte(the_load), site.program, within);
+        let formed_in = formed.within_before(0, StoreByte(the_store), site.program, put_in);
+        let fits = site.program.laid_out_fits(laid);
+        site.moves_trans(stack.writes, prog_len(prog), prog_len(formed), prog_len(loaded),
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (s: MachineState<M>) => ready(before, s.gprs, s.memory), post,
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(address.code), pre,
+                λ (g: Gprs) (m: M) => ready(before, g, m),
+                λ memory => site.runs_block(fits, formed_in.witness, prog, 0, address.code, formed_in.proof,
+                    site.program.block_reads_at(laid, formed_in.witness, prog, 0, address.code, formed_in.proof),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => ready(before, g, memory),
+                    λ x held => {
+                        let home_holds = held.left.right.right;
+                        let at_base: (values(64, home.base) = a) =
+                            j(same, λ b _ => values(64, home.base) = address_of(lending.addresses, b), home_holds.left);
+                        let length: (values(64, home.length) = BitVec::ofNat(xs.len())) =
+                            j(same, λ b _ => values(64, home.length) = BitVec::ofNat(buffer_bytes(lending.buffers, b).len()), home_holds.right);
+                        let short: (values(64, home.length).toNat() <= xs.len()) =
+                            j(sym(length), λ w _ => w.toNat() <= xs.len(), BitVec::toNat_ofNat_le(64, xs.len()));
+                        let below = file.bounded_sound(values, x.gprs, store.index, home.length, held.left.left, bounded);
+                        let got = addressed(x, held.left.left);
+                        ⟨⟨⟨got.left, trans(got.right, cong_fn(λ (b: BitVec(64)) => b.add(index), at_base))⟩,
+                          ⟨held.left.right.left,
+                           Nat::le_trans(Succ(index.toNat()), values(64, home.length).toNat(), xs.len(), below, short)⟩⟩,
+                         ⟨kept_trans(callee_saved(), s0.gprs, x.gprs, execute_block_normal(address.code, x).gprs, held.right.left,
+                            execute_block_kept<M>(address.code, x, callee_saved(), kept.left)), held.right.right⟩⟩
+                    })),
+            site.moves_trans(stack.writes, prog_len(formed), prog_len(put), prog_len(loaded),
+                λ (s: MachineState<M>) => ready(before, s.gprs, s.memory), λ (s: MachineState<M>) => ready(after, s.gprs, s.memory), post,
+                site.moves_store_byte(stack.writes, fits, put_in.witness, formed, 0, the_store, put_in.proof,
+                    λ (s: MachineState<M>) => ready(before, s.gprs, s.memory), λ (s: MachineState<M>) => ready(after, s.gprs, s.memory),
+                    λ s held resident => {
+                        let k = index.toNat();
+                        let inside = held.left.right.right;
+                        let cell = spans.byte(store.buffer, k);
+                        let at: (read_gpr(destination, s.gprs) = cell) =
+                            trans(held.left.left.right, sym(BitVec::iter_add_eq_add(64, a, index)));
+                        let value: (values(64, store.value) = read_gpr(source.register, s.gprs)) =
+                            source.at.rep(values, s.gprs, held.left.left.left);
+                        let goal = λ (x: BitVec(64)) (w: BitVec(64)) =>
+                            site.Resident(stack.writes.store(s.memory, x, [low_byte(w)])) ∧
+                                ready(after, s.gprs, stack.writes.store(s.memory, x, [low_byte(w)]));
+                        let done: goal(cell, values(64, store.value)) =
+                            ⟨loan.keeps_code(s.memory, store.buffer, k, written, inside, byte,
+                                assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident),
+                             ⟨held.left, ⟨held.right.left, stack.trail_put(top, lending, loan, d, s0.memory, before, s.memory,
+                                held.right.right, store.buffer, k, written, inside, byte)⟩⟩⟩;
+                        ⟨plain, ⟨j(sym(at), λ x _ => stack.writes.writable(s.memory, x, 1),
+                                loan.writable(s.memory, store.buffer, k, written, inside)),
+                            j(sym(at), λ x _ => goal(x, read_gpr(source.register, s.gprs)), j(value, λ w _ => goal(cell, w), done))⟩⟩
+                    }),
+                site.moves_load_byte(stack.writes, fits, within.witness, put, 0, the_load, within.proof,
+                    λ (s: MachineState<M>) => ready(after, s.gprs, s.memory), post,
+                    λ s held => {
+                        let in_memory = held.right.right.right(store.buffer);
+                        let ys = buffer_bytes(after, store.buffer);
+                        let inside: (index.toNat() < ys.len()) = j(sym(in_memory.left), λ n _ => index.toNat() < n, held.left.right.right);
+                        let reads = readable_at(site.data, s.memory, a, ys, in_memory.right, index, inside);
+                        let read = buffer_byte(after, store.buffer, index.toNat());
+                        let at = held.left.left.right;
+                        Exists(read, ⟨j(sym(at), λ x _ => x.toNat() < Nat::pow(2, 47), reads.right.left),
+                            ⟨j(sym(at), λ x _ => site.data.read(s.memory, x) = Some(read),
+                                trans(reads.right.right, buffer_byte_at(after, store.buffer, index.toNat(), inside))),
+                             ⟨address.file.represents_write(values, s.gprs, destination, Some(Held(store.output, Word)), read.zero_extend(56),
+                                held.left.left.left, held.left.right.left),
+                              ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, write_gpr(destination, read.zero_extend(56), s.gprs),
+                                held.right.left, kept_write(callee_saved(), destination, read.zero_extend(56), s.gprs, kept.right)),
+                               held.right.right⟩⟩⟩⟩)
+                    })))
+     }⟩
+}
+
+theorem File::store_at_runs<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, home: Lent, store: Store, destination: Gpr, placement: List<Place>,
+    names: Nat, same: home.buffer = store.buffer, written: lending.written(store.buffer) = True, before, after: Buffers()):
+    MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file,
+        store.Runs(values, before, after) ∧ home.Holds(values, lending.addresses, lending.buffers), before, after,
+        file.store_at(prog, home, store, destination, placement, names)) {
+    let facts = store.Runs(values, before, after) ∧ home.Holds(values, lending.addresses, lending.buffers);
+    let stored = store.after(values, before);
+    let core = (values(64, store.output) = byte_word(buffer_byte(stored, store.buffer, values(64, store.index).toNat()))) ∧
+        home.Holds(values, lending.addresses, lending.buffers);
+    match bounded: file.bounded(store.index, home.length) {
+        False => trivial,
+        True => (match file.address(destination, home.base, store.index) as λ a =>
+            a.All(λ (out: Lowered) => Addressed<M>(values, file, destination, home.base, store.index, out)) →
+            MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, match a {
+                None => None,
+                Some(address) => match address.file.find(Held(store.value, Word)) {
+                    None => None,
+                    Some(source) => match (leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                        store_base_plain(destination) {
+                        False => None,
+                        True => Some(Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                                LoadByte(ByteLoad(destination, destination))),
+                            address.file.write(destination, Some(Held(store.output, Word))), placement, names)),
+                    },
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(address) => λ addressed => match address.file.find(Held(store.value, Word)) as λ f =>
+                MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, match f {
+                    None => None,
+                    Some(source) => match (leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                        store_base_plain(destination) {
+                        False => None,
+                        True => Some(Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                                LoadByte(ByteLoad(destination, destination))),
+                            address.file.write(destination, Some(Held(store.output, Word))), placement, names)),
+                    },
+                }) {
+                None => trivial,
+                Some(source) => match kept: (leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                    store_base_plain(destination) {
+                    False => trivial,
+                    True => {
+                        let emitted = Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                                LoadByte(ByteLoad(destination, destination))),
+                            address.file.write(destination, Some(Held(store.output, Word))), placement, names);
+                        let all = Bool::is_true_and(leaves_all(address.code, callee_saved()) && destination.apart(callee_saved()),
+                            store_base_plain(destination),
+                            is_true_of_eq((leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                                store_base_plain(destination), kept));
+                        emits_over_at<M>(site, stack, lending, values, d, s0, prog, file, facts, before, stored, after,
+                            λ held => held.left.left, emitted,
+                            emits_over_weaken<M>(site, stack, lending, values, d, s0, prog, file, core, facts,
+                                λ held => ⟨j(held.left.left, λ f _ =>
+                                        values(64, store.output) = byte_word(buffer_byte(f, store.buffer, values(64, store.index).toNat())),
+                                    held.left.right), held.right⟩,
+                                before, stored, emitted,
+                                store_emits<M>(site, laid, stack, top, lending, loan, values, d, s0, prog, file, home, store, destination,
+                                    placement, names, same, written, is_true_of_eq(file.bounded(store.index, home.length), bounded), address,
+                                    addressed, source,
+                                    Bool::is_true_and(leaves_all(address.code, callee_saved()), destination.apart(callee_saved()), all.left),
+                                    eq_true_of_is_true(store_base_plain(destination), all.right), before)))
+                    },
+                },
+            },
+        })(file.address_addressed<M>(values, destination, home.base, store.index)),
+    }
+}
+
+theorem File::store_from_runs<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, store: Store, destination: Gpr, placement: List<Place>, names: Nat,
+    written: lending.written(store.buffer) = True, before, after: Buffers(), homes: List<Lent>):
+    MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file,
+        store.Runs(values, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), before, after,
+        file.store_from(prog, homes, store, destination, placement, names)) {
+    match homes {
+        Nil => trivial,
+        Cons(home, rest) => {
+            let all = store.Runs(values, before, after) ∧ HomesHold(Cons(home, rest), values, lending.addresses, lending.buffers);
+            let one = store.Runs(values, before, after) ∧ home.Holds(values, lending.addresses, lending.buffers);
+            let later = may_emit_over_weaken<M>(site, stack, lending, values, d, s0, prog, file,
+                store.Runs(values, before, after) ∧ HomesHold(rest, values, lending.addresses, lending.buffers), all,
+                λ held => ⟨held.left, held.right.right⟩, before, after, file.store_from(prog, rest, store, destination, placement, names),
+                file.store_from_runs<M>(site, laid, stack, top, lending, loan, values, d, s0, prog, store, destination, placement, names,
+                    written, before, after, rest));
+            match same: home.buffer.same(store.buffer) {
+                False => later,
+                True => (match file.store_at(prog, home, store, destination, placement, names) as λ e =>
+                    MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, one, before, after, e) →
+                    MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, all, before, after, match e {
+                        None => file.store_from(prog, rest, store, destination, placement, names),
+                        Some(emitted) => Some(emitted),
+                    }) {
+                    None => λ _ => later,
+                    Some(emitted) => λ emits => emits_over_weaken<M>(site, stack, lending, values, d, s0, prog, file, one, all,
+                        λ held => ⟨held.left, held.right.left⟩, before, after, emitted, emits),
+                })(file.store_at_runs<M>(site, laid, stack, top, lending, loan, values, d, s0, prog, home, store, destination, placement,
+                    names, home.buffer.same_sound(store.buffer, same), written, before, after)),
+            }
+        },
+    }
+}
+
+// A leaf. One that stores nothing leaves the file, and its nodes hold over
+// the file it starts from; one store sets its byte, into a buffer the
+// lending lets the program write.
 theorem emit_leaf_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), values: Valuation(), d: Nat,
     s0: MachineState<M>, under: d + 64 <= top, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat,
-    homes: List<Lent>, before, after: Buffers()):
+    homes: List<Lent>, allowed: (b: Nat) → nodes_store(nodes, b).IsTrue() → lending.written(b) = True, before, after: Buffers()):
     MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file,
         NodesRun(nodes, values, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), before, after,
         emit_leaf(prog, file, nodes, placement, names, homes)) {
     let facts = NodesRun(nodes, values, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
-    match quiet: nodes_quiet(nodes) {
-        False => trivial,
-        True => {
-            let still = λ (held: facts) => nodes_run_still(values, nodes, before, after, is_true_of_eq(nodes_quiet(nodes), quiet), held.left);
-            may_emit_over_still<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, λ held => still(held).left,
-                emit_quiet_leaf(prog, file, nodes, placement, names, homes),
-                may_emit_over_of_in<M>(site, stack, top, lending, loan, values, d, s0, under, prog, file, facts, before,
+    (match leaf_store(nodes) as λ found => leaf_store(nodes) = found →
+        MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, match found {
+            None => match nodes_quiet(nodes) { False => None, True => emit_quiet_leaf(prog, file, nodes, placement, names, homes) },
+            Some(store) => file.emit_store(prog, homes, store, placement, names),
+        }) {
+        None => λ _ => match quiet: nodes_quiet(nodes) {
+            False => trivial,
+            True => {
+                let still = λ (held: facts) => nodes_run_still(values, nodes, before, after, is_true_of_eq(nodes_quiet(nodes), quiet), held.left);
+                may_emit_over_still<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, λ held => still(held).left,
                     emit_quiet_leaf(prog, file, nodes, placement, names, homes),
-                    emit_quiet_leaf_grows(prog, file, nodes, placement, names, homes),
-                    λ s lent shaped => may_emit_in_weaken<M>(site, stack, values, d, s, prog, file,
-                        NodesHoldOver(before, values, nodes) ∧ HomesHold(homes, values, lending.addresses, before), facts,
-                        λ held => ⟨still(held).right,
-                            homes_hold_shaped(values, lending.addresses, lending.buffers, before, λ b => sym(shaped(b)), homes, held.right)⟩,
+                    may_emit_over_of_in<M>(site, stack, top, lending, loan, values, d, s0, under, prog, file, facts, before,
                         emit_quiet_leaf(prog, file, nodes, placement, names, homes),
-                        emit_quiet_leaf_emits<M>(site, laid, stack, lending.over(before), values, d, s, lent, prog, file, nodes, placement,
-                            names, homes))))
+                        emit_quiet_leaf_grows(prog, file, nodes, placement, names, homes),
+                        λ s lent shaped => may_emit_in_weaken<M>(site, stack, values, d, s, prog, file,
+                            NodesHoldOver(before, values, nodes) ∧ HomesHold(homes, values, lending.addresses, before), facts,
+                            λ held => ⟨still(held).right,
+                                homes_hold_shaped(values, lending.addresses, lending.buffers, before, λ b => sym(shaped(b)), homes, held.right)⟩,
+                            emit_quiet_leaf(prog, file, nodes, placement, names, homes),
+                            emit_quiet_leaf_emits<M>(site, laid, stack, lending.over(before), values, d, s, lent, prog, file, nodes, placement,
+                                names, homes))))
+            },
         },
-    }
+        Some(store) => λ found => {
+            let one = store.Runs(values, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
+            may_emit_over_weaken<M>(site, stack, lending, values, d, s0, prog, file, one, facts,
+                λ held => ⟨leaf_store_runs(values, before, after, nodes, store, found, held.left), held.right⟩, before, after,
+                file.emit_store(prog, homes, store, placement, names),
+                match placement as λ p => MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, one, before, after,
+                    file.emit_store(prog, homes, store, p, names)) {
+                    Nil => trivial,
+                    Cons(place, rest) => match place as λ q => MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, one, before,
+                        after, file.emit_store(prog, homes, store, Cons(q, rest), names)) {
+                        Folded => trivial,
+                        Into(destination) => file.store_from_runs<M>(site, laid, stack, top, lending, loan, values, d, s0, prog, store,
+                            destination, rest, names, allowed(store.buffer, leaf_store_stores(nodes, store, found)), before, after, homes),
+                    },
+                })
+        },
+    })(refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -2553,17 +2905,18 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
     stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), bound: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), calls: site.CallsOver(stack, effects, bound, lending, top),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
-    fits: d + 64 <= stack.size, under: d + 72 <= top): (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) →
+    fits: d + 64 <= stack.size, under: d + 72 <= top): ((b: Nat) → region.stores(b).IsTrue() → lending.written(b) = True) →
+    (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) →
     (names: Nat) → (before, after: Buffers()) →
     MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file,
         StructuredRegionRunsOver(effects, values, region, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after, region.emit_calls(prog, file, placement, names, bound, lending.counts, homes)) {
     let leaf_under: (d + 64 <= top) = { omega };
     match region {
-        Dataflow(body) => λ homes prog file placement names before after =>
+        Dataflow(body) => λ allowed homes prog file placement names before after =>
             emit_leaf_runs<M>(site, laid, stack, top, lending, loan, values, d, s0, leaf_under, prog, file, body.nodes, placement, names,
-                homes, before, after),
-        Sequence(prefix, continuation) => λ homes prog file placement names before after => {
+                homes, allowed, before, after),
+        Sequence(prefix, continuation) => λ allowed homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
             let First = λ (mid: Buffers()) => NodesRun(prefix.nodes, values, before, mid) ∧ held_homes;
             let Second = λ (mid: Buffers()) => StructuredRegionRunsOver(effects, values, continuation, mid, after) ∧ held_homes;
@@ -2583,11 +2936,12 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                     may_emit_over_seq<M>(site, stack, lending, values, d, s0, prog, file, First, Second, before, after, first, first_emits,
                         continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
                         λ mid => continuation.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0,
-                            rsp0, room, fits, under, homes, first.prog, first.file, first.placement, first.names, mid, after))),
+                            rsp0, room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(nodes_store(prefix.nodes, b), continuation.stores(b), stores)), homes, first.prog, first.file, first.placement, first.names, mid, after))),
             })(λ mid => emit_leaf_runs<M>(site, laid, stack, top, lending, loan, values, d, s0, leaf_under, prog, file, prefix.nodes,
-                placement, names, homes, before, mid))
+                placement, names, homes,
+                λ b stores => allowed(b, Bool::is_true_or_l(nodes_store(prefix.nodes, b), continuation.stores(b), stores)), before, mid))
         },
-        Compose(prefix, continuation) => λ homes prog file placement names before after => {
+        Compose(prefix, continuation) => λ allowed homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
             let lent_homes = HomesHold(prefix.lends(homes), values, lending.addresses, lending.buffers);
             let First = λ (mid: Buffers()) => StructuredRegionRunsOver(effects, values, prefix, before, mid) ∧ held_homes;
@@ -2612,14 +2966,14 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                         continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts,
                             prefix.lends(homes)),
                         λ mid => continuation.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0,
-                            rsp0, room, fits, under, prefix.lends(homes), first.prog, first.file, first.placement, first.names, mid, after))),
+                            rsp0, room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(prefix.stores(b), continuation.stores(b), stores)), prefix.lends(homes), first.prog, first.file, first.placement, first.names, mid, after))),
             })(λ mid => prefix.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0, room,
-                fits, under, homes, prog, file, placement, names, before, mid))
+                fits, under, λ b stores => allowed(b, Bool::is_true_or_l(prefix.stores(b), continuation.stores(b), stores)), homes, prog, file, placement, names, before, mid))
         },
         // The motive is written out: read off the goal it is past the
         // budget a stuck head is spelled within, the file's slots being a
         // reduction further down than a function's application was.
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ homes prog file placement names before after => {
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ allowed homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
             let facts = StructuredRegionRunsOver(effects, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false),
                 before, after) ∧ held_homes;
@@ -2660,17 +3014,17 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                                     inputs, condition, arguments, outputs, when_true, when_false, held_homes, before, after, tested, names,
                                     yes, no, yes_emits, no_emits),
                             })(when_false.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0,
-                                room, fits, under, homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names,
+                                room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(when_true.stores(b), when_false.stores(b), stores)), homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names,
                                 before, after)),
                     })(when_true.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0, room,
-                        fits, under, homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+                        fits, under, λ b stores => allowed(b, Bool::is_true_or_l(when_true.stores(b), when_false.stores(b), stores)), homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
                         Succ(Succ(names)), before, after)),
             }
         },
-        Call(callee, arguments, result) => λ homes prog file placement names before after =>
+        Call(callee, arguments, result) => λ allowed homes prog file placement names before after =>
             file.emit_call_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0, room, fits, under, prog,
                 callee, arguments, result, placement, names, homes, before, after),
-        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes prog file placement names before after => {
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ allowed homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
             let facts = StructuredRegionRunsOver(effects, values,
                 Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted), before, after) ∧ held_homes;
@@ -2707,7 +3061,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                             loop_close_emits<M>(site, laid, stack, lending, Pass, values, d, s0, prog, file, inputs, limit, parameters, count,
                                 body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits, before, after)),
                     })(λ v from to => body.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, v, d, s0, rsp0,
-                        room, fits, under, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names),
+                        room, fits, under, allowed, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names),
                         entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), from, to)),
             })(loop_entry_sound<M>(values, file, inputs, limit, parameters, count, placement))
         },
@@ -2870,6 +3224,7 @@ theorem function_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
     effects: Effects(), k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     calls: site.CallsOver(stack, effects, k, lending, top), function: Function, prog: Prog, file: File,
     placement: List<Place>, names: Nat, body: Emitted,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -2900,7 +3255,7 @@ theorem function_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
     let body_emits = function.body.emit_calls(opened, file, placement, names, k, lending.counts, function.homes()).all_some(
         λ (e: Emitted) => EmitsOver<M>(site, stack, lending, values, d, s1, opened, file, facts, before, after, e),
         body, emitted,
-        function.body.emit_calls_runs<M>(site, laid, stack, top, effects, k, lending, loan, calls, values, d, s1, rsp1, room, fits, under,
+        function.body.emit_calls_runs<M>(site, laid, stack, top, effects, k, lending, loan, calls, values, d, s1, rsp1, room, fits, under, allowed,
             function.homes(), opened, file, placement, names, before, after));
     let opened_in = opened.within_trans(body.prog, site.program, body_emits.left, body_in);
     let entry_in = At(prog, Succ(k), Block([])).within_before(0, Block([frame_allocate()]), site.program, opened_in);
@@ -2959,6 +3314,7 @@ theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
     effects: Effects(), k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     calls: site.CallsOver(stack, effects, k, lending, top), function: Function, prog: Prog, file: File,
     placement: List<Place>, names: Nat, body: Emitted,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -2988,7 +3344,7 @@ theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
             j(sym(count), λ c _ => ArgsLent(c, 0, words_of(values, function.parameters), lending.addresses, lending.buffers),
                 j(sym(runs.proof.left), λ w _ => ArgsLent(lent_count(lending.counts, k), 0, w, lending.addresses, lending.buffers),
                     pre.right.left)));
-        let ran = function_runs<M>(site, laid, stack, top, effects, k, lending, loan, calls, function, prog, file, placement, names, body,
+        let ran = function_runs<M>(site, laid, stack, top, effects, k, lending, loan, calls, function, prog, file, placement, names, body, allowed,
             emitted, moves, keeps, placed, leaves, entered, within, values, s0, d,
             trans(held.right.left, sym(at_back)), sizes.right.left, sizes.right.right.left, unders.left, before, after,
             pre.right.right.right,
@@ -3021,6 +3377,7 @@ theorem function_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
     effects: Effects(), k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     calls: site.CallsOver(stack, effects, k, lending, top), function: Function, prog: Prog, file: File,
     placement: List<Place>, names: Nat, body: Emitted,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -3036,7 +3393,7 @@ theorem function_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
     site.returns_by(stack, site.program.laid_out_fits(laid), prog_len(prog), within.witness, closed, 0, within.proof,
         stack.EnteredOver(effects, lending, top, k, function, words, result, before, after), stack.AnsweredOver(lending, result, after),
         λ s0 i ret => function_body<M>(site, laid, stack, top, effects, k, lending, loan, calls, function, prog, file, placement, names,
-            body, emitted, moves, keeps, placed, leaves, entered, count, closed.within_before(0, Ret, site.program, within), words, result,
+            body, allowed, emitted, moves, keeps, placed, leaves, entered, count, closed.within_before(0, Ret, site.program, within), words, result,
             before, after, s0, i, ret))
 }
 
@@ -3101,6 +3458,7 @@ theorem Function::closing_returns<M>(self function: Function, site: Site<M>, lai
     stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), k: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), prog: Prog, file: File,
     placement: List<Place>, names: Nat, body: Emitted,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     count: function.lent = lent_count(lending.counts, k),
     grown: At(prog, Succ(k), Block([])).Within(body.prog),
@@ -3130,7 +3488,7 @@ theorem Function::closing_returns<M>(self function: Function, site: Site<M>, lai
                     ⟨At(prog, Succ(k), Block([])).within_trans(body.prog, At(function_closed(body.prog, moves.code), 0, Ret), grown,
                         closed_within(body.prog, moves.code)),
                      λ within calls words result before after => function_returns<M>(site, laid, stack, top, effects, k, lending, loan,
-                        calls, function, prog, file, placement, names, body, emitted, moves, keeps, checked.left, checked.right, entered,
+                        calls, function, prog, file, placement, names, body, allowed, emitted, moves, keeps, checked.left, checked.right, entered,
                         count, within, words, result, before, after)⟩
                 },
             })(λ ok => Bool::is_true_and(moves.file.outputs_check(outs, [Rax]), leaves_all(moves.code, callee_saved()), ok)),
@@ -3144,7 +3502,8 @@ theorem label_opened(prog: Prog, k: Nat): At(prog, Succ(k), Block([])).Within(fu
 theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), k: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), prog: Prog, file: File,
-    placement: List<Place>, names: Nat, count: function.lent = lent_count(lending.counts, k),
+    placement: List<Place>, names: Nat, allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
+    count: function.lent = lent_count(lending.counts, k),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
         file.Represents(values, g)):
     MayReturnOver<M>(site, stack, top, effects, k, lending, function, prog, function.emit_body(prog, k, file, placement, names, lending.counts)) {
@@ -3155,7 +3514,7 @@ theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, l
         MayReturnOver<M>(site, stack, top, effects, k, lending, function, prog, match e { None => None, Some(body) => function.closing(body) }) {
         None => λ _ _ => trivial,
         Some(body) => λ emitted grown => function.closing_returns(site, laid, stack, top, effects, k, lending, loan, prog, file, placement,
-            names, body, emitted, count, label.within_trans(opened, body.prog, label_opened(prog, k), grown), entered),
+            names, body, allowed, emitted, count, label.within_trans(opened, body.prog, label_opened(prog, k), grown), entered),
     })(refl, function.body.emit_calls_grows(k, lending.counts, function.homes(), opened, file, placement, names))
 }
 
@@ -3164,7 +3523,8 @@ theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, l
 // resident, given its callees meet theirs.
 theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), k: Nat, lending: Lending,
-    loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), prog: Prog, placement: List<Place>, names: Nat):
+    loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), prog: Prog, placement: List<Place>, names: Nat,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True):
     MayReturnOver<M>(site, stack, top, effects, k, lending, function, prog, function.emit_lent(prog, k, placement, names, lending.counts)) {
     let ins = word_ports(function.parameters);
     match same: function.lent.same(lent_count(lending.counts, k)) {
@@ -3177,7 +3537,7 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
                 Some(file) => function.emit_body(prog, k, file, placement, names, lending.counts),
             }) {
             None => λ _ => trivial,
-            Some(file) => λ entered => function.emit_body_returns(site, laid, stack, top, effects, k, lending, loan, prog, file, placement, names,
+            Some(file) => λ entered => function.emit_body_returns(site, laid, stack, top, effects, k, lending, loan, prog, file, placement, names, allowed,
                 function.lent.same_sound(lent_count(lending.counts, k), same), entered),
         })(λ values g placed => input_file_represents(values, g, ins, argument_registers(), placed)),
     }
@@ -3225,6 +3585,7 @@ fn lower_program_lent(functions: List<Function>, placement: List<Place>, counts:
     }
 }
 
+// The door without buffers: a program lent none.
 fn lower_program(functions: List<Function>, placement: List<Place>) → Option<Prog> { lower_program_lent(functions, placement, []) }
 
 // ---------------------------------------------------------------------------
@@ -3374,11 +3735,11 @@ theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
 
 theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), start: Prog, placement: List<Place>,
-    names: Nat, functions: List<Function>):
+    names: Nat, functions: List<Function>): ((b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True) →
     MayCallOver<M>(site, stack, top, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
     match functions {
-        Nil => λ _ f below words result before after => false_elim(nothing_below_zero(f, below)),
-        Cons(last, earlier) =>
+        Nil => λ _ _ f below words result before after => false_elim(nothing_below_zero(f, below)),
+        Cons(last, earlier) => λ allowed =>
             (match emit_functions_after_lent(start, earlier, placement, names, lending.counts) as λ e =>
                 MayCallOver<M>(site, stack, top, lending, earlier, e) →
                 MayCallOver<M>(site, stack, top, lending, Cons(last, earlier), match e {
@@ -3389,8 +3750,10 @@ theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.lai
                 Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, top, lending, last, earlier, before, earlier_calls,
                     last.emit_lent(before.prog, earlier.len(), before.placement, before.names, lending.counts),
                     last.emit_returns(site, laid, stack, top, program_effects(earlier), earlier.len(), lending, loan, before.prog,
-                        before.placement, before.names)),
-            })(emit_functions_after_lent_calls<M>(site, laid, stack, top, lending, loan, start, placement, names, earlier)),
+                        before.placement, before.names,
+                        λ b stores => allowed(b, Bool::is_true_or_l(last.body.stores(b), program_stores(earlier, b), stores)))),
+            })(emit_functions_after_lent_calls<M>(site, laid, stack, top, lending, loan, start, placement, names, earlier,
+                λ b stores => allowed(b, Bool::is_true_or_r(last.body.stores(b), program_stores(earlier, b), stores)))),
     }
 }
 
@@ -3473,10 +3836,11 @@ theorem emit_functions_after_grows(start: Prog, placement: List<Place>, names: N
 }
 
 // ---------------------------------------------------------------------------
-// What is lowered stores nothing
+// What is lowered with no buffers stores nothing
 
-// A leaf with a store is refused, so a program that lowers has none: what
-// it does to the file is to leave it (`program_effects_quiet`), and the
+// A store is lowered into a home of its buffer, and a scope entered with no
+// home has none: a program that lowers lent nothing stores into nothing,
+// what it does to the file is to leave it (`program_effects_quiet`), and the
 // contract without buffers follows from the one over the file.
 fn Quiets(quiet: Bool, out: Option<Emitted>) → Type { out.All(λ (_: Emitted) => quiet.IsTrue()) }
 
@@ -3492,52 +3856,83 @@ theorem quiets_and_left(out: Option<Emitted>, a, b: Bool, right: b.IsTrue()): Qu
     match out { None => λ _ => trivial, Some(_) => λ left => Bool::is_true_and_intro(a, b, left, right) }
 }
 
-theorem emit_leaf_quiet(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
-    Quiets(nodes_quiet(nodes), emit_leaf(prog, file, nodes, placement, names, homes)) {
-    match nodes_quiet(nodes) as λ q => Quiets(q, match q { False => None, True => emit_quiet_leaf(prog, file, nodes, placement, names, homes) }) {
-        False => trivial,
-        True => quiets_of(emit_quiet_leaf(prog, file, nodes, placement, names, homes), True, trivial),
+// A scope entered with no home leaves none: a loop carries only the homes
+// it was entered with.
+theorem StructuredRegion::lends_none(self region: StructuredRegion): region.lends([]) = [] {
+    match region {
+        Dataflow(_) => refl,
+        Sequence(_, continuation) => continuation.lends_none(),
+        Compose(prefix, continuation) =>
+            trans(cong_fn(λ (homes: List<Lent>) => continuation.lends(homes), prefix.lends_none()), continuation.lends_none()),
+        Conditional(_, _, _, _, _, _) => refl,
+        Call(_, _, _) => refl,
+        Loop(_, _, _, _, _, _, _, _, _) => refl,
+    }
+}
+
+theorem emit_leaf_quiet(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat):
+    Quiets(nodes_quiet(nodes), emit_leaf(prog, file, nodes, placement, names, [])) {
+    match leaf_store(nodes) as λ s => Quiets(nodes_quiet(nodes), match s {
+        None => match nodes_quiet(nodes) { False => None, True => emit_quiet_leaf(prog, file, nodes, placement, names, []) },
+        Some(store) => file.emit_store(prog, [], store, placement, names),
+    }) {
+        None => match nodes_quiet(nodes) as λ q => Quiets(q, match q {
+            False => None,
+            True => emit_quiet_leaf(prog, file, nodes, placement, names, []),
+        }) {
+            False => trivial,
+            True => quiets_of(emit_quiet_leaf(prog, file, nodes, placement, names, []), True, trivial),
+        },
+        Some(store) => match placement as λ p => Quiets(nodes_quiet(nodes), file.emit_store(prog, [], store, p, names)) {
+            Nil => trivial,
+            Cons(place, rest) => match place as λ p => Quiets(nodes_quiet(nodes), file.emit_store(prog, [], store, Cons(p, rest), names)) {
+                Folded => trivial,
+                Into(_) => trivial,
+            },
+        },
     }
 }
 
 theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound: Nat, counts: List<Nat>):
-    (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
-    Quiets(region.quiet(), region.emit_calls(prog, file, placement, names, bound, counts, homes)) {
+    (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
+    Quiets(region.quiet(), region.emit_calls(prog, file, placement, names, bound, counts, [])) {
     match region {
-        Dataflow(body) => λ homes prog file placement names => emit_leaf_quiet(prog, file, body.nodes, placement, names, homes),
-        Sequence(prefix, continuation) => λ homes prog file placement names =>
-            (match emit_leaf(prog, file, prefix.nodes, placement, names, homes) as λ e => Quiets(nodes_quiet(prefix.nodes), e) →
+        Dataflow(body) => λ prog file placement names => emit_leaf_quiet(prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => λ prog file placement names =>
+            (match emit_leaf(prog, file, prefix.nodes, placement, names, []) as λ e => Quiets(nodes_quiet(prefix.nodes), e) →
                 Quiets(nodes_quiet(prefix.nodes) && continuation.quiet(), match e {
                     None => None,
-                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, homes),
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, []),
                 }) {
                 None => λ _ => trivial,
                 Some(first) => λ first_quiet => quiets_and(
-                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, homes),
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, []),
                     nodes_quiet(prefix.nodes), continuation.quiet(), first_quiet,
-                    continuation.emit_calls_quiet(bound, counts, homes, first.prog, first.file, first.placement, first.names)),
-            })(emit_leaf_quiet(prog, file, prefix.nodes, placement, names, homes)),
-        Compose(prefix, continuation) => λ homes prog file placement names =>
-            (match prefix.emit_calls(prog, file, placement, names, bound, counts, homes) as λ e => Quiets(prefix.quiet(), e) →
+                    continuation.emit_calls_quiet(bound, counts, first.prog, first.file, first.placement, first.names)),
+            })(emit_leaf_quiet(prog, file, prefix.nodes, placement, names)),
+        Compose(prefix, continuation) => λ prog file placement names =>
+            (match prefix.emit_calls(prog, file, placement, names, bound, counts, []) as λ e => Quiets(prefix.quiet(), e) →
                 Quiets(prefix.quiet() && continuation.quiet(), match e {
                     None => None,
-                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends([])),
                 }) {
                 None => λ _ => trivial,
                 Some(first) => λ first_quiet => quiets_and(
-                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends([])),
                     prefix.quiet(), continuation.quiet(), first_quiet,
-                    continuation.emit_calls_quiet(bound, counts, prefix.lends(homes), first.prog, first.file, first.placement, first.names)),
-            })(prefix.emit_calls_quiet(bound, counts, homes, prog, file, placement, names)),
-        Conditional(_, condition, _, _, when_true, when_false) => λ homes prog file placement names =>
+                    j(sym(prefix.lends_none()), λ lent _ => Quiets(continuation.quiet(),
+                        continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, lent)),
+                        continuation.emit_calls_quiet(bound, counts, first.prog, first.file, first.placement, first.names))),
+            })(prefix.emit_calls_quiet(bound, counts, prog, file, placement, names)),
+        Conditional(_, condition, _, _, when_true, when_false) => λ prog file placement names =>
             match file.branch_test(condition) {
                 None => trivial,
                 Some(tested) => {
                     let branched = prog.branched(tested.test, Succ(names));
-                    (match when_true.emit_calls(branched, file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes) as λ y =>
+                    (match when_true.emit_calls(branched, file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, []) as λ y =>
                         Quiets(when_true.quiet(), y) → Quiets(when_true.quiet() && when_false.quiet(), match y {
                             None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes) {
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, []) {
                                 None => None,
                                 Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
@@ -3545,26 +3940,26 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound:
                         None => λ _ => trivial,
                         Some(yes) => λ yes_quiet => {
                             let second = yes.prog.else_label(Succ(names), Succ(Succ(names)));
-                            (match when_false.emit_calls(second, file, yes.placement, yes.names, bound, counts, homes) as λ n =>
+                            (match when_false.emit_calls(second, file, yes.placement, yes.names, bound, counts, []) as λ n =>
                                 Quiets(when_false.quiet(), n) → Quiets(when_true.quiet() && when_false.quiet(), match n {
                                     None => None,
                                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_quiet => Bool::is_true_and_intro(when_true.quiet(), when_false.quiet(), yes_quiet, no_quiet),
-                            })(when_false.emit_calls_quiet(bound, counts, homes, second, file, yes.placement, yes.names))
+                            })(when_false.emit_calls_quiet(bound, counts, second, file, yes.placement, yes.names))
                         },
-                    })(when_true.emit_calls_quiet(bound, counts, homes, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
+                    })(when_true.emit_calls_quiet(bound, counts, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
                 },
             },
-        Call(callee, arguments, result) => λ homes prog file placement names =>
-            quiets_of(file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes), True, trivial),
-        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes prog file placement names =>
+        Call(callee, arguments, result) => λ prog file placement names =>
+            quiets_of(file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, []), True, trivial),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names =>
             match file.loop_entry(inputs, limit, parameters, count, placement) {
                 None => trivial,
                 Some(entry) =>
                     (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))),
-                        bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) as λ b => Quiets(body.quiet(), b) →
+                        bound, counts, []) as λ b => Quiets(body.quiet(), b) →
                         Quiets(body.quiet(), match b {
                             None => None,
                             Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
@@ -3572,56 +3967,60 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound:
                         None => λ _ => trivial,
                         Some(pass) => λ pass_quiet => quiets_of(pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
                             body.quiet(), pass_quiet),
-                    })(body.emit_calls_quiet(bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next)),
-                        loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))))),
+                    })(body.emit_calls_quiet(bound, counts, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                        Succ(Succ(Succ(Succ(names)))))),
             },
     }
 }
 
-theorem Function::emit_lent_quiet(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>):
-    Quiets(function.body.quiet(), function.emit_lent(prog, k, placement, names, counts)) {
+theorem Function::emit_lent_quiet(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat):
+    Quiets(function.body.quiet(), function.emit_lent(prog, k, placement, names, [])) {
     let opened = function_opened(prog, k);
-    match function.lent.same(lent_count(counts, k)) {
+    match same: function.lent.same(0) {
         False => trivial,
         True => match input_file(word_ports(function.parameters), argument_registers()) as λ entry => Quiets(function.body.quiet(), match entry {
                 None => None,
-                Some(file) => function.emit_body(prog, k, file, placement, names, counts),
+                Some(file) => function.emit_body(prog, k, file, placement, names, []),
             }) {
             None => trivial,
-            Some(file) =>
-                (match function.body.emit_calls(opened, file, placement, names, k, counts, function.homes()) as λ e =>
+            Some(file) => j(sym(function.lent.same_sound(0, same)), λ count _ => Quiets(function.body.quiet(),
+                match function.body.emit_calls(opened, file, placement, names, k, [], lent_homes(function.parameters, count, 0)) {
+                    None => None,
+                    Some(body) => function.closing(body),
+                }),
+                (match function.body.emit_calls(opened, file, placement, names, k, [], []) as λ e =>
                     Quiets(function.body.quiet(), e) →
                     Quiets(function.body.quiet(), match e { None => None, Some(body) => function.closing(body) }) {
                     None => λ _ => trivial,
                     Some(body) => λ quiet => quiets_of(function.closing(body), function.body.quiet(), quiet),
-                })(function.body.emit_calls_quiet(k, counts, function.homes(), opened, file, placement, names)),
+                })(function.body.emit_calls_quiet(k, [], opened, file, placement, names))),
         },
     }
 }
 
-theorem emit_functions_after_lent_quiet(start: Prog, placement: List<Place>, names: Nat, counts: List<Nat>, functions: List<Function>):
-    Quiets(program_quiet(functions), emit_functions_after_lent(start, functions, placement, names, counts)) {
+theorem emit_functions_after_lent_quiet(start: Prog, placement: List<Place>, names: Nat, functions: List<Function>):
+    Quiets(program_quiet(functions), emit_functions_after_lent(start, functions, placement, names, [])) {
     match functions {
         Nil => trivial,
         Cons(last, earlier) =>
-            (match emit_functions_after_lent(start, earlier, placement, names, counts) as λ e => Quiets(program_quiet(earlier), e) →
+            (match emit_functions_after_lent(start, earlier, placement, names, []) as λ e => Quiets(program_quiet(earlier), e) →
                 Quiets(last.body.quiet() && program_quiet(earlier), match e {
                     None => None,
-                    Some(before) => last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts),
+                    Some(before) => last.emit_lent(before.prog, earlier.len(), before.placement, before.names, []),
                 }) {
                 None => λ _ => trivial,
                 Some(before) => λ earlier_quiet => quiets_and_left(
-                    last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts),
+                    last.emit_lent(before.prog, earlier.len(), before.placement, before.names, []),
                     last.body.quiet(), program_quiet(earlier), earlier_quiet,
-                    last.emit_lent_quiet(before.prog, earlier.len(), before.placement, before.names, counts)),
-            })(emit_functions_after_lent_quiet(start, placement, names, counts, earlier)),
+                    last.emit_lent_quiet(before.prog, earlier.len(), before.placement, before.names)),
+            })(emit_functions_after_lent_quiet(start, placement, names, earlier)),
     }
 }
 
-// A program that lowers stores into no buffer.
-theorem lower_program_lent_quiet(functions: List<Function>, placement: List<Place>, counts: List<Nat>, program: Prog,
-    lowered: lower_program_lent(functions, placement, counts) = Some(program)): program_quiet(functions).IsTrue() {
-    let quiets = (match emit_functions_after_lent(Start, functions, placement, functions.len(), counts) as λ e =>
+// A program that lowers lent nothing stores into no buffer.
+theorem lower_program_quiet(functions: List<Function>, placement: List<Place>, program: Prog,
+    lowered: lower_program(functions, placement) = Some(program)): program_quiet(functions).IsTrue() {
+    let quiets = (match emit_functions_after_lent(Start, functions, placement, functions.len(), []) as λ e =>
         Quiets(program_quiet(functions), e) →
         (match e as λ _ => Option<Prog> {
             None => None,
@@ -3635,8 +4034,8 @@ theorem lower_program_lent_quiet(functions: List<Function>, placement: List<Plac
                 False => trivial,
                 True => quiet,
             },
-    })(emit_functions_after_lent_quiet(Start, placement, functions.len(), counts, functions));
-    lower_program_lent(functions, placement, counts).all_some(λ (_: Prog) => program_quiet(functions).IsTrue(), program, lowered, quiets)
+    })(emit_functions_after_lent_quiet(Start, placement, functions.len(), functions));
+    lower_program(functions, placement).all_some(λ (_: Prog) => program_quiet(functions).IsTrue(), program, lowered, quiets)
 }
 
 // ---------------------------------------------------------------------------
@@ -3651,7 +4050,8 @@ fn ProgramCalls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<Bi
 
 theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), top: Nat, lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()),
-    functions: List<Function>, placement: List<Place>):
+    functions: List<Function>, placement: List<Place>,
+    allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True):
     lower_program_lent(functions, placement, lending.counts).All(λ (p: Prog) =>
         ProgramCalls<M>(fetch, data, last, origin, stack, top, lending, functions, p)) {
     (match emit_functions_after_lent(Start, functions, placement, functions.len(), lending.counts) as λ e =>
@@ -3670,7 +4070,7 @@ theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, l
                 True => λ laid => calls(Site<M>(fetch, data, out.prog, last, origin), laid(trivial), stack, loan, out.prog.within_self()),
             })(λ ok => ok),
     })(λ site laid stack loan => emit_functions_after_lent_calls<M>(site, laid, stack, top, lending, loan, Start, placement,
-        functions.len(), functions))
+        functions.len(), functions, allowed))
 }
 
 // The theorem, proved once: whatever the placement, a program
@@ -3687,11 +4087,12 @@ theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, l
 theorem lower_program_lent_correct<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
     lowered: lower_program_lent(functions, placement, lending.counts) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
-    loan: Loan<M>(fetch, data, stack, top, lending.spans())):
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()),
+    allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True):
     Site<M>(fetch, data, program, last, origin).CallsOver(stack, program_effects(functions), functions.len(), lending, top) {
     lower_program_lent(functions, placement, lending.counts).all_some(
         λ (p: Prog) => ProgramCalls<M>(fetch, data, last, origin, stack, top, lending, functions, p),
-        program, lowered, lower_program_calls<M>(fetch, data, last, origin, stack, top, lending, loan, functions, placement))
+        program, lowered, lower_program_calls<M>(fetch, data, last, origin, stack, top, lending, loan, functions, placement, allowed))
 }
 
 // With no buffers nothing is lent: the laws hold of no spans under any
@@ -3709,17 +4110,17 @@ theorem Stack::in_memory_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     λ buffer => ⟨refl, ⟨low, λ k no => false_elim(no)⟩⟩
 }
 
-// And of a program that lends nothing, the contract without buffers: what
-// lowers stores into none, so its functions leave the empty file as they
-// compute, and the stores they make are their own.
+// And of a program that lends nothing, the contract without buffers: it
+// stores into none, so its functions leave the empty file as they compute,
+// and the stores they make are their own.
 theorem lower_program_correct<M>(functions: List<Function>, placement: List<Place>, program: Prog,
     lowered: lower_program(functions, placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data)):
     Site<M>(fetch, data, program, last, origin).Calls(stack, program_callees(functions), functions.len()) {
     let none = Lending::none();
-    let quiet = lower_program_lent_quiet(functions, placement, [], program, lowered);
-    let calls = lower_program_lent_correct<M>(functions, placement, none, program, lowered, fetch, data, last, origin, stack, stack.size,
-        stack.loan_nothing());
+    let quiet = lower_program_quiet(functions, placement, program, lowered);
+    let calls = lower_program_lent_correct<M>(functions, placement, none, program, lowered, fetch, data, last, origin, stack,
+        stack.size, stack.loan_nothing(), λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores)));
     λ f below arguments result s at resident i rsp room held ret saved => {
         let ran = calls(f, below, arguments, result, [], [], s, at, resident, i, rsp, room,
             ⟨⟨held.left, ⟨program_effects_quiet(functions, quiet, [], f, arguments, result, held.right.left), held.right.right⟩⟩,

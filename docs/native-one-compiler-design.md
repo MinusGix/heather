@@ -171,7 +171,7 @@ buffers as well as words. Then:
 - *The code.* A load is a leaf of its own: the base moved to the
   placement's register, the index added, a zero-extending byte load over
   it (`File::load_at`). Leaves that read no buffer go through the lowering
-  unchanged (`nodes_pure`), so that proof did not move.
+  unchanged (`nodes_blind`), so that proof did not move.
 - *The contract.* What a program lends is a `Lending`: how many buffers
   each function takes, where each lies, and its bytes. A function is
   entered with the homes of the buffers it takes as its first arguments
@@ -680,13 +680,27 @@ is now (`Stack::Trail`: `WroteIn` from the function's entry, and
 `Stack::InMemory` of the file now).
 Code that stores only in its own frame keeps that by the first law, so a
 load reads through it at the memory it runs in, with no trip back to
-entry. A store is a leaf of its own, like a load: the address formed
-from the home, then one `StoreByte`. The relation it is proved against
-threads the file (`StructuredRegionRunsOver(effects, values, region,
-before, after)`, a call's `effects` relating the file before to the word
-and the file after), and the fixed-file relation embeds in it for a
-region with no store, so everything proved through `eval` today feeds
-the new theorem unchanged.
+entry. A store is a leaf of its own, like a load, under the comparison
+that bounds its index: the address formed from the home in the register
+its output is placed in, one `StoreByte` of the register that holds the
+value, and the byte then there loaded back over the address, which is
+what the store's output names (`File::store_at`, `store_emits`). The
+reload is one instruction a planner that knows the output dead can drop
+(`issues/native-store-reloads-its-byte.md`). The relation it is proved
+against threads the file (`StructuredRegionRunsOver(effects, values,
+region, before, after)`, a call's `effects` relating the file before to
+the word and the file after), and the fixed-file relation embeds in it
+for a region with no store, so everything proved through `eval` today
+feeds the new theorem unchanged.
+
+Which buffers a program stores into is computed (`program_stores`, from
+`StructuredRegion::stores`), and the theorems take that each is one the
+lending lets be written (`allowed`), weakened at each sub-region to the
+buffers it stores into. A lending to read therefore still serves every
+program that stores nothing, and a program that stores is not provable
+under one. A store lowers only through a home, so the door without
+buffers (`lower_program`) accepts no store and keeps its statement
+(`lower_program_quiet`: lowered with no home, a program is quiet).
 
 **A program's call** (`Source`) then answers with the file as well:
 `Readers` gives a word and the buffers left, the statement after the
@@ -790,19 +804,34 @@ Each is a PR and ends with something that runs.
     the file now (`Stack::CalledOver`) and answers with `WroteIn` and
     the file its meaning leaves in memory (`Stack::AnsweredOver`), and
     `lower_program_lent_correct` is `Site::CallsOver` against
-    `program_effects` under any `Loan`. A leaf with a store is still
-    refused, so every lowered program is quiet
-    (`lower_program_lent_quiet`) and the fixed-file statements follow:
-    `lower_program_correct` keeps its statement, at a loan of nothing
-    (`Stack::loan_nothing`), and `compiled_returns_lent` now holds over
-    any file as long as the one lent. `Source` supplies the laws
-    (`Target::loan`). *Runs:* everything that runs today, its bytes
-    unchanged; the probes add a function answering over a file other
-    than the one its lending was made over, and the store's refusal
+    `program_effects` under any `Loan`. A leaf with a store was still
+    refused at this step, so every lowered program was quiet and the
+    fixed-file statements followed: `lower_program_correct` keeps its
+    statement, at a loan of nothing (`Stack::loan_nothing`), and
+    `compiled_returns_lent` now holds over any file as long as the one
+    lent. `Source` supplies the laws (`Target::loan`). *Runs:*
+    everything that runs today, its bytes unchanged; the probes add a
+    function answering over a file other than the one its lending was
+    made over (`function_ir_lower_reads_tests.hthr`).
+  - *Step 4a-4, built 2026-11-11:* the store leaf
+    (`function_ir_lower_reads.hthr`: `leaf_store`, `File::store_at`), its
+    machine run (`store_emits`: the trail kept through a byte put into a
+    written span, `Stack::trail_put`), and the theorems under `allowed`
+    (`program_stores`); `compiled_returns_over` is what a caller cites
+    for a program that stores, and `compiled_returns_lent` its case for a
+    quiet one. `Prog::links` checks `program_quiet` until step 4b, so a
+    program's calls are as they were. *Runs:* nothing new at the doors;
+    the probes compile a byte stored under its bound, with its code
+    spelled and its answer over a file proved through a meaning written
+    by hand, and a loop that rewrites a buffer accepted with its
+    contract, and refuse a store with no bound, no home, no register for
+    its output or its value, or through the door without buffers
     (`function_ir_lower_reads_tests.hthr`).
-  - *Step 4a-4:* the store leaf, its refusals, and the contract for a
-    function that writes. *Runs:* a byte map over a span, by evaluation
-    and accepted by the function compiler.
+  - *Step 4a-5:* a storing program's meaning computed: an evaluator that
+    threads the file through stores and calls, proved to give
+    `program_effects`, so what a writing function returns and leaves is
+    stated by evaluation as a reading one's is. *Runs:* a byte map over a
+    span, by evaluation.
   - *Step 4b:* a program's call of a function that writes. *Runs:* `tr`
     with its byte map as a called function over the buffer, beside GNU's.
   - *Step 4c:* `rt`'s write, the class, the reflector and the generator.

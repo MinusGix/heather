@@ -284,7 +284,7 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
         Nil => λ same => j(Option::some_inj(base, program, same), λ x _ => base.Within(x), base.within_self()),
         Cons(last, earlier) => {
             let fs = Cons(last, earlier);
-            (match program_evaluable(fs) && program_placeless(fs) as λ b => (match b as λ _ => Option<Prog> {
+            (match (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) as λ b => (match b as λ _ => Option<Prog> {
                     False => None,
                     True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
                 }) = Some(program) → base.Within(program) {
@@ -315,7 +315,8 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
             λ addresses buffers written top loan f below words result before after => false_elim(nothing_below_zero(f, below))⟩⟩,
         Cons(last, earlier) => {
             let fs = Cons(last, earlier);
-            (match program_evaluable(fs) && program_placeless(fs) as λ b => program_evaluable(fs) && program_placeless(fs) = b →
+            (match (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) as λ b =>
+                    (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) = b →
                     (match b as λ _ => Option<Prog> {
                         False => None,
                         True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
@@ -326,8 +327,10 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                             site.CallsOver(stack, program_effects(fs), Succ(earlier.len()),
                                 Lending(program_counts(fs), addresses, buffers, written), top))) {
                 False => λ _ none => absurd(none),
-                True => λ checked => (match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) as λ o =>
-                        Quiets(program_quiet(fs), o) →
+                True => λ checked => {
+                    let both = Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_quiet(fs),
+                        j(sym(checked), λ b _ => b.IsTrue(), trivial));
+                    (match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) as λ o =>
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
                             MayCallOver<M>(site, stack, top, Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
@@ -337,13 +340,14 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                                 Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
                                 site.CallsOver(stack, program_effects(fs), Succ(earlier.len()),
                                     Lending(program_counts(fs), addresses, buffers, written), top))) {
-                    None => λ _ _ none => absurd(none),
-                    Some(out) => λ quiet may same => ⟨j(sym(checked), λ b _ => b.IsTrue(), trivial), ⟨quiet,
-                        λ addresses buffers written top loan => may(addresses, buffers, written, top, loan)(
-                            j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩⟩,
-                })(emit_functions_after_lent_quiet(base, places, names, program_counts(fs), fs),
-                    λ addresses buffers written top loan => emit_functions_after_lent_calls<M>(site, laid, stack, top,
-                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs)),
+                        None => λ _ none => absurd(none),
+                        Some(out) => λ may same => ⟨both.left, ⟨both.right,
+                            λ addresses buffers written top loan => may(addresses, buffers, written, top, loan)(
+                                j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩⟩,
+                    })(λ addresses buffers written top loan => emit_functions_after_lent_calls<M>(site, laid, stack, top,
+                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
+                        λ b stores => false_elim(program_quiet_stores(fs, b, both.right, stores))))
+                },
             })(refl)
         },
     }

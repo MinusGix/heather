@@ -374,6 +374,27 @@ theorem Site::moves_load_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits
 }
 
 // ---------------------------------------------------------------------------
+// A byte stored
+
+// A register's low byte stored at a label, through a plain base, to a
+// writable byte that keeps the code, which is resident when it is stored.
+theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: ByteStore, at: asm_back(site.program, k) = At(before, name, StoreByte(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
+        (site.Resident(byte_store_after(writes, store, s).memory) ∧ post(byte_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds, resident);
+        let after = byte_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(byte_store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, StoreByte(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Calls
 
 // A function at offset `entry`: entered with the stack pointer at offset `i`

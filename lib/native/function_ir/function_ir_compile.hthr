@@ -60,15 +60,41 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 
 // The same of a program whose functions take buffers
 // (docs/native-one-compiler-design.md §2.3, §2.6): called over a file
-// `now` of the lending's lengths (`Stack::LentOver`: the homes of the
+// `before` of the lending's lengths (`Stack::LentOver`: the homes of the
 // buffers `f` takes are its first arguments, and the file is in memory,
-// each buffer at its address), under the lending laws (`loan`), the code
-// returns what the program evaluates `f` to over `now` and leaves `now` in
-// memory: a program that lowers stores into no buffer, so its evaluation
-// over the file is what it does. Whoever lends discharges the premises: a
-// program from its data region, Rust from a slice.
+// each buffer at its address), under the lending laws (`loan`) with every
+// buffer the program stores into lent to be written (`allowed`), the code
+// returns a result and leaves a file the program's meaning says it may
+// (`ran`). Whoever lends discharges the premises: a program from its data
+// region, Rust from a slice.
+theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
+    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program),
+    allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True,
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
+    ran: program_effects(functions)(before, f, arguments, result, after)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.LentOver(lending, top, f, arguments, before)(i, s),
+        stack.AnsweredOver(lending, result, after)) {
+    let site = Site<M>(fetch, data, program, last, origin);
+    let calls = lower_program_lent_correct<M>(functions, placement, lending, program, lowered, fetch, data, last, origin, stack, top, loan,
+        allowed);
+    site.returns_weaken(stack, asm_labels(program)(Succ(f)),
+        stack.CalledOver(program_effects(functions), lending, top, f, arguments, result, before, after),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.LentOver(lending, top, f, arguments, before)(i, s),
+        stack.AnsweredOver(lending, result, after), calls(f, below, arguments, result, before, after),
+        λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
+}
+
+// A program that stores into no buffer (`quiet`) does what it evaluates to
+// over the file: the code returns what the program evaluates `f` to over
+// `now` and leaves `now` in memory, lent to read or to write.
 theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
     lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    quiet: program_quiet(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
@@ -78,22 +104,12 @@ theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Plac
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, now)(i, s),
         stack.AnsweredOver(lending, answer, now)) {
-    let site = Site<M>(fetch, data, program, last, origin);
-    let calls = lower_program_lent_correct<M>(functions, placement, lending, program, lowered, fetch, data, last, origin, stack, top, loan);
-    let quiet = lower_program_lent_quiet(functions, placement, lending.counts, program, lowered);
     let value = program_eval_over(now, functions, f, arguments);
     let computed = program_effects_quiet(functions, quiet, now, f, arguments, value,
         program_eval_reads(functions, now, evaluable, f, arguments, fits));
-    let returns = site.returns_weaken(stack, asm_labels(program)(Succ(f)),
-        stack.CalledOver(program_effects(functions), lending, top, f, arguments, value, now, now),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
-            stack.LentOver(lending, top, f, arguments, now)(i, s),
-        stack.AnsweredOver(lending, value, now), calls(f, below, arguments, value, now, now),
-        λ i s held => ⟨⟨held.left.left, ⟨computed, held.left.right⟩⟩, held.right⟩);
-    j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
-            stack.LentOver(lending, top, f, arguments, now)(i, s),
-        stack.AnsweredOver(lending, x, now)), returns)
+    compiled_returns_over<M>(functions, placement, lending, program, lowered,
+        λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores)), fetch, data, last, origin, stack, top, loan, f, below,
+        arguments, answer, now, now, j(evaluates, λ x _ => program_effects(functions)(now, f, arguments, x, now), computed))
 }
 
 // What the stores leave of the stack: the words from the return address

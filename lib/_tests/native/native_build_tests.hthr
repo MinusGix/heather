@@ -18,6 +18,7 @@ import native_tool_words;
 import native_tool_words_program;
 import native_tool_spans;
 import function_ir_eval;
+import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_calls;
 import function_ir_placeless;
@@ -352,6 +353,33 @@ theorem where_it_lies_lowers(): lower_program_lent([where_it_lies()], plan_progr
 theorem where_it_lies_placed(): program_placeless([where_it_lies()]) = False { refl }
 theorem asks_where_refused(): asks_where().source().refusal(region_low(),
     Homes::slots(asks_where().source()).placed(plan_program(asks_where().source().functions))) = [0, 5, 17, 0, 0] { refl }
+
+// A function that stores into its buffer does not link yet: the function
+// compiler lowers the store (function_ir_lower_reads_tests), and a
+// program's statements lend their buffers to read
+// (docs/native-one-compiler-design.md §3, U4 step 4b).
+fn overwrites() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([Port(0, 64), Port(1, 64), Port(2, 64)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([Port(0, 64), Port(1, 64), Port(2, 64), Port(3, 1)])),
+            Conditional(Ports([Port(0, 64), Port(1, 64), Port(2, 64), Port(3, 1)]), 3, Ports([Port(2, 64)]), Ports([Port(4, 64)]),
+                Dataflow(Region(inputs := Ports([Port(2, 64)]), nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 2)],
+                    outputs := Ports([Port(4, 64)]))),
+                Dataflow(Region(inputs := Ports([Port(2, 64)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([Port(4, 64)]))))),
+        result := 4)
+}
+fn overwriting() → Tool {
+    program([overwrites()], buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [num(1)], r)) ++ exit(r.get())))))
+}
+theorem overwrites_evaluable(): program_evaluable([overwrites()]) = True { refl }
+theorem overwrites_placeless(): program_placeless([overwrites()]) = True { refl }
+theorem overwrites_lowers(): lower_program_lent([overwrites()], plan_program([overwrites()]), [1]).is_some().IsTrue() { trivial }
+theorem overwrites_stores(): program_quiet([overwrites()]) = False { refl }
+theorem overwriting_refused(): overwriting().source().refusal(region_low(),
+    Homes::slots(overwriting().source()).placed(plan_program(overwriting().source().functions))) = [0, 5, 17, 0, 0] { refl }
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

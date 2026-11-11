@@ -1,14 +1,16 @@
-// Probes of the function compiler reading a lent buffer
-// (function_ir_lower_reads; docs/native-one-compiler-design.md §2.3, U3):
-// a byte read under the comparison that bounds it, a loop over a buffer, a
-// call that hands its buffer on, and what is refused. Each program's code
-// is computed by evaluation, and its claim is the one theorem
-// (`lower_program_lent_correct`) instantiated, whatever the buffers hold
-// and wherever the lending laws let them lie (`Loan`, x86_64_lending): the
-// file is threaded, so a function is called over the file as it is then
-// (docs/native-one-compiler-design.md §2.6).
+// Probes of the function compiler reading and writing a lent buffer
+// (function_ir_lower_reads; docs/native-one-compiler-design.md §2.3, U3,
+// and §2.6, U4): a byte read under the comparison that bounds it, a loop
+// over a buffer, a call that hands its buffer on, a byte stored under its
+// bound, a loop that rewrites a buffer, and what is refused. Each
+// program's code is computed by evaluation, and its claim is the one
+// theorem (`lower_program_lent_correct`) instantiated, whatever the
+// buffers hold and wherever the lending laws let them lie (`Loan`,
+// x86_64_lending): the file is threaded, so a function is called over the
+// file as it is then (docs/native-one-compiler-design.md §2.6).
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
 import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_structured;
@@ -91,7 +93,8 @@ theorem byte_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: L
     Site<M>(fetch, data, byte_at_program(), last, origin).CallsOver(stack, program_effects([byte_at()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([byte_at()], plan_program([byte_at()]), Lending::reading([1], addresses, buffers), byte_at_program(),
-        byte_at_lowers(), fetch, data, last, origin, stack, top, loan)
+        byte_at_lowers(), fetch, data, last, origin, stack, top, loan,
+        λ b stores => false_elim(program_quiet_stores([byte_at()], b, trivial, stores)))
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +148,7 @@ theorem sum_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<
     Site<M>(fetch, data, sum_program(), last, origin).CallsOver(stack, program_effects([sum()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, buffers), sum_program(), sum_lowers(),
-        fetch, data, last, origin, stack, top, loan)
+        fetch, data, last, origin, stack, top, loan, λ b stores => false_elim(program_quiet_stores([sum()], b, trivial, stores)))
 }
 
 // What a caller cites (`compiled_returns_lent`): over a buffer that holds
@@ -159,7 +162,7 @@ theorem sum_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
             stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], abc())(i, s),
         stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(294), abc())) {
     compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
-        sum_evaluable(), fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, abc(), w(294), refl)
+        sum_evaluable(), trivial, fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, abc(), w(294), refl)
 }
 
 // The file is the one in memory at the call, not the one the lending was
@@ -174,7 +177,7 @@ theorem sum_of_now<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
             stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], upper())(i, s),
         stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(198), upper())) {
     compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
-        sum_evaluable(), fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, upper(), w(198), refl)
+        sum_evaluable(), trivial, fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, upper(), w(198), refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -209,14 +212,173 @@ theorem firsts_call<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Lis
     Site<M>(fetch, data, firsts_program(), last, origin).CallsOver(stack, program_effects(firsts()), 2,
         Lending::reading([1, 1], addresses, buffers), top) {
     lower_program_lent_correct<M>(firsts(), plan_program(firsts()), Lending::reading([1, 1], addresses, buffers), firsts_program(),
-        firsts_lowers(), fetch, data, last, origin, stack, top, loan)
+        firsts_lowers(), fetch, data, last, origin, stack, top, loan,
+        λ b stores => false_elim(program_quiet_stores(firsts(), b, trivial, stores)))
+}
+
+// ---------------------------------------------------------------------------
+// One byte stored, under its bound
+
+// put_at(buffer, i, v): `v`'s low byte stored at `i`, returning the byte
+// then there, or 256 past the end with nothing stored. The store is in the
+// arm the comparison `i < length` guards, as a load is.
+fn put_at() → Function {
+    Function(parameters := [0, 1, 2, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(5)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(5), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(5), bit(3)]), 3, Ports([word(0), word(2), word(5)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 5)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+// The buffer it stores into is read off the program.
+theorem put_at_stores(): program_stores([put_at()], 0) = True { refl }
+theorem put_at_spares(): program_stores([put_at()], 1) = False { refl }
+
+// The address formed in RAX, the low byte of RCX stored over it and the
+// byte then there loaded back, which is what the store's output names.
+fn put_at_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([]))
+        .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(StoreByte(ByteStore(Rax, Rcx))).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
+        .label(2).put(Block([MovRI(Rax, w(256))]))
+        .label(3)
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem put_at_planned(): plan_program([put_at()]) = [Folded, Into(Rax), Into(Rax)] { refl }
+theorem put_at_lowers(): lower_program_lent([put_at()], plan_program([put_at()]), [1]) = Some(put_at_program()) { refl }
+
+// A lending with buffer 0 to be written.
+fn writing(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers()) → Lending {
+    Lending(counts, addresses, buffers, λ (b: Nat) => b.same(0))
+}
+
+theorem put_at_allowed(lending: Lending, written: lending.written(0) = True):
+    (b: Nat) → program_stores([put_at()], b).IsTrue() → lending.written(b) = True {
+    λ b => match b { Zero => λ _ => written, Succ(_) => λ no => false_elim(no) }
+}
+
+// Called with the buffer lent to be written, the function returns a result
+// and leaves a file its meaning says it may, whatever the buffers hold.
+theorem put_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), 1,
+        writing([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([put_at()], plan_program([put_at()]), writing([1], addresses, buffers), put_at_program(),
+        put_at_lowers(), fetch, data, last, origin, stack, top, loan, put_at_allowed(writing([1], addresses, buffers), refl))
+}
+
+// The meaning, by hand until a storing program's is computed (step 4a-5):
+// over "abc", 'X' put at 1 returns 'X' and leaves "aXc".
+fn axc() → Buffers() { [[b(97), b(88), b(99)]] }
+fn put_values(a: BitVec(64)) → Valuation() {
+    Valuation::set(Valuation::set(Valuation::bind(Valuation::zero(), [0, 1, 2, 5])([a, w(3), w(1), w(88)]), 3, word_value(w(1))), 4,
+        word_value(w(88)))
+}
+theorem put_at_runs(a: BitVec(64)): program_effects([put_at()])(abc(), 0, [a, w(3), w(1), w(88)], w(88), axc()) {
+    Exists(put_values(a), ⟨refl, ⟨Exists(abc(), ⟨Exists(abc(), ⟨⟨refl, refl⟩, refl⟩), Exists(axc(), ⟨⟨refl, refl⟩, refl⟩)⟩), refl⟩⟩)
+}
+
+// So the code, over "abc" lent to be written wherever the laws let it lie:
+// it returns 'X', and "aXc" is the file in memory.
+theorem put_at_x<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, abc()).spans())):
+    Site<M>(fetch, data, put_at_program(), last, origin).Returns(stack, asm_labels(put_at_program())(1),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), w(1), w(88)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+            stack.LentOver(writing([1], addresses, abc()), top, 0, [a, w(3), w(1), w(88)], abc())(i, s),
+        stack.AnsweredOver(writing([1], addresses, abc()), w(88), axc())) {
+    compiled_returns_over<M>([put_at()], plan_program([put_at()]), writing([1], addresses, abc()), put_at_program(), put_at_lowers(),
+        put_at_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
+        [a, w(3), w(1), w(88)], w(88), abc(), axc(), put_at_runs(a))
+}
+
+// A lending to read does not let it be called: the theorem asks that the
+// buffer it stores into is lent to be written.
+// expect-error(kernel): the kernel rejected `put_at_read_only`: NotConvertible
+theorem put_at_read_only<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([put_at()], plan_program([put_at()]), Lending::reading([1], addresses, buffers), put_at_program(),
+        put_at_lowers(), fetch, data, last, origin, stack, top, loan, put_at_allowed(Lending::reading([1], addresses, buffers), refl))
+}
+
+// ---------------------------------------------------------------------------
+// A loop that rewrites a buffer
+
+// bump(buffer): every byte one more, returning how many. A pass loads the
+// byte at the index, adds one and stores it back, under the one comparison
+// that bounds both.
+fn bump() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2)])),
+            Loop(inputs := [0, 1, 2], bound := 1, parameters := [10, 11, 12], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([word(10), word(11), word(12), word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([word(10), word(11), word(12), bit(20), bit(15)])),
+                    Conditional(Ports([word(10), word(11), word(12), bit(20), bit(15)]), 15, Ports([word(12)]), Ports([word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([word(12)]), nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([word(12), word(18)])),
+                            Sequence(
+                                Region(inputs := Ports([word(12), word(18)]),
+                                    nodes := [Const(width := 64, output := 19, value := 1), Add(width := 64, output := 21, left := 18, right := 19)],
+                                    outputs := Ports([word(12), word(19), word(21)])),
+                                Sequence(
+                                    Region(inputs := Ports([word(12), word(19), word(21)]),
+                                        nodes := [BufferStore(output := 22, buffer := 0, index := 12, value := 21)],
+                                        outputs := Ports([word(12), word(19)])),
+                                    Dataflow(Region(inputs := Ports([word(12), word(19)]),
+                                        nodes := [Add(width := 64, output := 17, left := 12, right := 19)], outputs := Ports([word(17)])))))),
+                        Dataflow(Region(inputs := Ports([word(12)]), nodes := [Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([word(17)]))))),
+                exit := 20, next := [10, 11, 17], outputs := [4, 5, 6], exhausted := 8)),
+        result := 6)
+}
+
+// The function compiler takes it: the loop carries the home, and the load
+// and the store of a pass are each under the pass's comparison.
+theorem bump_present(): lower_program_lent([bump()], plan_program([bump()]), [1]).is_some().IsTrue() { trivial }
+fn bump_program() → Prog { lower_program_lent([bump()], plan_program([bump()]), [1]).get(bump_present()) }
+theorem bump_lowers(): lower_program_lent([bump()], plan_program([bump()]), [1]) = Some(bump_program()) {
+    Option::some_get(lower_program_lent([bump()], plan_program([bump()]), [1]), bump_present())
+}
+
+theorem bump_allowed(lending: Lending, written: lending.written(0) = True):
+    (b: Nat) → program_stores([bump()], b).IsTrue() → lending.written(b) = True {
+    λ b => match b { Zero => λ _ => written, Succ(_) => λ no => false_elim(no) }
+}
+
+// And its code meets the contract over the file, whatever the buffer
+// holds: what it returns and leaves is what the meaning says it may.
+theorem bump_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, bump_program(), last, origin).CallsOver(stack, program_effects([bump()]), 1,
+        writing([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([bump()], plan_program([bump()]), writing([1], addresses, buffers), bump_program(),
+        bump_lowers(), fetch, data, last, origin, stack, top, loan, bump_allowed(writing([1], addresses, buffers), refl))
 }
 
 // ---------------------------------------------------------------------------
 // What is refused
 
-// A store: the meaning has it (function_ir_writes), the lowering not yet
-// (docs/native-one-compiler-design.md §3, U4 step 4a-4).
+// A store no comparison bounds.
 fn storing() → Function {
     Function(parameters := [0, 1, 2], lent := 1,
         body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
@@ -224,6 +386,51 @@ fn storing() → Function {
         result := 3)
 }
 theorem storing_refused(): lower_program_lent([storing()], [Into(Rax)], [1]) = None { refl }
+
+// A store whose output has no register: the code names the byte then
+// there in one.
+theorem store_folded_refused(): lower_program_lent([put_at()], [Folded, Folded, Into(Rax)], [1]) = None { refl }
+
+// A store through the entry for programs that lend nothing: with no home,
+// no store lowers.
+fn homeless() → Function {
+    Function(parameters := [0, 1, 2, 5], body := put_at().body, result := 4)
+}
+theorem homeless_refused(): lower_program([homeless()], [Folded, Into(Rax), Into(Rax)]) = None { refl }
+
+// A store into a buffer the function was not lent: it takes one, and
+// stores into buffer 1.
+fn other_store() → Function {
+    Function(parameters := [0, 1, 2, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(5)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(5), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(5), bit(3)]), 3, Ports([word(0), word(2), word(5)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]),
+                    nodes := [BufferStore(output := 4, buffer := 1, index := 2, value := 5)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+theorem other_store_refused(): lower_program_lent([other_store()], [Folded, Into(Rax), Into(Rax)], [1]) = None { refl }
+
+// A store of a value no register holds: the word 9 is nothing the function
+// was given or computed.
+fn valueless() → Function {
+    Function(parameters := [0, 1, 2, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(5)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(5), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(5), bit(3)]), 3, Ports([word(0), word(2), word(5)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 9)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+theorem valueless_refused(): lower_program_lent([valueless()], [Folded, Into(Rax), Into(Rax)], [1]) = None { refl }
 
 // A load no comparison bounds.
 fn unguarded() → Function {

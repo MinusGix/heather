@@ -130,22 +130,8 @@ theorem Site::moves_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fi
     }
 }
 
-// A register's low byte stored at a label, likewise.
-theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
-    before: Prog, name: Nat, store: ByteStore, at: asm_back(site.program, k) = At(before, name, StoreByte(store)),
-    pre, post: MachineState<M> → Type,
-    step: (s: MachineState<M>) → pre(s) → (store_base_plain(store.base) = True) ∧
-        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
-        (site.Resident(byte_store_after(writes, store, s).memory) ∧ post(byte_store_after(writes, store, s))))):
-    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
-    λ s here resident holds => {
-        let got = step(s, holds);
-        let after = byte_store_after(writes, store, s);
-        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(byte_store_step(site.fetch, writes, store, s, got.left,
-                site.item_fetched(fits, s, resident, k, before, name, StoreByte(store), at, here), got.right.left)))),
-            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
-    }
-}
+// (A register's low byte stored at a label is `Site::moves_store_byte`,
+// x86_64_stack_runs: the function compiler stores through it too.)
 
 // A JCC at a label that lands ahead: on to `to` either way, from where it
 // lands when its condition holds and from past it when not. The condition

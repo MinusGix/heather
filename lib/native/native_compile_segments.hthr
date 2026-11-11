@@ -282,7 +282,7 @@ theorem Target::goes_store_byte(self t: Target, before: Prog, name: Nat, store: 
         (t.writes().writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
         (t.site().Resident(byte_store_after(t.writes(), store, s).memory) ∧ post(byte_store_after(t.writes(), store, s))));
     t.io().goes_after(t.program, t.origin, prog_len(before), prog_len(before) + 3, tree, pre, post,
-        t.site().moves_store_byte(t.writes(), t.code_fits(), within.witness, before, name, store, within.proof, pre, post, λ s held => held), next)
+        t.site().moves_store_byte(t.writes(), t.code_fits(), within.witness, before, name, store, within.proof, pre, post, λ s held _ => held), next)
 }
 
 // ---------------------------------------------------------------------------

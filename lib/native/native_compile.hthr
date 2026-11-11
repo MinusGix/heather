@@ -76,6 +76,7 @@ import function_ir_eval;
 import function_ir_lower;
 import function_ir_lower_calls;
 import function_ir_state;
+import function_ir_writes;
 import function_ir_placeless;
 import function_ir_pass;
 import x86_64;
@@ -1168,12 +1169,16 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
 // values where `places` proposes; their inner labels from `names`. Checked
 // evaluable first, and placeless: a call's answer is then the one the
 // program states with no address (`program_readers`), wherever its buffers
-// lie. Each function is emitted under the count of buffers it says it is
-// lent (`program_counts`).
+// lie. And checked to store into no buffer (`program_quiet`): the function
+// compiler lowers a store, and a program's statements lend their buffers
+// to read until the meaning of a call is over the file it leaves
+// (docs/native-one-compiler-design.md §3, U4 step 4b). Each function is
+// emitted under the count of buffers it says it is lent
+// (`program_counts`).
 fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
-        Cons(_, _) => match program_evaluable(functions) && program_placeless(functions) {
+        Cons(_, _) => match (program_evaluable(functions) && program_placeless(functions)) && program_quiet(functions) {
             False => None,
             True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions)) {
                 None => None,
@@ -1263,8 +1268,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //      a word past the slots, or lent more buffers than the file has) (the
 //      function)
 //  17  the functions the regions call do not link (`Prog::links`: not
-//      evaluable, not placeless, or lowered with the homes' placement of
-//      their values refused)
+//      evaluable, not placeless, storing into a buffer, or lowered with
+//      the homes' placement of their values refused)
 //
 // Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
 // width 64: one with every node wide compiles a node at a time.

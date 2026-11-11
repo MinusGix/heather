@@ -38,6 +38,27 @@ fn store_byte(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8)) → Buffe
     buffers.update(buffer, λ bytes => bytes.update(index, λ _ => byte))
 }
 
+// A store sets its byte of its buffer, where the buffer has one, and
+// leaves every other buffer.
+theorem buffer_bytes_stored(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8)):
+    buffer_bytes(store_byte(buffers, buffer, index, byte), buffer) =
+        buffer_bytes(buffers, buffer).update(index, λ (_: BitVec(8)) => byte) {
+    let set = λ (bytes: List<BitVec(8)>) => bytes.update(index, λ (_: BitVec(8)) => byte);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    (match buffers.nth(buffer) as λ found => buffers.nth(buffer) = found →
+        read(buffers.update(buffer, set).nth(buffer)) = set(read(found)) {
+        None => λ none => cong_fn(read, buffers.nth_update_none(buffer, set, none)),
+        Some(bytes) => λ some => cong_fn(read, buffers.nth_update_here(buffer, set, bytes, some)),
+    })(refl)
+}
+
+theorem buffer_bytes_store_other(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8), other: Nat, differs: buffer ≠ other):
+    buffer_bytes(store_byte(buffers, buffer, index, byte), other) = buffer_bytes(buffers, other) {
+    let set = λ (bytes: List<BitVec(8)>) => bytes.update(index, λ (_: BitVec(8)) => byte);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
+}
+
 // ---------------------------------------------------------------------------
 // Nodes
 

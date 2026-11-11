@@ -54,6 +54,30 @@ fn nodes_quiet(nodes: List<Node>) → Bool {
     match nodes { Nil => True, Cons(node, rest) => !node.stores() && nodes_quiet(rest) }
 }
 
+// Whether a node stores into buffer `b`.
+fn Node::stores_to(self node: Node, b: Nat) → Bool { match node { BufferStore(_, buffer, _, _) => buffer.same(b), _ => False } }
+
+fn nodes_store(nodes: List<Node>, b: Nat) → Bool {
+    match nodes { Nil => False, Cons(node, rest) => node.stores_to(b) || nodes_store(rest, b) }
+}
+
+// Nodes with no store store into no buffer.
+theorem nodes_quiet_store(nodes: List<Node>, b: Nat): nodes_quiet(nodes).IsTrue() → nodes_store(nodes, b).IsTrue() → False {
+    match nodes {
+        Nil => λ _ never => never,
+        Cons(node, rest) => λ quiet stores => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            match Bool::is_true_or(node.stores_to(b), nodes_store(rest, b), stores) {
+                Inl(here) => (match node as λ n => (!n.stores()).IsTrue() → n.stores_to(b).IsTrue() → False {
+                    BufferStore(_, _, _, _) => λ no _ => no,
+                    _ => λ _ never => never,
+                })(both.left, here),
+                Inr(later) => nodes_quiet_store(rest, b, both.right, later),
+            }
+        },
+    }
+}
+
 // A node over the file `before`, leaving `after`: a store sets its byte
 // and names the byte then there; any other node holds at `before` and
 // leaves it.
@@ -231,6 +255,47 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
     }
 }
 
+// Whether a region stores into buffer `b` itself.
+fn StructuredRegion::stores(self region: StructuredRegion, b: Nat) → Bool {
+    match region {
+        Dataflow(body) => nodes_store(body.nodes, b),
+        Sequence(prefix, continuation) => nodes_store(prefix.nodes, b) || continuation.stores(b),
+        Compose(prefix, continuation) => prefix.stores(b) || continuation.stores(b),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.stores(b) || when_false.stores(b),
+        Call(_, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores(b),
+    }
+}
+
+theorem StructuredRegion::quiet_stores(self region: StructuredRegion, b: Nat): region.quiet().IsTrue() → region.stores(b).IsTrue() → False {
+    match region {
+        Dataflow(body) => nodes_quiet_store(body.nodes, b),
+        Sequence(prefix, continuation) => λ quiet stores => {
+            let both = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
+            match Bool::is_true_or(nodes_store(prefix.nodes, b), continuation.stores(b), stores) {
+                Inl(first) => nodes_quiet_store(prefix.nodes, b, both.left, first),
+                Inr(second) => continuation.quiet_stores(b, both.right, second),
+            }
+        },
+        Compose(prefix, continuation) => λ quiet stores => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            match Bool::is_true_or(prefix.stores(b), continuation.stores(b), stores) {
+                Inl(first) => prefix.quiet_stores(b, both.left, first),
+                Inr(second) => continuation.quiet_stores(b, both.right, second),
+            }
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ quiet stores => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match Bool::is_true_or(when_true.stores(b), when_false.stores(b), stores) {
+                Inl(first) => when_true.quiet_stores(b, both.left, first),
+                Inr(second) => when_false.quiet_stores(b, both.right, second),
+            }
+        },
+        Call(_, _, _) => λ _ never => never,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet_stores(b),
+    }
+}
+
 // The fixed-file relation embeds: a region with no store that holds over
 // a file runs from that file to itself, where its callees leave the file.
 theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buffers() → Callees(), file: Buffers()):
@@ -335,6 +400,26 @@ fn program_effects(functions: List<Function>) → Effects() {
 // No function of the program stores into a buffer.
 fn program_quiet(functions: List<Function>) → Bool {
     match functions { Nil => True, Cons(last, earlier) => last.body.quiet() && program_quiet(earlier) }
+}
+
+// Whether some function of the program stores into buffer `b`: a callee
+// is handed its caller's buffers under their numbers, so the buffers a
+// program may write are the ones its functions store into.
+fn program_stores(functions: List<Function>, b: Nat) → Bool {
+    match functions { Nil => False, Cons(last, earlier) => last.body.stores(b) || program_stores(earlier, b) }
+}
+
+theorem program_quiet_stores(functions: List<Function>, b: Nat): program_quiet(functions).IsTrue() → program_stores(functions, b).IsTrue() → False {
+    match functions {
+        Nil => λ _ never => never,
+        Cons(last, earlier) => λ quiet stores => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            match Bool::is_true_or(last.body.stores(b), program_stores(earlier, b), stores) {
+                Inl(here) => last.body.quiet_stores(b, both.left, here),
+                Inr(below) => program_quiet_stores(earlier, b, both.right, below),
+            }
+        },
+    }
 }
 
 // A function with no store that computes over a file runs from that file

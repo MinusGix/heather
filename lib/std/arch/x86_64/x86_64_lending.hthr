@@ -159,6 +159,20 @@ theorem Stack::wrote_in_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
 // ---------------------------------------------------------------------------
 // What a span reads along the way
 
+// A span's byte at an index word inside it: where it lies is canonical,
+// and it reads the span's byte.
+theorem readable_at<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>, reads: Readable(data, memory, a, xs),
+    index: BitVec(64), inside: index.toNat() < xs.len()):
+    (a.add(index) = next_rip(a, index.toNat())) ∧
+        ((a.add(index).toNat() < Nat::pow(2, 47)) ∧ (data.read(memory, a.add(index)) = xs.nth(index.toNat()))) {
+    let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
+        BitVec::offset_toNat(64, a, index.toNat(), omega(reads.left, inside, top));
+    ⟨address, ⟨j(sym(address), λ x _ => x.toNat() < Nat::pow(2, 47), omega(value, reads.left, inside)),
+        j(sym(address), λ x _ => data.read(memory, x) = xs.nth(index.toNat()), reads.right(index.toNat(), inside))⟩⟩
+}
+
 // A word stored below `top` leaves what a span reads.
 theorem Loan::own_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, k: Nat, below: k + 8 <= top, word: BitVec(64), c: Nat,

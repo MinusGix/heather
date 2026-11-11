@@ -714,11 +714,13 @@ fn Planned::met(self yes: Planned, no: Planned, known: List<Known>) → Planned 
 fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
 
 // The file after a node the leaf lowering has no code for: a load leaves
-// its byte in the register chosen (`function_ir_lower_reads` emits it,
-// a leaf of its own), and nothing else is known to follow.
+// its byte in the register chosen, and so does a store, which names the
+// byte then there (`function_ir_lower_reads` emits each, a leaf of its
+// own), and nothing else is known to follow.
 fn Node::planned_file(self node: Node, place: Place, file: File) → File {
     match node {
         BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file },
+        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file },
         _ => file,
     }
 }
