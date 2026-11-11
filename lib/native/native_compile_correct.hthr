@@ -2023,7 +2023,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let linked = built.proof.right.right.right.right.right;
     let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, linked.proof.proof);
-    let linking = Bool::is_true_and(program_evaluable(src.functions), program_unlent(src.functions), meets.left);
+    let linking = Bool::is_true_and(program_evaluable(src.functions), program_placeless(src.functions), meets.left);
     let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
     let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());

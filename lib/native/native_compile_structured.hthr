@@ -34,6 +34,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_state;
+import function_ir_placeless;
 import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_sim;
@@ -415,11 +416,14 @@ theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: N
 // A function's call from its start (`Prog::function_call`).
 theorem Prog::within_function_call(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat):
     p.Within(p.function_call(layout, out, callee, arguments, result)) {
+    let lent = program_lent(layout.functions, callee);
+    let regs = call_registers().drop(2 * lent);
     let framed = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)));
-    let passed = framed.words_to(layout, arguments, call_registers());
-    let back = then(then(then(passed, Block([MovRR(Rbx, R10)])), CallTo(Succ(callee))), Block([MovRR(R10, Rbx)]));
+    let passed = framed.words_to(layout, arguments, regs);
+    let back = then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(Succ(callee))),
+        Block([MovRR(R10, Rbx)]));
     p.within_trans(framed, back.word_from(layout, out, result, Rax), Exists(2, refl),
-        framed.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, call_registers(), framed),
+        framed.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, regs, framed),
             passed.within_trans(back, back.word_from(layout, out, result, Rax), Exists(3, refl), back.within_word_from(layout, out, result, Rax))))
 }
 
