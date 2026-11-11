@@ -352,6 +352,10 @@ to it is a gate failure. A word function stays `safe fn` as today.
 ## 7. The write half, in outline
 
 Not built by the read rounds; here to show they do not have to be redone.
+The design is `docs/native-one-compiler-design.md` §2.6 (U4), which
+changes one thing below: lending is stated as laws at every memory, and
+`Lends` follows from them instead of being quantified over a larger
+relation.
 
 - A home marked writable adds its span's bytes to what the call may store:
   `Wrote` takes the footprint, the callee's room and the written spans.

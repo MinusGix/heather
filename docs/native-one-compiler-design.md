@@ -564,9 +564,9 @@ issues/decreases-no-companions-nested-match-calls.md). The form with one
 self-call and the branch in its arguments is the one proved.
 
 What it leaves open, on purpose: a span that is written. A write makes
-the buffer a result as well as an input, so U4 decides whether the file
-becomes state the meaning threads or the function returns the new
-bytes; the world is the right place for a span only while it is read.
+the buffer a result as well as an input; §2.6 decides that the file
+becomes state the meaning threads, and the world stays the place for a
+span only while it is read.
 
 ### 2.4 A procedure is a function whose body has effects
 
@@ -600,6 +600,99 @@ A program is a function `main`, a start-up that lends it the static
 buffers and the command line, and an exit with its result;
 `native_compile_correct` is `main`'s claim under the Linux model. An
 export is a function with no effects and a generated Rust declaration.
+
+### 2.6 A written buffer is state the meaning threads
+
+U4's design. The question §2.3 left: when a function stores into a span
+it was lent, is the file state that the meaning threads, or does the
+function return the new bytes?
+
+**Threaded, at FunctionIR and below.** The machine has one span and
+changes it in place, and FunctionIR already has both halves of the
+meaning at the region level: `StructuredRegion::run` carries the file
+through `BufferStore` (`function_ir_state.hthr`), while `eval` and the
+relation the function compiler is proved against
+(`StructuredRegionHoldsOver`) read a file that never changes. U4 makes
+the threaded one the meaning of a function: a call is answered with a
+word and the file it leaves. "Returns the new bytes" is what the Heather
+function does, and it is the class's to state (below); proving that the
+one span updated in place is the list the function returned is the
+reflector's question, about how the source uses the span, and not the
+compiler's.
+
+Three things stay as they are. A buffer is a number and a list of bytes,
+and a store never changes a length, so a home's length word holds across
+stores. A store outside the buffer is no store in the meaning
+(`store_byte`), so the lowering asks what it asks of a load: the path
+knows the index below the home's length. And a function says which of
+its lent buffers it writes (`Function.writes`, empty by default), so a
+function that writes nothing has today's contract.
+
+**What a caller lends is laws, not stability.** `Stack::Lends` says a
+span reads its bytes after any store the callee makes in its own room.
+That cannot say what a written span reads after a store into it, and
+with stores into spans in play "stable under the callee's stores" is no
+longer about the callee's room alone. So lending is restated in the
+style of the `Stack` record, as laws at every memory, for the spans by
+buffer number (`at`, `size`, `written`) and an offset `top` the callee's
+words lie below:
+
+- every span is canonical, and a word stored below `top` leaves every
+  span's bytes;
+- a written span's bytes are writable, a byte stored there reads back,
+  and it leaves every other byte of every span, the stack's words below
+  `top`, and the code.
+
+A read span and a written span are apart because the last law says so,
+and two read spans may overlap. These are what Rust's `&[u8]` and
+`&mut [u8]` give a wrapper, and what a `DataRegion` gives a program's
+static buffers (`DataRegion::apart`, `read_stored`, `store_outside`,
+`store_keeps_code`). `top` is there because a program's buffers lie in
+the same region as its stack, above the running frame: "a span store
+keeps the stack" is true only of the words below them. `Lends` becomes a
+consequence of the laws and stops being a premise.
+
+**What a call may store** widens with it: `WroteIn(i, spans, before,
+after)` is stores one after another, each a word of the callee's own
+room below `i` (`Own`, as now) or one byte of a written span. `Wrote` is
+the case with nothing written. From `WroteIn` and the laws follow what a
+caller keeps: its words from `i` up to `top`, the code, and every span
+nobody was lent to write.
+
+**The contract.** Under the laws, a function called over the file
+`before`, each lent span reading its bytes of `before`, returns with its
+result, the kept registers, `WroteIn` over the spans it writes, and each
+lent span reading its bytes of the file the meaning leaves. A callee is
+handed the same spans under the same numbers (§2.3), writes no span its
+caller does not, and the lowering refuses a call that would.
+
+**Inside the function compiler** the file is no longer a constant of the
+proof. What emitting proves (`EmitsIn`) gains the file before and after
+and, beside the frame, that every lent span reads the file as it is now.
+Code that stores only in its own frame keeps that by the first law, so a
+load reads through it at the memory it runs in, with no trip back to
+entry. A store is a leaf of its own, like a load: the address formed
+from the home, then one `StoreByte`. The relation it is proved against
+threads the file (`StructuredRegionRunsOver(effects, values, region,
+before, after)`, a call's `effects` relating the file before to the word
+and the file after), and the fixed-file relation embeds in it for a
+region with no store, so everything proved through `eval` today feeds
+the new theorem unchanged.
+
+**A program's call** (`Source`) then answers with the file as well:
+`Readers` gives a word and the buffers left, the statement after the
+call starts from them, and the claim between statements is rebuilt from
+the contract's post, the buffers being the layout's cells. `tr`'s byte
+map is the first customer.
+
+**`rt` and the class.** A `runtime fn` takes a span it may write as a
+`mut` parameter, and its Heather type returns the new bytes beside its
+result (the prelude's `Mutated`). The class states that the code, run
+over a file, leaves the file with that span set to what the function
+returns. In place is sound when the old bytes are dead, which is the
+reflector accepting only a span used linearly (`Unique`,
+`lib/lang/facts/unique.hthr`). Its details wait for the function
+compiler's half, as §2.3's did.
 
 ## 3. The rounds
 
@@ -658,9 +751,25 @@ Each is a PR and ends with something that runs.
       Heather function. *Runs:* `wc -l` with `count_newlines` a
       `runtime fn` (a loop and the function that starts it), beside
       GNU's.
-- **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
-  `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
-  its byte map as a called function.
+- **U4. Buffers written** (§2.6), in steps that each leave the library
+  whole.
+  - *Step 4a-1:* the stack's half: the laws of a lending, `WroteIn`, and
+    what a caller keeps, with a `DataRegion`'s spans as the instance.
+    *Runs:* nothing new; the laws are checked at a region's spans.
+  - *Step 4a-2:* FunctionIR's half: `Function.writes`, the relation that
+    threads the file, and the fixed-file relation embedded in it.
+  - *Step 4a-3:* the function compiler's contract over the laws with the
+    file threaded, no store yet; `Source` supplies the laws. *Runs:*
+    everything that runs today, its bytes unchanged.
+  - *Step 4a-4:* the store leaf, its refusals, and the contract for a
+    function that writes. *Runs:* a byte map over a span, by evaluation
+    and accepted by the function compiler.
+  - *Step 4b:* a program's call of a function that writes. *Runs:* `tr`
+    with its byte map as a called function over the buffer, beside GNU's.
+  - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
+    *Runs:* the byte map as a `runtime fn`.
+  - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,
+    here or with U5, whichever the frames make cheaper.
 - **U5. Procedures are functions** (§2.4), after its own note. *Runs:* the
   tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
