@@ -403,6 +403,11 @@ pub(crate) enum Unfold {
     /// A call reaching the match its definition makes on a constructor
     /// argument (goal_combinators' `matched_at_constructor`).
     MatchedArm,
+    /// A structurally recursive definition's call reaching the arm of a
+    /// constructor argument, refolded (goal_combinators'
+    /// `recursion_at_constructor`): a case per constructor before the arm,
+    /// and a β per parameter after the descended one.
+    RecursiveArm,
     /// An instance's bit operand reaching an injection or a call the source
     /// names (`Elaborator::instance_bit`).
     InstanceBit,
@@ -443,7 +448,7 @@ impl Unfold {
             Unfold::Comparison | Unfold::IndexRead => 8,
             Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
             Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
-            Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead => 64,
+            Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead | Unfold::RecursiveArm => 64,
             Unfold::FamilyEncoding | Unfold::Spelling => 1024,
         }
     }

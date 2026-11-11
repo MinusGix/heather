@@ -5,7 +5,7 @@ labels: [tactics,proofs,performance,ergonomics]
 area: tactics
 milestone: [tac-general]
 created: 2026-10-26
-updated: 2026-11-08
+updated: 2026-11-11
 ---
 
 `rewrite(h, e)` with an unapplied law instantiates it once, at the first node
@@ -31,3 +31,4 @@ termination: a law whose right side matches its own left side
 ## Log
 
 - 2026-11-08: 2026-11-08: [[simp-tactic]] builds on this walk with a set of laws in place of one.
+- 2026-11-11: `simp_only(h)` ([[simp-tactic]], `crates/elab/src/rewrite/simp.rs`) is the entry point that rewrites every instance of an unapplied law, and it detects a commuting law's loop. Its cost is still one walk and one `J` (or one relation plan) per instance: the driver calls the existing step until nothing fires. The one-walk matcher this issue asks for would go under it without changing the surface.
