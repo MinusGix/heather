@@ -806,13 +806,15 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   where a span other than the chain's is read.
 
 - *A loop is the measured recursion, with the file carried.* A writing
-  loop is a method that calls itself last (`raise_from` at `i + 1`).
-  Its pass is the body's computation; the kept words, the moved words
-  and the exit flag are what `rt_loop` makes them, and those regions
-  store nothing, so their theorems lift to the threaded evaluation by
-  the fact that a region without a store leaves the file
-  (`StructuredRegion::run_quiet`). The new proof is the pass over
-  `loop_run` with the file threaded, by the measure.
+  loop is a method that calls itself last (`raise_from` at `i + 1`); the
+  reflection says so with `Again`. Its pass is the body lowered in tail
+  position (`FTm::lower_tail`): a leaf that returns sets the exit flag,
+  a self-call moves its words to the loop's next ports, and the stores
+  and calls on the way are the ones the loop-free lowering makes. The
+  function around the pass is `rt_loop`'s (`Fun::meas_code`: the kept
+  words, the moved words, the bound and the exit flag), unchanged. The
+  new proof is the pass over `loop_run` with the file threaded, by a
+  measure that may read the span as well as the words.
 
 - *The class states the run.* `Compile<F>(f)` says the code evaluated
   over a file answers as `f` at that file's spans. For a function that
@@ -1062,7 +1064,67 @@ Each is a PR and ends with something that runs.
       instantiated from the once-proof over any file, run on bytes and
       accepted by the function compiler; four refusals and a control
       (`lib/_tests/native/runtime/rt_file_tests.hthr`).
-    - *4c-2:* the measured loop with the file carried.
+    - *4c-2 (built 2026-11-11):* the measured loop with the file carried
+      (`rt_file_loop.hthr`). `FTm::Again(args)` is the function calling
+      itself last; `FTm::tail_sem` is the body's meaning with that call
+      answered by a parameter; `FTm::lower_tail` lowers the body as one
+      pass and `FFun::lower_measured` puts `rt_loop`'s loop around it
+      (`Fun::meas_code`, the pure loop's code and ids). The theorem is
+      `FFun::measured_sound`: for a function `h` of the span and the
+      words that the body computes when its self-call is answered by
+      anything agreeing with `h` below a measure (`FFun::Guarded`), the
+      measure below 2^64 (`FFun::Bounded`), the code run on any words
+      over any file `Cons(own, rest)`, its calls answered by the
+      program, answers `h`'s word and leaves `h`'s span over `rest`
+      (`FFun::MeasuredHolds`). What the build settled:
+      - *The recursion is a continuation, as in the pure layer.* The
+        first sketch gave a pass a datatype of turns (left with a value,
+        or went round with words); what was built is `rt_loop`'s shape
+        instead. A pass's promise (`FTm::Turn`) is an equation at every
+        continuation: leaving the pass, with the continuation resumed on
+        the file the pass left, ends as the meaning does with its
+        self-call answered by that continuation. So the cases compose as
+        4c-1's do (`FTm::tail_bind_sound`, `FTm::tail_put_sound`,
+        `FTm::tail_if_sound`), with two leaves (`FTm::tail_leaf_sound`,
+        `FTm::tail_again_sound`).
+      - *One conjunct the pure loop has no use for.* The promise also
+        says the file the pass left has its other spans as they were
+        (`FTm::Spanned`). The equation alone does not: where the pass
+        goes round, it speaks through a continuation that reads only
+        span 0, and the loop's induction needs the next pass to start
+        over a file of the same shape.
+      - *The measure reads the span.* It is `m(words, span)`, and the
+        hypothesis `Guarded` gives about the self-call is at every span
+        below the measure, since the pass hands on the span it wrote.
+        That is the shape of the recursor's own `ext`, so a function's
+        `Guarded` is its `ext` and `irrel` and nothing about the bytes.
+      - *The loop theorem is over any state a file is made from.*
+        `loop_run_agrees_measured<S>` (`function_ir_run.hthr`) runs a
+        loop whose pass is known as an equation between endings against
+        a recursion on `S` and the words, with the file `emb(s)` and an
+        invariant on endings; the written span over a fixed rest is its
+        first instance.
+      - *The self-call is not a call.* The loop's code never emits a
+        `Call` of its own index, so the hypothesis about the program's
+        calls (`FTm::CallsAgree`) is about callees only and a loop with
+        none takes the empty one. Outside a loop `Again` lowers as a
+        call of computation 0; where a loop sits in its own table is
+        linking's to say (4c-3).
+      - *The function compiler takes the loop as generated.* The pass's
+        test ends its leaf and the store is a leaf of its own, as 4c-1
+        made them, so nothing in `function_ir_lower*` changed.
+
+      *Runs:* `bump_from` (every byte from an index up by one) and
+      `raise_from` (every byte through `raise`, a pure function of the
+      program called between the load and the store, the program the
+      loop above its callee). Each is lowered by evaluation, accepted by
+      the function compiler lent one buffer, run on bytes, pinned to the
+      recursor's step by conversion, and proved from the once-proof at
+      every span, every rest of the file, every place and length word
+      (`bump_called`, `raise_called`); the callee's side of
+      `FTm::CallsAgree` is `program_run_quiet` and the pure once-proof
+      (`raise_agrees`)
+      (`lib/_tests/native/runtime/rt_file_loop_tests.hthr`).
     - *4c-3:* the class's statement of the run, the reflector over a
       `mut self` span, the generator and linking; `raise_span` becomes a
       `runtime fn`.

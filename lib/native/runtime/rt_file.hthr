@@ -13,7 +13,9 @@
 // - `Put(i, length, v, body)` stores a byte under a length word and goes
 //   on;
 // - `Call(f, args, body)` runs a computation of the program and binds its
-//   value for the rest, which goes on from the span the callee left.
+//   value for the rest, which goes on from the span the callee left;
+// - `Again(args)` ends as the function itself does on new arguments, from
+//   the span as it is: the self-call a loop is made of (`rt_file_loop`).
 //
 // A computation writes one span, span 0 of its file, and its meaning
 // threads that span's bytes: `List<BitVec(8)> → Mutated<List<BitVec(8)>,
@@ -63,6 +65,10 @@ inductive FTm {
     // A computation of the program, by index, on variables: `body` sees
     // its value as variable 0 and goes on from the span it left.
     Call(f: Nat, args: List<Nat>, body: FTm),
+    // The function itself, the program's computation 0 (as a pure function
+    // is entry 0 of its own table), on variables, its answer the term's:
+    // a self-call in tail position.
+    Again(args: List<Nat>),
 }
 
 // A computation function: `lent` spans, the first the one it writes.
@@ -141,6 +147,7 @@ fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
         IfEq(_, yes, _) => yes.ty(w, fsigs, g),
         Put(_, _, _, body) => body.ty(w, fsigs, g),
         Call(f, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
+        Again(_) => Sig::at(fsigs, 0).result,
     }
 }
 
@@ -179,6 +186,7 @@ fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → 
         Call(f, args, body) => λ g env own =>
             shared(FTm::called(fw, g, env, f, args, own), λ m =>
                 body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Again(args) => λ g env own => FTm::called(fw, g, env, 0, args, own),
     }
 }
 

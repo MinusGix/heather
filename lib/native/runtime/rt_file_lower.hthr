@@ -562,6 +562,8 @@ fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, p
         // as variable 0.
         Call(f, args, body) => FTm::lower_call(w, fsigs, base, g, ports, next, f, args).and_then(λ lc =>
             FTm::lower(body, w, fsigs, base, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next).and_then(λ lb => Tm::compose(lc, lb))),
+        // Outside a loop, a self-call is a call of computation 0.
+        Again(args) => FTm::lower_call(w, fsigs, base, g, ports, next, 0, args),
     }
 }
 
@@ -665,6 +667,7 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
                     j(lowered_body, λ r _ => FTm::LowerHolds(body, fw, base, inner, Cons(lc.result, ports), lc.next, r),
                         FTm::lower_sound(body, fw, base, inner, Cons(lc.result, ports), lc.next)))))
         },
+        Again(args) => λ g ports next => FTm::call_sound(fw, base, g, ports, next, 0, args),
     }
 }
 

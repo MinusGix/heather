@@ -703,7 +703,8 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
         ⟨trans(Valuation::set_here(bound, exhausted, bv, 64), sym(bit_word_at)),
             λ _ => trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(bound, exhausted, bv, 1)),
                 sym(cong_fn(λ (x: BitVec(64)) => x.head_bit(), bit_word_at)))⟩;
-    let agrees_after: Valuation::Agrees(v, m, s.looped(outputs, exhausted)) = λ x def => match x.eq_dec(exhausted) {
+    let agrees_after: Valuation::Agrees(v, m, s.looped(outputs, exhausted)) = λ x def => match x.eq_dec(exhausted)
+        as λ _ => (v(64, x) = m.word(x)) ∧ ((!s.looped(outputs, exhausted).loose(x)).IsTrue() → v(1, x).head_bit() = m.bit(x)) {
         Inl(eq) => j(sym(eq), λ y _ => (v(64, y) = m.word(y)) ∧ ((!s.looped(outputs, exhausted).loose(y)).IsTrue() → v(1, y).head_bit() = m.bit(y)),
             exhausted_goal),
         Inr(ne) => match held: outputs.holds(x) {
@@ -779,7 +780,8 @@ theorem StructuredRegion::call_settles(env: Env, values: Valuation(), s: Scope, 
         ⟨trans(Valuation::set_here(values, result, wv, 64), sym(word_at)),
             λ _ => trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(values, result, wv, 1)),
                 trans(word_head(word), sym(cong_fn(λ (x: BitVec(64)) => x.head_bit(), word_at))))⟩;
-    let agrees_after: Valuation::Agrees(v, m, s.put(result, True)) = λ x def => match x.eq_dec(result) {
+    let agrees_after: Valuation::Agrees(v, m, s.put(result, True)) = λ x def => match x.eq_dec(result)
+        as λ _ => (v(64, x) = m.word(x)) ∧ ((!s.put(result, True).loose(x)).IsTrue() → v(1, x).head_bit() = m.bit(x)) {
         Inl(eq) => j(sym(eq), λ y _ => (v(64, y) = m.word(y)) ∧ ((!s.put(result, True).loose(y)).IsTrue() → v(1, y).head_bit() = m.bit(y)), here),
         Inr(ne) => {
             let sdef: s.defined(x).IsTrue() = j(s.put_defined_other(result, True, x, ne), λ b _ => b.IsTrue(), def);

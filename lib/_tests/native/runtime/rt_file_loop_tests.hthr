@@ -1,0 +1,304 @@
+// Probes of a loop over a span it writes (`FFun::lower_measured`,
+// lib/native/runtime/rt_file_loop.hthr; docs/native-one-compiler-design.md
+// §2.6, U4 step 4c-2). A function that adds one to every byte of its span
+// from an index on is lowered to one loop by evaluation, the code is what
+// the function compiler accepts lent one buffer, it runs, and over every
+// file it runs to the function: `Guarded` proved from the function's own
+// `ext` and `irrel` as the generator will. The reflection is written by
+// hand here (the reflector is step 4c-3). Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn bare() → World { World(RecInfo::none, [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+
+fn code_of(r: Option<Function>) → Function { match r { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
+fn lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
+
+// ---------------------------------------------------------------------------
+// Every byte from `i` up by one, the index it stopped at returned.
+
+fn bump_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => bump_from(span.with_byte_within(length, i, span.byte_within(length, i).add(BitVec::ofNat(1))), length, i.add(BitVec::ofNat(1))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// Its reflection, over three words `[i, length, place]`: the span's place
+// and length first, then the index. The read is of the span as it is then,
+// the store is under the length word, and the self-call hands the place
+// and the length on as the variables they came in as.
+//
+//   let below = i <u length                  [below, i, length, place]
+//   if below {
+//     let byte = span[i] under length        [byte, below, i, length, place]
+//     let one = 1                            [one, byte, below, i, length, place]
+//     let up = byte + one                    [up, one, byte, below, i, length, place]
+//     span[i] := up under length
+//     let step = 1                           [step, up, one, byte, below, i, length, place]
+//     let i2 = i + step                      [i2, step, up, one, byte, below, i, length, place]
+//     again(place, length, i2)
+//   } else i
+fn bump_body() → FTm {
+    Let(Prim(Ult(64), [0, 1]), IfEq(0,
+        Let(Byte(0, 1, 2), Let(Lit(Word(8), 1), Let(Prim(Add(8), [1, 0]), Put(4, 5, 0,
+            Let(Lit(Word(64), 1), Let(Prim(Add(64), [5, 0]), Again([8, 7, 0]))))))),
+        Pure(Var(1))))
+}
+
+fn bump_words() → List<Ty> { [Word(64), Word(64), Word(64)] }
+
+// Two words kept (the home), then the one the loop moves.
+fn bump_lowered() → Option<Function> { FFun::lower_measured([Word(64), Word(64)], Word(64), [], bump_body(), Word(64), bare(), [], 0, 1) }
+
+fn bump_code() → Function { code_of(bump_lowered()) }
+
+theorem bump_lowers(): lowers(bump_lowered()) = True { refl }
+
+// The code is the function compiler's: evaluable, placeless, storing into
+// buffer 0 only, and compiled when it is lent its one buffer.
+theorem bump_evaluable(): program_evaluable([bump_code()]).IsTrue() { trivial }
+theorem bump_placeless(): program_placeless([bump_code()]).IsTrue() { trivial }
+theorem bump_accepted(): lower_program_lent([bump_code()], plan_program([bump_code()]), [1]).is_some() = True { refl }
+
+// It runs: "abc" becomes "bcd", wherever the span is said to lie, and the
+// file's other span is as it was.
+theorem bump_runs(): program_run([bump_code()], [[b(97), b(98), b(99)], [b(7)]], 0, [w(4096), w(3), w(0)]) =
+    Ending(w(3), [[b(98), b(99), b(100)], [b(7)]]) { refl }
+// From an index on, and under a length short of the span.
+theorem bump_runs_from(): program_run([bump_code()], [[b(97), b(98), b(99)]], 0, [w(0), w(3), w(2)]) = Ending(w(3), [[b(97), b(98), b(100)]]) { refl }
+theorem bump_runs_short(): program_run([bump_code()], [[b(97), b(98), b(99)]], 0, [w(0), w(2), w(0)]) = Ending(w(2), [[b(98), b(99), b(99)]]) { refl }
+theorem bump_runs_empty(): program_run([bump_code()], [[]], 0, [w(0), w(0), w(0)]) = Ending(w(0), [[]]) { refl }
+
+// ---------------------------------------------------------------------------
+// Over every file, the loop runs to the function.
+
+// The function as the loop's three words see it: where the span lies is
+// not the function's to read.
+fn bump_at(span: List<BitVec(8)>, place, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> { bump_from(span, length, i) }
+
+fn bump_measure(ys: List<BitVec(64)>, span: List<BitVec(8)>) → Nat {
+    ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat()
+}
+
+// The body with its recursion answered by `again` is the recursor's step
+// with an ih that drops its proof: a conversion, the span threaded by the
+// meaning as the function threads it.
+theorem bump_step(rest: List<List<BitVec(8)>>, span: List<BitVec(8)>, place, length, i: BitVec(64),
+    again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>):
+    bump_body().tail_sem(alone(rest), Word(64), again, bump_words(), Pair(i, Pair(length, Pair(place, trivial))), span) =
+        bump_from::body(length.sub(i).toNat(), λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => again([place, y1, y2], s),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat())) { refl }
+
+// `Guarded`, from `bump_from::ext` and `bump_from::irrel`: the recursion
+// answers at every span, as `ext` asks, since the loop hands the span on.
+theorem bump_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), Word(64), bump_body(), alone(rest), bump_at, bump_measure) {
+    λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
+        sym(bump_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
+                bump_from::rec(length.sub(i).toNat(), s, y1, y2, p),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ s y1 y2 p q => trans(bump_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
+                    nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
+                sym(trans(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                        hyp([place, y1, y2], s, refl, p)),
+                    FTm::mutated_eta(bump_from(s, y1, y2))))),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
+}
+
+theorem bump_bounded(): FFun::Bounded(bump_words(), bump_measure) { λ span place length i => BitVec::toNat_lt_pow(64, length.sub(i)) }
+
+theorem bump_lowers_to(): bump_lowered() = Some(bump_code()) { refl }
+
+// The loop's theorem over any rest of the file.
+theorem bump_loops(rest: List<List<BitVec(8)>>): FFun::MeasuredHolds(bump_words(), Word(64), alone(rest), 0, bump_at, bump_lowered()) {
+    FFun::measured_sound([Word(64), Word(64)], Word(64), [], bump_body(), Word(64), alone(rest), 0, 1, bump_at, bump_measure, bump_bounded(),
+        bump_guarded(rest))
+}
+
+// So the one code, lent any span at any place with any length word, over
+// any file, answers the function's index and leaves the function's span,
+// the rest of the file as it was.
+theorem bump_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    bump_code().run(call, [place, length, i], Cons(span, rest)) =
+        Ending(bump_from(span, length, i).value, Cons(bump_from(span, length, i).after, rest)) {
+    j(bump_lowers_to(), λ r _ => FFun::MeasuredHolds(bump_words(), Word(64), alone(rest), 0, bump_at, r), bump_loops(rest))(
+        call, FTm::calls_agree_none(RecInfo::none, rest, call), span, [place, length, i], refl)
+}
+
+// As a program of one function, called.
+theorem bump_called(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run([bump_code()], Cons(span, rest), 0, [place, length, i]) =
+        Ending(bump_from(span, length, i).value, Cons(bump_from(span, length, i).after, rest)) {
+    bump_compiled(program_run([]), span, rest, place, length, i)
+}
+
+// ---------------------------------------------------------------------------
+// A pass that calls a function between its load and its store
+
+// A lowercase ASCII letter to its capital, on a word: a pure function of
+// the program, below the loop.
+fn raise(x: BitVec(64)) → BitVec(64) {
+    match x.sub(w(97)).unsigned_lt_bit(w(26)) { False => x, True => x.sub(w(32)) }
+}
+
+fn raise_rt() → Fun {
+    Fun([Word(64)], Word(64),
+        Let(Lit(Word(64), 97), Let(Prim(Sub(64), [1, 0]), Let(Lit(Word(64), 26), Let(Prim(Ult(64), [1, 0]),
+            If(0, Let(Lit(Word(64), 32), Prim(Sub(64), [5, 0])), Var(4)))))))
+}
+
+theorem raise_pinned(x: BitVec(64)): raise_rt().meaning(bare(), x) = raise(x) { refl }
+
+fn raise_code() → Function { code_of(raise_rt().lower(bare())) }
+
+// Every byte from `i` raised, the index it stopped at returned.
+fn raise_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => raise_from(span.with_byte_within(length, i, raise(span.byte_within(length, i).zero_extend(56)).truncate(8, 56)), length,
+            i.add(BitVec::ofNat(1))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// Its reflection: the byte widened to the callee's word, the call of pure
+// function 0, the answer narrowed and stored.
+//
+//   let below = i <u length                  [below, i, length, place]
+//   if below {
+//     let byte = span[i] under length        [byte, below, i, length, place]
+//     let wide = zext byte                   [wide, byte, below, i, length, place]
+//     let up = raise(wide)                   [up, wide, byte, below, i, length, place]
+//     let low = trunc up                     [low, up, wide, byte, below, i, length, place]
+//     span[i] := low under length
+//     let step = 1                           [step, low, up, wide, byte, below, i, length, place]
+//     let i2 = i + step                      [i2, step, low, up, wide, byte, below, i, length, place]
+//     again(place, length, i2)
+//   } else i
+fn raise_body() → FTm {
+    Let(Prim(Ult(64), [0, 1]), IfEq(0,
+        Let(Byte(0, 1, 2), Let(Prim(Zext(8, 56), [0]), Let(Call(0, [0]), Let(Prim(Trunc(8, 56), [0]), Put(5, 6, 0,
+            Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]), Again([9, 8, 0])))))))),
+        Pure(Var(1))))
+}
+
+// The program's one pure function, and the loop's world over it: the loop
+// is computation 0, FunctionIR function 1.
+fn raise_pure() → World { World(RecInfo::none, [raise_rt().sig()], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
+fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(raise_pure(), λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], trivial, rest)
+}
+
+fn raise_lowered() → Option<Function> {
+    FFun::lower_measured([Word(64), Word(64)], Word(64), [], raise_body(), Word(64), raise_pure(), [], 1, 1)
+}
+fn raise_loop() → Function { code_of(raise_lowered()) }
+
+// The loop above its callee.
+fn raise_program() → List<Function> { [raise_loop(), raise_code()] }
+
+theorem raise_lowers(): lowers(raise_lowered()) = True { refl }
+theorem raise_evaluable(): program_evaluable(raise_program()).IsTrue() { trivial }
+theorem raise_placeless(): program_placeless(raise_program()).IsTrue() { trivial }
+theorem raise_counts(): program_counts(raise_program()) = [0, 1] { refl }
+theorem raise_accepted(): lower_program_lent(raise_program(), plan_program(raise_program()), program_counts(raise_program())).is_some() = True { refl }
+
+// It runs: "a1c" becomes "A1C", the file's other span as it was.
+theorem raise_runs(): program_run(raise_program(), [[b(97), b(49), b(99)], [b(7)]], 1, [w(4096), w(3), w(0)]) =
+    Ending(w(3), [[b(65), b(49), b(67)], [b(7)]]) { refl }
+theorem raise_runs_from(): program_run(raise_program(), [[b(97), b(98), b(99)]], 1, [w(0), w(3), w(1)]) = Ending(w(3), [[b(97), b(66), b(67)]]) {
+    refl
+}
+
+fn raise_at(span: List<BitVec(8)>, place, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> { raise_from(span, length, i) }
+
+// The pin: the call is the callee's own function, not unfolded.
+theorem raise_step(rest: List<List<BitVec(8)>>, span: List<BitVec(8)>, place, length, i: BitVec(64),
+    again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>):
+    raise_body().tail_sem(raise_world(rest), Word(64), again, bump_words(), Pair(i, Pair(length, Pair(place, trivial))), span) =
+        raise_from::body(length.sub(i).toNat(), λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => again([place, y1, y2], s),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat())) { refl }
+
+theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), Word(64), raise_body(), raise_world(rest), raise_at, bump_measure) {
+    λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
+        sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
+                raise_from::rec(length.sub(i).toNat(), s, y1, y2, p),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
+                    nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
+                sym(trans(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                        hyp([place, y1, y2], s, refl, p)),
+                    FTm::mutated_eta(raise_from(s, y1, y2))))),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
+}
+
+theorem raise_lowers_to(): raise_lowered() = Some(raise_loop()) { refl }
+theorem raise_code_lowers(file: List<List<BitVec(8)>>): raise_rt().lower(World(RecInfo::none, [], trivial, file)) = Some(raise_code()) { refl }
+
+// The callee's code answers the loop's calls with the callee's function
+// and leaves every file: a program of pure functions is quiet
+// (`program_run_quiet`), and its word is the pure once-proof's.
+theorem raise_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(raise_world(rest), 1, program_run([raise_code()])) {
+    ⟨λ own f => match f {
+            Zero => λ _ x => trans(
+                cong_fn(λ (e: Ending) => e.word, program_run_quiet([raise_code()], trivial, Cons(own, rest), 0, [x])),
+                j(raise_code_lowers(Cons(own, rest)), λ r _ => raise_rt().LowerHolds(World(RecInfo::none, [], trivial, Cons(own, rest)), r),
+                    Fun::lower_sound(raise_rt(), World(RecInfo::none, [], trivial, Cons(own, rest))))(
+                    program_eval_over(Cons(own, rest), []), Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), program_eval_over(Cons(own, rest), [])), x)),
+            Succ(_) => λ ok => false_elim(ok.right),
+        },
+        ⟨λ f among own words => cong_fn(λ (e: Ending) => e.buffers, program_run_quiet([raise_code()], trivial, Cons(own, rest), f, words)),
+            λ f ok => false_elim(ok.right)⟩⟩
+}
+
+theorem raise_loops(rest: List<List<BitVec(8)>>): FFun::MeasuredHolds(bump_words(), Word(64), raise_world(rest), 1, raise_at, raise_lowered()) {
+    FFun::measured_sound([Word(64), Word(64)], Word(64), [], raise_body(), Word(64), raise_world(rest), 1, 1, raise_at, bump_measure, bump_bounded(),
+        raise_guarded(rest))
+}
+
+// The program of two, called at the loop: over any file it answers the
+// function's index and leaves the function's span, each pass's call
+// answered by the callee's code.
+theorem raise_called(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(raise_program(), Cons(span, rest), 1, [place, length, i]) =
+        Ending(raise_from(span, length, i).value, Cons(raise_from(span, length, i).after, rest)) {
+    j(raise_lowers_to(), λ r _ => FFun::MeasuredHolds(bump_words(), Word(64), raise_world(rest), 1, raise_at, r), raise_loops(rest))(
+        program_run([raise_code()]), raise_agrees(rest), span, [place, length, i], refl)
+}

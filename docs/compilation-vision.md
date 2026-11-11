@@ -252,8 +252,11 @@ optimization that uses it is proved once under it as a hypothesis.
   a computation over the span, a layer over its pure terms as the layer
   over Linux is (`FTm`, `rt_file.hthr`): the meaning threads the bytes
   of the one span written, and the lowering's code runs to it
-  (`FTm::lower_sound`, `rt_file_lower.hthr`). Loops, the reflector and
-  the generator are next.
+  (`FTm::lower_sound`, `rt_file_lower.hthr`). A computation that calls
+  itself last under a measure is one loop with the span carried from
+  pass to pass, proved once against any function that satisfies the
+  body's equation (`FFun::measured_sound`, `rt_file_loop.hthr`); the
+  measure may read the span. The reflector and the generator are next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

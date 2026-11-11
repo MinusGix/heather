@@ -682,3 +682,84 @@ theorem program_run_quiet(functions: List<Function>): program_quiet(functions).I
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A loop that writes, against a recursion bounded by a measure
+
+// One pass over `file` from the state `words_of(v, parameters)` with
+// `Succ(r)` passes left: leaving, what `finish` makes of the next state and
+// the file the pass left; going round, `later` of them (`loop_pass` with
+// the file carried).
+fn loop_pass_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopState → Ending,
+    later: List<BitVec(64)> → Buffers() → Ending, r: Nat, v: Valuation(), file: Buffers()) → Ending {
+    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), file);
+    match after.values(1, exit).head_bit() {
+        False => later(words_of(after.values, next), after.buffers),
+        True => finish(LoopState(LoopEnd(words_of(after.values, next), False), after.buffers)),
+    }
+}
+
+// What a loop's end is held to: `Good` of it, whatever the passes left,
+// and the recursion `run` where the measure is below them.
+fn LoopAgrees<S>(Good: Ending → Type, measure: List<BitVec(64)> → S → Nat,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending, r: Nat, state: List<BitVec(64)>, s: S,
+    end: Ending) → Type {
+    Good(end) ∧ ((h: Nat::Lt(measure(state, s), Succ(r))) → end = run(r, state, s, h))
+}
+
+// A loop whose passes write agrees with `run`, a recursion bounded by a
+// measure of its state and of what the file holds (`loop_eval_agrees_measured`
+// with the file carried). The files are a family `emb(s)`: the passes are
+// known only over those, and `Good` is what every end satisfies without the
+// measure, which is how a pass that goes round learns that the file the
+// later passes leave is of the family before it knows the measure fell.
+theorem loop_run_agrees_measured<S>(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), finish: LoopState → Ending, emb: S → Buffers(), Good: Ending → Type,
+    measure: List<BitVec(64)> → S → Nat,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending,
+    at_zero: (v: Valuation()) → (s: S) →
+        LoopAgrees<S>(Good, measure, run, 0, words_of(v, parameters), s, finish(LoopState(LoopEnd(words_of(v, parameters), True), emb(s)))),
+    at_pass: (r: Nat) → (v: Valuation()) → (s: S) →
+        ((state: List<BitVec(64)>) → (s2: S) → state.len() = parameters.len() →
+            LoopAgrees<S>(Good, measure, run, r, state, s2, finish(loop_run(step, parameters, count, exit, next, r, state, emb(s2))))) →
+        LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s,
+            loop_pass_run(step, parameters, count, exit, next, finish,
+                λ (state: List<BitVec(64)>) (file: Buffers()) => finish(loop_run(step, parameters, count, exit, next, r, state, file)), r, v, emb(s))),
+    remaining: Nat):
+    (state: List<BitVec(64)>) → (s: S) → state.len() = parameters.len() →
+        LoopAgrees<S>(Good, measure, run, remaining, state, s, finish(loop_run(step, parameters, count, exit, next, remaining, state, emb(s)))) {
+    match remaining {
+        Zero => λ state s fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, 0, st, s, finish(LoopState(LoopEnd(st, True), emb(s)))), at_zero(v, s))
+        },
+        Succ(r) => λ state s fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), emb(s));
+            let following = words_of(after.values, next);
+            let Held = λ (end: Ending) => LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s, end);
+            let earlier = λ (st: List<BitVec(64)>) (s2: S) (st_fits: st.len() = parameters.len()) =>
+                loop_run_agrees_measured<S>(step, parameters, count, exit, next, apart, finish, emb, Good, measure, run, at_zero, at_pass, r, st, s2, st_fits);
+            let at_v = (match after.values(1, exit).head_bit() as λ b =>
+                Held(match b { False => finish(loop_run(step, parameters, count, exit, next, r, following, after.buffers)),
+                    True => finish(LoopState(LoopEnd(following, False), after.buffers)) }) →
+                Held(finish(match b as λ _ => LoopState { False => loop_run(step, parameters, count, exit, next, r, following, after.buffers),
+                    True => LoopState(LoopEnd(following, False), after.buffers) })) {
+                False => λ passed => passed,
+                True => λ passed => passed,
+            })(at_pass(r, v, s, earlier));
+            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, Succ(r), st, s, finish(loop_run(step, parameters, count, exit, next, Succ(r), st, emb(s)))),
+                at_v)
+        },
+    }
+}
+
+// What a function answers when `post` follows the loop: `post` run on the
+// loop's end over the file the loop left, read at `result`
+// (`loop_finish_over` with the file carried). `post` is run once.
+fn loop_finish_run(post: StructuredRegion, call: Writers(), values: Valuation(), outputs: List<Nat>, exhausted, result: Nat) → LoopState → Ending {
+    λ ls => shared(post.run(call, Valuation::set(Valuation::bind(values, outputs, ls.end.state), exhausted, bit_value(ls.end.exhausted)), ls.buffers),
+        λ (end: State) => Ending(end.values(64, result), end.buffers))
+}
