@@ -233,7 +233,11 @@ optimization that uses it is proved once under it as a hypothesis.
   is proved at every file, call one another over the same span, and a
   tool's call of one is proved to answer as the Heather function at the
   tool's buffer: `wc -l` counts with a `runtime fn`. What is left of it
-  is writes.
+  is writes. They are designed (`docs/native-one-compiler-design.md`
+  §2.6): the file is state the meaning threads, and a caller lends a
+  span by laws that say what a store into it leaves, which are what
+  Rust's `&` and `&mut` give. The memory half is built
+  (`x86_64_lending.hthr`); the compiler's is next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

@@ -753,9 +753,17 @@ Each is a PR and ends with something that runs.
       GNU's.
 - **U4. Buffers written** (§2.6), in steps that each leave the library
   whole.
-  - *Step 4a-1:* the stack's half: the laws of a lending, `WroteIn`, and
-    what a caller keeps, with a `DataRegion`'s spans as the instance.
-    *Runs:* nothing new; the laws are checked at a region's spans.
+  - *Step 4a-1, built 2026-11-11:* the stack's half
+    (`lib/std/arch/x86_64/x86_64_lending.hthr`): `Spans`, the laws of a
+    lending (`Loan`), `Stack::WroteIn`, what a span reads along the way
+    (`own_reads`, `put_reads`, `put_keeps`) and what a caller keeps
+    (`unchanged`, `resident`, `unwritten_reads`); `Stack::Lends` follows
+    (`Loan::lends`). The instance is `DataRegion::loan`
+    (`x86_64_byte_memory.hthr`): spans inside a region at or above `top`,
+    a written one sharing no byte with another. *Runs:* nothing new; the
+    probes lend two spans of any region, one to write, and show that no
+    lending has a written span starting where another does
+    (`lib/_tests/std/arch/x86_64/x86_64_lending_tests.hthr`).
   - *Step 4a-2:* FunctionIR's half: `Function.writes`, the relation that
     threads the file, and the fixed-file relation embedded in it.
   - *Step 4a-3:* the function compiler's contract over the laws with the
