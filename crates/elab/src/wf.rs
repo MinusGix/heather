@@ -33,6 +33,12 @@ use crate::sum_layout::Child;
 use crate::matching::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
 use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind, WfCov, WfShape};
 use crate::{Alias, Cx, Elaborator, R, embed, err};
+use crate::matching::Routes;
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
+use crate::declarations::Declarations;
+#[cfg(test)]
+use crate::name_lookup::NameLookup;
 
 /// The pieces every part of the lowering needs, gathered once so that the
 /// recursion below carries one reference instead of eight arguments.
@@ -53,7 +59,7 @@ pub(crate) struct Tel<'a> {
     pub gamma0: &'a LocalCtx,
     /// `⟦D⟧` **inline** — the `Type::Wf` itself, scoped in `gamma0`. This is
     /// the structural-read copy: `spine` reads the sum-of-Σs out of it and
-    /// [`Elaborator::motive_head`] pushes it as a context entry. Never use it
+    /// [`Wf::motive_head`] pushes it as a context entry. Never use it
     /// for an emitted annotation; that is [`Tel::emitted`].
     pub structural: StructuralWf<'a>,
     /// `⟦D⟧` as it is **written into emitted terms**, selected by
@@ -167,10 +173,10 @@ pub(crate) struct WfConvoy {
     generalized: Option<Rc<Vec<usize>>>,
     /// [`WfCov::peel`], at this `match`'s context: the window's own, shifted
     /// here, and then whatever `λ`s stand between the guard and this `match`
-    /// ([`Elaborator::convoy_peel`]).
+    /// ([`Wf::convoy_peel`]).
     peel: Vec<Rc<Term>>,
     /// How many binders stand between the guard's arm and this `match`: the
-    /// candidates [`Elaborator::convoy_peel`] may take, outermost first.
+    /// candidates [`Wf::convoy_peel`] may take, outermost first.
     between: u32,
 }
 
@@ -405,7 +411,17 @@ pub(crate) fn chain_shaped(ind: &Inductive) -> bool {
         .all(|c| c.arity() <= 1 && c.container().is_none())
 }
 
-impl Elaborator {
+/// Well-founded recursion's part of the elaborator.
+pub(crate) struct Wf<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Wf<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Wf<'_> {
     // -- constructors (§5) --------------------------------------------------
 
     /// The children tuple terminator, before plain children are prepended.
@@ -525,7 +541,7 @@ impl Elaborator {
         // The `match` recursion at the top wrapped the body in is the guard
         // whatever the planner would say (docs/recursion-at-the-top-design.md
         // §4, slice 3).
-        let dec = self.top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut, arms));
+        let dec = Declarations(self).top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut, arms));
         let Type::Wf { level, .. } = scrut_ty else {
             return err(
                 "internal: a recursive declaration did not lower to a `Wf`",
@@ -725,7 +741,7 @@ impl Elaborator {
             let Some(binder) = arm.binders.get(field) else {
                 continue;
             };
-            d = d.max(self.cov_depth(cx, &arm.body, binder.name(), dec, Some(ind)));
+            d = d.max(Routes(self).cov_depth(cx, &arm.body, binder.name(), dec, Some(ind)));
         }
         d
     }
@@ -984,9 +1000,9 @@ impl Elaborator {
         // `Case` annotations of an inline arity (`Sum` vs `Sum`, 300 queries
         // of the five-node FunctionIR/x86 module after the value sites
         // agreed, 2026-09-06; issues/emission-site-respell-audit.md).
-        let (shape_e, arity_e) = match self.wf_slot_refs(shape, arity) {
+        let (shape_e, arity_e) = match GeneratedDefs(self).wf_slot_refs(shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
-            None => self
+            None => GeneratedDefs(self)
                 .emit_wf_slots(cx, shape, arity, 0)
                 .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
         };
@@ -994,7 +1010,7 @@ impl Elaborator {
             &cx.gamma, &mlvl, &motive, &emitted, (&shape_e, &arity_e),
         );
         let spine = self.spine(scrut_ty, level, ind.ctors.len(), span)?;
-        let spine_emit = self.respell_spine(cx, &spine);
+        let spine_emit = Inductives(self).respell_spine(cx, &spine);
         let tel = Tel {
             gamma0: &cx.gamma,
             structural,
@@ -1748,7 +1764,7 @@ impl Elaborator {
     }
 }
 
-impl Elaborator {
+impl Wf<'_> {
     // -- no-confusion (§7) --------------------------------------------------
 
     /// `elim_Wf` at a **constant** motive, with a constant-motive case tree on
@@ -1988,7 +2004,7 @@ record DepC { m: Nat, eq: m = m }
         let structural = StructuralWf::new(&inline).expect("a recursive lowering");
         let emitted = structural.annotation(&e.el, &e.cx);
         let Type::El { tm, .. } = emitted.as_type() else { panic!("named annotation") };
-        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
         assert!(StructuralWf::new(&Type::Nat).is_none());
         assert!(StructuralWf::new(emitted.as_type()).is_none(),
             "a named code cannot enter the structural boundary without decoding");
@@ -2022,16 +2038,16 @@ record DepC { m: Nat, eq: m = m }
         let e = env();
         let (t_ty, l) = e.lowered("T");
         let r =
-            e.el.respell_ty(&e.cx, &t_ty)
+            GeneratedDefs(&e.el).respell_ty(&e.cx, &t_ty)
                 .expect("T's lowering respells");
         let Type::El { level, tm } = &r else {
             panic!("the spelling is `El` of a code")
         };
         assert_eq!(*level, l);
-        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
         // Idempotent: `tag_of` goes through `decoded`, which leaves an `El` of
         // a neutral code alone, so a reference does not respell again.
-        assert!(e.el.respell_ty(&e.cx, &r).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &r).is_none());
         // Conservativity (design §1.3): δ + decode of the reference is the
         // inline type, so the two convert.
         assert!(e.el.conv_types(&e.cx, &r, &t_ty, &l));
@@ -2064,10 +2080,10 @@ record DepC { m: Nat, eq: m = m }
             rhs: Rc::new(Type::Unit { level: Level::Zero }),
         };
         assert_eq!(e.el.tag_of(&forgery).map(|i| i.tag), Some(e.ind("T").tag));
-        assert!(e.el.respell_ty(&e.cx, &forgery).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &forgery).is_none());
         // …and the same read keyed by hand at the tag declines too, which is
         // the property `respell_ty` inherits rather than adds.
-        assert!(e.el.closed_type_ref(e.ind("T").tag, &forgery).is_none());
+        assert!(GeneratedDefs(&e.el).closed_type_ref(e.ind("T").tag, &forgery).is_none());
         let _ = l;
     }
 
@@ -2086,9 +2102,9 @@ record DepC { m: Nat, eq: m = m }
             tm: Rc::new(u_code),
         };
         // Neither by tag…
-        assert!(e.el.closed_type_ref(e.ind("T").tag, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).closed_type_ref(e.ind("T").tag, &forged).is_none());
         // …nor by the structural read, which does not follow a neutral code.
-        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &forged).is_none());
     }
 
     #[test]
@@ -2124,8 +2140,8 @@ record DepC { m: Nat, eq: m = m }
             level: l,
             tm: Rc::new(dup),
         };
-        assert!(e.el.closed_type_ref(e.ind("T").tag, &forged).is_none());
-        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).closed_type_ref(e.ind("T").tag, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &forged).is_none());
     }
 
     // -- emission: the four axes --------------------------------------------
@@ -2160,7 +2176,7 @@ record DepC { m: Nat, eq: m = m }
         // binding; re-key it into today's Ψ before asking the registry, or the
         // nominal test silently reads one binding over.
         let grew = (e.el.psi.bindings.len() - before) as u32;
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
     }
 
     /// Axes 1–4 on the tier-1 path, one source: a **neutral** scrutinee (the
@@ -2259,7 +2275,7 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
             cod: Rc::new(f_ty.clone()),
         };
         let r =
-            e.el.respell_ty_deep(&e.cx, &pi, 0)
+            GeneratedDefs(&e.el).respell_ty_deep(&e.cx, &pi, 0)
                 .expect("both components respell");
         let Type::Pi { dom, cod, .. } = &r else {
             panic!("the Π shell survives")
@@ -2270,18 +2286,18 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
         let Type::El { tm: ctm, .. } = &**cod else {
             panic!("cod is a reference")
         };
-        assert!(e.el.is_gen_ref(dtm, GenDef::TyCode(e.ind("T").tag)));
-        assert!(e.el.is_gen_ref(ctm, GenDef::TyCode(e.ind("Flat").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(dtm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(ctm, GenDef::TyCode(e.ind("Flat").tag)));
         // The respelled Π still converts with the inline one — component
         // respelling is a spelling change, both directions.
         let lvl = Level::max(tl, fl);
         assert!(e.el.conv_types(&e.cx, &r, &pi, &lvl));
         assert!(e.el.conv_types(&e.cx, &pi, &r, &lvl));
         // Idempotent, like the whole-type respell.
-        assert!(e.el.respell_ty_deep(&e.cx, &r, 0).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty_deep(&e.cx, &r, 0).is_none());
         // And a type with no registered component answers `None` — the
         // caller keeps its original.
-        assert!(e.el.respell_ty_deep(&e.cx, &Type::Nat, 0).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty_deep(&e.cx, &Type::Nat, 0).is_none());
     }
 
     /// The statement-side respell, pinned structurally rather than assumed: a
@@ -2303,7 +2319,7 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
         let Type::El { tm, .. } = &**dom else {
             panic!("the statement's dom is the reference, not the inline `Wf`")
         };
-        assert!(e.el.is_gen_ref(&tm.shift_global(1), GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(1), GenDef::TyCode(e.ind("T").tag)));
         let Type::El { .. } = &**cod else {
             panic!("the result respells too")
         };
@@ -2448,18 +2464,18 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("T is recursive")
         };
         let (sref, aref) =
-            e.el.wf_slot_refs(shape, arity)
+            GeneratedDefs(&e.el).wf_slot_refs(shape, arity)
                 .expect("T's slots respell");
         let Type::El { tm, .. } = &sref else {
             panic!("a shape slot takes `El` of a code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::ShapeCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::ShapeCode(e.ind("T").tag)));
         // The arity is an *application* to the shape's own binder, because the
         // slot is read one binder deep — §2.1's asymmetry, pinned.
         let Some((fun, arg)) = crate::spelling::app_of(&aref) else {
             panic!("an arity slot takes an application, not a code")
         };
-        assert!(e.el.is_gen_ref(fun, GenDef::ArityFn(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(fun, GenDef::ArityFn(e.ind("T").tag)));
         assert_eq!(**arg, Term::Var(LocalVar(0)));
         let respelled = Type::Wf {
             level: l.clone(),
@@ -2486,7 +2502,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("T is recursive")
         };
         let whole =
-            e.el.respell_ty(&e.cx, &t_ty)
+            GeneratedDefs(&e.el).respell_ty(&e.cx, &t_ty)
                 .expect("T's lowering respells");
         let stepped = heather_kernel::reduce::whnf_type_delta(
             &whole,
@@ -2495,13 +2511,13 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             e.el.policy.fuel,
         )
         .expect("the reference reduces");
-        let (sref, aref) = e.el.wf_slot_refs(shape, arity).expect("T's slots are named");
+        let (sref, aref) = GeneratedDefs(&e.el).wf_slot_refs(shape, arity).expect("T's slots are named");
         let Type::Wf { shape: s2, arity: a2, .. } = &stepped else {
             panic!("it reduces to a `Wf`")
         };
         assert_eq!(**s2, sref);
         assert_eq!(**a2, aref);
-        assert_eq!(e.el.unspell_wf_slots(&stepped), Some(t_ty.clone()));
+        assert_eq!(GeneratedDefs(&e.el).unspell_wf_slots(&stepped), Some(t_ty.clone()));
         // One δ of the shape reference: `El` of the shape's code, which is
         // spelled over the shape's spine names
         // (`issues/recursive-spine-codes.md`): `El (T#payload₀^δ + T#suffix₀^δ)`.
@@ -2516,7 +2532,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
                 rhs: Rc::new(e.el.gen_ref(GenDef::SuffixCode(tag, 0)).expect("named")),
             }),
         };
-        assert!(e.el.wf_slot_refs(&decoded_shape, arity).is_some());
+        assert!(GeneratedDefs(&e.el).wf_slot_refs(&decoded_shape, arity).is_some());
     }
 
     /// The named pair with one slot swapped is not a spelling of `T`, and
@@ -2529,10 +2545,10 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         let (Type::Wf { level, shape: ts, arity: ta }, Type::Wf { shape: us, arity: ua, .. }) = (&t_ty, &u_ty) else {
             panic!("T and U are recursive")
         };
-        let (t_sref, _) = e.el.wf_slot_refs(ts, ta).expect("T's slots are named");
-        let (_, u_aref) = e.el.wf_slot_refs(us, ua).expect("U's slots are named");
+        let (t_sref, _) = GeneratedDefs(&e.el).wf_slot_refs(ts, ta).expect("T's slots are named");
+        let (_, u_aref) = GeneratedDefs(&e.el).wf_slot_refs(us, ua).expect("U's slots are named");
         let swapped = Type::Wf { level: level.clone(), shape: Rc::new(t_sref), arity: Rc::new(u_aref) };
-        assert_eq!(e.el.unspell_wf_slots(&swapped), None);
+        assert_eq!(GeneratedDefs(&e.el).unspell_wf_slots(&swapped), None);
     }
 
     /// The look-alike negative, in this round's discipline: the shape names
@@ -2548,13 +2564,13 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         };
         // Every label gets one more child than it should.
         let bumped = Term::Succ(Rc::clone(arity));
-        assert!(e.el.wf_slot_refs(shape, &bumped).is_none());
+        assert!(GeneratedDefs(&e.el).wf_slot_refs(shape, &bumped).is_none());
         // …and the mirror: `U`'s shape with `T`'s arity is not `U`'s pair.
         let (u_ty, _) = e.lowered("U");
         let Type::Wf { shape: ushape, .. } = &u_ty else {
             panic!("U is recursive")
         };
-        assert!(e.el.wf_slot_refs(ushape, arity).is_none());
+        assert!(GeneratedDefs(&e.el).wf_slot_refs(ushape, arity).is_none());
     }
 
     /// A constructor **value** carries the references — the site the
@@ -2579,11 +2595,11 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         let Type::El { tm, .. } = &**shape else {
             panic!("the shape slot is the reference")
         };
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
         let Some((fun, _)) = crate::spelling::app_of(arity) else {
             panic!("the arity slot is the application")
         };
-        assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
     }
 
     /// …and a `match` carries them in its `elim_Wf`, over a **neutral**
@@ -2612,11 +2628,11 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         let Type::El { tm, .. } = &**shape else {
             panic!("the shape slot is the reference")
         };
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
         let Some((fun, _)) = crate::spelling::app_of(arity) else {
             panic!("the arity slot is an application")
         };
-        assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
     }
 
     /// The four axes with the slot spelling in place, including the one the
@@ -2691,39 +2707,39 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let (flat_ty, l) = e.lowered("Flat");
         let flat = e.ind("Flat").tag;
         let spine = e.el.spine(&flat_ty, &l, 3, SPAN).expect("a spine");
-        let emit = e.el.respell_spine(&e.cx, &spine);
+        let emit = Inductives(&e.el).respell_spine(&e.cx, &spine);
         for (k, ((inline, lk), (r, _))) in spine.ctors.iter().zip(&emit.ctors).enumerate() {
             let Type::El { tm, level } = &**r else {
                 panic!("payload {k} takes `El` of a code")
             };
             assert_eq!(level, lk);
-            assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat, k)));
+            assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::PayloadCode(flat, k)));
             assert!(e.el.conv_types(&e.cx, r, inline, lk));
             assert!(e.el.conv_types(&e.cx, inline, r, lk));
-            assert_eq!(e.el.spine_type_ref(&e.cx, flat, inline).as_ref(), Some(&**r));
+            assert_eq!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, inline).as_ref(), Some(&**r));
             // …but never from the deep walk: a component is named only by
             // position at emission (the tag-type look-alike, below).
-            assert!(e.el.respell_ty(&e.cx, inline).is_none());
+            assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, inline).is_none());
         }
         let Type::El { tm, .. } = &*emit.rhs(0).0 else {
             panic!("the first tail takes `El` of a code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(flat, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::SuffixCode(flat, 0)));
         assert!(e.el.conv_types(&e.cx, &emit.rhs(0).0, &spine.rhs(0).0, &spine.rhs(0).1));
         assert!(e.el.conv_types(&e.cx, &spine.rhs(0).0, &emit.rhs(0).0, &spine.rhs(0).1));
         assert_eq!(
-            e.el.spine_type_ref(&e.cx, flat, &spine.rhs(0).0).as_ref(),
+            GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, &spine.rhs(0).0).as_ref(),
             Some(&*emit.rhs(0).0)
         );
         let Type::El { tm, .. } = &*emit.rhs(1).0 else {
             panic!("the last tail takes `El` of a code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat, 2)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::PayloadCode(flat, 2)));
         // The whole is still the whole.
-        let Type::El { tm, .. } = e.el.respell_ty(&e.cx, &flat_ty).expect("respells") else {
+        let Type::El { tm, .. } = GeneratedDefs(&e.el).respell_ty(&e.cx, &flat_ty).expect("respells") else {
             panic!("`El` of a code")
         };
-        assert!(e.el.is_gen_ref(&tm, GenDef::TyCode(flat)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm, GenDef::TyCode(flat)));
     }
 
     /// The whole-type code of a flat declaration is spelled over its spine's
@@ -2737,7 +2753,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let e = env();
         let (flat_ty, _) = e.lowered("Flat");
         let flat = e.ind("Flat").tag;
-        let whole = e.el.respell_ty(&e.cx, &flat_ty).expect("respells");
+        let whole = GeneratedDefs(&e.el).respell_ty(&e.cx, &flat_ty).expect("respells");
         let stepped = heather_kernel::reduce::whnf_type_delta(
             &whole,
             &e.cx.gamma,
@@ -2751,8 +2767,8 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let (Type::El { tm: l, .. }, Type::El { tm: r, .. }) = (&**lhs, &**rhs) else {
             panic!("both components are `El` of a code")
         };
-        assert!(e.el.is_gen_ref(l, GenDef::PayloadCode(flat, 0)));
-        assert!(e.el.is_gen_ref(r, GenDef::SuffixCode(flat, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(l, GenDef::PayloadCode(flat, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(r, GenDef::SuffixCode(flat, 0)));
         assert_eq!(e.el.whnf(&e.cx, &stepped, SPAN).expect("whnf"), flat_ty);
         assert_eq!(e.el.whnf(&e.cx, &whole, SPAN).expect("whnf"), flat_ty);
         assert_eq!(e.el.tag_of(&e.el.whnf(&e.cx, &stepped, SPAN).unwrap()).map(|i| i.tag), Some(flat));
@@ -2772,7 +2788,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let Type::Wf { shape, .. } = &t_ty else {
             panic!("T is recursive")
         };
-        let sref = e.el.gen_type_ref(GenDef::ShapeCode(tag), &l).expect("T has a shape code");
+        let sref = GeneratedDefs(&e.el).gen_type_ref(GenDef::ShapeCode(tag), &l).expect("T has a shape code");
         let stepped = heather_kernel::reduce::whnf_type_delta(
             &sref,
             &e.cx.gamma,
@@ -2786,29 +2802,29 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let (Type::El { tm: lt, .. }, Type::El { tm: rt, .. }) = (&**lhs, &**rhs) else {
             panic!("both components are `El` of a code")
         };
-        assert!(e.el.is_gen_ref(lt, GenDef::PayloadCode(tag, 0)));
-        assert!(e.el.is_gen_ref(rt, GenDef::SuffixCode(tag, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(lt, GenDef::PayloadCode(tag, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(rt, GenDef::SuffixCode(tag, 0)));
         assert_eq!(e.el.whnf(&e.cx, &stepped, SPAN).expect("whnf"), **shape);
         assert_eq!(e.el.tag_of(&e.el.whnf(&e.cx, &stepped, SPAN).unwrap()).map(|i| i.tag), Some(tag));
         let spine = e.el.spine(&t_ty, &l, 3, SPAN).expect("a spine");
-        let emit = e.el.respell_spine(&e.cx, &spine);
+        let emit = Inductives(&e.el).respell_spine(&e.cx, &spine);
         for (k, ((inline, lk), (r, _))) in spine.ctors.iter().zip(&emit.ctors).enumerate() {
             let Type::El { tm, .. } = &**r else {
                 panic!("payload {k} takes `El` of a code")
             };
-            assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(tag, k)));
+            assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::PayloadCode(tag, k)));
             assert!(e.el.conv_types(&e.cx, r, inline, lk));
             assert!(e.el.conv_types(&e.cx, inline, r, lk));
         }
         let Type::El { tm, .. } = &*emit.rhs(0).0 else {
             panic!("the first tail takes `El` of a code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(tag, 0)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::SuffixCode(tag, 0)));
         // `U` is `T` but for its tag: `T`'s names never stand for `U`'s.
         let (u_ty, ul) = e.lowered("U");
         let uspine = e.el.spine(&u_ty, &ul, 3, SPAN).expect("a spine");
-        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.ctors[1].0).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.rhs(0).0).is_none());
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, tag, &uspine.ctors[1].0).is_none());
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, tag, &uspine.rhs(0).0).is_none());
     }
 
     /// The four axes over a recursive declaration whose labels and `match`
@@ -2897,13 +2913,13 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
         let (flat2_ty, l2) = e.lowered("Flat2");
         let (flat, flat2) = (e.ind("Flat").tag, e.ind("Flat2").tag);
         let spine2 = e.el.spine(&flat2_ty, &l2, 3, SPAN).expect("a spine");
-        let emit2 = e.el.respell_spine(&e.cx, &spine2);
+        let emit2 = Inductives(&e.el).respell_spine(&e.cx, &spine2);
         let Type::El { tm, .. } = &*emit2.ctors[1].0 else {
             panic!("`Flat2`'s payload respells")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat2, 1)));
-        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.ctors[1].0).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.rhs(0).0).is_none());
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::PayloadCode(flat2, 1)));
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, &spine2.ctors[1].0).is_none());
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, &spine2.rhs(0).0).is_none());
         let spine = e.el.spine(&flat_ty, &l, 3, SPAN).expect("a spine");
         // `⟦FB⟧` with its `Nat` field replaced: `Σ(tag). Σ(Unit). Unit`.
         let Type::Sigma { fst_level, snd_level, fst, snd } = &*spine.ctors[1].0 else {
@@ -2924,8 +2940,8 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
             }),
         };
         assert_eq!(e.el.tag_of(&forged).map(|i| i.tag), Some(flat));
-        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, flat, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &forged).is_none());
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, &forged).is_none());
         let forged_suffix = Type::Sum {
             lhs_level: spine.ctors[1].1.clone(),
             rhs_level: Level::Zero,
@@ -2933,8 +2949,8 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
             rhs: Rc::new(Type::Unit { level: Level::Zero }),
         };
         assert_eq!(e.el.tag_of(&forged_suffix).map(|i| i.tag), Some(flat));
-        assert!(e.el.respell_ty(&e.cx, &forged_suffix).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, flat, &forged_suffix).is_none());
+        assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &forged_suffix).is_none());
+        assert!(GeneratedDefs(&e.el).spine_type_ref(&e.cx, flat, &forged_suffix).is_none());
     }
 
     /// The tag-type look-alike that made the scan unsafe as a fallback of
@@ -2980,7 +2996,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let flat = e.ind("Flat").tag;
         let is_ref = |ty: &Type, key: GenDef| {
             let Type::El { tm, .. } = ty else { return false };
-            e.el.is_gen_ref(&tm.shift_global(grew), key)
+            GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), key)
         };
         let Term::InrAt { ty: Some(ty), val } = &**body else {
             panic!("`FB` is the second constructor: an annotated `inr@`, got {body:?}")
@@ -3010,7 +3026,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let flat = e.ind("Flat").tag;
         let is_ref = |ty: &Type, key: GenDef| {
             let Type::El { tm, .. } = ty else { return false };
-            e.el.is_gen_ref(&tm.shift_global(grew), key)
+            GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), key)
         };
         let mut cur: &Term = body;
         while let Term::Lam { body, .. } = cur {
@@ -3046,14 +3062,14 @@ theorem s2(): or_else(3, None) = 3 { refl }
         // instantiation has a name, so the chokepoint hands back the code
         // function's application — and the slot pair, which may not hold a
         // reference to the whole (§8), asks its own question.
-        let whole = e.el.respell_ty_deep(&e.cx, &box_ty, 0).expect("the instance respells");
+        let whole = GeneratedDefs(&e.el).respell_ty_deep(&e.cx, &box_ty, 0).expect("the instance respells");
         assert!(matches!(&whole, Type::El { .. }), "{whole:?}");
         assert_eq!(e.el.unspell_here(&whole).as_ref(), Some(&box_ty));
         let Type::Wf { shape: s0, arity: a0, .. } = &box_ty else {
             panic!("a recursive lowering is a `Wf`")
         };
         let (shape, arity) =
-            e.el.emit_wf_slots(&e.cx, s0, a0, 0).expect("its components respell");
+            GeneratedDefs(&e.el).emit_wf_slots(&e.cx, s0, a0, 0).expect("its components respell");
         let r = Type::Wf {
             level: l.clone(),
             shape: Rc::clone(&shape),
@@ -3072,7 +3088,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let Type::El { tm, .. } = &**fst else {
             panic!("the field respells to `El` of a code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
         // …and so does the arity's `Case` annotation for the same summand,
         // one binder deeper (the shape's own).
         let Term::Case { rhs: case_rhs, .. } = &*arity else {
@@ -3087,7 +3103,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let Type::El { tm, .. } = &**fst else {
             panic!("the arity's annotation respells with the shape")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
         assert!(e.el.conv_types(&e.cx, &r, &box_ty, &l));
         assert!(e.el.conv_types(&e.cx, &box_ty, &r, &l));
         // …and the spelling checks and computes end to end.
@@ -3255,7 +3271,7 @@ theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v)
         let Type::El { tm, .. } = &**fst else {
             panic!("the `sup_f`'s shape respells with the label, not inline")
         };
-        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
         // …and the label's one annotation is *that* shape
         // (`docs/intro-by-type-design.md` §4.1): the checked spelling carries
         // the sum whole, where the component spelling carried its summands.
@@ -3453,7 +3469,7 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
         let Type::El { tm, .. } = &at0 else {
             panic!("the reference is an `El` of the code")
         };
-        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
         let at1 = e.el.emit_ty(&e.cx, &lowered, 1).expect("…at the binder's depth too");
         assert_eq!(at0, at1, "a closed reference is one spelling under any binders");
         assert_eq!(found[1].emitted, format!("{at1:?}"));
@@ -3654,7 +3670,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             let e = env();
             let (flat, fl) = e.lowered("Flat");
             let (inline, il) = instance(&e, "Box", &[(flat, fl)]);
-            let r = e.el.respell_ty(&e.cx, &inline).expect("`Box<Flat>` respells");
+            let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("`Box<Flat>` respells");
             let Type::El { level, tm } = &r else {
                 panic!("the spelling is `El` of an application")
             };
@@ -3666,7 +3682,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             assert!(e.el.conv_types(&e.cx, &r, &inline, &il));
             assert!(e.el.conv_types(&e.cx, &inline, &r, &il));
             // Idempotent: `tag_of` leaves an `El` of a neutral alone.
-            assert!(e.el.respell_ty(&e.cx, &r).is_none());
+            assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &r).is_none());
             // …and the inverse restores the registry's own copy, not the
             // kernel's decode (§4.2): this is what every structural reader
             // and every use-site guard sees.
@@ -3685,7 +3701,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             let (flat2, fl2) = e.lowered("Flat2");
             let (inline, il) = instance(&e, "Box", &[(flat, fl)]);
             let (other, _) = instance(&e, "Box", &[(flat2, fl2)]);
-            let wrong = e.el.respell_ty(&e.cx, &other).expect("`Box<Flat2>` respells");
+            let wrong = GeneratedDefs(&e.el).respell_ty(&e.cx, &other).expect("`Box<Flat2>` respells");
             assert!(
                 !e.el.conv_types(&e.cx, &wrong, &inline, &il),
                 "a wrong-argument application is a different type"
@@ -3693,7 +3709,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             // …and the look-alike declaration's own instantiation is not this
             // one either, tags being nominal.
             let (look, ll) = instance(&e, "Box2", &[(e.lowered("Flat").0, e.lowered("Flat").1)]);
-            let look_r = e.el.respell_ty(&e.cx, &look).expect("`Box2<Flat>` respells");
+            let look_r = GeneratedDefs(&e.el).respell_ty(&e.cx, &look).expect("`Box2<Flat>` respells");
             let Type::El { tm, .. } = &look_r else { panic!("a reference") };
             assert_eq!(
                 e.el.gen_app_of(tm).map(|(k, _)| k),
@@ -3713,21 +3729,21 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             assert_eq!(e.el.tag_of(&b1).map(|i| i.tag), Some(e.ind("Box").tag));
             // A closed declaration's lowering takes its *own* whole-type
             // code and is nobody's instantiation…
-            let closed = e.el.respell_ty(&e.cx, &flat).expect("`Flat` has a code");
+            let closed = GeneratedDefs(&e.el).respell_ty(&e.cx, &flat).expect("`Flat` has a code");
             let Type::El { tm, .. } = &closed else { panic!("a reference") };
-            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+            assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
             assert!(e.el.gen_app_of(tm).is_none());
             // …and a fieldless shape with no tag read declines outright.
             assert!(
-                e.el.respell_ty(&e.cx, &Type::Unit { level: Level::Zero })
+                GeneratedDefs(&e.el).respell_ty(&e.cx, &Type::Unit { level: Level::Zero })
                     .is_none()
             );
             // The two look-alikes' own instantiations name different definitions,
             // which is the whole of the nominal guarantee.
             let (b2, _) = instance(&e, "Box2", &[(flat, fl)]);
             assert_ne!(
-                e.el.respell_ty(&e.cx, &b1),
-                e.el.respell_ty(&e.cx, &b2),
+                GeneratedDefs(&e.el).respell_ty(&e.cx, &b1),
+                GeneratedDefs(&e.el).respell_ty(&e.cx, &b2),
                 "structurally identical instantiations take their own names"
             );
         }
@@ -3738,7 +3754,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             let (flat, fl) = e.lowered("Flat");
             let (inner, il) = instance(&e, "Box", &[(flat, fl)]);
             let (outer, ol) = instance(&e, "Box", &[(inner, il)]);
-            let r = e.el.respell_ty(&e.cx, &outer).expect("`Box<Box<Flat>>` respells");
+            let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &outer).expect("`Box<Box<Flat>>` respells");
             let Type::El { tm, .. } = &r else { panic!("a reference") };
             let (key, args) = e.el.gen_app_of(tm).expect("an application");
             assert_eq!(key, GenDef::TyCodeFn(e.ind("Box").tag));
@@ -3806,7 +3822,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
                 .lower_instance(&cx, &e.ind("Box"), &[(a, one)], &[], SPAN)
                 .expect("`Box<A>` lowers at level 1 too");
             assert!(
-                e.el.respell_ty(&cx, &open).is_none(),
+                GeneratedDefs(&e.el).respell_ty(&cx, &open).is_none(),
                 "a level-1 instantiation keeps the inline spelling"
             );
         }
@@ -3820,7 +3836,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             let (flat, fl) = e.lowered("Flat");
             let named = e.el.annotation_type(&e.cx, &flat, 0);
             let Type::El { tm, .. } = &named else { panic!("closed code") };
-            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
+            assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(e.ind("Flat").tag)));
             let (boxed, level) = instance(&e, "Box", &[(flat, fl)]);
             let named = e.el.annotation_type(&e.cx, &boxed, 0);
             let Type::El { tm, .. } = &named else { panic!("instance code") };
@@ -3842,7 +3858,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             cx.push("b".into(), boxed.clone(), level.clone());
             let boxed = boxed.shift_local(1);
             let b = Rc::new(Term::Var(LocalVar(0)));
-            let projection = e.el.child_projection(&cx, &ind, &boxed, &level,
+            let projection = Wf(&e.el).child_projection(&cx, &ind, &boxed, &level,
                 1, 0, Rc::clone(&b), (*b).clone(), SPAN).expect("child projection");
             let Term::ElimWf { motive, .. } = &projection else { panic!("recursive projection") };
             let Type::El { tm, .. } = &**motive else { panic!("named motive") };
@@ -3889,7 +3905,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
                 // Independent registry identities, never annotation_type(expected).
                 assert_eq!(key, GenDef::TyCodeFn(e.ind("Box").tag));
                 assert_eq!(args.len(), 1);
-                assert!(e.el.is_gen_ref(&args[0], GenDef::TyCode(e.ind("Payload").tag)));
+                assert!(GeneratedDefs(&e.el).is_gen_ref(&args[0], GenDef::TyCode(e.ind("Payload").tag)));
             }
         }
 
@@ -4115,7 +4131,7 @@ record Mimic<A> { item: A, n: Nat, ok: n = ident(n) }
                     .el
                     .lower_instance(&cx, &e.ind("Slot"), &[(a, Level::Zero)], &[], SPAN)
                     .expect("`Slot<A>` lowers openly");
-                let r = e.el.respell_ty(&cx, &open).expect(
+                let r = GeneratedDefs(&e.el).respell_ty(&cx, &open).expect(
                     "`Slot<A>` respells: the stored template is read into today's Ψ",
                 );
                 let Type::El { level, tm } = &r else {
@@ -4137,20 +4153,20 @@ record Mimic<A> { item: A, n: Nat, ok: n = ident(n) }
                 let (flat, fl) = e.lowered("Flat");
                 let (closed, cl) = instance(&e, "Slot", &[(flat.clone(), fl.clone())]);
                 let here = closed.shift_local(1);
-                let rc = e
-                    .el
+                let rc = GeneratedDefs(&e
+                    .el)
                     .respell_ty(&cx, &here)
                     .expect("`Slot<Flat>` respells at the telescope's own length");
                 let Type::El { tm: ctm, .. } = &rc else { panic!("`El` of an application") };
                 let (ckey, cargs) = e.el.gen_app_of(ctm).expect("an application");
                 assert_eq!(ckey, GenDef::TyCodeFn(e.ind("Slot").tag));
-                assert!(e.el.is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)));
+                assert!(GeneratedDefs(&e.el).is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)));
                 assert!(e.el.conv_types(&cx, &rc, &here, &cl));
                 // The look-alike is a different declaration and gets its own
                 // name; neither is the other's.
                 let (mimic, _) = instance(&e, "Mimic", &[(flat, fl)]);
-                let m = e
-                    .el
+                let m = GeneratedDefs(&e
+                    .el)
                     .respell_ty(&cx, &mimic.shift_local(1))
                     .expect("`Mimic<Flat>` respells");
                 let Type::El { tm: mtm, .. } = &m else { panic!("`El` of an application") };
@@ -4166,7 +4182,7 @@ record Mimic<A> { item: A, n: Nat, ok: n = ident(n) }
                 // instantiation and must decline. (A constant does not move
                 // when Ψ grows, so the stale spelling is written out.)
                 assert!(
-                    e.el.respell_ty(&cx, &one_binding_over(&open)).is_none(),
+                    GeneratedDefs(&e.el).respell_ty(&cx, &one_binding_over(&open)).is_none(),
                     "a lowering whose global points one binding over is not this instance"
                 );
             }
@@ -4211,7 +4227,7 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
                     for name in ["Box", "Two", "Box2", "BV", "Mixed", "Cell", "Slot", "Mimic"] {
                         let tag = e.ind(name).tag;
                         let key = GenDef::TyCodeFn(tag);
-                        let entry = e.el.ty_code_fn_entry(tag).expect("a registered entry");
+                        let entry = GeneratedDefs(&e.el).ty_code_fn_entry(tag).expect("a registered entry");
                         let fun = e.el.gen_ref(key).expect("a reference");
                         let Term::GlobalTm { var, .. } = &fun else {
                             panic!("a definition reference is a global")
@@ -4240,7 +4256,7 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
                 };
                 both_reads_agree(&e);
                 let (cx, open) = open_slot(&e);
-                assert!(e.el.respell_ty(&cx, &open).is_some());
+                assert!(GeneratedDefs(&e.el).respell_ty(&cx, &open).is_some());
                 // …and again after several more pushes, which is the whole
                 // point: a stored copy is stale from the next push on.
                 e.el
@@ -4255,7 +4271,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 both_reads_agree(&e);
                 let (cx, open) = open_slot(&e);
                 assert!(
-                    e.el.respell_ty(&cx, &open).is_some(),
+                    GeneratedDefs(&e.el).respell_ty(&cx, &open).is_some(),
                     "the entry is read off today's Ψ, not the one it was stored in"
                 );
                 // The **tail** half, landed 2026-09-15 (implementation pass 2):
@@ -4269,8 +4285,8 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 // same instantiation is recovered at any outer depth, and the
                 // spelling it produces is scoped where the subject is.
                 let closed = instance(&e, "Slot", &[e.lowered("Flat")]).0;
-                let at0 = e
-                    .el
+                let at0 = GeneratedDefs(&e
+                    .el)
                     .respell_ty(&Cx::empty(), &closed)
                     .expect("a closed instantiation respells from the empty context");
                 assert!(e.el.conv_types(&Cx::empty(), &at0, &closed, &Level::Zero));
@@ -4281,8 +4297,8 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 let mut deep = Cx::empty();
                 deep.push("#a".into(), Type::Nat, Level::Zero);
                 deep.push("#b".into(), Type::Nat, Level::Zero);
-                let at2 = e
-                    .el
+                let at2 = GeneratedDefs(&e
+                    .el)
                     .respell_ty(&deep, &closed.shift_local(2))
                     .expect("…and at outer depth 2");
                 assert_eq!(
@@ -4361,7 +4377,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                     fam,
                     "`{name}`'s shape is decided by its spine's dependency"
                 );
-                assert_eq!(e.el.rec_projs_are_dependent(e.ind(name).tag), fam);
+                assert_eq!(GeneratedDefs(&e.el).rec_projs_are_dependent(e.ind(name).tag), fam);
             }
             // …and the closed side is exactly as it was: a dependent spine is
             // named, a flat one is left to the (already linear) walk.
@@ -4393,7 +4409,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 .expect("`Cell<Flat, Flat2>` lowers");
             // The receiver's own type is the reference, which is what a
             // binder respelled by §4.1 carries.
-            let r = e.el.respell_ty(&e.cx, &inline).expect("the instance respells");
+            let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("the instance respells");
             let (cx, v) = receiver(&r, &il);
             let (tm, ty, lvl) = e
                 .el
@@ -4464,7 +4480,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                     SPAN,
                 )
                 .expect("`Cell<Flat, Flat2>` lowers");
-            let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+            let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("respells");
             let (cx, v) = receiver(&r, &il);
             // The *swapped* instantiation's arguments, against this receiver.
             let (swapped, _) = e
@@ -4472,10 +4488,10 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 .lower_instance(&e.cx, &e.ind("Cell"), &[(flat2, fl2), (flat, fl)], &[], SPAN)
                 .expect("`Cell<Flat2, Flat>` lowers");
             let args =
-                e.el.instance_args(&cx, &e.ind("Cell"), &swapped.shift_local(1))
+                GeneratedDefs(&e.el).instance_args(&cx, &e.ind("Cell"), &swapped.shift_local(1))
                     .expect("the swapped instantiation's arguments");
             let (tm, ty, lvl) =
-                e.el.rec_proj_ref_at(&cx, e.ind("Cell").tag, 1, &args, &v)
+                GeneratedDefs(&e.el).rec_proj_ref_at(&cx, e.ind("Cell").tag, 1, &args, &v)
                     .expect("the spine is built — it is the kernel that refuses it");
             assert!(
                 e.el.kernel_check_term(
@@ -4514,7 +4530,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                     SPAN,
                 )
                 .expect("`Cell<A, Flat>` lowers openly");
-            let r = e.el.respell_ty(&acx, &open).expect("the open instance respells");
+            let r = GeneratedDefs(&e.el).respell_ty(&acx, &open).expect("the open instance respells");
             let mut cx = acx.clone();
             // A chain, not the bare binder — the boundary keeps the walk at a
             // bare `Var` (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5).
@@ -4775,7 +4791,7 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
                 // the receiver, and the domain at them is the receiver's own
                 // *reference* (§13.2's load-bearing choice, unchanged).
                 let (inline, il) = dep_at(&e, 3);
-                let r = e.el.respell_ty(&e.cx, &inline).expect("the instance respells");
+                let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("the instance respells");
                 let (cx, v) = receiver(&r, &il);
                 let (tm, ty, lvl) = e
                     .el
@@ -4835,7 +4851,7 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
                         )
                         .expect("`Cell<Flat, Flat2>` lowers")
                     };
-                    let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                    let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("respells");
                     let mut cx = Cx::empty();
                     cx.push("#v".into(), r.clone(), il.clone());
                     let bare: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
@@ -4865,14 +4881,14 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
                 // definition's domain at `ā` is the instantiation itself.
                 let e = env();
                 let (inline, il) = dep_at(&e, 3);
-                let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("respells");
                 let (cx, v) = receiver(&r, &il);
                 let (other, _) = dep_at(&e, 4);
                 let args =
-                    e.el.instance_args(&cx, &e.ind("Dep"), &other.shift_local(1))
+                    GeneratedDefs(&e.el).instance_args(&cx, &e.ind("Dep"), &other.shift_local(1))
                         .expect("`Dep<Flat>(4)`'s arguments are recovered");
                 let (tm, ty, lvl) =
-                    e.el.rec_proj_ref_at(&cx, e.ind("Dep").tag, 1, &args, &v)
+                    GeneratedDefs(&e.el).rec_proj_ref_at(&cx, e.ind("Dep").tag, 1, &args, &v)
                         .expect("the spine is built — it is the kernel that refuses it");
                 assert!(
                     e.el.kernel_check_term(
@@ -4989,7 +5005,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     )
                     .expect("`ByApp<Flat>(5)` lowers");
                 let args =
-                    e.el.instance_args(&e.cx, &e.ind("ByApp"), &inline)
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByApp"), &inline)
                         .expect("the hidden value parameter is recovered");
                 assert_eq!(args.len(), 2);
                 assert_eq!(*args[1], nat(5), "…as the numeral it is");
@@ -5005,7 +5021,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                         SPAN,
                     )
                     .expect("`ByAppLk<Flat>(5)` lowers");
-                let r = e.el.respell_ty(&e.cx, &lk).expect("the look-alike respells");
+                let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &lk).expect("the look-alike respells");
                 let Type::El { tm, .. } = &r else { panic!("`El` of an application") };
                 assert_eq!(
                     e.el.gen_app_of(tm).map(|(k, _)| k),
@@ -5013,7 +5029,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                 );
                 assert_ne!(
                     r,
-                    e.el.respell_ty(&e.cx, &inline).expect("…and so does `ByApp`")
+                    GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("…and so does `ByApp`")
                 );
                 // The negative the matcher's incompleteness must not swallow:
                 // a *different* value argument is a different instantiation.
@@ -5028,7 +5044,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     )
                     .expect("`ByApp<Flat>(6)` lowers");
                 let other_args =
-                    e.el.instance_args(&e.cx, &e.ind("ByApp"), &other)
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByApp"), &other)
                         .expect("…and recovers its own");
                 assert_ne!(*other_args[1], nat(5));
             }
@@ -5056,7 +5072,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&acx, &e.ind("ByCode"), &[(a.clone(), Level::Zero)], &[], SPAN)
                     .expect("`ByCode<A>` lowers openly");
                 let oargs =
-                    e.el.instance_args(&acx, &e.ind("ByCode"), &open)
+                    GeneratedDefs(&e.el).instance_args(&acx, &e.ind("ByCode"), &open)
                         .expect("the type parameter is recovered from both slots at once");
                 assert_eq!(oargs.len(), 1);
                 assert_eq!(*oargs[0], Term::Var(LocalVar(0)));
@@ -5066,10 +5082,10 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&acx, &e.ind("ByCodeLk"), &[(a, Level::Zero)], &[], SPAN)
                     .expect("`ByCodeLk<A>` lowers openly");
                 assert!(
-                    e.el.instance_args(&acx, &e.ind("ByCodeLk"), &open).is_none(),
+                    GeneratedDefs(&e.el).instance_args(&acx, &e.ind("ByCodeLk"), &open).is_none(),
                     "this declaration's lowering is not the look-alike's instantiation"
                 );
-                assert!(e.el.instance_args(&acx, &e.ind("ByCode"), &lk).is_none());
+                assert!(GeneratedDefs(&e.el).instance_args(&acx, &e.ind("ByCode"), &lk).is_none());
                 // **The boundary the code recovery did not reach**, flipped
                 // 2026-09-15 (`docs/closed-argument-and-parameter-domain-
                 // spelling-design.md` §3). At a *closed* argument the subject
@@ -5089,11 +5105,11 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat.clone(), fl.clone())], &[], SPAN)
                     .expect("`ByCode<Flat>` lowers");
                 let cargs =
-                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed)
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &closed)
                         .expect("the two spellings of a closed type argument are reconciled");
                 assert_eq!(cargs.len(), 1);
                 assert!(
-                    e.el.is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)),
+                    GeneratedDefs(&e.el).is_gen_ref(&cargs[0], GenDef::TyCode(e.ind("Flat").tag)),
                     "…and the recovered argument is the **reference** code"
                 );
                 // The look-alike does not start matching, which is the one
@@ -5106,10 +5122,10 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCodeLk"), &[(flat, fl)], &[], SPAN)
                     .expect("`ByCodeLk<Flat>` lowers");
                 assert!(
-                    e.el.instance_args(&e.cx, &e.ind("ByCodeLk"), &closed).is_none(),
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCodeLk"), &closed).is_none(),
                     "the look-alike's template is not this declaration's lowering"
                 );
-                assert!(e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed_lk).is_none());
+                assert!(GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &closed_lk).is_none());
                 // And a genuinely different argument is a different
                 // instantiation, recovered as its own reference rather than
                 // reconciled with this one.
@@ -5119,10 +5135,10 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat2, f2l)], &[], SPAN)
                     .expect("`ByCode<Flat2>` lowers");
                 let oargs2 =
-                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &other)
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &other)
                         .expect("`ByCode<Flat2>`'s own argument is recovered");
                 assert!(
-                    e.el.is_gen_ref(&oargs2[0], GenDef::TyCode(e.ind("Flat2").tag)),
+                    GeneratedDefs(&e.el).is_gen_ref(&oargs2[0], GenDef::TyCode(e.ind("Flat2").tag)),
                     "a different closed argument recovers a different reference"
                 );
                 assert_ne!(cargs[0], oargs2[0]);
@@ -5157,7 +5173,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat, fl)], &[], SPAN)
                     .expect("`ByCode<Flat>` lowers");
                 assert!(
-                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &named).is_some(),
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &named).is_some(),
                     "a named closed argument is reconciled"
                 );
                 // The quote, two ways, and both now recover — to the **same**
@@ -5174,7 +5190,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                         .lower_instance(&e.cx, &e.ind("ByCode"), &[(arg, Level::Zero)], &[], SPAN)
                         .expect("the instantiation lowers");
                     let args =
-                        e.el.instance_args(&e.cx, &e.ind("ByCode"), &closed)
+                        GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &closed)
                             .unwrap_or_else(|| panic!("{label}: the quote is seen through"));
                     assert_eq!(args.len(), 1);
                     recovered.push(Rc::clone(&args[0]));
@@ -5197,7 +5213,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(wrong, Level::succ(Level::Zero))], &[], SPAN)
                     .map_or_else(|_| (Type::Nat, Level::Zero), |t| t);
                 if wrong_inst != Type::Nat {
-                    let args = e.el.instance_args(&e.cx, &e.ind("ByCode"), &wrong_inst);
+                    let args = GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &wrong_inst);
                     assert!(
                         args.is_none_or(|a| *a[0] != Term::TmNat),
                         "a quote of a different type is not `Nat`"
@@ -5209,7 +5225,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                     .lower_instance(&e.cx, &e.ind("ByCodeLk"), &[(flat2, f2l)], &[], SPAN)
                     .expect("`ByCodeLk<Flat2>` lowers");
                 assert!(
-                    e.el.instance_args(&e.cx, &e.ind("ByCode"), &lk).is_none(),
+                    GeneratedDefs(&e.el).instance_args(&e.cx, &e.ind("ByCode"), &lk).is_none(),
                     "the look-alike does not start matching"
                 );
             }
@@ -5322,7 +5338,7 @@ theorem n_checking(c: ByCode<Flat>): idty(c.a) = c.a { c.ok }
                         .el
                         .lower_instance(&e.cx, &e.ind("ByCode"), &[(arg, Level::Zero)], &[], SPAN)
                         .expect("the instantiation lowers");
-                    let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                    let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("respells");
                     let mut cx = Cx::empty();
                     cx.push("#v".into(), r.clone(), il.clone());
                     let (tm, ..) = e
@@ -5356,7 +5372,7 @@ theorem n_checking(c: ByCode<Flat>): idty(c.a) = c.a { c.ok }
                     .el
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat, fl)], &[], SPAN)
                     .expect("`ByCode<Flat>` lowers");
-                let r = e.el.respell_ty(&e.cx, &inline).expect("respells");
+                let r = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).expect("respells");
                 let (cx, v) = receiver(&r, &il);
                 let (flat2, f2l) = e.lowered("Flat2");
                 let (other, _) = e
@@ -5364,10 +5380,10 @@ theorem n_checking(c: ByCode<Flat>): idty(c.a) = c.a { c.ok }
                     .lower_instance(&e.cx, &e.ind("ByCode"), &[(flat2, f2l)], &[], SPAN)
                     .expect("`ByCode<Flat2>` lowers");
                 let args =
-                    e.el.instance_args(&cx, &e.ind("ByCode"), &other.shift_local(1))
+                    GeneratedDefs(&e.el).instance_args(&cx, &e.ind("ByCode"), &other.shift_local(1))
                         .expect("`ByCode<Flat2>`'s arguments are recovered");
                 let Some((tm, ty, lvl)) =
-                    e.el.rec_proj_ref_at(&cx, e.ind("ByCode").tag, 0, &args, &v)
+                    GeneratedDefs(&e.el).rec_proj_ref_at(&cx, e.ind("ByCode").tag, 0, &args, &v)
                 else {
                     return;
                 };
@@ -5476,7 +5492,7 @@ theorem code_literal(): code_a(mk_code(FA)) = FA { refl }
                 .expect("elaborates");
             let (flat, fl) = e.lowered("Flat");
             let (inline, _) = instance(&e, "Box", &[(flat, fl)]);
-            let Some(Term::BoxTy(stmt)) = e.el.fn_type_code("bid") else {
+            let Some(Term::BoxTy(stmt)) = NameLookup(&e.el).fn_type_code("bid") else {
                 panic!("the statement reflects as a boxed type")
             };
             let Type::Pi { dom, cod, .. } = &*stmt else {
@@ -5541,15 +5557,15 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
         assert!(e.el.gen_ref(GenDef::TyCode(rec)).is_some(), "`LateRec#tycode`");
         for (name, tag) in [("Late", late), ("LateRec", rec)] {
             let (inline, l) = e.lowered(name);
-            let named = e.el.respell_ty(&e.cx, &inline).unwrap_or_else(|| panic!("`{name}` respells to its code"));
+            let named = GeneratedDefs(&e.el).respell_ty(&e.cx, &inline).unwrap_or_else(|| panic!("`{name}` respells to its code"));
             let Type::El { tm, .. } = &named else { panic!("`{name}`: `El` of a code") };
-            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(tag)), "`{name}`");
+            assert!(GeneratedDefs(&e.el).is_gen_ref(tm, GenDef::TyCode(tag)), "`{name}`");
             assert!(e.el.conv_types(&e.cx, &named, &inline, &l), "`{name}`");
             assert!(e.el.conv_types(&e.cx, &inline, &named, &l), "`{name}`");
             assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&inline), "`{name}` unspells to today's lowering");
             // The negative control: the stale spelling itself, its `twice`
             // one binding over, is not this declaration's lowering.
-            assert!(e.el.respell_ty(&e.cx, &one_binding_over(&inline)).is_none(), "`{name}`: a stale lowering");
+            assert!(GeneratedDefs(&e.el).respell_ty(&e.cx, &one_binding_over(&inline)).is_none(), "`{name}`: a stale lowering");
             // Under a binder the lowering is the same syntax, its `twice`
             // included (an empty substitution tail records no context), and
             // so is the reference minted there, which unspells back to it.
@@ -5557,7 +5573,7 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
             cx.push("#k".into(), Type::Nat, Level::Zero);
             let deeper = inline.shift_local(1);
             assert_eq!(deeper, inline, "`{name}`: a closed lowering is one spelling under any binders");
-            let named = e.el.respell_ty(&cx, &deeper).unwrap_or_else(|| panic!("`{name}` respells under a binder"));
+            let named = GeneratedDefs(&e.el).respell_ty(&cx, &deeper).unwrap_or_else(|| panic!("`{name}` respells under a binder"));
             assert!(e.el.conv_types(&cx, &named, &deeper, &l), "`{name}`");
             assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&deeper), "`{name}` unspells in its context");
         }

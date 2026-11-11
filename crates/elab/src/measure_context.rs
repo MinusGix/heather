@@ -2,8 +2,20 @@
 //! disposable elaborator; neither provisional signatures nor goals commit.
 use crate::*;
 use heather_syntax::{Block, Stmt};
+use crate::declarations::Declarations;
+use crate::module_pass::ModulePassMut;
 
-impl Elaborator {
+/// Measure contexts' part of the elaborator.
+pub(crate) struct MeasureContext<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for MeasureContext<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl MeasureContext<'_> {
     pub(crate) fn measure_local_evidence(
         &self, decl: &Decl, scope: &[measure::Binder], goal: &Ty, arithmetic: bool,
     ) -> Option<Expr> {
@@ -17,11 +29,11 @@ impl Elaborator {
             let Some(selected) = measure::select_scope(scope, goal, Some(&proof)) else { continue; };
             let mut head = decl.clone();
             head.params = selected.iter().map(|b| measure_param(&b.name, b.ty.as_ref().unwrap(), span)).collect();
-            let mut query = self.clone();
+            let mut query = self.0.clone();
             query.attempt.prepare();
             query.attempt.goal_arena.configure(0, 0);
             query.refresh_delta_psi();
-            let Ok(cx) = query.decl_head_cx(&head) else { continue; };
+            let Ok(cx) = Declarations(&query).decl_head_cx(&head) else { continue; };
             let Ok((expected, level)) = query.elab_ty(&cx, goal) else { continue; };
             let Ok((_, actual, _)) = query.elab_infer(&cx, &proof) else { continue; };
             if query.conv_types(&cx, &actual, &expected, &level) { return Some(proof); }
@@ -51,8 +63,8 @@ impl Elaborator {
         trial.params = selected.iter().map(|b| measure_param(&b.name, b.ty.as_ref().unwrap(), span)).collect();
         trial.result = goal.clone();
         trial.body = body;
-        let mut query = self.clone();
-        query.serially(|q| q.elab_decl_one(&trial, None)).ok()?;
+        let mut query = self.0.clone();
+        ModulePassMut(&mut query).serially(|q| q.elab_decl_one(&trial, None)).ok()?;
         Some(proof)
     }
 
@@ -62,7 +74,7 @@ impl Elaborator {
     ) -> Option<Ty> {
         let stripped = heather_syntax::without_decrease_labels(expr);
         let expr = &stripped;
-        let mut query = self.clone();
+        let mut query = self.0.clone();
         query.attempt.prepare();
         query.attempt.goal_arena.configure(0, 0);
         query.refresh_delta_psi();
@@ -70,7 +82,7 @@ impl Elaborator {
         // They supply result types, never proofs or global definitions.
         let mut head = decl.clone();
         head.params.clear();
-        let mut cx = query.decl_head_cx(&head).ok()?;
+        let mut cx = Declarations(&query).decl_head_cx(&head).ok()?;
         for (name, surface) in signatures {
             let (ty, level) = query.elab_ty(&cx, surface).ok()?;
             cx.push_skel(name.clone(), ty, level, skel_of_ty(surface));
@@ -98,8 +110,8 @@ impl Elaborator {
             // telescope. Instantiate it before attempting structural inversion
             // of a dependent record whose generated code may be unavailable.
             measure::signature_result(signatures, expr)
-                .or_else(|| query.measure_decl_result(&cx, &term))
-                .or_else(|| query.measure_field_result(&cx, scope, expr))?
+                .or_else(|| MeasureContext(&query).measure_decl_result(&cx, &term))
+                .or_else(|| MeasureContext(&query).measure_field_result(&cx, scope, expr))?
         };
         surface.span = expr.span;
         let (roundtrip, _) = query.elab_ty(&cx, &surface).ok()?;
@@ -172,7 +184,6 @@ impl Elaborator {
         }
         Some(result)
     }
-
 }
 
 fn measure_param(name: &str, ty: &Ty, span: Span) -> heather_syntax::Param {

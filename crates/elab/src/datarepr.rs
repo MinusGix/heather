@@ -25,6 +25,8 @@ use heather_syntax::{
 };
 
 use crate::{Elaborator, R, err};
+use crate::module_delta::DeltasMut;
+use crate::resolve::ResolutionMut;
 
 /// A registered repr. Keyed per design §4: the spec inductive's elaborated
 /// declaration identity (its nominal tag — the thing that changes when the
@@ -105,7 +107,7 @@ impl SpecView {
 /// printer (~25 `ExprKind` variants to keep in sync forever, to reproduce text
 /// that is immediately re-parsed) but to put the user's own `Expr` back after
 /// parsing: the skeleton is generated with a placeholder name, and
-/// [`Elaborator::elab_generated`] replaces it before `elab_decl` ever sees the
+/// [`DataReprMut::elab_generated`] replaces it before `elab_decl` ever sees the
 /// declaration.
 ///
 /// A placeholder only ever occupies the **whole body** of a generated
@@ -289,7 +291,17 @@ pub(crate) fn spell_ty(t: &Ty) -> Option<String> {
     })
 }
 
-impl Elaborator {
+/// Data representations' part of the elaborator.
+pub(crate) struct DataRepr<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for DataRepr<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl DataRepr<'_> {
     /// Resolve the spec type into the constructor list the record's shape is
     /// computed from.
     fn spec_view(&self, spec: &Ty, span: Span) -> R<SpecView> {
@@ -490,7 +502,25 @@ impl Elaborator {
             ctors,
         })
     }
+}
 
+/// Data representations' part of the elaborator that writes: `impl` blocks and their generated items.
+pub(crate) struct DataReprMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for DataReprMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for DataReprMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl DataReprMut<'_> {
     /// `datarepr N for S { … }` / `datarepr N for S := repr::naive();`
     /// (design §1.4).
     ///
@@ -503,11 +533,11 @@ impl Elaborator {
     /// declaration's qualifier has to name a type in scope and `N` names the
     /// assembled value.
     pub(crate) fn elab_datarepr(&mut self, d: &DatareprDecl) -> R<()> {
-        self.session_transaction(|me| me.elab_datarepr_inner(d))
+        self.session_transaction(|me| DataReprMut(me).elab_datarepr_inner(d))
     }
 
     fn elab_datarepr_inner(&mut self, d: &DatareprDecl) -> R<()> {
-        let mut spec = self.spec_view(&d.spec, d.spec.span)?;
+        let mut spec = DataRepr(self).spec_view(&d.spec, d.spec.span)?;
         if let Some(prev) = self.representations.for_spec(&spec.key) {
             return err(
                 format!(
@@ -528,7 +558,7 @@ impl Elaborator {
         self.register_repr_access(&d.name, &ctors);
         let mut sp = Splices::default();
         let mut holes = Vec::new();
-        let clauses = self.clauses_of(d, &spec, &mut sp, &mut holes)?;
+        let clauses = DataRepr(self).clauses_of(d, &spec, &mut sp, &mut holes)?;
         if clauses.fold.is_none() {
             self.register_fold_default_access(&d.name);
         }
@@ -559,10 +589,12 @@ impl Elaborator {
         let key = spec.key.clone();
         let name = d.name.clone();
         let monomorph = spec.monomorph;
-        self.semantic_commit_repr(key, name, info, monomorph, obs);
+        DeltasMut(self).semantic_commit_repr(key, name, info, monomorph, obs);
         Ok(())
     }
+}
 
+impl DataRepr<'_> {
     /// The clause table: every field of the generated record, as the source
     /// expression that fills it. Either read off the written clauses or minted
     /// by `repr::naive()`.
@@ -771,7 +803,9 @@ impl Elaborator {
             inv_trivial,
         })
     }
+}
 
+impl DataReprMut<'_> {
     /// Parse and elaborate generated source in the *current* module and scope.
     /// A failure here is a failure of the `datarepr` declaration, reported
     /// against it — the generated text is an implementation detail, so it is
@@ -781,7 +815,7 @@ impl Elaborator {
         // is what the emission spells (`docs/repr-access-spellings-design.md`
         // §6). A mode and not a property of the text, so that a generator that
         // one day writes designed paths needs no change here.
-        self.generated_mode(|me| me.elab_generated_at(src, what, span, sp))
+        self.generated_mode(|me| DataReprMut(me).elab_generated_at(src, what, span, sp))
     }
 
     fn elab_generated_at(&mut self, src: &str, what: &str, span: Span, sp: &Splices) -> R<()> {
@@ -849,11 +883,13 @@ impl Elaborator {
                     at,
                 );
             }
-            self.mint_pending();
+            ResolutionMut(self).mint_pending();
         }
         Ok(())
     }
+}
 
+impl Elaborator {
     /// The name a `datarepr` minted for a parameterized instantiation, if any
     /// (§1.4 item 2). The consumer is certgen's rim.
     pub fn monomorph_name(&self, name: &str, args: &[Ty]) -> Option<&str> {
@@ -2258,7 +2294,7 @@ impl ImplSchema {
     }
 }
 
-impl Elaborator {
+impl DataRepr<'_> {
     /// Build §1.2's schema at `(op, repr)`. Both callers have already checked
     /// that the repr and the declaration are in scope and that the operation is
     /// monomorphic — with their own messages, which differ deliberately — so
@@ -2319,7 +2355,7 @@ impl Elaborator {
     }
 }
 
-impl Elaborator {
+impl DataReprMut<'_> {
     /// `impl f for Rp { body := …, refines := … }` (design §1.2).
     ///
     /// The registry is **open by construction**: the operation is an index, so
@@ -2329,7 +2365,7 @@ impl Elaborator {
     /// about the operation half being its resolved name rather than its
     /// `.code`.
     pub(crate) fn elab_impl(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
-        self.session_transaction(|me| me.elab_impl_inner(d))
+        self.session_transaction(|me| DataReprMut(me).elab_impl_inner(d))
     }
 
     fn elab_impl_inner(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
@@ -2370,7 +2406,7 @@ impl Elaborator {
         // occurrences, per-position mixing deferred), and §1.2's conclusions —
         // one computation, shared with the transfer generator (§2.1).
         let s = &rp.written;
-        let sch = match self.impl_schema(&d.op, &d.repr) {
+        let sch = match DataRepr(self).impl_schema(&d.op, &d.repr) {
             Ok(sch) => sch,
             Err(msg) => return err(msg, d.span),
         };
@@ -2640,7 +2676,7 @@ impl Elaborator {
         let repr = d.repr.clone();
         let op = d.op.clone();
         let entry = ImplEntry { global, provenance };
-        self.semantic_commit_impl(repr, op, entry, obs);
+        DeltasMut(self).semantic_commit_impl(repr, op, entry, obs);
         Ok(())
     }
 
@@ -2677,10 +2713,12 @@ impl Elaborator {
         // The emission's `impl` block lands through the ordinary path below,
         // which is what records the registry entry; this says who wrote it.
         self.scoped(|s| &mut s.impl_provenance, Some(Provenance::Derived), |me| {
-            me.elab_generated(&em.text, &owner, d.span, &Splices::default())
+            DataReprMut(me).elab_generated(&em.text, &owner, d.span, &Splices::default())
         })
     }
+}
 
+impl Elaborator {
     /// The `Impl` registered for `op` at repr `rp`, if any — the
     /// "find the `Impl` for `f` at `Rp`" query of §1.4 item 3. The consumers
     /// are the transfer generator and the compiler walk; nothing in the

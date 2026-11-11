@@ -39,11 +39,21 @@ fn tuple_component(t: &Rc<Term>, c: usize) -> Option<Rc<Term>> {
     crate::spelling::pair_of(cur).map(|(fst, _)| Rc::clone(fst))
 }
 
-impl Elaborator {
+/// No-confusion for indexed families: its part of the elaborator.
+pub(crate) struct IwfConfusion<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for IwfConfusion<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl IwfConfusion<'_> {
     /// A constant-motive function of a family value, inside a `J` motive:
     /// `mcx` is the ambient context plus the motive's two binders, `fam`,
     /// `spine` and `body`'s payloads are scoped in the ambient context, and
-    /// `motive` and `scrut` in `mcx` ([`Self::const_predicate`]'s contract).
+    /// `motive` and `scrut` in `mcx` ([`Inductives::const_predicate`](crate::inductive::Inductives::const_predicate)'s contract).
     #[allow(clippy::too_many_arguments)]
     fn fam_const(
         &self,

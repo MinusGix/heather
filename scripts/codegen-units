@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""What a crate's codegen units hold, by size: scripts/codegen-units [--crate heather_elab] [--top 20].
+
+rustc compiles a dev build of a workspace crate as up to 256 codegen units and
+reuses the ones an edit did not touch. Which unit a function lands in is not the
+file it is written in: a method goes with the module that defines its `Self`
+type, a free function and a closure with the module they are written in, and
+generic instances with the generic's own module (all of a crate's `Vec<T>`
+code is one unit) and drop glue in a unit of its own. So one type with methods
+in fifty files is one unit, recompiled whole on one core after an edit to any
+of them (issues/elaborator-crate-compile-per-edit.md). This prints the units
+of the last build, largest first, each with the types or modules whose code
+fills it, so a unit that has grown back is visible.
+
+Reads `target/debug/incremental/<crate>-*/` (or `--target-dir`); builds nothing.
+Unit files carry hashed names, so a unit is named here by what `nm` finds in it.
+"""
+import argparse
+import collections
+import glob
+import os
+import re
+import subprocess
+import sys
+
+
+def owner(symbol):
+    """The type or module a demangled symbol belongs to."""
+    s = symbol
+    if s.startswith('<'):
+        # `<Type>::method`, `<Type as Trait>::method`, `<impl Trait for Type>::method`
+        depth = 0
+        for i, c in enumerate(s):
+            if c == '<':
+                depth += 1
+            elif c == '>':
+                depth -= 1
+                if depth == 0:
+                    inner = s[1:i]
+                    break
+        else:
+            inner = s[1:]
+        inner = re.split(r' as ', inner)[0]
+        inner = re.sub(r'^impl .* for ', '', inner)
+        inner = re.sub(r'^(&|\*const |\*mut |mut |dyn )+', '', inner)
+        return re.sub(r'<.*', '', inner)
+    # a free function, a closure or a shim: its module path
+    s = re.sub(r'<.*', '', s)
+    parts = s.split('::')
+    while parts and (parts[-1].startswith('{') or not parts[-1]):
+        parts.pop()
+    return '::'.join(parts[:-1]) if len(parts) > 1 else s
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    ap.add_argument('--crate', default='heather_elab', help='crate name as rustc spells it (default heather_elab)')
+    ap.add_argument('--top', type=int, default=20, help='units to list (default 20)')
+    ap.add_argument('--target-dir', default=os.environ.get('CARGO_TARGET_DIR', 'target'))
+    ap.add_argument('--profile', default='debug')
+    args = ap.parse_args()
+
+    root = os.path.join(args.target_dir, args.profile, 'incremental')
+    # A `cargo check` leaves a session too, with no objects in it.
+    sessions = [d for d in glob.glob(os.path.join(root, args.crate + '-*', 's-*'))
+                if os.path.isdir(d) and glob.glob(os.path.join(d, '*.o'))]
+    if not sessions:
+        sys.exit(f'no built incremental session for {args.crate} under {root}: build it first')
+    session = max(sessions, key=os.path.getmtime)
+    objects = sorted(glob.glob(os.path.join(session, '*.o')), key=os.path.getsize, reverse=True)
+    total = sum(os.path.getsize(o) for o in objects)
+    print(f'{args.crate}: {len(objects)} units, {total / 1e6:.1f} MB of objects ({session})')
+    print(f'{"MB":>6} {"share":>6} {"fns":>6}  what fills it (share of the unit\'s code)')
+    for obj in objects[:args.top]:
+        out = subprocess.run(['nm', '-S', '-C', '--defined-only', obj], capture_output=True, text=True).stdout
+        by = collections.Counter()
+        fns = 0
+        for line in out.splitlines():
+            parts = line.split(None, 3)
+            if len(parts) < 4 or parts[2] not in 'tTwW':
+                continue
+            fns += 1
+            by[owner(parts[3])] += int(parts[1], 16)
+        code = sum(by.values()) or 1
+        top = ', '.join(f'{name} {100 * n // code}%' for name, n in by.most_common(3))
+        size = os.path.getsize(obj)
+        print(f'{size / 1e6:6.1f} {100 * size / total:5.1f}% {fns:6d}  {top}')
+    rest = objects[args.top:]
+    if rest:
+        print(f'{sum(os.path.getsize(o) for o in rest) / 1e6:6.1f} {100 * sum(os.path.getsize(o) for o in rest) / total:5.1f}% {"":>6}  the other {len(rest)} units')
+
+
+if __name__ == '__main__':
+    main()

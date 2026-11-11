@@ -49,7 +49,17 @@ pub(crate) fn generated_loop(e: &Expr) -> bool {
             if binders.len() == 1 && binders[0].name.starts_with("#bind"))
 }
 
-impl Elaborator {
+/// Binding statements' part of the elaborator.
+pub(crate) struct Bindings<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Bindings<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Bindings<'_> {
     /// `error`, from elaborating a lowered `while` with no measure `call`,
     /// restated when it is the carrier's iteration operator that is missing:
     /// the block is pure, or its carrier has no `Iterate` instance.

@@ -30,6 +30,7 @@
 use heather_kernel::term::{Motives, Term, Type};
 
 use crate::{Cx, Elaborator};
+use crate::gendefs::GeneratedDefs;
 
 /// One emitted slot whose content [`Elaborator::emit_ty`] would rewrite.
 #[derive(Clone, Debug)]
@@ -168,7 +169,7 @@ impl Walk<'_> {
                 + crate::module_image::term_image_nodes(arity);
             return;
         }
-        if let Some((s, a)) = self.el.emit_wf_slots(&self.cx, shape, arity, d) {
+        if let Some((s, a)) = GeneratedDefs(self.el).emit_wf_slots(&self.cx, shape, arity, d) {
             self.out.push(EmissionFinding {
                 decl: self.decl.to_string(),
                 slot: name,

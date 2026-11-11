@@ -8,8 +8,21 @@ use heather_syntax::{Expr, ExprKind};
 
 use crate::{Cx, Elaborator, R, SolutionCheck};
 use crate::unification::{Sol, U, partially_zonked, unify_ty_root, zonked};
+use crate::application::Callables;
+use crate::gendefs::GeneratedDefs;
+use crate::app_unify::AppUnify;
 
-impl Elaborator {
+/// Polymorphic application's part of the elaborator.
+pub(crate) struct Polymorphic<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Polymorphic<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Polymorphic<'_> {
     /// Read a bare function's instance from a partially solved parameter.
     /// Its leading implicits live in a separate scratch world: only subject
     /// subterms that zonk in the enclosing call may become solutions here.
@@ -20,8 +33,8 @@ impl Elaborator {
         &self, cx: &Cx, argument: &Expr, parameter: &Type, n: u32, sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> {
         let ExprKind::Var(name) = &argument.kind else { return None; };
-        let prefix = self.bare_implicit_prefix(cx, name)
-            .or_else(|| self.value_skel(cx, name).map(|s| s.leading_implicit()).filter(|&k| k > 0))?;
+        let prefix = Callables(self).bare_implicit_prefix(cx, name)
+            .or_else(|| Callables(self).value_skel(cx, name).map(|s| s.leading_implicit()).filter(|&k| k > 0))?;
         // A written polymorphic domain wants the uninstantiated value.
         if let Type::Pi { dom, .. } = parameter
             && zonked(dom, n, sols)
@@ -47,19 +60,19 @@ impl Elaborator {
                 ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(meta));
                 level = cod_level;
             }
-            let pattern = self.unspell_deep_now(&ty, k).unwrap_or(ty);
+            let pattern = GeneratedDefs(self).unspell_deep_now(&ty, k).unwrap_or(ty);
             let subject = partially_zonked(parameter, n, sols, &cx.gamma);
-            let subject = self.unspell_deep_now(&subject, n).unwrap_or(subject);
-            let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, argument.span);
-            let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
-            let respell = |t: &Type| self.respell_ty(cx, t);
-            let constructor = |t: &Type| self.constructor_spelling(cx, t, argument.span);
-            let slot_view = |t: &Term| self.slot_view(t);
+            let subject = GeneratedDefs(self).unspell_deep_now(&subject, n).unwrap_or(subject);
+            let type_args = |t: &Term, d: u32| AppUnify(self).spine_type_args(cx, t, d, argument.span);
+            let canonical_head = |t: &Term, d: u32| AppUnify(self).canonical_head(cx, t, d);
+            let respell = |t: &Type| GeneratedDefs(self).respell_ty(cx, t);
+            let constructor = |t: &Type| GeneratedDefs(self).constructor_spelling(cx, t, argument.span);
+            let slot_view = |t: &Term| GeneratedDefs(self).slot_view(t);
             let check = SolutionCheck::new(self, cx, &doms, k);
             let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
             let slot_type = |i: usize, sols: &[Sol]| doms.get(i).and_then(|t| zonked(t, k, sols));
-            let next_head = |t: &Term| self.next_head(cx, t);
-            let unfold_constant = |t: &Term| self.unfold_constant(cx, t);
+            let next_head = |t: &Term| AppUnify(self).next_head(cx, t);
+            let unfold_constant = |t: &Term| AppUnify(self).unfold_constant(cx, t);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,

@@ -23,6 +23,11 @@ use crate::{
     Alias, Cx, ElabError, Elaborator, IMPLICIT_MARK_REFUSED, PRELUDE_MODULE, R, TyVar,
     application, err, has_implicit_mark,
 };
+use crate::indexed::IndexedFamilies;
+use crate::iwf_family::IwfFamily;
+use crate::inductive::Inductives;
+use crate::app_unify::AppUnify;
+use crate::name_lookup::NameLookup;
 
 /// A defaulted field a construction left out: the marker's arguments are the
 /// record's tag, the constructor and the field, and checking it runs the
@@ -30,9 +35,21 @@ use crate::{
 /// markers, this head cannot collide with a source name.
 pub(crate) const FIELD_DEFAULT: &str = "\0field-default";
 
+/// Constructor applications' part of the elaborator.
+pub(crate) struct Constructors<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Constructors<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     const STANDARD_LIST_MODULE: &'static str = "list";
+}
 
+impl Constructors<'_> {
     /// A constructor's arguments with its defaulted fields filled
     /// (docs/named-arguments-design.md §9.2): the positional arguments fill
     /// the fields without a default, in order, or every field when they are
@@ -133,7 +150,7 @@ impl Elaborator {
 
     fn standard_list_literal_instance_registered(&self) -> bool {
         let protocol = qkey(PRELUDE_MODULE, "CollectionLiteral");
-        let list = qkey(Self::STANDARD_LIST_MODULE, "List");
+        let list = qkey(Elaborator::STANDARD_LIST_MODULE, "List");
         // `A` is binder 0 and the generic literal length is binder 1 in the
         // standard instance.
         self.traits
@@ -142,7 +159,7 @@ impl Elaborator {
 
     fn is_standard_list(&self, ind: &Inductive) -> bool {
         self.types
-            .inductive(&qkey(Self::STANDARD_LIST_MODULE, "List"))
+            .inductive(&qkey(Elaborator::STANDARD_LIST_MODULE, "List"))
             .is_some_and(|standard| standard.tag == ind.tag)
     }
 
@@ -360,7 +377,7 @@ impl Elaborator {
         if !only_ctors_and_types || !matches!(self.resolve_name(name), crate::names::NameRes::Ambiguous(_)) {
             return None;
         }
-        let key = self.key_of_kinds(name, &[NameKind::Ctor])?;
+        let key = NameLookup(self).key_of_kinds(name, &[NameKind::Ctor])?;
         self.types.constructor(&key).map(|(i, k)| (Rc::clone(i), *k))
     }
 
@@ -723,7 +740,7 @@ impl Elaborator {
         // `build_ctor` checks every argument against its field afterwards,
         // so an error in the argument itself is still reported, there.
         let mut deferred = None;
-        for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
+        for (f, arg) in Inductives(self).ctor_fields(ind, i).iter().zip(args) {
             let TyKind::Named { name, args: targs } = &f.kind else {
                 continue;
             };
@@ -784,15 +801,15 @@ impl Elaborator {
             // Route 2b: the index is the constructor's *written* result index
             // at the arguments it was given (docs/inductive-fording-lowering.md
             // §2), which is the whole widening.
-            let ity = self.index_type_at(cx, ind, &targs, &[], span)?;
-            let (idx, _, _) = self.iwf_ctor_index(cx, ind, i, args, ity)?;
-            self.lower_iwf_instance(cx, ind, &targs, &[], idx, span)?
+            let ity = IndexedFamilies(self).index_type_at(cx, ind, &targs, &[], span)?;
+            let (idx, _, _) = IwfFamily(self).iwf_ctor_index(cx, ind, i, args, ity)?;
+            IwfFamily(self).lower_iwf_instance(cx, ind, &targs, &[], idx, span)?
         } else if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
             // The result index comes from the pattern and the written index
             // argument (docs/inductive-indexed-lowering.md §5); the wrong-
             // arity case falls through to `build_ctor`'s arity message.
-            let (idx, _, _) = self.indexed_ctor_index(cx, ind, i, args, span)?;
-            self.lower_indexed_instance(cx, ind, &targs, idx, span)?
+            let (idx, _, _) = IndexedFamilies(self).indexed_ctor_index(cx, ind, i, args, span)?;
+            IndexedFamilies(self).lower_indexed_instance(cx, ind, &targs, idx, span)?
         } else {
             self.lower_instance(cx, ind, &targs, &[], span)?
         };
@@ -873,7 +890,7 @@ impl Elaborator {
                 (Term::Var(LocalVar(n - 1 - j as u32)), t.shift_local(n - j as u32), l.clone())
             })
             .collect();
-        let (shape, _) = self.lower_ctor(&tcx, ind, i, &open_targs, &open_vargs, span)?;
+        let (shape, _) = Inductives(self).lower_ctor(&tcx, ind, i, &open_targs, &open_vargs, span)?;
         // Into the scratch world: the parameter binders become metas `< n`,
         // exactly as a callee's `Π` binders do in `apply_implicit`.
         let to_scratch = (0..n).fold(LocalSubst::id(&cx.gamma), |s, j| {
@@ -912,7 +929,7 @@ impl Elaborator {
                 Some(real) => self.elab_check(cx, arg.borrow(), &real, fst_level)?,
                 None => match self.elab_infer(cx, arg.borrow()) {
                     Ok((tm, ty, _)) => {
-                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, &[], crate::unification::Guesses::Take, span);
+                        AppUnify(self).unify_arg_ty(cx, fst, &ty, n, &mut sols, &[], crate::unification::Guesses::Take, span);
                         tm
                     }
                     Err(e) => {
@@ -1018,21 +1035,21 @@ impl Elaborator {
             .position(|f| *f == inductive::FieldKind::Plain)?;
         let (_, cty, _) = self.elab_infer(cx, args[k].borrow()).ok()?;
         let (ty, lvl) = if ind.skel.is_some() {
-            let (found, fam) = self.iwf_of_at(cx, &cty)?;
+            let (found, fam) = IwfFamily(self).iwf_of_at(cx, &cty)?;
             if found.tag != ind.tag {
                 return None;
             }
-            let idx = match self.iwf_ctor_index(cx, ind, i, args, (fam.ity.clone(), fam.ilvl.clone())) {
+            let idx = match IwfFamily(self).iwf_ctor_index(cx, ind, i, args, (fam.ity.clone(), fam.ilvl.clone())) {
                 Ok((idx, _, _)) => idx,
                 Err(e) => return Some(Err(e)),
             };
             (fam.ty_at(idx, 0), fam.lvl())
         } else {
-            let (found, fam) = self.indexed_of_at(cx, &cty)?;
+            let (found, fam) = IndexedFamilies(self).indexed_of_at(cx, &cty)?;
             if found.tag != ind.tag {
                 return None;
             }
-            let idx = match self.indexed_ctor_index(cx, ind, i, args, span) {
+            let idx = match IndexedFamilies(self).indexed_ctor_index(cx, ind, i, args, span) {
                 Ok((idx, _, _)) => idx,
                 Err(e) => return Some(Err(e)),
             };
@@ -1114,18 +1131,18 @@ impl Elaborator {
                     );
                 }
                 let (ty, lvl) = if ind.skel.is_some() {
-                    let ity = self.index_type_at(cx, &ind, &lowered, &[], span)?;
-                    let (idx, _, _) = self.iwf_ctor_index(cx, &ind, i, args, ity)?;
-                    self.lower_iwf_instance(cx, &ind, &lowered, &[], idx, span)?
+                    let ity = IndexedFamilies(self).index_type_at(cx, &ind, &lowered, &[], span)?;
+                    let (idx, _, _) = IwfFamily(self).iwf_ctor_index(cx, &ind, i, args, ity)?;
+                    IwfFamily(self).lower_iwf_instance(cx, &ind, &lowered, &[], idx, span)?
                 } else {
-                    let (idx, _, _) = self.indexed_ctor_index(cx, &ind, i, args, span)?;
-                    self.lower_indexed_instance(cx, &ind, &lowered, idx, span)?
+                    let (idx, _, _) = IndexedFamilies(self).indexed_ctor_index(cx, &ind, i, args, span)?;
+                    IndexedFamilies(self).lower_indexed_instance(cx, &ind, &lowered, idx, span)?
                 };
                 let t = self.build_ctor(cx, &ind, i, args, &ty, &lvl, span)?;
                 return Ok((t, ty, lvl));
             }
             let (ty, lvl) = self.lower_instance(cx, &ind, &lowered, &[], span)?;
-            let t = self.build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;
+            let t = Inductives(self).build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;
             Ok((t, ty, lvl))
         })())
     }
@@ -1151,11 +1168,11 @@ mod tests {
         let ExprKind::App { head, args: outer, .. } = &expr.kind else { unreachable!() };
         let ExprKind::App { args: inner, .. } = &head.kind else { unreachable!() };
         let cx = Cx::empty();
-        let (ind, _, args, _) = e.ctor_spine(&cx, &expr).expect("curried constructor");
+        let (ind, _, args, _) = Constructors(&e).ctor_spine(&cx, &expr).expect("curried constructor");
         assert!(std::ptr::eq(args[0], &inner[0]));
         assert!(std::ptr::eq(args[1], &outer[0]));
         let (expected, _) = e.lower_instance(&cx, &ind, &[], &[], span).expect("instance");
-        let (_, _, args, _) = e.ctor_spine_expected(&cx, &expr, &expected).expect("checking spine");
+        let (_, _, args, _) = Constructors(&e).ctor_spine_expected(&cx, &expr, &expected).expect("checking spine");
         assert!(std::ptr::eq(args[0], &inner[0]));
         assert!(std::ptr::eq(args[1], &outer[0]));
     }

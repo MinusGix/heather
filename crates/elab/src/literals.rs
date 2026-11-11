@@ -23,6 +23,9 @@ use heather_syntax::{Expr, ExprKind, ScaledLit, Span};
 
 use crate::oracle::Unfold;
 use crate::{application, Cx, ElabError, Elaborator, R};
+use crate::dispatch::Carriers;
+use crate::traits::Classes;
+use crate::mismatch_notes::MismatchNotes;
 
 /// The surface name of the `Char` record, its introduction form, and the
 /// reflection lemma a literal's scalar proof goes through. Written as keys
@@ -84,7 +87,17 @@ fn call(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
     }
 }
 
-impl Elaborator {
+/// Literals' part of the elaborator.
+pub(crate) struct Literals<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Literals<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Literals<'_> {
     /// Is the expected type the declaration `name` names here? `None` for a
     /// name with no reading in this scope, which is what makes the direct
     /// route optional: without `std/char` imported there is no `Char` to
@@ -93,7 +106,7 @@ impl Elaborator {
         let Some(key) = self.closure_key(name) else {
             return false;
         };
-        self.carrier_of_ty(cx, expected, span)
+        Carriers(self).carrier_of_ty(cx, expected, span)
             .is_some_and(|carrier| carrier.key == key)
     }
 
@@ -186,13 +199,13 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> Option<R<Term>> {
-        let (ind, named) = self.literal_class_record(class_key)?;
+        let (ind, named) = Classes(self).literal_class_record(class_key)?;
         let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
         (|| {
             let targs = [(expected.clone(), expected_level.clone())];
             let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
-            let carrier = self
+            let carrier = Carriers(self)
                 .type_namespace(cx, expected, span)
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("{class_name}<{carrier}>");
@@ -213,7 +226,7 @@ impl Elaborator {
                 self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
             let since = self.attempt.trivial_uses.borrow().len();
             let (out, _, _) = application::apply_explicit(
-                self,
+                self.0,
                 cx,
                 Some(field_name),
                 Rc::new(Vec::new()),
@@ -293,7 +306,7 @@ impl Elaborator {
         span: Span,
     ) -> Option<Term> {
         const NAT_CAST: &str = "semiring::Ring::nat_cast";
-        if !matches!(e.kind, ExprKind::Num(_)) || !self.is_local_carrier(cx, expected, span) {
+        if !matches!(e.kind, ExprKind::Num(_)) || !Carriers(self).is_local_carrier(cx, expected, span) {
             return None;
         }
         let name = self.key_of(NAT_CAST).map(|_| NAT_CAST.to_string())?;
@@ -321,7 +334,7 @@ impl Elaborator {
     /// ([`Self::class_carrier_numeral`] found none): said in terms of what
     /// would give it one, not as a `Nat`-against-`A` mismatch.
     pub(crate) fn class_numeral_refusal(&self, cx: &Cx, expected: &Type, span: Span) -> Option<ElabError> {
-        if !self.is_local_carrier(cx, expected, span) {
+        if !Carriers(self).is_local_carrier(cx, expected, span) {
             return None;
         }
         let carrier = self.display_type(cx, expected);
@@ -407,7 +420,7 @@ impl Elaborator {
             return result;
         }
         let (term, ty, _) = self.elab_char_infer(cx, c, e)?;
-        self.note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
+        MismatchNotes(self).note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
         Ok(term)
     }
 
@@ -441,7 +454,7 @@ impl Elaborator {
             return result;
         }
         let (term, ty, _) = self.elab_string_infer(cx, text, e)?;
-        self.note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
+        MismatchNotes(self).note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
         Ok(term)
     }
 
@@ -527,7 +540,7 @@ impl Elaborator {
             return Ok(term);
         }
         let (term, ty, _) = self.elab_scaled_infer(cx, lit, e)?;
-        self.note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
+        MismatchNotes(self).note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
         Ok(term)
     }
 
@@ -574,7 +587,7 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> Option<R<(Term, Option<Term>)>> {
-        let (ind, named) = self.literal_class_record(class_key)?;
+        let (ind, named) = Classes(self).literal_class_record(class_key)?;
         let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
         let check = match check {
@@ -584,7 +597,7 @@ impl Elaborator {
         (|| {
             let targs = [(expected.clone(), expected_level.clone())];
             let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
-            let carrier = self
+            let carrier = Carriers(self)
                 .type_namespace(cx, expected, span)
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("{class_name}<{carrier}>");
@@ -606,7 +619,7 @@ impl Elaborator {
             let apply = |name: &str, index, args: &[Expr]| -> R<Term> {
                 let (embed, embed_ty, embed_level) = self.project_field(cx, &ind, &goal, Rc::clone(&dict), index, span)?;
                 let (out, _, _) = application::apply_explicit(
-                    self,
+                    self.0,
                     cx,
                     Some(name),
                     Rc::new(Vec::new()),
@@ -641,7 +654,7 @@ impl Elaborator {
 }
 
 /// How many elements of a long literal's spine
-/// [`Elaborator::collection_literal_spine`] builds out.
+/// [`Literals::collection_literal_spine`] builds out.
 const LONG_SPINE: usize = 64;
 
 /// One constructor value of a collection literal's spine, opened: the node
@@ -653,7 +666,7 @@ struct SpineFrame {
     built: Vec<Rc<Term>>,
 }
 
-impl Elaborator {
+impl Literals<'_> {
     /// A collection literal's value with its **constructor spine built out**:
     /// `Cons(1, Cons(2, Nil))`, not the weak head the protocol's conversion
     /// leaves, `Cons(fst(v), fold(snd(v)))` over the literal's vector `v`.

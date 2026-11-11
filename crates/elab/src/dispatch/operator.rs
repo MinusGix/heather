@@ -14,8 +14,21 @@ use crate::surface::{
     operator_carrier_leaf,
 };
 use crate::{Cx, Elaborator, OperatorFallbackUse, R, err, traits};
+use crate::dispatch::Carriers;
+use crate::dispatch::Casts;
+use crate::app_unify::AppUnify;
 
-impl Elaborator {
+/// Operator dispatch's part of the elaborator.
+pub(crate) struct Operators<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Operators<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Operators<'_> {
     // -- operator symbols ---------------------------------------------------
 
     /// The fixed name an operator symbol falls back to — the third rung of
@@ -77,12 +90,16 @@ impl Elaborator {
             span,
         )
     }
+}
 
+impl Elaborator {
     // The clause a diagnostic uses to say which of rung 2's two sources the
     // carrier came from (docs/bare-symbol-checking-carrier-design.md §6).
     const FROM_OPERAND: &'static str = "the carrier of its left operand";
     const FROM_EXPECTED: &'static str = "the carrier this position expects";
+}
 
+impl Operators<'_> {
     /// The name an operator symbol means here — the three-rung ladder of
     /// docs/operators-onto-classes-design.md §4, as
     /// docs/bare-symbol-checking-carrier-design.md widens rung 2.
@@ -129,13 +146,13 @@ impl Elaborator {
         if self.traits.has_designation_for(fixity, sym) {
             let flexible_left = args.first().is_some_and(|arg| {
                 expression_left_leaf_is_numeral(arg)
-                    || expression_needs_numeral_carrier(arg, |leaf| self.is_checking_only(cx, leaf))
+                    || expression_needs_numeral_carrier(arg, |leaf| AppUnify(self).is_checking_only(cx, leaf))
             });
             let expected_for_numeral = if flexible_left {
                 expected
-                    .and_then(|t| self.carrier_of_ty(cx, t, span))
+                    .and_then(|t| Carriers(self).carrier_of_ty(cx, t, span))
                     .filter(|h| self.designated(sym, fixity, &h.key).is_some())
-                    .map(|h| (h, Self::FROM_EXPECTED))
+                    .map(|h| (h, Elaborator::FROM_EXPECTED))
             } else {
                 None
             };
@@ -146,7 +163,7 @@ impl Elaborator {
                 args.iter()
                     .skip(1)
                     .filter(|arg| !expression_needs_numeral_carrier(arg, |leaf| {
-                        self.is_checking_only(cx, leaf)
+                        AppUnify(self).is_checking_only(cx, leaf)
                     }))
                     .find_map(|arg| {
                         self.op_carrier_head(cx, std::slice::from_ref(arg), span)
@@ -163,7 +180,7 @@ impl Elaborator {
                 && expected_for_numeral.is_none()
                 && sibling_for_numeral.is_none()
                 && let Some(op) = self.designated_at_scope_class(cx, sym, fixity)
-                && expected.is_some_and(|t| self.is_local_carrier(cx, t, span))
+                && expected.is_some_and(|t| Carriers(self).is_local_carrier(cx, t, span))
             {
                 return Ok(op);
             }
@@ -174,10 +191,10 @@ impl Elaborator {
             } else if args.is_empty() {
                 expected
                     .and_then(|t| self.expected_carrier_head(cx, t, span))
-                    .map(|h| (h, Self::FROM_EXPECTED))
+                    .map(|h| (h, Elaborator::FROM_EXPECTED))
             } else {
                 self.op_carrier_head(cx, args, span)
-                    .map(|h| (h, Self::FROM_OPERAND))
+                    .map(|h| (h, Elaborator::FROM_OPERAND))
             };
             if let Some((head, from)) = probed {
                 // The carrier the probe found is a *declaration*, and the
@@ -329,12 +346,12 @@ impl Elaborator {
         }
         for arg in operands {
             operator_carrier_leaf(arg, |leaf| {
-                if self.is_checking_only(cx, leaf) {
+                if AppUnify(self).is_checking_only(cx, leaf) {
                     return true;
                 }
                 match self.probe(|| {
                     let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
-                    Some(self.carrier_of_ty(cx, &ty, span))
+                    Some(Carriers(self).carrier_of_ty(cx, &ty, span))
                 }) {
                     Some(carrier) => {
                         found = Some(carrier);
@@ -359,7 +376,7 @@ impl Elaborator {
             let Type::Pi { dom, .. } = self.whnf(cx, &ty, span).ok()? else {
                 return None;
             };
-            Some(self.carrier_of_ty(cx, &dom, span))
+            Some(Carriers(self).carrier_of_ty(cx, &dom, span))
         });
         match binder_carrier {
             None => false,
@@ -418,12 +435,12 @@ impl Elaborator {
     fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
         let mut carrier = None;
         let leaf = operator_carrier_leaf(args.first()?, |leaf| {
-            if self.is_checking_only(cx, leaf) {
+            if AppUnify(self).is_checking_only(cx, leaf) {
                 return true;
             }
             let Some(found) = self.probe(|| {
                 let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
-                Some(self.carrier_of_ty(cx, &ty, span))
+                Some(Carriers(self).carrier_of_ty(cx, &ty, span))
             }) else {
                 return true;
             };
@@ -431,7 +448,7 @@ impl Elaborator {
             false
         });
         if matches!(leaf.kind, ExprKind::Num(_)) {
-            return self.carrier_of_ty(cx, &Type::Nat, span);
+            return Carriers(self).carrier_of_ty(cx, &Type::Nat, span);
         }
         if carrier.is_some() {
             return carrier;
@@ -443,12 +460,12 @@ impl Elaborator {
         // dictionary, yet infers to `f`'s codomain. Second, so an operand that
         // infers outright still decides first.
         operator_carrier_leaf(args.first()?, |leaf| {
-            if !self.deferral_can_fall_back(cx, leaf) {
+            if !AppUnify(self).deferral_can_fall_back(cx, leaf) {
                 return true;
             }
             let Some(found) = self.probe(|| {
                 let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
-                Some(self.carrier_of_ty(cx, &ty, span))
+                Some(Carriers(self).carrier_of_ty(cx, &ty, span))
             }) else {
                 return true;
             };
@@ -476,7 +493,7 @@ impl Elaborator {
         let Type::Pi { dom, .. } = self.whnf(cx, expected, span).ok()? else {
             return None;
         };
-        self.carrier_of_ty(cx, &dom, span)
+        Carriers(self).carrier_of_ty(cx, &dom, span)
     }
 
     /// An operator symbol, bare or applied, rewritten to the ordinary
@@ -495,7 +512,7 @@ impl Elaborator {
     /// `expected` is the checking position's type where there is one, and
     /// `None` at the two inference sites.
     pub(crate) fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
-        if let Some(cast) = self.cast_rewrite(cx, e, expected)? {
+        if let Some(cast) = Casts(self).cast_rewrite(cx, e, expected)? {
             return Ok(Some(cast));
         }
         let (sym, args, explicit, goal_oriented) = match &e.kind {
@@ -549,7 +566,7 @@ impl Elaborator {
     }
 
     /// A **bare** operator symbol whose meaning only a carrier can settle —
-    /// the gate on [`Self::is_checking_only`]'s new arm
+    /// the gate on [`AppUnify::is_checking_only`]'s new arm
     /// (docs/bare-symbol-checking-carrier-design.md §4.3).
     ///
     /// Two conjuncts, both load-bearing.

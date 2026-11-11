@@ -12,11 +12,24 @@ use heather_syntax::{Expr, ExprKind, OpFixity, Span, Ty, TyKind};
 use super::Carrier;
 use crate::inductive::Inductive;
 use crate::{Cx, ElabError, Elaborator, ParamMeta, Sol, traits, zonked};
+use crate::dispatch::Carriers;
+use crate::traits::Classes;
+use crate::inductive::Inductives;
 
 /// A dot sugar's goal arguments: the type arguments and the value arguments.
 pub(crate) type GoalArgs = (Vec<(Type, Level)>, Vec<(Term, Type, Level)>);
 
-impl Elaborator {
+/// Dictionary dispatch's part of the elaborator.
+pub(crate) struct Dictionaries<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Dictionaries<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Dictionaries<'_> {
     /// The value-slot ladder's **step 2** at a goal the dot sugars are
     /// building (`docs/operation-indexed-classes-design.md` §5, §5.1): a
     /// binder in scope of the goal's class — or of a descendant, whose
@@ -86,7 +99,7 @@ impl Elaborator {
     /// Answers the goal's type arguments too, because a class whose carrier
     /// is declared at a universe (`class Frame<A: Type<1>>`) takes that
     /// carrier as its record's leading *value* parameter, the way a kinded
-    /// carrier is taken ([`Self::elab_class`]). There the carrier, a type at
+    /// carrier is taken ([`ClassesMut::elab_class`](crate::traits::ClassesMut::elab_class)). There the carrier, a type at
     /// the declared universe, is passed as its code and the goal has no type
     /// arguments (docs/frame-locale-design.md §3).
     pub(crate) fn index_vargs(
@@ -111,10 +124,10 @@ impl Elaborator {
         let Some(index) = self.scope_index(cx, key, carrier, clvl) else {
             // The carrier's head where it has one: at `Bool` the refusal lists
             // the two Bool structures and not every instance of the class.
-            let head = self.carrier_of_ty(cx, carrier, span);
+            let head = Carriers(self).carrier_of_ty(cx, carrier, span);
             return Err(self.value_slot_refusal(info, Some(key), subject, head.as_ref(), span));
         };
-        match self.valparam_args_after(cx, ind, &gargs, lead.into_iter().collect(), &index, span) {
+        match Inductives(self).valparam_args_after(cx, ind, &gargs, lead.into_iter().collect(), &index, span) {
             Ok(v) => Ok(Some((gargs, v))),
             Err(_) => Ok(None),
         }
@@ -173,7 +186,7 @@ impl Elaborator {
     /// reading is tried first, so no call that resolved before reads
     /// differently.
     fn solver_class_ref(&self, callee: &str, goal: &Ty) -> Option<(heather_syntax::ClassRef, String)> {
-        let read = |me: &Self| me.class_ref_of_ty(goal).and_then(|r| me.key_of(&r.name).map(|key| (r, key)));
+        let read = |me: &Elaborator| Classes(me).class_ref_of_ty(goal).and_then(|r| me.key_of(&r.name).map(|key| (r, key)));
         if let Some(found) = read(self) {
             return Some(found);
         }
@@ -346,7 +359,7 @@ impl Elaborator {
         // it does need resolving, since the name is a *spelling* the callee's
         // module wrote and the table is keyed on declarations.
         if !params.iter().any(|p| p.name == *name) {
-            return self.names_a_type(name).then(|| Carrier {
+            return Carriers(self).names_a_type(name).then(|| Carrier {
                 written: name.clone(),
                 key: self.carrier_key(name),
             });
@@ -369,7 +382,7 @@ impl Elaborator {
             level: Level::Zero,
             tm: code,
         };
-        self.carrier_of_ty(cx, &ty, span)
+        Carriers(self).carrier_of_ty(cx, &ty, span)
     }
 
     /// The ancestor of `dinfo` at class `tkey` that an **unqualified**
@@ -480,7 +493,7 @@ impl Elaborator {
     /// indices, so an ordinary field projection is untouched.
     pub(crate) fn index_of_dict(&self, cx: &Cx, dict: &str, name: &str) -> Option<Expr> {
         let d = cx.dicts.iter_inner().find(|d| d.name == dict)?;
-        let info = self.lookup_class(&d.class)?;
+        let info = Classes(self).lookup_class(&d.class)?;
         let k = info.valparams.iter().position(|p| p.name == name)?;
         d.index.get(k).cloned()
     }
@@ -565,7 +578,7 @@ impl Elaborator {
         // be the nomination this whole design deletes — but naming the ones
         // that exist tells the reader, in one line, the binder that works.
         let desig = head
-            .map(|h| self.designations_at(&h.key))
+            .map(|h| Classes(self).designations_at(&h.key))
             .unwrap_or_default();
         let fix = if desig.is_empty() {
             String::new()

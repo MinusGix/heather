@@ -10,6 +10,7 @@ use heather_syntax::{parse_file, Expr, Item, Span};
 
 use crate::oracle::Unfold;
 use crate::{err, goals, Alias, Cx, ElabError, Elaborator, TyVar, R};
+use crate::app_unify::AppUnify;
 
 fn expression(text: &str, span: Span) -> R<Expr> {
     let source = format!("fn generated() -> Type {{ {text} }}");
@@ -64,7 +65,7 @@ impl Relation {
                 Term::App { dom, dom_level, .. },
             ) => ((first.clone(), fl.clone()), (dom.clone(), dom_level.clone())),
             _ => {
-                let doms = e.app_domains(cx, tm, span).unwrap_or_default();
+                let doms = AppUnify(e).app_domains(cx, tm, span).unwrap_or_default();
                 let [.., first, dom] = doms.as_slice() else {
                     return None;
                 };
@@ -479,7 +480,7 @@ impl Builder<'_> {
                 };
                 (pi, Level::join(dom_level.clone(), cod_level))
             });
-            let goal = self.e.relation_obligation(self.original, tactic, label, self.goals - 1, closed, closed_level, self.span)?;
+            let goal = RelationalProof(self.e).relation_obligation(self.original, tactic, label, self.goals - 1, closed, closed_level, self.span)?;
             let k = self.binders.len() as u32;
             (0..k).rev().fold(goal.shift_local(k), |fun, i| Term::AppAt {
                 fun: Rc::new(fun),
@@ -839,7 +840,17 @@ impl Builder<'_> {
     }
 }
 
-impl Elaborator {
+/// Relational context proofs' part of the elaborator.
+pub(crate) struct RelationalProof<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for RelationalProof<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl RelationalProof<'_> {
     /// A goal for evidence a relational tactic needs and resolution did not
     /// find: `ty` in `cx`, labelled for an `on ?label := …` in the block and
     /// reported with its statement when nothing discharges it. `serial`

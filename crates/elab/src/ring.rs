@@ -35,6 +35,11 @@ use crate::statements::LetValue;
 use crate::omega_cert::{integer_source, named_args};
 use crate::relational_context::proof::Relation;
 use crate::{Cx, ElabError, Elaborator, R};
+use crate::dispatch::Carriers;
+use crate::dispatch::Dictionaries;
+use crate::gendefs::GeneratedDefs;
+use crate::resolve::Resolution;
+use crate::declarations::Declarations;
 
 type Z = i128;
 
@@ -195,10 +200,10 @@ fn same_dictionary_read(elab: &Elaborator, tm: &Term, want: &Term) -> bool {
 }
 
 /// `tm`, a projection chain, with the open derivation at its base unfolded
-/// ([`Elaborator::unfold_open_app`]); `None` when its base is none.
+/// ([`Resolution::unfold_open_app`]); `None` when its base is none.
 fn unfold_open_base(elab: &Elaborator, tm: &Term) -> Option<Term> {
     let Some((_, pair)) = crate::spelling::proj_of(tm) else {
-        return elab.unfold_open_app(tm);
+        return Resolution(elab).unfold_open_app(tm);
     };
     let inner = Rc::new(unfold_open_base(elab, pair)?);
     let mut out = tm.clone();
@@ -232,13 +237,23 @@ const CLASS_INTS: &str = "__ring_ints";
 
 impl ClassInts {
     /// `cx` with these integers in scope for a certificate at `carrier`:
-    /// [`Elaborator::class_dictionary_scope`] for `ring`'s lemmas.
+    /// [`Ring::class_dictionary_scope`] for `ring`'s lemmas.
     fn scope(&self, elab: &Elaborator, cx: &Cx, carrier: &str) -> Option<Cx> {
-        elab.class_dictionary_scope(cx, carrier, CLASS_INTS, (&self.ints, &self.ty, &self.level), "semiring::CommRingOfInt", "semiring::CommRing")
+        Ring(elab).class_dictionary_scope(cx, carrier, CLASS_INTS, (&self.ints, &self.ty, &self.level), "semiring::CommRingOfInt", "semiring::CommRing")
     }
 }
 
-impl Elaborator {
+/// The ring normaliser's part of the elaborator.
+pub(crate) struct Ring<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Ring<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Ring<'_> {
     /// `cx` with a class carrier's derived dictionary `value` in scope (a
     /// `CommRingOfInt` at `K`, built by `CommRing::with_ints` or
     /// `OrderedField::with_ints`), so the generic
@@ -257,7 +272,7 @@ impl Elaborator {
         class: &str,
         ring: &str,
     ) -> Option<Cx> {
-        let index = self.scope_dict_index(cx, &self.key_of(ring)?)?.into_iter().collect::<Option<Vec<Expr>>>()?;
+        let index = Dictionaries(self).scope_dict_index(cx, &self.key_of(ring)?)?.into_iter().collect::<Option<Vec<Expr>>>()?;
         let wrapper = format!("theorem __ring_generated(): {carrier} {{ 0 }}");
         let Some(Item::Decl(decl)) = parse_file(&wrapper).ok()?.items.pop() else {
             return None;
@@ -425,7 +440,7 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
 /// take its parameters before their operands, one per argument its type is
 /// applied to, as the `≈` reading counts them off `RelId<T>(lhs, rhs)`.
 fn identity_equation(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, level: &Level, lhs: &Rc<Term>, rhs: &Rc<Term>, span: Span) -> Option<Equation> {
-    let carrier = elab.carrier_of_ty(cx, carrier_ty, span)?;
+    let carrier = Carriers(elab).carrier_of_ty(cx, carrier_ty, span)?;
     if elab.designated("≈", OpFixity::Infix, &carrier.key)? != "relation::RelId" {
         return None;
     }
@@ -465,7 +480,7 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
 /// [`rel_carrier`], with the carrier's parameter count given (`params`) or
 /// read off the goal's relation.
 fn rel_carrier_at(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, params: Option<usize>, goal: Option<&Term>, span: Span) -> Option<RelCarrier> {
-    let Some(carrier) = elab.carrier_of_ty(cx, carrier_ty, span) else {
+    let Some(carrier) = Carriers(elab).carrier_of_ty(cx, carrier_ty, span) else {
         return class_carrier(elab, cx, carrier_ty);
     };
     let class = elab.key_of("semiring::CommRingOfInt")?;
@@ -516,7 +531,7 @@ fn rel_carrier_at(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, params: Option<
 /// statement spells them. `K` has no `-` designation, so a difference is
 /// written `x + K.inv(y)`; `⁻¹` and `/` are the class's (`field_division`).
 fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
-    elab.scope_memo(cx, carrier_ty, "ring::class_carrier", || read_class_carrier(elab, cx, carrier_ty))
+    Resolution(elab).scope_memo(cx, carrier_ty, "ring::class_carrier", || read_class_carrier(elab, cx, carrier_ty))
 }
 
 fn read_class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
@@ -1690,7 +1705,7 @@ impl Reifier<'_> {
     /// A field read off a value that computes to a constructor is read as the
     /// field: `Rat::add(x, y).num` is the numerator `add` builds, whether the
     /// read is the inline walk or a named projection
-    /// ([`Elaborator::named_field_read`]). Anything else is an atom.
+    /// ([`GeneratedDefs::named_field_read`]). Anything else is an atom.
     fn projection_or_atom(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
         if let Some(step) = self.range_step(tm, depth)? {
             return Ok(step);
@@ -1710,7 +1725,7 @@ impl Reifier<'_> {
     }
 
     fn project(&self, tm: &Rc<Term>) -> Option<Rc<Term>> {
-        let (path, cur) = self.elab.named_field_read(tm).unwrap_or_else(|| projection_path(tm));
+        let (path, cur) = GeneratedDefs(self.elab).named_field_read(tm).unwrap_or_else(|| projection_path(tm));
         // A call computes to its record; a literal record (`Rat(a, p, h).num`)
         // already is one.
         if path.is_empty() || !(matches!(app_spine(cur).0, Term::GlobalTm { .. }) || crate::spelling::is_pair(cur)) {
@@ -2856,7 +2871,7 @@ impl Drop for Depth<'_> {
     }
 }
 
-impl Elaborator {
+impl Ring<'_> {
     /// `ring` and `ring(h₁, …, hₖ)` in checking position.
     pub(crate) fn elab_ring(&self, cx: &Cx, hyps: &[Expr], goal: &Type, lvl: &Level, span: Span) -> R<Term> {
         let err = |msg: String| ElabError::Elab { msg, span };
@@ -2916,7 +2931,7 @@ impl Elaborator {
         })?;
         // As `omega`'s: one transparent slot per atom list, so the kernel
         // meets the list once rather than once per use.
-        let term = match self.attempt.goal_arena.allocate_transparent(&self.emitted_cx(cx), ty.clone(), level.clone(), atoms.clone()) {
+        let term = match self.attempt.goal_arena.allocate_transparent(&Declarations(self).emitted_cx(cx), ty.clone(), level.clone(), atoms.clone()) {
             crate::goals::Named::Slot(reference) => reference,
             crate::goals::Named::Inline => atoms,
             crate::goals::Named::Restart => {
@@ -2978,7 +2993,7 @@ impl Elaborator {
             .filter(|(i, _)| !cert.used.contains(i))
             .map(|(_, (term, ty, level))| LetValue::new(Rc::new(term), ty, level))
             .collect();
-        Ok(LetValue::discard_around(self, cx, unused, proof, goal, lvl))
+        Ok(LetValue::discard_around(self.0, cx, unused, proof, goal, lvl))
     }
 }
 

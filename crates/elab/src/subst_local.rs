@@ -25,7 +25,17 @@ use heather_syntax::{Expr, NamedArg, Span};
 use crate::context::Alias;
 use crate::{Cx, ElabError, Elaborator, R};
 
-impl Elaborator {
+/// Local substitution's part of the elaborator.
+pub(crate) struct LocalSubsts<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for LocalSubsts<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl LocalSubsts<'_> {
     /// `subst(h, e)` at `goal`.
     pub(crate) fn elab_subst(
         &self,
@@ -392,7 +402,7 @@ fn visible(cx: &Cx, p: usize) -> bool {
 /// A `match` arm binds its fields as aliases of `fst(sndʲ(v))` for the arm's
 /// value `v` (`elab_arm`, `wf.rs`), and the arm's goal and hypotheses mention
 /// `v` whole. So `subst` finds no local in `t = []`, and `rewrite` along it
-/// finds no `t` in a goal that displays one. [`Elaborator::split_projection`]
+/// finds no `t` in a goal that displays one. [`LocalSubsts::split_projection`]
 /// answers both by the move Lean's `cases` makes for a structure: a context
 /// in which `v`'s components are binders `c₀ … c_L`, every later local that
 /// mentions `v` is bound again at `v := (c₀, …, c_L)`, the goal likewise,
@@ -443,7 +453,7 @@ fn projection_path(el: &Elaborator, cx: &Cx, t: &Term, span: Span) -> Option<(us
     }
 }
 
-impl Elaborator {
+impl LocalSubsts<'_> {
     /// `t`, when it is not a local itself but reduces to one: the local's
     /// position.
     pub(crate) fn reduces_to_local(&self, cx: &Cx, t: &Term, span: Span) -> Option<usize> {

@@ -885,7 +885,7 @@ pub(crate) fn strengthen_global(t: &Term, g: u32) -> Term {
 ///
 /// Total over the expression forms a *self-call* can hide in, which is what
 /// its callers need: the recursion scans (`recursion::recurses_on`,
-/// [`crate::Elaborator::varying_params`], [`crate::Elaborator::cov_depth`]) are
+/// [`Generalize::varying_params`](crate::generalize::Generalize::varying_params), [`Routes::cov_depth`](crate::matching::Routes::cov_depth)) are
 /// sizing decisions, so a form missed here costs a refusal, never a wrong
 /// term. Types (`TyLit`, type arguments, annotations) are not entered.
 pub(super) fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {

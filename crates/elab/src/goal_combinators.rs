@@ -12,6 +12,8 @@ use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
 use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
+use crate::inductive::Inductives;
+use crate::name_lookup::NameLookup;
 
 /// Re-enter after each branch's motive has specialized the goal. Like the
 /// parser marker, this head cannot collide with a source name.
@@ -229,7 +231,7 @@ fn word_operation(elab: &Elaborator, term: &Term) -> bool {
     }
     let Term::GlobalTm { var, .. } = head else { return false };
     elab.global_abs_of(*var)
-        .and_then(|abs| elab.global_qualified_name_at(abs))
+        .and_then(|abs| NameLookup(elab).global_qualified_name_at(abs))
         .is_some_and(|name| name.starts_with("bitvec::BitVec::"))
 }
 
@@ -570,7 +572,7 @@ fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
         .iter()
         .rev()
         .filter(|name| case_equation(name))
-        .find(|name| elab.refuted_by_computation(cx, &var(name)))?;
+        .find(|name| Inductives(elab).refuted_by_computation(cx, &var(name)))?;
     Some(Expr {
         kind: ExprKind::App {
             head: Box::new(var("absurd")),

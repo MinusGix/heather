@@ -31,6 +31,8 @@ use crate::inductive::{FieldKind, Inductive, inject};
 use crate::iwf_family::{ArmEnv, child_index, res_expr};
 use crate::recursion::{FnChildIh, Guard, GuardKind};
 use crate::{Alias, Cx, Elaborator, R, err};
+use crate::indexed::IndexedFamilies;
+use crate::iwf_family::IwfFamily;
 
 fn var(i: u32) -> Term {
     Term::Var(LocalVar(i))
@@ -713,7 +715,17 @@ impl Br<'_> {
     }
 }
 
-impl Elaborator {
+/// The tier-2 W lowering's part of the elaborator.
+pub(crate) struct IwfW<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for IwfW<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl IwfW<'_> {
     /// Constructor `k`'s written result index and recursive fields,
     /// elaborated in `acx` (the stored fields aliased there), with the index
     /// type `ity` scoped in `acx`.
@@ -806,7 +818,7 @@ impl Elaborator {
             .expect("an IWf-route declaration has a shape declaration");
         let n = ind.ctors.len();
         let (shape, ls) = self.lower_instance(cx, shape_decl, args, vargs, span)?;
-        let (ity, ilvl) = self.index_type_at(cx, ind, args, vargs, span)?;
+        let (ity, ilvl) = IndexedFamilies(self).index_type_at(cx, ind, args, vargs, span)?;
         let spine = self.spine(&shape, &ls, n, span)?;
         // The function domains are spelled over the type parameters: bound
         // here, to `args`, for every branch below.
@@ -821,7 +833,7 @@ impl Elaborator {
         for k in 0..n {
             let mut pcx = cx.clone();
             pcx.push("#p".into(), (*spine.ctors[k].0).clone(), spine.ctors[k].1.clone());
-            let dcx = self.decl_payload_cx(&pcx, ind, &spine, k, &Rc::new(var(0)), 1, span)?;
+            let dcx = IwfFamily(self).decl_payload_cx(&pcx, ind, &spine, k, &Rc::new(var(0)), 1, span)?;
             let (_, kids) = self.iw_branch(&dcx, ind, k, &ity.shift_local(1), &ilvl, None, span)?;
             for kid in &kids {
                 let Some((a, la)) = &kid.dom else { continue };
@@ -853,7 +865,7 @@ impl Elaborator {
         let mut xcx = cx.clone();
         xcx.push("#x".into(), shape.clone(), ls.clone());
         let pos_body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _: &Type| -> R<Term> {
-            let dcx = self.decl_payload_cx(bcx, ind, &spine, k, value, d, span)?;
+            let dcx = IwfFamily(self).decl_payload_cx(bcx, ind, &spine, k, value, d, span)?;
             let (_, kids) = self.iw_branch(&dcx, ind, k, &ity.shift_local(d), &ilvl, None, span)?;
             let mut codes = kids
                 .iter()
@@ -875,7 +887,7 @@ impl Elaborator {
             }
             Ok(acc)
         };
-        let ptree = self.idx_case_tree(
+        let ptree = IndexedFamilies(self).idx_case_tree(
             &xcx,
             &spine,
             spine.root(),
@@ -935,7 +947,7 @@ impl Elaborator {
             ccx.push("#ih".into(), ih_ty(d + 1, &lab.shift_local(1)), lih.clone());
             ccx.push("#j".into(), ity.shift_local(d + 2), ilvl.clone());
             let dd = d + 3;
-            let dcx = self.decl_payload_cx(&ccx, ind, &spine, k, &Rc::new(value.shift_local(3)), dd, span)?;
+            let dcx = IwfFamily(self).decl_payload_cx(&ccx, ind, &spine, k, &Rc::new(value.shift_local(3)), dd, span)?;
             let (out, kids) = self.iw_branch(&dcx, ind, k, &ity.shift_local(dd), &ilvl, None, span)?;
             let br = Br {
                 sig: sig.shift_local(dd),
@@ -955,7 +967,7 @@ impl Elaborator {
                 ),
             ))
         };
-        let tree = self.idx_case_tree(&c3, &spine, spine.root(), q(4, &var(0)), &lq, Rc::new(var(2)), 3, &ok_body)?;
+        let tree = IndexedFamilies(self).idx_case_tree(&c3, &spine, spine.root(), q(4, &var(0)), &lq, Rc::new(var(2)), 3, &ok_body)?;
         // The step over (Γ, a, f, ih), moved under the tree `t` the predicate
         // is a function of.
         let step = app(app(tree, var(1)), var(0)).shift_local_above(1, 3);
@@ -1129,7 +1141,7 @@ impl Elaborator {
         let body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _: &Type| -> R<Term> {
             self.iw_arm(bcx, env, sig, &w, k, value, d)
         };
-        let tree = self.idx_case_tree(
+        let tree = IndexedFamilies(self).idx_case_tree(
             &c3,
             env.spine,
             env.spine.root(),
@@ -1181,7 +1193,7 @@ impl Elaborator {
         ccx.push("#c".into(), sig.ok_ty(d + 3, &sup3, &var(0)), lk.clone());
         // In BODY: f' = 3, ih' = 2, j = 1, c = 0.
         let dd = d + 4;
-        let dcx = self.decl_payload_cx(&ccx, ind, env.spine, k, &Rc::new(value.shift_local(4)), dd, span)?;
+        let dcx = IwfFamily(self).decl_payload_cx(&ccx, ind, env.spine, k, &Rc::new(value.shift_local(4)), dd, span)?;
         let pos = sig.pos_at(dd, &lab.shift_local(4));
         let (out, kids) = self.iw_branch(&dcx, ind, k, &sig.ity.shift_local(dd), li, Some((&pos, &sig.lp)), span)?;
         let sigd = sig.shift_local(dd);
@@ -1463,7 +1475,7 @@ impl Elaborator {
         let mlvl = env.mlvl;
         let mut acx = cx.clone();
         let past = (cx.names.len() - env.gamma0.len()) as u32;
-        self.payload_aliases(&mut acx, ind, env.spine, k, &Rc::new(value.shift_local(by)), past, names, span)?;
+        IwfFamily(self).payload_aliases(&mut acx, ind, env.spine, k, &Rc::new(value.shift_local(by)), past, names, span)?;
         let depth = acx.names.len();
         let mut children = Vec::new();
         let mut fn_children = Vec::new();
@@ -1486,7 +1498,7 @@ impl Elaborator {
                     let at = if env.rebind_inner {
                         ind.index_ty
                             .as_ref()
-                            .and_then(|ity| self.index_head(&acx, ity, &c, span))
+                            .and_then(|ity| IwfFamily(self).index_head(&acx, ity, &c, span))
                             .and_then(|(_, args)| args.first().map(|a| (**a).clone()))
                             .unwrap_or_else(|| c.clone())
                     } else {
@@ -1516,7 +1528,7 @@ impl Elaborator {
                         ycx.push("#y".into(), a.clone(), lp.clone());
                         ind.index_ty
                             .as_ref()
-                            .and_then(|ity| self.index_head(&ycx, ity, &c, span))
+                            .and_then(|ity| IwfFamily(self).index_head(&ycx, ity, &c, span))
                             .and_then(|(_, args)| args.first().map(|a| Rc::new((**a).clone())))
                     } else {
                         Some(Rc::new(c.clone()))
