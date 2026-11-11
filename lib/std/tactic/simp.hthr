@@ -173,3 +173,28 @@ fn simp_with(sets: List<SimpSet>, extra: List<Expr> := [], defaults: Bool := Tru
 fn simp(extra: List<Expr> := [], defaults: Bool := True, entries: List<SimpSet> := registered(SimpSet)) → Tac<Expr> {
     simp_with([], extra := extra, defaults := defaults, entries := entries)
 }
+
+// `simp_check(sets)`: the sets' laws, taken together, pass the checks a set
+// is held to (docs/simp-design.md §4), proving `True`. Written as a theorem
+// beside a set, or beside the sets a module means to use together:
+//
+//     theorem list_shape_checked(): True { by simp_check([simp_list_shape]) }
+//
+// No law's own statement may loop under the list, and no law may be
+// rewritten by another to a result that does not join. A refusal names the
+// law and gives the route.
+fn simp_check(sets: List<SimpSet>) → Tac<Expr> {
+    let laws <- simp_laws_of(simp_named(sets));
+    match <- simp_check_laws(laws) {
+        Accepted(p) => pure(Hd(p)),
+        Refused(why) => fail(why, simp_notes(simp_named(sets))),
+    }
+}
+
+// The defaults of `simp_laws`, each alone and the two together (a goal
+// about list lengths gets both).
+theorem simp_nat_arith_checked(): True { by simp_check([simp_nat_arith]) }
+
+theorem simp_list_shape_checked(): True { by simp_check([simp_list_shape]) }
+
+theorem simp_core_defaults_checked(): True { by simp_check([simp_nat_arith, simp_list_shape]) }

@@ -482,8 +482,28 @@ A free function named `simp` makes `e.simp()` ambiguous wherever both are
 in scope (the member-or-name rule), so `Regex::simp` became
 `Regex::simplify`.
 
-Not built: the registration checks of §4 (orientation, overlaps), the
-`--json` report, unfolding by name. Known gaps: a law between statements,
+**The checks of §4, as far as running a set shows** (`by
+simp_check([S, …])`, the host request `SimpCheck`). Each law's own
+statement, with its binders as fresh variables, is normalised by the whole
+list. A run that loops refuses the list: it has no normal form at that
+law's instances (commutativity, two laws that undo each other). A run
+whose two sides do not meet means another law rewrote the left side first
+and the results do not join; the refusal prints the two normal forms,
+which is the equation to add. A check is a theorem of `True` beside the
+set (`simp_list_shape_checked` in `simp.hthr`,
+`Regex::simp_regex_same_checked`), or beside the sets a module uses
+together, so it is re-run when a set or a lemma changes and not at every
+call.
+
+This is weaker than §4 in three ways, each left open on
+`issues/simp-tactic.md`: there is no order, so termination is tested at
+each law's generic instance and not proved; an overlap that needs both
+left sides instantiated (associativity against a unit) is not found, since
+that is unification of the two; and nothing forces a registered set to
+have its check, so an unchecked set is only caught by the loop report at a
+call.
+
+Not built: the `--json` report, unfolding by name. Known gaps: a law between statements,
 `P ↔ Q` (`issues/simp-iff-laws.md`); an equation's instance under a binder
 (`issues/simp-under-binders.md`); a goal a named case split left unfolded
 past its relation, which is restated in a one-step `calc`

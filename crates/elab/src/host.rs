@@ -434,6 +434,8 @@ pub enum Request {
     /// The goal handle closed by simplifying with the laws
     /// (docs/simp-design.md §7).
     Simp(Vec<RExpr>, u64),
+    /// The laws checked as a rewrite system (docs/simp-design.md §4).
+    SimpCheck(Vec<RExpr>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -998,6 +1000,15 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     laws.push(self.expr(self.call("host_proof", vec![tree, self.lit(i)])?, &mut budget)?);
                 }
                 Ok(Step::Ask(Request::Simp(laws, self.nat_of("host_handle", vec![tree])?)))
+            }
+            36 => {
+                let count = self.nat_of("host_proof_count", vec![tree])?;
+                let mut budget = READ_BUDGET;
+                let mut laws = Vec::new();
+                for i in 0..count {
+                    laws.push(self.expr(self.call("host_proof", vec![tree, self.lit(i)])?, &mut budget)?);
+                }
+                Ok(Step::Ask(Request::SimpCheck(laws)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1943,6 +1954,7 @@ impl Host<'_> {
                 Request::Abstract(h, x) => Answer::Handle(refusable(self.abstract_request(run, h, &x))?),
                 Request::Revert(h, x) => Answer::Handle(refusable(self.revert_request(run, h, &x))?),
                 Request::Simp(laws, goal) => Answer::Handle(refusable(self.simp_request(run, &laws, goal, span))?),
+                Request::SimpCheck(laws) => Answer::Handle(refusable(self.simp_check_request(run, &laws, span))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2897,6 +2909,37 @@ impl Host<'_> {
             .simp_terms(&cx, terms, &expected, &glevel, span)
             .map_err(|e| Fault::Ill(elab_message(e)))?;
         Ok(run.issue(at, Held::Term(p, expected, glevel)))
+    }
+
+    /// `SimpCheck(laws)`: the laws pass the checks a set is held to
+    /// (`rewrite::Simps::check_terms`, docs/simp-design.md §4): none loops
+    /// on its own statement, and none is rewritten by another to a result
+    /// that does not join. Answered with `trivial`, a proof of `True`, so a
+    /// check is a theorem beside the set; refused with the law and the
+    /// route.
+    fn simp_check_request(&self, run: &mut Run, laws: &[RExpr], span: Span) -> Result<u64, Fault> {
+        let mut at = 0;
+        for law in laws {
+            at = run.join(run.scope_of(law)?, at)?;
+        }
+        let mark = run.trail.len();
+        let mut reified = Vec::with_capacity(laws.len());
+        for law in laws {
+            reified.push(self.reify(run, law, at).inspect_err(|_| run.restore(mark))?);
+        }
+        let cx = run.cx(at)?;
+        let mut terms = Vec::with_capacity(reified.len());
+        for (i, r) in reified.iter().enumerate() {
+            let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+                run.restore(mark);
+                return Err(Fault::Ill("a law mentions a hole nothing has solved".into()));
+            };
+            let name = self.spell_term_clean(&cx, &t).unwrap_or_else(|| format!("law {}", i + 1));
+            terms.push((name, t, ty, r.level.clone()));
+        }
+        crate::rewrite::Simps(self).check_terms(&cx, terms, span).map_err(|e| Fault::Ill(elab_message(e)))?;
+        let level = Level::Zero;
+        Ok(run.issue(at, Held::Term(Term::Triv { level: level.clone() }, Type::Unit { level: level.clone() }, level)))
     }
 
     /// A name, elaborated where the `by` is. Elaboration may leave notes and

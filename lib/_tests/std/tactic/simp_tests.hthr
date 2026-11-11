@@ -181,3 +181,25 @@ theorem no_default(a, b: Bool): a = b { by simp() }
 // does not get.
 // expect-error: tried sets: none
 theorem defaults_follow_the_goal(a: Bool): (a && True) = (True && a) { by simp() }
+
+// ---------------------------------------------------------------------------
+// `by simp_check([S, …])`: sets held to the checks of a rewrite system
+// (docs/simp-design.md §4), as far as running them shows.
+
+// Sets from different modules, checked for use together.
+theorem defaults_together(): True { by simp_check([simp_nat_arith, simp_list_shape, simp_regex_same]) }
+
+// A commuting law loops on its own statement.
+// expect-error: these laws have no normal form at an instance of law 1 `add_comm`
+theorem commuting_set(): True { by simp_check([simp_tests_commute]) }
+
+// Two laws for one left side whose results do not join: the report gives
+// the two normal forms, which is the equation to add.
+theorem len_append_swapped<A>(xs, ys: List<A>): (xs ++ ys).len() = ys.len() + xs.len() {
+    rewrite(List::len_append(xs, ys), Nat::add_comm(xs.len(), ys.len()))
+}
+
+register def simp_tests_overlap: SimpSet = simp_set("simp_tests::overlap", [name_of(List::len_append), name_of(len_append_swapped)]);
+
+// expect-error: law 2 `len_append_swapped` overlaps another law, and the two results do not join
+theorem overlapping_set(): True { by simp_check([simp_tests_overlap]) }

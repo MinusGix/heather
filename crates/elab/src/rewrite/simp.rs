@@ -169,6 +169,83 @@ impl Simps<'_> {
         })
     }
 
+    /// A list of laws checked as a rewrite system, as far as running it
+    /// shows (docs/simp-design.md §4): each law's own statement, at its
+    /// binders as fresh variables, is normalised by the whole list. A run
+    /// that loops means the list has no normal form at that law's instances
+    /// (a commuting law, two laws that undo each other); a run whose two
+    /// sides do not meet means another law fired on the left side first and
+    /// the two results do not join, an overlap the author closes with the
+    /// equation named. Overlaps that need both left sides instantiated
+    /// (associativity against a unit) are not found: that is unification of
+    /// the two, which this does not do.
+    pub(crate) fn check_terms(&self, cx: &Cx, laws: Vec<(String, Term, Type, Level)>, span: Span) -> R<()> {
+        let exprs: Vec<Expr> = laws.iter().map(|(name, ..)| Expr { kind: ExprKind::Var(name.clone()), span }).collect();
+        for (i, (name, _, law_ty, law_lvl)) in laws.iter().enumerate() {
+            // The law's binders as locals, its conclusion under them.
+            let mut here = cx.clone();
+            let mut cur = self.whnf(&here, law_ty, span)?;
+            let mut lvl = law_lvl.clone();
+            let mut k = 0u32;
+            while let Type::Pi { dom_level, cod_level, dom, cod } = cur {
+                here.push(format!("x{k}"), (*dom).clone(), dom_level);
+                lvl = cod_level;
+                k += 1;
+                cur = self.whnf(&here, &cod, span)?;
+            }
+            // The statement as written, not its head normal form: a
+            // relation's application, not what the relation unfolds to.
+            let mut written = law_ty;
+            for _ in 0..k {
+                let Type::Pi { cod, .. } = written else { break };
+                written = cod;
+            }
+            let statement = if matches!(written, Type::Pi { .. }) { &cur } else { written };
+            let mut rules = Vec::with_capacity(laws.len());
+            for (h, (n, proof, ty, _)) in exprs.iter().zip(&laws) {
+                rules.push(self.law(&here, "simp_check", h, format!("`{n}`"), proof.shift_local(k), ty.shift_local(k))?);
+            }
+            let relations = Relations(self.0);
+            let run = self.normalise(&relations, &here, &rules, statement, &lvl, None, None)?;
+            if run.cycle.is_some() || run.exhausted {
+                return Err(ElabError::Elab {
+                    msg: format!(
+                        "`simp_check`: these laws have no normal form at an instance of law {} \
+                         `{name}`: rewriting its own statement loops\n  note: a law whose right \
+                         side its own left side matches (commutativity), or two laws that undo \
+                         each other, cannot both be in a set{}",
+                        i + 1,
+                        self.report(&here, &rules, &run, None)
+                    ),
+                    span,
+                });
+            }
+            let sides = match &run.end {
+                Type::Id { lhs, rhs, .. } => Some((Rc::clone(lhs), Rc::clone(rhs))),
+                end => Relation::of_type(self.0, &here, end, span).map(|rel| (rel.left, rel.right)),
+            };
+            let Some((left, right)) = sides else { continue };
+            if left != right && !Rewrites(self.0).terms_convert(&here, &left, &right) {
+                let shown = |t: &Term| self.spell_term_clean(&here, t).unwrap_or_else(|| "…".into());
+                return Err(ElabError::Elab {
+                    msg: format!(
+                        "`simp_check`: law {} `{name}` overlaps another law, and the two results \
+                         do not join: its left side normalises to\n    {}\n  and its right side \
+                         to\n    {}\n  note: a term these laws both rewrite has two normal \
+                         forms; add the equation between them as a law, or drop one of the \
+                         two{}",
+                        i + 1,
+                        shown(&left),
+                        shown(&right),
+                        self.report(&here, &rules, &run, None)
+                    ),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// A law of the list: what it concludes is read where it fires; a proof
     /// of something that is no statement at all is refused here, used or
     /// not.
