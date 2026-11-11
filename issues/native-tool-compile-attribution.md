@@ -1,6 +1,6 @@
 ---
 title: Attribute a native tool's write-elf now that the per-process floor is gone
-status: open
+status: closed
 labels: [performance,native,testing]
 area: heather-in-heather
 created: 2026-11-11
@@ -26,3 +26,48 @@ Take a `--timings` table of `write-elf` for `sort_tool` and `tac_tool` cold and 
 ## Done when
 
 The table exists in this issue's log and the follow-up it points at is filed.
+
+## Log
+
+- 2026-11-11: attributed, and the largest part fixed in the same round.
+
+  **The table** (`sort_tool` cold, four-core cloud box, dev-profile binary at width one, `--timings` on, master 56164d3; seconds are self time of the family's rows, and a read is two rows, its definition and its evaluation):
+
+  | family | rows | s | evaluator steps | what it is |
+  |---|---|---|---|---|
+  | `{p}_read::bytes_#_#` | 406 | 13.95 | 32.7 M | the fork's read of each span's bytes |
+  | `{p}_parts::read_#_part` | 254 | 11.50 | 31.6 M | the fork's read of each part's emission |
+  | `{p}_parts::o_#` | 520 | 10.51 | 29.0 M | the fork's read of each part's live-out set |
+  | `{p}_certificate::e_#` | 260 | 10.00 | 23.5 M | the kernel's check of each part's emission (9.1 s of gate) |
+  | `ck_#`, `piece_#_is`, `t_#`, `checked_#`, `at_#` | | 6.7 | | the rest of the certificate, 0.8 to 1.9 s each |
+  | `live_sets`, `allocation`, `trace` | | 2.3 | | one read each over the whole program |
+
+  The run: 67.0 s, of it 14.3 s in the kernel gate, 4.1 s image work, 1.3 s hashing and 50.4 s everything else (the reads and elaborating the certificate); 137.0 M evaluator steps. `tac_tool` has the same shape at 46.8 s and 91.4 M steps.
+
+  **Why the reads cost 36 s.** `function_ir_source::evaluate_numbers` built a fresh value arena for every read. A part's statement, its live-out set and what is known as it starts are spelled from its parent's (`{p}_s_`, `{p}_o_`, `{p}_kn_`), so every read worked each of them out from the root of the program again: a read of one eight-leaf part was 130 to 530 thousand steps of which 50 to 230 thousand were that chain. The byte reads then evaluated every part's emission a second time, to encode it once the labels were known.
+
+  **Fixed.**
+  - The reads of a tool's parts run in sessions that share one arena (`function_ir_source::read_sharing`), in the plan's order, so a part's set and known words are a step from what was read before. One arena for the whole tool ran past the suite's 6 GiB rail (a step keeps a few hundred bytes), so a session ends after two million evaluator steps and the next starts over; the bound is counted in steps so the kernel needed no edit.
+  - A whole part's read ends with its bytes, unlinked (`Prog::unlinked`, native_compile: a jump's displacement is the only thing in an item's bytes that reads the labels), and `labels::link` writes each displacement in Rust once the program is laid out. Untrusted like the reads: bytes linked wrong are a piece the kernel refuses. This is the first direction of [[native-certificate-fork-byte-reads]], which it closes.
+
+  **Measured** with `scripts/bench-probes --heavy --filter native/elf-cold`, two samples a side in the same hour, the before side in a worktree of master, minimum of the samples (spread within 7%):
+
+  | case | before s | after s | steps before | steps after |
+  |---|---|---|---|---|
+  | `native/elf-cold-sort` | 66.97 | 39.05 | 136,993,448 | 61,482,271 |
+  | `native/elf-cold-tac` | 46.83 | 27.07 | 91,409,523 | 39,793,202 |
+  | `native/elf-cold-head-n` | 20.14 | 17.76 | 27,943,304 | 19,843,842 |
+  | `native/elf-cold-yes` | 5.88 | 5.46 | 1,381,140 | 1,104,108 |
+
+  All four ELFs and certificates are byte-identical to master's. `sort_tool`'s peak resident memory is 1.05 GB before and after (the `trace` read sets it).
+
+  **Tried and dropped.** Parts of at most four and two leaves instead of eight: 48 and 55 s against 44.6 on `sort_tool`, because the reads' steps do not move (a leaf costs what it costs) and every extra join costs the kernel about 35 thousand steps.
+
+  **What is left on `sort_tool` (41.7 s with `--timings`)**: the kernel gate 13.9 s (`e_#` 8.9 s: the 127 whole parts 6.3 s and 14.8 M steps, the 133 joins 3.2 s and 8.7 M steps), the reads 9.5 s (parts 4.5, live-out sets 2.2, `live_sets` 1.2, `allocation` 0.9, `trace` 0.7), elaborating the certificate about 6 s, image work and hashing 5.2 s.
+
+  **Follow-ups.**
+  - [[native-emission-membership-scans]]: two thirds of a leaf's emission, in the read and in the kernel alike, is `absent` over lists of word ids through `Nat::differs`, `Nat::eq_dec` and `Nat::same`.
+  - [[native-write-elf-join-liveness]] (open since 2026-11-02): the joins' third of `e_#`, and the live-out reads, are liveness over a sibling.
+  - [[native-process-fixed-cost]]: `yes_tool` cold is 5.5 s of which 4 s is image work and hashing over 105 modules, paid by every `write-elf` process.
+
+  `perf/bench/cases.tsv` gained `native/elf-cold-sort` and `native/elf-cold-tac`.

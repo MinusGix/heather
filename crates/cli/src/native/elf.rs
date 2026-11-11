@@ -289,23 +289,43 @@ fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().ma
         return Err(refused(symbol, &allocation));
     }
     let live_sets = numbers(&fork, &parts, &format!("{p}_live_sets"))?;
-    let mut readings = Vec::with_capacity(plan.reads.len());
-    for (name, &whole) in plan.reads.iter().zip(&plan.whole) {
-        match emission::Reading::of(&numbers(&fork, &parts, name)?, whole, &address)? {
-            Some(reading) => readings.push(reading),
-            None => return Err(refused(symbol, &numbers(&fork, &parts, &format!("{p}_refusal"))?)),
+    // The reads of the parts in sessions that share what they force
+    // (`function_ir_source::read_sharing`): a part's statement, its
+    // live-out set and what is known as it starts are each spelled from its
+    // parent's, and a read on its own works every one of them out from the
+    // root again, which was most of what the reads cost
+    // (issues/native-tool-compile-attribution.md).
+    let shared = |reads: &function_ir_source::Reads<'_, '_>, name: &str| {
+        let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, &parts, name);
+        reads.numbers(&format!("{parts}::{name}")).map_err(|e| format!("`{symbol}` ({name}): {e}"))
+    };
+    // With them each part's live-out set, to state as a literal: spelled
+    // from its parent's, a part's set is otherwise worked out again from
+    // the root in every declaration of the certificate that reads it, which
+    // for a part deep in nested loops is past one declaration's fuel
+    // (`native_heap_tools`' tac and sort,
+    // docs/native-heap-arena-design.md §3). From a literal parent the
+    // kernel checks a part's set in one step down the tree: the joins
+    // (`Stmt::emits_then_of` and its siblings) compare it with its spelling
+    // over the parent's literal.
+    enum Got { Set(Vec<u64>), Items(emission::Reading) }
+    let order = emission::reads(p, &plan);
+    let got = function_ir_source::read_sharing(&fork, order.len(), |reads, i| match &order[i] {
+        emission::Read::Live(name) => shared(reads, name).map(Got::Set),
+        emission::Read::Items(r) => {
+            let (name, whole) = plan.reads.get(*r).zip(plan.whole.get(*r)).ok_or_else(|| format!("`{symbol}`'s parts did not read back in order"))?;
+            match emission::Reading::of(&shared(reads, name)?, *whole, &address)? {
+                Some(reading) => Ok(Got::Items(reading)),
+                None => Err(refused(symbol, &numbers(&fork, &parts, &format!("{p}_refusal"))?)),
+            }
         }
+    })?;
+    let (mut sets, mut readings) = (Vec::new(), Vec::with_capacity(plan.reads.len()));
+    for read in got {
+        match read { Got::Set(set) => sets.push(set), Got::Items(reading) => readings.push(reading) }
     }
-    // Each part's live-out set as a literal, read on the fork: spelled from
-    // its parent's, a part's set is otherwise worked out again from the
-    // root in every declaration that reads it, which for a part deep in
-    // nested loops is past one declaration's fuel (`native_heap_tools`'
-    // tac and sort, docs/native-heap-arena-design.md §3). From a literal
-    // parent the kernel checks a part's set in one step down the tree: the
-    // joins (`Stmt::emits_then_of` and its siblings) compare it with its
-    // spelling over the parent's literal.
     let mut plan = plan;
-    plan.text = emission::live_literals(p, &plan.text, |name| numbers(&fork, &parts, name))?;
+    plan.text = emission::live_literals(p, &plan.text, &sets)?;
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
     let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
@@ -325,25 +345,32 @@ fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().ma
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
     let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)), {size})");
-    // The bytes on the same fork, a read at a time by the parts' programs
-    // and the table, so only the certificate elaborates the literal.
-    let (byte_text, byte_reads) = emission::byte_reads(p, &spans, &offsets);
-    let reads = format!("import {root};\nimport {parts};\n{imports}\n{table}{byte_text}\
+    // The bytes: a part's as its read gave them, the items' around parts
+    // read on the same fork, and every jump's displacement written here,
+    // now that the labels are laid out (`labels::link`). So only the
+    // certificate elaborates the literal, and its table.
+    let (byte_text, byte_reads) = emission::byte_reads(p, &spans);
+    let reads = format!("import {root};\nimport {parts};\n{imports}\n{byte_text}\
         fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n");
     let read = format!("{p}_read");
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
-    let mut bytes = Vec::with_capacity(length);
-    for (name, items) in &byte_reads {
-        let read = numbers(&fork, &read, name)?;
-        if read.len() as u64 != lens[items.clone()].iter().sum::<u64>() {
+    let mut bytes = vec![0u8; length];
+    let mut place = |items: std::ops::Range<usize>, read: &[u8]| {
+        let at = offsets[items.start] as usize..offsets[items.end] as usize;
+        if read.len() != at.len() {
             return Err(format!("`{symbol}`'s bytes from item {} are not as long as its items", items.start));
         }
-        for n in read { bytes.push(byte(n)?); }
+        bytes[at].copy_from_slice(read);
+        Ok(())
+    };
+    for span in &spans {
+        if let Some(read) = &span.bytes { place(span.start..span.start + span.count, read)?; }
     }
-    if bytes.len() != length {
-        return Err(format!("`{symbol}`'s bytes did not read back"));
+    for (name, items) in &byte_reads {
+        place(items.clone(), &numbers(&fork, &read, name)?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?)?;
     }
+    labels::link(&items, &offsets, &mut bytes).map_err(|why| format!("`{symbol}`'s bytes did not read back: {why}"))?;
     let head = numbers(&fork, &read, &format!("{p}_header_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     drop(fork);
     if head.len() != HEADER {
@@ -597,13 +624,7 @@ fn layout_refusal(items: &[(u64, String)], lens: &[u64]) -> Option<String> {
     }
     let mut at = 0;
     for ((_, item), len) in items.iter().zip(lens) {
-        let target = |prefix: &str| item.strip_prefix(prefix)
-            .and_then(|rest| rest.trim_end_matches(')').rsplit(", ").next()?.parse::<u64>().ok());
-        let (jump, forward) = match (target("Jcc("), target("Jmp(").or_else(|| target("CallTo("))) {
-            (Some(t), _) => (t, true),
-            (_, Some(t)) => (t, false),
-            _ => { at += len; continue; }
-        };
+        let Some((jump, forward)) = labels::jump(item) else { at += len; continue; };
         match named.get(&jump) {
             None => return Some(format!("a jump to label {jump}, which no item names")),
             Some(&to) if forward && to < at + len => return Some(format!("a conditional jump back to label {jump}")),
