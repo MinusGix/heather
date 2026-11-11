@@ -39,6 +39,7 @@ import algebra;
 import regex;
 import regex_language;
 import simp_laws;
+import simp;
 
 record Dfa<S> { start: S, step: S → Nat → S, accept: S → Bool }
 
@@ -421,6 +422,8 @@ register def simp_regex_same: SimpSet = simp_default("Regex::same", name_of(Rege
     name_of(Regex::simplify_same),
     name_of(Regex::deriv_simp_same),
 ]);
+
+theorem Regex::simp_regex_same_checked(): True { by simp_check([simp_regex_same]) }
 
 // ---------------------------------------------------------------------------
 // The automaton of derivatives.

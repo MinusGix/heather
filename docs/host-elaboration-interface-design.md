@@ -1076,4 +1076,10 @@ additions serve it, and neither is specific to it:
   per step, and the laws blocked at the normal form. The laws are read
   through the accessors `Close`'s proofs use (`host_proof_count`,
   `host_proof`). Tag 35.
-
+- **`SimpCheck(laws: List<Expr>) → Checked<Handle>`**: `trivial`, when the
+  laws pass the checks a set is held to (`rewrite::Simps::check_terms`,
+  `docs/simp-design.md` §11): no law's own statement loops under the list,
+  and none is rewritten by another to a result that does not join. Answered
+  with a proof of `True` so that a check is a theorem beside the set
+  (`by simp_check([S])`); refused with the law at fault and the route.
+  Tag 36.
