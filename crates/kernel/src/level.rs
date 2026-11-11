@@ -13,9 +13,25 @@
 //! Every constructor ([`Level::succ`], [`Level::max`], [`Level::constant`],
 //! the substitutions) returns the canonical representative of its ≈-class,
 //! so `≈` is `==` and a term's levels never need a separate normalization
-//! pass. The common forms are inline — `0`, `ℓ`, `k + 0`, `k + ℓ` and `ω` —
-//! and only a genuine join of two or more components lives behind an `Rc`,
-//! so a `Level` is 16 bytes with no allocation in the common case.
+//! pass.
+//!
+//! # One word
+//!
+//! A `Level` is one machine word, `Copy`, compared and hashed as an integer
+//! (`issues/kernel-level-eight-bytes.md`). The forms terms are made of are
+//! spelled in the word itself: a constant `k`, `n + ℓ` (so `ℓ`), and `ω`.
+//! Every other level, a join of two or more components or an offset too
+//! large for the word, is a [`Join`] in a process-wide table and the word is
+//! its index ([`intern`]). A level has exactly one word: the table holds
+//! each join once, and a level the word can spell is never put in the table.
+//!
+//! The table only grows. It holds the distinct joins the process has built,
+//! which are a property of the declarations checked (a join is written by a
+//! universe-polymorphic signature, not by a term's size), and an entry is
+//! one small allocation that is never freed. An index is meaningful only in
+//! the process that made it, so nothing that leaves the process may read
+//! the word: [`Level::parts`] is the level's spelling, and `Hash` hashes
+//! that spelling.
 //!
 //! **Why this is sound.** Every judgement the kernel makes about a level —
 //! [`Level::equiv`], [`Level::le`], [`Level::well_formed`] — is a function of
@@ -35,61 +51,135 @@
 //! in the lattice, and is equivalent only to itself. A level built with `ω`
 //! anywhere in it is `ω`.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::num::NonZeroU32;
-use crate::rc::Rc;
+use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
+use std::sync::RwLock;
 
 /// A universe variable: de Bruijn index into the universe context `L`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UnivVar(pub u32);
 
 /// Universe levels `l := ℓ | 0 | 1 + l | l ⊔ l' | ω`, held as the canonical
-/// representative of their ≈-class (see the module docs).
+/// representative of their ≈-class in one word (see the module docs).
 ///
-/// `Zero`, `Var` and `Omega` are written and matched directly. `Lift` and
-/// `Join` carry types whose fields are private to this module, so outside
-/// it they can be matched but only built through the constructors, which is
-/// what keeps every `Level` canonical. Read a level's components with
-/// [`Level::parts`].
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Level {
-    Zero,
-    Var(UnivVar),
-    /// `k + 0` or `k + ℓ`, `k ≥ 1`.
-    Lift(Lift),
-    /// Every other finite level: two or more components, or an offset too
-    /// large for [`Lift`].
-    Join(Rc<Join>),
-    Omega,
-}
+/// [`Level::Zero`], [`Level::Var`] and [`Level::Omega`] are written directly
+/// and `Zero` and `Omega` are matched directly; every other level is built
+/// through the constructors, which is what keeps every `Level` canonical.
+/// Read a level's components with [`Level::parts`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Level(NonZeroU64);
 
-/// `by + base` (`base` absent for `0`). Inline in [`Level::Lift`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Lift {
-    by: NonZeroU32,
-    base: Option<UnivVar>,
+// The word: a tag in the low three bits (never zero, so `Option<Level>` is a
+// word too) and a payload above it.
+
+const TAG_BITS: u32 = 3;
+/// The constant `k`, for `k < 2^61`: the payload is `k`.
+const CONST: u64 = 1;
+/// `n + ℓ`, for `n < 2^29`: the payload is `ℓ` in its low 32 bits and `n`
+/// above them.
+const LIFT: u64 = 2;
+/// Any other finite level: the payload is its index in the join table.
+const JOIN: u64 = 3;
+const OMEGA: u64 = 4;
+
+const CONST_LIMIT: u64 = 1 << (64 - TAG_BITS);
+const OFFSET_LIMIT: u64 = 1 << (64 - TAG_BITS - 32);
+
+/// What a word spells.
+enum Form {
+    Const(u64),
+    /// `n + ℓ`.
+    Lift(UnivVar, u64),
+    Join(&'static Join),
+    Omega,
 }
 
 /// `konst ⊔ ⨆ (n_i + ℓ_i)` after `adjust`: `vars` strictly ascending by
 /// variable, `konst` `None` exactly when some `n_i ≥ konst`. Invariant: no
-/// inline [`Level`] form can spell it (see `Level::from_count`).
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Join {
+/// word spells it by itself (see `Level::from_count`).
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Join {
     konst: Option<u64>,
     vars: Box<[(UnivVar, u64)]>,
+}
+
+/// The joins of the process, by index and by content.
+struct Joins {
+    all: Vec<&'static Join>,
+    ids: BTreeMap<&'static Join, u32>,
+}
+
+static JOINS: RwLock<Joins> = RwLock::new(Joins { all: Vec::new(), ids: BTreeMap::new() });
+
+thread_local! {
+    /// What this thread has read of [`JOINS`]: a prefix of `all` and the
+    /// joins it interned or met in `ids`. Entries are never changed or
+    /// removed, so a copy is never stale for an index it holds, and a
+    /// thread takes the lock only for a join it has not seen.
+    static SEEN: RefCell<Joins> = const { RefCell::new(Joins { all: Vec::new(), ids: BTreeMap::new() }) };
+}
+
+/// The word of `join`, which no word spells by itself: its index in the
+/// table, entered on first sight. Equal joins get equal indices, which is
+/// what makes `==` on words equivalence.
+fn intern(join: Join) -> Level {
+    let id = SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some(&id) = seen.ids.get(&join) {
+            return id;
+        }
+        let (kept, id) = {
+            // A panic under the lock leaves the table as it was before the
+            // entry or with the entry whole, so a poisoned lock is usable.
+            let mut joins = JOINS.write().unwrap_or_else(|e| e.into_inner());
+            match joins.ids.get_key_value(&join) {
+                Some((&kept, &id)) => (kept, id),
+                None => {
+                    let id = u32::try_from(joins.all.len()).expect("more than 2^32 distinct universe joins");
+                    let kept: &'static Join = Box::leak(Box::new(join));
+                    joins.ids.insert(kept, id);
+                    joins.all.push(kept);
+                    (kept, id)
+                }
+            }
+        };
+        seen.ids.insert(kept, id);
+        id
+    });
+    Level::word(JOIN, u64::from(id))
+}
+
+/// The join a [`JOIN`] word indexes. Out of line: no run measured holds a
+/// join, and the three forms that are a word must not pay for this one's
+/// frame ([`Level::form`]).
+#[inline(never)]
+fn interned(id: u64) -> &'static Join {
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some(&join) = seen.all.get(id as usize) {
+            return join;
+        }
+        let joins = JOINS.read().unwrap_or_else(|e| e.into_inner());
+        let have = seen.all.len();
+        seen.all.extend_from_slice(&joins.all[have..]);
+        seen.all[id as usize]
+    })
 }
 
 /// The variable terms of a level's canonical spelling, `(ℓ, n)` for `n + ℓ`,
 /// in ascending variable order. See [`Level::parts`].
 #[derive(Clone)]
-pub struct Parts<'a> {
+pub struct Parts {
     one: Option<(UnivVar, u64)>,
-    rest: std::slice::Iter<'a, (UnivVar, u64)>,
+    rest: std::slice::Iter<'static, (UnivVar, u64)>,
 }
 
-impl Iterator for Parts<'_> {
+impl Iterator for Parts {
     type Item = (UnivVar, u64);
 
+    #[inline]
     fn next(&mut self) -> Option<(UnivVar, u64)> {
         self.one.take().or_else(|| self.rest.next().copied())
     }
@@ -100,7 +190,22 @@ impl Iterator for Parts<'_> {
     }
 }
 
-impl ExactSizeIterator for Parts<'_> {}
+impl ExactSizeIterator for Parts {}
+
+/// By spelling, not by word: a join's index depends on the order the process
+/// met its joins in, and a hash may be kept past the process.
+impl Hash for Level {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self.form() {
+            Form::Join(join) => {
+                state.write_u64(JOIN);
+                join.hash(state);
+            }
+            _ => state.write_u64(self.0.get()),
+        }
+    }
+}
 
 /// `a + b` on level offsets. Unreachable by any real term (offsets come from
 /// numerals and from one `1+` per typing step), but a wrapped offset would
@@ -125,24 +230,17 @@ impl Count {
     /// Join in the components of `by + l`. A dominated constant that `l`
     /// dropped stays dropped: raised by `by` it is still at most the raised
     /// count of the variable that dominated it.
-    fn add(&mut self, l: &Level, by: u64) {
-        match l {
-            Level::Zero => self.konst = self.konst.max(by),
-            Level::Var(v) => self.vars.push((*v, by)),
-            Level::Lift(x) => {
-                let n = offset_add(u64::from(x.by.get()), by);
-                match x.base {
-                    None => self.konst = self.konst.max(n),
-                    Some(v) => self.vars.push((v, n)),
-                }
-            }
-            Level::Join(j) => {
+    fn add(&mut self, l: Level, by: u64) {
+        match l.form() {
+            Form::Const(k) => self.konst = self.konst.max(offset_add(k, by)),
+            Form::Lift(v, n) => self.vars.push((v, offset_add(n, by))),
+            Form::Join(j) => {
                 if let Some(k) = j.konst {
                     self.konst = self.konst.max(offset_add(k, by));
                 }
                 self.vars.extend(j.vars.iter().map(|&(v, n)| (v, offset_add(n, by))));
             }
-            Level::Omega => self.omega = true,
+            Form::Omega => self.omega = true,
         }
     }
 
@@ -164,7 +262,41 @@ impl Count {
     }
 }
 
+// `Zero`, `Var` and `Omega` keep the names they had as an enum's variants:
+// they are written at every site that builds a sort.
+#[allow(non_upper_case_globals, non_snake_case)]
 impl Level {
+    pub const Zero: Level = Level::word(CONST, 0);
+
+    /// Checker-internal; see the module docs.
+    pub const Omega: Level = Level::word(OMEGA, 0);
+
+    /// The level `ℓ`.
+    pub const fn Var(v: UnivVar) -> Level {
+        Level::word(LIFT, v.0 as u64)
+    }
+}
+
+impl Level {
+    const fn word(tag: u64, payload: u64) -> Level {
+        match NonZeroU64::new(payload << TAG_BITS | tag) {
+            Some(word) => Level(word),
+            None => panic!("a level's tag is never zero"),
+        }
+    }
+
+    #[inline]
+    fn form(self) -> Form {
+        let word = self.0.get();
+        let payload = word >> TAG_BITS;
+        match word & ((1 << TAG_BITS) - 1) {
+            CONST => Form::Const(payload),
+            LIFT => Form::Lift(UnivVar(payload as u32), payload >> 32),
+            JOIN => Form::Join(interned(payload)),
+            _ => Form::Omega,
+        }
+    }
+
     /// `1 + l`.
     pub fn succ(l: Level) -> Level {
         l.plus(1)
@@ -173,36 +305,36 @@ impl Level {
     /// `by + l`: `by` successors, in constant time.
     pub fn plus(&self, by: u64) -> Level {
         if by == 0 {
-            return self.clone();
+            return *self;
         }
-        match self {
-            Level::Zero => Level::lift(None, by),
-            Level::Var(v) => Level::lift(Some(*v), by),
-            Level::Lift(x) => Level::lift(x.base, offset_add(u64::from(x.by.get()), by)),
-            Level::Join(_) => {
+        match self.form() {
+            Form::Const(k) => Level::lift(None, offset_add(k, by)),
+            Form::Lift(v, n) => Level::lift(Some(v), offset_add(n, by)),
+            Form::Join(_) => {
                 let mut c = Count::new(0);
-                c.add(self, by);
+                c.add(*self, by);
                 c.finish()
             }
-            Level::Omega => Level::Omega,
+            Form::Omega => Level::Omega,
         }
     }
 
     /// `a ⊔ b`. With canonical levels there is one spelling of the result,
     /// so this and [`Level::join`] are the same operation.
     pub fn max(a: Level, b: Level) -> Level {
-        match (&a, &b) {
-            (Level::Omega, _) | (_, Level::Omega) => Level::Omega,
-            (Level::Zero, _) => b,
-            (_, Level::Zero) => a,
-            _ if a == b => a,
-            _ => {
-                let mut c = Count::new(0);
-                c.add(&a, 0);
-                c.add(&b, 0);
-                c.finish()
-            }
+        if a == Level::Omega || b == Level::Omega {
+            return Level::Omega;
         }
+        if a == Level::Zero || a == b {
+            return b;
+        }
+        if b == Level::Zero {
+            return a;
+        }
+        let mut c = Count::new(0);
+        c.add(a, 0);
+        c.add(b, 0);
+        c.finish()
     }
 
     /// `a ⊔ b`; the same as [`Level::max`]. The name the inference sites
@@ -226,86 +358,77 @@ impl Level {
         c.finish()
     }
 
-    /// `by + base` (`base` absent for `0`) in its canonical form.
+    /// `by + base` (`base` absent for `0`) in its canonical form: the word
+    /// that spells it when one does.
     fn lift(base: Option<UnivVar>, by: u64) -> Level {
-        if by == 0 {
-            return base.map_or(Level::Zero, Level::Var);
-        }
-        match u32::try_from(by).ok().and_then(NonZeroU32::new) {
-            Some(by) => Level::Lift(Lift { by, base }),
-            None => Level::Join(Rc::new(match base {
-                None => Join { konst: Some(by), vars: Box::new([]) },
-                Some(v) => Join { konst: None, vars: Box::new([(v, by)]) },
-            })),
+        match base {
+            None if by < CONST_LIMIT => Level::word(CONST, by),
+            Some(v) if by < OFFSET_LIMIT => Level::word(LIFT, by << 32 | u64::from(v.0)),
+            None => intern(Join { konst: Some(by), vars: Box::new([]) }),
+            Some(v) => intern(Join { konst: None, vars: Box::new([(v, by)]) }),
         }
     }
 
     /// The canonical form of `adjust(konst, vars)`, `vars` strictly
-    /// ascending: the one place a `Join` is built, and the inline form
-    /// whenever one exists.
+    /// ascending: with `lift`, the only place a join is interned, and never
+    /// for a level a word spells.
     fn from_count(konst: u64, vars: Vec<(UnivVar, u64)>) -> Level {
         let dominated = vars.iter().any(|&(_, n)| konst <= n);
         match (dominated, vars.as_slice()) {
             (_, []) => Level::lift(None, konst),
             (true, [(v, n)]) => Level::lift(Some(*v), *n),
-            _ => Level::Join(Rc::new(Join {
+            _ => intern(Join {
                 konst: (!dominated).then_some(konst),
                 vars: vars.into_boxed_slice(),
-            })),
+            }),
         }
     }
 
     /// The canonical spelling's components: `None` for `ω`, else the
     /// constant part (absent when some variable term dominates it) and the
     /// variable terms. `0` is `(Some(0), [])` and `ℓ` is `(None, [(ℓ, 0)])`.
-    pub fn parts(&self) -> Option<(Option<u64>, Parts<'_>)> {
-        let empty: &[(UnivVar, u64)] = &[];
+    #[inline]
+    pub fn parts(&self) -> Option<(Option<u64>, Parts)> {
         let only = |konst: Option<u64>, one: Option<(UnivVar, u64)>| {
-            Some((konst, Parts { one, rest: empty.iter() }))
+            Some((konst, Parts { one, rest: [].iter() }))
         };
-        match self {
-            Level::Zero => only(Some(0), None),
-            Level::Var(v) => only(None, Some((*v, 0))),
-            Level::Lift(x) => {
-                let by = u64::from(x.by.get());
-                match x.base {
-                    None => only(Some(by), None),
-                    Some(v) => only(None, Some((v, by))),
-                }
-            }
-            Level::Join(j) => Some((j.konst, Parts { one: None, rest: j.vars.iter() })),
-            Level::Omega => None,
+        match self.form() {
+            Form::Const(k) => only(Some(k), None),
+            Form::Lift(v, n) => only(None, Some((v, n))),
+            Form::Join(j) => Some((j.konst, Parts { one: None, rest: j.vars.iter() })),
+            Form::Omega => None,
         }
     }
 
     /// The level as a closed constant, if it is one. Every variable-free
     /// level is: `2 ⊔ 1` is `2`.
     pub fn as_constant(&self) -> Option<u64> {
-        match self.parts() {
-            Some((Some(k), vars)) if vars.len() == 0 => Some(k),
+        match self.form() {
+            Form::Const(k) => Some(k),
+            Form::Join(j) if j.vars.is_empty() => j.konst,
             _ => None,
         }
     }
 
     /// Whether every variable the level mentions satisfies `pred`.
     fn vars_all(&self, mut pred: impl FnMut(UnivVar) -> bool) -> bool {
-        self.parts().map_or(true, |(_, mut vars)| vars.all(|(v, _)| pred(v)))
+        match self.form() {
+            Form::Const(_) | Form::Omega => true,
+            Form::Lift(v, _) => pred(v),
+            Form::Join(j) => j.vars.iter().all(|&(v, _)| pred(v)),
+        }
     }
 
     /// Replace each variable `ℓ` by `f(ℓ)`, as the level algebra's
     /// homomorphism: `n + ℓ` becomes `n + f(ℓ)`, joined with the constant.
     fn map_vars(&self, f: impl Fn(UnivVar) -> Level) -> Level {
-        match self {
-            Level::Zero | Level::Omega => self.clone(),
-            Level::Var(v) => f(*v),
-            Level::Lift(x) => match x.base {
-                None => self.clone(),
-                Some(v) => f(v).plus(u64::from(x.by.get())),
-            },
-            Level::Join(j) => {
+        match self.form() {
+            Form::Const(_) | Form::Omega => *self,
+            Form::Lift(v, n) => f(v).plus(n),
+            Form::Join(j) => {
                 let mut c = Count::new(j.konst.unwrap_or(0));
                 for &(v, n) in j.vars.iter() {
-                    c.add(&f(v), n);
+                    c.add(f(v), n);
                 }
                 c.finish()
             }
@@ -315,7 +438,7 @@ impl Level {
     /// Well-formedness `L ⊢ l : Level`: every variable is in scope and `ω`
     /// does not occur (`ω` is never programmer-writable).
     pub fn well_formed(&self, univ_ctx_len: u32) -> bool {
-        !matches!(self, Level::Omega) && self.vars_all(|v| v.0 < univ_ctx_len)
+        *self != Level::Omega && self.vars_all(|v| v.0 < univ_ctx_len)
     }
 
     /// Normal form `adjust(count(l))`, or `LevelNf::Omega` for `ω`: the
@@ -328,9 +451,8 @@ impl Level {
     }
 
     /// Decidable equivalence `L ⊢ l ≈ l' : Level` (extended so that
-    /// `ω ≈ ω` only). Levels are canonical, so this is syntactic equality;
-    /// `Rc`'s equality is pointer-first, so a shared join is decided at
-    /// the root.
+    /// `ω ≈ ω` only). Levels are canonical and each has one word, so this
+    /// is equality of words.
     pub fn equiv(&self, other: &Level) -> bool {
         self == other
     }
@@ -342,10 +464,10 @@ impl Level {
         if self == other {
             return true;
         }
-        if matches!(self, Level::Omega) || matches!(other, Level::Omega) {
+        if *self == Level::Omega || *other == Level::Omega {
             return false;
         }
-        *other == Level::max(self.clone(), other.clone())
+        *other == Level::max(*self, *other)
     }
 
     /// Apply a universe substitution `φ`: variable `ℓᵢ` (innermost = 0) maps
@@ -359,7 +481,7 @@ impl Level {
     /// `depth` so it does not capture the binders passed under.
     pub fn subst_at(&self, phi: &[Level], depth: u32) -> Level {
         if self.vars_all(|v| v.0 < depth) {
-            return self.clone();
+            return *self;
         }
         self.map_vars(|v| if v.0 < depth { Level::Var(v) } else { phi[(v.0 - depth) as usize].shift(depth, 0) })
     }
@@ -372,7 +494,7 @@ impl Level {
     pub fn inst_at(&self, phi: &[Level], depth: u32) -> Level {
         let n = phi.len() as u32;
         if n == 0 || self.vars_all(|v| v.0 < depth) {
-            return self.clone();
+            return *self;
         }
         self.map_vars(|v| {
             if v.0 < depth {
@@ -388,7 +510,7 @@ impl Level {
     /// Weakening: add `by` to every variable at or above `cutoff`.
     pub fn shift(&self, by: u32, cutoff: u32) -> Level {
         if by == 0 || self.vars_all(|v| v.0 < cutoff) {
-            return self.clone();
+            return *self;
         }
         // Injective and order-preserving on variables, so the result is
         // canonical as it stands; going through `map_vars` re-derives that
@@ -456,10 +578,14 @@ mod tests {
         Level::Var(UnivVar(n))
     }
 
+    fn is_join(l: Level) -> bool {
+        matches!(l.form(), Form::Join(_))
+    }
+
     #[test]
-    #[cfg(target_pointer_width = "64")]
-    fn level_is_two_words() {
-        assert_eq!(std::mem::size_of::<Level>(), 16);
+    fn level_is_one_word() {
+        assert_eq!(std::mem::size_of::<Level>(), 8);
+        assert_eq!(std::mem::size_of::<Option<Level>>(), 8);
     }
 
     #[test]
@@ -550,38 +676,94 @@ mod tests {
         }
     }
 
-    /// The inline forms are used whenever they can spell the level, so a
-    /// `Join` is only ever a genuine join (or a huge offset).
+    /// A word spells the level whenever one can, so the table holds only
+    /// genuine joins (and huge offsets).
     #[test]
-    fn inline_forms_are_preferred() {
+    fn words_are_preferred() {
         assert!(matches!(Level::constant(0), Level::Zero));
-        assert!(matches!(Level::constant(5), Level::Lift(_)));
-        assert!(matches!(Level::max(Level::constant(1), Level::constant(5)), Level::Lift(_)));
-        assert!(matches!(Level::max(var(3), Level::succ(var(3))), Level::Lift(_)));
-        assert!(matches!(Level::max(var(0), Level::constant(1)), Level::Join(_)));
-        assert!(matches!(Level::max(var(0), var(1)), Level::Join(_)));
+        assert!(!is_join(Level::constant(5)));
+        assert!(!is_join(Level::max(Level::constant(1), Level::constant(5))));
+        assert!(!is_join(Level::max(var(3), Level::succ(var(3)))));
+        assert!(!is_join(var(u32::MAX).plus(OFFSET_LIMIT - 1)));
+        assert!(is_join(Level::max(var(0), Level::constant(1))));
+        assert!(is_join(Level::max(var(0), var(1))));
         // a join that collapses back to one component returns to inline
         let j = Level::max(var(0), var(1));
         assert_eq!(j.subst(&[Level::Zero, Level::Zero]), Level::Zero);
         assert_eq!(j.subst(&[var(0), var(0)]), var(0));
     }
 
-    /// Offsets past `u32` leave the inline form and stay exact.
+    /// Offsets past what the word holds leave it and stay exact.
     #[test]
     fn large_offsets_are_exact() {
-        let edge = u64::from(u32::MAX);
+        let edge = CONST_LIMIT - 1;
         let top = Level::constant(edge);
-        assert!(matches!(top, Level::Lift(_)));
-        let past = Level::succ(top.clone());
-        assert!(matches!(past, Level::Join(_)));
+        assert!(!is_join(top));
+        let past = Level::succ(top);
+        assert!(is_join(past));
         assert_eq!(past, Level::constant(edge + 1));
         assert_ne!(past, top);
         assert_eq!(past.as_constant(), Some(edge + 1));
+        assert_eq!(past.plus(3).as_constant(), Some(edge + 4));
         assert!(top.le(&past) && !past.le(&top));
+        let edge = OFFSET_LIMIT - 1;
+        assert!(!is_join(var(2).plus(edge)));
         let v = var(2).plus(edge + 7);
+        assert!(is_join(v));
         assert_eq!(v, Level::succ(var(2).plus(edge + 6)));
-        assert_eq!(Level::max(v.clone(), Level::constant(edge)), v);
+        assert_ne!(v, var(3).plus(edge + 7));
+        assert_eq!(Level::max(v, Level::constant(edge)), v);
         assert_eq!(v.normalize().canonical(), v);
+        assert_eq!(v.subst(&[var(0), var(1), Level::Zero]), Level::constant(edge + 7));
+    }
+
+    /// A variable and its offset do not run into each other in the word.
+    #[test]
+    fn the_word_keeps_variable_and_offset_apart() {
+        for v in [0, 1, 7, u32::MAX - 1, u32::MAX] {
+            for n in [0, 1, 2, OFFSET_LIMIT - 1, OFFSET_LIMIT, u64::from(u32::MAX) + 9] {
+                let l = var(v).plus(n);
+                let (konst, vars) = l.parts().unwrap();
+                assert_eq!((konst, vars.collect::<Vec<_>>()), (None, vec![(UnivVar(v), n)]));
+            }
+        }
+        assert_eq!(Level::Var(UnivVar(0)), Level::of_parts(None, [(UnivVar(0), 0)]));
+        assert_ne!(Level::Var(UnivVar(0)), Level::Zero);
+        assert_ne!(Level::Var(UnivVar(1)), Level::constant(1));
+    }
+
+    /// One join has one word, on whichever thread it is built or read, and
+    /// a hash is of the spelling: threads that meet joins in different
+    /// orders agree on both.
+    #[test]
+    fn joins_are_shared_between_threads() {
+        use std::collections::hash_map::DefaultHasher;
+        let hash = |l: Level| {
+            let mut h = DefaultHasher::new();
+            l.hash(&mut h);
+            h.finish()
+        };
+        let build = |order: Vec<u32>| {
+            order.into_iter().map(|i| (i, Level::max(var(900 + i), var(950 + 2 * i).plus(u64::from(i))))).collect::<Vec<_>>()
+        };
+        let forward: Vec<u32> = (0..40).collect();
+        let backward: Vec<u32> = (0..40).rev().collect();
+        let (a, b) = std::thread::scope(|s| {
+            let a = s.spawn(|| build(forward.clone()));
+            let b = s.spawn(|| build(backward.clone()));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        // Read here, on a thread that built none of them.
+        for (i, l) in &a {
+            let (_, twin) = b.iter().find(|(j, _)| j == i).unwrap();
+            assert_eq!(l, twin);
+            assert_eq!(hash(*l), hash(*twin));
+            let (konst, vars) = l.parts().unwrap();
+            assert_eq!(konst, None);
+            assert_eq!(vars.collect::<Vec<_>>(), vec![(UnivVar(900 + i), 0), (UnivVar(950 + 2 * i), u64::from(*i))]);
+        }
+        let distinct: std::collections::BTreeSet<u64> = a.iter().map(|(_, l)| l.0.get()).collect();
+        assert_eq!(distinct.len(), a.len());
     }
 
     // ---- reference model ------------------------------------------------

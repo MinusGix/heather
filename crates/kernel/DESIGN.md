@@ -21,9 +21,15 @@ applications. Concretely:
 - Universe levels with variables, `⊔`, `ω`; equivalence decided by the
   count/adjust map normalization (ch. 04 §universe-levels), and a `Level` *is*
   that normal form: every constructor returns the canonical representative,
-  so `≈` is `==` (16 bytes, joins behind an `Rc`; `level.rs`,
-  `issues/kernel-compact-level.md`). `ω` is checker-internal: never written
-  in programs, only the type level of `ΠΠ`.
+  so `≈` is `==` (`level.rs`, `issues/kernel-compact-level.md`). A `Level`
+  is one `Copy` word (2026-11-10, `issues/kernel-level-eight-bytes.md`): a
+  constant, `n + ℓ` and `ω` are spelled in the word, and any other level is
+  its index in a process-wide table of joins that holds each join once and
+  only grows, so `==` is one integer comparison. An index means something
+  only inside the process that made it: whatever leaves the process (the
+  images, the content hashes, `Hash` itself) reads a level's spelling
+  through `Level::parts`, never the word. `ω` is checker-internal: never
+  written in programs, only the type level of `ΠΠ`.
 - Universe polymorphism: `ΠΠ ℓ⃗. T` / `Λ ℓ⃗. t` / `t $ l⃗`, non-empty level
   vectors, layer m only.
 - Nat with its recursor; fully-annotated dependent functions
@@ -998,14 +1004,14 @@ paper too).
   arenas carry no collector. There is deliberately no global or thread-local
   sink: concurrent checks cannot contaminate one another's measurements, and
   enabling counters cannot change fuel, cache policy, or a verdict.
-- **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
-  `ω` compares only to itself. `equiv`/`le` take a **reflexivity pre-check**
-  first — identical syntax is equivalent because normalization is a function,
-  so the pre-check can only answer sooner, never differently, and a miss
-  falls through to the full decision. It is not an optimization of the
-  decision procedure but a shortcut *around* it, so nothing about
-  `adjust`/`count` (in particular the dominated-constant rule `n + ℓ ⊒ n`)
-  may be weakened to make it fire more often.
+- **Level equivalence** is equality of words. `adjust(count(l))` runs where
+  a level is built, every constructor returns the canonical representative,
+  and a representative has one word (`level.rs`); `ω` is equal only to
+  itself. `le` is `l' == l ⊔ l'`. Nothing about `adjust`/`count` (in
+  particular the dominated-constant rule `n + ℓ ⊒ n`) may be weakened to
+  make two levels meet more often: the constructors are the decision
+  procedure now, and the reference model in `level.rs`'s tests is what holds
+  them to it.
 - **Propositional equality at `□` is exactly the recursor's observation.**
   `refl` *synthesizes* `Id(S; t; t)`, so checking it against `Id(S; a; b)`
   goes through conversion on the endpoints — and conversion at `□` types is
@@ -1089,7 +1095,7 @@ paper too).
 - `Rc` for sub-terms (substitution clones aggressively; sharing keeps that
   cheap; no interior mutability anywhere *in the terms*, which is exactly
   what makes the bounds below sound). **`Rc` is the kernel's own pointer**
-  (`rc.rs`, 2026-11-10): `std::sync::Arc` around the value and a head, three
+  (`rc.rs`, 2026-11-10): `std::sync::Arc` around the value and a head, two
   words in which the kernel keeps what it has computed about the node. Every
   workspace file that holds syntax spells `use heather_kernel::rc::Rc;`
   (`crate::rc::Rc` here), and the API is `Arc`'s. An unsized payload (a
@@ -1106,7 +1112,7 @@ paper too).
 
   **A client's mark** (`rc::Mark`, 2026-11-10,
   `issues/emission-decode-walks-every-annotation.md`): spare bits of the
-  head's state byte are offered to the kernel's clients, one bit a
+  head's flags are offered to the kernel's clients, one bit a
   property, set by `Rc::mark` and read by `Rc::marked`. The kernel reads
   none of them, so no mark is in the trusted base. The client owes what
   the kernel's own answers owe: the property is a function of the value

@@ -23,6 +23,12 @@
 //! question about one node write the same answer. The flag that says an
 //! answer is there is written last and read first ([`Head::set_local`]).
 //!
+//! **Size.** A head is two words, and with `Arc`'s two counts a node is four
+//! words over its value. The flags have no word of their own: they are the
+//! top bits of the word that holds the mask of used indices, the one part of
+//! an answer that is about cost and not about scope (`bounds::LocalUse`), so
+//! nothing a traversal decides is squeezed to make room for them.
+//!
 //! The API is `Arc`'s, as associated functions, for the part of it the
 //! compiler uses. An unsized payload (`[T]`, `str`, `dyn Trait`) stays a
 //! plain `Arc`: no question is asked of one.
@@ -30,7 +36,7 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct Rc<T>(Arc<Node<T>>);
@@ -50,15 +56,20 @@ impl<T: Clone> Clone for Node<T> {
 /// What has been computed about a node. Read and written by `bounds.rs`.
 #[derive(Default)]
 pub(crate) struct Head {
-    uses: AtomicU64,
+    /// The mask of used indices in the low [`USES_BITS`] bits, the flags
+    /// above them.
+    state: AtomicU64,
     bound: AtomicU32,
     global: AtomicU32,
-    state: AtomicU8,
 }
 
-const LOCAL: u8 = 1;
-const HAS_WK: u8 = 2;
-const GLOBAL: u8 = 4;
+/// How many indices a head's mask of used indices covers.
+pub(crate) const USES_BITS: u32 = 60;
+
+const USES: u64 = (1 << USES_BITS) - 1;
+const LOCAL: u64 = 1 << 60;
+const HAS_WK: u64 = 1 << 61;
+const GLOBAL: u64 = 1 << 62;
 
 /// A property of a node's value that a client of the kernel has established
 /// and wants not to establish again: one bit of the head, set by
@@ -71,12 +82,12 @@ const GLOBAL: u8 = 4;
 /// true of the node for as long as the value is the one it was computed
 /// from. A changed value has an empty head ([`Rc::make_mut`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Mark(u8);
+pub struct Mark(u64);
 
 impl Mark {
     /// The elaborator's "nothing under this type is the decoding of a code
     /// literal" (`heather_elab::inductive::decode_deep`).
-    pub const DECODED: Mark = Mark(8);
+    pub const DECODED: Mark = Mark(1 << 63);
 }
 
 impl Head {
@@ -88,16 +99,17 @@ impl Head {
         if state & LOCAL == 0 {
             return None;
         }
-        Some((self.bound.load(Ordering::Relaxed), state & HAS_WK != 0, self.uses.load(Ordering::Relaxed)))
+        Some((self.bound.load(Ordering::Relaxed), state & HAS_WK != 0, state & USES))
     }
 
-    /// The flag goes last and is released, so a reader that sees it sees
-    /// the two words written before it.
+    /// The flag goes last and is released, with the mask in the same write,
+    /// so a reader that sees it sees the bound written before it. `uses`
+    /// names indices below [`USES_BITS`] only.
     #[inline]
     pub(crate) fn set_local(&self, bound: u32, has_wk: bool, uses: u64) {
+        debug_assert!(uses & !USES == 0);
         self.bound.store(bound, Ordering::Relaxed);
-        self.uses.store(uses, Ordering::Relaxed);
-        self.state.fetch_or(LOCAL | if has_wk { HAS_WK } else { 0 }, Ordering::Release);
+        self.state.fetch_or(LOCAL | if has_wk { HAS_WK } else { 0 } | (uses & USES), Ordering::Release);
     }
 
     #[inline]
@@ -315,6 +327,19 @@ mod tests {
         Rc::head(&a).set_local(0, false, 0);
         assert_eq!(Rc::head(&a).local(), Some((0, false, 0)));
         assert_eq!(Rc::head(&a).global(), Some(9));
+        // Every bit of each part, with the others beside it.
+        let b = Rc::new(());
+        Rc::head(&b).set_local(u32::MAX, false, USES);
+        assert_eq!(Rc::head(&b).local(), Some((u32::MAX, false, USES)));
+        assert_eq!(Rc::head(&b).global(), None);
+        assert!(!Rc::marked(&b, Mark::DECODED));
+        Rc::head(&b).set_global(u32::MAX);
+        assert_eq!(Rc::head(&b).local(), Some((u32::MAX, false, USES)));
+        assert_eq!(Rc::head(&b).global(), Some(u32::MAX));
+        let c = Rc::new(());
+        Rc::head(&c).set_local(0, true, 0);
+        assert_eq!(Rc::head(&c).local(), Some((0, true, 0)));
+        assert_eq!(Rc::head(&c).global(), None);
     }
 
     #[test]
@@ -344,8 +369,8 @@ mod tests {
     /// The head is what a node costs over an `Arc`'s two counts.
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn a_head_is_three_words() {
-        assert_eq!(std::mem::size_of::<Head>(), 24);
+    fn a_head_is_two_words() {
+        assert_eq!(std::mem::size_of::<Head>(), 16);
         assert_eq!(std::mem::size_of::<Rc<u8>>(), 8);
         assert_eq!(std::mem::size_of::<Option<Rc<u8>>>(), 8);
     }

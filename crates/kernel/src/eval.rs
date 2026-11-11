@@ -587,12 +587,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             TyClo::Vec { level, elem, len, .. } => {
                 let (level, elem, len) = (*level, *elem, *len);
                 let lv = self.force(len)?;
-                self.vec_ty(level, elem, &lv)?
+                self.vec_ty(&level, elem, &lv)?
             }
             TyClo::El { level, tm, .. } => {
                 let (level, tm) = (*level, *tm);
                 let v = self.force(tm)?;
-                self.decode(level, &v)?
+                self.decode(&level, &v)?
             }
         };
         self.arena.cache_ty(c, &v);

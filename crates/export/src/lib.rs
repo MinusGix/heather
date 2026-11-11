@@ -84,7 +84,7 @@ fn refuse<T>(what: &str) -> R<T> {
 
 fn lvl(l: &Level) -> R<Lvl> {
     // Levels are canonical, so a variable-free one is a constant.
-    match l {
+    match *l {
         Level::Omega => refuse("level ω"),
         _ => l.as_constant().map(Lvl).map_or_else(|| refuse("universe variable (level polymorphism)"), Ok),
     }

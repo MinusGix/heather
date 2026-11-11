@@ -443,7 +443,6 @@ pub struct ValueArena<'v> {
     vtys: Region<VTy<'v>>,
     neutrals: Region<VNeutral<'v>>,
     elim_cells: Region<Elim<'v>>,
-    levels: Region<Level>,
     elims: Region<ElimNode<'v>>,
     terms: Region<TmClo<'v>>,
     types: Region<TyClo<'v>>,
@@ -910,7 +909,6 @@ impl<'v> ValueArena<'v> {
             vtys: Region::new(),
             neutrals: Region::new(),
             elim_cells: Region::new(),
-            levels: Region::new(),
             elims: Region::new(),
             terms: Region::new(),
             types: Region::new(),
@@ -944,7 +942,6 @@ impl<'v> ValueArena<'v> {
                 vtys: Region::new(),
                 neutrals: Region::new(),
                 elim_cells: Region::new(),
-                levels: Region::new(),
                 elims: Region::new(),
                 terms: Region::new(),
                 types: Region::new(),
@@ -1087,22 +1084,18 @@ impl<'v> ValueArena<'v> {
         self.types.alloc(value)
     }
 
-    /// Build one of the uncommon synthesized type forms. Keeping its level
-    /// in the query region rather than inline lets the overwhelmingly common
-    /// syntactic closures carry the compact 16-byte environment handle.
+    /// Build one of the uncommon synthesized type forms.
     pub fn ty_vec(
         &'v self,
         level: Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
     ) -> &'v TyClo<'v> {
-        let level = self.levels.alloc(level);
         self.ty(TyClo::vec(level, elem, len))
     }
 
     /// The `El` counterpart of [`ValueArena::ty_vec`].
     pub fn ty_el(&'v self, level: Level, tm: &'v TmClo<'v>) -> &'v TyClo<'v> {
-        let level = self.levels.alloc(level);
         self.ty(TyClo::el(level, tm))
     }
 
@@ -1433,10 +1426,10 @@ pub type CloId = (usize, usize, u32, u32);
 ///   a vector at a canonical length stays lazy even when the element type is
 ///   a value with no syntax. Forcing it is `Eval::vec_ty`.
 ///
-/// The uncommon synthesized forms store their universe level out of line in
-/// the query arena. That keeps both closure enums at four words and a memo
-/// on 64-bit targets instead of making every syntactic closure pay for
-/// `Level`'s rare largest variant.
+/// A level is one word (`level.rs`), so the uncommon synthesized forms hold
+/// theirs inline and both closure enums stay at four words and a memo. (It
+/// was two words with a rare largest variant, and these forms kept it in a
+/// region of the query arena so that no syntactic closure paid for it.)
 pub enum TyClo<'v> {
     Syn {
         env: Env<'v>,
@@ -1445,7 +1438,7 @@ pub enum TyClo<'v> {
     },
     Val(&'v VTy<'v>),
     Vec {
-        level: &'v Level,
+        level: Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
         memo: Memo<&'v VTy<'v>>,
@@ -1455,7 +1448,7 @@ pub enum TyClo<'v> {
     /// keeping it lazy is what makes the decode one step deep and lets
     /// conversion synthesize `El`s over encodings that are values.
     El {
-        level: &'v Level,
+        level: Level,
         tm: &'v TmClo<'v>,
         memo: Memo<&'v VTy<'v>>,
     },
@@ -1470,11 +1463,11 @@ impl<'v> TyClo<'v> {
         TyClo::Val(v)
     }
 
-    fn vec(level: &'v Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
+    fn vec(level: Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::Vec { level, elem, len, memo: Cell::new(None) }
     }
 
-    fn el(level: &'v Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
+    fn el(level: Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::El { level, tm, memo: Cell::new(None) }
     }
 
@@ -2774,13 +2767,13 @@ mod tests {
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
-        assert_eq!(std::mem::size_of::<Val<'_>>(), 72);
+        assert_eq!(std::mem::size_of::<Val<'_>>(), 56);
         // Types and eliminations ride the evaluator's and conversion's
         // recursion; a former with many components keeps them behind one
-        // pointer (`VIWfSig`) instead of growing every one. A `Level` is two
-        // words (`issues/kernel-compact-level.md`).
-        assert_eq!(std::mem::size_of::<VTy<'_>>(), 56);
-        assert_eq!(std::mem::size_of::<Elim<'_>>(), 104);
+        // pointer (`VIWfSig`) instead of growing every one. A `Level` is one
+        // word (`issues/kernel-level-eight-bytes.md`).
+        assert_eq!(std::mem::size_of::<VTy<'_>>(), 48);
+        assert_eq!(std::mem::size_of::<Elim<'_>>(), 80);
     }
 
     #[test]

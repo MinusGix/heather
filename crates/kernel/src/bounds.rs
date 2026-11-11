@@ -73,7 +73,7 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
-use crate::rc::Rc;
+use crate::rc::{Rc, USES_BITS};
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, Type};
 
@@ -83,9 +83,11 @@ use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, 
 pub(crate) struct LocalUse {
     pub bound: u32,
     pub has_wk: bool,
-    /// Bit `i` set when the free index `i` occurs, for `i < 64` (larger
-    /// indices are counted by `bound` alone). No substitution reads it: it
-    /// answers [`ignores_innermost`], a question about cost.
+    /// Bit `i` set when the free index `i` occurs, for `i` below
+    /// [`USES_BITS`] (larger indices are counted by `bound` alone). No
+    /// substitution reads it: it answers [`ignores_innermost`], a question
+    /// about cost, which is why a node's head can keep its flags in the
+    /// bits above (`rc::Head`).
     pub uses: u64,
 }
 
@@ -338,7 +340,7 @@ impl Walk {
 
 /// Bit `i` of [`LocalUse::uses`].
 fn var_bit(i: u32) -> u64 {
-    1u64.checked_shl(i).unwrap_or(0)
+    if i < USES_BITS { 1 << i } else { 0 }
 }
 
 thread_local! {
@@ -408,11 +410,11 @@ pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {
     })
 }
 
-/// Whether evaluating `t` reads none of its innermost `n` (< 64) local
-/// variables: no free index below `n` occurs. A wrong answer costs time,
-/// never a verdict (`eval/probe.rs`, the one reader).
+/// Whether evaluating `t` reads none of its innermost `n` (below
+/// [`USES_BITS`]) local variables: no free index below `n` occurs. A wrong
+/// answer costs time, never a verdict (`eval/probe.rs`, the one reader).
 pub(crate) fn ignores_innermost(t: &Rc<Term>, n: u32) -> bool {
-    debug_assert!(n < 64);
+    debug_assert!(n < USES_BITS);
     term_local_use(t).uses & (var_bit(n) - 1) == 0
 }
 
@@ -1129,7 +1131,9 @@ mod tests {
             body: v(1),
         });
         assert!(!ignores_innermost(&lam, 1));
-        // Past 64 an index is counted by `bound` alone.
+        // Past the mask an index is counted by `bound` alone.
+        assert_eq!(term_use(&v(USES_BITS - 1)).uses, 1 << (USES_BITS - 1));
+        assert_eq!(term_use(&v(USES_BITS)).uses, 0);
         assert_eq!(term_use(&v(70)).uses, 0);
     }
 

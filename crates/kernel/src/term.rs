@@ -3857,13 +3857,13 @@ mod size_tests {
     /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
     /// constructor value overflow the 8 MiB stack. A former with many
     /// components keeps them behind one pointer (`IWfSig`). The annotated
-    /// formers carry up to three `Level`s, two words each
-    /// (`issues/kernel-compact-level.md`).
+    /// formers carry up to three `Level`s, a word each
+    /// (`issues/kernel-level-eight-bytes.md`).
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn syntax_nodes_stay_their_size() {
-        assert_eq!(std::mem::size_of::<Type>(), 56);
-        assert_eq!(std::mem::size_of::<Term>(), 104);
+        assert_eq!(std::mem::size_of::<Type>(), 48);
+        assert_eq!(std::mem::size_of::<Term>(), 80);
     }
 }
 

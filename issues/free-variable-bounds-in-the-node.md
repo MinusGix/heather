@@ -110,3 +110,6 @@ read by the rest.
   Peak memory fell although a term node grew from the 128-byte class to the
   160-byte one: each table entry's weak key held a dead node's block until
   the slot was reused, six tables a thread.
+- 2026-11-10: The head is two words (2026-11-10, with [[kernel-level-eight-bytes]]). The flags had a byte and seven bytes of padding to themselves; they are now the top four bits of the word that holds the mask of used indices, which covers indices below 60 instead of 64 (`rc::USES_BITS`). The mask is the one part of an answer that is about cost: its only reader is `bounds::ignores_innermost`, asked about index 0 by the evaluator's probe, and "a wrong answer costs time, never a verdict". The bound and the global bound keep all 32 bits, so no skip decision changed. The flag and the mask are published by one `fetch_or`, which is one write fewer than before.
+
+  With `Arc`'s two counts a node is four words over its value: a term 112 bytes, a type 80. What that buys is in [[global-allocator]]'s log, since it only shows under an allocator that serves those sizes from their own classes.
