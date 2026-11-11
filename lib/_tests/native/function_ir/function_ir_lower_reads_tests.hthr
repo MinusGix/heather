@@ -11,6 +11,7 @@ import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_reads;
 import function_ir_lower_calls;
+import function_ir_compile;
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;
@@ -138,6 +139,18 @@ theorem sum_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<
         Lending([1], addresses, buffers)) {
     lower_program_lent_correct<M>([sum()], plan_program([sum()]), Lending([1], addresses, buffers), sum_program(), sum_lowers(),
         fetch, data, last, origin, stack)
+}
+
+// What a caller cites (`compiled_returns_lent`): over a buffer that holds
+// "abc", lent wherever it lies, the code returns 294.
+theorem sum_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64)):
+    Site<M>(fetch, data, sum_program(), last, origin).Returns(stack, asm_labels(sum_program())(1),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+            stack.CalleeLent(Lending([1], addresses, abc()), 0, [a, w(3)])(i, s),
+        stack.CalleePost(w(294))) {
+    compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending([1], addresses, abc()), sum_program(), sum_lowers(), sum_evaluable(),
+        fetch, data, last, origin, stack, 0, trivial, [a, w(3)], trivial, w(294), refl)
 }
 
 // ---------------------------------------------------------------------------

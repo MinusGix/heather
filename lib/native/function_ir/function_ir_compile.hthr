@@ -10,6 +10,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_lower_structured;
+import function_ir_lower_reads;
 import function_ir_lower_calls;
 import x86_64;
 import x86_64_block;
@@ -52,6 +53,40 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
         λ i s held => ⟨held.left, ⟨computed, held.right⟩⟩);
     j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
         λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(x)), returns)
+}
+
+// The same of a program whose functions take buffers
+// (docs/native-one-compiler-design.md §2.3): called with the buffers lent
+// (`Stack::CalleeLent`: the homes of the ones `f` takes are its first
+// arguments, and every buffer's bytes are read at its address whatever the
+// call stores below where it is entered), the code returns what the
+// program evaluates `f` to over those buffers. Whoever lends discharges
+// the premise: a program from its data region, Rust from a slice.
+theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
+    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    evaluates: program_eval_over(lending.buffers, functions, f, arguments) = answer):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.CalleeLent(lending, f, arguments)(i, s),
+        stack.CalleePost(answer)) {
+    let site = Site<M>(fetch, data, program, last, origin);
+    let calls = lower_program_lent_correct<M>(functions, placement, lending, program, lowered, fetch, data, last, origin, stack);
+    let computed = program_eval_reads(functions, lending.buffers, evaluable, f, arguments, fits);
+    let value = program_eval_over(lending.buffers, functions, f, arguments);
+    let returns = site.returns_weaken(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => CalleePre<M>(program_callees_over(lending.buffers, functions), f, arguments, value)(i, s) ∧
+            stack.CalleeLent(lending, f, arguments)(i, s),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.CalleeLent(lending, f, arguments)(i, s),
+        stack.CalleePost(value), calls(f, below, arguments, value),
+        λ i s held => ⟨⟨held.left.left, ⟨computed, held.left.right⟩⟩, held.right⟩);
+    j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.CalleeLent(lending, f, arguments)(i, s),
         stack.CalleePost(x)), returns)
 }
 
