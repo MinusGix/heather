@@ -155,6 +155,12 @@ fn loop_finish(post: StructuredRegion, call: Answers(), values: Valuation(), out
     λ end => post.eval(call, Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)))(64, result)
 }
 
+// The same over a file of buffers, for a function that reads one.
+fn loop_finish_over(buffers: Buffers(), post: StructuredRegion, call: Answers(), values: Valuation(), outputs: List<Nat>, exhausted, result: Nat) →
+    LoopEnd → BitVec(64) {
+    λ end => post.eval(call, Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)), buffers := buffers)(64, result)
+}
+
 theorem function_eval_body(parameters: List<Nat>, body: StructuredRegion, result: Nat, call: Answers(), arguments: List<BitVec(64)>):
     Function(parameters := parameters, body := body, result := result).eval(call, arguments) =
         body.eval(call, Valuation::bind(Valuation::zero(), parameters, arguments))(64, result) { refl }

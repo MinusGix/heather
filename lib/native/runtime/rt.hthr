@@ -291,6 +291,39 @@ fn List::byte_at(self xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) { xs.nth
 
 fn List::with_byte(self xs: List<BitVec(8)>, i: BitVec(64), v: BitVec(8)) → List<BitVec(8)> { xs.update(i.toNat(), λ _ => v) }
 
+// A read under a length word: the byte where the index is below the word,
+// 0 elsewhere. This is what code lent a span computes (`Tm::Byte`): it
+// tests the index against the length it was handed and loads under the
+// test. At the span's own length it is `byte_at` (`List::byte_within_own`).
+fn List::byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(8) {
+    match i.unsigned_lt_bit(length) { False => BitVec::ofNat(0), True => xs.byte_at(i) }
+}
+
+// At a span's own length, where that fits a word, the read under it is the
+// plain one: past the end both are 0. This is how a function lent a span
+// is read at its source, which says `byte_at`: the caller hands the span's
+// length (`Lending`, function_ir_lower_reads).
+theorem List::byte_within_own(self xs: List<BitVec(8)>, i: BitVec(64), small: xs.len() < Nat::pow(2, 64)):
+    xs.byte_within(BitVec::ofNat(xs.len()), i) = xs.byte_at(i) {
+    let length: BitVec(64) = BitVec::ofNat(xs.len());
+    (match i.unsigned_lt_bit(length) as λ b => i.unsigned_lt_bit(length) = b →
+        (match b { False => BitVec::ofNat(0), True => xs.byte_at(i) }) = xs.byte_at(i) {
+        True => λ _ => refl,
+        False => λ at_or_past => {
+            let not_below: ¬(i.toNat() < xs.len()) = λ below => absurd(trans(sym(
+                BitVec::borrow_sub_bit_true_iff(64, i, length).mpr(j(sym(BitVec::toNat_ofNat(64, xs.len(), small)), λ n _ => i.toNat() < n, below))),
+                at_or_past));
+            sym(cong_fn(λ (o: Option<BitVec(8)>) => o.unwrap_or(BitVec::ofNat(0)),
+                xs.nth_past_end(i.toNat(), Nat::le_of_not_lt(i.toNat(), xs.len(), not_below))))
+        },
+    })(refl)
+}
+
+// Span `k` of a file of spans: empty where there is none.
+fn List::span(self spans: List<List<BitVec(8)>>, k: Nat) → List<BitVec(8)> {
+    match spans.nth(k) { None => [], Some(bytes) => bytes }
+}
+
 // ---------------------------------------------------------------------------
 // Primitives: the operations a setup may know, each with its signature and
 // the Heather function it means. A setup's primitive table says which of
@@ -413,11 +446,21 @@ inductive Tm {
     // as variable 0. A fuel recursion's body is one at the top, matching its
     // fuel (design §7.4).
     Case(c: Nat, zero: Tm, succ: Tm),
+    // `spans.span(k).byte_within(length, i)`: a byte of span `k` of the
+    // file the function is run over (`World.spans`), read at the word
+    // variable `i` under the length word variable `length`. The span is not
+    // a value of the term: a function lent spans takes each as two words,
+    // where it lies and how long it is (docs/native-one-compiler-design.md
+    // §2.3), and reads through the second.
+    Byte(k: Nat, i: Nat, length: Nat),
 }
 
 record Sig { params: List<Ty>, result: Ty }
 
-record Fun { params: List<Ty>, result: Ty, body: Tm }
+// `lent`: how many spans of the file the function reads. Span `k`'s two
+// words are parameters `2k` (where it lies, which the meaning never reads)
+// and `2k + 1` (its length).
+record Fun { params: List<Ty>, result: Ty, body: Tm, lent: Nat := 0 }
 
 record Program { funs: List<Fun>, entry: Nat }
 
@@ -446,8 +489,9 @@ fn Fun::sig(self f: Fun) → Sig { Sig(f.params, f.result) }
 fn Program::sigs(self p: Program) → List<Sig> { p.funs.map(Fun::sig) }
 
 // What the meaning reads besides a term: the type table, the program's
-// signatures, and the meanings answering its calls.
-record World { tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs) }
+// signatures, the meanings answering its calls, and the file of spans its
+// functions are lent (none, for a function of words alone).
+record World { tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs), spans: List<List<BitVec(8)>> := [] }
 
 // A function of a signature applied to variables, each cast to its
 // parameter's code.
@@ -507,6 +551,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Call(f, _) => Sig::at(w.sigs, f).result,
         Fold(_, _, step) => Sig::at(w.sigs, step).result,
         Case(_, zero, _) => zero.ty(w, g),
+        Byte(_, _, _) => Word(8),
     }
 }
 
@@ -556,6 +601,9 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
             Zero => zero.sem(w, g, env),
             Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem(w, Cons(Count, g), Pair(k, env))),
         },
+        Byte(k, i, length) => λ g env =>
+            w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
+                Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
     }
 }
 
@@ -655,9 +703,10 @@ fn Tm::same(self t: Tm) → Tm → Bool {
             _ => False,
         },
         Case(c, zero, succ) => λ u => match u { Case(c2, zero2, succ2) => c.same(c2).and(zero.same(zero2)).and(succ.same(succ2)), _ => False },
+        Byte(k, i, length) => λ u => match u { Byte(k2, i2, length2) => k.same(k2).and(i.same(i2)).and(length.same(length2)), _ => False },
     }
 }
 
 fn Fun::same(self f: Fun, g: Fun) → Bool {
-    Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.body.same(g.body))
+    Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.body.same(g.body)).and(f.lent.same(g.lent))
 }

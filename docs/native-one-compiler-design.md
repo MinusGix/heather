@@ -288,11 +288,14 @@ against the length home too. That test is the path-known bound; it costs
 one comparison a pass that an optimizer could fold when the count is
 known below the capacity (not built).
 
-**A `runtime fn` reads a span: the design of U3c (2026-11-11, not
+**A `runtime fn` reads a span: the design of U3c (2026-11-11; step 1
 built).** The joint so far ends at FunctionIR written by hand. What is
 left is the front end: `rt`, its lowering and its loop theorems
 (`rt.hthr`, `rt_lower.hthr`, `rt_loop.hthr`), the `Compile` class and the
 generator (`runtime.hthr`). Read against them, five things are decided.
+A first form of this design threaded the homes through the lowering
+beside the term and carried an invariant about them; building it showed
+that neither is needed, and what follows is the form that was built.
 
 - *A lent buffer is the function's world, not one of its values.* `rt`
   has a byte buffer as a value already (`Bytes(cap)` with `Get` and
@@ -301,11 +304,8 @@ generator (`runtime.hthr`). Read against them, five things are decided.
   proofs: no term makes one, moves one or chooses between two, so which
   buffer a read reads is static. So the spans join the type table and
   the callees in `World`, as the file of buffers the function is
-  evaluated over (`World.spans`, the same list `Buffers()` is), and two
-  terms read it: `Byte(k, i)`, the byte of span `k` at the word `i`,
-  zero past its end, and `Len(k)`, its length as a word. A `Fun` says
-  how many spans it takes (`lent`). Its meaning is a function of its
-  words alone, in a world.
+  evaluated over (`World.spans`, the same list `Buffers()` is). The
+  meaning of a function is a function of its words alone, in a world.
 
   The alternative, a span as a parameter of code `Bytes`, keeps the
   reflection's pin as it is and costs every statement that reads a
@@ -321,40 +321,51 @@ generator (`runtime.hthr`). Read against them, five things are decided.
   no new term either: it is `Call(g, words)`, and `g`'s entry in the
   table of meanings is `g` at the same file.
 
-- *The lowering names the homes it reads through.* A term is lowered
-  with the ids its scope holds each span's home at (two a span, the
-  address then the length), fixed for the whole term, since no binding
-  changes them. `Len(k)` is the length's id and no code. `Byte(k, i)` is
-  the comparison of `i` with that id, and a branch on it: the load of
-  buffer `k` at `i` where it holds, zero where it does not. That is the
+- *A home is two words of the function.* A function lent `n` spans
+  (`Fun.lent`) has `2n` parameters of type `Word(64)` before its own:
+  span `k`'s address and its length, which is where FunctionIR looks
+  for a home (`Function.lent`, parameters `2k` and `2k + 1`). They are
+  variables like any other, so a term names a length by the variable
+  that holds it, a call passes them as arguments, and nothing about
+  homes is threaded through the lowering. The address is never read by
+  the meaning: it is there for the machine.
+
+- *One term reads, under the length it is given.* `Byte(k, i, length)`
+  is the byte of span `k` at the word `i` when `i` is below the word
+  `length`, and zero otherwise (`List::byte_within`). It lowers to the
+  comparison and a branch on it: the load of buffer `k` at `i` where
+  it holds, a zero where it does not (`Tm::lower_byte`). That is the
   check the function compiler asks for before a load (`File::bounded`),
-  written by the language above it as §2.3 said it would be, and it is
-  also exactly `byte_at`'s meaning, so the term needs no premise. The
-  soundness theorem (`Tm::lower_sound`) is restated over the evaluation
-  with buffers, at the world's own file, with one invariant more: each
-  length id holds its span's length (`SpansHold`), kept because the ids
-  are below everything the region writes. One fact is asked of the
-  file: each span is shorter than `2^64` bytes, without which a length
-  word would not say where the span ends.
+  written by the language above it as this section said it would be.
 
-- *A function's homes are parameters after its words; a loop carries
-  them after its state.* FunctionIR wants the homes as the function's
-  first parameters by position, and names are free, so the words keep
-  the ids they have and the homes take the ids after them. A function
-  with no spans is lowered to the code it has today, which is what
-  keeps every linked export's bytes.
+  Since the term's meaning tests the same word its code tests, the
+  lowering theorem has no premise about homes at all: it holds at every
+  valuation, whatever `length` holds (`Tm::lower_byte_sound`, and
+  `Tm::lower_sound` restated over the evaluation with buffers at the
+  world's own file). There is no length term. Whether `length` *is*
+  span `k`'s length home is not `rt`'s question: it is the function
+  compiler's, which refuses a load whose bound is any other id
+  (`peek_misread_refused` in the probes: `rt` lowers a read under the
+  wrong word, soundly, and the code is not accepted).
 
-  A loop is where the function compiler's rule bites: a pass sees only
-  the loop's state, and a home is carried when the pass's `next` for
-  its two places is the pass's own parameters (`carried_sound`). So the
-  loops `rt_loop` builds get the homes as a suffix of their state, with
-  `next` the parameters themselves: no move, no branch arm that writes
-  them, and the first word of the state is still the result a leaving
-  pass hands back. What a pass computes (`Tm::tail_sound`) does not
-  change; the two loop theorems are restated over the longer state,
-  from one new lemma, that a loop whose passes keep a part of the state
-  agrees with a recursion stated on the rest
-  (`Fun::loop_agrees_below` with an invariant).
+  Truth about the length enters once, at the top. A source function
+  over a span says `span.byte_at(i)`; it is the meaning at the world of
+  that span and the length word `ofNat(span.len())`, where
+  `byte_within` at the span's own length is `byte_at`
+  (`List::byte_within_own`, for a span shorter than `2^64` bytes, the
+  one fact asked of a file).
+
+- *A loop carries the homes in place.* A pass sees only the loop's
+  state, and the function compiler carries a home across a pass when
+  the pass's `next` for its two places is the pass's own parameter
+  (`carry_slot`). The home words are state like the rest, so the loops
+  `rt_loop` builds are asked for one thing more: the self-call passes
+  each home word as the variable it came in as. Then the loop's code is
+  `lent` what the function is, and after it both the loop's outputs and
+  the ids before it are homes (`StructuredRegion::lends`). What a pass
+  computes (`Tm::tail_sound`) and the two loop theorems are restated
+  over the file and otherwise as they were (built, for loops that read
+  nothing); the carrying is step 2.
 
 - *The class is about a function at a file.* `Compile<F>(f)` states that
   the code answers as `f` does. With spans, `f` takes them first as
@@ -362,17 +373,32 @@ generator (`runtime.hthr`). Read against them, five things are decided.
   is for every file: the code, evaluated over the file at the homes of
   its first `lent` buffers and then the words, answers as `f` applied
   to those buffers and the words. The pin is by conversion at a neutral
-  file, as it is at neutral words. An instance without spans is the one
-  it is today read at the empty file, and `f::agrees` and the linking
-  theorems gain the file as a parameter (`program_eval_over`).
+  file, as it is at neutral words (`peek_pinned` in the probes). An
+  instance without spans is the one it is today read at the empty file,
+  and `f::agrees` and the linking theorems gain the file as a parameter
+  (`program_eval_over`). Until that is built (step 3) the class keeps
+  its statement and an instance is made only at a world without spans
+  (`World::spanless`, a premise of `Setup::compile` and its two loop
+  forms).
 
-- *The reflector decides what is a span.* A parameter of type
-  `List<BitVec(8)>` of a pure `runtime fn` is a span, numbered in
-  order. It may be read by `byte_at` and by its length, passed to a
-  call of the function itself in the same place, and passed to another
-  `runtime fn` as the same span number; any other use is refused with
-  the reason. Passing span `j` as a callee's span `k ≠ j` waits for a
-  `Call` that renames buffers, which FunctionIR does not have.
+  The reflector decides what is a span: a parameter of type
+  `List<BitVec(8)>` of a pure `runtime fn`, numbered in order, becomes
+  the two words, `byte_at` on it the read under its length word, and
+  its length the length word. It may be passed to a call of the
+  function itself in the same place and to another `runtime fn` as the
+  same span number; any other use is refused with the reason. Passing
+  span `j` as a callee's span `k ≠ j` waits for a `Call` that renames
+  buffers, which FunctionIR does not have.
+
+What step 1 built (`lib/_tests/native/runtime/rt_spans_tests.hthr` is
+its evidence): the term, its meaning, its lowering and the theorem, for
+functions without a loop; every statement of `rt_lower` and `rt_loop`
+over the world's file; a function `peek` that reads its span, lowered
+by `rt`, proved to answer as its meaning over every file, run by
+evaluation over a short buffer, and accepted by the function compiler
+lent one buffer (`lower_program_lent`). A value region reads no bytes,
+so the effectful layer cites the old statement through
+`StructuredRegion::eval_byte_free`.
 
 What it leaves open, on purpose: a span that is written. A write makes
 the buffer a result as well as an input, so U4 decides whether the file
@@ -445,12 +471,14 @@ Each is a PR and ends with something that runs.
     function is written as FunctionIR until U3c.
   - **U3c. A `runtime fn` reads a span**, so the loop is Heather source;
     the scanner's loop is the customer. Designed in §2.3, in three steps
-    that each leave the library whole: `rt`'s two terms and their
-    lowering with its theorem, for a function without a loop (*runs:*
-    probes by evaluation, and the lowered code accepted by the function
-    compiler); loops carrying the homes; the class, the reflector and
-    linking over a file (*runs:* `wc -l` with `count_newlines` a
-    `runtime fn`).
+    that each leave the library whole.
+    - *Step 1, built 2026-11-11:* `rt`'s read term and its lowering with
+      its theorem, for a function without a loop, and every statement of
+      the lowering over the world's file. *Runs:* probes by evaluation,
+      and the lowered code accepted by the function compiler.
+    - *Step 2:* loops carrying the homes.
+    - *Step 3:* the class, the reflector and linking over a file.
+      *Runs:* `wc -l` with `count_newlines` a `runtime fn`.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
   `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
   its byte map as a called function.

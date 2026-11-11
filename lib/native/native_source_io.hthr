@@ -272,6 +272,77 @@ fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
     }
 }
 
+// A node that touches no buffer steps alike over any file of buffers.
+theorem Node::step_pure(self node: Node, values: Valuation(), buffers: Buffers(), pure: node.pure().IsTrue()):
+    node.step(values, buffers := buffers) = node.step(values) {
+    match node as λ n => n.pure().IsTrue() → n.step(values, buffers := buffers) = n.step(values) {
+        Const(_, _, _) => λ _ => refl,
+        Move(_, _, _) => λ _ => refl,
+        Add(_, _, _, _) => λ _ => refl,
+        Sub(_, _, _, _) => λ _ => refl,
+        BitAnd(_, _, _, _) => λ _ => refl,
+        BitOr(_, _, _, _) => λ _ => refl,
+        BitXor(_, _, _, _) => λ _ => refl,
+        ShiftLeft(_, _, _, _) => λ _ => refl,
+        LogicalShiftRight(_, _, _, _) => λ _ => refl,
+        ArithmeticShiftRight(_, _, _, _) => λ _ => refl,
+        UnsignedLessThan(_, _, _, _) => λ _ => refl,
+        SignedLessThan(_, _, _, _) => λ _ => refl,
+        Equal(_, _, _, _) => λ _ => refl,
+        BufferLoad(_, _, _) => λ no => false_elim(no),
+        BufferStore(_, _, _, _) => λ no => false_elim(no),
+        Resize(_, _, _, _) => λ _ => refl,
+        SignResize(_, _, _, _) => λ _ => refl,
+    }(pure)
+}
+
+theorem eval_nodes_pure(nodes: List<Node>, buffers: Buffers()): nodes_pure(nodes).IsTrue() → (values: Valuation()) →
+    eval_nodes_over(buffers, nodes, values) = eval_nodes(nodes, values) {
+    match nodes {
+        Nil => λ _ values => refl,
+        Cons(node, rest) => λ pure values => {
+            let parts = Bool::is_true_and(node.pure(), nodes_pure(rest), pure);
+            j(sym(node.step_pure(values, buffers, parts.left)), λ v _ => eval_nodes_over(buffers, rest, v) = eval_nodes(rest, node.step(values)),
+                eval_nodes_pure(rest, buffers, parts.right, node.step(values)))
+        },
+    }
+}
+
+// A byte-free region evaluates alike over any file of buffers: what lets
+// a lowering proved over a file (`rt_lower`, whose terms may read a lent
+// span) be used where the buffers are state.
+theorem StructuredRegion::eval_byte_free(self region: StructuredRegion, call: Answers(), buffers: Buffers()): region.byte_free().IsTrue() →
+    (values: Valuation()) → region.eval(call, values, buffers := buffers) = region.eval(call, values) {
+    match region {
+        Dataflow(body) => λ free values => eval_nodes_pure(body.nodes, buffers, free, values),
+        Sequence(prefix, continuation) => λ free values => {
+            let parts = Bool::is_true_and(nodes_pure(prefix.nodes), continuation.byte_free(), free);
+            j(sym(eval_nodes_pure(prefix.nodes, buffers, parts.left, values)),
+                λ v _ => continuation.eval(call, v, buffers := buffers) = continuation.eval(call, eval_nodes(prefix.nodes, values)),
+                continuation.eval_byte_free(call, buffers, parts.right, eval_nodes(prefix.nodes, values)))
+        },
+        Compose(prefix, continuation) => λ free values => {
+            let parts = Bool::is_true_and(prefix.byte_free(), continuation.byte_free(), free);
+            j(sym(prefix.eval_byte_free(call, buffers, parts.left, values)),
+                λ v _ => continuation.eval(call, v, buffers := buffers) = continuation.eval(call, prefix.eval(call, values)),
+                continuation.eval_byte_free(call, buffers, parts.right, prefix.eval(call, values)))
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ free values => {
+            let parts = Bool::is_true_and(when_true.byte_free(), when_false.byte_free(), free);
+            let b = values(1, condition).head_bit();
+            j(sym(when_false.eval_byte_free(call, buffers, parts.right, values)), λ f _ =>
+                    (λ (w: Nat) (id: Nat) => match b { False => f(w, id), True => when_true.eval(call, values, buffers := buffers)(w, id) }) =
+                    Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values),
+                j(sym(when_true.eval_byte_free(call, buffers, parts.left, values)), λ t _ =>
+                        (λ (w: Nat) (id: Nat) => match b { False => when_false.eval(call, values)(w, id), True => t(w, id) }) =
+                        Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values),
+                    refl))
+        },
+        Call(_, _, _) => λ _ values => refl,
+        Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
+    }
+}
+
 theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Readers()): region.byte_free().IsTrue() →
     (values: Valuation()) → (buffers: Buffers()) → region.run(call, values, buffers) = State(region.eval(call(buffers), values), buffers) {
     match region {

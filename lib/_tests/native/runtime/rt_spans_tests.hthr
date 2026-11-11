@@ -1,0 +1,145 @@
+// Probes of a function of `rt` that reads a span it is lent
+// (`Tm::Byte`, lib/native/runtime/rt.hthr; docs/native-one-compiler-design.md
+// §2.3, U3c): the span is the file the function is run over, and the
+// function takes it as two words, where it lies and how long it is. The
+// reflection is written by hand here (the reflector's round is later); it is
+// lowered by evaluation, the once-proof `Fun::lower_sound` is instantiated
+// over any span, the pin closes by conversion at the span's own length, and
+// the lowered code is what the function compiler accepts. Tests, not
+// library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import rt;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_placeless;
+import x86_64;
+import x86_64_asm;
+import rt_lower;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// One byte of a span, widened.
+
+// The byte at `i`, as a word: 0 at or past the span's length.
+fn peek(span: List<BitVec(8)>, i: BitVec(64)) → BitVec(64) {
+    span.byte_within(BitVec::ofNat(span.len()), i).zero_extend(56)
+}
+
+// Its reflection: three words, the span's place and length before the
+// index. The last parameter is variable 0, so the index is variable 0 and
+// the length variable 1; the place is never read.
+fn peek_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 1), Prim(Zext(8, 56), [0])), 1) }
+
+// The world is the file: the one span.
+fn peek_world(span: List<BitVec(8)>) → World { World(RecInfo::none, [], trivial, [span]) }
+
+// The lowering's code, spelled: the index against the length word, the
+// load under the test and narrowed to its byte, zero otherwise, and the
+// byte widened. The lowering does not read the file.
+fn peek_code() → Function {
+    Function([0, 1, 2],
+        Compose(
+            Compose(nodes_region([UnsignedLessThan(64, 3, 2, 1)]),
+                branch(3, Ports([Port(5, 8)]),
+                    Compose(nodes_region([BufferLoad(4, 0, 2)]), nodes_region([Resize(64, 8, 5, 4)])),
+                    nodes_region([Const(8, 5, 0)]))),
+            nodes_region([Resize(8, 64, 6, 5)])),
+        6, 1)
+}
+
+theorem peek_lowers(span: List<BitVec(8)>): peek_rt().lower(peek_world(span)) = Some(peek_code()) { refl }
+
+// The pin: handed the span's length, the reflection means the function,
+// wherever the span lies.
+theorem peek_pinned(span: List<BitVec(8)>, place, i: BitVec(64)):
+    peek_rt().meaning(peek_world(span))(place, BitVec::ofNat(span.len()), i) = peek(span, i) { refl }
+
+// The once-proof, instantiated: over the span, at any three words, the code
+// returns the meaning. Nothing is asked of the two words of the span.
+theorem peek_compiled(call: Answers(), span: List<BitVec(8)>, place, length, i: BitVec(64)):
+    peek_code().eval(call, [place, length, i], buffers := [span]) = peek_rt().meaning(peek_world(span))(place, length, i) {
+    Fun::lower_sound(peek_rt(), peek_world(span), call, Tm::calls_agree_none_over(RecInfo::none, [span], call), place, length, i)
+}
+
+// So the code, lent a span with its length, computes the function.
+theorem peek_runs(call: Answers(), span: List<BitVec(8)>, place, i: BitVec(64)):
+    peek_code().eval(call, [place, BitVec::ofNat(span.len()), i], buffers := [span]) = peek(span, i) {
+    trans(peek_compiled(call, span, place, BitVec::ofNat(span.len()), i), peek_pinned(span, place, i))
+}
+
+// A span whose length fits a word: the plain read.
+theorem peek_reads(call: Answers(), span: List<BitVec(8)>, place, i: BitVec(64), small: span.len() < Nat::pow(2, 64)):
+    peek_code().eval(call, [place, BitVec::ofNat(span.len()), i], buffers := [span]) = span.byte_at(i).zero_extend(56) {
+    trans(peek_runs(call, span, place, i), cong_fn(λ (byte: BitVec(8)) => byte.zero_extend(56), span.byte_within_own(i, small)))
+}
+
+// By evaluation, over "abc": the function, and the code as a program of one
+// function run over the file.
+fn abc() → List<BitVec(8)> { [b(97), b(98), b(99)] }
+
+theorem peek_abc(): peek(abc(), w(1)) = w(98) { refl }
+theorem peek_abc_code(): program_eval_over([abc()], [peek_code()], 0, [w(4096), w(3), w(1)]) = w(98) { refl }
+theorem peek_abc_past(): program_eval_over([abc()], [peek_code()], 0, [w(4096), w(3), w(3)]) = w(0) { refl }
+
+// The read is under the length word the function is handed, in the meaning
+// and in the code alike: handed 2, neither reads the third byte.
+theorem peek_short_means(): peek_rt().meaning(peek_world(abc()))(w(4096), w(2), w(2)) = w(0) { refl }
+theorem peek_short_code(): program_eval_over([abc()], [peek_code()], 0, [w(4096), w(2), w(2)]) = w(0) { refl }
+
+// The guard is part of the meaning: the plain read differs there.
+theorem guard_matters(): abc().byte_at(w(2)).eq_bit(abc().byte_within(w(2), w(2))) = False { refl }
+
+// A file without the span reads as zeroes.
+theorem peek_no_span(): peek_rt().meaning(World(RecInfo::none, [], trivial))(w(4096), w(3), w(1)) = w(0) { refl }
+
+// ---------------------------------------------------------------------------
+// The function compiler takes the code.
+
+// It evaluates, it does not read where the span lies, and it lowers to x86
+// lent one buffer: the load is under the test of its index against the
+// buffer's length home (`File::bounded`).
+theorem peek_evaluable(): program_evaluable([peek_code()]).IsTrue() { trivial }
+theorem peek_placeless(): program_placeless([peek_code()]).IsTrue() { trivial }
+theorem peek_accepted(): lower_program_lent([peek_code()], plan_program([peek_code()]), [1]).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals, and who refuses.
+
+// Read under the place word instead of the length word: both are words, so
+// this lowering takes it, and its theorem holds of it (the meaning is under
+// whatever word is named). The function compiler refuses: the test is not
+// against the buffer's length home, and the code reads where the span lies.
+fn peek_misread_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 2), Prim(Zext(8, 56), [0])), 1) }
+
+fn peek_misread_code() → Function {
+    match peek_misread_rt().lower(World(RecInfo::none, [], trivial)) { None => Function([], nodes_region(Nil), 0), Some(code) => code }
+}
+
+theorem peek_misread_lowered(): peek_misread_rt().lower(World(RecInfo::none, [], trivial)).is_some() = True { refl }
+theorem peek_misread_refused(): lower_program_lent([peek_misread_code()], plan_program([peek_misread_code()]), [1]) = None { refl }
+theorem peek_misread_placed(): program_placeless([peek_misread_code()]) = False { refl }
+
+// The same code not lent the buffer: refused by the function compiler.
+fn peek_unlent_code() → Function { Function(peek_code().parameters, peek_code().body, peek_code().result, 0) }
+
+theorem peek_unlent_refused(): lower_program_lent([peek_unlent_code()], plan_program([peek_unlent_code()]), [0]) = None { refl }
+
+// An index that is not a 64-bit word, and a variable out of scope: refused
+// by this lowering.
+theorem byte_of_bit_refused(): Tm::lower(Byte(0, 0, 1), World(RecInfo::none, [], trivial), [Bit, Word(64)], [1, 0], 2) = None { refl }
+theorem byte_narrow_length_refused(): Tm::lower(Byte(0, 0, 1), World(RecInfo::none, [], trivial), [Word(64), Word(8)], [1, 0], 2) = None { refl }
+theorem byte_unbound_refused(): Tm::lower(Byte(0, 3, 1), World(RecInfo::none, [], trivial), [Word(64), Word(64)], [1, 0], 2) = None { refl }

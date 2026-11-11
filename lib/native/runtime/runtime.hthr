@@ -141,6 +141,7 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         },
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
+        Byte(_, _, _) => Ok,
     }
 }
 
@@ -158,6 +159,7 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
         Field(i, k, of) => Field(i, k, of).judge(sigs, tys),
         Fold(over, init, step) => Fold(over, init, step).judge(sigs, tys),
         Case(c, zero, succ) => Case(c, zero, succ).judge(sigs, tys),
+        Byte(k, i, length) => Byte(k, i, length).judge(sigs, tys),
     }
 }
 
@@ -271,7 +273,7 @@ theorem Setup::checked_fits(s: Setup, f: Fun, w: World, ok: s.checked(f, w).IsTr
 // produced code answers with the function's meaning.
 theorem Setup::of_lowered(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerHolds(w, r) →
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval(call, xs)) {
+    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval(call, xs, buffers := w.spans)) {
     match r {
         None => λ never _ => false_elim(never),
         Some(_) => λ _ holds => holds,
@@ -288,11 +290,25 @@ theorem Setup::holds_at(s: Setup, f: Fun, w: World, shape: RtShape, shaped: f.sh
 // evaluation and `plain` by evaluation too.
 theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTrue(), plain: f.shape() = Plain):
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval(call, xs)) {
+    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval(call, xs, buffers := w.spans)) {
     Setup::of_lowered(f, w, s.lower(f, w), ok, Setup::holds_at(s, f, w, Plain, plain))
 }
 
 // ---------------------------------------------------------------------------
+// A world with no spans. The class below states its agreement over no
+// buffers, so an instance is built at such a world (`closed`, by
+// evaluation); a function lent spans is lowered and proved over its
+// world's (`Fun::lower_sound`) and gets its instance with the class's
+// statement over a file (docs/native-one-compiler-design.md §2.3, U3c).
+fn World::spanless(self w: World) → Bool { match w.spans { Nil => True, Cons(_, _) => False } }
+
+theorem World::spanless_nil(self w: World): w.spanless().IsTrue() → w.spans = Nil {
+    match w.spans as λ s => (match s { Nil => True, Cons(_, _) => False }).IsTrue() → s = Nil {
+        Nil => λ _ => refl,
+        Cons(_, _) => λ no => false_elim(no),
+    }
+}
+
 // The `Compile` class (design §9.3): a function's code and the code's
 // agreement with the function, keyed on the function itself (an
 // operation-indexed class, docs/operation-indexed-classes-design.md). The
@@ -342,11 +358,13 @@ fn Setup::typed_refl<F>(f: F) → Itself(F) = Itself(F) { refl }
 // `plain` are evaluation.
 fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itself(Ty::Arrows(w.tys, rt.params, rt.result)),
     pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.checked(rt, w).IsTrue(),
-    plain: rt.shape() = Plain) → Compile<F>(f)
+    plain: rt.shape() = Plain, closed: w.spanless().IsTrue()) → Compile<F>(f)
 {
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs)),
-            Setup::code_answers(s, rt, w, Setup::checked_lowered(s, rt, w, ok), plain, call, agree)),
+        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, rt.params, rt.result, retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f),
+                λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
+            j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs, buffers := w.spans)),
+                Setup::code_answers(s, rt, w, Setup::checked_lowered(s, rt, w, ok), plain, call, agree))),
         Setup::checked_fits(s, rt, w, ok))
 }
 
@@ -361,13 +379,14 @@ fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: N
     shaped: Setup::fuel_fun(w0, wrest, res, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
     zero_eq: Fun::FuelZero(Cons(w0, wrest), res, zero, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f)),
     step_eq: (n: Nat) → Fun::FuelStep(Cons(w0, wrest), res, succ, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f), n),
-    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue()) → Compile<F>(f)
+    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue(), closed: w.spanless().IsTrue()) → Compile<F>(f)
 {
     let rt = Setup::fuel_fun(w0, wrest, res, c, zero, succ);
     let h = retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f);
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        Fun::fuel_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
-            Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree),
+        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, Cons(Count, Cons(w0, wrest)), res, h, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
+            Fun::fuel_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
+                Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree)),
         Setup::checked_fits(s, rt, w, ok))
 }
 
@@ -381,13 +400,14 @@ fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, 
     shaped: Setup::measured_fun(w0, wrest, res, body).shape() = Measured(w0, wrest, body),
     m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(Cons(w0, wrest), m),
     guarded: Fun::Guarded(Cons(w0, wrest), res, body, w, retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f), m),
-    ok: s.checked(Setup::measured_fun(w0, wrest, res, body), w).IsTrue()) → Compile<F>(f)
+    ok: s.checked(Setup::measured_fun(w0, wrest, res, body), w).IsTrue(), closed: w.spanless().IsTrue()) → Compile<F>(f)
 {
     let rt = Setup::measured_fun(w0, wrest, res, body);
     let h = retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f);
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
-            Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree),
+        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, Cons(w0, wrest), res, h, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
+            Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
+                Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree)),
         Setup::checked_fits(s, rt, w, ok))
 }
 
@@ -790,10 +810,13 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Call(f, args) => ap(runtime_at(q.tm, 8), [NatLit(f), q.nat_list(args)]),
         Fold(over, init, step) => ap(runtime_at(q.tm, 9), [NatLit(over), NatLit(init), NatLit(step)]),
         Case(c, zero, succ) => ap(runtime_at(q.tm, 10), [NatLit(c), zero.quote(q), succ.quote(q)]),
+        Byte(k, i, length) => ap(runtime_at(q.tm, 11), [NatLit(k), NatLit(i), NatLit(length)]),
     }
 }
 
-fn Fun::quote(self f: Fun, q: RtQ) → Expr { ap(q.mk_fun, [Ty::quotes(f.params, q), Ty::quote(f.result, q), Tm::quote(f.body, q)]) }
+fn Fun::quote(self f: Fun, q: RtQ) → Expr {
+    ap(q.mk_fun, [Ty::quotes(f.params, q), Ty::quote(f.result, q), Tm::quote(f.body, q), NatLit(f.lent)])
+}
 
 fn Sig::quote(self s: Sig, q: RtQ) → Expr { ap(q.mk_sig, [Ty::quotes(s.params, q), Ty::quote(s.result, q)]) }
 
@@ -1146,7 +1169,7 @@ fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, 
     let step_eq = Lam(r.ref, runtime_lams(ys, ap(rfl, [Blank, ap(Global(f), Cons(ap(succ_g, [Local(r.ref)]),
         runtime_args(count, reprs, ws, runtime_locals(ys))))])));
     pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), Ty::quote(res, q), NatLit(c), Tm::quote(zero, q), Tm::quote(succ, q),
-        world_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h)]))
+        world_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h), Hd(trivial_h)]))
 }
 
 // A measured recursion's instance: its measure, the measure below `2^64`,
@@ -1223,7 +1246,7 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let guarded = runtime_lams(xs.append([again, hyp]),
         ap(sym_g, [Blank, Blank, Blank, runtime_cong_out(cong_g, reprs, res, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_codes(xs).append([lt_n, lt_n]))))))))]));
     pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), res_e, body_e, world_e, typed, shaped, m_e, bounded, guarded,
-        Hd(trivial_h)]))
+        Hd(trivial_h), Hd(trivial_h)]))
 }
 
 // The `Compile(f)` instance, by the reflection's shape.
@@ -1236,7 +1259,7 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
     match rfun.shape() {
         Plain => runtime_global("Setup::compile").bind(λ compile =>
             pure(ap(compile, [Blank, Global(f), setup, rt_e, world_e, typed, ap(rfl, [Blank, Global(f)]), Hd(trivial_h),
-                ap(rfl, [Blank, runtime_at(shapes, 0)])]))),
+                ap(rfl, [Blank, runtime_at(shapes, 0)]), Hd(trivial_h)]))),
         Fuel(w0, wrest, zero, succ) => match rfun.body {
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
             _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),

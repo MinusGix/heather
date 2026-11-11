@@ -759,6 +759,10 @@ theorem ETm::value_sound(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next
             let lowered = j(e_l, λ r _ => Tm::LowerHolds(v, w, g, Loc::ports(locs), next, r), Tm::lower_sound(v, w, g, Loc::ports(locs), next));
             let ran = lowered(call(env.buffers), agree(env.buffers), env.valuation(), vals, locs_env_holds(w.tys, env, g, locs, vals, held),
                 locs_below(w.tys, env, g, next, pos, locs, vals, held, below));
+            // The lowering is proved over the world's spans; a byte-free
+            // region evaluates alike over none.
+            let result_held = j(l.region.eval_byte_free(call(env.buffers), w.spans, free, env.valuation()),
+                λ u _ => t.Holds(w.tys, u, l.result, Tm::sem(v, w, g, vals)), ran.right.right.right);
             let region = ETm::moved(t, l);
             let free2: region.byte_free().IsTrue() = Bool::is_true_and_intro(l.region.byte_free(),
                 Dataflow(Region(Ports(Nil), [Move(t.width(), l.next, l.result)], Ports(Nil))).byte_free(), free, trivial);
@@ -767,7 +771,7 @@ theorem ETm::value_sound(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next
             let same = Loc::same_compute(env, call, region, keeps, locs, clear2);
             let number = env.compute_moved(call, l.region, free, t.width(), l.next, l.result);
             ⟨ran.left, ⟨t.kept_moved(w.tys, env.compute(call, region), l.next, l.region.eval(call(env.buffers), env.valuation()), l.result, one,
-                    Tm::sem(v, w, g, vals), ran.right.right.right, number),
+                    Tm::sem(v, w, g, vals), result_held, number),
                 locs_hold_same(w.tys, env, env.compute(call, region), g, locs, vals, same, held)⟩⟩
         }⟩))))
 }

@@ -91,6 +91,7 @@ fn Tm::tail_sem(self t: Tm, w: World, skip: Nat, res: Ty, again: List<BitVec(64)
         },
         Fold(over, init, step) => λ g env => Tm::leaf(Fold(over, init, step), w, res, g, env),
         Case(c, zero, succ) => λ g env => Tm::leaf(Case(c, zero, succ), w, res, g, env),
+        Byte(k, i, length) => λ g env => Tm::leaf(Byte(k, i, length), w, res, g, env),
     }
 }
 
@@ -179,29 +180,29 @@ theorem Tm::disjoint_tail(n: Nat, rest: List<Nat>, ys: List<Nat>): disjoint(Cons
 
 // Distinct targets, none a source, as many as the sources: the targets read
 // the sources' words.
-theorem Tm::moves_to_words(ns: List<Nat>): (qs: List<Nat>) → (values: Valuation()) → distinct(ns).IsTrue() → disjoint(ns, qs).IsTrue() →
-    ns.len() = qs.len() → words_of(eval_nodes(Tm::moves_to(ns, qs), values), ns) = words_of(values, qs) {
+theorem Tm::moves_to_words(ns: List<Nat>, buffers: Buffers()): (qs: List<Nat>) → (values: Valuation()) → distinct(ns).IsTrue() → disjoint(ns, qs).IsTrue() →
+    ns.len() = qs.len() → words_of(eval_nodes_over(buffers, Tm::moves_to(ns, qs), values), ns) = words_of(values, qs) {
     match ns {
-        Nil => λ qs values _ _ => match qs as λ q2 => 0 = q2.len() → words_of(eval_nodes(Tm::moves_to(Nil, q2), values), Nil) = words_of(values, q2) {
+        Nil => λ qs values _ _ => match qs as λ q2 => 0 = q2.len() → words_of(eval_nodes_over(buffers, Tm::moves_to(Nil, q2), values), Nil) = words_of(values, q2) {
             Nil => λ _ => refl,
             Cons(_, more) => λ (bad: 0 = Succ(more.len())) => false_elim(more.len().zero_ne_succ(bad)),
         },
         Cons(n, rest) => λ qs values apart => match qs as λ q2 => disjoint(Cons(n, rest), q2).IsTrue() → Succ(rest.len()) = q2.len() →
-            words_of(eval_nodes(Tm::moves_to(Cons(n, rest), q2), values), Cons(n, rest)) = words_of(values, q2) {
+            words_of(eval_nodes_over(buffers, Tm::moves_to(Cons(n, rest), q2), values), Cons(n, rest)) = words_of(values, q2) {
             Nil => λ _ (bad: Succ(rest.len()) = 0) => false_elim(rest.len().succ_ne_zero(bad)),
             Cons(q, more) => λ dis same => {
                 let parts = Bool::is_true_and(absent(n, rest), distinct(rest), apart);
                 let dparts = Bool::is_true_and(absent(q, Cons(n, rest)), disjoint(Cons(n, rest), more), dis);
                 let moved = Valuation::set(values, n, λ wd => values(wd, q));
-                let after = eval_nodes(Tm::moves_to(rest, more), moved);
+                let after = eval_nodes_over(buffers, Tm::moves_to(rest, more), moved);
                 let head: (after(64, n) = values(64, q)) = trans(
-                    eval_nodes_frame(Tm::moves_to(rest, more), Nil, moved, 64, n, Tm::moves_to_writes(rest, more, n, parts.left)),
+                    eval_nodes_frame(Tm::moves_to(rest, more), buffers, moved, 64, n, Tm::moves_to_writes(rest, more, n, parts.left)),
                     Valuation::set_here(values, n, λ wd => values(wd, q), 64));
                 // `n` is none of `more`'s sources.
                 let fresh: (y: Nat) → Mem(y, more) → (moved(64, y) = values(64, y)) = λ y m =>
                     Valuation::set_other(values, n, λ wd => values(wd, q), 64, y, Nat::differs_ne(y, n,
                         Bool::is_true_and(y.differs(n), absent(y, rest), disjoint_mem(Cons(n, rest), more, dparts.right, y, m)).left));
-                let tail = trans(Tm::moves_to_words(rest, more, moved, parts.right,
+                let tail = trans(Tm::moves_to_words(rest, buffers, more, moved, parts.right,
                         Tm::disjoint_tail(n, rest, more, dparts.right),
                         Nat::succ_inj(rest.len(), more.len(), same)),
                     words_agree(more, values, moved, fresh));
@@ -310,6 +311,7 @@ fn Tm::lower_tail(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, nexts: Li
         Field(i, k, of) => Tm::lower_leaf(Field(i, k, of), w, res, flag, nexts, g, ports, next),
         Fold(over, init, step) => Tm::lower_leaf(Fold(over, init, step), w, res, flag, nexts, g, ports, next),
         Case(c, zero, succ) => Tm::lower_leaf(Case(c, zero, succ), w, res, flag, nexts, g, ports, next),
+        Byte(k, i, length) => Tm::lower_leaf(Byte(k, i, length), w, res, flag, nexts, g, ports, next),
     }
 }
 
@@ -322,7 +324,7 @@ fn Tm::TailHolds(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, nexts: Lis
         Some(c) => (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
             EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
             (next <= c.next) ∧ ((again: List<BitVec(64)> → res.sem(w.tys)) →
-                Tm::leave(c.region.eval(call, values), flag, nexts, λ ys => Tm::out(w.tys, res, again(ys))) =
+                Tm::leave(c.region.eval(call, values, buffers := w.spans), flag, nexts, λ ys => Tm::out(w.tys, res, again(ys))) =
                     Tm::out(w.tys, res, t.tail_sem(w, skip, res, again, g, env))),
     }
 }
@@ -340,14 +342,14 @@ theorem Tm::lower_again_sound(t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, ne
             let parts = Bool::is_true_and(distinct(Cons(flag, nexts)), disjoint(Cons(flag, nexts), qs) && nexts.len().matches(qs.len()), ok);
             let rest = Bool::is_true_and(disjoint(Cons(flag, nexts), qs), nexts.len().matches(qs.len()), parts.right);
             let apart = Bool::is_true_and(absent(flag, nexts), distinct(nexts), parts.left);
-            let shifted = eval_nodes(Tm::moves_to(nexts, qs), values);
+            let shifted = eval_nodes_over(w.spans, Tm::moves_to(nexts, qs), values);
             let after = Valuation::set(shifted, flag, λ wd => BitVec::ofNat(0));
             let at_flag: (after(64, flag) = BitVec::ofNat(0)) = Valuation::set_here(shifted, flag, λ wd => BitVec::ofNat(0), 64);
             // The flag is none of `nexts`.
             let kept: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
                 Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, λ e => absent_mem(flag, nexts, apart.left, y, m, sym(e))));
             let moved: (words_of(after, nexts) = Tm::words(w, g, env, args)) = trans(kept, trans(
-                Tm::moves_to_words(nexts, qs, values, apart.right, Tm::disjoint_tail(flag, nexts, qs, rest.left),
+                Tm::moves_to_words(nexts, w.spans, qs, values, apart.right, Tm::disjoint_tail(flag, nexts, qs, rest.left),
                     nexts.len().matches_eq(qs.len(), rest.right)),
                 Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs)));
             ⟨next.le_refl(), λ again => trans(
@@ -382,15 +384,15 @@ theorem Tm::lower_leaf_sound(t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWor
                     let p1 = Bool::is_true_and(absent(flag, Cons(n0, rest)), distinct(Cons(n0, rest)), apart);
                     let pf = Bool::is_true_and(flag.differs(n0), absent(flag, rest), p1.left);
                     let pn = Bool::is_true_and(absent(n0, rest), distinct(rest), p1.right);
-                    let mid = l.region.eval(call, values);
+                    let mid = l.region.eval(call, values, buffers := w.spans);
                     let moved = Valuation::set(mid, n0, λ wd => mid(wd, l.result));
                     let copies = Tm::moves_to(rest, Tm::copies(rest, n0));
-                    let copied = eval_nodes(copies, moved);
+                    let copied = eval_nodes_over(w.spans, copies, moved);
                     let after = Valuation::set(copied, flag, λ wd => BitVec::ofNat(1));
                     let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(copied, flag, λ wd => BitVec::ofNat(1), 64);
                     let at_n0: (after(64, n0) = mid(64, l.result)) = trans(
                         Valuation::set_other(copied, flag, λ wd => BitVec::ofNat(1), 64, n0, λ same => Nat::differs_ne(flag, n0, pf.left, sym(same))), trans(
-                        eval_nodes_frame(copies, Nil, moved, 64, n0, Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left)),
+                        eval_nodes_frame(copies, w.spans, moved, 64, n0, Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left)),
                         Valuation::set_here(mid, n0, λ wd => mid(wd, l.result), 64)));
                     let held_one: t.ty(w, g).OneWord(w.tys) = j(sym(e), λ x _ => x.OneWord(w.tys), er);
                     let value: (mid(64, l.result) = Tm::out(w.tys, res, Tm::leaf(t, w, res, g, env))) =
@@ -406,15 +408,15 @@ theorem Tm::lower_leaf_sound(t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWor
 }
 
 // What a pass's branch leaves is what the arm its bit chooses leaves.
-theorem Tm::leave_branch(values: Valuation(), pc: Nat, outs: Ports, wt, wf: StructuredRegion, call: Answers(), flag: Nat, nexts: List<Nat>,
+theorem Tm::leave_branch(values: Valuation(), pc: Nat, outs: Ports, wt, wf: StructuredRegion, call: Answers(), buffers: Buffers(), flag: Nat, nexts: List<Nat>,
     again: List<BitVec(64)> → BitVec(64), b: Bool): values(1, pc).head_bit() = b →
-    Tm::leave(branch(pc, outs, wt, wf).eval(call, values), flag, nexts, again) =
-        match b { False => Tm::leave(wf.eval(call, values), flag, nexts, again), True => Tm::leave(wt.eval(call, values), flag, nexts, again) } {
+    Tm::leave(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), flag, nexts, again) =
+        match b { False => Tm::leave(wf.eval(call, values, buffers := buffers), flag, nexts, again), True => Tm::leave(wt.eval(call, values, buffers := buffers), flag, nexts, again) } {
     match b {
-        True => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values), wt.eval(call, values), flag, nexts, again,
-            λ wd id => branch_true(values, pc, outs, wt, wf, call, h, wd, id)),
-        False => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values), wf.eval(call, values), flag, nexts, again,
-            λ wd id => branch_false(values, pc, outs, wt, wf, call, h, wd, id)),
+        True => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wt.eval(call, values, buffers := buffers), flag, nexts, again,
+            λ wd id => branch_true(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
+        False => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wf.eval(call, values, buffers := buffers), flag, nexts, again,
+            λ wd id => branch_false(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
     }
 }
 
@@ -451,7 +453,7 @@ theorem Tm::tail_if_sound(t: Tm, c: Nat, yes, no: Tm, w: World, skip: Nat, res: 
             let chosen = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit), BitVec::head_bit_ofBool(scrutinee));
             ⟨Nat::le_trans(next, ly.next, ln.next, first.left, second.left), λ again => {
                 let k = λ (ys: List<BitVec(64)>) => Tm::out(w.tys, res, again(ys));
-                trans(Tm::leave_branch(values, pc, outs, ly.region, ln.region, call, flag, nexts, k, scrutinee, chosen),
+                trans(Tm::leave_branch(values, pc, outs, ly.region, ln.region, call, w.spans, flag, nexts, k, scrutinee, chosen),
                     trans(eq2(λ (x: BitVec(64)) (y: BitVec(64)) => match scrutinee { False => y, True => x },
                         first.right(again), second.right(again)),
                         trans(Tm::out_match(w.tys, res, scrutinee, yes.tail_sem(w, skip, res, again, g, env), no.tail_sem(w, skip, res, again, g, env)),
@@ -473,6 +475,8 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
             Tm::lower_leaf_sound(Fold(over, init, step), w, skip, res, er, flag, nexts, g, ports, next, λ again env => refl),
         Case(c, zero, succ) => λ g ports next =>
             Tm::lower_leaf_sound(Case(c, zero, succ), w, skip, res, er, flag, nexts, g, ports, next, λ again env => refl),
+        Byte(k, i, length) => λ g ports next =>
+            Tm::lower_leaf_sound(Byte(k, i, length), w, skip, res, er, flag, nexts, g, ports, next, λ again env => refl),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::TailHolds(Call(f2, args), w, skip, res, flag, nexts, g, ports, next, Tm::lower_tail(Call(f2, args), w, skip, res, flag, nexts, g, ports, next)) {
             Zero => λ g ports next => Tm::lower_again_sound(Call(Zero, args), w, skip, res, flag, nexts, g, ports, next, args.drop(skip), λ again env => refl),
@@ -490,7 +494,7 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
                 λ call agree values env held below => {
                     let first = j(lowered_e, λ r _ => Tm::LowerHolds(e, w, g, ports, next, r),
                         Tm::lower_sound(e, w, g, ports, next))(call, agree, values, env, held, below);
-                    let mid = le.region.eval(call, values);
+                    let mid = le.region.eval(call, values, buffers := w.spans);
                     let then = j(lowered_body, λ r _ => Tm::TailHolds(body, w, skip, res, flag, nexts, inner, Cons(le.result, ports), le.next, r),
                         Tm::tail_sound(body, w, skip, res, er, flag, nexts, inner, Cons(le.result, ports), le.next))(call, agree, mid,
                         Pair(Tm::sem(e, w, g, env), env),
@@ -659,25 +663,25 @@ fn Fun::post(x, rr, o0: Nat, exhausted: StructuredRegion) → StructuredRegion {
     branch(x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]))
 }
 
-theorem Fun::post_left(x, rr, o0: Nat, os: List<Nat>, exhausted: StructuredRegion, call: Answers(), values: Valuation(), s0: BitVec(64),
+theorem Fun::post_left(x, rr, o0: Nat, os: List<Nat>, exhausted: StructuredRegion, call: Answers(), buffers: Buffers(), values: Valuation(), s0: BitVec(64),
     rest: List<BitVec(64)>, apart: x ≠ o0):
-    loop_finish(Fun::post(x, rr, o0, exhausted), call, values, Cons(o0, os), x, rr)(LoopEnd(Cons(s0, rest), False)) = s0 {
+    loop_finish_over(buffers, Fun::post(x, rr, o0, exhausted), call, values, Cons(o0, os), x, rr)(LoopEnd(Cons(s0, rest), False)) = s0 {
     let bound = Valuation::bind(values, Cons(o0, os), Cons(s0, rest));
     let q = Valuation::set(bound, x, bit_value(False));
     let left: (q(1, x).head_bit() = False) = cong_fn(λ (v: BitVec(1)) => v.head_bit(), Valuation::set_here(bound, x, bit_value(False), 1));
-    trans(branch_false(q, x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]), call, left, 64, rr),
+    trans(branch_false(q, x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]), call, buffers, left, 64, rr),
         trans(Valuation::set_here(q, rr, λ wd => q(wd, o0), 64),
             trans(Valuation::set_other(bound, x, bit_value(False), 64, o0, λ e => apart(sym(e))),
                 Valuation::set_here(Valuation::bind(values, os, rest), o0, word_value(s0), 64))))
 }
 
 // What the exhausted branch sees: the state at `os`, the bit at `x` set.
-theorem Fun::post_exhausted(x, rr, o0: Nat, exhausted: StructuredRegion, call: Answers(), values: Valuation(), os: List<Nat>,
+theorem Fun::post_exhausted(x, rr, o0: Nat, exhausted: StructuredRegion, call: Answers(), buffers: Buffers(), values: Valuation(), os: List<Nat>,
     st: List<BitVec(64)>):
-    loop_finish(Fun::post(x, rr, o0, exhausted), call, values, os, x, rr)(LoopEnd(st, True)) =
-        exhausted.eval(call, Valuation::set(Valuation::bind(values, os, st), x, bit_value(True)))(64, rr) {
+    loop_finish_over(buffers, Fun::post(x, rr, o0, exhausted), call, values, os, x, rr)(LoopEnd(st, True)) =
+        exhausted.eval(call, Valuation::set(Valuation::bind(values, os, st), x, bit_value(True)), buffers := buffers)(64, rr) {
     let q = Valuation::set(Valuation::bind(values, os, st), x, bit_value(True));
-    branch_true(q, x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]), call,
+    branch_true(q, x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]), call, buffers,
         cong_fn(λ (v: BitVec(1)) => v.head_bit(), Valuation::set_here(Valuation::bind(values, os, st), x, bit_value(True), 1)), 64, rr)
 }
 
@@ -757,7 +761,7 @@ fn Fun::FuelHolds(ws: List<Ty>, res: Ty, w: World, h: Nat → Ty::Arrows(w.tys, 
     match r {
         None => True,
         Some(code) => (call: Answers()) → Tm::CallsAgree(w, call) → (b: BitVec(64)) → (xs: List<BitVec(64)>) → xs.len() = ws.len() →
-            code.eval(call, Cons(b, xs)) = Ty::uncurry(w.tys, ws, res, h(b.toNat()), xs),
+            code.eval(call, Cons(b, xs), buffers := w.spans) = Ty::uncurry(w.tys, ws, res, h(b.toNat()), xs),
     }
 }
 
@@ -797,7 +801,7 @@ theorem Fun::fuel_pass_sound(ws: List<Ty>, res: Ty, succ: Tm, w: World, h: Nat �
     call: Answers(), agree: Tm::CallsAgree(w, call), finish: LoopEnd → BitVec(64),
     left: (v: Valuation()) → finish(LoopEnd(words_of(v, Fun::fuel_ns(ws)), False)) = words_of(v, Fun::fuel_ns(ws)).head_or(BitVec::zero()),
     r: Nat, step_eq: Fun::FuelStep(ws, res, succ, w, h, r), small: Succ(r) < Nat::pow(2, 64), v: Valuation()):
-    loop_pass(λ (pass: Valuation()) => Fun::fuel_pass(ws, t).eval(call, pass), Fun::fuel_ps(ws), Fun::fuel_c(ws), Succ(t.next), Fun::fuel_ns(ws),
+    loop_pass(λ (pass: Valuation()) => Fun::fuel_pass(ws, t).eval(call, pass, buffers := w.spans), Fun::fuel_ps(ws), Fun::fuel_c(ws), Succ(t.next), Fun::fuel_ns(ws),
         finish, λ (state: List<BitVec(64)>) => Ty::uncurry(w.tys, ws, res, h(r), state), r, v) =
         Ty::uncurry(w.tys, ws, res, h(Succ(r)), words_of(v, Fun::fuel_ps(ws))) {
     let tys = w.tys;
@@ -849,7 +853,7 @@ theorem Fun::fuel_pass_sound(ws: List<Ty>, res: Ty, succ: Tm, w: World, h: Nat �
     let ran = j(lowered, λ o _ => Tm::TailHolds(succ, w, 1, res, flag, ns, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), Succ(flag), o),
         Tm::tail_sound(succ, w, 1, res, er, flag, ns, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), Succ(flag)))(call, agree, pv1, env, held, below);
     // The exit bit, from the flag word.
-    let pv2 = t.region.eval(call, pv1);
+    let pv2 = t.region.eval(call, pv1, buffers := w.spans);
     let pv2a = Valuation::set(pv2, t.next, λ wd => BitVec::ofNat(1));
     let exit_value = bit_value(pv2a(64, flag).eq_bit(pv2a(64, t.next)));
     let pv3 = Valuation::set(pv2a, Succ(t.next), exit_value);
@@ -879,7 +883,7 @@ theorem Fun::fuel_zero_sound(ws: List<Ty>, res: Ty, zero: Tm, w: World, h: Nat �
     zero_eq: Fun::FuelZero(ws, res, zero, w, h), t, lz: Lowered, lowered_z: Fun::fuel_zero_at(ws, zero, w, t) = Some(lz),
     ez: zero.ty(w, Fun::fuel_ctx(ws)) = res, call: Answers(), agree: Tm::CallsAgree(w, call), values: Valuation(),
     st: List<BitVec(64)>, len: st.len() = ws.len()):
-    loop_finish(Fun::post(Fun::past(ws, Succ(Succ(Succ(t.next)))), lz.next, Succ(Succ(Succ(t.next))),
+    loop_finish_over(w.spans, Fun::post(Fun::past(ws, Succ(Succ(Succ(t.next)))), lz.next, Succ(Succ(Succ(t.next))),
             Fun::fuel_zero_region(Succ(Succ(t.next)), lz.next, lz)),
         call, values, Fun::param_ids(ws, Succ(Succ(Succ(t.next)))), Fun::past(ws, Succ(Succ(Succ(t.next)))), lz.next)(LoopEnd(st, True)) =
         Ty::uncurry(w.tys, ws, res, h(0), st) {
@@ -902,12 +906,12 @@ theorem Fun::fuel_zero_sound(ws: List<Ty>, res: Ty, zero: Tm, w: World, h: Nat �
         Fun::below_onto(tys, ws, [Count], Succ(z), [z], ok, ⟨z.lt_succ_self(), trivial⟩));
     let ran = j(lowered_z, λ o _ => Tm::LowerHolds(zero, w, ctx, ports, Succ(x), o), Tm::lower_sound(zero, w, ctx, ports, Succ(x)))(
         call, agree, qz, env, held, below);
-    let after = lz.region.eval(call, qz);
+    let after = lz.region.eval(call, qz, buffers := w.spans);
     let value: (after(64, lz.result) = Tm::out(tys, res, Tm::leaf(zero, w, res, ctx, env))) =
         trans(Ty::one_word_reads(tys, after, lz.result, zero.ty(w, ctx), j(sym(ez), λ y _ => y.OneWord(tys), er), zero.sem(w, ctx, env),
                 ran.right.right.right),
             sym(Tm::out_cast(tys, zero.ty(w, ctx), res, ez, zero.sem(w, ctx, env))));
-    trans(Fun::post_exhausted(x, lz.next, Succ(z), Fun::fuel_zero_region(z, lz.next, lz), call, values, os, st),
+    trans(Fun::post_exhausted(x, lz.next, Succ(z), Fun::fuel_zero_region(z, lz.next, lz), call, w.spans, values, os, st),
         trans(Valuation::set_here(after, lz.next, λ wd => after(wd, lz.result), 64),
             trans(value, cong_fn(λ (u: res.sem(tys)) => Tm::out(tys, res, u),
                 sym(Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => Ty::apply(tys, ws, res, h(0), xs) =
@@ -943,8 +947,8 @@ theorem Fun::fuel_sound(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: Wor
             let ids = Cons(0, Fun::param_ids(ws, 1));
             let values0 = Valuation::bind(Valuation::zero(), ids, Cons(b, xs));
             let post = Fun::post(x, lz.next, Succ(z), Fun::fuel_zero_region(z, lz.next, lz));
-            let fin = loop_finish(post, call, values0, Fun::param_ids(ws, Succ(z)), x, lz.next);
-            let step = λ (pass: Valuation()) => Fun::fuel_pass(ws, t).eval(call, pass);
+            let fin = loop_finish_over(w.spans, post, call, values0, Fun::param_ids(ws, Succ(z)), x, lz.next);
+            let step = λ (pass: Valuation()) => Fun::fuel_pass(ws, t).eval(call, pass, buffers := w.spans);
             let run = λ (r: Nat) (state: List<BitVec(64)>) => Ty::uncurry(tys, ws, res, h(r), state);
             let read: (words_of(values0, ids) = Cons(b, xs)) = words_of_bind(Valuation::zero(), ids, Fun::ids_distinct(Cons(Count, ws), 0), Cons(b, xs),
                 cong_fn(λ (n: Nat) => Succ(n), trans(Fun::ids_len(ws, 1), sym(len))));
@@ -957,7 +961,7 @@ theorem Fun::fuel_sound(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: Wor
                 trans(Fun::ids_len(ws, Succ(c)), sym(trans(words_of_len(values0, Fun::param_ids(ws, 1)), Fun::ids_len(ws, 1)))));
             let x_o0: (Succ(z) < x) = Nat::lt_of_lt_of_le(Succ(z), Succ(Succ(z)), x, Succ(z).lt_succ_self(), Fun::past_ge(wrest, Succ(Succ(z))));
             let left = λ (v: Valuation()) => Fun::post_left(x, lz.next, Succ(z), Fun::param_ids(wrest, Succ(Succ(z))), Fun::fuel_zero_region(z, lz.next, lz),
-                call, values0, v(64, Succ(Succ(Fun::fuel_k(ws)))), words_of(v, Fun::param_ids(wrest, Succ(Succ(Succ(Fun::fuel_k(ws)))))),
+                call, w.spans, values0, v(64, Succ(Succ(Fun::fuel_k(ws)))), words_of(v, Fun::param_ids(wrest, Succ(Succ(Succ(Fun::fuel_k(ws)))))),
                 Nat::ne_of_gt(x, Succ(z), x_o0));
             let small_bound: (bound < Nat::pow(2, 64)) = BitVec::toNat_lt_pow(64, values0(64, 0));
             let agreed = Fun::loop_agrees_below(step, ps, c, Succ(t.next), Fun::fuel_ns(ws), Fun::ids_distinct(ws, Succ(c)),
@@ -1041,7 +1045,7 @@ fn Fun::MeasuredHolds(ws: List<Ty>, res: Ty, w: World, h: Ty::Arrows(w.tys, ws, 
     match r {
         None => True,
         Some(code) => (call: Answers()) → Tm::CallsAgree(w, call) → (xs: List<BitVec(64)>) → xs.len() = ws.len() →
-            code.eval(call, xs) = Ty::uncurry(w.tys, ws, res, h, xs),
+            code.eval(call, xs, buffers := w.spans) = Ty::uncurry(w.tys, ws, res, h, xs),
     }
 }
 
@@ -1081,10 +1085,10 @@ theorem Fun::meas_pass_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
     left: (v: Valuation()) → finish(LoopEnd(words_of(v, Fun::meas_ns(ws)), False)) = words_of(v, Fun::meas_ns(ws)).head_or(BitVec::zero()),
     r: Nat, v: Valuation(), hr: m(words_of(v, Fun::meas_ps(ws))) < Succ(Succ(r)),
     earlier: (state: List<BitVec(64)>) → state.len() = Fun::meas_ps(ws).len() → (p: m(state) < Succ(r)) →
-        finish(loop_eval(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass), Fun::meas_ps(ws), Fun::meas_c(ws), Succ(t.next),
+        finish(loop_eval(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass, buffers := w.spans), Fun::meas_ps(ws), Fun::meas_c(ws), Succ(t.next),
             Fun::meas_ns(ws), r, state)) = Ty::uncurry(w.tys, ws, res, h, state)):
-    loop_pass(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass), Fun::meas_ps(ws), Fun::meas_c(ws), Succ(t.next), Fun::meas_ns(ws),
-        finish, λ (state: List<BitVec(64)>) => finish(loop_eval(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass), Fun::meas_ps(ws),
+    loop_pass(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass, buffers := w.spans), Fun::meas_ps(ws), Fun::meas_c(ws), Succ(t.next), Fun::meas_ns(ws),
+        finish, λ (state: List<BitVec(64)>) => finish(loop_eval(λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass, buffers := w.spans), Fun::meas_ps(ws),
             Fun::meas_c(ws), Succ(t.next), Fun::meas_ns(ws), r, state)), r, v) =
         Ty::uncurry(w.tys, ws, res, h, words_of(v, Fun::meas_ps(ws))) {
     let tys = w.tys;
@@ -1095,7 +1099,7 @@ theorem Fun::meas_pass_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
     let flag = Fun::meas_flag(ws);
     let ctx = Ty::bind_onto(ws, Nil);
     let ports = Fun::ports_onto(ws, Succ(bnd), Nil);
-    let step = λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass);
+    let step = λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass, buffers := w.spans);
     let later = λ (state: List<BitVec(64)>) => finish(loop_eval(step, ps, c, Succ(t.next), ns, r, state));
     let st = words_of(v, ps);
     let len_st: (st.len() = ws.len()) = trans(words_of_len(v, ps), Fun::ids_len(ws, Succ(bnd)));
@@ -1109,7 +1113,7 @@ theorem Fun::meas_pass_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
         Fun::below_onto(tys, ws, Nil, Succ(bnd), Nil, ok, trivial));
     let ran = j(lowered, λ o _ => Tm::TailHolds(body, w, 0, res, flag, ns, ctx, ports, Succ(flag), o),
         Tm::tail_sound(body, w, 0, res, er, flag, ns, ctx, ports, Succ(flag)))(call, agree, pv, env, held, below);
-    let pv2 = t.region.eval(call, pv);
+    let pv2 = t.region.eval(call, pv, buffers := w.spans);
     let pv2a = Valuation::set(pv2, t.next, λ wd => BitVec::ofNat(1));
     let exit_value = bit_value(pv2a(64, flag).eq_bit(pv2a(64, t.next)));
     let pv3 = Valuation::set(pv2a, Succ(t.next), exit_value);
@@ -1143,7 +1147,7 @@ theorem Fun::meas_zero_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
     guarded: Fun::Guarded(ws, res, body, w, h, m), o, x: Nat, t2: Lowered, lowered2: Fun::meas_tail2(ws, res, body, w, o, x) = Some(t2),
     x_at: x = Fun::past(ws, o), n0: Nat, ns_rest: List<Nat>, ns_at: Fun::meas_ns2(ws, x) = Cons(n0, ns_rest),
     call: Answers(), agree: Tm::CallsAgree(w, call), values: Valuation(), st: List<BitVec(64)>, len: st.len() = ws.len(), hz: m(st) < 1):
-    loop_finish(Fun::post(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)]))), call, values, Fun::param_ids(ws, o), x, t2.next)(
+    loop_finish_over(w.spans, Fun::post(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)]))), call, values, Fun::param_ids(ws, o), x, t2.next)(
         LoopEnd(st, True)) = Ty::uncurry(w.tys, ws, res, h, st) {
     let tys = w.tys;
     let os = Fun::param_ids(ws, o);
@@ -1167,7 +1171,7 @@ theorem Fun::meas_zero_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
         j(sym(x_at), λ y _ => Below(tys, ctx, ports, y), Fun::below_onto(tys, ws, Nil, o, Nil, ok, trivial)));
     let ran = j(lowered2, λ r _ => Tm::TailHolds(body, w, 0, res, flag2, ns2, ctx, ports, Succ(flag2), r),
         Tm::tail_sound(body, w, 0, res, er, flag2, ns2, ctx, ports, Succ(flag2)))(call, agree, q, env, held, below);
-    let q2 = t2.region.eval(call, q);
+    let q2 = t2.region.eval(call, q, buffers := w.spans);
     let first = λ (ys: List<BitVec(64)>) => ys.head_or(BitVec::zero());
     let at_st = Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
         ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(tys, ws, res, h, ys)) →
@@ -1175,7 +1179,7 @@ theorem Fun::meas_zero_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
             Ty::uncurry(tys, ws, res, h, xs), guarded, st, len);
     let moved: (q2(64, n0) = words_of(q2, ns2).head_or(BitVec::zero())) =
         j(sym(ns_at), λ l _ => q2(64, n0) = words_of(q2, l).head_or(BitVec::zero()), refl);
-    trans(Fun::post_exhausted(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)])), call, values, os, st),
+    trans(Fun::post_exhausted(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)])), call, w.spans, values, os, st),
         trans(Valuation::set_here(q2, t2.next, λ wd => q2(wd, n0), 64),
             trans(moved, trans(sym(Tm::leave_first(q2, flag2, ns2)),
                 trans(Tm::leave_cont(q2, flag2, ns2, first, λ (ys: List<BitVec(64)>) => Tm::out(tys, res, Tm::into(tys, res, first(ys))),
@@ -1215,8 +1219,8 @@ theorem Fun::measured_sound(w0: Ty, wrest: List<Ty>, body: Tm, res: Ty, w: World
             let values0 = Valuation::bind(Valuation::zero(), ids, xs);
             let values1 = Valuation::set(values0, bnd, λ wd => BitVec::ofNat(Fun::meas_passes()));
             let exhausted = Compose(t2.region, nodes_region([Move(64, t2.next, Succ(x))]));
-            let fin = loop_finish(Fun::post(x, t2.next, o, exhausted), call, values1, Fun::param_ids(ws, o), x, t2.next);
-            let step = λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass);
+            let fin = loop_finish_over(w.spans, Fun::post(x, t2.next, o, exhausted), call, values1, Fun::param_ids(ws, o), x, t2.next);
+            let step = λ (pass: Valuation()) => Fun::meas_pass(ws, t).eval(call, pass, buffers := w.spans);
             let st0 = words_of(values1, ids);
             let len_ids: (ids.len() = xs.len()) = trans(Fun::ids_len(ws, 0), sym(len));
             let bnd_out = Fun::absent_ids(ws, 0, bnd, Inr(bnd.le_refl()));
@@ -1232,7 +1236,7 @@ theorem Fun::measured_sound(w0: Ty, wrest: List<Ty>, body: Tm, res: Ty, w: World
             let start: (m(st0) < Succ(values1(64, bnd).toNat())) = j(sym(at_bound), λ b _ => m(st0) < Succ(b), measured0);
             let o_x: (o < x) = Nat::lt_of_lt_of_le(o, Succ(o), x, o.lt_succ_self(), Fun::past_ge(wrest, Succ(o)));
             let c = Fun::meas_c(ws);
-            let left = λ (v: Valuation()) => Fun::post_left(x, t2.next, o, Fun::param_ids(wrest, Succ(o)), exhausted, call, values1,
+            let left = λ (v: Valuation()) => Fun::post_left(x, t2.next, o, Fun::param_ids(wrest, Succ(o)), exhausted, call, w.spans, values1,
                 v(64, Succ(c)), words_of(v, Fun::param_ids(wrest, Succ(Succ(c)))), Nat::ne_of_gt(x, o, o_x));
             let agreed = loop_eval_agrees_measured(step, ps, c, Succ(t.next), Fun::meas_ns(ws), Fun::ids_distinct(ws, Succ(bnd)), fin, m,
                 λ (r: Nat) (state: List<BitVec(64)>) _ => Ty::uncurry(tys, ws, res, h, state),
@@ -1347,12 +1351,12 @@ theorem Ty::answers_of_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: T
 theorem Fun::fuel_answers(ws: List<Ty>, res: Ty, w: World, h: Nat → Ty::Arrows(w.tys, ws, res), r: Option<Function>,
     lowered: (match r { None => False, Some(_) => True }).IsTrue(), held: Fun::FuelHolds(ws, res, w, h, r)):
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, Cons(Count, ws), res, h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+    Ty::Answers(w.tys, Cons(Count, ws), res, h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs, buffers := w.spans)) {
     match r as λ o => (match o { None => False, Some(_) => True }).IsTrue() → Fun::FuelHolds(ws, res, w, h, o) →
         (call: Answers()) → Tm::CallsAgree(w, call) →
-        Ty::Answers(w.tys, Cons(Count, ws), res, h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+        Ty::Answers(w.tys, Cons(Count, ws), res, h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs, buffers := w.spans)) {
         None => λ never _ => false_elim(never),
-        Some(code) => λ _ holds call agree => λ b => Ty::answers_of_uncurry(w.tys, ws, res, h(b.toNat()), λ xs => code.eval(call, Cons(b, xs)),
+        Some(code) => λ _ holds call agree => λ b => Ty::answers_of_uncurry(w.tys, ws, res, h(b.toNat()), λ xs => code.eval(call, Cons(b, xs), buffers := w.spans),
             λ xs len => holds(call, agree, b, xs, len)),
     }(lowered, held)
 }
@@ -1361,12 +1365,12 @@ theorem Fun::fuel_answers(ws: List<Ty>, res: Ty, w: World, h: Nat → Ty::Arrows
 theorem Fun::measured_answers(ws: List<Ty>, res: Ty, w: World, h: Ty::Arrows(w.tys, ws, res), r: Option<Function>,
     lowered: (match r { None => False, Some(_) => True }).IsTrue(), held: Fun::MeasuredHolds(ws, res, w, h, r)):
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, ws, res, h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+    Ty::Answers(w.tys, ws, res, h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs, buffers := w.spans)) {
     match r as λ o => (match o { None => False, Some(_) => True }).IsTrue() → Fun::MeasuredHolds(ws, res, w, h, o) →
         (call: Answers()) → Tm::CallsAgree(w, call) →
-        Ty::Answers(w.tys, ws, res, h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+        Ty::Answers(w.tys, ws, res, h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs, buffers := w.spans)) {
         None => λ never _ => false_elim(never),
-        Some(code) => λ _ holds call agree => Ty::answers_of_uncurry(w.tys, ws, res, h, λ xs => code.eval(call, xs),
+        Some(code) => λ _ holds call agree => Ty::answers_of_uncurry(w.tys, ws, res, h, λ xs => code.eval(call, xs, buffers := w.spans),
             λ xs len => holds(call, agree, xs, len)),
     }(lowered, held)
 }
