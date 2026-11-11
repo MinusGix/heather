@@ -102,6 +102,16 @@ property of Heather.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
+- **Name one object by one spelling throughout a statement a generated
+  instance is checked against.** A class or builder that says `w.tys` in one
+  place and `w.over(cs, b).tys` in another states the same table twice, one
+  projection apart, and by hand nobody pays for it. A generator's instance
+  is gated at its literal spelled out in full, and there the kernel, missing
+  on the respelled argument, compares the literal's reductions beside it: the
+  cost climbed as a high power of a shift count in the reflection until it
+  ran out of fuel. Give the object one function (`World::at(w, callees, b)`)
+  and reach every part of it through that, its projections included
+  ([[conversion-respelled-world-compares-reflection]]).
 - **State a word fact modulo `2^n`; add a bound only to read the value as a
   Nat.** Every word operation is `ofNat` of the Nat one at every width
   (`BitVec::add_eq_ofNat`, `ofNat_add`, `toNat_add_mod`, `bitvec_nat`), and

@@ -80,4 +80,13 @@ runtime fn both_loops(n: BitVec(64)) → BitVec(64) { count_down(n, sum_down(n.t
 theorem both_loops_runs(n: BitVec(64)): program_eval(both_loops::program, 2, [n]) = both_loops(n) { both_loops::agrees(n) }
 
 theorem both_loops_compiled(call: Answers(), agree: Tm::CallsAgree(both_loops::world, call), n: BitVec(64)):
-    both_loops::code.eval(call, [n]) = both_loops(n) { both_loops::compile.agrees(call, agree, n) }
+    both_loops::code.eval(call, [n]) = both_loops(n) { both_loops::compile.agrees(Nil, call, agree, n) }
+
+// The loops' instances hold at every file too.
+theorem count_down_compiled_over(b: Buffers(), call: Answers(), agree: Tm::CallsAgree(count_down::world.at(count_down::world.fixed(), b), call),
+    n, acc: BitVec(64)): count_down::code.eval(call, [n, acc], buffers := b) = count_down(n, acc) { count_down::compile.agrees(b, call, agree, n, acc) }
+
+theorem sum_down_compiled_over(b: Buffers(), call: Answers(), agree: Tm::CallsAgree(sum_down::world.at(sum_down::world.fixed(), b), call),
+    k, n, acc: BitVec(64)): sum_down::code.eval(call, [k, n, acc], buffers := b) = sum_down(k.toNat(), n, acc) {
+    sum_down::compile.agrees(b, call, agree, k, n, acc)
+}

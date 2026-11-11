@@ -1988,3 +1988,99 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
                     Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right))
             }))))))
 }
+
+// ---------------------------------------------------------------------------
+// The lowering reads the world's type table and signatures and nothing
+// else: not the meanings that answer its calls, not the file. So a function
+// has one code at every file, which is what lets an instance carry one
+// `Function` and state its agreement over any buffers
+// (docs/native-one-compiler-design.md §2.3, U3c step 3). `World::over` is a
+// world's table and file replaced; each lowering at it is the lowering at
+// the world, by the same walk as the definition.
+
+fn World::over(self w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>) → World { World(w.tys, w.sigs, cs, spans) }
+
+theorem Tm::ty_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): (g: List<Ty>) →
+    t.ty(w.over(cs, spans), g) = t.ty(w, g) {
+    match t {
+        Var(_) => λ g => refl,
+        Lit(_, _) => λ g => refl,
+        Prim(_, _) => λ g => refl,
+        Let(e, body) => λ g => trans(cong_fn(λ (a: Ty) => body.ty(w.over(cs, spans), Cons(a, g)), Tm::ty_static(e, w, cs, spans, g)),
+            Tm::ty_static(body, w, cs, spans, Cons(e.ty(w, g), g))),
+        If(_, yes, _) => λ g => Tm::ty_static(yes, w, cs, spans, g),
+        IfEq(_, yes, _) => λ g => Tm::ty_static(yes, w, cs, spans, g),
+        Make(_, _) => λ g => refl,
+        Field(_, _, _) => λ g => refl,
+        Call(_, _) => λ g => refl,
+        Fold(_, _, _) => λ g => refl,
+        Case(_, zero, _) => λ g => Tm::ty_static(zero, w, cs, spans, g),
+        Byte(_, _, _) => λ g => refl,
+    }
+}
+
+// A branch's two arms, each lowered alike at both worlds.
+theorem Tm::lower_if_static(c: Nat, yes, no: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, g: List<Ty>, ports: List<Nat>,
+    next: Nat,
+    same_yes: (n: Nat) → Tm::lower(yes, w.over(cs, spans), g, ports, n) = Tm::lower(yes, w, g, ports, n),
+    same_no: (n: Nat) → Tm::lower(no, w.over(cs, spans), g, ports, n) = Tm::lower(no, w, g, ports, n)):
+    Tm::lower(yes, w.over(cs, spans), g, ports, next).and_then(λ ly => Tm::lower(no, w.over(cs, spans), g, ports, ly.next).and_then(λ ln =>
+        Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w.over(cs, spans), g), Tm::ty(no, w.over(cs, spans), g), ly, ln))) =
+    Tm::lower(yes, w, g, ports, next).and_then(λ ly => Tm::lower(no, w, g, ports, ly.next).and_then(λ ln =>
+        Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))) {
+    let v = w.over(cs, spans);
+    let arms_v = λ (ly: Lowered) (ln: Lowered) => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, v, g), Tm::ty(no, v, g), ly, ln);
+    let arms_w = λ (ly: Lowered) (ln: Lowered) => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln);
+    let rest_v = λ (ly: Lowered) => Tm::lower(no, v, g, ports, ly.next).and_then(λ ln => arms_v(ly, ln));
+    let rest_w = λ (ly: Lowered) => Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => arms_w(ly, ln));
+    trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(rest_v), same_yes(next)),
+        Option::and_then_ext(Tm::lower(yes, w, g, ports, next), rest_v, rest_w, λ ly =>
+            trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(λ ln => arms_v(ly, ln)), same_no(ly.next)),
+                Option::and_then_ext(Tm::lower(no, w, g, ports, ly.next), λ ln => arms_v(ly, ln), λ ln => arms_w(ly, ln), λ ln =>
+                    eq2(λ (a: Ty) (b: Ty) => Tm::lower_branch(w.tys, g, ports, c, a, b, ly, ln), Tm::ty_static(yes, w, cs, spans, g),
+                        Tm::ty_static(no, w, cs, spans, g))))))
+}
+
+theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): (g: List<Ty>) → (ports: List<Nat>) →
+    (next: Nat) → Tm::lower(t, w.over(cs, spans), g, ports, next) = Tm::lower(t, w, g, ports, next) {
+    match t {
+        Var(_) => λ g ports next => refl,
+        Lit(_, _) => λ g ports next => refl,
+        Prim(_, _) => λ g ports next => refl,
+        Make(_, _) => λ g ports next => refl,
+        Field(_, _, _) => λ g ports next => refl,
+        Call(_, _) => λ g ports next => refl,
+        Fold(_, _, _) => λ g ports next => refl,
+        Case(_, _, _) => λ g ports next => refl,
+        Byte(_, _, _) => λ g ports next => refl,
+        Let(e, body) => λ g ports next => {
+            let v = w.over(cs, spans);
+            let rest_v = λ (le: Lowered) => Tm::lower(body, v, Cons(Tm::ty(e, v, g), g), Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb));
+            let rest_w = λ (le: Lowered) => Tm::lower(body, w, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb));
+            trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(rest_v), Tm::lower_static(e, w, cs, spans, g, ports, next)),
+                Option::and_then_ext(Tm::lower(e, w, g, ports, next), rest_v, rest_w, λ le =>
+                    cong_fn(λ (o: Option<Lowered>) => o.and_then(λ lb => Tm::compose(le, lb)),
+                        trans(cong_fn(λ (a: Ty) => Tm::lower(body, v, Cons(a, g), Cons(le.result, ports), le.next), Tm::ty_static(e, w, cs, spans, g)),
+                            Tm::lower_static(body, w, cs, spans, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports), le.next)))))
+        },
+        If(c, yes, no) => λ g ports next => Tm::lower_if_static(c, yes, no, w, cs, spans, g, ports, next,
+            λ n => Tm::lower_static(yes, w, cs, spans, g, ports, n), λ n => Tm::lower_static(no, w, cs, spans, g, ports, n)),
+        IfEq(c, yes, no) => λ g ports next => Tm::lower_if_static(c, yes, no, w, cs, spans, g, ports, next,
+            λ n => Tm::lower_static(yes, w, cs, spans, g, ports, n), λ n => Tm::lower_static(no, w, cs, spans, g, ports, n)),
+    }
+}
+
+theorem Fun::lower_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): f.lower(w.over(cs, spans)) = f.lower(w) {
+    let v = w.over(cs, spans);
+    let ports = Fun::ports_onto(f.params, 0, Nil);
+    let next = Fun::past(f.params, 0);
+    let typed = λ (c: Lowered) => cong_fn(λ (a: Ty) => a.check(f.result).and_then(λ _ =>
+            Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, f.lent))), Tm::ty_static(f.body, w, cs, spans, f.context()));
+    let body: (f.lower_body(v) = f.lower_body(w)) = trans(
+        cong_fn(λ (o: Option<Lowered>) => o.and_then(λ c => f.lower_typed(v, c)), Tm::lower_static(f.body, w, cs, spans, f.context(), ports, next)),
+        Option::and_then_ext(f.body.lower(w, f.context(), ports, next), λ c => f.lower_typed(v, c), λ c => f.lower_typed(w, c), typed));
+    let apart: (f.lower_distinct(v) = f.lower_distinct(w)) = cong_fn(λ (o: Option<Function>) =>
+        Tm::check_true(distinct(Fun::param_ids(f.params, 0))).and_then(λ _ => o), body);
+    let result: (f.lower_result(v) = f.lower_result(w)) = cong_fn(λ (o: Option<Function>) => f.result.check_one_word(w.tys).and_then(λ _ => o), apart);
+    cong_fn(λ (o: Option<Function>) => Ty::check_one_words(w.tys, f.params).and_then(λ _ => o), result)
+}

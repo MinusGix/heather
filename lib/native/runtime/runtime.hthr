@@ -211,12 +211,18 @@ record Setup {
     judge: Fun → World → Verdict,
     lower: Fun → World → Option<Function>,
     sound: (f: Fun) → (w: World) → f.Holds(w, lower(f, w)),
+    // The lowering reads the world's type table and signatures, never its
+    // callees' meanings or its file, so one code serves a function at every
+    // file (docs/native-one-compiler-design.md §2.3).
+    static: (f: Fun) → (w: World) → (cs: Sig::Sems(w.tys, w.sigs)) → (spans: List<List<BitVec(8)>>) → lower(f, w.over(cs, spans)) = lower(f, w),
 }
 
 // The default setup: abstract programming over words and `Bool`, lowered
 // to FunctionIR (design §7, `rt_lower.hthr`), a fuel recursion and a
 // measured one as loops (`rt_loop.hthr`).
-fn Setup::default() → Setup { Setup("default", Fun::judge, Fun::lower_any, λ f w => Fun::lower_any_sound(f, w)) }
+fn Setup::default() → Setup {
+    Setup("default", Fun::judge, Fun::lower_any, λ f w => Fun::lower_any_sound(f, w), λ f w cs spans => Fun::lower_any_static(f, w, cs, spans))
+}
 
 fn Setup::lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
 
@@ -294,33 +300,58 @@ theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTr
     Setup::of_lowered(f, w, s.lower(f, w), ok, Setup::holds_at(s, f, w, Plain, plain))
 }
 
-// ---------------------------------------------------------------------------
-// A world with no spans. The class below states its agreement over no
-// buffers, so an instance is built at such a world (`closed`, by
-// evaluation); a function lent spans is lowered and proved over its
-// world's (`Fun::lower_sound`) and gets its instance with the class's
-// statement over a file (docs/native-one-compiler-design.md §2.3, U3c).
-fn World::spanless(self w: World) → Bool { match w.spans { Nil => True, Cons(_, _) => False } }
+// What a setup lowered at one world it lowered at every file and every
+// table of meanings, and to the same code.
+theorem Setup::lowered_over(s: Setup, f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>,
+    ok: s.lowered(f, w).IsTrue()): s.lowered(f, w.over(cs, spans)).IsTrue() {
+    j(sym(s.static(f, w, cs, spans)), λ r _ => Setup::lowers(r).IsTrue(), ok)
+}
 
-theorem World::spanless_nil(self w: World): w.spanless().IsTrue() → w.spans = Nil {
-    match w.spans as λ s => (match s { Nil => True, Cons(_, _) => False }).IsTrue() → s = Nil {
-        Nil => λ _ => refl,
-        Cons(_, _) => λ no => false_elim(no),
+// A world at a file: its table of meanings there, and the file. Every
+// statement below names the world at a file by this one spelling, its type
+// table included (`w.at(callees, b).tys`, never `w.tys`): the two convert,
+// but a generated instance is checked at a reflection spelled out in full,
+// and where two spellings of one world meet the kernel compares that
+// reflection instead of passing over it.
+fn World::at(self w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), b: Buffers()) → World { w.over(callees(b), b) }
+
+// ---------------------------------------------------------------------------
+// A function at a file (docs/native-one-compiler-design.md §2.3, U3c). A
+// function lent spans takes, in Heather, each span's bytes and then its
+// length word: `f(span, length, words…)`. Its code takes the span's home
+// instead, two words (where the bytes are, how many), and reads the bytes
+// from the file it runs over. So the code is one, and what it computes is
+// the function at that file's spans: `Ty::lend`. With no span lent the two
+// are the same type and `Ty::lend` changes nothing.
+
+// The type of a function lent `lent` spans, whose code takes `ps`.
+fn Ty::Lent(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty) → Type {
+    match lent {
+        Zero => Ty::Arrows(tys, ps, r),
+        Succ(n) => match ps {
+            Nil => Ty::Arrows(tys, Nil, r),
+            Cons(place, more) => match more {
+                Nil => Ty::Arrows(tys, [place], r),
+                Cons(length, rest) => List<BitVec(8)> → length.sem(tys) → Ty::Lent(tys, n, rest, r),
+            },
+        },
     }
 }
 
-// The `Compile` class (design §9.3): a function's code and the code's
-// agreement with the function, keyed on the function itself (an
-// operation-indexed class, docs/operation-indexed-classes-design.md). The
-// `runtime` generator publishes an instance per runtime fn; a hand-written
-// instance (tuned FunctionIR and its proof) is one too.
-//
-// The code answers its calls by index into `world`'s table, so its
-// agreement assumes every function of the table is answered with its
-// meaning (`Tm::CallsAgree`): a program built from the callees' own
-// instances discharges that (`Compile::part`, below).
-// `typed` is `refl` at every instance: it is what lets the class state the
-// agreement about `f` itself while `f`'s type is any `F`.
+// Such a function at the file `b`: span `k` is `b`'s, and the word where
+// its bytes are is not read.
+fn Ty::lend(tys: Nat → RecInfo, r: Ty, b: Buffers(), lent: Nat) → (k: Nat) → (ps: List<Ty>) → Ty::Lent(tys, lent, ps, r) → Ty::Arrows(tys, ps, r) {
+    match lent {
+        Zero => λ k ps v => v,
+        Succ(n) => λ k ps => match ps as λ qs => Ty::Lent(tys, Succ(n), qs, r) → Ty::Arrows(tys, qs, r) {
+            Nil => λ v => v,
+            Cons(place, more) => match more as λ qs => Ty::Lent(tys, Succ(n), Cons(place, qs), r) → Ty::Arrows(tys, Cons(place, qs), r) {
+                Nil => λ v => v,
+                Cons(_, rest) => λ v => λ _ len => Ty::lend(tys, r, b, n, Succ(k), rest, v(List::span(b, k), len)),
+            },
+        },
+    }
+}
 
 // A type as a term of `Type`: a bare variable in a motive's body reads as
 // a type name, and a class field that names its carrier as a term in an
@@ -331,93 +362,190 @@ fn Itself(T: Type) → Type { T }
 // A value read at a type it is equal to: itself, at `refl`.
 fn retype<F>(T: Type, e: Itself(F) = Itself(T), f: F) → T { j(e, λ x _ => Itself(x), f) }
 
+// A function of any type `F` that is a lent function's, at the file `b`.
+fn Ty::lent_at<F>(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(Ty::Lent(tys, lent, ps, r)), f: F, b: Buffers())
+    → Ty::Arrows(tys, ps, r) {
+    Ty::lend(tys, r, b, lent, 0, ps, retype(Ty::Lent(tys, lent, ps, r), typed, f))
+}
+
+// The `Compile` class (design §9.3): a function's code and the code's
+// agreement with the function, keyed on the function itself (an
+// operation-indexed class, docs/operation-indexed-classes-design.md). The
+// `runtime` generator publishes an instance per runtime fn; a hand-written
+// instance (tuned FunctionIR and its proof) is one too.
+//
+// The agreement is stated at every file `b`: run over `b`, the code returns
+// what the function does at `b`'s spans (`Ty::lent_at`). The code answers
+// its calls by index into `world`'s table, so the agreement assumes every
+// function of the table is answered with its meaning at that file
+// (`callees(b)`, `Tm::CallsAgree`): a program built from the callees' own
+// instances discharges that (`Compile::part`, below). A function lent
+// nothing has one table, `world.callees`, at every file (`World::fixed`).
+// `typed` is `refl` at every instance and every file: it is what lets the
+// class state the agreement about `f` itself while `f`'s type is any `F`.
 class Compile<F>(f: F) {
     reflected: Fun,
     world: World,
-    typed: Itself(F) = Itself(Ty::Arrows(world.tys, reflected.params, reflected.result)),
+    callees: (b: Buffers()) → Sig::Sems(world.tys, world.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(world.at(callees, b).tys, reflected.lent, reflected.params, reflected.result)),
     code: Function,
-    agrees: (call: Answers()) → Tm::CallsAgree(world, call) →
-        Ty::Answers(world.tys, reflected.params, reflected.result,
-            retype(Ty::Arrows(world.tys, reflected.params, reflected.result), typed, f), λ xs => code.eval(call, xs)),
+    agrees: (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(world.at(callees, b), call) →
+        Ty::Answers(world.at(callees, b).tys, reflected.params, reflected.result,
+            Ty::lent_at(world.at(callees, b).tys, reflected.lent, reflected.params, reflected.result, typed(b), f, b),
+            λ xs => code.eval(call, xs, buffers := b)),
     // The code's calls name callees of the table at their arity: checked
     // once, here, by evaluation, and cited by every program the code is
     // linked into (`Compile::part`).
     fits: code.calls_fit(world.callee_arity()).IsTrue(),
 }
 
+// A world's own table, at every file: the table of a function lent nothing.
+fn World::fixed(self w: World) → (b: Buffers()) → Sig::Sems(w.tys, w.sigs) { λ _ => w.callees }
+
 // `Itself(F) = Itself(F)` with `F` read off `f`: what the generator passes
 // for `typed`, `F` being a type it cannot spell as a term. A definition, not
 // a theorem: `retype` along it must compute.
-fn Setup::typed_refl<F>(f: F) → Itself(F) = Itself(F) { refl }
+fn Setup::typed_refl<F>(f: F) → (b: Buffers()) → Itself(F) = Itself(F) { λ _ => refl }
+
+// `x = x` at every file: the pin of a function lent nothing, spelled with
+// no binder.
+theorem Setup::at_every<A>(x: A): (b: Buffers()) → x = x { λ _ => refl }
 
 // A runtime fn's instance, from its reflection: the default setup's code
-// and the agreement `Setup::code_answers` gives, carried to `f` along the
-// pin. At a runtime fn `typed` and `pinned` are both `refl`, which the
-// kernel checks by conversion (the reflection's meaning unfolds to `f`'s
-// body node for node, docs/runtime-fn-setups-design.md §4.3), and `ok` and
-// `plain` are evaluation.
-fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itself(Ty::Arrows(w.tys, rt.params, rt.result)),
-    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.checked(rt, w).IsTrue(),
-    plain: rt.shape() = Plain, closed: w.spanless().IsTrue()) → Compile<F>(f)
+// and the agreement `Setup::code_answers` gives at each file, carried to
+// `f` along the pin and to the one code along `static`. At a runtime fn
+// `typed` and `pinned` are both `refl`, which the kernel checks by
+// conversion (the reflection's meaning unfolds to `f`'s body node for node,
+// docs/runtime-fn-setups-design.md §4.3), and `ok` and `plain` are
+// evaluation, once, at `w`.
+//
+// The agreement is a theorem of its own, stated as the class states it: a
+// generated instance is checked with `Setup::compile` unfolded at the
+// function's reflection, and what stands there is then one opaque
+// application whose statement is the field's type letter for letter, where
+// the proof spelled in place would have the kernel compare the reflection's
+// code at two spellings of one world.
+theorem Setup::plain_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
+    ok: s.checked(rt, w).IsTrue(), plain: rt.shape() = Plain):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => s.code(rt, w).eval(call, xs, buffers := b)) {
+    λ b call agree =>
+        j(sym(pinned(b)), λ g _ => Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
+            j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
+                    λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
+                Setup::code_answers(s, rt, w.at(callees, b),
+                    Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
+}
+
+fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
+    ok: s.checked(rt, w).IsTrue(), plain: rt.shape() = Plain) → Compile<F>(f)
 {
-    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, rt.params, rt.result, retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f),
-                λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
-            j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs, buffers := w.spans)),
-                Setup::code_answers(s, rt, w, Setup::checked_lowered(s, rt, w, ok), plain, call, agree))),
-        Setup::checked_fits(s, rt, w, ok))
+    Compile(rt, w, callees, typed, s.code(rt, w), Setup::plain_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
 }
 
 // A fuel recursion's instance (design §16.11): no pin (the function at an
 // open fuel is stuck on it), but its two equations, `zero` and `step`,
 // each `refl` per word at the function itself, and the loop's soundness
-// read at the function. The reflection is the function of the pieces.
+// read at the function. The reflection is the function of the pieces. A
+// fuel loop is lent nothing.
 fn Setup::fuel_fun(w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm) → Fun { Fun(Cons(Count, Cons(w0, wrest)), res, Case(c, zero, succ)) }
 
-fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm, w: World,
-    typed: Itself(F) = Itself(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res)),
+theorem Setup::fuel_agrees<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res)),
     shaped: Setup::fuel_fun(w0, wrest, res, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
-    zero_eq: Fun::FuelZero(Cons(w0, wrest), res, zero, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f)),
-    step_eq: (n: Nat) → Fun::FuelStep(Cons(w0, wrest), res, succ, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f), n),
-    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue(), closed: w.spanless().IsTrue()) → Compile<F>(f)
-{
+    zero_eq: (b: Buffers()) → Fun::FuelZero(Cons(w0, wrest), res, zero, w.at(callees, b),
+        retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f)),
+    step_eq: (b: Buffers()) → (n: Nat) → Fun::FuelStep(Cons(w0, wrest), res, succ, w.at(callees, b),
+        retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f), n),
+    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue()):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::Answers(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res,
+        Ty::lent_at(w.at(callees, b).tys, 0, Cons(Count, Cons(w0, wrest)), res, typed(b), f, b),
+        λ xs => s.code(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).eval(call, xs, buffers := b)) {
     let rt = Setup::fuel_fun(w0, wrest, res, c, zero, succ);
-    let h = retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f);
-    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, Cons(Count, Cons(w0, wrest)), res, h, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
-            Fun::fuel_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
-                Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree)),
-        Setup::checked_fits(s, rt, w, ok))
+    λ b call agree => {
+        let h = retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f);
+        j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res, h,
+                λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
+            Fun::fuel_answers(Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
+                Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)),
+                Setup::holds_at(s, rt, w.at(callees, b), Fuel(w0, wrest, zero, succ), shaped, h, zero_eq(b), step_eq(b)), call, agree))
+    }
+}
+
+fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res)),
+    shaped: Setup::fuel_fun(w0, wrest, res, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
+    zero_eq: (b: Buffers()) → Fun::FuelZero(Cons(w0, wrest), res, zero, w.at(callees, b),
+        retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f)),
+    step_eq: (b: Buffers()) → (n: Nat) → Fun::FuelStep(Cons(w0, wrest), res, succ, w.at(callees, b),
+        retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f), n),
+    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue()) → Compile<F>(f)
+{
+    Compile(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w, callees, typed, s.code(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w),
+        Setup::fuel_agrees(f, s, w0, wrest, res, c, zero, succ, w, callees, typed, shaped, zero_eq, step_eq, ok),
+        Setup::checked_fits(s, Setup::fuel_fun(w0, wrest, res, c, zero, succ), w, ok))
 }
 
 // A measured recursion's instance: its measure `m` below `2^64` and
-// `Guarded`, which the generator proves from the function's own `f::ext`
-// and `f::irrel`, and the loop's soundness read at the function.
-fn Setup::measured_fun(w0: Ty, wrest: List<Ty>, res: Ty, body: Tm) → Fun { Fun(Cons(w0, wrest), res, body) }
+// `Guarded` at every file, which the generator proves from the function's
+// own `f::ext` and `f::irrel`, and the loop's soundness read at the
+// function. `ks` are the words the loop keeps in place, the homes of the
+// `lent` spans.
+fn Setup::measured_fun(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat) → Fun { Fun(ks ++ Cons(w0, wrest), res, body, lent) }
 
-fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, w: World,
-    typed: Itself(F) = Itself(Ty::Arrows(w.tys, Cons(w0, wrest), res)),
-    shaped: Setup::measured_fun(w0, wrest, res, body).shape() = Measured(Nil, w0, wrest, body),
-    m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(Cons(w0, wrest), m),
-    guarded: Fun::Guarded(Cons(w0, wrest), res, body, w, retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f), m),
-    ok: s.checked(Setup::measured_fun(w0, wrest, res, body), w).IsTrue(), closed: w.spanless().IsTrue()) → Compile<F>(f)
+// A measured function's `Guarded` at every file: what the generator proves,
+// named here so that a module marking a runtime fn needs only
+// `import runtime;` and its listed imports
+// (issues/runtime-generator-imports.md), not `rt_loop`, `nat` or `logic`.
+fn Setup::Guarded<F>(f: F, lent: Nat, ws: List<Ty>, res: Ty, body: Tm, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ws, res)), m: List<BitVec(64)> → Nat) → Type {
+    (b: Buffers()) → Fun::Guarded(ws, res, body, w.at(callees, b), Ty::lent_at(w.at(callees, b).tys, lent, ws, res, typed(b), f, b), m)
+}
+
+theorem Setup::measured_agrees<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res)),
+    shaped: Setup::measured_fun(ks, w0, wrest, res, body, lent).shape() = Measured(ks, w0, wrest, body),
+    m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(ks ++ Cons(w0, wrest), m),
+    guarded: Setup::Guarded(f, lent, ks ++ Cons(w0, wrest), res, body, w, callees, typed, m),
+    ok: s.checked(Setup::measured_fun(ks, w0, wrest, res, body, lent), w).IsTrue()):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::Answers(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, Ty::lent_at(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res, typed(b), f, b),
+        λ xs => s.code(Setup::measured_fun(ks, w0, wrest, res, body, lent), w).eval(call, xs, buffers := b)) {
+    let rt = Setup::measured_fun(ks, w0, wrest, res, body, lent);
+    λ b call agree => {
+        let h = Ty::lent_at(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res, typed(b), f, b);
+        j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, h,
+                λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
+            Fun::measured_answers(ks ++ Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
+                Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)),
+                Setup::holds_at(s, rt, w.at(callees, b), Measured(ks, w0, wrest, body), shaped, h, m, bounded, guarded(b)), call, agree))
+    }
+}
+
+fn Setup::compile_measured<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res)),
+    shaped: Setup::measured_fun(ks, w0, wrest, res, body, lent).shape() = Measured(ks, w0, wrest, body),
+    m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(ks ++ Cons(w0, wrest), m),
+    guarded: Setup::Guarded(f, lent, ks ++ Cons(w0, wrest), res, body, w, callees, typed, m),
+    ok: s.checked(Setup::measured_fun(ks, w0, wrest, res, body, lent), w).IsTrue()) → Compile<F>(f)
 {
-    let rt = Setup::measured_fun(w0, wrest, res, body);
-    let h = retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f);
-    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, Cons(w0, wrest), res, h, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
-            Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
-                Setup::holds_at(s, rt, w, Measured(Nil, w0, wrest, body), shaped, h, m, bounded, guarded), call, agree)),
-        Setup::checked_fits(s, rt, w, ok))
+    Compile(Setup::measured_fun(ks, w0, wrest, res, body, lent), w, callees, typed, s.code(Setup::measured_fun(ks, w0, wrest, res, body, lent), w),
+        Setup::measured_agrees(f, s, ks, w0, wrest, res, body, lent, w, callees, typed, shaped, m, bounded, guarded, ok),
+        Setup::checked_fits(s, Setup::measured_fun(ks, w0, wrest, res, body, lent), w, ok))
 }
 
-// What the generator cites for a measured instance, named here so that a
-// module marking a runtime fn needs only `import runtime;` and its listed
-// imports (issues/runtime-generator-imports.md), not `rt_loop`, `nat` or
-// `logic`.
-fn Setup::Guarded(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, res), m: List<BitVec(64)> → Nat) → Type {
-    Fun::Guarded(ws, res, body, w, h, m)
-}
+// What else the generator cites for a measured instance, named here for the
+// same reason.
 
 // Transparent, and `Nat::lt_succ_self` itself: a `decreases` function's
 // body passes that proof to its recursor, and the instance's statements
@@ -633,16 +761,20 @@ theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → B
 }
 
 // An instance's function as a word function: its meaning, uncurried.
+// Linking is at the empty file for now: a program's functions over a file
+// are U3c's last step (docs/native-one-compiler-design.md §2.3).
 fn Compile::uncurried<F>(f: F, c: Compile<F>(f)) → List<BitVec(64)> → BitVec(64) {
-    λ ws => Ty::uncurry(c.world.tys, c.reflected.params, c.reflected.result,
-        retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, f), ws)
+    λ ws => Ty::uncurry(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
+        Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), ws)
 }
 
 // An instance's code in a program: its calls renamed by `links`.
 fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
 
 // An instance's table of meanings, uncurried: what `links` must name.
-fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVec(64)> { c.world.uncurried() }
+fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVec(64)> {
+    Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Nil))
+}
 
 // How many words an instance's function takes.
 fn Compile::arity<F>(f: F, c: Compile<F>(f)) → Nat { c.reflected.params.len() }
@@ -662,7 +794,7 @@ fn link_arity(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat →
 // the instance's `fits`, so no link reads the code. This is one conjunct of
 // `program_linked`.
 theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>, arity: Nat → Option<Nat>,
-    linked: links.map(λ (n: Nat) => link_source(srcs, n)) = c.world.uncurried(),
+    linked: links.map(λ (n: Nat) => link_source(srcs, n)) = Compile::table(f, c),
     named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue()):
     Compile::linked(f, c, links).calls_fit(arity).IsTrue()
     ∧ ((words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
@@ -670,13 +802,14 @@ theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> →
     ⟨c.code.relabel_calls_fit(link_at(links), c.world.callee_arity(), arity,
         Sig::callee_links_fit_at(arity, c.world.sigs, links, named), c.fits),
     λ words n => {
-        let own = link_sources(c.world.uncurried());
-        let meaning = retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, f);
-        let answered = Ty::answers_at(c.world.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs),
-            c.agrees(own, c.world.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
+        let at = c.world.at(c.callees, Nil);
+        let own = link_sources(Compile::table(f, c));
+        let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil);
+        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs),
+            c.agrees(Nil, own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
         trans(c.code.relabel_eval(link_sources(srcs), link_at(links), words),
             trans(c.code.eval_answers(own, Answers::relabel(link_sources(srcs), link_at(links)), c.world.callee_arity(),
-                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.world.callees, links, linked, k, ws,
+                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.callees(Nil), links, linked, k, ws,
                     Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
                 answered))
     }⟩
@@ -742,6 +875,7 @@ def runtime_w_srcs: List<List<BitVec(64)> → BitVec(64)> = [];
 def runtime_w_functions: List<Function> = [];
 def runtime_w_shape: RtShape = Plain;
 def runtime_w_nat: Nat = 0;
+def runtime_w_buffers: List<List<BitVec(8)>> = [];
 
 record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
     tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle }
@@ -1151,7 +1285,7 @@ fn runtime_params_at(ts: List<Handle>, under: Option<LocalRef>, i: Nat) → Tac<
 
 // A fuel recursion's instance: its two equations, `refl` per word at the
 // function itself (design §16.11).
-fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, typed, count: Expr, reprs: List<ReprEntry>,
+fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, count: Expr, reprs: List<ReprEntry>,
     w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm) → Tac<Expr> {
     let compile <- runtime_global("Setup::compile_fuel");
     let rfl <- runtime_global("tactic::rfl");
@@ -1160,23 +1294,27 @@ fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, 
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let ws = Cons(w0, wrest);
     let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 1), [Ty::quote(w0, q), Ty::quotes(wrest, q), Tm::quote(zero, q), Tm::quote(succ, q)])]);
-    let xs <- runtime_params(ts.word, ws, None, 0);
+    // Both equations hold at every file (the function reads none).
+    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let b0 <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
+    let xs <- runtime_params(ts.word, ws, Some(b0.ref), 0);
     // Each word is read at its parameter's code (a repr's `abs`), as the
     // statements read it.
-    let zero_eq = runtime_lams(xs, ap(rfl, [Blank, ap(Global(f), Cons(NatLit(0), runtime_args(count, reprs, ws, runtime_locals(xs))))]));
-    let r <- assume(Hd(nat_h), "r", None).or_fail("runtime: a fuel: ");
+    let zero_eq = Lam(b0.ref, runtime_lams(xs, ap(rfl, [Blank, ap(Global(f), Cons(NatLit(0), runtime_args(count, reprs, ws, runtime_locals(xs))))])));
+    let b1 <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
+    let r <- assume(Hd(nat_h), "r", Some(b1.ref)).or_fail("runtime: a fuel: ");
     let ys <- runtime_params(ts.word, ws, Some(r.ref), 0);
-    let step_eq = Lam(r.ref, runtime_lams(ys, ap(rfl, [Blank, ap(Global(f), Cons(ap(succ_g, [Local(r.ref)]),
-        runtime_args(count, reprs, ws, runtime_locals(ys))))])));
+    let step_eq = Lam(b1.ref, Lam(r.ref, runtime_lams(ys, ap(rfl, [Blank, ap(Global(f), Cons(ap(succ_g, [Local(r.ref)]),
+        runtime_args(count, reprs, ws, runtime_locals(ys))))]))));
     pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), Ty::quote(res, q), NatLit(c), Tm::quote(zero, q), Tm::quote(succ, q),
-        world_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h), Hd(trivial_h)]))
+        world_e, table_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h)]))
 }
 
 // A measured recursion's instance: its measure, the measure below `2^64`,
 // and `Fun::Guarded` from the function's own `f::ext` and `f::irrel`
 // (`lib/_tests/native/runtime/rt_loop_tests.hthr`'s `count_down_guarded`,
 // spelled for any arity).
-fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, typed, count: Expr,
+fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, count: Expr,
     reprs: List<ReprEntry>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm) → Tac<Expr> {
     let compile <- runtime_global("Setup::compile_measured");
     let rfl <- runtime_global("tactic::rfl");
@@ -1212,15 +1350,17 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let mu_b <- runtime_measure_at(rec, at_codes(bs));
     let word_b <- runtime_measured_word(mu_b);
     let bounded = runtime_lams(bs, ap(lt_pow, [Hd(word_b)]));
-    // `Guarded`: its binders opened off its statement (the words, the
-    // recursion `again`, and what `again` agrees with below the measure).
-    let g_t <- as_type(ap(guarded_g, [ws_e, res_e, body_e, world_e, Global(f), m_e])).or_fail("runtime: a measured function's `Guarded`: ");
+    // `Guarded`: its binders opened off its statement (the file, the words,
+    // the recursion `again`, and what `again` agrees with below the
+    // measure).
+    let g_t <- as_type(ap(guarded_g, [Blank, Global(f), NatLit(0), ws_e, res_e, body_e, world_e, table_e, typed, m_e])).or_fail("runtime: a measured function's `Guarded`: ");
     let words: List<String> = List::range(ws.len()).map(λ i => "x".append(decimal_name(2, i)));
-    let names = words.append(["again", "hyp"]);
+    let names = Cons("b", words.append(["again", "hyp"]));
     let opened <- runtime_open_n(64, g_t, names);
-    let xs = opened.fst.take(ws.len());
-    let again = opened.fst.nth(ws.len()).unwrap_or(LocalRef(0));
-    let hyp = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
+    let file = opened.fst.head_or(LocalRef(0));
+    let xs = opened.fst.drop(1).take(ws.len());
+    let again = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(Succ(Succ(ws.len()))).unwrap_or(LocalRef(0));
     let mu_x <- runtime_measure_at(rec, at_codes(xs));
     let n_e = Hd(mu_x);
     // `g1 = λ y… p => f::rec(N, y…, p)`.
@@ -1243,10 +1383,10 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let hy = runtime_cong_into(cong_g, reprs, res, ap(Local(hyp), [list(ys3), ap(rfl, [Blank, NatLit(ws.len())]), Local(p3.ref)]));
     let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
     let lt_n = ap(lt_succ, [n_e]);
-    let guarded = runtime_lams(xs.append([again, hyp]),
+    let guarded = runtime_lams(Cons(file, xs.append([again, hyp])),
         ap(sym_g, [Blank, Blank, Blank, runtime_cong_out(cong_g, reprs, res, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_codes(xs).append([lt_n, lt_n]))))))))]));
-    pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), res_e, body_e, world_e, typed, shaped, m_e, bounded, guarded,
-        Hd(trivial_h), Hd(trivial_h)]))
+    pure(ap(compile, [Blank, Global(f), setup, Ty::quotes(Nil, q), Ty::quote(w0, q), Ty::quotes(wrest, q), res_e, body_e, NatLit(0), world_e, table_e,
+        typed, shaped, m_e, bounded, guarded, Hd(trivial_h)]))
 }
 
 // The `Compile(f)` instance, by the reflection's shape.
@@ -1256,16 +1396,20 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let shapes <- runtime_type_of("runtime_w_shape").bind(λ h => runtime_ctors_at(h));
     let typed = ap(typed_refl, [Blank, Global(f)]);
+    // A function lent nothing: its table is its world's at every file.
+    let fixed <- runtime_global("World::fixed");
+    let at_every <- runtime_global("Setup::at_every");
+    let table_e = ap(fixed, [world_e]);
     match rfun.shape() {
         Plain => runtime_global("Setup::compile").bind(λ compile =>
-            pure(ap(compile, [Blank, Global(f), setup, rt_e, world_e, typed, ap(rfl, [Blank, Global(f)]), Hd(trivial_h),
-                ap(rfl, [Blank, runtime_at(shapes, 0)]), Hd(trivial_h)]))),
+            pure(ap(compile, [Blank, Global(f), setup, rt_e, world_e, table_e, typed, ap(at_every, [Blank, Global(f)]), Hd(trivial_h),
+                ap(rfl, [Blank, runtime_at(shapes, 0)])]))),
         Fuel(w0, wrest, zero, succ) => match rfun.body {
-            Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
+            Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
             _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),
         },
         Measured(ks, w0, wrest, body) => match ks {
-            Nil => runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, body),
+            Nil => runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, body),
             // A loop that keeps the homes of lent spans: the lowering and its
             // theorem are there (`Fun::measured_sound`); the instance waits
             // for the class over a file (docs/native-one-compiler-design.md

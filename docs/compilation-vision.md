@@ -224,9 +224,11 @@ optimization that uses it is proved once under it as a hypothesis.
   through a home (two of its values, address and length), under a
   comparison the path knows, and its contract says what it was lent
   (§2.5); a program's call passes its buffer's home, and a tool runs that
-  reads its input and calls a compiled loop over it. What is left of it is
-  the loop as a `runtime fn` (`rt` lowering a read of a lent span) and
-  writes.
+  reads its input and calls a compiled loop over it. `Compile(f)` says so
+  for a function over memory: it is stated at every file, the function
+  taking a span and its length word where its code takes the home, and
+  one code serving every file. What is left of it is the reflector
+  reading such a function, so the loop is a `runtime fn`, and writes.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

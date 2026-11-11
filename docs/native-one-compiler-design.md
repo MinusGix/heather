@@ -378,18 +378,53 @@ that neither is needed, and what follows is the form that was built.
   yet.
 
 - *The class is about a function at a file.* `Compile<F>(f)` states that
-  the code answers as `f` does. With spans, `f` takes them first as
-  ordinary Heather parameters (`List<BitVec(8)>`), and the agreement
-  is for every file: the code, evaluated over the file at the homes of
-  its first `lent` buffers and then the words, answers as `f` applied
-  to those buffers and the words. The pin is by conversion at a neutral
-  file, as it is at neutral words (`peek_pinned` in the probes). An
-  instance without spans is the one it is today read at the empty file,
-  and `f::agrees` and the linking theorems gain the file as a parameter
-  (`program_eval_over`). Until that is built (step 3) the class keeps
-  its statement and an instance is made only at a world without spans
-  (`World::spanless`, a premise of `Setup::compile` and its two loop
-  forms).
+  the code answers as `f` does, at every file (built in step 3a,
+  `lib/native/runtime/runtime.hthr`). A function lent spans takes each as
+  a pair of ordinary Heather parameters, the bytes and then the word it
+  tests its index against, before its other words:
+  `f(span, length, words…)`. Its code takes the home in the bytes'
+  place, so the code's words are `place, length, words…` and the code
+  never reads `place` except to load from it. `Ty::Lent(tys, lent, ps,
+  r)` is that Heather type computed from the reflection's parameters,
+  `Ty::lend` reads such a function at a file's spans as a function of
+  the code's words (it drops each place and hands over span `k` of the
+  file), and the class says, for every file `b` and every answering of
+  calls that agrees with the table there, that the code evaluated over
+  `b` answers as `Ty::lent_at(…, f, b)`. With no spans `Ty::Lent` is
+  `Ty::Arrows` and `lent_at` is `f` by conversion, so a spanless
+  instance states what it did, at every file instead of the empty one.
+
+  Two things make one code serve every file. The table of callees is a
+  function of the file (`callees: (b) → Sig::Sems(…)`), since a function
+  that calls itself over a span is in its own table at that span; a
+  spanless world's table is constant (`World::fixed`). And the lowering
+  does not read the file: `Fun::lower_any_static` says the code at
+  `w.over(cs, spans)` is the code at `w`, and a `Setup` carries that
+  law for its own lowering (`static`), so `Setup::code(rt, w)` is the
+  code whatever file the agreement is read at.
+
+  The world at a file has one spelling, `World::at(w, callees, b)`, and
+  the class reaches every part of it through that, its type table
+  included. This is a rule about cost, not meaning: with the table
+  spelled `w.tys` in one place and through the world at the file in
+  another, a generated instance's check made the kernel compare the
+  spelled-out reflection, at a cost that climbed steeply with a numeral
+  inside it (issues/conversion-respelled-world-compares-reflection.md,
+  `docs/proof-patterns.md` §2). The builders' proofs are opaque theorems
+  (`Setup::plain_agrees`, `fuel_agrees`, `measured_agrees`), so an
+  instance is a constructor applied to them.
+
+  A length word is a parameter of the Heather function and not the
+  span's own length because that is what the code has: a word it is
+  handed. The read is `span.byte_within(length, i)`, which is `byte_at`
+  when the word is the span's length (`List::byte_within_own`), and the
+  caller that lends the span is the one who knows it is. A `Span` type
+  pairing the two, so the source reads `s.byte_at(i)` and `s.len()`, is
+  a surface over this and is left for the export round, where the
+  scanner's signature is written.
+
+  Linking is still at the empty file (`Compile::part`,
+  `f::agrees`, `program_linked_sources`): step 3c states it over a file.
 
   A loop needs more than the pin, and step 2 found where: a measured
   function is proved from its own `f::ext`, and `decreases` takes every
@@ -411,10 +446,20 @@ that neither is needed, and what follows is the form that was built.
   each ih. If `decreases` comes to leave fixed parameters outside its
   recursor, the family is no longer needed and can go.
 
-  The reflector decides what is a span: a parameter of type
-  `List<BitVec(8)>` of a pure `runtime fn`, numbered in order, becomes
-  the two words, `byte_at` on it the read under its length word, and
-  its length the length word. It may be passed to a call of the
+  In the class this is `Setup::Guarded`: `Guarded` at every file, each
+  obtained from the family at that file's span 0
+  (`Fun::guarded_at(…, b.span(0))`), which converts because the body
+  and the function read a file only through that span. The family is
+  indexed by the span and not by the file for that reason: `again` at a
+  file and `again` at the one-span file of its span are not convertible.
+  So a loop is lent one span for now; a loop over two is a family over
+  pairs, built when something needs it.
+
+  The reflector decides what is a span (step 3b): leading parameters
+  of a pure `runtime fn` that come as `List<BitVec(8)>` followed by a
+  64-bit word, numbered in order, become the two words, and
+  `byte_within` on the span under its own length word is the read.
+  It may be passed to a call of the
   function itself in the same place and to another `runtime fn` as the
   same span number; any other use is refused with the reason. Passing
   span `j` as a callee's span `k ≠ j` waits for a `Call` that renames
@@ -441,8 +486,9 @@ computes `count_from` (`count_compiled`), `GuardedAt` proved from
 `count_from::ext` and `count_from::irrel` as the generator will. A
 self-call that moves a home is not lowered; a loop that keeps nothing,
 or is lent nothing, is lowered and not accepted. The generator makes no
-instance for such a loop yet (it says so), since the class is still at
-a world without spans.
+instance for such a loop yet (it says so): the class admits one since
+step 3a, built by hand in `runtime_spans_tests.hthr`, and the reflector
+reads a span in step 3b.
 
 One limit of the source language showed while writing it: a `decreases`
 body that branches under its `match h:` arm with a self-call below the
@@ -531,8 +577,15 @@ Each is a PR and ends with something that runs.
       place, and `Guarded` is stated at every file at once
       (`Fun::GuardedAt`). *Runs:* a newline count over a span, by
       evaluation, proved to compute its Heather function at every span.
-    - *Step 3:* the class, the reflector and linking over a file.
-      *Runs:* `wc -l` with `count_newlines` a `runtime fn`.
+    - *Step 3a, built 2026-11-11:* the class at every file, one code
+      per function, and the generator's instances for spanless functions
+      under it. *Runs:* a span read and a span loop as instances built by
+      hand through the generator's own builders
+      (`lib/_tests/native/runtime/runtime_spans_tests.hthr`).
+    - *Step 3b:* the reflector reads a span parameter and the generator
+      makes the instance. *Runs:* the same two as `runtime fn`s.
+    - *Step 3c:* linking over a file. *Runs:* `wc -l` with
+      `count_newlines` a `runtime fn`.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
   `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
   its byte map as a called function.

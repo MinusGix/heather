@@ -1603,6 +1603,151 @@ fn Fun::lower_at(self f: Fun, w: World, s: RtShape) → Option<Function> {
 // The default setup's lowering.
 fn Fun::lower_any(self f: Fun, w: World) → Option<Function> { f.lower_at(w, f.shape()) }
 
+// The loops' lowerings read the world as the plain one does: its type table
+// and signatures (`Tm::lower_static`, lib/native/runtime/rt_lower.hthr).
+
+theorem Tm::self_args_static(w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, g: List<Ty>, ports: List<Nat>, args: List<Nat>):
+    Tm::self_args(w.over(cs, spans), g, ports, args) = Tm::self_args(w, g, ports, args) {
+    match args {
+        Nil => refl,
+        Cons(a, more) => cong_fn(λ (o: Option<List<Nat>>) => port_at(ports, a).and_then(λ q =>
+            Ty::at(g, a).check_one_word(w.tys).and_then(λ _ => o.and_then(λ qs => Some(Cons(q, qs))))),
+            Tm::self_args_static(w, cs, spans, g, ports, more)),
+    }
+}
+
+theorem Tm::lower_leaf_static(t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, res: Ty, flag: Nat, nexts: List<Nat>,
+    g: List<Ty>, ports: List<Nat>, next: Nat):
+    Tm::lower_leaf(t, w.over(cs, spans), res, flag, nexts, g, ports, next) = Tm::lower_leaf(t, w, res, flag, nexts, g, ports, next) {
+    let v = w.over(cs, spans);
+    trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(λ l => t.ty(v, g).check(res).and_then(λ _ => Tm::leave_at(flag, nexts, l))),
+            Tm::lower_static(t, w, cs, spans, g, ports, next)),
+        Option::and_then_ext(Tm::lower(t, w, g, ports, next), λ l => t.ty(v, g).check(res).and_then(λ _ => Tm::leave_at(flag, nexts, l)),
+            λ l => t.ty(w, g).check(res).and_then(λ _ => Tm::leave_at(flag, nexts, l)),
+            λ l => cong_fn(λ (a: Ty) => a.check(res).and_then(λ _ => Tm::leave_at(flag, nexts, l)), Tm::ty_static(t, w, cs, spans, g))))
+}
+
+// A pass's two arms, each lowered alike at both worlds.
+theorem Tm::tail_if_static(c: Nat, yes, no: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, skip: Nat, res: Ty, flag: Nat,
+    kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    same_yes: (n: Nat) → Tm::lower_tail(yes, w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, n) =
+        Tm::lower_tail(yes, w, skip, res, flag, kept, nexts, g, ports, n),
+    same_no: (n: Nat) → Tm::lower_tail(no, w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, n) =
+        Tm::lower_tail(no, w, skip, res, flag, kept, nexts, g, ports, n)):
+    Tm::lower_tail(yes, w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, next).and_then(λ ly =>
+        Tm::lower_tail(no, w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))) =
+    Tm::lower_tail(yes, w, skip, res, flag, kept, nexts, g, ports, next).and_then(λ ly =>
+        Tm::lower_tail(no, w, skip, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))) {
+    let v = w.over(cs, spans);
+    let rest_v = λ (ly: Lowered) => Tm::lower_tail(no, v, skip, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln =>
+        Tm::tail_branch(g, ports, c, flag, nexts, ly, ln));
+    let rest_w = λ (ly: Lowered) => Tm::lower_tail(no, w, skip, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln =>
+        Tm::tail_branch(g, ports, c, flag, nexts, ly, ln));
+    trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(rest_v), same_yes(next)),
+        Option::and_then_ext(Tm::lower_tail(yes, w, skip, res, flag, kept, nexts, g, ports, next), rest_v, rest_w, λ ly =>
+            cong_fn(λ (o: Option<Lowered>) => o.and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln)), same_no(ly.next))))
+}
+
+theorem Tm::lower_tail_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, skip: Nat, res: Ty, flag: Nat,
+    kept, nexts: List<Nat>): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+    Tm::lower_tail(t, w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, next) = Tm::lower_tail(t, w, skip, res, flag, kept, nexts, g, ports, next) {
+    match t {
+        Var(i) => λ g ports next => Tm::lower_leaf_static(Var(i), w, cs, spans, res, flag, nexts, g, ports, next),
+        Lit(c, n) => λ g ports next => Tm::lower_leaf_static(Lit(c, n), w, cs, spans, res, flag, nexts, g, ports, next),
+        Prim(op, args) => λ g ports next => Tm::lower_leaf_static(Prim(op, args), w, cs, spans, res, flag, nexts, g, ports, next),
+        Make(i, args) => λ g ports next => Tm::lower_leaf_static(Make(i, args), w, cs, spans, res, flag, nexts, g, ports, next),
+        Field(i, k, of) => λ g ports next => Tm::lower_leaf_static(Field(i, k, of), w, cs, spans, res, flag, nexts, g, ports, next),
+        Fold(over, init, step) => λ g ports next => Tm::lower_leaf_static(Fold(over, init, step), w, cs, spans, res, flag, nexts, g, ports, next),
+        Case(c, zero, succ) => λ g ports next => Tm::lower_leaf_static(Case(c, zero, succ), w, cs, spans, res, flag, nexts, g, ports, next),
+        Byte(k, i, length) => λ g ports next => Tm::lower_leaf_static(Byte(k, i, length), w, cs, spans, res, flag, nexts, g, ports, next),
+        Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::lower_tail(Call(f2, args), w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, next) =
+                Tm::lower_tail(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next) {
+            Zero => λ g ports next => cong_fn(λ (o: Option<List<Nat>>) => o.and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs)),
+                Tm::self_args_static(w, cs, spans, g, ports, args.drop(skip))),
+            Succ(h) => λ g ports next => Tm::lower_leaf_static(Call(Succ(h), args), w, cs, spans, res, flag, nexts, g, ports, next),
+        },
+        Let(e, body) => λ g ports next => {
+            let v = w.over(cs, spans);
+            let rest_v = λ (le: Lowered) => Tm::lower_tail(body, v, skip, res, flag, kept, nexts, Cons(Tm::ty(e, v, g), g), Cons(le.result, ports),
+                le.next).and_then(λ lb => Tm::compose(le, lb));
+            let rest_w = λ (le: Lowered) => Tm::lower_tail(body, w, skip, res, flag, kept, nexts, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports),
+                le.next).and_then(λ lb => Tm::compose(le, lb));
+            trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(rest_v), Tm::lower_static(e, w, cs, spans, g, ports, next)),
+                Option::and_then_ext(Tm::lower(e, w, g, ports, next), rest_v, rest_w, λ le =>
+                    cong_fn(λ (o: Option<Lowered>) => o.and_then(λ lb => Tm::compose(le, lb)),
+                        trans(cong_fn(λ (a: Ty) => Tm::lower_tail(body, v, skip, res, flag, kept, nexts, Cons(a, g), Cons(le.result, ports), le.next),
+                                Tm::ty_static(e, w, cs, spans, g)),
+                            Tm::lower_tail_static(body, w, cs, spans, skip, res, flag, kept, nexts, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports),
+                                le.next)))))
+        },
+        If(c, yes, no) => λ g ports next => Tm::tail_if_static(c, yes, no, w, cs, spans, skip, res, flag, kept, nexts, g, ports, next,
+            λ n => Tm::lower_tail_static(yes, w, cs, spans, skip, res, flag, kept, nexts, g, ports, n),
+            λ n => Tm::lower_tail_static(no, w, cs, spans, skip, res, flag, kept, nexts, g, ports, n)),
+        IfEq(c, yes, no) => λ g ports next => Tm::tail_if_static(c, yes, no, w, cs, spans, skip, res, flag, kept, nexts, g, ports, next,
+            λ n => Tm::lower_tail_static(yes, w, cs, spans, skip, res, flag, kept, nexts, g, ports, n),
+            λ n => Tm::lower_tail_static(no, w, cs, spans, skip, res, flag, kept, nexts, g, ports, n)),
+    }
+}
+
+theorem Fun::lower_fuel_static(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>):
+    Fun::lower_fuel(w0, wrest, zero, succ, res, w.over(cs, spans)) = Fun::lower_fuel(w0, wrest, zero, succ, res, w) {
+    let v = w.over(cs, spans);
+    let ws = Cons(w0, wrest);
+    let finish = λ (t: Lowered) => trans(
+        cong_fn(λ (o: Option<Lowered>) => o.and_then(λ lz => zero.ty(v, Fun::fuel_ctx(ws)).check(res).and_then(λ _ => Some(Fun::fuel_code(ws, t, lz)))),
+            Tm::lower_static(zero, w, cs, spans, Fun::fuel_ctx(ws), Fun::ports_onto(ws, Succ(Succ(Succ(t.next))), [Succ(Succ(t.next))]),
+                Succ(Fun::past(ws, Succ(Succ(Succ(t.next))))))),
+        Option::and_then_ext(Fun::fuel_zero_at(ws, zero, w, t),
+            λ lz => zero.ty(v, Fun::fuel_ctx(ws)).check(res).and_then(λ _ => Some(Fun::fuel_code(ws, t, lz))),
+            λ lz => zero.ty(w, Fun::fuel_ctx(ws)).check(res).and_then(λ _ => Some(Fun::fuel_code(ws, t, lz))),
+            λ lz => cong_fn(λ (a: Ty) => a.check(res).and_then(λ _ => Some(Fun::fuel_code(ws, t, lz))), Tm::ty_static(zero, w, cs, spans, Fun::fuel_ctx(ws)))));
+    let pass: (Tm::lower_tail(succ, v, 1, res, Fun::fuel_flag(ws), Nil, Fun::fuel_ns(ws), Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws),
+            Succ(Fun::fuel_flag(ws))).and_then(λ t => Fun::fuel_finish(ws, res, zero, v, t)) =
+        Tm::lower_tail(succ, w, 1, res, Fun::fuel_flag(ws), Nil, Fun::fuel_ns(ws), Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws),
+            Succ(Fun::fuel_flag(ws))).and_then(λ t => Fun::fuel_finish(ws, res, zero, w, t))) = trans(
+        cong_fn(λ (o: Option<Lowered>) => o.and_then(λ t => Fun::fuel_finish(ws, res, zero, v, t)),
+            Tm::lower_tail_static(succ, w, cs, spans, 1, res, Fun::fuel_flag(ws), Nil, Fun::fuel_ns(ws), Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws),
+                Succ(Fun::fuel_flag(ws)))),
+        Option::and_then_ext(Tm::lower_tail(succ, w, 1, res, Fun::fuel_flag(ws), Nil, Fun::fuel_ns(ws), Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws),
+                Succ(Fun::fuel_flag(ws))), λ t => Fun::fuel_finish(ws, res, zero, v, t), λ t => Fun::fuel_finish(ws, res, zero, w, t), finish));
+    cong_fn(λ (o: Option<Function>) => Ty::check_one_words(w.tys, ws).and_then(λ _ => res.check_one_word(w.tys).and_then(λ _ => o)), pass)
+}
+
+theorem Fun::lower_measured_static(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: Tm, res: Ty, w: World, cs: Sig::Sems(w.tys, w.sigs),
+    spans: List<List<BitVec(8)>>, lent: Nat):
+    Fun::lower_measured(ks, w0, wrest, body, res, w.over(cs, spans), lent) = Fun::lower_measured(ks, w0, wrest, body, res, w, lent) {
+    let v = w.over(cs, spans);
+    let ws = Cons(w0, wrest);
+    let all = ks ++ ws;
+    let ctx = Ty::bind_onto(all, Nil);
+    let ports = Fun::ports_onto(all, Succ(Fun::meas_bnd(all)), Nil);
+    let flag = Fun::meas_flag(all, ws);
+    let kept = Fun::meas_kept(all, ks);
+    let ns = Fun::meas_ns(all, ws);
+    let second = λ (u: World) (t: Lowered) => Fun::meas_tail2(all, ks, ws, res, body, u, Succ(Succ(t.next)), Fun::past(all, Succ(Succ(t.next)))).and_then(λ t2 =>
+        Some(Fun::meas_code(all, ks, ws, lent, t, t2)));
+    let pass: (Tm::lower_tail(body, v, 0, res, flag, kept, ns, ctx, ports, Succ(flag)).and_then(λ t => second(v, t)) =
+        Tm::lower_tail(body, w, 0, res, flag, kept, ns, ctx, ports, Succ(flag)).and_then(λ t => second(w, t))) = trans(
+        cong_fn(λ (o: Option<Lowered>) => o.and_then(λ t => second(v, t)),
+            Tm::lower_tail_static(body, w, cs, spans, 0, res, flag, kept, ns, ctx, ports, Succ(flag))),
+        Option::and_then_ext(Tm::lower_tail(body, w, 0, res, flag, kept, ns, ctx, ports, Succ(flag)), λ t => second(v, t), λ t => second(w, t), λ t =>
+            cong_fn(λ (o: Option<Lowered>) => o.and_then(λ t2 => Some(Fun::meas_code(all, ks, ws, lent, t, t2))),
+                Tm::lower_tail_static(body, w, cs, spans, 0, res, Fun::meas_flag2(ws, Fun::past(all, Succ(Succ(t.next)))),
+                    Fun::param_ids(ks, Succ(Succ(t.next))), Fun::meas_ns2(ws, Fun::past(all, Succ(Succ(t.next)))), ctx,
+                    Fun::ports_onto(all, Succ(Succ(t.next)), Nil), Succ(Fun::meas_flag2(ws, Fun::past(all, Succ(Succ(t.next)))))))));
+    cong_fn(λ (o: Option<Function>) => Ty::check_one_words(w.tys, all).and_then(λ _ => res.check_one_word(w.tys).and_then(λ _ => o)), pass)
+}
+
+theorem Fun::lower_any_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>):
+    f.lower_any(w.over(cs, spans)) = f.lower_any(w) {
+    match f.shape() as λ s => f.lower_at(w.over(cs, spans), s) = f.lower_at(w, s) {
+        Plain => Fun::lower_static(f, w, cs, spans),
+        Fuel(w0, wrest, zero, succ) => Fun::lower_fuel_static(w0, wrest, zero, succ, f.result, w, cs, spans),
+        Measured(ks, w0, wrest, body) => Fun::lower_measured_static(ks, w0, wrest, body, f.result, w, cs, spans, f.lent),
+    }
+}
+
 // What a lowering of the shape promises. A loop's promise is about any `h`
 // that satisfies its equations; the generator gives the function itself.
 fn Fun::HoldsAt(self f: Fun, w: World, s: RtShape, r: Option<Function>) → Type {
