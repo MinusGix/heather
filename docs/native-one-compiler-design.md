@@ -1,8 +1,8 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. U1, U2, the function compiler's half of
-U3 and the placeless theorem a program's call needs are built (§3). Owner:
+export"); this note scopes it. U1, U2 and a program's call of a function over a
+buffer (U3a, U3b) are built (§3). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -246,6 +246,48 @@ value computed from an address and then discarded is refused. Probes:
 call handing a home on; eight refusals, among them the function that
 returns its address, with its two different answers).
 
+**A program's call, built.** Three pieces, each where the note said.
+
+- *The meaning.* A region's calls are answered by `Readers()`, a function
+  of the buffers as they are and then of the callee and its words
+  (`function_ir_state.hthr`); `StructuredRegion::run` asks it of its own
+  buffers. A source's are `program_readers(src.functions)`
+  (`function_ir_placeless.hthr`): function `f`, lent `k` buffers, is
+  answered by `program_eval_over` of the first `k` buffers the program
+  holds (`lent_buffers`), at the homes `stated_homes` gives them (address
+  zero, the length the buffer's own) before the words the call names. A
+  call sees exactly what it is lent. For a function lent nothing this is
+  `program_eval` by evaluation, so a certificate of a program without
+  buffers states what it did.
+- *The code* (`Prog::function_call`, `native_compile.hthr`). Buffer `b`
+  of the file is the `b`th a function is lent. Its home is two
+  immediates, the address the layout puts it at and its capacity, set in
+  the block that carries R10 (`Layout::homes_block`); the words go to the
+  registers after the homes'. A call fits (`Layout::function_fits`) when
+  the function takes the words after its homes, six registers hold them
+  all, and the file has the buffers. `Prog::links` checks the functions
+  placeless and emits each under its count of lent buffers
+  (`program_counts`). A function lent nothing is called by the code it
+  was.
+- *The proof* (`native_compile_function.hthr`). The function's contract
+  (`Site::CallsLent`, at every address and over every buffers) is cited at
+  the placed homes over the buffers lent, and `program_eval_placeless`
+  turns its answer into the stated one (`Target::answers_of`; the joints
+  are `homes_apart`, `args_lent_placed` and `program_counts_lent`,
+  `function_ir_lend.hthr`). `Lends` comes from the claim between
+  statements, which places every buffer's bytes in the data region
+  (`Target::buffer_readable`) and which stores below the running frame
+  keep (`held_wrote`): so the buffers are lent to the call as they are
+  when it is entered (`Target::lent_all`), with no fact about where the
+  region lies beyond what `Target` already holds. A buffer of a source is
+  always as long as its capacity, which is why the capacity is the length.
+
+What a function over a count needs: a read fills a prefix of the buffer,
+so the count is a word the call passes, and the function tests its index
+against the length home too. That test is the path-known bound; it costs
+one comparison a pass that an optimizer could fold when the count is
+known below the capacity (not built).
+
 ### 2.4 A procedure is a function whose body has effects
 
 The last joint, and the largest. `Stmt` becomes the body language of a
@@ -303,11 +345,13 @@ Each is a PR and ends with something that runs.
     lending (`function_ir_lower_reads.hthr`, `function_ir_lower_calls.hthr`),
     `lower_program_lent_correct` and `compiled_returns_lent`. *Runs:* the
     probes' code by evaluation; no process yet, which is U3b's.
-  - **U3b. A program's `Call` passes buffers.** Placeless functions
-    (*built 2026-11-11*, §2.3); then `run` answers a call over its
-    buffers, the call's code supplies the static homes, and `Lends` is
-    discharged from the data region lying below the stack. *Runs:* a tool
-    that reads its input into a buffer and calls a compiled loop over it.
+  - **U3b. A program's `Call` passes buffers.** *Built 2026-11-11*
+    (§2.3): placeless functions, `run` answering a call over its buffers,
+    the call's code supplying the static homes, and `Lends` from the claim
+    between statements. *Runs:* `wc -l` with each read's newlines counted
+    by `count_newlines` (`native_tool_spans.hthr`), a function lent the
+    buffer, beside GNU's (`crates/cli/tests/native_tools.rs`). The
+    function is written as FunctionIR until U3c.
   - **U3c. `rt` lowers `Get` and `Len`**, so the loop is a `runtime fn`;
     the scanner's loop is the customer.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;

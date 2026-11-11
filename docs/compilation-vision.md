@@ -220,10 +220,13 @@ optimization that uses it is proved once under it as a hypothesis.
   a program's `main` and an export are its cases. The first joint is
   built: a program's call of a `runtime fn` is a CALL of the function
   compiler's code in the same file, proved from that function's contract.
-  Of the second, the function compiler's half is built: a function reads
-  a buffer it is lent through a home (two of its values, address and
-  length), under a comparison the path knows, and its contract says what
-  it was lent (§2.5).
+  The second is built for reads: a function reads a buffer it is lent
+  through a home (two of its values, address and length), under a
+  comparison the path knows, and its contract says what it was lent
+  (§2.5); a program's call passes its buffer's home, and a tool runs that
+  reads its input and calls a compiled loop over it. What is left of it is
+  the loop as a `runtime fn` (`rt` lowering a read of a lent span) and
+  writes.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -263,7 +266,11 @@ of its own. One thing the list above leaves open is settled in
 address as a word, so "no meaning mentions an address" needs the
 evaluation not to depend on that word. An export gets this from its
 agreement equation over an open word; a program's tree needs it as a
-theorem about placeless functions.
+theorem about placeless functions. That theorem is built
+(`program_eval_placeless`), and a program's compile cites it: the tree
+states a call over the buffers the program holds with no address
+(`program_readers`), the code passes the address the layout gives, and the
+two answers are the same for every function `Prog::links` accepts.
 
 ---
 
@@ -439,7 +446,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5), built after the two compilers are joined | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads inside one file (a program lends its buffer to a function it calls); the export after the two compilers are joined | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
