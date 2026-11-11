@@ -372,6 +372,10 @@ pub struct ValueArena<'v> {
     /// ([`ValueArena::memo_closed`]); kept, like a closure's own memo, for
     /// the query, and alive by the same argument as `transducers`' keys.
     closed_values: RefCell<PtrMap<CloId, &'v Val<'v>>>,
+    /// The former a closed type annotation unfolds to, by the annotation's
+    /// syntax ([`ValueArena::memo_former`]). The entry holds the syntax, so
+    /// the address it is keyed on stays that annotation's.
+    closed_formers: RefCell<PtrMap<(usize, u32, u32), (Rc<Type>, &'v VTy<'v>)>>,
     /// Whether each element type satisfies the bit criterion, and with what
     /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
     /// element closure's identity. Decided once per type, beside the fold
@@ -893,6 +897,7 @@ impl<'v> ValueArena<'v> {
             forced: (Cell::new(0), Cell::new(0)),
             fold_classes: RefCell::new(PtrMap::default()),
             closed_values: RefCell::new(PtrMap::default()),
+            closed_formers: RefCell::new(PtrMap::default()),
             bit_types: RefCell::new(PtrMap::default()),
             bit_tys: Region::new(),
             transducers: RefCell::new(PtrMap::default()),
@@ -926,6 +931,7 @@ impl<'v> ValueArena<'v> {
                 forced: (Cell::new(0), Cell::new(0)),
                 fold_classes: RefCell::new(PtrMap::default()),
                 closed_values: RefCell::new(PtrMap::default()),
+                closed_formers: RefCell::new(PtrMap::default()),
                 bit_types: RefCell::new(PtrMap::default()),
                 bit_tys: Region::new(),
                 transducers: RefCell::new(PtrMap::default()),
@@ -1197,6 +1203,35 @@ impl<'v> ValueArena<'v> {
         if let Some(key) = Self::closed_key(clo) {
             self.closed_values.borrow_mut().entry(key).or_insert(value);
         }
+    }
+
+    /// The former the annotation `ty` unfolded to in an environment like
+    /// `env`, when `ty` reads none of its entries. A constructor written
+    /// with its type (`pair@(T; a; b)`, `inl@(T; a)`) evaluates `T` to the
+    /// Σ or sum it names, to build the value the annotated spelling builds;
+    /// a declaration's `T` is a call of its type code, closed wherever the
+    /// declaration has no parameters, and it was unfolded and decoded again
+    /// at every constructor a computation built. The same argument as
+    /// [`ValueArena::memo_closed`]: a closed type denotes one former
+    /// wherever it is read.
+    pub(crate) fn memo_former(&self, ty: &Rc<Type>, env: &Env<'v>) -> Option<&'v VTy<'v>> {
+        let key = Self::former_key(ty, env)?;
+        self.closed_formers.borrow().get(&key).map(|(_, former)| *former)
+    }
+
+    pub(crate) fn cache_former(&self, ty: &Rc<Type>, env: &Env<'v>, former: &'v VTy<'v>) {
+        if let Some(key) = Self::former_key(ty, env) {
+            self.closed_formers.borrow_mut().entry(key).or_insert_with(|| (Rc::clone(ty), former));
+        }
+    }
+
+    /// [`TmClo::closed_ident`] for an annotation that has no closure yet.
+    fn former_key(ty: &Rc<Type>, env: &Env<'v>) -> Option<(usize, u32, u32)> {
+        let used = crate::bounds::type_local_use(ty);
+        (used.bound == 0).then(|| {
+            let len = if used.has_wk { env.len() } else { 0 };
+            (Rc::as_ptr(ty) as usize, len, env.gshift())
+        })
     }
 
     fn closed_key(clo: &TmClo<'v>) -> Option<CloId> {

@@ -625,20 +625,71 @@ fn absolute(term: &Term, caller: usize) -> Option<usize> {
 /// compiler learns the bytes and offsets `lower_program` computed, which
 /// the certificate then states as literals and the kernel checks.
 pub fn evaluate_numbers(elaborator: &Elaborator, name: &str) -> Result<Vec<u64>, SourceError> {
+    with_reads(elaborator, |reads| reads.numbers(name))
+}
+
+/// Reads of one world that share what they force: `read` is given a
+/// [`Reads`] over `elaborator`'s world, and every definition a read of it
+/// evaluates is evaluated once for all of them (the evaluator keeps a
+/// closed definition's value for as long as its arena lives, and here the
+/// arena is the session's). So reads spelled from one another, as a part's
+/// live-out set is from its parent's, each cost their own step and not the
+/// chain from the root again. Everything the reads force is kept until
+/// `read` returns, which is what [`Reads::full`] and [`read_sharing`] bound.
+pub fn with_reads<R>(elaborator: &Elaborator, read: impl FnOnce(&Reads<'_, '_>) -> R) -> R {
     let arena = ValueArena::new();
-    let reader = Reader::new(elaborator, &arena);
-    let mut cell = reader.global(elaborator, name)?;
-    let mut numbers = Vec::new();
-    loop {
-        let (index, fields, children) = reader.ctor(cell)?;
-        match (index, fields.first(), children.first()) {
-            (0, _, _) => return Ok(numbers),
-            (1, Some(head), Some(tail)) => {
-                if numbers.len() >= 1 << 20 { return unsupported("an implausibly long list"); }
-                numbers.push(reader.nat(head)?);
-                cell = tail;
+    read(&Reads { elaborator, reader: Reader::new(elaborator, &arena), started: heather_kernel::stats::snapshot().eval_steps })
+}
+
+/// The evaluator steps a session takes before it is [`Reads::full`]. A step
+/// keeps a few hundred bytes of values until its session ends, and a tool's
+/// reads in one session ran past the suite's rail; counted in steps and not
+/// in bytes because the kernel already counts them, so the bound asks
+/// nothing new of it.
+const SESSION_STEPS: u64 = 2_000_000;
+
+/// `count` reads in order, `read(session, i)` the `i`th, in sessions each
+/// ended once it is full: the reads after it start a new one, and pay again
+/// for what they share with the ones before. So reads that share should be
+/// neighbours, as a tree's parts are in preorder.
+pub fn read_sharing<T, E>(elaborator: &Elaborator, count: usize, mut read: impl FnMut(&Reads<'_, '_>, usize) -> Result<T, E>) -> Result<Vec<T>, E> {
+    let mut out = Vec::with_capacity(count);
+    while out.len() < count {
+        with_reads(elaborator, |reads| {
+            while out.len() < count {
+                out.push(read(reads, out.len())?);
+                if reads.full() { break; }
             }
-            _ => return unsupported("not a list of numbers"),
+            Ok(())
+        })?;
+    }
+    Ok(out)
+}
+
+/// A session of reads ([`with_reads`]): the world read, and the evaluator's
+/// step count on this thread as the session started.
+pub struct Reads<'a, 'v> { elaborator: &'a Elaborator, reader: Reader<'a, 'v>, started: u64 }
+
+impl Reads<'_, '_> {
+    /// Whether the session holds as much as one should ([`read_sharing`]).
+    pub fn full(&self) -> bool { heather_kernel::stats::snapshot().eval_steps.saturating_sub(self.started) >= SESSION_STEPS }
+
+    /// A nullary global of type `List<Nat>`, evaluated and read back.
+    pub fn numbers(&self, name: &str) -> Result<Vec<u64>, SourceError> {
+        let reader = &self.reader;
+        let mut cell = reader.global(self.elaborator, name)?;
+        let mut numbers = Vec::new();
+        loop {
+            let (index, fields, children) = reader.ctor(cell)?;
+            match (index, fields.first(), children.first()) {
+                (0, _, _) => return Ok(numbers),
+                (1, Some(head), Some(tail)) => {
+                    if numbers.len() >= 1 << 20 { return unsupported("an implausibly long list"); }
+                    numbers.push(reader.nat(head)?);
+                    cell = tail;
+                }
+                _ => return unsupported("not a list of numbers"),
+            }
         }
     }
 }
