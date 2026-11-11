@@ -212,6 +212,12 @@ optimization that uses it is proved once under it as a hypothesis.
   pass sound (`docs/certified-pass-algebra-probe.md`;
   `function-ir-pass-in-heather` is the first real one). A pass that needs a
   fact takes it as a hypothesis of its local law.
+- **One compiler serves the levels** (Minus, 2026-11-11: "unify first and
+  then export"; `docs/native-one-compiler-design.md`). `write-elf` and
+  `compile-x86` share FunctionIR and the region lowering and grew apart
+  above it. The direction is one compiler of functions: a frame, System V
+  registers, buffers lent, a body that may have effects. A pure function,
+  a program's `main` and an export are its cases.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -219,8 +225,10 @@ optimization that uses it is proved once under it as a hypothesis.
 
 ### 2.5 Memory a function is lent
 
-Proposed 2026-11-10 (`docs/native-library-exports-design.md`), not yet
-accepted. Principle 1 applied to memory:
+Proposed 2026-11-10 (`docs/native-library-exports-design.md`); Minus's
+answer (2026-11-11) was to join the two compilers first, so it lands in
+the order of `docs/native-one-compiler-design.md`. Principle 1 applied to
+memory:
 
 - **A buffer is a value in every level's meaning.** A list of bytes in
   `rt`, a numbered entry of `Buffers()` in FunctionIR. No meaning mentions
@@ -414,7 +422,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed, awaiting acceptance (§2.5) | `docs/native-library-exports-design.md`, `docs/native-lexer-crypto-roadmap.md` §2, milestone `nh-library` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5), built after the two compilers are joined | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |

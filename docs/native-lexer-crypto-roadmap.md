@@ -544,7 +544,8 @@ which compiles the scanner's loop and is the smaller half of the export
 contract); fixed arrays and tables in the
 pure fragment (the whole of `compress` in Heather, and the automaton as a
 table); then the write half and SHA-256 behind a switch in `crates/cache`.
-The read half's design is written and waits on Minus
-(`docs/native-library-exports-design.md`, with its rounds R1 to R3 in §10
-there).
+The read half's design is written (`docs/native-library-exports-design.md`).
+Minus's answer (2026-11-11) was "unify first and then export": the program
+compiler and the function compiler are joined first, in the rounds of
+`docs/native-one-compiler-design.md`, and the export is the last of them.
 

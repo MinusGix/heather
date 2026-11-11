@@ -1,7 +1,10 @@
 # Native library exports: a compiled function over memory its caller lends
 
-Status: **proposed 2026-11-10**, for Minus to accept or redirect. Nothing
-here is built. Owner: `issues/native-library-exports-design.md` (milestone
+Status: **proposed 2026-11-10; re-sequenced 2026-11-11** by Minus's answer,
+"unify first and then export". The design of memory and of the contract
+below stands; the rounds of §10 now land in the order
+`docs/native-one-compiler-design.md` gives (its §5 has the mapping), with
+the export itself last. Nothing here is built. Owner: `issues/native-library-exports-design.md` (milestone
 `nh-library`), which asks for this note before any code. It extends
 `docs/compilation-vision.md` (§2.5 there points here) and revises
 `docs/native-lexer-crypto-roadmap.md` §2, whose lean on the unit of export
