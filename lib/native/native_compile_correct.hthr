@@ -1101,6 +1101,44 @@ theorem Stmt::emits_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, lay
     }
 }
 
+// A sequence whose rest does not start with a call or an exit, with the set
+// live between its parts taken from the allocation check's verdict on the
+// rest (`Stmt::checked_sound`): nothing here works the rest's liveness out
+// again, which `emits_then_of`'s reader does once for every sequence above a
+// statement (issues/native-emission-join-liveness.md).
+theorem Stmt::live_head_plain(self s: Stmt, homes: Homes, known: List<Fact>, out: List<Nat>, plain: s.reads_known() = False):
+    s.live_head(homes, known, out) = s.live_in(homes, out) {
+    match s {
+        Invoke(_) => absurd(plain),
+        Exit(_) => absurd(plain),
+        Then(first, rest) => j(sym(plain), λ b _ => (match b as λ _ => List<Nat> {
+                True => first.live_head(homes, known, rest.live_in(homes, out)),
+                False => Then(first, rest).live_in(homes, out),
+            }) = Then(first, rest).live_in(homes, out), refl),
+        Compute(_) => refl,
+        Branch(_, _, _) => refl,
+        Repeat(_, _) => refl,
+        Arg(_, _, _) => refl,
+        Perform(_, _, _) => refl,
+    }
+}
+
+theorem Stmt::live_with_plain(self s: Stmt, homes: Homes, known: List<Fact>, out: List<Nat>, plain: s.reads_known() = False):
+    s.live_with(homes, known, out) = s.live_in(homes, out) {
+    match known { Nil => refl, Cons(f, more) => s.live_head_plain(homes, Cons(f, more), out, plain) }
+}
+
+theorem Stmt::emits_then_checked(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat, c: Compiled, mid: List<Nat>,
+    plain: s.right().reads_known() = False, rest: s.right().checked(layout.homes, out) = Some(mid),
+    left: s.left().emits(p, layout, mid, s.left().first_known(known), names) = Some(c)):
+    s.emits(p, layout, out, known, names) = s.right().emits(c.prog, layout, out, s.left().carried(s.right(), layout.homes, out), c.names) {
+    let live: (mid = s.right().live_in(layout.homes, out)) = s.right().checked_sound(layout.homes)(out, mid, rest).left;
+    let between: (s.right().live_with(layout.homes, s.left().carried(s.right(), layout.homes, out), out) = mid) =
+        trans(s.right().live_with_plain(layout.homes, s.left().carried(s.right(), layout.homes, out), out, plain), sym(live));
+    s.emits_then_of(is, p, layout, out, known, names, c,
+        j(sym(between), λ m _ => s.left().emits(p, layout, m, s.left().first_known(known), names) = Some(c), left))
+}
+
 theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog, layout: Layout, fits: layout.word_fits(s.word()).IsTrue(), out: List<Nat>, known: List<Fact>, names: Nat,
     b: Compiled, body: s.left().emits(p.label(Succ(names)), layout, s.loop_out(layout.homes, out), Nil, Succ(Succ(names))) = Some(b)):
     s.emits(p, layout, out, known, names) = Some(Compiled(then(b.prog.tests(layout, s.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
