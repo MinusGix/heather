@@ -288,6 +288,97 @@ against the length home too. That test is the path-known bound; it costs
 one comparison a pass that an optimizer could fold when the count is
 known below the capacity (not built).
 
+**A `runtime fn` reads a span: the design of U3c (2026-11-11, not
+built).** The joint so far ends at FunctionIR written by hand. What is
+left is the front end: `rt`, its lowering and its loop theorems
+(`rt.hthr`, `rt_lower.hthr`, `rt_loop.hthr`), the `Compile` class and the
+generator (`runtime.hthr`). Read against them, five things are decided.
+
+- *A lent buffer is the function's world, not one of its values.* `rt`
+  has a byte buffer as a value already (`Bytes(cap)` with `Get` and
+  `Set`), for the effectful layer, where a buffer is a static one named
+  by its id. A lent span is different in the one way that matters to the
+  proofs: no term makes one, moves one or chooses between two, so which
+  buffer a read reads is static. So the spans join the type table and
+  the callees in `World`, as the file of buffers the function is
+  evaluated over (`World.spans`, the same list `Buffers()` is), and two
+  terms read it: `Byte(k, i)`, the byte of span `k` at the word `i`,
+  zero past its end, and `Len(k)`, its length as a word. A `Fun` says
+  how many spans it takes (`lent`). Its meaning is a function of its
+  words alone, in a world.
+
+  The alternative, a span as a parameter of code `Bytes`, keeps the
+  reflection's pin as it is and costs every statement that reads a
+  signature as words: `Ty::Answers`, `Ty::apply`, a loop's `tail_sem` and
+  its two equations each pass a call's arguments as a list of words,
+  and a buffer among them would have to be cut out of each. With the
+  spans in the world those statements do not change at all; they are
+  read at a world that has spans.
+
+  This is also FunctionIR's own shape. Its evaluator takes the file of
+  buffers beside the valuation, and a callee is evaluated over the same
+  file as its caller. So a call of a function that is lent spans needs
+  no new term either: it is `Call(g, words)`, and `g`'s entry in the
+  table of meanings is `g` at the same file.
+
+- *The lowering names the homes it reads through.* A term is lowered
+  with the ids its scope holds each span's home at (two a span, the
+  address then the length), fixed for the whole term, since no binding
+  changes them. `Len(k)` is the length's id and no code. `Byte(k, i)` is
+  the comparison of `i` with that id, and a branch on it: the load of
+  buffer `k` at `i` where it holds, zero where it does not. That is the
+  check the function compiler asks for before a load (`File::bounded`),
+  written by the language above it as §2.3 said it would be, and it is
+  also exactly `byte_at`'s meaning, so the term needs no premise. The
+  soundness theorem (`Tm::lower_sound`) is restated over the evaluation
+  with buffers, at the world's own file, with one invariant more: each
+  length id holds its span's length (`SpansHold`), kept because the ids
+  are below everything the region writes. One fact is asked of the
+  file: each span is shorter than `2^64` bytes, without which a length
+  word would not say where the span ends.
+
+- *A function's homes are parameters after its words; a loop carries
+  them after its state.* FunctionIR wants the homes as the function's
+  first parameters by position, and names are free, so the words keep
+  the ids they have and the homes take the ids after them. A function
+  with no spans is lowered to the code it has today, which is what
+  keeps every linked export's bytes.
+
+  A loop is where the function compiler's rule bites: a pass sees only
+  the loop's state, and a home is carried when the pass's `next` for
+  its two places is the pass's own parameters (`carried_sound`). So the
+  loops `rt_loop` builds get the homes as a suffix of their state, with
+  `next` the parameters themselves: no move, no branch arm that writes
+  them, and the first word of the state is still the result a leaving
+  pass hands back. What a pass computes (`Tm::tail_sound`) does not
+  change; the two loop theorems are restated over the longer state,
+  from one new lemma, that a loop whose passes keep a part of the state
+  agrees with a recursion stated on the rest
+  (`Fun::loop_agrees_below` with an invariant).
+
+- *The class is about a function at a file.* `Compile<F>(f)` states that
+  the code answers as `f` does. With spans, `f` takes them first as
+  ordinary Heather parameters (`List<BitVec(8)>`), and the agreement
+  is for every file: the code, evaluated over the file at the homes of
+  its first `lent` buffers and then the words, answers as `f` applied
+  to those buffers and the words. The pin is by conversion at a neutral
+  file, as it is at neutral words. An instance without spans is the one
+  it is today read at the empty file, and `f::agrees` and the linking
+  theorems gain the file as a parameter (`program_eval_over`).
+
+- *The reflector decides what is a span.* A parameter of type
+  `List<BitVec(8)>` of a pure `runtime fn` is a span, numbered in
+  order. It may be read by `byte_at` and by its length, passed to a
+  call of the function itself in the same place, and passed to another
+  `runtime fn` as the same span number; any other use is refused with
+  the reason. Passing span `j` as a callee's span `k ≠ j` waits for a
+  `Call` that renames buffers, which FunctionIR does not have.
+
+What it leaves open, on purpose: a span that is written. A write makes
+the buffer a result as well as an input, so U4 decides whether the file
+becomes state the meaning threads or the function returns the new
+bytes; the world is the right place for a span only while it is read.
+
 ### 2.4 A procedure is a function whose body has effects
 
 The last joint, and the largest. `Stmt` becomes the body language of a
@@ -352,8 +443,14 @@ Each is a PR and ends with something that runs.
     by `count_newlines` (`native_tool_spans.hthr`), a function lent the
     buffer, beside GNU's (`crates/cli/tests/native_tools.rs`). The
     function is written as FunctionIR until U3c.
-  - **U3c. `rt` lowers `Get` and `Len`**, so the loop is a `runtime fn`;
-    the scanner's loop is the customer.
+  - **U3c. A `runtime fn` reads a span**, so the loop is Heather source;
+    the scanner's loop is the customer. Designed in §2.3, in three steps
+    that each leave the library whole: `rt`'s two terms and their
+    lowering with its theorem, for a function without a loop (*runs:*
+    probes by evaluation, and the lowered code accepted by the function
+    compiler); loops carrying the homes; the class, the reflector and
+    linking over a file (*runs:* `wc -l` with `count_newlines` a
+    `runtime fn`).
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
   `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
   its byte map as a called function.
