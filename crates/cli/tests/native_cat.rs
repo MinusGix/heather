@@ -65,8 +65,10 @@ fn compiled_cat_runs_as_cat() {
     write_cat(&binary);
     let certificate = std::fs::read_to_string(dir.join("cat.certificate.hthr")).expect("the certificate is published beside the file");
     // cat is long enough that its emission is stated a part at a time, and
-    // joined by each of the three (crates/cli/src/native/emission.rs).
-    for join in ["Stmt::emits_then_of", "Stmt::emits_repeat_of", "Stmt::emits_branch_of"] {
+    // joined by each of the three (crates/cli/src/native/emission.rs): a
+    // sequence's by `emits_then_checked` where the allocation's check gives
+    // the set live between its parts, otherwise by `emits_then_of`.
+    for join in ["Stmt::emits_then_", "Stmt::emits_repeat_of", "Stmt::emits_branch_of"] {
         assert!(certificate.contains(join), "the certificate joins parts by `{join}`");
     }
     assert!(!dir.join("cat.certificate.unchecked.hthr").exists(), "and no unchecked copy is left");
