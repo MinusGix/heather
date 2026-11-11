@@ -1,0 +1,124 @@
+// Probes of `function_ir_writes`, FunctionIR's meaning with the file
+// threaded (docs/native-one-compiler-design.md §2.6): a store runs from a
+// file to the file with its byte set and to no other, at a neutral
+// valuation and file and at literal ones; a load after a store reads the
+// byte stored, which the fixed-file relation cannot say; a call's file is
+// the one its callee leaves; and a program with no store runs as it
+// computes, from a file to itself. Tests, not library: nothing imports
+// this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+
+// ---------------------------------------------------------------------------
+// A store: value 1's low byte at index 0 of buffer 0, the byte then there
+// named 2
+
+fn put() → StructuredRegion { leaf([BufferStore(output := 2, buffer := 0, index := 0, value := 1)]) }
+
+fn put_file(values: Valuation(), file: Buffers()) → Buffers() { store_byte(file, 0, values(64, 0).toNat(), low_byte(values(64, 1))) }
+
+// It runs from any file to the file with the byte set, whatever its calls
+// would be answered by, where the output names the byte then there.
+theorem put_runs(effects: Effects(), values: Valuation(), file: Buffers(),
+    named: values(64, 2) = byte_word(buffer_byte(put_file(values, file), 0, values(64, 0).toNat()))):
+    StructuredRegionRunsOver(effects, values, put(), file, put_file(values, file)) {
+    Exists(put_file(values, file), ⟨⟨refl, named⟩, refl⟩)
+}
+
+// And to no other file.
+theorem put_runs_only(effects: Effects(), values: Valuation(), before, after: Buffers(),
+    ran: StructuredRegionRunsOver(effects, values, put(), before, after)): after = put_file(values, before) {
+    trans(ran.proof.right, ran.proof.left.left)
+}
+
+// At a literal valuation and file: 7 stored over the second byte of two.
+fn sevens() → Valuation() { λ w id => BitVec::ofNat(match id { Zero => 1, Succ(_) => 7 }) }
+
+theorem put_literal(): StructuredRegionRunsOver(no_effects(), sevens(), put(), [[b(1), b(2)]], [[b(1), b(7)]]) {
+    Exists([[b(1), b(7)]], ⟨⟨refl, refl⟩, refl⟩)
+}
+
+// The control: it does not run to the file as it was.
+theorem put_changes(ran: StructuredRegionRunsOver(no_effects(), sevens(), put(), [[b(1), b(2)]], [[b(1), b(2)]])): False {
+    let left: ([[b(1), b(2)]] = put_file(sevens(), [[b(1), b(2)]])) = put_runs_only(no_effects(), sevens(), [[b(1), b(2)]], [[b(1), b(2)]], ran);
+    let verdict: (True = False) = cong_fn<Buffers(), Bool>(λ file => buffer_byte(file, 0, 1).eq_bit(b(2)), left);
+    absurd(verdict)
+}
+
+// Past the buffer's end a store is no store: the file is as it was.
+theorem put_past(): put_file(sevens(), [[b(1)]]) = [[b(1)]] { refl }
+
+// ---------------------------------------------------------------------------
+// A load after a store reads the byte stored
+
+fn put_get() → StructuredRegion { leaf([BufferStore(output := 2, buffer := 0, index := 0, value := 1), BufferLoad(output := 3, buffer := 0, index := 0)]) }
+
+// The load's word is the store's: both name the byte at the index in the
+// file the store left. Over a fixed file the store's output is free and
+// the load reads the old byte.
+theorem get_reads_put(effects: Effects(), values: Valuation(), before, after: Buffers(),
+    ran: StructuredRegionRunsOver(effects, values, put_get(), before, after)): values(64, 3) = values(64, 2) {
+    let stored = ran.proof.left;
+    let loaded = ran.proof.right.proof.left;
+    trans(loaded.left, sym(stored.right))
+}
+
+// ---------------------------------------------------------------------------
+// A call's file is the one its callee leaves
+
+fn storer() → Function { Function(parameters := [0, 1], body := put(), result := 2) }
+fn caller() → Function { Function(parameters := [0, 1], body := Call(0, [0, 1], 2), result := 2) }
+
+theorem call_leaves_callee_file(before, after: Buffers(), i, v, result: BitVec(64),
+    ran: program_effects([caller(), storer()])(before, 1, [i, v], result, after)): after = store_byte(before, 0, i.toNat(), low_byte(v)) {
+    let outer = ran.witness;
+    let called = ran.proof.right.left;
+    let inner = called.witness;
+    let words: (words_of(inner, [0, 1]) = [i, v]) = trans(called.proof.left, ran.proof.left);
+    let at_i: (inner(64, 0) = i) = cong_fn<List<BitVec(64)>, BitVec(64)>(λ ws => ws.head_or(BitVec::zero()), words);
+    let at_v: (inner(64, 1) = v) = cong_fn<List<BitVec(64)>, BitVec(64)>(λ ws => ws.drop(1).head_or(BitVec::zero()), words);
+    let left: (after = put_file(inner, before)) = put_runs_only(no_effects(), inner, before, after, called.proof.right.left);
+    j(at_v, λ x _ => after = store_byte(before, 0, i.toNat(), low_byte(x)),
+        j(at_i, λ x _ => after = store_byte(before, 0, x.toNat(), low_byte(inner(64, 1))), left))
+}
+
+// ---------------------------------------------------------------------------
+// A program with no store runs as it computes
+
+// The byte at an index of the buffer, under a comparison with its length.
+fn peek() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(Region(Ports([]), [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)], Ports([])),
+            leaf([BufferLoad(output := 4, buffer := 0, index := 2)])),
+        result := 4)
+}
+
+theorem peek_quiet(): program_quiet([peek()]) = True { refl }
+theorem storer_stores(): program_quiet([storer()]) = False { refl }
+
+// What `peek` may return over a file, it returns with the file left as it
+// was.
+theorem peek_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64),
+    computes: program_callees_over(file, [peek()])(0, arguments, result)): program_effects([peek()])(file, 0, arguments, result, file) {
+    program_effects_quiet([peek()], trivial, file, 0, arguments, result, computes)
+}
+
+// `program_effects_quiet` asks for no store: the storing program is not one
+// it speaks of.
+// expect-error(mismatch)
+theorem storer_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64),
+    computes: program_callees_over(file, [storer()])(0, arguments, result)): program_effects([storer()])(file, 0, arguments, result, file) {
+    program_effects_quiet([storer()], trivial, file, 0, arguments, result, computes)
+}

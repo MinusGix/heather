@@ -624,9 +624,11 @@ Three things stay as they are. A buffer is a number and a list of bytes,
 and a store never changes a length, so a home's length word holds across
 stores. A store outside the buffer is no store in the meaning
 (`store_byte`), so the lowering asks what it asks of a load: the path
-knows the index below the home's length. And a function says which of
-its lent buffers it writes (`Function.writes`, empty by default), so a
-function that writes nothing has today's contract.
+knows the index below the home's length. And which of its lent buffers
+a function writes is read off the program, not declared: the buffers its
+body stores into and the ones its callees write, which is computable
+because a program's functions call only those after them. A function
+that writes nothing has today's contract.
 
 **What a caller lends is laws, not stability.** `Stack::Lends` says a
 span reads its bytes after any store the callee makes in its own room.
@@ -663,8 +665,9 @@ nobody was lent to write.
 `before`, each lent span reading its bytes of `before`, returns with its
 result, the kept registers, `WroteIn` over the spans it writes, and each
 lent span reading its bytes of the file the meaning leaves. A callee is
-handed the same spans under the same numbers (§2.3), writes no span its
-caller does not, and the lowering refuses a call that would.
+handed the same spans under the same numbers (§2.3) and writes no span
+its caller does not, by how the written set is computed, so a caller
+lends on what it was lent (`Loan::narrow`).
 
 **Inside the function compiler** the file is no longer a constant of the
 proof. What emitting proves (`EmitsIn`) gains the file before and after
@@ -764,8 +767,17 @@ Each is a PR and ends with something that runs.
     probes lend two spans of any region, one to write, and show that no
     lending has a written span starting where another does
     (`lib/_tests/std/arch/x86_64/x86_64_lending_tests.hthr`).
-  - *Step 4a-2:* FunctionIR's half: `Function.writes`, the relation that
-    threads the file, and the fixed-file relation embedded in it.
+  - *Step 4a-2, built 2026-11-11:* FunctionIR's half
+    (`lib/native/function_ir/function_ir_writes.hthr`): the relation
+    that threads the file (`StructuredRegionRunsOver`, `Function::Runs`,
+    `program_effects`, a call's `Effects` relating the file before to
+    the word and the file after), and the fixed-file relation embedded
+    in it for a program with no store (`StructuredRegion::runs_quiet`,
+    `program_effects_quiet`). *Runs:* nothing new; the probes show a
+    store running to the file with its byte set and to no other, a load
+    after a store reading the byte stored, and a caller's file being the
+    one its callee leaves
+    (`lib/_tests/native/function_ir/function_ir_writes_tests.hthr`).
   - *Step 4a-3:* the function compiler's contract over the laws with the
     file threaded, no store yet; `Source` supplies the laws. *Runs:*
     everything that runs today, its bytes unchanged.

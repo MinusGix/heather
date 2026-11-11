@@ -1,0 +1,356 @@
+// FunctionIR's meaning with the file threaded, as a relation
+// (docs/native-one-compiler-design.md §2.6).
+//
+// The relation the function compiler is proved against
+// (`StructuredRegionHoldsOver`, function_ir) reads a file that never
+// changes: a store's equation is `True` there. Here the file is state. A
+// region runs from the file `before` to the file `after`: a store sets one
+// byte (`store_byte`, as `StructuredRegion::run` does), every other node
+// holds at the file it meets and leaves it, a call is answered with a word
+// and the file it leaves (`Effects`), and a loop carries the file from
+// pass to pass.
+//
+// - `StructuredRegionRunsOver(effects, values, region, before, after)`,
+//   `Function::Runs`, `program_effects`: the relation, a function's, and a
+//   program's, each function answering its calls by the functions after
+//   it.
+// - The fixed-file relation embeds: a region with no store that holds
+//   over a file runs from that file to itself, its callees leaving the
+//   file too (`StructuredRegion::runs_quiet`, `Function::runs_quiet`,
+//   `program_effects_quiet`). So what is proved of a program through
+//   `eval` and `Computes` is a statement of this relation.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// What a call does over a file
+
+// `effects(before, f, arguments, result, after)`: function `f`, called on
+// `arguments` over the file `before`, may return `result` and leave the
+// file `after`.
+fn Effects() → Type<1> { Buffers() → Nat → List<BitVec(64)> → BitVec(64) → Buffers() → Type }
+
+fn no_effects() → Effects() { λ _ _ _ _ _ => False }
+
+// Callees that leave the file as it is, answered over it as it is at the
+// call.
+fn Effects::keeping(callees: Buffers() → Callees()) → Effects() {
+    λ before f arguments result after => callees(before)(f, arguments, result) ∧ (after = before)
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+fn Node::stores(self node: Node) → Bool { match node { BufferStore(_, _, _, _) => True, _ => False } }
+
+fn nodes_quiet(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => !node.stores() && nodes_quiet(rest) }
+}
+
+// A node over the file `before`, leaving `after`: a store sets its byte
+// and names the byte then there; any other node holds at `before` and
+// leaves it.
+fn Node::Runs(self node: Node, values: Valuation(), before, after: Buffers()) → Type {
+    match node {
+        BufferStore(output, buffer, index, value) =>
+            (after = store_byte(before, buffer, values(64, index).toNat(), low_byte(values(64, value)))) ∧
+                (values(64, output) = byte_word(buffer_byte(after, buffer, values(64, index).toNat()))),
+        _ => NodeHolds(values, node, buffers := before) ∧ (after = before),
+    }
+}
+
+fn NodesRun(nodes: List<Node>, values: Valuation(), before, after: Buffers()) → Type {
+    match nodes {
+        Nil => after = before,
+        Cons(node, rest) => Exists<Buffers()>(λ mid => node.Runs(values, before, mid) ∧ NodesRun(rest, values, mid, after)),
+    }
+}
+
+// A node that is no store runs from a file to itself where it holds.
+theorem Node::runs_quiet(self node: Node, values: Valuation(), file: Buffers()):
+    (!node.stores()).IsTrue() → NodeHolds(values, node, buffers := file) → node.Runs(values, file, file) {
+    match node {
+        BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        _ => λ _ holds => ⟨holds, refl⟩,
+    }
+}
+
+theorem nodes_run_quiet(values: Valuation(), file: Buffers(), nodes: List<Node>):
+    nodes_quiet(nodes).IsTrue() → NodesHoldOver(file, values, nodes) → NodesRun(nodes, values, file, file) {
+    match nodes {
+        Nil => λ _ _ => refl,
+        Cons(node, rest) => λ quiet holds => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            Exists(file, ⟨node.runs_quiet(values, file, both.left, holds.left), nodes_run_quiet(values, file, rest, both.right, holds.right)⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// `LoopRuns` with the file carried from pass to pass: each pass runs from
+// the file the one before left.
+fn LoopRunsOver(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat) →
+    List<BitVec(64)> → List<BitVec(64)> → Bool → Buffers() → Buffers() → Type {
+    match remaining {
+        Zero => λ state final exhausted before after => (final = state) ∧ ((exhausted = True) ∧ (after = before)),
+        Succ(rest) => λ state final exhausted before after => Exists<Valuation()>(λ values => Exists<Buffers()>(λ mid =>
+            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(Succ(rest))) ∧ (pass(values, before, mid) ∧
+                match values(1, exit).head_bit() {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                })))),
+    }
+}
+
+// Passes that leave a file make a loop that does.
+theorem loop_runs_over_quiet(pass: Valuation() → Type, over: Valuation() → Buffers() → Buffers() → Type, file: Buffers(),
+    lifts: (values: Valuation()) → pass(values) → over(values, file, file), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → LoopRuns(pass, parameters, count, exit, next, remaining, state, final, exhausted) →
+    LoopRunsOver(over, parameters, count, exit, next, remaining, state, final, exhausted, file, file) {
+    match remaining {
+        Zero => λ state final exhausted ran => ⟨ran.left, ⟨ran.right, refl⟩⟩,
+        Succ(rest) => λ state final exhausted ran => {
+            let values = ran.witness;
+            Exists(values, Exists(file, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨lifts(values, ran.proof.right.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
+                        True => (final = words_of(values, next)) ∧ (exhausted = False),
+                    }) →
+                    (match b {
+                        False => LoopRunsOver(over, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, file, file),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (file = file)),
+                    }) {
+                    False => λ later => loop_runs_over_quiet(pass, over, file, lifts, parameters, count, exit, next, rest,
+                        words_of(values, next), final, exhausted, later),
+                    True => λ done => ⟨done.left, ⟨done.right, refl⟩⟩,
+                })(ran.proof.right.right.right)⟩⟩⟩))
+        },
+    }
+}
+
+// Runs whose passes satisfy a weaker condition.
+theorem loop_runs_over_weaken(pass, weaker: Valuation() → Buffers() → Buffers() → Type,
+    implies: (values: Valuation()) → (before, after: Buffers()) → pass(values, before, after) → weaker(values, before, after),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(weaker, parameters, count, exit, next, remaining, state, final, exhausted, before, after) {
+    match remaining {
+        Zero => λ state final exhausted before after ran => ran,
+        Succ(rest) => λ state final exhausted before after ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            Exists(values, Exists(mid, ⟨held.left, ⟨held.right.left, ⟨implies(values, before, mid, held.right.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                    }) →
+                    (match b {
+                        False => LoopRunsOver(weaker, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                    }) {
+                    False => λ later => loop_runs_over_weaken(pass, weaker, implies, parameters, count, exit, next, rest,
+                        words_of(values, next), final, exhausted, mid, after, later),
+                    True => λ done => done,
+                })(held.right.right.right)⟩⟩⟩))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// A structured region's equations with the file threaded, its calls
+// answered by `effects`.
+fn StructuredRegionRunsOver(effects: Effects(), values: Valuation(), region: StructuredRegion, before, after: Buffers()) → Type {
+    match region {
+        Dataflow(body) => NodesRun(body.nodes, values, before, after),
+        Sequence(prefix, continuation) => Exists<Buffers()>(λ mid =>
+            NodesRun(prefix.nodes, values, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)),
+        Compose(prefix, continuation) => Exists<Buffers()>(λ mid =>
+            StructuredRegionRunsOver(effects, values, prefix, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)),
+        Conditional(_, condition, _, _, when_true, when_false) =>
+            match values(1, condition).head_bit() {
+                False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+            },
+        Call(callee, arguments, result) => effects(before, callee, words_of(values, arguments), values(64, result), after),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
+                values(1, exhausted).head_bit(), before, after),
+    }
+}
+
+// Whether a region stores into no buffer itself. What it calls is the
+// program's to say (`program_quiet`).
+fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_quiet(body.nodes),
+        Sequence(prefix, continuation) => nodes_quiet(prefix.nodes) && continuation.quiet(),
+        Compose(prefix, continuation) => prefix.quiet() && continuation.quiet(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.quiet() && when_false.quiet(),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+    }
+}
+
+// The fixed-file relation embeds: a region with no store that holds over
+// a file runs from that file to itself, where its callees leave the file.
+theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buffers() → Callees(), file: Buffers()):
+    region.quiet().IsTrue() → (values: Valuation()) → StructuredRegionHoldsOver(file, callees(file), values, region) →
+    StructuredRegionRunsOver(Effects::keeping(callees), values, region, file, file) {
+    match region {
+        Dataflow(body) => λ quiet values holds => nodes_run_quiet(values, file, body.nodes, quiet, holds),
+        Sequence(prefix, continuation) => λ quiet values holds => {
+            let both = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
+            Exists(file, ⟨nodes_run_quiet(values, file, prefix.nodes, both.left, holds.left),
+                continuation.runs_quiet(callees, file, both.right, values, holds.right)⟩)
+        },
+        Compose(prefix, continuation) => λ quiet values holds => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Exists(file, ⟨prefix.runs_quiet(callees, file, both.left, values, holds.left),
+                continuation.runs_quiet(callees, file, both.right, values, holds.right)⟩)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ quiet values => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match values(1, condition).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionHoldsOver(file, callees(file), values, when_false),
+                    True => StructuredRegionHoldsOver(file, callees(file), values, when_true),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(Effects::keeping(callees), values, when_false, file, file),
+                    True => StructuredRegionRunsOver(Effects::keeping(callees), values, when_true, file, file),
+                }) {
+                False => λ holds => when_false.runs_quiet(callees, file, both.right, values, holds),
+                True => λ holds => when_true.runs_quiet(callees, file, both.left, values, holds),
+            }
+        },
+        Call(_, _, _) => λ _ values holds => ⟨holds, refl⟩,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet values =>
+            loop_runs_over_quiet(λ (pass: Valuation()) => StructuredRegionHoldsOver(file, callees(file), pass, body),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(Effects::keeping(callees), pass, body, from, to),
+                file, λ pass held => body.runs_quiet(callees, file, quiet, pass, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit()),
+    }
+}
+
+// A region runs under any effects its own imply.
+theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after)):
+    (values: Valuation()) → (before, after: Buffers()) → StructuredRegionRunsOver(effects, values, region, before, after) →
+    StructuredRegionRunsOver(weaker, values, region, before, after) {
+    match region {
+        Dataflow(_) => λ values before after ran => ran,
+        Sequence(_, continuation) => λ values before after ran =>
+            Exists(ran.witness, ⟨ran.proof.left, continuation.runs_weaken(effects, weaker, implies, values, ran.witness, after, ran.proof.right)⟩),
+        Compose(prefix, continuation) => λ values before after ran =>
+            Exists(ran.witness, ⟨prefix.runs_weaken(effects, weaker, implies, values, before, ran.witness, ran.proof.left),
+                continuation.runs_weaken(effects, weaker, implies, values, ran.witness, after, ran.proof.right)⟩),
+        Conditional(_, condition, _, _, when_true, when_false) => λ values before after =>
+            match values(1, condition).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(weaker, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(weaker, values, when_true, before, after),
+                }) {
+                False => λ ran => when_false.runs_weaken(effects, weaker, implies, values, before, after, ran),
+                True => λ ran => when_true.runs_weaken(effects, weaker, implies, values, before, after, ran),
+            },
+        Call(callee, arguments, result) => λ values before after ran =>
+            implies(before, callee, words_of(values, arguments), values(64, result), after, ran),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values before after =>
+            loop_runs_over_weaken(
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
+                λ pass from to held => body.runs_weaken(effects, weaker, implies, pass, from, to, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit(), before, after),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// Called on `arguments` over the file `before`, the function may return
+// `result` and leave `after`.
+fn Function::Runs(self function: Function, effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) → Type {
+    Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧
+        (StructuredRegionRunsOver(effects, values, function.body, before, after) ∧ values(64, function.result) = result))
+}
+
+// What the functions of a program do, each answering its calls by the
+// functions after it, over the one file (`program_callees_over` with the
+// file threaded).
+fn program_effects(functions: List<Function>) → Effects() {
+    match functions {
+        Nil => no_effects(),
+        Cons(last, earlier) => λ before f arguments result after => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+            Inr(_) => program_effects(earlier)(before, f, arguments, result, after),
+        },
+    }
+}
+
+// No function of the program stores into a buffer.
+fn program_quiet(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.quiet() && program_quiet(earlier) }
+}
+
+// A function with no store that computes over a file runs from that file
+// to itself.
+theorem Function::runs_quiet(self function: Function, callees: Buffers() → Callees(), file: Buffers(), quiet: function.body.quiet().IsTrue(),
+    arguments: List<BitVec(64)>, result: BitVec(64), computes: function.Computes(callees(file), arguments, result, buffers := file)):
+    function.Runs(Effects::keeping(callees), arguments, result, file, file) {
+    Exists(computes.witness, ⟨computes.proof.left,
+        ⟨function.body.runs_quiet(callees, file, quiet, computes.witness, computes.proof.right.left), computes.proof.right.right⟩⟩)
+}
+
+// And a program none of whose functions stores: what it may return over a
+// file, it does with the file left as it was.
+theorem program_effects_quiet(functions: List<Function>): program_quiet(functions).IsTrue() → (file: Buffers()) → (f: Nat) →
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → program_callees_over(file, functions)(f, arguments, result) →
+    program_effects(functions)(file, f, arguments, result, file) {
+    match functions {
+        Nil => λ _ file f arguments result never => never,
+        Cons(last, earlier) => λ quiet file f arguments result => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            let below = λ (held: Buffers()) => program_callees_over(held, earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Computes(program_callees_over(file, earlier), arguments, result, buffers := file),
+                    Inr(_) => program_callees_over(file, earlier)(f, arguments, result),
+                }) →
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, file, file),
+                    Inr(_) => program_effects(earlier)(file, f, arguments, result, file),
+                }) {
+                Inl(_) => λ computes => {
+                    let ran = last.runs_quiet(below, file, both.left, arguments, result, computes);
+                    Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(Effects::keeping(below), program_effects(earlier),
+                        λ before g words word after kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, x),
+                            program_effects_quiet(earlier, both.right, before, g, words, word, kept.left)),
+                        ran.witness, file, file, ran.proof.right.left), ran.proof.right.right⟩⟩)
+                },
+                Inr(_) => λ earlier_returns => program_effects_quiet(earlier, both.right, file, f, arguments, result, earlier_returns),
+            }
+        },
+    }
+}
