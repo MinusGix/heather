@@ -1342,3 +1342,101 @@ theorem List::nodup_product<A, B>(self xs: List<A>, ys: List<B>):
             t.nodup_product(ys, dx.right, dy)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Repeats: the failure of `NoDup` as data, its decision, and the search for
+// two elements with one image (pigeonhole's witness, fintype_card.hthr).
+
+// A repeated element, as data: the first position whose element occurs again.
+fn List::Dup<A>(self xs: List<A>) → Type {
+    match xs { Nil => False, Cons(h, t) => Mem(h, t) ∨ t.Dup() }
+}
+
+theorem List::not_dup_of_nodup<A>(self xs: List<A>): xs.NoDup() → ¬xs.Dup() {
+    match xs {
+        Nil => λ d u => u,
+        Cons(_, t) => λ d u => match u { Inl(m) => d.left(m), Inr(u2) => t.not_dup_of_nodup(d.right, u2) },
+    }
+}
+
+// Membership and duplicate-freedom decide at a carrier with decidable equality.
+fn List::mem_dec<A: DecEq>(a: A, self xs: List<A>) → Mem(a, xs) ∨ ¬Mem(a, xs) {
+    match xs {
+        Nil => Inr(λ m => m),
+        Cons(h, t) => match A.eq_dec(a, h) {
+            Inl(e) => Inl(Inl(e)),
+            Inr(ne) => match t.mem_dec(a) {
+                Inl(m) => Inl(Inr(m)),
+                Inr(nm) => Inr(λ m => match m { Inl(e) => ne(e), Inr(m2) => nm(m2) }),
+            },
+        },
+    }
+}
+
+fn List::nodup_dec<A: DecEq>(self xs: List<A>) → xs.NoDup() ∨ xs.Dup() {
+    match xs {
+        Nil => Inl(trivial),
+        Cons(h, t) => match t.mem_dec(h) {
+            Inl(m) => Inr(Inl(m)),
+            Inr(nm) => match t.nodup_dec() {
+                Inl(d) => Inl(And(nm, d)),
+                Inr(u) => Inr(Inr(u)),
+            },
+        },
+    }
+}
+
+// A repeat among the images of a duplicate-free list is two different
+// elements with one image.
+theorem List::dup_map<A, B>(self xs: List<A>, f: A → B): xs.NoDup() → xs.map(f).Dup() →
+    Exists(λ (q: Pair<A, A>) => ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd))
+{
+    match xs {
+        Nil => λ d u => false_elim(u),
+        Cons(h, t) => λ d u => match u {
+            Inl(m) => match t.mem_map_inv(f, f(h), m) {
+                Exists(a, w) => Exists(Pair(h, a), And(λ e => d.left(rewrite(e, w.left)), sym(w.right))),
+            },
+            Inr(u2) => t.dup_map(f, d.right, u2),
+        },
+    }
+}
+
+theorem List::len_product<A, B>(self xs: List<A>, ys: List<B>): xs.product(ys).len() = xs.len() * ys.len() {
+    match xs {
+        Nil => sym(Nat::mul_left_zero(ys.len())),
+        Cons(h, t) => trans(
+            (ys.map(λ (b: B) => Pair(h, b))).len_append(t.product(ys)),
+            trans(rewrite(ys.len_map(λ (b: B) => Pair(h, b)), rewrite(t.len_product(ys), refl)),
+                trans(Nat::add_comm(ys.len(), t.len() * ys.len()),
+                    trans(cong_fn(λ (n: Nat) => n + ys.len(), Nat::mul_comm(t.len(), ys.len())),
+                        Nat::mul_comm(ys.len(), Succ(t.len())))))),
+    }
+}
+
+// The first two elements of a list with one image, searched for.
+fn List::collision<A, B: DecEq>(self xs: List<A>, f: A → B) → Option<Pair<A, A>> {
+    match xs {
+        Nil => None,
+        Cons(h, t) => match t.find(λ (a: A) => or_bit(B.eq_dec(f(h), f(a)))) {
+            Some(a) => Some(Pair(h, a)),
+            None => t.collision(f),
+        },
+    }
+}
+
+theorem List::collision_sound<A, B: DecEq>(self xs: List<A>, f: A → B, q: Pair<A, A>):
+    xs.NoDup() → xs.collision(f) = Some(q) → ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd)
+{
+    match xs {
+        Nil => λ d e => Option::none_ne_some(q, e, ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd)),
+        Cons(h, t) => λ d => (match fd: t.find(λ (a: A) => or_bit(B.eq_dec(f(h), f(a)))) {
+            Some(a) => λ e => {
+                let found = t.find_sound(λ (a: A) => or_bit(B.eq_dec(f(h), f(a))), a, fd);
+                j(Option::some_inj(Pair(h, a), q, e), λ r _ => ¬(r.fst = r.snd) ∧ f(r.fst) = f(r.snd),
+                    And(λ same => d.left(rewrite(same, found.left)), or_bit_reflects(B.eq_dec(f(h), f(a))).left(found.right)))
+            },
+            None => λ e => t.collision_sound(f, q, d.right, e),
+        }),
+    }
+}

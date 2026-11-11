@@ -57,3 +57,25 @@ theorem Fin::len_all(n: Nat): Fin::all(n).len() = n {
         Succ(k) => cong_fn(λ (m: Nat) => Succ(m), trans(Fin::all(k).len_map(λ (i: Fin(k)) => Fin::succ(i)), Fin::len_all(k))),
     }
 }
+
+// Equality of indices decides, by recursion on the length.
+fn Fin::eq_dec(n: Nat) → (a, b: Fin(n)) → a = b ∨ ¬(a = b) {
+    match n {
+        Zero => λ a b => match a {},
+        Succ(k) => λ a b => match a {
+            FZ => match b {
+                FZ => Inl(refl),
+                FS(j) => Inr(Fin::zero_ne_succ(j)),
+            },
+            FS(i) => match b {
+                FZ => Inr(λ e => Fin::zero_ne_succ(i, sym(e))),
+                FS(j) => match Fin::eq_dec(k, i, j) {
+                    Inl(e) => Inl(cong_fn(λ (x: Fin(k)) => Fin::succ(x), e)),
+                    Inr(ne) => Inr(λ e => ne(Fin::succ_inj(i, j, e))),
+                },
+            },
+        },
+    }
+}
+
+instance(n: Nat) DecEq<Fin(n)> { eq_dec := Fin::eq_dec(n) }
