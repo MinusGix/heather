@@ -220,6 +220,10 @@ optimization that uses it is proved once under it as a hypothesis.
   a program's `main` and an export are its cases. The first joint is
   built: a program's call of a `runtime fn` is a CALL of the function
   compiler's code in the same file, proved from that function's contract.
+  Of the second, the function compiler's half is built: a function reads
+  a buffer it is lent through a home (two of its values, address and
+  length), under a comparison the path knows, and its contract says what
+  it was lent (§2.5).
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -249,6 +253,17 @@ memory:
 - **An access the machine may refuse is guarded by a comparison the path
   knows**, the default that always compiles; a fact (`InBounds`) removes
   the guard as an optimization (§2.3).
+
+Built for reads in the function compiler (2026-11-11,
+`function_ir_lower_reads`): the home is two values of the scope, carried
+by loops and handed on by calls; the guard is the conditional the source
+already has, known in the arm it selects, so the lowering emits no check
+of its own. One thing the list above leaves open is settled in
+`docs/native-one-compiler-design.md` §2.3: the lowered code is handed an
+address as a word, so "no meaning mentions an address" needs the
+evaluation not to depend on that word. An export gets this from its
+agreement equation over an open word; a program's tree needs it as a
+theorem about placeless functions.
 
 ---
 

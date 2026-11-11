@@ -1,7 +1,8 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. U1 and U2 are built (§3). Owner:
+export"); this note scopes it. U1, U2 and the function compiler's half of
+U3 are built (§3). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -140,6 +141,88 @@ buffers as well as words. Then:
 - `write-elf`'s own byte-node code is retired in favour of the shared
   lowering once that reads and writes.
 
+**How, settled against the code (2026-11-11): the function compiler.**
+
+- *The meaning.* A program's buffers are numbered, and every function of
+  it reads them by the same numbers. `BufferLoad(out, b, i)` means the
+  byte of buffer `b` at `i`, zero past its end
+  (`StructuredRegionHoldsOver`, `Function::Computes(…, buffers := …)`,
+  `program_callees_over`; the evaluator is `program_eval_over`, tied to
+  the relation by `program_eval_reads`). A function says how many buffers
+  it takes (`Function.lent`), and buffer `k` arrives as its parameters
+  `2k` and `2k + 1`, address then length, ordinary words. The meaning
+  reads neither as an address.
+- *A home is two values of the scope* (`Lent`, `function_ir_lower_reads`):
+  the ids that hold a buffer's address and its length. A function's scope
+  starts with its parameters' (`Function::homes`). A loop carries a home
+  as state its passes hand on as it came: which state positions those are
+  is an untrusted search (`carry_homes`) held to a check
+  (`carried_sound`), and after the loop the home is the loop's outputs
+  (`StructuredRegion::lends`), so a second loop over the same buffer
+  finds it. A call hands the callee its count of buffers, their homes its
+  first arguments (`args_lend`).
+- *The bound is what the path knows.* The arm of a conditional taken where
+  its bit is set knows the bit (`Known::Truth`). A load is accepted when
+  some bit the path knows is the comparison `index < length` of a home of
+  its buffer, folded at the branch (`File::bounded`), and refused
+  otherwise. No check is emitted and no fact is asked of a front end: this
+  is the exports note's default that always compiles (§5 there), and a
+  proved bound (`InBounds`) is the later optimisation.
+- *The code.* A load is a leaf of its own: the base moved to the
+  placement's register, the index added, a zero-extending byte load over
+  it (`File::load_at`). Leaves that read no buffer go through the lowering
+  unchanged (`nodes_pure`), so that proof did not move.
+- *The contract.* What a program lends is a `Lending`: how many buffers
+  each function takes, where each lies, and its bytes. A function is
+  entered with the homes of the buffers it takes as its first arguments
+  and every buffer lent (`Stack::CalleeLent`: `Stack::Lends`, the bytes
+  read at the address whatever the call stores below where it is entered).
+  `Site::CallsLent` is every function meeting that. The contract without
+  buffers is its instance at `Lending::none()` (`Site::calls_of_lent`), so
+  every program that lends nothing is as it was, bytes included, and the
+  old entry points are the new ones at an empty table.
+- *The theorems.* `lower_program_lent_correct`, and what a caller cites,
+  `compiled_returns_lent`: with the buffers lent the code returns what the
+  program evaluates the function to over them.
+- *Probes* (`lib/_tests/native/function_ir/function_ir_lower_reads_tests`):
+  a byte under its bound with its code spelled, a loop summing a buffer,
+  a call handing its buffer on, and eight refusals, each a theorem by
+  evaluation.
+
+Limits kept, each in `issues/function-ir-buffer-state-edges.md`: a loop
+inside a loop that carries a home (the outer pass must hand on the
+parameter itself, and after the inner loop the home is the inner loop's
+outputs), and the comparison must be the one folded at the branch that
+guards the load.
+
+**What a program's call needs, and the question it raises.** A program's
+buffers are static, so its call of a function that takes buffers supplies
+the homes itself: the address a literal, the length the capacity, then the
+words the region names. Two things follow.
+
+- *A call reads the buffers as they are.* A program's region answers a
+  `Call` by `call: Answers()`, a function of the callee and its words
+  (`StructuredRegion::run`, `Source::denote` at
+  `program_eval(src.functions)`). With buffers the answer depends on what
+  they hold at the call, so `run` asks `program_eval_over` of its own
+  buffers. This is also where U5 ends: a body with effects calls
+  functions that read the state it has reached.
+- *No meaning mentions an address* (vision §2.5), and the code passes one.
+  The function's theorem is about the evaluation at the words it was
+  entered with, the address among them, and a function that returned its
+  buffer's address would compile. For an export this costs nothing: the
+  certificate's last equation is the compiler's by `refl` over an open
+  address word. A program's tree has no address to quantify, so it
+  evaluates at address zero, and the compile needs the two evaluations
+  equal. **Recommended:** a check and one theorem. A function is
+  *placeless* when a base is read only as a home: by a load, as a call's
+  home argument, as loop state carried unchanged. The check walks the same
+  scopes the lowering does; the theorem says a placeless program's
+  evaluation does not depend on the address words. The alternative, a
+  premise each program discharges from its functions' agreement
+  equations, puts a proof in every certificate that the generator can
+  give once.
+
 ### 2.4 A procedure is a function whose body has effects
 
 The last joint, and the largest. `Stmt` becomes the body language of a
@@ -191,10 +274,19 @@ Each is a PR and ends with something that runs.
   procedures. *Runs:* tr with each byte through a called function, beside
   GNU's; a tool calling a `runtime fn` that calls another; a procedure and
   a function in one file (`crates/cli/tests/native_tools.rs`).
-- **U3. Buffers read through one home.** The function compiler reads a
-  lent span under a path-known comparison; `Call` passes buffers; `rt`
-  lowers `Get` and `Len`. *Runs:* a tool that reads its input into a buffer
-  and calls a compiled loop over it; the scanner's loop is the customer.
+- **U3. Buffers read through one home**, in three steps.
+  - **U3a. The function compiler reads a lent span.** *Built 2026-11-11*
+    (§2.3): homes, the path-known bound, the load, the contract with
+    lending (`function_ir_lower_reads.hthr`, `function_ir_lower_calls.hthr`),
+    `lower_program_lent_correct` and `compiled_returns_lent`. *Runs:* the
+    probes' code by evaluation; no process yet, which is U3b's.
+  - **U3b. A program's `Call` passes buffers.** `run` answers a call over
+    its buffers; placeless functions; the call's code supplies the static
+    homes, and `Lends` is discharged from the data region lying below the
+    stack. *Runs:* a tool that reads its input into a buffer and calls a
+    compiled loop over it.
+  - **U3c. `rt` lowers `Get` and `Len`**, so the loop is a `runtime fn`;
+    the scanner's loop is the customer.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
   `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
   its byte map as a called function.
@@ -204,7 +296,7 @@ Each is a PR and ends with something that runs.
   scanner's loop linked into Rust
   (`docs/native-library-exports-design.md` §6, §10 R3).
 
-E needs only U1 and U3. It is last because that is the order asked for;
+E needs only U1, U3a and U3c. It is last because that is the order asked for;
 it can move up without changing any other round.
 
 ## 4. What is not unified, on purpose
