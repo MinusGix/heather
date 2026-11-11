@@ -83,6 +83,90 @@ impl Relations<'_> {
         goal: &Type,
         premise: Option<super::Premise<'_>>,
     ) -> Result<Option<RelationRewrite<'a>>, super::Miss> {
+        self.step_or(cx, h, proof, proof_ty, goal, premise, false)
+    }
+
+    /// The step an *equation* gives when it is read as a step of `RelId`,
+    /// the identity relation: what reaches an instance under a λ, where the
+    /// equation form's transport does not (`issues/simp-under-binders.md`).
+    /// Heather has no function extensionality, so the λ is crossed as any
+    /// relation crosses it, by its consumer's evidence about
+    /// `Pointwise(RelId)`. `proof_ty` and `goal` are the `RelId` forms
+    /// ([`Self::as_identity`]).
+    pub(super) fn identity_step_or<'a>(
+        &'a self,
+        cx: &'a Cx,
+        h: &Expr,
+        proof: &Term,
+        proof_ty: &Type,
+        goal: &Type,
+        premise: Option<super::Premise<'_>>,
+    ) -> Result<Option<RelationRewrite<'a>>, super::Miss> {
+        self.step_or(cx, h, proof, proof_ty, goal, premise, true)
+    }
+
+    /// Does `goal` hold a term below a binder, where only a walk reaches?
+    pub(super) fn below_binders(&self, cx: &Cx, goal: &Type) -> bool {
+        let mut nodes = GoalNodes { terms: Vec::new(), scopes: Vec::new() };
+        let mut seen = std::collections::HashSet::new();
+        match goal {
+            // An equation's sides, which the walk meets as `RelId`'s.
+            Type::Id { lhs, rhs, .. } => {
+                nodes.walk(self, cx, lhs, 0, &mut seen);
+                nodes.walk(self, cx, rhs, 0, &mut seen);
+            }
+            _ => nodes.types(self, cx, goal, &mut seen),
+        }
+        !nodes.scopes.is_empty()
+    }
+
+    /// `ty`, an equation `a = b` below any binders, as `RelId<T>(a, b)`
+    /// below the same binders: the same statement, by unfolding `RelId`.
+    /// `None` for anything else, or where `relation` is not imported.
+    pub(super) fn as_identity(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+        match self.whnf(cx, ty, span).ok()? {
+            Type::Pi { dom_level, cod_level, dom, cod } => {
+                let mut below = cx.clone();
+                below.push(format!("_{}", cx.names.len()), (*dom).clone(), dom_level.clone());
+                let cod = Rc::new(self.as_identity(&below, &cod, span)?);
+                Some(Type::Pi { dom_level, cod_level, dom, cod })
+            }
+            Type::Id { level, ty: carrier, lhs, rhs } => {
+                let mut here = cx.clone();
+                let depth = here.names.len();
+                here.tyvars.push(TyVar { name: "__identity_carrier".into(), ty: (*carrier).clone(), level: level.clone(), depth });
+                for (name, side) in [("__identity_left", lhs), ("__identity_right", rhs)] {
+                    here.aliases.push(Rc::new(Alias {
+                        name: name.into(),
+                        depth,
+                        term: side,
+                        ty: (*carrier).clone(),
+                        level: level.clone(),
+                        skel: None,
+                        spliced: None,
+                        shifted: Default::default(),
+                    }));
+                }
+                let source = "fn generated(x: relation::RelId<__identity_carrier>(__identity_left, __identity_right)) -> Type { Type }";
+                let mut file = parse_file(source).ok()?;
+                let Some(Item::Decl(d)) = file.items.pop() else { return None };
+                self.generated_scope(|e| e.elab_ty(&here, &d.params[0].ty)).ok().map(|(ty, _)| ty)
+            }
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn step_or<'a>(
+        &'a self,
+        cx: &'a Cx,
+        h: &Expr,
+        proof: &Term,
+        proof_ty: &Type,
+        goal: &Type,
+        premise: Option<super::Premise<'_>>,
+        identity: bool,
+    ) -> Result<Option<RelationRewrite<'a>>, super::Miss> {
         let mut pcx = cx.clone();
         let mut k = 0u32;
         let mut telescope = Vec::new();
@@ -93,7 +177,7 @@ impl Relations<'_> {
                 // A relation that unfolds to equality of its own two sides
                 // (`RelId(a, b)`, `Steps(R, 0, a, b)`) is that equality, and
                 // rewrites as one: one transport, no evidence.
-                if matches!(&unfolded, Type::Id { lhs, rhs, .. } if *lhs == rel.left && *rhs == rel.right) {
+                if !identity && matches!(&unfolded, Type::Id { lhs, rhs, .. } if *lhs == rel.left && *rhs == rel.right) {
                     return Ok(None);
                 }
                 break rel;
@@ -114,7 +198,9 @@ impl Relations<'_> {
             _ => unreachable!("a relation is an `El` or a family"),
         };
         if k == 0 {
-            return Ok(RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds).map(Some)?);
+            let mut step = RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds)?;
+            step.identity = identity;
+            return Ok(Some(step));
         }
         if matches!(&*pattern.left, Term::Var(x) if x.0 < k) {
             return Err(ElabError::Elab {
@@ -197,6 +283,11 @@ impl Relations<'_> {
                 [&instance.left, &instance.right, &term].iter().all(|t| relocated(t, b, depth).is_some())
             })
             .expect("every term is scoped at its own depth");
+        let shown = (base > 0)
+            .then(|| Some((self.spell_term_clean(&here, &instance.left)?, self.spell_term_clean(&here, &instance.right)?)))
+            .flatten()
+            // The walk's own names for the binders it is below, as `x0`.
+            .map(|(l, r)| (l.replace("__bound_", "x"), r.replace("__bound_", "x")));
         let to_root = |t: &Term| crate::strengthen_tm(&cx.gamma, t, depth);
         let (Some(head), Some(carrier)) =
             (to_root(&instance.head), crate::strengthen_ty(&cx.gamma, &instance.carrier, depth))
@@ -218,7 +309,10 @@ impl Relations<'_> {
             level: instance.level,
         };
         let proof = Rc::unwrap_or_clone(at_base(&term));
-        Ok(RelationRewrite::new(self, cx, h.span, relation, proof, base, holds).map(Some)?)
+        let mut step = RelationRewrite::new(self, cx, h.span, relation, proof, base, holds)?;
+        step.identity = identity;
+        step.shown = shown;
+        Ok(Some(step))
     }
 }
 
@@ -552,6 +646,12 @@ pub(super) struct RelationRewrite<'a> {
     /// (a simplifier's step either fires whole or not at all): the
     /// statements that were missing.
     pub(super) refused: Option<Vec<String>>,
+    /// The rewrite's own relation is `RelId` (an equation walked as a
+    /// relation step): every context preserves it, with no evidence.
+    identity: bool,
+    /// The instance's two sides as spelled where it was found, for one
+    /// found under a binder it mentions: what a route prints.
+    pub(super) shown: Option<(String, String)>,
 }
 
 impl<'a> RelationRewrite<'a> {
@@ -598,6 +698,8 @@ impl<'a> RelationRewrite<'a> {
             serial: 0,
             goals: 0,
             refused: None,
+            identity: false,
+            shown: None,
         };
         rw.carrier_name = rw.fresh();
         rw.cx.tyvars.push(TyVar {
@@ -1081,7 +1183,7 @@ impl<'a> RelationRewrite<'a> {
         // `Respects2` is over `R` alone: an argument a context carried to
         // another relation crosses only unary evidence.
         let own = changed.iter().all(|&i| nodes[i].rel().is_none());
-        if n >= 2 && changed[0] >= n - 2 && !pointwise && own {
+        if n >= 2 && changed[0] >= n - 2 && !pointwise && own && !self.identity {
             let op = prefix(t, 2);
             let binary = self.lookup_here(&Shape::Binary, None, &op, None)?;
             // A binary operation with only its last argument changed may have
@@ -1524,7 +1626,7 @@ impl<'a> RelationRewrite<'a> {
         };
         let (op_ty, op_level) = self.statement(&operation)?;
         // An argument changed by `=` crosses every context (§11.6).
-        let identity = matches!(shape, Shape::Unary) && input.is_some_and(|r| r.identity);
+        let identity = matches!(shape, Shape::Unary) && input.map_or(self.identity, |r| r.identity);
         let found = if !self.checks(context, &op_ty, &op_level) {
             Lookup::Untyped
         } else if let Some((d, l)) = target {

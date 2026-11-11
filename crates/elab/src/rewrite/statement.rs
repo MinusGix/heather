@@ -5,9 +5,10 @@
 //! operations that carry congruence evidence. A statement's contexts are
 //! type formers, and each has one congruence for `↔` that `logic` proves
 //! once: `iff_and_congr`, `iff_or_congr`, `iff_imp_congr`, `iff_not_congr`,
-//! `iff_iff_congr`, and `iff_forall_congr` below a `∀`. So this walk is over
+//! `iff_iff_congr`, and `iff_forall_congr` and `iff_exists_congr` below a
+//! quantifier. So this walk is over
 //! the statement: the goal itself, the operands of `∧`, `∨`, `↔`, `¬` and a
-//! non-dependent `→`, and the body of a `∀`, one binder down.
+//! non-dependent `→`, and the body of a `∀` or an `∃`, one binder down.
 //!
 //! Each position is matched against the law's left side on its own, so two
 //! positions may be two instances (nothing is abstracted, as a `J` motive
@@ -160,6 +161,32 @@ impl Statements<'_> {
         // is that relation where it is written.
         let _ = cx;
         None
+    }
+
+    /// `ty` as `Exists<A>(λ x. B(x))`: the binder's type and level, and the
+    /// body as a code, one binder down. `record Exists<A>(P: A → Type)
+    /// { witness: A, proof: P(witness) }` lowers to its tag, then its
+    /// fields, `Σ(tag). Σ(A). Σ(El(P(witness))). Unit`, with the predicate
+    /// applied and not contracted.
+    fn existential(&self, cx: &Cx, ty: &Type) -> Option<(Rc<Type>, Level, Rc<Term>)> {
+        let inline = self.inline(cx, ty)?;
+        if !self.display_tag_of(&inline).is_some_and(|ind| matches!(ind.name.as_str(), "Exists" | "logic::Exists")) {
+            return None;
+        }
+        let Type::Sigma { fst: tag, fst_level: tag_level, snd: fields, .. } = &inline else { return None };
+        let Type::Sigma { fst: witness, fst_level: dom_level, snd: rest, .. } = &**fields else { return None };
+        let Type::Sigma { fst: proof, .. } = &**rest else { return None };
+        let Type::El { tm, .. } = &**proof else { return None };
+        let (predicate, at) = crate::spelling::app_of(tm)?;
+        if !matches!(&**at, Term::Var(x) if x.0 == 0) {
+            return None;
+        }
+        let mut below = cx.clone();
+        below.push("_".into(), (**tag).clone(), tag_level.clone());
+        let dom = crate::strengthen_ty(&below.gamma, witness, 1)?;
+        below.push("_".into(), (**witness).clone(), dom_level.clone());
+        let Term::Lam { body, .. } = crate::strengthen_tm(&below.gamma, predicate, 2)? else { return None };
+        Some((Rc::new(dom), dom_level.clone(), body))
     }
 
     /// `ty` as `A ∧ B`, `A ∨ B` or `A ↔ B`, with its operands.
@@ -324,7 +351,20 @@ impl Walk<'_, '_, '_> {
                 let (pa, pb) = (self.operand(dom, dom_level, premise), self.operand(&conclusion, cod_level, concluded));
                 return self.congruence(ty, lvl, &format!("iff_imp_congr({pa}, {pb})"));
             }
-            return self.forall(ty, lvl, below, dom_level, cod_level, dom, cod);
+            return self.quantifier(ty, lvl, below, dom_level, cod_level, dom, cod, false);
+        }
+        if let Some((dom, dom_level, body)) = self.statements().existential(&self.cx, ty) {
+            // The predicate's body is a code at `Ty l`: a statement at `l`.
+            let mut below = self.cx.clone();
+            below.push(self.binder(), (*dom).clone(), dom_level.clone());
+            let oracle = self.e.semantic_oracle();
+            let Ok((Type::Ty(body_level), _)) =
+                heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &below.gamma, &body, self.e.policy.fuel)
+            else {
+                return Ok(None);
+            };
+            let body_ty = Type::El { level: body_level.clone(), tm: body };
+            return self.quantifier(ty, lvl, below, &dom_level, &body_level, &dom, &body_ty, true);
         }
         // `¬P`: a call of `Not` as written, and not a definition that
         // unfolds to one.
@@ -339,9 +379,10 @@ impl Walk<'_, '_, '_> {
         Ok(None)
     }
 
-    /// `(x: A) → B(x)` with `B` rewritten one binder down.
+    /// `(x: A) → B(x)`, or `Exists(λ x. B(x))` when `exists`, with `B`
+    /// rewritten one binder down.
     #[allow(clippy::too_many_arguments)]
-    fn forall(
+    fn quantifier(
         &mut self,
         ty: &Type,
         lvl: &Level,
@@ -349,7 +390,8 @@ impl Walk<'_, '_, '_> {
         dom_level: &Level,
         cod_level: &Level,
         dom: &Rc<Type>,
-        cod: &Rc<Type>,
+        cod: &Type,
+        exists: bool,
     ) -> R<Option<Changed>> {
         // A law is read again one binder down; a leaf is told the depth.
         let deeper = match &self.by {
@@ -396,6 +438,15 @@ impl Walk<'_, '_, '_> {
         };
         let (Some(p), Some(q)) = (predicate(self, before), predicate(self, after)) else { return Ok(None) };
         let h = self.alias(pointwise, pointwise_ty, level);
+        if exists {
+            // What the goal becomes is the former at the new predicate, as
+            // the elaborator writes it.
+            let source = format!("fn generated(x: Exists({q})) -> Type {{ Type }}");
+            let Ok(mut file) = parse_file(&source) else { return Ok(None) };
+            let Some(Item::Decl(d)) = file.items.pop() else { return Ok(None) };
+            let Ok((to, _)) = self.e.generated_scope(|e| e.elab_ty(&self.cx, &d.params[0].ty)) else { return Ok(None) };
+            return Ok(self.congruence(ty, lvl, &format!("iff_exists_congr({p}, {q}, {h})"))?.map(|c| Changed { to, ..c }));
+        }
         // The congruence states its right side as `(x: A) → Q(x)` at the
         // predicate `Q`, a β-redex in the body: what the goal becomes is
         // the body as rewritten.
@@ -476,6 +527,9 @@ impl Walk<'_, '_, '_> {
             return Ok(None);
         }
         let Some((_, iff_level)) = self.infer(&iff) else { return Ok(None) };
+        // The right side as its declaration's reference, where the law's
+        // own type had it lowered: what a code of it is read from.
+        let to = crate::gendefs::GeneratedDefs(self.e).respell_ty_deep(&self.cx, &to, 0).unwrap_or(to);
         let sides = (self.e.display_type(&self.cx, &from), self.e.display_type(&self.cx, &to));
         self.first.get_or_insert(sides);
         Ok(Some(Changed { to, iff, iff_ty, iff_level }))

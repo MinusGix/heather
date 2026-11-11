@@ -6,7 +6,7 @@
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
 import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
-import simp_laws; import simp;
+import simp_laws; import simp; import list_pointwise;
 
 // ---------------------------------------------------------------------------
 // Equations: both sides normalised, the goal closed where they meet.
@@ -126,11 +126,34 @@ theorem no_laws(a: Nat): a + 0 = a { simp_only() }
 // expect-error: `a` is not a law
 theorem not_a_law(a: Nat): a + 0 = a { simp_only(a) }
 
-// An instance under a binder is not reached by an equation
-// (issues/simp-under-binders.md): the route says no law fired.
-// expect-error: route: no law fired
+// An instance under a λ (docs/simp-design.md §13): the equation is walked
+// as a step of the identity relation, and the λ is crossed by its
+// consumer's pointwise evidence (`list_pointwise`), since there is no
+// function extensionality to cross it by.
 theorem under_a_binder<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) ++ Nil).len()) = xs.map(λ x => f(x).len()) {
     simp_only(List::append_nil)
+}
+
+theorem under_a_filter<A>(xs: List<List<A>>, ys: List<A>):
+    xs.filter(λ x => (x ++ Nil).len().leb((ys ++ Nil).len())).len() = xs.filter(λ x => x.len().leb(ys.len())).len()
+{
+    simp_only(List::append_nil)
+}
+
+theorem under_a_count<A>(xs: List<List<A>>, ys: List<A>): xs.count(λ x => (x ++ Nil).len().leb(ys.len())) + 0 = xs.count(λ x => x.len().leb(ys.len())) {
+    simp_only(List::append_nil)
+}
+
+// The route spells the instance where it was found.
+// expect-error: 1. `List::append_nil`: `f(x0) ++ []` ⟶ `f(x0)`
+theorem under_a_binder_route<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) ++ Nil).len()).len() = 0 {
+    simp_show(List::append_nil)
+}
+
+// A consumer with no pointwise evidence is named.
+// expect-error: PreservesRelation(Pointwise
+theorem under_a_binder_no_evidence<A>(xs: List<List<A>>): xs.foldr(λ x n => (x ++ Nil).len() + n, 0) = xs.foldr(λ x n => x.len() + n, 0) {
+    simp_show(List::append_nil)
 }
 
 // A statement that is not a relation application gives the relation no
@@ -310,8 +333,26 @@ register def simp_tests_and_comm: SimpSet = simp_set("simp_tests::and_comm", [na
 // expect-error: rewriting its own statement loops
 theorem simp_tests_and_comm_checked(): True { by simp_check([simp_tests_and_comm]) }
 
-// An existential's body is not reached yet (issues/simp-under-binders.md).
-// expect-error: route: no law fired
-theorem below_exists<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys)) {
+// Below an `∃`: the predicate's body is a statement one binder down.
+theorem below_exists<A>(xs, ys: List<A>, w: Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys))): Exists(λ (a: A) => Mem(a, xs ++ ys)) {
+    simp_only(List::mem_append_iff, then := w)
+}
+
+theorem below_exists_both<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) ↔ Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys)) {
+    simp_only(List::mem_append_iff)
+}
+
+theorem equation_below_exists<A>(xs: List<A>, R: Type): R ∧ Exists(λ (a: A) => Mem(a, xs ++ Nil)) ↔ R ∧ Exists(λ (a: A) => Mem(a, xs)) {
+    simp_only(List::append_nil)
+}
+
+theorem below_two_exists<A>(xs, ys: List<A>, w: Exists<A>(λ (a: A) => Exists<A>(λ (b: A) => a = b ∧ (Mem(b, xs) ∨ Mem(b, ys))))):
+    Exists<A>(λ (a: A) => Exists<A>(λ (b: A) => a = b ∧ Mem(b, xs ++ ys)))
+{
+    simp_only(List::mem_append_iff, then := w)
+}
+
+// expect-error: 1. `List::mem_append_iff`: `Mem(x, xs ++ ys)` ⟶ `Or<Mem(x, xs), Mem(x, ys)>`
+theorem below_exists_route<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → False {
     simp_show(List::mem_append_iff)
 }
