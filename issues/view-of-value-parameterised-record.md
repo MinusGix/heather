@@ -1,6 +1,6 @@
 ---
 title: A view of Exists(P) does not present its predicate
-status: open
+status: closed
 labels: [tactics,host]
 area: tactics
 created: 2026-11-11
@@ -33,3 +33,7 @@ Done when
         Exists(λ (a: A) => Mem(a, xs ++ (ys ++ Nil))) ↔ Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys)) { by simp() }
 
 closes.
+
+## Log
+
+- 2026-11-11: Fixed: `view_instance` (`crates/elab/src/host.rs`) reads a value argument the unifier leaves unsolved where the template applies it (`applied_values`: the template's `El(?j(a))` against the type's `El(F(a))` at the same position of the lowering, `F` strengthened past the binders crossed), and keeps the conversion check of the template at what was read. The done-when theorem is the probe `defaults_below_exists` in `lib/_tests/std/tactic/simp_tests.hthr`.

@@ -572,17 +572,27 @@ is crossed its own way.
   `RelId` with no evidence; the λ's consumer needs
   `PreservesRelation(Pointwise(RelId), RelId, λ f => xs.map(f))`, an
   `evidence theorem` beside the function. `lib/std/data/list_pointwise.hthr`
-  has it for `map`, `filter` and `count`, each with the lemma a proof cites
-  (`List::map_ext`). A consumer without it is named in the report's blocked
-  line, with the statement it needs.
+  has it for `map`, `filter`, `count`, `foldr`, `foldl`, `any_bit`,
+  `all_bit`, `find`, `split_by` and `update`, each with the lemma a proof
+  cites (`List::map_ext`); a step of two arguments (a fold's) is related by
+  `Pointwise(Pointwise(RelId))` and crossed one binder at a time.
+  `big_operator` has it for `∑`/`∏` along the carrier's relation
+  (`range_pointwise`) and along `=` (`range_pointwise_eq`). A consumer
+  without it is named in the report's blocked line, with the statement it
+  needs.
 
 The route spells an instance where it was found, with the walk's name for
 the binder (`f(x0) ++ []`).
 
-Gaps left: `by simp()` does not find the default sets of types that occur
-only inside an `∃`, because a view of `Exists(P)` does not present `P`
-(`issues/view-of-value-parameterised-record.md`; `simp_only`, `extra :=`
-and `simp_with` are unaffected); a side condition of a law fired under a
-binder is not discharged there; the evidence exists for three list
-functions, and each further consumer (`foldr`, `any`, a `∑`'s at `=`) is
-one lemma.
+`by simp()` finds the default sets of types that occur only inside an
+`∃`: the host's view of a value-parameterised record reads a value
+argument the unifier leaves unsolved where the template applies it
+(`El(?P(witness))` against `El((λ x => …)(witness))`), so `Exists(P)` views
+as `Exists` with `A` and `P`, and `P` as a λ that `Open` enters.
+
+Gaps left: a side condition of a law fired under a binder is not
+discharged there; each further consumer of a λ is one lemma and one
+evidence theorem; and a call computed at a constructor can leave its
+recursive call in no surface spelling (`foldl`, `range`), where a later law
+written over the call does not match
+(`issues/simp-unfolded-call-loses-spelling.md`).
