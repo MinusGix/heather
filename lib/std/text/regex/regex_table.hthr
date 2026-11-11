@@ -228,7 +228,7 @@ fn Table::row_ok(self T: Table, row: Row) → Bool {
 }
 
 fn Table::check(self T: Table, r: Regex) → Bool {
-    T.rows.nth(0).holds(λ row => row.expr.eqb(r.simp())) && T.rows.all_bit(λ row => T.row_ok(row))
+    T.rows.nth(0).holds(λ row => row.expr.eqb(r.simplify())) && T.rows.all_bit(λ row => T.row_ok(row))
 }
 
 // What a row number says about its state, by the row found there.
@@ -305,15 +305,15 @@ theorem Table::step_label(self T: Table, ok: T.rows.all_bit(λ row => T.row_ok(r
 
 // A table that passes the check accepts the expression's language.
 theorem Table::check_accepts(self T: Table, r: Regex, ok: T.check(r) = True, w: List<Nat>): T.dfa().run(w) = True ↔ r.Denotes(w) {
-    let parts = T.rows.nth(0).holds(λ row => row.expr.eqb(r.simp())).and_true_parts(T.rows.all_bit(λ row => T.row_ok(row)), ok);
-    match T.rows.nth(0).holds_sound(λ row => row.expr.eqb(r.simp()), parts.left) {
+    let parts = T.rows.nth(0).holds(λ row => row.expr.eqb(r.simplify())).and_true_parts(T.rows.all_bit(λ row => T.row_ok(row)), ok);
+    match T.rows.nth(0).holds_sound(λ row => row.expr.eqb(r.simplify()), parts.left) {
         ⟨row, ⟨e0, h0⟩⟩ => iff_trans(
             T.dfa().residual(λ s u => T.Label(s, u),
                 λ s => T.accept_label(parts.right, s, T.rows.nth(s), refl),
                 λ s c u => T.step_label(parts.right, s, c, u, T.rows.nth(s), refl),
                 w, 0),
             iff_trans(T.label_some(0, w, row, e0),
-                iff_trans(Regex::denotes_eq(row.expr, r.simp(), w, row.expr.eqb_sound(r.simp(), h0)), r.simp_same()(w)))),
+                iff_trans(Regex::denotes_eq(row.expr, r.simplify(), w, row.expr.eqb_sound(r.simplify(), h0)), r.simplify_same()(w)))),
     }
 }
 
@@ -383,6 +383,6 @@ fn Regex::row_of(bs: List<Nat>, states: List<Regex>, q: Regex) → Row {
 // The table of `r`, exploring at most `fuel` states.
 fn Regex::table(self r: Regex, fuel: Nat) → Table {
     let bs = r.cuts(Nil);
-    let states = Regex::explore(fuel, Cons(0, bs), [r.simp()], 0);
+    let states = Regex::explore(fuel, Cons(0, bs), [r.simplify()], 0);
     Table(bs, states.map(λ q => Regex::row_of(bs, states, q)))
 }

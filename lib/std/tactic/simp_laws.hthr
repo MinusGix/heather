@@ -1,0 +1,56 @@
+// What `simp` (lib/std/tactic/simp.hthr) reads: its sets of laws.
+//
+// A set is a registered value (`register def …: SimpSet = …;`,
+// docs/registered-values-design.md) written in the module that owns the
+// facts, with each law named by `name_of`, so a name is checked where the
+// lemma is in scope and the set's contents are one declaration to read
+// (docs/simp-design.md §3). A set registered as a type's default is used by
+// `by simp()` at every goal that has a value of that type, and at no other
+// (§3.1): the laws a call gets are a function of the goal's types, not of
+// what the module happens to import.
+//
+// This module holds the set type and the defaults of the carriers below
+// the tactics (`Nat`, `List`), whose own modules cannot import `string`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+
+// `name`: what a report calls the set. `default_for`: the types (by
+// `name_of`) whose goals get the set without naming it. `laws`: proofs of
+// equations or of a designated relation's instances, under any hypotheses,
+// each used left to right.
+record SimpSet { name: String, default_for: List<String>, laws: List<String> }
+
+// A set a call names: `by simp([S])`.
+fn simp_set(name: String, laws: List<String>) → SimpSet { SimpSet(name, [], laws) }
+
+// A type's default set.
+fn simp_default(name: String, ty: String, laws: List<String>) → SimpSet { SimpSet(name, [ty], laws) }
+
+// `Nat`: units and zeros on the left (the right ones compute), sums and
+// products nested to the right.
+register def simp_nat_arith: SimpSet = simp_default("Nat::arith", name_of(Nat), [
+    name_of(Nat::add_left_zero),
+    name_of(Nat::mul_left_zero),
+    name_of(Nat::mul_left_one),
+    name_of(Nat::sub_zero),
+    name_of(Nat::sub_self),
+    name_of(Nat::add_assoc),
+    name_of(Nat::mul_assoc),
+]);
+
+// `List`: appends nested to the right with no empty operand, `len` and
+// `map` pushed to the leaves.
+register def simp_list_shape: SimpSet = simp_default("List::shape", name_of(List), [
+    name_of(List::append_nil),
+    name_of(List::append_assoc),
+    name_of(List::len_append),
+    name_of(List::len_map),
+    name_of(List::map_append),
+    name_of(List::map_map),
+]);
