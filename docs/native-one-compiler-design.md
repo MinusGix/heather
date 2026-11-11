@@ -725,14 +725,111 @@ already, so there is no span it must keep from a callee, and which ones
 a callee does store into is the callee's program to say
 (`program_stores`). `tr`'s byte map is the first customer.
 
-**`rt` and the class.** A `runtime fn` takes a span it may write as a
-`mut` parameter, and its Heather type returns the new bytes beside its
-result (the prelude's `Mutated`). The class states that the code, run
-over a file, leaves the file with that span set to what the function
-returns. In place is sound when the old bytes are dead, which is the
-reflector accepting only a span used linearly (`Unique`,
-`lib/lang/facts/unique.hthr`). Its details wait for the function
-compiler's half, as §2.3's did.
+**A `runtime fn` writes a span: the design of 4c (2026-11-11).** Read
+against the runtime language as U3c left it and against its layer over
+Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
+`rt_io_reflect.hthr`), six things are decided.
+
+- *A function that writes is a computation, and computations are a layer
+  over `rt`'s terms.* `rt`'s terms are values: total, pure, their meaning
+  a function of their words in a world (`Tm::sem`), and U3c put the
+  spans in that world for exactly that reason. A store changes the
+  world. So it does not join `Tm`. It joins a layer over it, as a call
+  to Linux did (`ETm`: `Pure`, `Let`, `Invoke`): `FTm`, computations
+  over the file.
+
+  - `Pure(t)`: a value, the file as it is.
+  - `Let(e, body)`: a pure value bound once.
+  - `If(c, yes, no)` and `IfEq`: a branch on a `Bool` variable.
+  - `Put(i, length, v, body)`: the store, then the rest.
+  - `Call(f, args, body)`: a computation of the program, its word bound
+    for the rest, which goes on in the file the callee left.
+
+  Its meaning threads the bytes of the one span it writes, span 0:
+  `List<BitVec(8)> → Mutated<List<BitVec(8)>, value>`, over the rest of
+  the file, which it only reads. Each pure term is read at the world of
+  the file as it is then, `Cons(own, rest)` (`World::at`). Nothing in
+  `rt.hthr`, `rt_lower.hthr` or `rt_loop.hthr` changes, and every
+  theorem about a pure term is cited as it stands.
+
+  The state is the written span's bytes and not the whole file for the
+  reflection's sake. A source function is over its span, and its pin to
+  the meaning is a conversion: a read after a store must compute, at a
+  span that is a variable, to the source's read of the updated list.
+  Span 0 of `Cons(own.put_within(…), rest)` is that list by computation;
+  span 0 of a store into a file that is a variable is that list only by
+  a theorem, which a pin cannot cite.
+
+  The alternative is a `Put` among `Tm`'s terms, with a second meaning
+  that returns the file. It saves a type and costs the property the
+  pure language is built on: `Tm::sem` would be a value at a world some
+  subterm changed, every statement about a term would need to say which
+  file it is read at, and the pure lowering's theorem, which is over a
+  fixed file, would be false of a term with a store in it.
+
+- *The span is the computation's world, so it is used linearly by
+  construction.* §2.6 asked that the old bytes be dead for a store in
+  place to be sound. No `FTm` can name the file: a read is of the file
+  as it is, and there is no term for the file as it was. So a body that
+  reflects at all threads the span straight through, which is the
+  argument that made `Io` linear in `ETm`. No separate uniqueness
+  analysis is asked of the source.
+
+- *One term writes, under the length it is given.* `Put(i, length, v)`
+  leaves the span with the byte `v` at the word `i` when `i` is below
+  the word `length`, and as it was otherwise (`List::put_within`, beside
+  `byte_within`). It lowers to the comparison and a branch on it, the
+  store of buffer 0 at `i` where it holds and nothing where it does not,
+  which is the bound the function compiler asks of a store
+  (`leaf_store`). As with `Byte`, the
+  lowering's theorem has no premise about homes, and a `Put` under a
+  word that is not the span's length home is lowered soundly and refused
+  by the function compiler.
+
+- *The source is a `mut self` method on the span.* The language has
+  state-threading already: `fn T::m(mut self x: T, …) → R` has kernel
+  type `T → … → Mutated<T, R>`, and a body's calls of such methods are
+  threaded by the elaborator (docs/effects-capabilities-design.md §2).
+  A function that writes a span is one over its bytes:
+  `runtime fn List::raise_from(mut self span: List<BitVec(8)>, length,
+  count, i: BitVec(64)) → BitVec(64)`, whose body says
+  `span.put_within(length, i, v)`. The written span is the receiver and
+  is span 0; spans it only reads follow as in U3c. One written span is
+  what `mut self` gives, and it is enough for `tr`, the scanner and the
+  hashes' output; a second is a language question (`mut` on a parameter
+  that is not the receiver) and is left there.
+
+  The reflector reads the elaborated body the way the one over `Io`
+  does: it walks the chain of `Mutated` records from the result's span
+  back to the parameter, which gives the order of the stores and the
+  writing calls, reflects each operand as pure `rt`, and refuses a body
+  where a span other than the chain's is read.
+
+- *A loop is the measured recursion, with the file carried.* A writing
+  loop is a method that calls itself last (`raise_from` at `i + 1`).
+  Its pass is the body's computation; the kept words, the moved words
+  and the exit flag are what `rt_loop` makes them, and those regions
+  store nothing, so their theorems lift to the threaded evaluation by
+  the fact that a region without a store leaves the file
+  (`StructuredRegion::run_quiet`). The new proof is the pass over
+  `loop_run` with the file threaded, by the measure.
+
+- *The class states the run.* `Compile<F>(f)` says the code evaluated
+  over a file answers as `f` at that file's spans. For a function that
+  writes, the statement is of the run: over `b`, the code ends with
+  `f`'s word and with `b` whose span 0 is the bytes `f` returns
+  (`Ending`, `StructuredRegion::run`), at every file that has a span
+  0. A function that writes nothing
+  satisfies the same statement with the file unchanged, from its
+  instance as it is and the fact that its code has no store. So linking
+  sees one shape, a table of `Writers`, and a program of both kinds is
+  proved at every file: `f::runs_over`, beside `f::agrees_over`.
+
+After U5 the two computation layers are one. `ETm` lowers to a
+`Source`'s statements because that is where a call to Linux and a
+program's buffer live today; when a program's statements are functions,
+`Invoke` is one more computation over a state that has the world beside
+the file.
 
 ## 3. The rounds
 
@@ -920,8 +1017,16 @@ Each is a PR and ends with something that runs.
       any address, a count short of the span and past it, and a
       program's statements reading the raised bytes after the call
       (`native_tool_spans_tests.hthr`, `native_build_tests.hthr`).
-  - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
-    *Runs:* the byte map as a `runtime fn`.
+  - *Step 4c:* a `runtime fn` writes a span (§2.6), in four steps.
+    *Runs:* `tr`'s loop as a `runtime fn`, stated at every file.
+    - *4c-1:* the computation layer and its meaning (`FTm`), its
+      loop-free lowering and that lowering's theorem over the run.
+    - *4c-2:* the measured loop with the file carried.
+    - *4c-3:* the class's statement of the run, the reflector over a
+      `mut self` span, the generator and linking; `raise_span` becomes a
+      `runtime fn`.
+    - *4c-4:* the layer over Linux drops `Writers::Quiet`, so a tool
+      written as a `runtime fn` over `Io` calls a function that writes.
   - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,
     here or with U5, whichever the frames make cheaper.
 - **U5. Procedures are functions** (§2.4), after its own note. *Runs:* the
