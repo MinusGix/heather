@@ -76,6 +76,7 @@ enum Fired<'a> {
 /// The two sides of the instance a step rewrote, as a route prints them.
 enum Sides {
     Terms(Rc<Term>, Rc<Term>),
+    /// Already spelled, where the instance was found.
     Statements(String, String),
 }
 
@@ -597,7 +598,7 @@ impl Simps<'_> {
                         if step.occurrences() == 0 || next == *ty {
                             return Ok(Outcome::Miss);
                         }
-                        let sides = step.sides().map(|(l, r)| Sides::Terms(l, r));
+                        let sides = step.sides().map(|(l, r)| Sides::Terms(l, r)).or_else(|| step.shown.clone().map(|(l, r)| Sides::Statements(l, r)));
                         Ok(Outcome::Fired(Fired::Relation { step: Box::new(step), plan }, next, sides))
                     }
                     Err(e) => soft(e).map(Outcome::Blocked),
@@ -610,6 +611,9 @@ impl Simps<'_> {
         let (proof, Equation { level, ty: carrier, lhs, rhs }) =
             match rw.rewrite_instance_or(cx, rule.expr, rule.proof.clone(), &rule.ty, ty, Some(premise)) {
                 Ok(found) => found,
+                // No instance the transport reaches: one under a λ is
+                // reached by the relation walk, at the identity relation.
+                Err(Miss::NoInstance) => return self.fire_identity(relations, cx, rule, ty, premise),
                 Err(miss) => return missed(miss),
             };
         if lhs == rhs {
@@ -627,6 +631,62 @@ impl Simps<'_> {
         }
         let sides = Some(Sides::Terms(Rc::clone(&lhs), Rc::clone(&rhs)));
         Ok(Outcome::Fired(Fired::Equation { level, ty: carrier, lhs, rhs, proof, motive }, next, sides))
+    }
+
+    /// An equation at `ty` as a step of the identity relation
+    /// (`Relations::identity_step_or`): the walk that crosses a λ. Tried
+    /// where the transport found no instance, so a miss here is a miss.
+    fn fire_identity<'a>(
+        &self,
+        relations: &'a Relations<'a>,
+        cx: &'a Cx,
+        rule: &Rule<'_>,
+        ty: &Type,
+        premise: super::Premise<'_>,
+    ) -> R<Outcome<'a>> {
+        let span = rule.expr.span;
+        if !relations.below_binders(cx, ty) {
+            return Ok(Outcome::Miss);
+        }
+        let Some(law) = relations.as_identity(cx, &rule.ty, span) else { return Ok(Outcome::Miss) };
+        // An equation goal is the identity relation's application; any
+        // other goal is walked as it is.
+        let equation = matches!(ty, Type::Id { .. });
+        let goal = if equation {
+            let Some(goal) = relations.as_identity(cx, ty, span) else { return Ok(Outcome::Miss) };
+            goal
+        } else {
+            ty.clone()
+        };
+        let mut step = match relations.identity_step_or(cx, rule.expr, &rule.proof, &law, &goal, Some(premise)) {
+            Ok(Some(step)) => step,
+            Ok(None) | Err(Miss::NoInstance) => return Ok(Outcome::Miss),
+            Err(Miss::Unbound { index, .. }) => {
+                return Ok(Outcome::Blocked(format!(
+                    "matching its left side under a binder does not determine its argument {index}; apply the law to it"
+                )));
+            }
+            Err(Miss::Hard(e)) => return soft(e).map(Outcome::Blocked),
+        };
+        step.refused = Some(Vec::new());
+        let (next, plan) = match step.goal(&goal, GOAL) {
+            Ok((_, Plan::Same)) => return Ok(Outcome::Miss),
+            Ok(found) => found,
+            Err(e) => return soft(e).map(Outcome::Blocked),
+        };
+        if step.occurrences() == 0 || next == goal {
+            return Ok(Outcome::Miss);
+        }
+        let next = if equation {
+            let (Type::Id { level, ty: carrier, .. }, Some(rel)) = (ty, Relation::of_type(self.0, cx, &next, span)) else {
+                return Ok(Outcome::Miss);
+            };
+            Type::Id { level: level.clone(), ty: Rc::clone(carrier), lhs: rel.left, rhs: rel.right }
+        } else {
+            next
+        };
+        let sides = step.sides().map(|(l, r)| Sides::Terms(l, r)).or_else(|| step.shown.clone().map(|(l, r)| Sides::Statements(l, r)));
+        Ok(Outcome::Fired(Fired::Relation { step: Box::new(step), plan }, next, sides))
     }
 
     /// A proof of the side condition `ty`: a hypothesis in scope whose type

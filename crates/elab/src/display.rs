@@ -870,6 +870,18 @@ impl Speller<'_> {
             shown.extend((args.len()..ind.params.len()).map(|_| "·".to_string()));
             return format!("{}<{}>", ind.name, shown.join(", "));
         }
+        // A fully applied type constructor as a code (a predicate's body,
+        // `λ x => P(x) ∨ Q(x)`): the type it decodes to.
+        if !self.annotations
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && args.len() == ind.params.len() + ind.valparams.len()
+        {
+            let decoded = Type::El { level: crate::Level::Zero, tm: Rc::new(t.clone()) };
+            if self.el.unspell_here(&decoded).is_some() {
+                return self.ty(&decoded, d + 1);
+            }
+        }
         // `3`, not `S(S(S(0)))`.
         if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();

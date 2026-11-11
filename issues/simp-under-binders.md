@@ -1,6 +1,6 @@
 ---
 title: simp: an equation's instance under a binder is not rewritten
-status: open
+status: closed
 labels: [tactics,proofs]
 area: tactics
 milestone: [tac-general]
@@ -36,3 +36,7 @@ predicate as a value, so a law (an equation, or `P ↔ Q` since
 `iff_exists_congr` over the pointwise `↔`, which wants the statement walk
 to read a value-parameterised former's predicate argument. A `∀` is
 crossed: its body is a statement one binder down.
+
+## Log
+
+- 2026-11-11: Built (docs/simp-design.md §13). The proposal here assumed `funext` as `=`'s pointwise evidence; Heather has none, so a λ is crossed by its consumer's own evidence: an equation with no instance for the transport is walked as a step of `RelId` (`Relations::identity_step_or`), and `lib/std/data/list_pointwise.hthr` states `PreservesRelation(Pointwise(RelId), RelId, …)` for `map`, `filter`, `count`. `under_a_binder` closes. An `∃`'s body is read off the record's lowering and crossed by `iff_exists_congr` (`below_exists`). Left, each small: evidence for more consumers; `by simp()`'s defaults inside an `∃` (view-of-value-parameterised-record).

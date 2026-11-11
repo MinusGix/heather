@@ -230,6 +230,13 @@ theorem iff_forall_congr<A>(P, Q: A → Type, h: (x: A) → (P(x) ↔ Q(x))): ((
 
 record Exists<A>(P: A → Type) { witness: A, proof: P(witness) }
 
+// Below an `∃` a step of `↔` is pointwise, as below a `∀`
+// (`iff_forall_congr`).
+theorem iff_exists_congr<A>(P, Q: A → Type, h: (x: A) → (P(x) ↔ Q(x))): Exists(P) ↔ Exists(Q) {
+    Iff(mp := λ (e: Exists(P)) => Exists(witness := e.witness, proof := h(e.witness).mp(e.proof)),
+        mpr := λ (e: Exists(Q)) => Exists(witness := e.witness, proof := h(e.witness).mpr(e.proof)))
+}
+
 // ---------------------------------------------------------------------------
 // Decidable equality at a CARRIER, which `Decide` cannot express. A `Decide`
 // instance is keyed by the endpoints' resolved type
