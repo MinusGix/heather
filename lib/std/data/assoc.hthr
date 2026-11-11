@@ -1,0 +1,196 @@
+// Association lists as finite maps over a key type that decides equality
+// (issues/finite-maps-and-multisets.md).
+//
+// A map is a `List<Pair<K, V>>` read from the front: `assoc_get` answers
+// the first row with the key, so `assoc_set` is a `Cons` that shadows and
+// `assoc_remove` drops every row of a key. The laws are the ones
+// `nat_map.hthr` states for its trie (`get_set_same`, `get_set_other`), with
+// removal's two beside them and what the keys say about a lookup. A function
+// out of a finite type is such a map with every key present: `Fintype::
+// tabulate` builds it and a lookup reads the function back (`tabulate_get`).
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import fintype;
+
+fn List::assoc_get<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K) → Option<V> {
+    match xs {
+        Nil => None,
+        Cons(row, t) => match K.eq_dec(k, row.fst) { Inl(_) => Some(row.snd), Inr(_) => t.assoc_get(k) },
+    }
+}
+
+fn List::assoc_set<K, V>(self xs: List<Pair<K, V>>, k: K, v: V) → List<Pair<K, V>> { Cons(Pair(k, v), xs) }
+
+fn List::assoc_remove<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K) → List<Pair<K, V>> {
+    match xs {
+        Nil => Nil,
+        Cons(row, t) => match K.eq_dec(k, row.fst) { Inl(_) => t.assoc_remove(k), Inr(_) => Cons(row, t.assoc_remove(k)) },
+    }
+}
+
+fn List::assoc_keys<K, V>(self xs: List<Pair<K, V>>) → List<K> { xs.map(λ (row: Pair<K, V>) => row.fst) }
+
+// ---------------------------------------------------------------------------
+// The point update laws.
+
+theorem List::assoc_get_empty<K: DecEq, V>(k: K): List::assoc_get<K, V>(Nil, k) = None { refl }
+
+theorem List::assoc_get_cons_same<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V): Cons(Pair(k, v), xs).assoc_get(k) = Some(v) {
+    match K.eq_dec(k, k) as λ d => (match d { Inl(_) => Some(v), Inr(_) => xs.assoc_get(k) }) = Some(v) {
+        Inl(_) => refl,
+        Inr(ne) => false_elim(ne(refl)),
+    }
+}
+
+theorem List::assoc_get_cons_other<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V, i: K, ne: ¬(i = k)):
+    Cons(Pair(k, v), xs).assoc_get(i) = xs.assoc_get(i)
+{
+    match K.eq_dec(i, k) as λ d => (match d { Inl(_) => Some(v), Inr(_) => xs.assoc_get(i) }) = xs.assoc_get(i) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => refl,
+    }
+}
+
+theorem List::assoc_get_set_same<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V): xs.assoc_set(k, v).assoc_get(k) = Some(v) {
+    xs.assoc_get_cons_same(k, v)
+}
+
+theorem List::assoc_get_set_other<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V, i: K, ne: ¬(i = k)):
+    xs.assoc_set(k, v).assoc_get(i) = xs.assoc_get(i)
+{
+    xs.assoc_get_cons_other(k, v, i, ne)
+}
+
+// A lookup's one step, at any row: taken when the key is the row's, passed
+// on when it is not.
+theorem List::assoc_get_hit<K: DecEq, V>(row: Pair<K, V>, self t: List<Pair<K, V>>, k: K, e: k = row.fst):
+    Cons(row, t).assoc_get(k) = Some(row.snd)
+{
+    match K.eq_dec(k, row.fst) as λ d => (match d { Inl(_) => Some(row.snd), Inr(_) => t.assoc_get(k) }) = Some(row.snd) {
+        Inl(_) => refl,
+        Inr(ne) => false_elim(ne(e)),
+    }
+}
+
+theorem List::assoc_get_miss<K: DecEq, V>(row: Pair<K, V>, self t: List<Pair<K, V>>, k: K, ne: ¬(k = row.fst)):
+    Cons(row, t).assoc_get(k) = t.assoc_get(k)
+{
+    match K.eq_dec(k, row.fst) as λ d => (match d { Inl(_) => Some(row.snd), Inr(_) => t.assoc_get(k) }) = t.assoc_get(k) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => refl,
+    }
+}
+
+theorem List::assoc_get_remove_same<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K): xs.assoc_remove(k).assoc_get(k) = None {
+    match xs {
+        Nil => refl,
+        Cons(row, t) => match K.eq_dec(k, row.fst) as λ d =>
+            (match d { Inl(_) => t.assoc_remove(k), Inr(_) => Cons(row, t.assoc_remove(k)) }).assoc_get(k) = None
+        {
+            Inl(_) => t.assoc_get_remove_same(k),
+            Inr(ne) => trans(t.assoc_remove(k).assoc_get_miss(row, k, ne), t.assoc_get_remove_same(k)),
+        },
+    }
+}
+
+theorem List::assoc_get_remove_other<K: DecEq, V>(self xs: List<Pair<K, V>>, k, i: K, ne: ¬(i = k)):
+    xs.assoc_remove(k).assoc_get(i) = xs.assoc_get(i)
+{
+    match xs {
+        Nil => refl,
+        Cons(row, t) => match K.eq_dec(k, row.fst) as λ d =>
+            (match d { Inl(_) => t.assoc_remove(k), Inr(_) => Cons(row, t.assoc_remove(k)) }).assoc_get(i) = Cons(row, t).assoc_get(i)
+        {
+            Inl(e) => trans(t.assoc_get_remove_other(k, i, ne), sym(t.assoc_get_miss(row, i, λ ie => ne(trans(ie, sym(e)))))),
+            Inr(_) => match K.eq_dec(i, row.fst) {
+                Inl(_) => refl,
+                Inr(_) => t.assoc_get_remove_other(k, i, ne),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the keys say: a lookup answers exactly at a key of the list, and its
+// answer is a row.
+
+theorem List::assoc_get_absent<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K): ¬Mem(k, xs.assoc_keys()) → xs.assoc_get(k) = None {
+    match xs {
+        Nil => λ no => refl,
+        Cons(row, t) => λ no => trans(t.assoc_get_miss(row, k, λ e => no(Inl(e))), t.assoc_get_absent(k, λ m => no(Inr(m)))),
+    }
+}
+
+theorem List::assoc_get_present<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K): Mem(k, xs.assoc_keys()) → Exists(λ (v: V) => xs.assoc_get(k) = Some(v)) {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(row, t) => λ m => match K.eq_dec(k, row.fst) {
+            Inl(hit) => Exists(row.snd, t.assoc_get_hit(row, k, hit)),
+            Inr(miss) => match m {
+                Inl(e) => false_elim(miss(e)),
+                Inr(later) => match t.assoc_get_present(k, later) { Exists(v, w) => Exists(v, trans(t.assoc_get_miss(row, k, miss), w)) },
+            },
+        },
+    }
+}
+
+theorem List::assoc_get_row<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V): xs.assoc_get(k) = Some(v) → Mem(Pair(k, v), xs) {
+    match xs {
+        Nil => λ h => Option::none_ne_some(v, h, False),
+        Cons(row, t) => λ h => match K.eq_dec(k, row.fst) {
+            Inl(hit) => Inl(j(sym(hit), λ w _ => Pair(w, v) = row,
+                cong_fn(λ (x: V) => Pair(row.fst, x), sym(Option::some_inj(row.snd, v, trans(sym(t.assoc_get_hit(row, k, hit)), h)))))),
+            Inr(miss) => Inr(t.assoc_get_row(k, v, trans(sym(t.assoc_get_miss(row, k, miss)), h))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function as a table, and the table read back.
+
+fn List::tabulate<K, V>(self ks: List<K>, f: K → V) → List<Pair<K, V>> { ks.map(λ (k: K) => Pair(k, f(k))) }
+
+theorem List::tabulate_get<K: DecEq, V>(self ks: List<K>, f: K → V, k: K): Mem(k, ks) → ks.tabulate(f).assoc_get(k) = Some(f(k)) {
+    match ks {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m => match K.eq_dec(k, h) {
+            Inl(hit) => cong_fn(λ (x: K) => Some(f(x)), sym(hit)),
+            Inr(miss) => match m {
+                Inl(e) => false_elim(miss(e)),
+                Inr(later) => t.tabulate_get(f, k, later),
+            },
+        },
+    }
+}
+
+theorem List::tabulate_keys<K, V>(self ks: List<K>, f: K → V): ks.tabulate(f).assoc_keys() = ks {
+    trans(ks.map_map(λ (k: K) => Pair(k, f(k)), λ (row: Pair<K, V>) => row.fst), ks.map_id())
+}
+
+// The table of a function out of a finite type: every key is present, and
+// a lookup is the function.
+fn Fintype::tabulate<A: Fintype, B>(f: A → B) → List<Pair<A, B>> { A.elems.tabulate(f) }
+
+theorem Fintype::tabulate_get<A: Fintype + DecEq, B>(f: A → B, a: A): Fintype::tabulate(f).assoc_get(a) = Some(f(a)) {
+    List::tabulate_get(A.elems, f, a, A.complete(a))
+}
+
+// The function a table stands for, with a default where it has no row, and
+// the round trip: tabulating it gives a table with the same lookups wherever
+// the first had a row.
+fn List::assoc_fn<K: DecEq, V>(self xs: List<Pair<K, V>>, d: V) → K → V { λ k => xs.assoc_get(k).unwrap_or(d) }
+
+theorem Fintype::tabulate_assoc_fn<A: Fintype + DecEq, B>(t: List<Pair<A, B>>, d: B, a: A, v: B, h: t.assoc_get(a) = Some(v)):
+    Fintype::tabulate(t.assoc_fn(d)).assoc_get(a) = t.assoc_get(a)
+{
+    trans(Fintype::tabulate_get(t.assoc_fn(d), a), trans(cong_fn(λ (o: Option<B>) => Some(o.unwrap_or(d)), h), sym(h)))
+}
+
+theorem Fintype::assoc_fn_tabulate<A: Fintype + DecEq, B>(f: A → B, d: B, a: A): Fintype::tabulate(f).assoc_fn(d)(a) = f(a) {
+    cong_fn(λ (o: Option<B>) => o.unwrap_or(d), Fintype::tabulate_get(f, a))
+}
