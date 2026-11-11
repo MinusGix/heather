@@ -130,10 +130,10 @@ theorem List::assoc_get_present<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K): M
     match xs {
         Nil => λ m => false_elim(m),
         Cons(row, t) => λ m => match K.eq_dec(k, row.fst) {
-            Inl(hit) => Exists(row.snd, t.assoc_get_hit(row, k, hit)),
+            Inl(_) => Exists(row.snd, refl),
             Inr(miss) => match m {
                 Inl(e) => false_elim(miss(e)),
-                Inr(later) => match t.assoc_get_present(k, later) { Exists(v, w) => Exists(v, trans(t.assoc_get_miss(row, k, miss), w)) },
+                Inr(later) => t.assoc_get_present(k, later),
             },
         },
     }

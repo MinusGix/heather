@@ -28,7 +28,8 @@ theorem pick_either(n, a, b: Nat): (k: Nat) → pick(n, a, b) = k → a = k ∨ 
     match h: n.leb(3) { True => λ k e => Inl(e), False => λ k e => Inr(e) }
 }
 
-// A disjunction: the call sits in both summands.
+// The limit: the summands of a disjunction are not read (§4.5 says why).
+// expect-error(kernel)
 theorem pick_sum(n, a, b, k: Nat): pick(n, a, b).leb(k) = a.leb(k) ∨ pick(n, a, b).leb(k) = b.leb(k) {
     match h: n.leb(3) { True => Inl(refl), False => Inr(refl) }
 }

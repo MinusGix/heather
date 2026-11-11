@@ -722,8 +722,8 @@ fn abstract_below(
     below.abstract_local_any(&hits)
 }
 
-/// `ty` with its term positions reduced, below `Π` codomains, `Σ`
-/// components and the summands of a `+` to `depth` formers; `under` counts the binders passed, and a
+/// `ty` with its term positions reduced, below `Π` codomains and `Σ`
+/// components to `depth` formers; `under` counts the binders passed, and a
 /// stuck position found below them is recorded as it reads in the outer
 /// context. A position that does not reduce is left as written.
 #[allow(clippy::too_many_arguments)]
@@ -775,11 +775,6 @@ fn expose_below(
             let new_fst = expose_below(elab, cx, &fst, span, depth - 1, under, out, budget);
             let new_snd = expose_below(elab, &inner, &snd, span, depth - 1, under + 1, out, budget);
             Type::Sigma { fst_level, snd_level, fst: Rc::new(new_fst), snd: Rc::new(new_snd) }
-        }
-        Type::Sum { lhs_level, rhs_level, lhs, rhs } if depth > 0 => {
-            let new_lhs = expose_below(elab, cx, &lhs, span, depth - 1, under, out, budget);
-            let new_rhs = expose_below(elab, cx, &rhs, span, depth - 1, under, out, budget);
-            Type::Sum { lhs_level, rhs_level, lhs: Rc::new(new_lhs), rhs: Rc::new(new_rhs) }
         }
         head => head,
     }
