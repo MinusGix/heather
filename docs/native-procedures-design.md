@@ -161,8 +161,10 @@ frame there; and the callee saves the registers the program's homes use
 and opens its own frame. §3's "why not callee-saves" was about static
 slots, where a callee's code could write a caller's word; a frame above
 the callee's RSP is out of its reach by the memory clause. What follows
-describes the code before those steps; the `room` slot and the depth
-test are as written.*
+describes the code before those steps. The `room` slot is as written;
+since step 5c the depth is tested and counted in the callee's entry and
+counted back in its exit, not at the call site, and results come back in
+RAX, RDX, RCX, RSI, RDI and R8.*
 
 ### 4.1 Layout
 

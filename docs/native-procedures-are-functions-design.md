@@ -1,7 +1,8 @@
 # Procedures are functions: one frame, one call, one contract
 
-Status: **proposed 2026-11-11; steps 5a and 5b built the same day** (§3),
-5c and 5d not. §1 describes the code before 5a. Round U5 of
+Status: **proposed 2026-11-11; steps 5a and 5b and the call sequence of 5c
+built the same day** (§3), 5c's contract and 5d not. §1 describes the code
+before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
 before the round. Owner: `issues/native-one-compiler.md`; it draws in
 `issues/native-procedure-contracts.md`,
@@ -179,13 +180,18 @@ stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
   `Spill` at displacement zero (`Prog::saves`), then `MovRI(Rbx, 8·W)`,
   `SubRR(Rsp, Rbx)` (`frame_down`); RBX is scratch between statements
   and is not saved, which an export changes when it needs System V's
-  set. The depth stays at the call site until 5c.
+  set. *As built (5c):* the depth is counted first, at the label and
+  through RAX and R11, which hold nothing there, so a call past the depth
+  leaves before anything of the callee's is pushed; then RBX and the
+  registers below are saved.
 - **Exit.** Each result from its home to its register, the words' room
   given back, the saved registers reloaded, their room given back, RET.
 - **What is saved.** RBX, and each register of the home pool that some
   word of the program lives in. With homes global to the program (they
   are, §2.7) that is one list for every procedure, computed once from the
-  `Homes`.
+  `Homes`. *As built (5c):* `Homes::kept`, RBX and of R12 to R15 and RBP
+  those a word lives in. R10 is a home too, and the callee does not save
+  it: every caller carries it in RBX (§2.3).
 - **`main`.** The start-up saves the entry RSP for the command line as it
   does now, makes `main`'s frame below it, and sets each word that is live
   at `main`'s entry to zero in its home. Today such words must be slotted
@@ -339,7 +345,10 @@ the shared exit (`Prog::deep_exit`), otherwise it is counted down, and the
 exit counts it back. The callee's claim then covers a call at depth zero
 by itself (its tree there is `Ret(Exited(call_depth_status()))`), the call
 site has no test, and it is the same code as a call of a function, which
-has no depth.
+has no depth. *As built (5c):* the room is read at the label, before
+anything is pushed and through RAX and R11, so a refused call has used
+its return address and nothing more; the stack bound takes that one word
+(§3).
 
 The stack bound is per level: a procedure's frame, and below the deepest
 one the functions' frames as now.
@@ -511,7 +520,57 @@ gates passing on the new code.
   `Target::Performs` is stated, a procedure and a function each an
   instance, and the call site proved from it once.
   `native-procedure-contracts` closes on it. *Runs:* the same tools; the
-  machine-level control of §2.5.
+  machine-level control of §2.5. It lands in two halves: the call
+  sequence (built 2026-11-11), then the contract.
+
+  What the call sequence settled:
+  - *One function emits every call.* `Prog::calls(layout, label, lent,
+    arguments)`: the arguments to the call registers after the homes
+    lent, R10 to RBX, the CALL, RBX to R10. `Prog::performs` is it with
+    nothing lent and the results taken from `result_registers()`;
+    `Prog::call_lent` is it with RAX taken, and is the code it was by
+    conversion, so the function compiler's proofs did not move.
+    `call_enters` and `call_leaves` went.
+  - *The count is the callee's.* `Prog::count_down` after the label and
+    `Prog::count_up` before the frame closes. Their lemmas
+    (`Target::goes_count_down`, `goes_count_up`) take whatever else the
+    site claims as a predicate closed under a write of the two scratch
+    registers and a store to the room slot, so one statement serves the
+    callee before it has a frame and after it has given its results.
+    Between a callee's label and its frame the count is not yet the
+    callee's, so `Target::Based` and `Target::Bare` carry the room as an
+    argument beside the target's.
+  - *A refused call has pushed its return address.* The test is in the
+    callee, after the CALL. `Target.roomy` asks a word past the levels,
+    and `native_compile_correct`'s `deep` is `(depth * (8 * (words + 7)) +
+    80 * functions) + 8 * (words + 1) <= stack`. A program with no calls
+    carries the word too (cat's theorems), the price of one statement for
+    every source.
+  - *What a callee keeps.* `Homes::kept` (§2.2). Not R10: saved by the
+    callee it would be a seventh word a level, and the caller's carry in
+    RBX is needed for functions anyway (`Homes::returned` reads every
+    home's register back after a call from the two). A call still takes
+    a return address, at most six words of registers and a frame.
+  - *One proof of the way to a callee.* `Target::goes_called`: the
+    arguments, R10 into RBX (`Target::homes_carried` at no buffers lent,
+    the function compiler's lemma), the CALL, the label and the count.
+    `Target::perform_deep` and `perform_call` are its two ends.
+  - *A gap the first several-parameter probe found.* The allocator built
+    a body's interference from its statements' writes, and no statement
+    writes a parameter the body only reads, so two such parameters got
+    one register and `Procedure::fits` refused the procedure. The entry
+    writes the parameters with what is live as the body starts, and the
+    graph and the fallback's check now say so (`List::bodies_graph`,
+    `bodies_check`, native_alloc). `spreading` in `native_compile_tests`
+    holds it: three parameters and three results, a status that tells
+    any two out of place.
+  - *What the contract takes from it.* Past its count a callee is claimed
+    by `Target::Bare` at the return address with one call less of room
+    and the registers as the CALL left them but RAX, R11 and RSP; at its
+    RET, by `Bare` past that address with the room back, the registers it
+    keeps as they were, and the results in theirs. That pair is
+    `Target::Performs` to state, and a function's `CallsOver` to read as
+    an instance of.
 - **5d. One byte lowering** (U4's step 4d). A leaf with byte nodes goes
   through the shared lowering, its buffers' homes loaded as immediates
   the way `Layout::homes_block` loads them for a callee, and
