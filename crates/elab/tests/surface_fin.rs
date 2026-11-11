@@ -22,7 +22,7 @@
 //! hook declines and the pins hold; they are the left-hand side the port
 //! round's cross-checks compare against (in_language_{tabulate,nth}.rs).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_elab::{ElabError, Elaborator};
 use heather_kernel::level::Level;

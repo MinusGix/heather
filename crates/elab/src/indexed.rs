@@ -34,7 +34,7 @@
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

@@ -24,7 +24,7 @@
 //! sound (a memo is a cache) and keeps the map total. Shifting by zero is the
 //! identity on the *handle*, so the ordinary program path never pays.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};

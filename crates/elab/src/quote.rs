@@ -15,7 +15,7 @@
 //! Everything here is level 0: code types live at universe 0, and the slice
 //! has no level variables (issues/implicit-level-polymorphism.md).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

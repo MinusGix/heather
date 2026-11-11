@@ -20,7 +20,7 @@
 //! ([`LetValue::discard_around`]); a value some use spliced is already
 //! checked there.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use heather_kernel::level::Level;

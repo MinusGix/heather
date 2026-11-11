@@ -108,6 +108,13 @@
   gets a `node()`-gated manual impl, never a derived `Debug`. Property tests
   still report seeds only (the `law!` macro in
   `crates/kernel/tests/subst_laws.rs`).
+- **Syntax is shared through the kernel's `Rc`**: `use heather_kernel::rc::Rc;`
+  (`crate::rc::Rc` inside the kernel), never `std::sync::Arc` under an alias.
+  It is `Arc` with a head in which the kernel keeps what it computed about
+  the node (free-variable bounds, `crates/kernel/src/rc.rs`), and its API is
+  `Arc`'s. An unsized payload (`[T]`, `str`, `dyn Trait`) is a plain `Arc`.
+  A method cannot take `self: &Rc<Self>`; write it on `impl Rc<T>` in the
+  kernel, or as an associated function.
 - **Perf measurement is not part of an ordinary round.** Elaborator changes —
   even complex ones, as long as they add no inference route on a hot path —
   land without timing anything; `scripts/bench --check` catches regressions.

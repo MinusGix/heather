@@ -17,7 +17,7 @@
 //! the kernel re-checks every term below — but a wrong schema would produce a
 //! *checked theorem about the wrong function*, so no shortcuts.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};

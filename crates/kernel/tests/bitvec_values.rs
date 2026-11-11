@@ -30,7 +30,7 @@
 //! both directions: convertible pairs are accepted, and the corresponding
 //! perturbation is refused.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, ConvError};
 use heather_kernel::layer::Layer;

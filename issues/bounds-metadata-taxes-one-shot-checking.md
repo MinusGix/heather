@@ -1,10 +1,10 @@
 ---
 title: Free-variable bounds tax one-shot checking ~1.17x; accepted, with levers if it grows
-status: open
+status: closed
 labels: [kernel,performance]
 area: kernel
 created: 2026-07-31
-updated: 2026-11-02
+updated: 2026-11-10
 ---
 
 [[subst-visits-closed-subtrees]]'s round left one deliberate regression:
@@ -84,3 +84,8 @@ WHERE IT LANDS IN THE SUITE: the declaration cache gates it away for four of the
 - 2026-11-02: LEVER PULLED, one this issue did not list: the table's keep-alive. Sampling calc_parser cold at width one (the survey's gdb sampler, 744 stacks) put bounds.rs frames in 17.9% of samples, and about half of those (70 of 133) were `bounds.rs` ~180/~233, the slot store dropping the evicted entry's strong `Rc`: a decrement on cold memory (~25) or, more often (~45), the cascading free of a dead subtree the table alone was keeping alive. The probe itself and the walks were the smaller half. Fix: the key is now a `Weak`, which pins the node's allocation (so its address still cannot be recycled while the entry lives, which is what pointer keying needs) but not its contents, so a dead term frees where it dies, while warm; an eviction is one weak decrement and at most one block's free. The two-stage marker moved into the same 32-byte aligned slot, so a probe reads one cache line instead of two parallel tables. The soundness argument is on `Slot` in bounds.rs: every query holds a strong `Rc`, the weak key pins the allocation, contents never change while strong references exist and a strong count never climbs back from zero, and the key is only compared, never upgraded.
     Measured (`scripts/perf ab`, calc_parser cold, 5 interleaved pairs, all four separating): wall -17.9%, kernel gate -11.8%, total -15.2%, max RSS -20.1% (190 to 156 MB). Resampled after: bounds.rs at 11.5% of 608 stacks. Side effect, and a correction rather than a cost: the strong keep-alive inflated `Rc::strong_count`, which the substitution memo and `syntax_eq` read as "reachable twice"; nodes held only by the table no longer count as shared, so `local_subst_nodes`/`syntax_eq_*` move by well under 0.1% (they already varied run to run, being address-keyed). What remains under bounds.rs is mostly the cold slot probe (`Slot::hit`) and weak decrements, i.e. the table being a side table: the node-header lever above is still the one that would remove it.
 - 2026-11-05: gardener: cites a file it shares with [[resolver-lookup-constant]] (`docs/data-oriented-survey.md`).
+- 2026-11-10: The tax is gone with the tables ([[free-variable-bounds-in-the-node]]): an
+  answer is kept in the node, a first walk costs a read per child and no
+  table entry, and `code/check-identity-recursor` runs at 0.74 to 0.83× of
+  its time with the tables (same box, two interleaved runs each). The two-stage
+  fill this issue defended is deleted with them.

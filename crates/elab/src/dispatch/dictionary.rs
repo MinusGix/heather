@@ -3,7 +3,7 @@
 //! Value indices are filled from the nearest compatible dictionary binder or
 //! an explicit designation. This module owns that ladder and its refusal.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
@@ -489,7 +489,7 @@ impl Elaborator {
     /// class that reaches it as an ancestor and has no nameable ancestor
     /// that also does — `Semigroup` for `Associative`, `Monoid` for
     /// `MonoidRel` — first by key. `None` when nothing nameable reaches it.
-    fn nearest_nameable_descendant(&self, owner: &str) -> Option<(String, std::sync::Arc<traits::ClassInfo>)> {
+    fn nearest_nameable_descendant(&self, owner: &str) -> Option<(String, heather_kernel::rc::Rc<traits::ClassInfo>)> {
         let nameable = |key: &str, info: &traits::ClassInfo| self.key_of(&info.name).as_deref() == Some(key);
         if let Some(info) = self.traits.class(owner)
             && nameable(owner, info)
@@ -499,11 +499,11 @@ impl Elaborator {
         let reaches = |info: &traits::ClassInfo, target: &str| {
             info.ancestors.iter().any(|a| self.key_of(&a.name).as_deref() == Some(target))
         };
-        let mut found: Vec<(String, std::sync::Arc<traits::ClassInfo>)> = self
+        let mut found: Vec<(String, heather_kernel::rc::Rc<traits::ClassInfo>)> = self
             .traits
             .classes_iter()
             .filter(|(key, info)| nameable(key, info) && reaches(info, owner))
-            .map(|(key, info)| (key.clone(), std::sync::Arc::clone(info)))
+            .map(|(key, info)| (key.clone(), heather_kernel::rc::Rc::clone(info)))
             .collect();
         let keys: Vec<String> = found.iter().map(|(k, _)| k.clone()).collect();
         found.retain(|(key, info)| !keys.iter().any(|other| other != key && reaches(info, other)));
@@ -536,7 +536,7 @@ impl Elaborator {
         // it: those are the dictionaries the reader can write.
         let (ckey, class) = match self.nearest_nameable_descendant(&owner) {
             Some(found) => found,
-            None => (owner, std::sync::Arc::new(class.clone())),
+            None => (owner, heather_kernel::rc::Rc::new(class.clone())),
         };
         let class = &*class;
         // Both registries key the carrier by its *resolved* declaration

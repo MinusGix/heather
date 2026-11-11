@@ -5,7 +5,7 @@
 //! written motive, synthesizing a motive from a checking goal, and the pure
 //! syntax/core transformation used by convoy matching.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};

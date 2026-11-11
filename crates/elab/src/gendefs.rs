@@ -31,7 +31,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -911,7 +911,38 @@ fn pi_arity(stmt: &Type) -> usize {
 /// The substitution's tail is the empty one: the template is scoped in `Θ`
 /// alone, and `args` may be scoped in any context, since an empty tail
 /// records none (`heather_kernel::term::LocalSubst`).
+///
+/// **Asked once per instance.** An elaboration asks for few instances and
+/// asks for each many times, at arguments that are equal and seldom the same
+/// nodes: a width literal is a node per mention, and an argument read out of
+/// a substituted type is that substitution's copy. The answer is a function
+/// of the template and the arguments alone, so it is kept ([`Instances`]) and
+/// handed out again, which also makes equal instances one piece of syntax to
+/// everything downstream that stops at a shared node.
 fn instance_of_template(entry: &TyCodeFn, args: &[Rc<Term>]) -> Type {
+    // A template nothing else holds was computed for this one question
+    // (`Elaborator::constructor_spelling`) and will not be asked about again.
+    // The count is a filter and never part of the answer.
+    if Rc::strong_count(&entry.template) == 1 {
+        return instance_of_template_built(entry, args);
+    }
+    INSTANCES.with(|kept| {
+        let key = (Rc::as_ptr(&entry.template) as usize, args_shape(args));
+        if let Some(known) = kept.borrow().find(key, entry, args) {
+            #[cfg(debug_assertions)]
+            if crate::readback::sampled() {
+                assert!(known == instance_of_template_built(entry, args), "a kept template instance is not the one built");
+            }
+            return known;
+        }
+        let at = instance_of_template_built(entry, args);
+        kept.borrow_mut().keep(key, entry, args, &at);
+        at
+    })
+}
+
+/// [`instance_of_template`], built.
+fn instance_of_template_built(entry: &TyCodeFn, args: &[Rc<Term>]) -> Type {
     let subst = LocalSubst {
         tail: SubstTail::Empty,
         terms: args.to_vec(),
@@ -919,6 +950,101 @@ fn instance_of_template(entry: &TyCodeFn, args: &[Rc<Term>]) -> Type {
     let at = entry.template.apply_local(&subst);
     crate::inductive::decode_deep(&at).unwrap_or(at)
 }
+
+/// The template instances this thread has built
+/// ([`instance_of_template`]), by the template's address and the outer shape
+/// of the arguments ([`args_shape`]). An entry holds its template, so the
+/// address stays that template's, and its arguments, which are what a hit
+/// compares: the shape only chooses where to look.
+///
+/// Nothing here is semantic, and nothing in it depends on the registry, Ψ or
+/// a scope: an instance is the template under a substitution. That is why it
+/// can be a thread's and not an elaborator's, and why no rollback clears it.
+#[derive(Default)]
+struct Instances {
+    by_shape: HashMap<(usize, u64), Vec<(Rc<Type>, Vec<Rc<Term>>, Type)>>,
+    held: usize,
+}
+
+impl Instances {
+    /// Past this many instances the table starts over. The askings for one
+    /// instance come close together, so a small table answers nearly all of
+    /// them (a table of one answers a fifth), and a table that kept every
+    /// instance of a long run would hold types nothing else needs.
+    const BOUND: usize = 1 << 8;
+
+    fn find(&self, key: (usize, u64), entry: &TyCodeFn, args: &[Rc<Term>]) -> Option<Type> {
+        self.by_shape
+            .get(&key)?
+            .iter()
+            .find(|(template, known, _)| Rc::ptr_eq(template, &entry.template) && known[..] == *args)
+            .map(|(_, _, at)| at.clone())
+    }
+
+    fn keep(&mut self, key: (usize, u64), entry: &TyCodeFn, args: &[Rc<Term>], at: &Type) {
+        if self.held >= Self::BOUND {
+            self.by_shape.clear();
+            self.held = 0;
+        }
+        self.held += 1;
+        self.by_shape.entry(key).or_default().push((Rc::clone(&entry.template), args.to_vec(), at.clone()));
+    }
+}
+
+thread_local! {
+    static INSTANCES: std::cell::RefCell<Instances> = std::cell::RefCell::new(Instances::default());
+}
+
+/// A hash of the outer shape of a template's arguments: the formers,
+/// literals and variables met in the first [`SHAPE_NODES`] nodes of a walk
+/// through the code formers and applications. It is never the answer
+/// ([`Instances::find`] compares the arguments), so a former this does not
+/// descend into costs collisions and nothing else, and it need not learn a
+/// new one.
+fn args_shape(args: &[Rc<Term>]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn walk(t: &Term, left: &mut u32, h: &mut crate::layered::WordHasher) {
+        if *left == 0 {
+            return;
+        }
+        *left -= 1;
+        std::mem::discriminant(t).hash(h);
+        match t {
+            Term::Var(v) => v.hash(h),
+            Term::NatLit(n) => n.hash(h),
+            Term::GlobalTm { var, .. } => var.hash(h),
+            Term::Succ(a) | Term::TmFin { len: a } | Term::TmSquash { ty: a, .. } => walk(a, left, h),
+            Term::App { fun: a, arg: b, .. }
+            | Term::AppAt { fun: a, arg: b }
+            | Term::TmPi { dom: a, cod: b, .. }
+            | Term::TmSigma { fst: a, snd: b, .. }
+            | Term::TmSum { lhs: a, rhs: b, .. }
+            | Term::TmW { shape: a, pos: b, .. }
+            | Term::TmVec { elem: a, len: b, .. }
+            | Term::TmWf { shape: a, arity: b, .. }
+            | Term::TmDVec { len: a, fam: b, .. } => {
+                walk(a, left, h);
+                walk(b, left, h);
+            }
+            Term::TmId { ty, lhs, rhs, .. } | Term::TmSEq { ty, lhs, rhs, .. } => {
+                walk(ty, left, h);
+                walk(lhs, left, h);
+                walk(rhs, left, h);
+            }
+            _ => {}
+        }
+    }
+    let mut h = crate::layered::WordHasher::default();
+    args.len().hash(&mut h);
+    for arg in args {
+        let mut left = SHAPE_NODES;
+        walk(arg, &mut left, &mut h);
+    }
+    h.finish()
+}
+
+/// How many nodes of one argument [`args_shape`] reads.
+const SHAPE_NODES: u32 = 48;
 
 /// The guard copies of one non-recursive declaration's spine codes
 /// ([`GenDef::PayloadCode`]/[`GenDef::SuffixCode`]): the **inline** spine
@@ -4418,4 +4544,75 @@ pub(crate) fn slot_of_lambda(x: &str, targs: &[heather_syntax::Ty]) -> Option<us
         }
     }
     found
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+    use heather_kernel::term::{LocalVar, Numeral};
+
+    /// `Vec(El x₁; x₀)`: a type parameter and a value parameter.
+    fn template() -> Rc<Type> {
+        Rc::new(Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(1))) }),
+            len: Rc::new(Term::Var(LocalVar(0))),
+        })
+    }
+
+    fn entry(template: &Rc<Type>) -> TyCodeFn {
+        TyCodeFn {
+            template: Rc::clone(template),
+            stmt: Rc::new(Type::Nat),
+            param_levels: vec![Level::Zero],
+            level: Level::Zero,
+        }
+    }
+
+    fn lit(n: u64) -> Rc<Term> {
+        Rc::new(Term::NatLit(Numeral::from(n)))
+    }
+
+    fn succs(n: u32, of: Term) -> Rc<Term> {
+        (0..n).fold(Rc::new(of), |t, _| Rc::new(Term::Succ(t)))
+    }
+
+    fn held() -> usize {
+        INSTANCES.with(|kept| kept.borrow().held)
+    }
+
+    /// Equal arguments on other nodes get the instance already built, node
+    /// for node; other arguments get their own, whether or not the shape
+    /// tells them apart; and a template held by nothing else is not kept.
+    #[test]
+    fn an_instance_is_built_once_per_template_and_arguments() {
+        let registered = template();
+        let e = entry(&registered);
+        let before = held();
+        let first = instance_of_template(&e, &[Rc::new(Term::TmNat), lit(64)]);
+        let again = instance_of_template(&e, &[Rc::new(Term::TmNat), lit(64)]);
+        assert_eq!(held(), before + 1);
+        let (Type::Vec { elem: a, len: la, .. }, Type::Vec { elem: b, len: lb, .. }) = (&first, &again) else {
+            panic!("the instance is a vector type");
+        };
+        assert!(matches!(**a, Type::Nat), "the code argument is decoded");
+        assert!(Rc::ptr_eq(a, b) && Rc::ptr_eq(la, lb), "the second asking is the first one's nodes");
+
+        let other = instance_of_template(&e, &[Rc::new(Term::TmNat), lit(8)]);
+        assert!(other != first);
+        assert!(other == instance_of_template_built(&e, &[Rc::new(Term::TmNat), lit(8)]));
+
+        // Two lengths that differ past what the shape reads.
+        let deep = |end: Term| [Rc::new(Term::TmNat), succs(SHAPE_NODES + 2, end)];
+        assert_eq!(args_shape(&deep(Term::Zero)), args_shape(&deep(Term::TmNat)));
+        let zero = instance_of_template(&e, &deep(Term::Zero));
+        let nat = instance_of_template(&e, &deep(Term::TmNat));
+        assert!(zero != nat);
+        assert!(nat == instance_of_template_built(&e, &deep(Term::TmNat)));
+
+        let now = held();
+        let once = entry(&template());
+        drop(instance_of_template(&once, &[Rc::new(Term::TmNat), lit(64)]));
+        assert_eq!(held(), now);
+    }
 }

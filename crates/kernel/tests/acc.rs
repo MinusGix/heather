@@ -27,7 +27,7 @@
 //! Ψ is empty throughout, which is the point of §4: the recursion direction
 //! of tier 2 buys **no funext** and needs **no `Empty`-η`**.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, conv_type};
 use heather_kernel::layer::Layer;

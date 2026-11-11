@@ -103,8 +103,8 @@
 //!   memo is dropped with the checker when the gate returns.
 //! - **Deterministic, so a hit may skip fuel.** Whether a lookup hits
 //!   depends only on which node and scope objects the rules pass along,
-//!   which the term's sharing decides, not on addresses or reference counts
-//!   (a count would be perturbed by the bounds cache's keep-alives). Every
+//!   which the term's sharing decides, not on addresses or reference counts.
+//!   Every
 //!   eligible node gets an entry, chosen by its kind, and nothing is evicted.
 //!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
 //!   input, at any worker count.
@@ -119,15 +119,17 @@
 //!   of a convoy: before, a family's index functions were judged once per
 //!   level and per constructor. A check keeps it only when the expected type
 //!   is syntax inside the same entries, and an inferred type only when it
-//!   is, since a description is relative to Γ's length. The table that
-//!   answers "which entries" is the bounds memo's function on its own
-//!   table (`bounds::scope_term_use`), so it moves no substitution counter.
+//!   is, since a description is relative to Γ's length. "Which entries" is
+//!   the node's own bounds (`bounds::term_local_use`), a function of the
+//!   node, so asking moves no substitution counter.
 //! - **Successes only.** A failure propagates and records nothing.
 //! - **Off under the spelling record** ([`spell_checked_in_code`]), whose
 //!   point is to visit every checked spelling.
 //! - Debug builds re-judge a sample of hits (`crate::checks`) and assert the
-//!   memo's answer, out of the counters' sight (`crate::stats::unobserved`),
-//!   so debug and release builds count alike.
+//!   memo's answer (`crate::checks::rederive`): out of the counters' sight,
+//!   so debug and release builds count alike, and with no hit under the
+//!   re-judged node re-judged in turn, so a shared chain is checked at the
+//!   cost of judging it.
 //! - **Locally closed types are kept apart from Γ** ([`TyScope`],
 //!   `issues/mutual-group-recursion-gate-cost.md`). A type with no free
 //!   local variable and no weakening tail `wk^k_g`
@@ -161,7 +163,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::{discriminant, Discriminant};
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 pub(crate) mod ity;
 
@@ -1923,7 +1925,7 @@ impl Tc {
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 assert!(
-                    crate::stats::unobserved(|| self.conv_ity(env, ITyRef::Syn(expected), ITyRef::Syn(inferred), l))
+                    crate::checks::rederive(crate::checks::Claim::Kept, || self.conv_ity(env, ITyRef::Syn(expected), ITyRef::Syn(inferred), l))
                         .is_ok(),
                     "the closed-conversion memo kept a pair that converting again rejects \
                      (term output suppressed: see CLAUDE.md)"
@@ -2359,7 +2361,7 @@ impl Tc {
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 assert!(
-                    crate::stats::unobserved(|| self.iwf_sig_premises(env, sig)).is_ok(),
+                    crate::checks::rederive(crate::checks::Claim::Kept, || self.iwf_sig_premises(env, sig)).is_ok(),
                     "the signature memo kept a signature that judging it again rejects \
                      (term output suppressed: see CLAUDE.md)"
                 );
@@ -2505,7 +2507,7 @@ impl Tc {
                 #[cfg(debug_assertions)]
                 if crate::checks::verify_this_skip() {
                     assert!(
-                        crate::stats::unobserved(|| self.ty_infer(env, t)).is_ok_and(|again| again == level),
+                        crate::checks::rederive(crate::checks::Claim::Kept, || self.ty_infer(env, t)).is_ok_and(|again| again == level),
                         "the closed-type memo kept a level that judging the type again does \
                          not give (term output suppressed: see CLAUDE.md)"
                     );
@@ -2872,7 +2874,7 @@ impl Tc {
     /// entries' types by identity and their levels, interned; `None` when
     /// the conditions fail or `k` is past [`STRENGTHEN_MAX`].
     fn strengthened(&self, env: &Env, t: &Rc<Term>) -> Option<(Scope, u32)> {
-        let u = crate::bounds::scope_term_use(t);
+        let u = crate::bounds::term_local_use(t);
         let k = u.bound;
         if u.has_wk || k > STRENGTHEN_MAX || k as usize > env.gamma.entries.len() {
             return None;
@@ -2880,7 +2882,7 @@ impl Tc {
         let mut entries: [Option<&CtxEntry>; STRENGTHEN_MAX as usize] = [None; STRENGTHEN_MAX as usize];
         for j in 0..k {
             let e = env.gamma.entries.nth_inner(j)?;
-            let eu = crate::bounds::scope_type_use(&e.ty);
+            let eu = crate::bounds::type_local_use(&e.ty);
             if eu.has_wk || eu.bound + j + 1 > k {
                 return None;
             }
@@ -2916,7 +2918,7 @@ impl Tc {
         // within the same `k` entries: it is half the judgment.
         let strong = self.strengthened(env, t).filter(|(_, k)| {
             ty.as_syn().is_some_and(|e| {
-                let u = crate::bounds::scope_type_ref_use(e);
+                let u = crate::bounds::type_ref_local_use(e);
                 !u.has_wk && u.bound <= *k
             })
         });
@@ -2929,7 +2931,7 @@ impl Tc {
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 assert!(
-                    crate::stats::unobserved(|| self.tm_check_inner(env, t, ty, l)).is_ok(),
+                    crate::checks::rederive(crate::checks::Claim::Kept, || self.tm_check_inner(env, t, ty, l)).is_ok(),
                     "the typing memo kept a check that judging the node again refuses \
                      (term output suppressed: see CLAUDE.md)"
                 );
@@ -3160,7 +3162,7 @@ impl Tc {
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 assert!(
-                    crate::stats::unobserved(|| self.tm_infer_fresh(env, t)).is_ok_and(|again| again == judged),
+                    crate::checks::rederive(crate::checks::Claim::Kept, || self.tm_infer_fresh(env, t)).is_ok_and(|again| again == judged),
                     "the typing memo kept an inferred type that judging the node again does \
                      not give (term output suppressed: see CLAUDE.md)"
                 );
@@ -3174,7 +3176,7 @@ impl Tc {
         let scope = match strong {
             Some((s, k))
                 if judged.0.as_syn().is_some_and(|ty| {
-                    let u = crate::bounds::scope_type_ref_use(ty);
+                    let u = crate::bounds::type_ref_local_use(ty);
                     !u.has_wk && u.bound <= k
                 }) =>
             {
@@ -5435,9 +5437,9 @@ mod typing_memo_tests {
         assert!(queries(&d) <= 1, "the top link was not answered whole");
     }
 
-    /// Kind, never count: holding an extra reference to every node (what the
-    /// bounds cache's keep-alives do to an arbitrary subset) changes no
-    /// counter, so which lookups hit does not depend on reference counts.
+    /// Kind, never count: holding an extra reference to every node (what any
+    /// table of keep-alives does to an arbitrary subset) changes no counter,
+    /// so which lookups hit does not depend on reference counts.
     #[test]
     fn reference_counts_do_not_move_the_counters() {
         let links = chain(12);

@@ -136,10 +136,13 @@
 //! entry and changes nothing else, so the memo changes allocation and work,
 //! never syntax. Each entry holds a keep-alive clone of its key, so an
 //! address cannot be reused while the memo lives; the entries are dropped
-//! when the call returns (the emptied tables go back to a per-thread pool).
-//! A `Var` leaf is shared by construction ([`Term::var_rc`]), so it is
-//! mapped before the memo is asked, and enters it only when it became a
-//! payload: that is the one leaf result worth sharing across paths.
+//! when the call returns.
+//! A `Var` leaf is shared by construction ([`Term::var_rc`]), so the memo
+//! is never asked about one. What it becomes is the mapper's own node for
+//! that payload at that depth ([`Mapper::local_var`], [`Lifted`]): one node
+//! along every path, and the substitution's own node wherever the payload
+//! needs no lifting, so a payload keeps the identity (and the bounds, and
+//! every memo entry keyed by it) that it had before it was substituted.
 //!
 //! Every mapper whose output depends on the node and depths alone opts in
 //! ([`Mapper::memo`]): the global and universe operations as much as the
@@ -152,7 +155,7 @@
 //! variable), [`RootTerms`] and [`RebuildChecked`] (state per visit). Debug
 //! builds re-run the real traversal behind a sample of hits, as for skips.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::bounds;
 use crate::few_map::FewMap;
@@ -225,16 +228,42 @@ impl GlobalSubst {
 /// rebuilds exactly as it would have). The first `Rc` of each entry is the
 /// keep-alive for the address in its key.
 ///
-/// Most calls record one or two nodes and a few record thousands, so each
-/// table is a [`FewMap`]: a call that stays small allocates nothing and is
-/// dropped by dropping its entries. (The tables were hash tables kept in a
-/// per-thread pool; emptying one cost its capacity, which was the largest
-/// call's, on every call that recorded anything:
-/// `issues/per-call-memos-pay-table-capacity.md`.)
+/// Most calls record nothing, or one or two nodes, and a few record
+/// thousands. So the tables are made at the first node recorded (a mapper
+/// is built and dropped by every call, and a call that records nothing
+/// should pay for no table), and each is a [`FewMap`]: a call that stays
+/// small allocates nothing more and is dropped by dropping its entries.
+/// (The tables were hash tables kept in a per-thread pool; emptying one
+/// cost its capacity, which was the largest call's, on every call that
+/// recorded anything: `issues/per-call-memos-pay-table-capacity.md`.)
 #[derive(Default)]
 struct NodeMemo {
-    terms: FewMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>,
-    types: FewMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>,
+    tables: Option<Box<NodeTables>>,
+}
+
+type Kept<T> = (Rc<T>, Rc<T>, bool);
+
+#[derive(Default)]
+struct NodeTables {
+    terms: FewMap<(usize, Depths), Kept<Term>>,
+    types: FewMap<(usize, Depths), Kept<Type>>,
+}
+
+impl NodeMemo {
+    #[inline]
+    fn term(&self, key: &(usize, Depths)) -> Option<&Kept<Term>> {
+        self.tables.as_ref()?.terms.get(key)
+    }
+    #[inline]
+    fn ty(&self, key: &(usize, Depths)) -> Option<&Kept<Type>> {
+        self.tables.as_ref()?.types.get(key)
+    }
+    fn keep_term(&mut self, key: (usize, Depths), kept: Kept<Term>) {
+        self.tables.get_or_insert_with(Box::default).terms.insert(key, kept);
+    }
+    fn keep_type(&mut self, key: (usize, Depths), kept: Kept<Type>) {
+        self.tables.get_or_insert_with(Box::default).types.insert(key, kept);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,8 +319,14 @@ trait Mapper {
     fn level(&mut self, l: &Level, _at: Depths) -> Level {
         l.clone()
     }
-    fn local_var(&mut self, v: LocalVar, _at: Depths) -> Term {
-        Term::Var(v)
+    /// What a local variable becomes, or `None` (the default) when it stays
+    /// the variable it is. A `Some` is a change and is noted by the caller,
+    /// as [`Self::pre_tm`]'s is. The node is used as it is given, so a
+    /// mapper that hands out one node for one payload at one depth keeps
+    /// every occurrence of a variable one node (§Keeping a shared DAG
+    /// shared), and a payload that needs no lifting is the caller's own.
+    fn local_var(&mut self, _v: LocalVar, _at: Depths) -> Option<Rc<Term>> {
+        None
     }
     /// `U^δ`; `subst` has already been mapped.
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, _at: Depths) -> Type {
@@ -383,15 +418,16 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if let Some(count) = M::COUNT_NODES {
         count(1);
     }
-    if m.skip_ty(t, at) {
+    if !(M::VERIFY_SKIPS && crate::checks::unskipped()) && m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
         // claim in debug builds, exactly as shared_ty verifies the change
         // counter — at the level `checks` sets, because the whole cost of
-        // the walk being skipped is paid again.
+        // the walk being skipped is paid again: the subtree is walked with
+        // no skip taken inside it (`checks::rederive`).
         #[cfg(debug_assertions)]
         if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
-            let mapped = map_type(t, m, at);
+            let mapped = crate::checks::rederive(crate::checks::Claim::Skip, || map_type(t, m, at));
             assert!(
                 *m.changes() == before && mapped == **t,
                 "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
@@ -406,13 +442,13 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     let key = (Rc::as_ptr(t) as usize, at);
     let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
     if shared {
-        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.types.get(&key)) {
+        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.ty(&key)) {
             let (out, changed) = (Rc::clone(out), *changed);
             crate::stats::subst_memo_hits(1);
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 let before = *m.changes();
-                let again = map_type(t, m, at);
+                let again = crate::checks::rederive(crate::checks::Claim::Kept, || map_type(t, m, at));
                 assert!(
                     (*m.changes() != before) == changed && again == *out,
                     "{} memoized a shared node's result that walking it again does not build \
@@ -433,7 +469,7 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     let out = if changed { Rc::new(mapped) } else { shared_ty::<M>(t, mapped) };
     if shared {
         if let Some(memo) = m.memo() {
-            memo.types.insert(key, (Rc::clone(t), Rc::clone(&out), changed));
+            memo.keep_type(key, (Rc::clone(t), Rc::clone(&out), changed));
         }
     }
     out
@@ -517,11 +553,11 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
         m.note();
         return Some(r.into_rc());
     }
-    if m.skip_tm(t, at) {
+    if !(M::VERIFY_SKIPS && crate::checks::unskipped()) && m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
         if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
-            let mapped = map_term(t, m, at);
+            let mapped = crate::checks::rederive(crate::checks::Claim::Skip, || map_term(t, m, at));
             assert!(
                 *m.changes() == before && mapped == **t,
                 "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
@@ -531,44 +567,31 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
         }
         return Some(Rc::clone(t));
     }
-    let key = (Rc::as_ptr(t) as usize, at);
-    // `Var` leaves are shared by construction (`Term::var_rc`), so their
-    // count says nothing about a second path, and mapping one costs less
-    // than a table probe. Mapped first, then: a variable that stays a
-    // variable is a shared leaf again, and only one that became a payload
-    // goes through the memo, so a payload reached along two paths is still
-    // one node (and counts the same hit it always did).
-    if let Term::Var(_) = **t {
-        let before = *m.changes();
-        let mapped = map_term(t, m, at);
-        if *m.changes() == before {
-            return Some(shared_tm::<M>(t, mapped));
-        }
-        if let Term::Var(_) = mapped {
-            return Some(mapped.into_rc());
-        }
-        if Rc::strong_count(t) == 1 {
-            return Some(Rc::new(mapped));
-        }
-        let Some(memo) = m.memo() else { return Some(Rc::new(mapped)) };
-        if let Some((_, out, _)) = memo.terms.get(&key) {
-            crate::stats::subst_memo_hits(1);
-            return Some(Rc::clone(out));
-        }
-        let out = Rc::new(mapped);
-        memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), true));
-        return Some(out);
+    // A variable is answered by the mapper and never by the memo: the leaf
+    // is shared by construction (`Term::var_rc`), so its count says nothing
+    // about a second path, and what it becomes is the mapper's node for
+    // that payload at this depth ([`Mapper::local_var`]), the same along
+    // every path.
+    if let Term::Var(v) = **t {
+        return Some(match m.local_var(v, at) {
+            None => Rc::clone(t),
+            Some(out) => {
+                m.note();
+                out
+            }
+        });
     }
+    let key = (Rc::as_ptr(t) as usize, at);
     // As in `sub_ty`.
     let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
     if shared {
-        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.terms.get(&key)) {
+        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.term(&key)) {
             let (out, changed) = (Rc::clone(out), *changed);
             crate::stats::subst_memo_hits(1);
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 let before = *m.changes();
-                let again = map_term(t, m, at);
+                let again = crate::checks::rederive(crate::checks::Claim::Kept, || map_term(t, m, at));
                 assert!(
                     (*m.changes() != before) == changed && again == *out,
                     "{} memoized a shared node's result that walking it again does not build \
@@ -603,7 +626,7 @@ fn sub_tm_settled<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths, mapped: Term, 
     let out = if changed { mapped.into_rc() } else { shared_tm::<M>(t, mapped) };
     if shared {
         if let Some(memo) = m.memo() {
-            memo.terms.insert((Rc::as_ptr(t) as usize, at), (Rc::clone(t), Rc::clone(&out), changed));
+            memo.keep_term((Rc::as_ptr(t) as usize, at), (Rc::clone(t), Rc::clone(&out), changed));
         }
     }
     out
@@ -895,7 +918,15 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
 
 fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
     match t {
-        Term::Var(v) => m.local_var(*v, at),
+        // Reached for a root only: a variable below one is answered in
+        // [`sub_tm_answered`], which keeps the mapper's node.
+        Term::Var(v) => match m.local_var(*v, at) {
+            None => Term::Var(*v),
+            Some(out) => {
+                m.note();
+                (*out).clone()
+            }
+        },
         Term::TmNat => Term::TmNat,
         Term::TmPi { dom_level, cod_level, dom, cod } => Term::TmPi {
             dom_level: m.level(dom_level, at),
@@ -1054,7 +1085,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             Term::VecItems {
                 level: m.level(level, at),
                 elem: sub_ty(elem, m, at),
-                items: if same { Rc::clone(items) } else { mapped.into() },
+                items: if same { std::sync::Arc::clone(items) } else { mapped.into() },
                 from: if same { *from } else { 0 },
             }
         }
@@ -1432,15 +1463,10 @@ impl Mapper for ShiftLocal {
         &mut self.changes
     }
 
-    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
-        if v.0 < at.local {
-            Term::Var(v)
-        } else {
-            // `by` is nonzero here (the entry points short-circuit zero), so
-            // a free variable is always renumbered.
-            self.note();
-            Term::Var(LocalVar(v.0 + self.by))
-        }
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
+        // `by` is nonzero here (the entry points short-circuit zero), so a
+        // free variable is always renumbered.
+        (v.0 >= at.local).then(|| Term::var_rc(v.0 + self.by))
     }
 
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
@@ -1750,17 +1776,65 @@ impl Mapper for InstUniv<'_> {
     }
 }
 
+/// A substitution's payloads as they read under binders: each lifted to a
+/// depth once, and one node for every occurrence at that depth.
+///
+/// A variable that occurs many times under the same binders (a readback's
+/// environment entry, `issues/elab-whnf-family-transport-cost.md`) shares
+/// one lifted copy instead of rewalking the payload per occurrence. A
+/// payload that lifting does not change is the substitution's own node, at
+/// every depth: under no binder always, and under binders when it reads no
+/// variable they could capture, which its bounds answer without a walk and
+/// without an entry here.
+struct Lifted<K> {
+    at: FewMap<(K, Depths), Rc<Term>>,
+}
+
+impl<K> Default for Lifted<K> {
+    fn default() -> Lifted<K> {
+        Lifted { at: FewMap::default() }
+    }
+}
+
+impl<K: Copy + Eq + std::hash::Hash> Lifted<K> {
+    fn at(&mut self, which: K, at: Depths, payload: &Rc<Term>) -> Rc<Term> {
+        if at.local == 0 && at.global == 0 && at.univ == 0 {
+            return Rc::clone(payload);
+        }
+        // A variable lifts to a variable, whatever the other two
+        // namespaces count: the shared leaf, and no entry.
+        if let Term::Var(w) = **payload {
+            return Term::var_rc(w.0 + at.local);
+        }
+        // Not while a skip is being derived again: that walk consults no
+        // bounds (`checks::unskipped`), and the lift below takes none.
+        if at.global == 0 && at.univ == 0 && !crate::checks::unskipped() && bounds::skip_term(payload, 0) {
+            return Rc::clone(payload);
+        }
+        if let Some(hit) = self.at.get(&(which, at)) {
+            return Rc::clone(hit);
+        }
+        let mut out = Rc::clone(payload);
+        if at.local != 0 {
+            out = sub_tm(&out, &mut ShiftLocal { by: at.local, changes: 0, memo: NodeMemo::default() }, Depths::default());
+        }
+        if at.global != 0 {
+            out = sub_tm(&out, &mut ShiftGlobal { by: at.global, changes: 0, memo: NodeMemo::default() }, Depths::default());
+        }
+        if at.univ != 0 {
+            out = sub_tm(&out, &mut ShiftUniv { by: at.univ, changes: 0, memo: NodeMemo::default() }, Depths::default());
+        }
+        self.at.insert((which, at), Rc::clone(&out));
+        out
+    }
+}
+
 /// Local substitution `δ`, applied from depth zero; lifting under binders is
 /// depth-based (payloads are shifted in all three namespaces at insertion).
 struct SubstLocal<'a> {
     delta: &'a LocalSubst,
     changes: u64,
-    /// Each payload lifted to a binder depth, once per depth: a variable
-    /// that occurs many times under the same binders (a readback's
-    /// environment entry, `issues/elab-whnf-family-transport-cost.md`)
-    /// shares one lifted copy instead of rewalking the payload per
-    /// occurrence.
-    lifted: FewMap<(usize, Depths), Term>,
+    lifted: Lifted<usize>,
     memo: NodeMemo,
 }
 
@@ -1773,9 +1847,9 @@ impl Mapper for SubstLocal<'_> {
         &mut self.changes
     }
 
-    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
         if v.0 < at.local {
-            return Term::Var(v);
+            return None;
         }
         let i = (v.0 - at.local) as usize;
         let n = self.delta.terms.len();
@@ -1787,25 +1861,15 @@ impl Mapper for SubstLocal<'_> {
         );
         // terms[0] substitutes the outermost entry; index from the innermost.
         let payload = &self.delta.terms[n - 1 - i];
-        let out = if at == Depths::default() {
-            (**payload).clone()
-        } else if let Some(hit) = self.lifted.get(&(i, at)) {
-            hit.clone()
-        } else {
-            let out = payload
-                .shift_local(at.local)
-                .shift_global(at.global)
-                .shift_univ(at.univ);
-            self.lifted.insert((i, at), out.clone());
-            out
-        };
-        // An *identity* substitution sends this variable to itself, and that
-        // is common enough to be worth the O(1) test: `t[id]` should share all
-        // of `t`, not rebuild it. Any other payload is a change.
-        if out != Term::Var(v) {
-            self.note();
+        if let Term::Var(w) = **payload {
+            // A variable lifts to a variable. An *identity* substitution
+            // sends this one to itself, and that is common enough to be
+            // worth the O(1) test: `t[id]` should share all of `t`, not
+            // rebuild it. Any other payload is a change.
+            let w = w.0 + at.local;
+            return (w != v.0).then(|| Term::var_rc(w));
         }
-        out
+        Some(self.lifted.at(i, at, payload))
     }
 
     /// Composition on tails (ch. 02/05): `wk_g^k ∘ δ = wk_g^{δ̂}` and
@@ -1855,6 +1919,9 @@ struct InstTop<'a> {
     payload: &'a Term,
     by: u32,
     changes: u64,
+    /// The payload as a node, made at its first occurrence.
+    node: Option<Rc<Term>>,
+    lifted: Lifted<()>,
     memo: NodeMemo,
 }
 
@@ -1867,24 +1934,17 @@ impl Mapper for InstTop<'_> {
         &mut self.changes
     }
 
-    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
         if v.0 < at.local {
-            return Term::Var(v);
+            return None;
         }
         if v.0 == at.local {
-            self.note();
-            return self
-                .payload
-                .shift_local(at.local)
-                .shift_global(at.global)
-                .shift_univ(at.univ);
+            let node = self.node.get_or_insert_with(|| self.payload.clone().into_rc());
+            return Some(self.lifted.at((), at, node));
         }
         // `by == 1` keeps Γ's variables where they were.
         let w = v.0 - 1 + self.by;
-        if w != v.0 {
-            self.note();
-        }
-        Term::Var(LocalVar(w))
+        (w != v.0).then(|| Term::var_rc(w))
     }
 
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
@@ -2000,12 +2060,8 @@ impl Mapper for AbstractLocal<'_> {
     // The walk makes room for `z` as it goes ([`ShiftLocal`] by one), where
     // it used to walk a weakened copy of the goal: one traversal and one
     // result, and nothing built for the parts it can skip.
-    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
-        if v.0 < at.local {
-            return Term::Var(v);
-        }
-        self.note();
-        Term::Var(LocalVar(v.0 + 1))
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
+        (v.0 >= at.local).then(|| Term::var_rc(v.0 + 1))
     }
 
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
@@ -2093,7 +2149,7 @@ impl Mapper for RootTerms {
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
         // `pre_tm` runs before the memo is asked, so a shared node is
         // listed only the first time it is met.
-        if at == Depths::default() && !self.memo.terms.contains_key(&(Rc::as_ptr(t) as usize, at)) {
+        if at == Depths::default() && self.memo.term(&(Rc::as_ptr(t) as usize, at)).is_none() {
             self.out.push(Rc::clone(t));
         }
         None
@@ -2275,7 +2331,7 @@ macro_rules! ops {
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
             pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
-                $map(self, &mut SubstLocal { delta, changes: 0, lifted: FewMap::default(), memo: NodeMemo::default() }, Depths::default())
+                $map(self, &mut SubstLocal { delta, changes: 0, lifted: Lifted::default(), memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Apply a global substitution `σ`.
@@ -2287,7 +2343,7 @@ macro_rules! ops {
             /// `Γ, x`, `s` and the result in `Γ, Δ` with `|Δ| = by`. See
             /// [`InstTop`].
             pub fn inst_top(&self, by: u32, payload: &Term) -> $ty {
-                $map(self, &mut InstTop { payload, by, changes: 0, memo: NodeMemo::default() }, Depths::default())
+                $map(self, &mut InstTop { payload, by, changes: 0, node: None, lifted: Lifted::default(), memo: NodeMemo::default() }, Depths::default())
             }
 
             /// [`Self::inst_top`] below `cutoff` binders that stay fixed:
@@ -2298,7 +2354,7 @@ macro_rules! ops {
             pub fn inst_top_above(&self, by: u32, cutoff: u32, payload: &Term) -> $ty {
                 $map(
                     self,
-                    &mut InstTop { payload, by, changes: 0, memo: NodeMemo::default() },
+                    &mut InstTop { payload, by, changes: 0, node: None, lifted: Lifted::default(), memo: NodeMemo::default() },
                     Depths { local: cutoff, ..Depths::default() },
                 )
             }
@@ -2533,7 +2589,7 @@ impl LocalSubst {
 
     /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
     pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: FewMap::default(), memo: NodeMemo::default() }, Depths::default())
+        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: Lifted::default(), memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {
@@ -2722,6 +2778,87 @@ mod tests {
             }
             assert_eq!(*node, leaf, "{name} at the leaf");
         }
+    }
+
+    /// A substituted variable is a node the substitution already had, never
+    /// a copy of one: the payload itself under no binder and wherever
+    /// lifting does not change it, and one lifted node per depth otherwise.
+    /// Stated on pointers, since a copy is equal. (Each occurrence used to
+    /// get a copy of the payload's root, which lost the payload's identity,
+    /// and with it its bounds and every memo entry keyed by its address.)
+    #[test]
+    fn a_substituted_variable_is_the_payloads_own_node() {
+        crate::checks::set_skip_verification(crate::checks::SkipVerification::Full);
+        let nat = Rc::new(Type::Nat);
+        let app = |fun: Rc<Term>, arg: Rc<Term>| {
+            rt(Term::App {
+                fun,
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::clone(&nat),
+                cod: Rc::clone(&nat),
+                arg,
+            })
+        };
+        let lam = |body: Rc<Term>| {
+            rt(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: Rc::clone(&nat), body })
+        };
+        // Two leaves of one variable that are two nodes, so that nothing
+        // but the mapper can make their images one.
+        let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+        let children = |t: &Rc<Term>| match &**t {
+            Term::App { fun, arg, .. } => (Rc::clone(fun), Rc::clone(arg)),
+            _ => panic!("the application's shape changed"),
+        };
+        let body_of = |t: &Rc<Term>| match &**t {
+            Term::Lam { body, .. } => Rc::clone(body),
+            _ => panic!("the binder's shape changed"),
+        };
+        // `x x` at depth zero and under one binder, in `·, y, x`.
+        let flat = app(var(0), var(0));
+        let under = lam(app(var(1), var(1)));
+        let gamma = nil_ctx(1);
+
+        // A closed payload is itself at every depth.
+        let closed = rt(Term::Succ(rt(Term::Zero)));
+        let delta = LocalSubst::id(&gamma).extended(Rc::clone(&closed));
+        let (f, a) = children(&sub_tm(&flat, &mut subst_local(&delta), Depths::default()));
+        assert!(Rc::ptr_eq(&f, &closed) && Rc::ptr_eq(&a, &closed), "a payload was copied under no binder");
+        let (f, a) = children(&body_of(&sub_tm(&under, &mut subst_local(&delta), Depths::default())));
+        assert!(Rc::ptr_eq(&f, &closed) && Rc::ptr_eq(&a, &closed), "a closed payload was copied under a binder");
+
+        // An open one is itself under no binder, and one lifted node for
+        // both occurrences under the binder.
+        let open = rt(Term::Succ(var(0)));
+        let delta = LocalSubst::id(&gamma).extended(Rc::clone(&open));
+        let (f, a) = children(&sub_tm(&flat, &mut subst_local(&delta), Depths::default()));
+        assert!(Rc::ptr_eq(&f, &open) && Rc::ptr_eq(&a, &open), "an open payload was copied under no binder");
+        let (f, a) = children(&body_of(&sub_tm(&under, &mut subst_local(&delta), Depths::default())));
+        assert!(Rc::ptr_eq(&f, &a), "an open payload was lifted once per occurrence");
+        assert_eq!(*f, Term::Succ(var(1)));
+        assert!(!Rc::ptr_eq(&f, &open));
+
+        // `inst_top` has one payload, by value: one node for it per depth.
+        let top = |t: &Rc<Term>| {
+            let mut m = InstTop { payload: &open, by: 1, changes: 0, node: None, lifted: Lifted::default(), memo: NodeMemo::default() };
+            sub_tm(t, &mut m, Depths::default())
+        };
+        let (f, a) = children(&top(&flat));
+        assert!(Rc::ptr_eq(&f, &a) && *f == *open, "inst_top copied its payload per occurrence");
+        let (f, a) = children(&body_of(&top(&under)));
+        assert!(Rc::ptr_eq(&f, &a) && *f == Term::Succ(var(1)), "inst_top lifted its payload per occurrence");
+
+        // A variable payload is the shared leaf, and the identity is no
+        // change at all.
+        let delta = LocalSubst::id(&nil_ctx(2)).extended(var(1));
+        let (f, _) = children(&body_of(&sub_tm(&under, &mut subst_local(&delta), Depths::default())));
+        assert!(Rc::ptr_eq(&f, &Term::var_rc(2)));
+        let id = LocalSubst::id(&nil_ctx(2));
+        assert!(Rc::ptr_eq(&sub_tm(&under, &mut subst_local(&id), Depths::default()), &under), "t[id] is not t");
+    }
+
+    fn subst_local(delta: &LocalSubst) -> SubstLocal<'_> {
+        SubstLocal { delta, changes: 0, lifted: Lifted::default(), memo: NodeMemo::default() }
     }
 
     #[test]
@@ -3080,7 +3217,7 @@ pub fn holds_checked_spelling_ty(t: &Rc<Type>) -> bool {
 }
 
 /// 1 + the largest free local de Bruijn index of `t` (0 when it is locally
-/// closed), from the bounds memo the local traversals already keep
+/// closed), from the bounds the node keeps for the local traversals
 /// (`bounds.rs`). For a reader outside the kernel that pairs syntax with
 /// captured entries — the elaborator's readback of a closure — and must not
 /// pay for the entries the syntax cannot reach.

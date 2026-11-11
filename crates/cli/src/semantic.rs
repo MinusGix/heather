@@ -186,6 +186,15 @@ struct Canon {
     spine: usize,
 }
 
+/// What a replayed image's load already knows of it: the stored bytes'
+/// digest, and the interface identity, which the load projected from the
+/// decoded delta to hold the stored one to it. A module that was elaborated
+/// has neither, and its identity is projected when it finishes.
+struct Hit {
+    content: [u8; 32],
+    identity: [u8; 32],
+}
+
 /// What the session keeps of a module it has finished, in the module's own
 /// canonical coordinates.
 struct Finished {
@@ -260,9 +269,9 @@ pub struct SemanticSession {
     /// a module that checked, and is published with them
     /// (`docs/module-dag-design.md` §11).
     expectations: bool,
-    /// The stored bytes' digest of the image the last [`Self::check_in`]
-    /// replayed, for the module's [`Finished`].
-    hit_content: Option<[u8; 32]>,
+    /// The image the last [`Self::check_in`] replayed, for the module's
+    /// [`Finished`].
+    hit: Option<Hit>,
     /// The rest of the load, once the caller has said what it is
     /// ([`Self::expect_load`]): what each module still to be checked will
     /// need of the finished ones (`docs/module-dag-design.md` §8).
@@ -348,7 +357,7 @@ impl SemanticSession {
             only: BTreeMap::new(),
             only_met: BTreeSet::new(),
             expectations: false,
-            hit_content: None,
+            hit: None,
             load: None,
         }
     }
@@ -643,19 +652,24 @@ impl SemanticSession {
             self.done.insert(module.name.clone(), Finished::failed(imports, canon, source_len));
             return outcome;
         };
+        let hit = self.hit.take();
+        debug_assert!(
+            hit.as_ref().is_none_or(|hit| hit.identity == ModuleImageCache::interface_hash(&delta)),
+            "a replayed image's identity is not its delta's projection"
+        );
         let finished = Finished {
             imports,
             canon,
             failed: false,
             len: delta.binding_count(),
-            identity: ModuleImageCache::interface_hash(&delta),
+            identity: hit.as_ref().map_or_else(|| ModuleImageCache::interface_hash(&delta), |hit| hit.identity),
             key,
             source_len,
             registry: Some(delta.registry_part()),
             digest: OnceLock::new(),
             hashes: None,
             delta: Some(Rc::new(delta)),
-            content: self.hit_content.take(),
+            content: hit.map(|hit| hit.content),
             state,
         };
         self.done.insert(module.name.clone(), finished);
@@ -984,7 +998,7 @@ impl SemanticSession {
         elab.set_lint_profile(lint_profile);
         let start = elab.psi().bindings.len();
         let mut notices = Vec::new();
-        self.hit_content = None;
+        self.hit = None;
         if !self.images_usable {
             let checked = elab.check_module_delta(&module.name, &module.src, dependencies);
             elab.take_omega_reports();
@@ -1028,7 +1042,7 @@ impl SemanticSession {
                 }) {
                     Ok(()) => {
                         self.hits += 1;
-                        self.hit_content = Some(loaded.content);
+                        self.hit = Some(Hit { content: loaded.content, identity: loaded.interface_hash });
                         self.note_stale(&module.name, loaded.stale, &mut notices);
                         return (
                             ModuleOutcome {
@@ -1611,20 +1625,15 @@ pub fn module_imports(name: &str, src: &str, common_earlier: bool) -> Vec<String
     imports
 }
 
-/// The modules a source imports, as written, the prelude aside. The loader
-/// read the same lines; a parse error is the elaborator's to report.
+/// The modules a source imports, as written, the prelude aside: its import
+/// lines and nothing after them (`heather_syntax::leading_imports`), which is
+/// what the loader read.
 pub fn written_imports(src: &str) -> Vec<String> {
-    match heather_syntax::parse_file(src) {
-        Ok(file) => file
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                heather_syntax::Item::Import(imp) if imp.module != heather_elab::PRELUDE_MODULE => Some(imp.module.clone()),
-                _ => None,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    heather_syntax::leading_imports(src)
+        .into_iter()
+        .filter(|imp| imp.module != heather_elab::PRELUDE_MODULE)
+        .map(|imp| imp.module)
+        .collect()
 }
 
 /// The canonical order of the closure of a module with these imports

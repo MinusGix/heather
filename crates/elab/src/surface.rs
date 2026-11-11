@@ -1,6 +1,6 @@
 //! State-free surface-expression traversals and argument-slot lowering.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::Term;

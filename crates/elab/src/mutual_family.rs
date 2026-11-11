@@ -19,7 +19,7 @@
 //! kernel re-checks every term the routes emit, and a refusal names what the
 //! user wrote.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

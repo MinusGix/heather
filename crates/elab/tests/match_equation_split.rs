@@ -112,12 +112,12 @@ fn a_split_emits_the_same_term_as_the_match() {
     let ty = Type::Pi {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: std::sync::Arc::new(Type::Nat),
-        cod: std::sync::Arc::new(Type::Pi {
+        dom: heather_kernel::rc::Rc::new(Type::Nat),
+        cod: heather_kernel::rc::Rc::new(Type::Pi {
             dom_level: Level::Zero,
             cod_level: Level::Zero,
-            dom: std::sync::Arc::new(Type::Nat),
-            cod: std::sync::Arc::new(Type::Nat),
+            dom: heather_kernel::rc::Rc::new(Type::Nat),
+            cod: heather_kernel::rc::Rc::new(Type::Nat),
         }),
     };
     conv_term(by_split.psi(), &empty_ctx(), Layer::Prog, &a, &b, &ty, &Level::Zero, DEFAULT_FUEL)

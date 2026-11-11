@@ -10,7 +10,7 @@
 //! indistinguishable from a bug. (Reflexivity on well-typed terms is the
 //! ch. 07/08 PER lemma, not something the generators can witness.)
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_local_ctx, conv_term, conv_type, ConvError};
 use heather_kernel::layer::Layer;

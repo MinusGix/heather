@@ -4,7 +4,7 @@ status: open
 labels: [kernel,representation,performance,parallelism,design,conversion,evaluator]
 area: kernel
 created: 2026-09-11
-updated: 2026-11-02
+updated: 2026-11-10
 ---
 
 Evaluate replacing the kernel's `Rc`-owned term trees with arena-indexed terms over a frozen prefix, so that (a) the value-domain and term allocation constant goes away at the representation level rather than one pool at a time, and (b) independent declarations of one module can be kernel-checked in parallel without atomic reference counts.
@@ -77,3 +77,4 @@ SURPRISE, filed not exploited: the type memo answers 1.3% of its lookups (163 k 
 - 2026-11-02: Trigger check from the data-oriented survey (2026-11-02, `docs/data-oriented-survey.md` §8). In cold gdb-sampled checks, 32–42% of samples have an allocator frame on top. Most of that is elaborator-side copying of non-term data ([[elab-probe-clone-copies-attempt]], [[elab-cx-persistent-binders]]), so the ≥15% Term/Type trigger has not fired. Re-read it once those two land. [[kernel-compact-level]] (Term 128 → ~80 B) and [[subst-per-call-allocations]] are the representation-preserving steps that shrink the term share without the rewrite.
 - 2026-11-02: 2026-11-02: [[kernel-compact-level]] landed: a 16-byte canonical Level, Term 128 → 104 B, Type 72 → 56 B; cold calc_parser max RSS −10%, gate −6.8% (perf ab). The 8-byte step, which needs an interned join table, is [[kernel-level-eight-bytes]]. An arena would give it that table for free.
 - 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`crates/elab/src/certgen.rs`); [[resolver-lookup-constant]] (`docs/data-oriented-survey.md`).
+- 2026-11-10: [[kernel-level-eight-bytes]] landed without an arena: a process-wide join table that the showcase and the x86 certificate leave empty, so an arena-scoped interner is no longer something this design would be buying.

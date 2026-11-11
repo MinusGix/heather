@@ -9,16 +9,18 @@
 //! so `equiv` is `==` and the normalization a comparison used to run now
 //! runs once, when a join is built. Three families:
 //!
+//! A level is one word (`issues/kernel-level-eight-bytes.md`): a join is
+//! its index in the process's table, so a comparison reads no join at all.
+//!
 //! - `level/equiv-shared` — the two sides are the *same* value. Constant
-//!   time is a claim (`Rc` pointer equality decides a shared join at the
-//!   root), and the flat slope is what states it.
+//!   time is a claim, and the flat slope is what states it.
 //! - `level/equiv-rebuilt` — the two sides are equal but built separately,
-//!   in opposite join orders, so they share no `Rc` and the comparison walks
-//!   both joins' component slices. Linear, and it was linear with a
-//!   `BTreeMap` per side before; what it guards is a comparison that grew
-//!   past that.
+//!   in opposite join orders. One join has one word however it was built,
+//!   so this is flat too; it was linear while a join was compared by its
+//!   components, and what it guards is a comparison that reads them again.
 //! - `level/join` — building `a ⊔ b` from two `n/2`-variable joins: the
-//!   merge that canonicity costs, paid at construction. Expected ~n log n.
+//!   merge that canonicity costs and the table lookup that finds the word,
+//!   paid at construction. Expected ~n log n.
 
 use heather_kernel::level::{Level, UnivVar};
 
@@ -46,31 +48,41 @@ fn tower(n: u32, fwd: bool) -> Level {
     l
 }
 
+/// Comparisons per timed call. One is a nanosecond, which is the timer's
+/// noise and not the comparison's cost; a batch is something the gate's
+/// ratio test can hold.
+const BATCH: u64 = 64;
+
+/// How many of [`BATCH`] comparisons of `a` with `b` say equivalent.
+fn equivs(a: &Level, b: &Level) -> u64 {
+    (0..BATCH).map(|_| std::hint::black_box(a).equiv(std::hint::black_box(b)) as u64).sum()
+}
+
 /// A level against itself — the case the conversion path actually meets most
 /// often, where both sides came from the same annotation. Expected exponent
-/// ~0: reflexivity is decided at the root.
+/// ~0: the two are one word.
 fn equiv_shared() -> Family {
     let cases = [4u64, 8, 16, 32, 64]
         .iter()
         .map(|&n| {
             let a = tower(n as u32, true);
             let b = a.clone();
-            let go = move || a.equiv(&b) as u64;
-            assert!(go() == 1, "a level is not equivalent to itself at n = {n}");
-            Case::new(n, 1, go)
+            let go = move || equivs(&a, &b);
+            assert!(go() == BATCH, "a level is not equivalent to itself at n = {n}");
+            Case::new(n, BATCH, go)
         })
         .collect();
     Family {
         name: "level/equiv-shared",
-        what: "l ≈ l on shared syntax — the reflexivity pre-check",
+        what: "l ≈ l, 64 times — the same word",
         unit: "variables",
         expect_slope: Some((-0.35, 0.45)),
         cases,
     }
 }
 
-/// Equal levels that share nothing: the same joins in the other order,
-/// which canonicity makes the same value but not the same allocation.
+/// Equal levels built apart: the same joins in the other order, which
+/// canonicity makes the same value and the table the same word.
 fn equiv_rebuilt() -> Family {
     let cases = [4u64, 8, 16, 32, 64]
         .iter()
@@ -78,16 +90,16 @@ fn equiv_rebuilt() -> Family {
             let a = tower(n as u32, true);
             let b = tower(n as u32, false);
             assert!(a == b, "levels are canonical: the two towers must be one value");
-            let go = move || a.equiv(&b) as u64;
-            assert!(go() == 1, "the reordered join is not equivalent at n = {n}");
-            Case::new(n, 1, go)
+            let go = move || equivs(&a, &b);
+            assert!(go() == BATCH, "the reordered join is not equivalent at n = {n}");
+            Case::new(n, BATCH, go)
         })
         .collect();
     Family {
         name: "level/equiv-rebuilt",
-        what: "l ≈ l' on equal levels built apart — the slice comparison",
+        what: "l ≈ l' on equal levels built apart, 64 times — one join, one word",
         unit: "variables",
-        expect_slope: Some((0.6, 1.5)),
+        expect_slope: Some((-0.35, 0.45)),
         cases,
     }
 }
@@ -101,9 +113,9 @@ fn join() -> Family {
             let half = (n / 2) as u32;
             let a = tower(half, true);
             let b = tower(half, true).shift(half, 0);
-            let go = move || matches!(Level::max(a.clone(), b.clone()), Level::Join(_)) as u64;
-            assert!(go() == 1, "the join of disjoint towers is a join at n = {n}");
-            Case::new(n, 1, go)
+            let go = move || Level::max(a.clone(), b.clone()).parts().map_or(0, |(_, vars)| vars.len() as u64);
+            assert!(go() == n, "the join of disjoint towers has every variable at n = {n}");
+            Case::new(n, n, go)
         })
         .collect();
     Family {

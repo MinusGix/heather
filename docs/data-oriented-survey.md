@@ -255,6 +255,15 @@ marker shares the slot's cache line; perf ab, calc_parser cold: wall −18%,
 kernel gate −12%, max RSS −20%, all separating. The node header remains the
 lever for what is left ([[bounds-metadata-taxes-one-shot-checking]]).
 
+**Status (2026-11-10).** The header is taken, without the construction API
+this section thought it needed ([[free-variable-bounds-in-the-node]]). It
+is not computed at construction: the kernel's shared pointer keeps an empty
+head beside the value, `bounds.rs` fills it on first demand with the same
+pure function the table memoized, and the pointer empties it before it
+hands the value out mutably. No construction site maintains anything, so
+the 1,200 sites stay as they are. The tables, their weak keys and the
+two-stage fill are deleted; what the change measured is in the issue.
+
 ## 5. Per-call allocations in substitution
 
 **Where.** `crates/kernel/src/subst.rs`.

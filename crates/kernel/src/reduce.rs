@@ -35,7 +35,7 @@
 //!   call every global neutral — the layer-c view, and the only one that
 //!   reaches inside a `box`.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};

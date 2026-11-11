@@ -17,7 +17,7 @@
 //! see the note in `elab_datarepr`.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_syntax::{
     DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, LamBinder, Pat, Span, Stmt,

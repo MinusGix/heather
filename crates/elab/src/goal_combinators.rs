@@ -4,7 +4,7 @@
 //! match whose leaves are copies of `body`. The generated proof remains an
 //! ordinary term and crosses the declaration's normal kernel gate.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

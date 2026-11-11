@@ -14,7 +14,7 @@
 //!
 //! Nothing here is trusted: the declaration passes the kernel gate.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

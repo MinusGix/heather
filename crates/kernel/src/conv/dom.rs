@@ -50,7 +50,7 @@
 //! then embed. See the stage-2a log entry in
 //! `issues/nbe-conversion-round.md`.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::rec;

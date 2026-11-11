@@ -37,7 +37,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_syntax::{Decl, Expr, ExprKind};
 

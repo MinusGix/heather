@@ -7,6 +7,9 @@
 //! each entry's `include_str!` naming that module's file. A list goes stale
 //! when a module it holds gains an import; the failure says to run the
 //! script, not which list to hand-edit.
+//!
+//! The loader in turn reads a module's imports from its import lines alone;
+//! the second test holds that reading to the parser's over the whole tree.
 
 use std::path::{Path, PathBuf};
 
@@ -120,4 +123,39 @@ fn marked_lists_are_the_loaders_closures() {
         stale.len(),
         stale.join("\n")
     );
+}
+
+/// What the loader orders a build by is each module's import lines
+/// (`heather_syntax::leading_imports`); what the elaborator opens a module
+/// with is the imports of the parsed file. Over every source in the tree that
+/// parses they are the same imports at the same spans. A difference would be
+/// a module elaborated over a world the loader did not put under it.
+#[test]
+fn the_import_lines_are_every_sources_imports() {
+    let root = showcase::repo_root();
+    let mut files = Vec::new();
+    for dir in ["lib", "examples", "docs/showcase"] {
+        hthr_files(&root.join(dir), &mut files);
+    }
+    let spell = |i: &heather_syntax::ImportItem| format!("{:?}", (i.reexport, &i.module, i.module_span, &i.listed, i.span));
+    let (mut parsed, mut imports) = (0, 0);
+    for file in &files {
+        let src = std::fs::read_to_string(file).unwrap();
+        let Ok(whole) = heather_syntax::parse_file(&src) else { continue };
+        parsed += 1;
+        let whole: Vec<String> = whole
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                heather_syntax::Item::Import(i) => Some(spell(i)),
+                _ => None,
+            })
+            .collect();
+        let lines: Vec<String> = heather_syntax::leading_imports(&src).iter().map(spell).collect();
+        assert_eq!(lines, whole, "{}", file.display());
+        imports += lines.len();
+    }
+    // The control: the walk found the tree, and the tree imports.
+    assert!(parsed * 10 >= files.len() * 9 && parsed > 100, "{parsed} of {} sources parse", files.len());
+    assert!(imports > parsed, "{imports} imports over {parsed} sources");
 }

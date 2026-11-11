@@ -5,7 +5,7 @@
 //! and the dependency graph are recorded before theorem proofs are discarded.
 
 use std::collections::BTreeMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use crate::layered::{Layer, Layered, index_hash};
 

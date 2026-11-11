@@ -1,10 +1,10 @@
-//! Per-node free-variable bounds for the **local** namespace, memoized by
-//! subtree identity, so the local-namespace traversals (`SubstLocal`,
-//! `ShiftLocal` in `subst.rs`) can return a subtree that provably cannot
-//! change in O(1) instead of walking it to discover it was shareable
+//! Per-node free-variable bounds for the **local** namespace, kept in the
+//! node, so the local-namespace traversals (`SubstLocal`, `ShiftLocal` in
+//! `subst.rs`) can return a subtree that provably cannot change in O(1)
+//! instead of walking it to discover it was shareable
 //! (issues/subst-visits-closed-subtrees.md, route B).
 //!
-//! ## What is cached
+//! ## What is kept
 //!
 //! [`LocalUse`] summarizes everything a local-namespace operation can act on
 //! inside a subtree, relative to the subtree's own root:
@@ -27,30 +27,37 @@
 //! `ctx`/`ty` annotations of letbox/recursors live in a *different* local
 //! context, so they contribute nothing (`box T [δ] = box T`).
 //!
-//! ## Why a memo table and not a field on the node
+//! ## Where it is kept, and who writes it
 //!
-//! Storing the bound at construction would make it an invariant of every
-//! construction site in this crate *and* in `elab` — the trusted-base
-//! spread the issue defers route B over. Here the metadata is instead a
-//! **pure function of the immutable term**, computed on first demand and
-//! memoized; no constructor anywhere maintains anything, and the whole
+//! In the node's head (`rc.rs`, [`crate::rc::Head`]): the words the kernel's
+//! shared pointer keeps beside the value. The summary is a **pure function
+//! of the immutable term**, computed on first demand by this file and
+//! written once; `Rc::new` makes an empty head and that is all a
+//! construction site has to do with it. So no constructor in this crate or
+//! in `elab` maintains anything, which is what storing the bound *at
+//! construction* would have asked of every one of them, and the whole
 //! trusted surface is this file's arithmetic (whose binder counts must
-//! mirror `subst.rs`'s dep table — the one drift hazard, see below).
+//! mirror `subst.rs`'s dep table, the one drift hazard, see below) and the
+//! pointer's rule that a value reached mutably has its head emptied first.
 //!
-//! ## Why pointer keying is sound
+//! The first question about a node walks whatever of its subtree has no
+//! answer yet, and leaves an answer in every node it passes; after that the
+//! question is a read of the node the caller already holds. A node is
+//! walked once for as long as it lives.
 //!
-//! The memo key is the subtree's `Rc` address. Terms have no interior
-//! mutability (DESIGN.md §Representation), so a given allocation's contents
-//! never change while it is alive; and each entry holds a [`Weak`] reference
-//! to its key, which keeps the *allocation* from being freed — so its
-//! address cannot be recycled — while the entry lives, without keeping the
-//! contents (or the subtree below them) alive. Every query comes from a
-//! caller holding a strong `Rc` to the node, so an address match names a
-//! live allocation the entry was computed from, and a hit always describes
-//! exactly the queried term (the full argument is on `Slot`). The table is
-//! thread-local (terms are `Rc`, single-threaded by construction),
-//! fixed-size and direct-mapped; a colliding insert evicts, which costs only
-//! recomputation.
+//! ## What it replaced
+//!
+//! Until 2026-11-10 the answers were in direct-mapped tables keyed by the
+//! node's address (one pair a thread for the substitutions, one for the
+//! typing memo, one for the global namespace), each entry under a weak
+//! reference so that the address stayed its node's, and filled at a node's
+//! second query so that a term built, walked once and dropped paid a marker
+//! and not an entry. What that cost on a cold check, and why a larger table
+//! would not have recovered it, is in
+//! `issues/free-variable-bounds-in-the-node.md`. What it cost in reasoning:
+//! which subtrees a substitution skipped depended on what had been asked
+//! before and on which addresses collided, so the substitution counters
+//! were not functions of the input. Now they are.
 //!
 //! ## How wrong bounds are caught
 //!
@@ -64,8 +71,9 @@
 //! traversal's dep table fails those tests; it cannot silently ship.
 
 use std::cell::RefCell;
-use std::sync::Arc as Rc;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
+
+use crate::rc::{Rc, USES_BITS};
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, Type};
 
@@ -75,9 +83,11 @@ use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, 
 pub(crate) struct LocalUse {
     pub bound: u32,
     pub has_wk: bool,
-    /// Bit `i` set when the free index `i` occurs, for `i < 64` (larger
-    /// indices are counted by `bound` alone). No substitution reads it: it
-    /// answers [`ignores_innermost`], a question about cost.
+    /// Bit `i` set when the free index `i` occurs, for `i` below
+    /// [`USES_BITS`] (larger indices are counted by `bound` alone). No
+    /// substitution reads it: it answers [`ignores_innermost`], a question
+    /// about cost, which is why a node's head can keep its flags in the
+    /// bits above (`rc::Head`).
     pub uses: u64,
 }
 
@@ -113,56 +123,29 @@ impl LocalUse {
     }
 }
 
-/// The memo: two fixed-size direct-mapped caches, one per sort. A slot's
-/// key is a [`Weak`] reference to the node it describes (compared by
-/// address), which pins the node's *allocation* but not its contents; a
-/// colliding insert evicts, which costs only recomputation (usually cheap —
-/// the evictee's children are still cached). Fixed size means no growth, no
-/// rehash, and no flush policy, and it bounds table memory and how many dead
-/// allocations the keys can pin (one node each, never a subtree).
+/// The walk that computes an answer, and what it needs beside the nodes:
+/// its native depth, and the suffix joins of long item arrays.
 ///
-/// **Why the key is weak.** A strong keep-alive (the design until
-/// 2026-11-02) made the table the last owner of every dead subtree it had
-/// seen, so a colliding insert paid for the evictee's whole cascading free —
-/// cold memory, pinned since its last query — and the data-oriented survey
-/// found that eviction drop at about half of all samples under this file on
-/// cold library checks (`issues/bounds-metadata-taxes-one-shot-checking.md`).
-/// A weak key lets a dead term free where it dies, while still warm; the
-/// eviction is one decrement of a weak count and, at most, one block's
-/// deallocation. It also stops the table inflating `Rc::strong_count`,
-/// which the substitution memo and `syntax_eq` read as "reachable twice".
-///
-/// A slot also carries the two-stage marker, so a probe touches one cache
-/// line, not two parallel tables.
-///
-/// Memoization is **two-stage**: a query's first miss stores only a marker
-/// (a bare address, no reference), and the bounds are computed when the
-/// same address is queried again. This is what keeps the metadata from taxing one-shot terms — an
-/// elaborated declaration is built, checked once, and dropped, and paying a
-/// bounds walk plus a table entry per node there bought nothing (measured
-/// 1.5–2× on `code/check-identity-recursor`, whose fresh telescopes are
-/// exactly that shape, for either an eager-compute or `HashMap` variant).
-/// The subtrees skips actually help are the ones traversed over and over
-/// (an eliminator's step body, a schema's annotations), and those reach
-/// their second query within two reduction steps; a marker that gets
-/// computed then covers its whole subtree, because the recursive compute
-/// ([`Cache::term_use`]) stores unconditionally — stability propagates down.
-struct Cache {
-    terms: Vec<Slot<Term>>,
-    types: Vec<Slot<Type>>,
-    /// Native depth of [`Cache::term_use`]'s recursion: past
+/// An answer is kept in the node it is about ([`crate::rc::Head`]): written
+/// once, by [`Walk::term_use`] or [`Walk::type_use`], and read by whoever
+/// holds the node. So a node is walked at most once for as long as it
+/// lives, a parent's answer costs one read per child, and nothing is keyed
+/// by an address.
+struct Walk {
+    /// Native depth of [`Walk::term_use`]'s recursion: past
     /// [`crate::term::SPINE_ITERATE_AT`] a node's spine is computed from the
-    /// bottom up first ([`Cache::warm_spine`]).
+    /// bottom up first ([`Walk::warm_spine`]).
     depth: u32,
     /// Suffix joins of the item arrays whose tail windows were asked about
-    /// ([`Cache::window_use`]).
+    /// ([`Walk::window_use`]).
     windows: Vec<WindowSlot>,
 }
 
-/// One item array's suffix joins at a stride, under a weak key to the array
-/// (the [`Slot`] argument: the key pins the allocation, so an address match
-/// names the array the joins were computed from, whose contents cannot have
-/// changed). `suffix[k]` is the join of `items[k * WINDOW_STRIDE..]`.
+/// One item array's suffix joins at a stride, under a weak key to the array:
+/// the key pins the allocation, so an address match names the array the
+/// joins were computed from, whose contents cannot have changed, and a
+/// caller asks about an array it holds. `suffix[k]` is the join of
+/// `items[k * WINDOW_STRIDE..]`.
 ///
 /// The key pins the array's *block* (one pointer per element) past its
 /// death until evicted, never the elements; the table is small and only
@@ -177,65 +160,72 @@ struct WindowSlot {
 /// lookup plus at most this many joins.
 const WINDOW_STRIDE: usize = 32;
 
-/// log2 of [`WindowSlot`]s per cache.
+/// log2 of [`WindowSlot`]s per thread.
 const WINDOW_BITS: u32 = 6;
 
-/// One direct-mapped entry: the memoized answer under a weak key, and the
-/// two-stage marker, side by side so a probe reads one cache line.
-///
-/// Soundness of the weak key: a caller asks about a node it holds by a
-/// strong `Rc`, so the allocation is live; the key pins its own allocation,
-/// so no other node can occupy that address while the key lives. An address
-/// match therefore names the same allocation the answer was computed from,
-/// and an allocation's contents never change while any strong reference
-/// exists (no interior mutability, DESIGN.md §Representation) — nor can its
-/// strong count climb back from zero. So a hit always describes exactly the
-/// queried term. Contents dropped behind a key are never read: the key is
-/// only ever compared, never upgraded.
-#[repr(align(32))]
-struct Slot<T> {
-    key: Option<Weak<T>>,
-    used: LocalUse,
-    /// The two-stage marker: a bare address, or 0.
-    mark: usize,
+/// What a node's head holds, as a [`LocalUse`].
+#[inline]
+fn known<T>(t: &Rc<T>) -> Option<LocalUse> {
+    Rc::head(t).local().map(|(bound, has_wk, uses)| LocalUse { bound, has_wk, uses })
 }
 
-impl<T> Slot<T> {
-    fn empty() -> Slot<T> {
-        Slot {
-            key: None,
-            used: LocalUse::CLOSED,
-            mark: 0,
-        }
-    }
+#[inline]
+fn keep<T>(t: &Rc<T>, u: LocalUse) {
+    Rc::head(t).set_local(u.bound, u.has_wk, u.uses);
+}
 
-    /// The memoized answer, when the key is `t`'s own allocation.
-    fn hit(&self, t: &Rc<T>) -> Option<LocalUse> {
-        match &self.key {
-            Some(k) if std::ptr::eq(k.as_ptr(), Rc::as_ptr(t)) => Some(self.used),
-            _ => None,
-        }
-    }
-
-    fn store(&mut self, t: &Rc<T>, u: LocalUse) {
-        self.key = Some(Rc::downgrade(t));
-        self.used = u;
+/// A term whose use is read off the node itself: a variable, or a form
+/// with no local variable under it (`box`ed code is another local scope).
+#[inline]
+fn term_leaf(t: &Term) -> Option<LocalUse> {
+    match t {
+        Term::Var(v) => Some(LocalUse {
+            bound: v.0.saturating_add(1),
+            has_wk: false,
+            uses: var_bit(v.0),
+        }),
+        Term::TmNat
+        | Term::TmTy(_)
+        | Term::TmUnit { .. }
+        | Term::TmEmpty { .. }
+        | Term::TmSEmpty { .. }
+        | Term::Zero
+        | Term::NatLit(_)
+        | Term::Triv { .. }
+        | Term::BoxTy(_)
+        | Term::BoxTm(_) => Some(LocalUse::CLOSED),
+        _ => None,
     }
 }
 
-/// log2 of the slot count per sort. 2^16 slots × 32 bytes × 2 sorts = 4 MiB.
-const BITS: u32 = 16;
-
-fn slot(p: usize) -> usize {
-    // Fibonacci hashing; the top bits are the well-mixed ones.
-    ((p as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - BITS)) as usize
+#[inline]
+fn type_leaf(t: &Type) -> Option<LocalUse> {
+    match t {
+        Type::Nat
+        | Type::Ty(_)
+        | Type::Unit { .. }
+        | Type::Empty { .. }
+        | Type::SEmpty { .. }
+        | Type::CodeTy { .. }
+        | Type::CodeTm { .. } => Some(LocalUse::CLOSED),
+        _ => None,
+    }
 }
 
-impl Cache {
-    fn new() -> Cache {
-        Cache {
-            terms: (0..1 << BITS).map(|_| Slot::empty()).collect(),
-            types: (0..1 << BITS).map(|_| Slot::empty()).collect(),
+/// A term's use when it takes no walk: a leaf, or a node already answered.
+#[inline]
+fn term_known(t: &Rc<Term>) -> Option<LocalUse> {
+    term_leaf(t).or_else(|| known(t))
+}
+
+#[inline]
+fn type_known(t: &Rc<Type>) -> Option<LocalUse> {
+    type_leaf(t).or_else(|| known(t))
+}
+
+impl Walk {
+    fn new() -> Walk {
+        Walk {
             depth: 0,
             windows: (0..1 << WINDOW_BITS)
                 .map(|_| WindowSlot { key: None, suffix: Box::new([]) })
@@ -254,10 +244,10 @@ impl Cache {
     /// shared array, so the array's suffix joins at a stride, computed once
     /// in a pass from the back, answer any window with one lookup and fewer
     /// than [`WINDOW_STRIDE`] joins. The from-zero window, which every
-    /// ordinary walk of a literal asks, is the node's own memo entry and is
+    /// ordinary walk of a literal asks, is the node's own answer and is
     /// walked directly: an array gets suffix joins only when a tail is
     /// asked about, and only when it is long enough for them to pay.
-    fn window_use(&mut self, items: &Rc<[Rc<Term>]>, from: u32) -> LocalUse {
+    fn window_use(&mut self, items: &Arc<[Rc<Term>]>, from: u32) -> LocalUse {
         let from = from as usize;
         let live = items.get(from..).unwrap_or(&[]);
         if from == 0 || live.len() < 2 * WINDOW_STRIDE {
@@ -267,12 +257,12 @@ impl Cache {
             }
             return used;
         }
-        let p = Rc::as_ptr(items).cast::<()>() as usize;
-        let i = slot(p) >> (BITS - WINDOW_BITS);
-        let hit = matches!(&self.windows[i].key, Some(k) if std::ptr::eq(k.as_ptr().cast::<()>(), Rc::as_ptr(items).cast::<()>()));
+        let p = Arc::as_ptr(items).cast::<()>() as usize;
+        let i = ((p as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - WINDOW_BITS)) as usize;
+        let hit = matches!(&self.windows[i].key, Some(k) if std::ptr::eq(k.as_ptr().cast::<()>(), Arc::as_ptr(items).cast::<()>()));
         if !hit {
             // From the back, so each stored join is one stride's joins on
-            // the next; the elements' own answers come from the term table.
+            // the next; the elements' own answers come from their nodes.
             let mut suffix = vec![LocalUse::CLOSED; items.len().div_ceil(WINDOW_STRIDE)];
             let mut used = LocalUse::CLOSED;
             for (j, item) in items.iter().enumerate().rev() {
@@ -281,7 +271,7 @@ impl Cache {
                     suffix[j / WINDOW_STRIDE] = used;
                 }
             }
-            self.windows[i] = WindowSlot { key: Some(Rc::downgrade(items)), suffix: suffix.into() };
+            self.windows[i] = WindowSlot { key: Some(Arc::downgrade(items)), suffix: suffix.into() };
         }
         // The stored join at the first stride boundary at or past `from`,
         // and the elements before it one by one.
@@ -294,54 +284,29 @@ impl Cache {
     }
 
     fn term_use(&mut self, t: &Rc<Term>) -> LocalUse {
-        match &**t {
-            Term::Var(v) => {
-                return LocalUse {
-                    bound: v.0.saturating_add(1),
-                    has_wk: false,
-                    uses: var_bit(v.0),
-                }
-            }
-            Term::TmNat
-            | Term::TmTy(_)
-            | Term::TmUnit { .. }
-            | Term::TmEmpty { .. }
-            | Term::TmSEmpty { .. }
-            | Term::Zero
-            | Term::NatLit(_)
-            | Term::Triv { .. }
-            | Term::BoxTy(_)
-            | Term::BoxTm(_) => return LocalUse::CLOSED,
-            _ => {}
-        }
-        let i = slot(Rc::as_ptr(t) as usize);
-        if let Some(u) = self.terms[i].hit(t) {
+        if let Some(u) = term_known(t) {
             return u;
         }
         if self.depth >= crate::term::SPINE_ITERATE_AT {
             self.warm_spine(t);
-            if let Some(u) = self.terms[i].hit(t) {
-                return u;
-            }
         }
         self.depth += 1;
         let u = self.compute_term(t);
         self.depth -= 1;
-        self.terms[i].store(t, u);
+        keep(t, u);
         u
     }
 
     /// A deep node's spine answered from the bottom up, so the recursion
-    /// that follows meets a stored answer one level down instead of walking
-    /// the chain one native frame per node (docs/deep-term-walks-design.md).
+    /// that follows meets an answer one level down instead of walking the
+    /// chain one native frame per node (docs/deep-term-walks-design.md).
     /// Each node below `t` is computed with the depth reset: its own spine
-    /// child is already stored, so it recurses a level or two. A collision
-    /// that evicted that child costs one more level, never the chain.
+    /// child is already answered, so it recurses a level or two.
     fn warm_spine(&mut self, t: &Rc<Term>) {
         let mut path = Vec::new();
         let mut cur = crate::term::spine_child(t);
         while let Some(c) = cur {
-            if self.terms[slot(Rc::as_ptr(c) as usize)].hit(c).is_some() {
+            if term_known(c).is_some() {
                 break;
             }
             path.push(Rc::clone(c));
@@ -354,27 +319,6 @@ impl Cache {
         self.depth = depth;
     }
 
-    /// Two-stage query (see the [`Cache`] docs): `None` means "not seen
-    /// twice yet — walk it", and leaves a marker behind. The marker is a
-    /// bare address, deliberately: it carries no value, so a later node
-    /// reusing the address at worst promotes itself one stage early and
-    /// gets bounds computed from the live node — never a stale answer —
-    /// and storing it costs no refcount traffic and pins nothing.
-    fn term_query(&mut self, t: &Rc<Term>) -> Option<LocalUse> {
-        let p = Rc::as_ptr(t) as usize;
-        let i = slot(p);
-        let s = &mut self.terms[i];
-        if let Some(u) = s.hit(t) {
-            return Some(u);
-        }
-        if s.mark == p {
-            Some(self.term_use(t))
-        } else {
-            s.mark = p;
-            None
-        }
-    }
-
     /// The checked spellings' annotation is optional (design §2.1); an
     /// absent one uses nothing.
     fn opt_type_use(&mut self, t: &Option<Rc<Type>>) -> LocalUse {
@@ -385,95 +329,57 @@ impl Cache {
     }
 
     fn type_use(&mut self, t: &Rc<Type>) -> LocalUse {
-        match &**t {
-            Type::Nat
-            | Type::Ty(_)
-            | Type::Unit { .. }
-            | Type::Empty { .. }
-            | Type::SEmpty { .. }
-            | Type::CodeTy { .. }
-            | Type::CodeTm { .. } => return LocalUse::CLOSED,
-            _ => {}
-        }
-        let i = slot(Rc::as_ptr(t) as usize);
-        if let Some(u) = self.types[i].hit(t) {
+        if let Some(u) = type_known(t) {
             return u;
         }
         let u = self.compute_type(t);
-        self.types[i].store(t, u);
+        keep(t, u);
         u
-    }
-
-    fn type_query(&mut self, t: &Rc<Type>) -> Option<LocalUse> {
-        let p = Rc::as_ptr(t) as usize;
-        let i = slot(p);
-        let s = &mut self.types[i];
-        if let Some(u) = s.hit(t) {
-            return Some(u);
-        }
-        if s.mark == p {
-            Some(self.type_use(t))
-        } else {
-            s.mark = p;
-            None
-        }
     }
 }
 
 /// Bit `i` of [`LocalUse::uses`].
 fn var_bit(i: u32) -> u64 {
-    1u64.checked_shl(i).unwrap_or(0)
+    if i < USES_BITS { 1 << i } else { 0 }
 }
 
 thread_local! {
-    static CACHE: RefCell<Cache> = RefCell::new(Cache::new());
+    static WALK: RefCell<Walk> = RefCell::new(Walk::new());
 }
 
 /// Captures read by evaluation of a syntactic closure. Weakening tails
 /// depend on the ambient base/global shift, not on captured local values.
 pub(crate) fn term_captures(t: &Rc<Term>) -> u32 {
-    CACHE.with(|c| c.borrow_mut().term_use(t).bound)
+    term_local_use(t).bound
 }
 
 pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
-    CACHE.with(|c| c.borrow_mut().type_use(t).bound)
+    type_local_use(t).bound
 }
 
 /// `t`'s local footprint: its bound and whether a weakening tail shows
-/// in its local scope, for conversion's closure identity, which reads only
-/// the captures a body uses (`conv/dom/values.rs`).
+/// in its local scope. The first question about a node walks what of its
+/// subtree has not been answered; every later one is a read.
+#[inline]
 pub(crate) fn term_local_use(t: &Rc<Term>) -> LocalUse {
-    CACHE.with(|c| c.borrow_mut().term_use(t))
+    match term_known(t) {
+        Some(u) => u,
+        None => WALK.with(|c| c.borrow_mut().term_use(t)),
+    }
 }
 
+#[inline]
 pub(crate) fn type_local_use(t: &Rc<Type>) -> LocalUse {
-    CACHE.with(|c| c.borrow_mut().type_use(t))
+    match type_known(t) {
+        Some(u) => u,
+        None => WALK.with(|c| c.borrow_mut().type_use(t)),
+    }
 }
 
-thread_local! {
-    /// The typing memo's own table (`typing.rs` §The typing memo), apart from
-    /// [`CACHE`]: the memo asks about every elimination it judges, and
-    /// answering into the substitutions' table would settle their two-stage
-    /// markers early, so which subtrees a substitution skips (and the
-    /// `local_subst_nodes` it counts) would depend on what was judged
-    /// before. The answers are the same pure function either way.
-    static SCOPE_CACHE: RefCell<Cache> = RefCell::new(Cache::new());
-}
-
-/// [`term_local_use`] for the typing memo's strengthened scope: a node of
-/// bound `k` with no weakening tail is judged by Γ's innermost `k` entries alone.
-pub(crate) fn scope_term_use(t: &Rc<Term>) -> LocalUse {
-    SCOPE_CACHE.with(|c| c.borrow_mut().term_use(t))
-}
-
-pub(crate) fn scope_type_use(t: &Rc<Type>) -> LocalUse {
-    SCOPE_CACHE.with(|c| c.borrow_mut().type_use(t))
-}
-
-/// [`scope_type_use`] for a type the caller holds by reference: the node
-/// itself is walked, its children answered from the table.
-pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
-    SCOPE_CACHE.with(|c| c.borrow_mut().compute_type(t))
+/// [`type_local_use`] for a type the caller holds by reference: the node
+/// itself is walked, its children answered from their own nodes.
+pub(crate) fn type_ref_local_use(t: &Type) -> LocalUse {
+    WALK.with(|c| c.borrow_mut().compute_type(t))
 }
 
 /// Whether a type is locally closed: no free local variable and no
@@ -481,79 +387,50 @@ pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
 /// under any binders. The one reader that is not a traversal is the
 /// closed-type memo in `typing.rs` (`Tc::ty_check`), which judges a locally
 /// closed type once whatever Γ it occurs in — so a wrong answer here is a
-/// soundness bug there, as a wrong skip is in `subst.rs`. Always computed
-/// (never the two-stage marker), so the answer is a function of the type.
+/// soundness bug there, as a wrong skip is in `subst.rs`.
 pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
-    CACHE.with(|c| {
-        let u = c.borrow_mut().type_use(t);
-        u.bound == 0 && !u.has_wk
-    })
+    let u = type_local_use(t);
+    u.bound == 0 && !u.has_wk
 }
 
 /// [`type_locally_closed`] for a type the caller holds by reference: the
-/// node itself is walked, its children answered from the table. Read by the
+/// node itself is walked, its children answered from their own nodes. Read by the
 /// closed-conversion memo (`Tc::conv_ty`), with the same stakes.
 pub(crate) fn type_ref_locally_closed(t: &Type) -> bool {
-    CACHE.with(|c| {
-        let u = c.borrow_mut().compute_type(t);
-        u.bound == 0 && !u.has_wk
-    })
+    let u = type_ref_local_use(t);
+    u.bound == 0 && !u.has_wk
 }
 
 /// [`type_locally_closed`] for an `IWf` signature, which `Tc::iwf_sig_wf`
 /// judges once whatever Γ it occurs in.
 pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {
-    CACHE.with(|c| {
+    WALK.with(|c| {
         let u = c.borrow_mut().iwf_sig_use(sig);
         u.bound == 0 && !u.has_wk
     })
 }
 
-/// Whether evaluating `t` reads none of its innermost `n` (< 64) local
-/// variables: no free index below `n` occurs. A wrong answer costs time,
-/// never a verdict (`eval/probe.rs`, the one reader).
+/// Whether evaluating `t` reads none of its innermost `n` (below
+/// [`USES_BITS`]) local variables: no free index below `n` occurs. A wrong
+/// answer costs time, never a verdict (`eval/probe.rs`, the one reader).
 pub(crate) fn ignores_innermost(t: &Rc<Term>, n: u32) -> bool {
-    debug_assert!(n < 64);
-    CACHE.with(|c| c.borrow_mut().term_use(t).uses & (var_bit(n) - 1) == 0)
+    debug_assert!(n < USES_BITS);
+    term_local_use(t).uses & (var_bit(n) - 1) == 0
 }
 
-/// Should a local-namespace operation at binder depth `d` skip this subtree?
-///
-/// The leaf cases are answered inline — recomputing them is cheaper than a
-/// cache slot, and `box`ed code is a leaf here: its contents are another
-/// local scope.
+/// Should a local-namespace operation at binder depth `d` skip this
+/// subtree? It should when the operation can change nothing in it.
+#[inline]
 pub(crate) fn skip_term(t: &Rc<Term>, d: u32) -> bool {
-    match &**t {
-        Term::Var(v) => return v.0 < d,
-        Term::TmNat
-        | Term::TmTy(_)
-        | Term::TmUnit { .. }
-        | Term::TmEmpty { .. }
-        | Term::TmSEmpty { .. }
-        | Term::Zero
-        | Term::Triv { .. }
-        | Term::BoxTy(_)
-        | Term::BoxTm(_) => return true,
-        _ => {}
-    }
-    CACHE.with(|c| c.borrow_mut().term_query(t).is_some_and(|u| !u.touched_at(d)))
+    !term_local_use(t).touched_at(d)
 }
 
+#[inline]
 pub(crate) fn skip_type(t: &Rc<Type>, d: u32) -> bool {
-    match &**t {
-        Type::Nat
-        | Type::Ty(_)
-        | Type::Unit { .. }
-        | Type::Empty { .. }
-        | Type::SEmpty { .. }
-        | Type::CodeTy { .. }
-        | Type::CodeTm { .. } => return true,
-        _ => {}
-    }
-    CACHE.with(|c| c.borrow_mut().type_query(t).is_some_and(|u| !u.touched_at(d)))
+    !type_local_use(t).touched_at(d)
 }
 
-impl Cache {
+impl Walk {
     /// An `IWf` signature: `arity` and `out` under `x : S`, `child` under
     /// `x, i`.
     fn iwf_sig_use(&mut self, sig: &IWfSig) -> LocalUse {
@@ -753,7 +630,7 @@ impl Cache {
             // A loop, not a fold of joins: the node exists to be shallow.
             // A window past the array's start is an unfolded tail, met once
             // per element as a value comparison walks the vector, so it is
-            // answered from the array's suffix joins ([`Cache::window_use`]).
+            // answered from the array's suffix joins ([`Walk::window_use`]).
             Term::VecItems { elem, items, from, .. } => {
                 self.type_use(elem).join(self.window_use(items, *from))
             }
@@ -989,55 +866,20 @@ impl Cache {
 // is `<= d`. Unlike the local summary it reads *through* boxed code and the
 // other-scope annotations, because the global operations do.
 //
-// It is a separate table from the local one on purpose. The two are asked
-// about different nodes at different times (a zonk asks about a fresh
-// elaborated term's library-typed annotations, a β-step about an
-// eliminator's step body), so one slot serving both would settle each
-// namespace's two-stage marker on the other's schedule; and the local
-// summary's arithmetic is this file's own, while this one is computed by the
-// traversal it serves (`subst::free_global_bound_*`: the generic walk with a
-// mapper that only looks), so there is no second binder table to drift.
+// It is kept in the node beside the local summary ([`crate::rc::Head`]),
+// and is no part of it: the local summary's arithmetic is this file's own,
+// while this one is computed by the traversal it serves
+// (`subst::free_global_bound_*`: the generic walk with a mapper that only
+// looks), so there is no second binder table to drift.
 //
-// The soundness argument is the local one's: weak keys pin the allocation, a
-// hit describes the queried node, and every skip taken is re-verified in
-// debug builds against the real traversal (`sub_ty`/`sub_tm`).
-
-/// One direct-mapped entry of the global table: [`Slot`], with the bound in
-/// place of a [`LocalUse`].
-#[repr(align(32))]
-struct GlobalSlot<T> {
-    key: Option<Weak<T>>,
-    bound: u32,
-    /// The two-stage marker: a bare address, or 0.
-    mark: usize,
-}
-
-impl<T> GlobalSlot<T> {
-    fn empty() -> GlobalSlot<T> {
-        GlobalSlot { key: None, bound: 0, mark: 0 }
-    }
-
-    fn hit(&self, t: &Rc<T>) -> Option<u32> {
-        match &self.key {
-            Some(k) if std::ptr::eq(k.as_ptr(), Rc::as_ptr(t)) => Some(self.bound),
-            _ => None,
-        }
-    }
-}
-
-struct GlobalCache {
-    terms: Vec<GlobalSlot<Term>>,
-    types: Vec<GlobalSlot<Type>>,
-}
+// The soundness argument is the local one's: a head describes the value
+// beside it, and every skip taken is re-verified in debug builds against
+// the real traversal (`sub_ty`/`sub_tm`).
 
 thread_local! {
-    static GLOBAL_CACHE: RefCell<GlobalCache> = RefCell::new(GlobalCache {
-        terms: (0..1 << BITS).map(|_| GlobalSlot::empty()).collect(),
-        types: (0..1 << BITS).map(|_| GlobalSlot::empty()).collect(),
-    });
     /// Native depth of [`global_bound_term`]'s recursion through the
     /// traversal: past [`crate::term::SPINE_ITERATE_AT`] a node's spine is
-    /// answered from the bottom up first, as [`Cache::warm_spine`] does.
+    /// answered from the bottom up first, as [`Walk::warm_spine`] does.
     static GLOBAL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -1069,26 +911,22 @@ fn global_leaf_type(t: &Type) -> Option<u32> {
 }
 
 /// `1 +` the largest global variable free in `t`, `0` when it has none
-/// (constants are not variables). Memoized unconditionally, like
-/// [`Cache::term_use`]: this is the recursive compute, whose answers for a
-/// subtree are what make its parent's cheap.
+/// (constants are not variables).
 pub(crate) fn global_bound_term(t: &Rc<Term>) -> u32 {
     if let Some(b) = global_leaf_term(t) {
         return b;
     }
-    let i = slot(Rc::as_ptr(t) as usize);
-    let hit = |t: &Rc<Term>| GLOBAL_CACHE.with(|c| c.borrow().terms[slot(Rc::as_ptr(t) as usize)].hit(t));
-    if let Some(b) = hit(t) {
+    if let Some(b) = Rc::head(t).global() {
         return b;
     }
     let depth = GLOBAL_DEPTH.with(|d| d.get());
     if depth >= crate::term::SPINE_ITERATE_AT {
-        // The spine below `t`, bottom up, so the walk of each node meets a
-        // stored answer one level down (docs/deep-term-walks-design.md).
+        // The spine below `t`, bottom up, so the walk of each node meets an
+        // answer one level down (docs/deep-term-walks-design.md).
         let mut path = Vec::new();
         let mut cur = crate::term::spine_child(t);
         while let Some(c) = cur {
-            if global_leaf_term(c).is_some() || hit(c).is_some() {
+            if global_leaf_term(c).is_some() || Rc::head(c).global().is_some() {
                 break;
             }
             path.push(Rc::clone(c));
@@ -1099,20 +937,12 @@ pub(crate) fn global_bound_term(t: &Rc<Term>) -> u32 {
             global_bound_term(node);
         }
         GLOBAL_DEPTH.with(|d| d.set(depth));
-        if let Some(b) = hit(t) {
-            return b;
-        }
     }
     GLOBAL_DEPTH.with(|d| d.set(depth + 1));
-    // No borrow of the table is held across the walk: it asks about the
-    // node's children through this same function.
+    // The walk asks about the node's children through this same function.
     let b = crate::subst::free_global_bound_term(t);
     GLOBAL_DEPTH.with(|d| d.set(depth));
-    GLOBAL_CACHE.with(|c| {
-        let s = &mut c.borrow_mut().terms[i];
-        s.key = Some(Rc::downgrade(t));
-        s.bound = b;
-    });
+    Rc::head(t).set_global(b);
     b
 }
 
@@ -1121,69 +951,27 @@ pub(crate) fn global_bound_type(t: &Rc<Type>) -> u32 {
     if let Some(b) = global_leaf_type(t) {
         return b;
     }
-    let i = slot(Rc::as_ptr(t) as usize);
-    if let Some(b) = GLOBAL_CACHE.with(|c| c.borrow().types[i].hit(t)) {
+    if let Some(b) = Rc::head(t).global() {
         return b;
     }
     let depth = GLOBAL_DEPTH.with(|d| d.replace(d.get() + 1));
     let b = crate::subst::free_global_bound_type(t);
     GLOBAL_DEPTH.with(|d| d.set(depth));
-    GLOBAL_CACHE.with(|c| {
-        let s = &mut c.borrow_mut().types[i];
-        s.key = Some(Rc::downgrade(t));
-        s.bound = b;
-    });
+    Rc::head(t).set_global(b);
     b
 }
 
 /// Should a global-namespace operation at global binder depth `d` skip this
-/// subtree? Two-stage, as [`Cache::term_query`]: a node asked about once is
-/// only marked, and walked by its caller.
+/// subtree?
+#[inline]
 pub(crate) fn skip_global_term(t: &Rc<Term>, d: u32) -> bool {
-    if let Some(b) = global_leaf_term(t) {
-        return b <= d;
-    }
-    let p = Rc::as_ptr(t) as usize;
-    let seen = GLOBAL_CACHE.with(|c| {
-        let s = &mut c.borrow_mut().terms[slot(p)];
-        match s.hit(t) {
-            Some(b) => Some(Some(b)),
-            None if s.mark == p => Some(None),
-            None => {
-                s.mark = p;
-                None
-            }
-        }
-    });
-    match seen {
-        Some(Some(b)) => b <= d,
-        Some(None) => global_bound_term(t) <= d,
-        None => false,
-    }
+    global_bound_term(t) <= d
 }
 
 /// [`skip_global_term`] for a type.
+#[inline]
 pub(crate) fn skip_global_type(t: &Rc<Type>, d: u32) -> bool {
-    if let Some(b) = global_leaf_type(t) {
-        return b <= d;
-    }
-    let p = Rc::as_ptr(t) as usize;
-    let seen = GLOBAL_CACHE.with(|c| {
-        let s = &mut c.borrow_mut().types[slot(p)];
-        match s.hit(t) {
-            Some(b) => Some(Some(b)),
-            None if s.mark == p => Some(None),
-            None => {
-                s.mark = p;
-                None
-            }
-        }
-    });
-    match seen {
-        Some(Some(b)) => b <= d,
-        Some(None) => global_bound_type(t) <= d,
-        None => false,
-    }
+    global_bound_type(t) <= d
 }
 
 #[cfg(test)]
@@ -1193,11 +981,11 @@ mod tests {
     use crate::term::{GlobalVar, LocalVar, SubstTail};
 
     fn term_use(t: &Rc<Term>) -> LocalUse {
-        Cache::new().term_use(t)
+        Walk::new().term_use(t)
     }
 
     fn type_use(t: &Rc<Type>) -> LocalUse {
-        Cache::new().type_use(t)
+        Walk::new().type_use(t)
     }
 
     fn rt(t: Term) -> Rc<Term> {
@@ -1238,7 +1026,7 @@ mod tests {
         // the stored suffix joins and the stride's remainder must agree with
         // walking the window, at every offset from a stride boundary.
         let n = 5 * WINDOW_STRIDE + 7;
-        let items: Rc<[Rc<Term>]> = (0..n)
+        let items: Arc<[Rc<Term>]> = (0..n)
             .map(|j| match j % 41 {
                 0 => v(j as u32 % 70),
                 _ => rt(Term::Zero),
@@ -1249,14 +1037,14 @@ mod tests {
             rt(Term::VecItems {
                 level: Level::Zero,
                 elem: Rc::new(Type::Nat),
-                items: Rc::clone(&items),
+                items: Arc::clone(&items),
                 from,
             })
         };
         let direct = |from: usize| {
             items[from..].iter().fold(LocalUse::CLOSED, |a, t| a.join(term_use(t)))
         };
-        let mut c = Cache::new();
+        let mut c = Walk::new();
         let order = (0..n).chain((0..n).rev().step_by(3));
         for from in order {
             assert_eq!(c.term_use(&node(from as u32)), direct(from), "window from {from}");
@@ -1343,7 +1131,9 @@ mod tests {
             body: v(1),
         });
         assert!(!ignores_innermost(&lam, 1));
-        // Past 64 an index is counted by `bound` alone.
+        // Past the mask an index is counted by `bound` alone.
+        assert_eq!(term_use(&v(USES_BITS - 1)).uses, 1 << (USES_BITS - 1));
+        assert_eq!(term_use(&v(USES_BITS)).uses, 0);
         assert_eq!(term_use(&v(70)).uses, 0);
     }
 
@@ -1378,7 +1168,7 @@ mod tests {
     }
 
     #[test]
-    fn memo_is_stable_across_queries() {
+    fn an_answer_is_stable_across_queries() {
         let t = rt(Term::Succ(v(3)));
         assert_eq!(term_use(&t), term_use(&t));
         assert_eq!(
@@ -1389,5 +1179,47 @@ mod tests {
                 uses: 1 << 3
             }
         );
+    }
+
+    /// The first question leaves its answer in the node and in every node
+    /// of the subtree it walked, so the next question about any of them is
+    /// a read.
+    #[test]
+    fn an_answer_is_kept_in_every_node_it_walked() {
+        let inner = rt(Term::Succ(v(3)));
+        let t = rt(Term::Succ(Rc::clone(&inner)));
+        assert_eq!(known(&t), None);
+        assert_eq!(known(&inner), None);
+        let u = term_local_use(&t);
+        assert_eq!(known(&t), Some(u));
+        assert_eq!(known(&inner), Some(u));
+        // The global bound is another question, with its own answer.
+        assert_eq!(Rc::head(&t).global(), None);
+        assert_eq!(global_bound_term(&t), 0);
+        assert_eq!(Rc::head(&t).global(), Some(0));
+        assert_eq!(known(&t), Some(u));
+    }
+
+    /// A skip is decided at first sight: there is no second query to wait
+    /// for, so what a traversal skips is a function of the term.
+    #[test]
+    fn a_fresh_node_is_skipped_at_its_first_question() {
+        let closed = rt(Term::Succ(rt(Term::Succ(rt(Term::Zero)))));
+        assert!(skip_term(&closed, 0));
+        let open = rt(Term::Succ(v(2)));
+        assert!(!skip_term(&open, 2));
+        assert!(skip_term(&open, 3));
+        assert!(skip_global_term(&closed, 0));
+    }
+
+    /// A node changed in place is asked again: the pointer empties the head
+    /// before it hands the value out (`rc.rs`).
+    #[test]
+    fn a_changed_node_is_answered_afresh() {
+        let mut t = rt(Term::Succ(v(3)));
+        assert_eq!(term_local_use(&t).bound, 4);
+        *Rc::make_mut(&mut t) = Term::Succ(v(0));
+        assert_eq!(known(&t), None);
+        assert_eq!(term_local_use(&t).bound, 1);
     }
 }

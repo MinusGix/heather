@@ -42,7 +42,7 @@
 //! need both passes, which is why they run the state forward first and the
 //! output backward after.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use heather_numeral::Numeral;
 

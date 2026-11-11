@@ -15,7 +15,7 @@
 //! 4. **Negative controls** — what a corrupted cache does, and (stated, not
 //!    tested, because it cannot be) what a forged one does.
 
-use std::sync::Arc as Rc;
+use std::sync::Arc;
 
 use heather_cache::store::{FORMAT, Rejected, Store};
 use heather_cache::{Cache, KERNEL_SEMANTICS};
@@ -67,11 +67,11 @@ theorem unrelated(n: Nat): add(0, n) = n {{
 
 /// Elaborate `src` under a fresh cache backed by nothing, and hand back the
 /// cache. Panics on any elaboration error: these fixtures must check.
-fn run(src: &str) -> Rc<Cache> {
-    run_with(Rc::new(Cache::over(Store::empty("unused".into()))), src)
+fn run(src: &str) -> Arc<Cache> {
+    run_with(Arc::new(Cache::over(Store::empty("unused".into()))), src)
 }
 
-fn run_with(cache: Rc<Cache>, src: &str) -> Rc<Cache> {
+fn run_with(cache: Arc<Cache>, src: &str) -> Arc<Cache> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     // The prelude is elaborated *inside* `with_prelude`, before any gate can
     // be installed, so it is always kernel-checked (docs/cache-v1-design.md
@@ -79,7 +79,7 @@ fn run_with(cache: Rc<Cache>, src: &str) -> Rc<Cache> {
     // means "gate time spent on `src`".
     heather_elab::stats::reset_kernel_ns();
     cache.begin_run();
-    e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    e.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
     let errs = e.check_source(src);
     assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(src));
     cache
@@ -324,7 +324,7 @@ fn the_file_round_trips() {
 
     let (cache, why) = Cache::open(dir.clone());
     assert!(matches!(why, Some(Rejected::Absent)), "a first run finds nothing");
-    let cache = run_with(Rc::new(cache), &src);
+    let cache = run_with(Arc::new(cache), &src);
     cache.save().expect("write");
 
     let text = std::fs::read_to_string(Store::path(&dir)).expect("read back");
@@ -341,7 +341,7 @@ fn the_file_round_trips() {
     let (reopened, why) = Cache::open(dir.clone());
     assert!(why.is_none(), "a valid file must load");
     assert_eq!(reopened.entries(), cache.entries());
-    let reopened = run_with(Rc::new(reopened), &src);
+    let reopened = run_with(Arc::new(reopened), &src);
     assert_eq!(reopened.counts().checked, 0, "a reloaded cache is a warm cache");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -358,7 +358,7 @@ fn the_file_round_trips() {
 fn a_stale_kernel_fingerprint_discards_everything() {
     let dir = tempdir("fingerprint");
     let src = source(PROOF_A, "add(n, 0) = n");
-    let cache = run_with(Rc::new(Cache::over(Store::empty(dir.clone()))), &src);
+    let cache = run_with(Arc::new(Cache::over(Store::empty(dir.clone()))), &src);
     cache.save().expect("write");
 
     // Re-label the section as another kernel's. The fingerprint is not under
@@ -383,7 +383,7 @@ fn a_stale_kernel_fingerprint_discards_everything() {
         _ => panic!("a stale fingerprint must be reported as one"),
     };
     assert_eq!(reopened.entries(), 0, "nothing may be believed");
-    let after = run_with(Rc::new(reopened), &src);
+    let after = run_with(Arc::new(reopened), &src);
     assert!(after.counts().checked > 0, "and the kernel must run again");
 
     // Saving this kernel's verdicts keeps the other kernel's section whole.
@@ -561,7 +561,7 @@ fn a_single_kernel_file_is_read_as_one_section() {
 fn a_corrupted_cache_is_rejected_and_not_half_read() {
     let dir = tempdir("corrupt");
     let src = source(PROOF_A, "add(n, 0) = n");
-    let cache = run_with(Rc::new(Cache::over(Store::empty(dir.clone()))), &src);
+    let cache = run_with(Arc::new(Cache::over(Store::empty(dir.clone()))), &src);
     cache.save().expect("write");
     let path = Store::path(&dir);
     let good = std::fs::read_to_string(&path).unwrap();
@@ -608,7 +608,7 @@ fn a_corrupted_cache_is_rejected_and_not_half_read() {
         assert!(why.unwrap().message().is_some(), "{what} must be reported out loud");
         assert_eq!(c.entries(), 0, "{what} must not leave a partially-read cache");
         // And the run that follows is a real one.
-        let after = run_with(Rc::new(c), &src);
+        let after = run_with(Arc::new(c), &src);
         assert!(after.counts().checked > 0, "{what} must lead to a full re-check");
     }
 
@@ -629,7 +629,7 @@ fn an_entry_for_nothing_is_never_consulted() {
     let src = source(PROOF_A, "add(n, 0) = n");
     let mut store = Store::empty(dir.clone());
     store.insert([7u8; 32], [9u8; 32], "not-a-real-declaration");
-    let cache = run_with(Rc::new(Cache::over(store)), &src);
+    let cache = run_with(Arc::new(Cache::over(store)), &src);
     assert_eq!(cache.counts().hits, 0, "a key nothing computes cannot be hit");
     assert!(cache.counts().checked > 0);
 }
@@ -646,11 +646,11 @@ fn each_gated_declaration_is_rendered_once_at_either_gate_width() {
     let src = source(PROOF_A, "add(n, 0) = n");
     let mut per_width = Vec::new();
     for workers in [1usize, 4] {
-        let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+        let cache = Arc::new(Cache::over(Store::empty("unused".into())));
         let mut e = Elaborator::with_prelude().expect("prelude");
         e.set_kernel_workers(workers);
         cache.begin_run();
-        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        e.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
         let errs = e.check_source(&src);
         assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(&src));
         let c = cache.counts();
@@ -703,8 +703,10 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     // The same declaration, accepted: answered from the open question.
     cache.accepted(&psi, &item(body_a), &[]);
     assert_eq!(cache.counts().hashed, 1, "accepted must not render again");
+    // A theorem's verdict is two entries: its check key, and its statement's
+    // (the same for both bodies here, which share a statement).
     let key_a = cache.keys();
-    assert_eq!(key_a.len(), 1);
+    assert_eq!(key_a.len(), 2);
 
     // A second declaration with the same name at the same position — refused
     // before it could land, then a different one asks.
@@ -716,8 +718,9 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert_eq!(cache.counts().hashed, 2, "after abandon the new declaration is rendered afresh");
     cache.accepted(&psi, &item(body_b), &[]);
     let key_b = cache.keys();
-    assert_eq!(key_b.len(), 1);
+    assert_eq!(key_b.len(), 2);
     assert_ne!(key_a, key_b, "the two bodies must not share a check key");
+    assert_eq!(key_a.iter().filter(|k| key_b.contains(k)).count(), 1, "and they share the statement's");
 
     // Without abandon, the belt: a second Ψ-landing question at one length
     // kills the first, since only one declaration can be waiting to land at
@@ -747,13 +750,13 @@ theorem wit(): Wit { Wit(n := 2, ok := refl) }
 theorem wit_two(): wit().n = 2 { refl }
 theorem two_two(): 2 = 2 { refl }
 ";
-    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let cache = Arc::new(Cache::over(Store::empty("unused".into())));
     let mut runs = Vec::new();
     for workers in [1usize, 4, 1] {
         let mut e = Elaborator::with_prelude().expect("prelude");
         e.set_kernel_workers(workers);
         cache.begin_run();
-        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        e.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
         let errs = e.check_source(src);
         assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(src));
         runs.push(cache.counts());
@@ -783,10 +786,10 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
     use heather_kernel::term::{GlobalBinding, Term};
 
     let src = source(PROOF_A, "add(n, 0) = n");
-    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let cache = Arc::new(Cache::over(Store::empty("unused".into())));
     let mut cold = Elaborator::with_prelude().expect("prelude");
     cache.begin_run();
-    cold.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    cold.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
     let delta = cold
         .elab_module_delta("m", &src, ModuleDependencyIdentity::default())
         .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(&src)));
@@ -804,7 +807,7 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
         let mut warm = Elaborator::with_prelude().expect("prelude");
         warm.set_kernel_workers(workers);
         cache.begin_run();
-        warm.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        warm.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
         let before = cache.counts();
         warm.replay_module_delta(&delta, &ModuleDependencyIdentity::default())
             .expect("the stored suffix replays");
@@ -818,12 +821,12 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
 
         // An empty store: every body is checked and recorded, and the next
         // replay against that store is warm.
-        let fresh = Rc::new(Cache::over(Store::empty("unused".into())));
+        let fresh = Arc::new(Cache::over(Store::empty("unused".into())));
         for (round, expected) in [(1, (bodies, 0)), (2, (0, bodies))] {
             let mut e = Elaborator::with_prelude().expect("prelude");
             e.set_kernel_workers(workers);
             fresh.begin_run();
-            e.set_gate(Rc::clone(&fresh) as Rc<dyn heather_elab::gate::KernelGate>);
+            e.set_gate(Arc::clone(&fresh) as Arc<dyn heather_elab::gate::KernelGate>);
             let before = fresh.counts();
             e.replay_module_delta(&delta, &ModuleDependencyIdentity::default())
                 .expect("the stored suffix replays");
@@ -841,11 +844,11 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
         let GlobalBinding::Tm { body, .. } = &mut forged.extension_mut()[at] else {
             unreachable!()
         };
-        *body = Some(Rc::new(Term::TmNat));
+        *body = Some(heather_kernel::rc::Rc::new(Term::TmNat));
         let mut e = Elaborator::with_prelude().expect("prelude");
         e.set_kernel_workers(workers);
         cache.begin_run();
-        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        e.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
         let before = e.psi().clone();
         let counts = cache.counts();
         let verdict = e.replay_module_delta(&forged, &ModuleDependencyIdentity::default());
@@ -861,7 +864,7 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
         cache.begin_run();
         let mut again = Elaborator::with_prelude().expect("prelude");
         again.set_kernel_workers(workers);
-        again.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        again.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
         let before = cache.counts();
         again
             .replay_module_delta(&delta, &ModuleDependencyIdentity::default())
@@ -874,14 +877,14 @@ fn a_replayed_module_accepts_stored_verdicts_and_rechecks_only_misses() {
 /// Replay `delta` in a fresh elaborator over `cache`, at kernel width
 /// `workers`, and hand back what the gate counted.
 fn replay_counts(
-    cache: &Rc<Cache>,
+    cache: &Arc<Cache>,
     delta: &heather_elab::ModuleDelta,
     workers: usize,
 ) -> heather_cache::Counts {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.set_kernel_workers(workers);
     cache.begin_run();
-    e.set_gate(Rc::clone(cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    e.set_gate(Arc::clone(cache) as Arc<dyn heather_elab::gate::KernelGate>);
     let before = cache.counts();
     e.replay_module_delta(delta, &heather_elab::ModuleDependencyIdentity::default())
         .expect("the stored suffix replays");
@@ -918,7 +921,7 @@ fn a_replayed_statement_is_vouched_for_by_its_own_verdict_and_only_by_it() {
     assert!(n >= 1, "`same` is stored without its proof");
     assert_eq!(bodiless(&one), n);
     for workers in [1usize, 4] {
-        let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+        let cache = Arc::new(Cache::over(Store::empty("unused".into())));
         let c = replay_counts(&cache, &zero, workers);
         assert_eq!((c.statements_checked, c.statement_hits), (n, 0), "width {workers}: an empty store vouches for nothing");
         let c = replay_counts(&cache, &zero, workers);
@@ -948,7 +951,7 @@ theorem two_two(): 2 = 2 { refl }
     let delta = cold_delta(src);
     let n = bodiless(&delta);
     for workers in [1usize, 4] {
-        let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+        let cache = Arc::new(Cache::over(Store::empty("unused".into())));
         let c = replay_counts(&cache, &delta, workers);
         assert_eq!((c.statements_checked, c.statement_hits), (n, 0), "width {workers}: cold");
         for round in [2, 3] {
@@ -962,6 +965,160 @@ theorem two_two(): 2 = 2 { refl }
     }
 }
 
+/// Elaborate `src` over `cache` at kernel width `workers`, as the build that
+/// writes a module's image does, and hand back the suffix it would store.
+fn gated_delta(cache: &Arc<Cache>, src: &str, workers: usize) -> heather_elab::ModuleDelta {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.set_kernel_workers(workers);
+    cache.begin_run();
+    e.set_gate(Arc::clone(cache) as Arc<dyn heather_elab::gate::KernelGate>);
+    e.elab_module_delta("m", src, heather_elab::ModuleDependencyIdentity::default())
+        .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(src)))
+}
+
+fn bodied(delta: &heather_elab::ModuleDelta) -> usize {
+    use heather_kernel::term::GlobalBinding;
+    delta.extension().iter().filter(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. })).count()
+}
+
+/// Two use sites of `Mag<Pair<Nat, Nat>>`: the derivation is minted as a
+/// global of its own between `use1` and `use2`, by the resolver and not by a
+/// declaration (`traits_resolution.rs`,
+/// `a_derived_instance_is_minted_once_and_reused`). No two bindings have the
+/// same content, so no verdict here answers for two of them (which is why
+/// the carrier is `Nat` and not an enumeration declared here: the summands
+/// of two nullary constructors are one definition written twice).
+const DERIVING: &str = "class Mag<A> { op: A -> A -> A }
+record Pair<A, B> { fst: A, snd: B }
+instance Mag<Nat> { fn op(x: Nat, y: Nat) -> Nat { y } }
+instance<A, B> Mag<Pair<A, B>> requires ma: Mag<A>, mb: Mag<B> {
+  fn op(x: Pair<A, B>, y: Pair<A, B>) -> Pair<A, B> {
+    Pair { fst: ma.op(x.fst, y.fst), snd: mb.op(x.snd, y.snd) }
+  }
+}
+fn combine<A> requires m: Mag<A> (x: A, y: A) -> A { m.op(x, y) }
+fn use1(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>) -> Pair<Nat, Nat> { combine(p, q) }
+fn use2(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>) -> Pair<Nat, Nat> { combine(q, p) }
+theorem same(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>): use1(p, q) = use2(q, p) { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+
+/// The first replay of an image asks the kernel nothing its build asked.
+/// The build's gate checked every theorem's statement on the way to its
+/// proof and every minted derivation before it landed, and each is a
+/// verdict the store keeps: about the statement alone, which is what a
+/// theorem stored without its proof asks at replay, and about the mint,
+/// which used to face the kernel without the store being told
+/// (`issues/first-replay-rechecks-what-the-build-checked.md`).
+///
+/// The control is the same replay over a store the build did not write to:
+/// every binding is checked, the mint among them.
+#[test]
+fn the_first_replay_of_a_build_asks_the_kernel_nothing_the_build_asked() {
+    let mut plain = Elaborator::with_prelude().expect("prelude");
+    plain
+        .elab_module_delta("m", DERIVING, heather_elab::ModuleDependencyIdentity::default())
+        .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(DERIVING)));
+    assert_eq!(plain.derived_instances().len(), 1, "the fixture mints one derivation");
+    for workers in [1usize, 4] {
+        let built = Arc::new(Cache::over(Store::empty("unused".into())));
+        let delta = gated_delta(&built, DERIVING, workers);
+        let (bodies, statements) = (bodied(&delta), bodiless(&delta));
+        assert!(statements >= 2, "`same` and `two_two` are stored without their proofs");
+        let c = replay_counts(&built, &delta, workers);
+        assert_eq!((c.checked, c.hits), (0, bodies), "width {workers}: every body is one the build's gate passed");
+        assert_eq!(
+            (c.statements_checked, c.statement_hits),
+            (0, statements),
+            "width {workers}: every statement is one the build's gate passed"
+        );
+        let elsewhere = Arc::new(Cache::over(Store::empty("unused".into())));
+        let c = replay_counts(&elsewhere, &delta, workers);
+        assert_eq!((c.checked, c.hits), (bodies, 0), "width {workers}: another store vouches for no body");
+        assert_eq!((c.statements_checked, c.statement_hits), (statements, 0), "width {workers}: nor for a statement");
+    }
+}
+
+/// A build keeps no statement verdict for a theorem whose check opened a
+/// sealed proof, as it keeps none about the theorem
+/// (`a_statement_that_opened_a_sealed_proof_keeps_no_verdict` is the same
+/// rule at replay): `uses`' statement is well-typed only because `wit().n`
+/// computes to `2`. The first replay checks that one statement and no other.
+#[test]
+fn a_build_keeps_no_statement_verdict_that_opened_a_sealed_proof() {
+    let src = "record Wit { n: Nat, ok: n = 2 }
+theorem wit(): Wit { Wit(n := 2, ok := refl) }
+fn need(n: Nat, p: n = 2) -> Nat { n }
+theorem uses(): need(wit().n, refl) = 2 { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+    for workers in [1usize, 4] {
+        let built = Arc::new(Cache::over(Store::empty("unused".into())));
+        let delta = gated_delta(&built, src, workers);
+        let n = bodiless(&delta);
+        let c = replay_counts(&built, &delta, workers);
+        assert_eq!(
+            (c.statements_checked, c.statement_hits),
+            (1, n - 1),
+            "width {workers}: only `uses`, which opened `wit`, is checked at the first replay"
+        );
+    }
+}
+
+/// A question that died describes nothing that lands after it. `refused` is
+/// asked about at the end of an empty Ψ and abandoned; another binding then
+/// lands there without asking, as an inductive's or a prelude's does, and a
+/// definition that refers to it is keyed by what landed. Before, the dead
+/// question's interface hash was still waiting for whatever landed at its
+/// index, and the dependent's key named the refused declaration.
+#[test]
+fn an_abandoned_question_does_not_describe_what_lands_in_its_place() {
+    use heather_elab::gate::{GateItem, KernelGate};
+    use heather_kernel::layer::Layer;
+    use heather_kernel::level::Level;
+    use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
+
+    let empty = LocalCtx::nil();
+    let level = Level::constant(0);
+    let nothing = GlobalCtx::new(Vec::new());
+    let landed = GlobalCtx::new(vec![GlobalBinding::Tm {
+        ctx: LocalCtx::nil(),
+        layer: Layer::Code,
+        ty: heather_kernel::rc::Rc::new(Type::Nat),
+        level: Level::constant(0),
+        body: Some(heather_kernel::rc::Rc::new(Term::TmUnit { level: Level::constant(0) })),
+    }])
+    .with_consts(1);
+    let refused = Term::TmNat;
+    let reads = Term::GlobalTm { var: GlobalVar::constant(0), subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] } };
+    let item = |name: &'static str, body: &'static Term| GateItem {
+        name,
+        ctx: &empty,
+        ty: &Type::Nat,
+        level: &level,
+        body,
+        opaque: false,
+        layer: Layer::Code,
+        lands_in_psi: true,
+    };
+    let refused: &'static Term = Box::leak(Box::new(refused));
+    let reads: &'static Term = Box::leak(Box::new(reads));
+    let dependent_key = |a_question_died_first: bool| {
+        let cache = Cache::over(Store::empty("unused".into()));
+        cache.begin_run();
+        if a_question_died_first {
+            assert!(!cache.admits(&nothing, &item("refused", refused)));
+            cache.abandon(&nothing);
+        }
+        assert!(!cache.admits(&landed, &item("dependent", reads)));
+        cache.accepted(&landed, &item("dependent", reads), &[]);
+        let keys = cache.keys();
+        assert_eq!(keys.len(), 1);
+        keys
+    };
+    assert_eq!(dependent_key(true), dependent_key(false), "the dependent is keyed by the binding that landed");
+}
+
 /// An elaborator and its forks share one gate and ask about different Ψs in
 /// turn (`write-elf` reads its program on forks and checks its certificate
 /// on the parent). The gate keeps the interface hashes of what the asking Ψ
@@ -973,20 +1130,20 @@ theorem two_two(): 2 = 2 { refl }
 fn forks_sharing_a_gate_keep_only_the_prefix_they_share() {
     let first = "fn value() -> Nat { 0 }\ntheorem same(): value() = value() { refl }\n";
     let second = "record Pair { a: Nat, b: Nat }\nfn value() -> Nat { 1 }\ntheorem same(): value() = value() { refl }\n";
-    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let cache = Arc::new(Cache::over(Store::empty("unused".into())));
     let mut parent = Elaborator::with_prelude().expect("prelude");
     cache.begin_run();
-    parent.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    parent.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
     parent.fork().elab_module_source("m", first).unwrap_or_else(|e| panic!("{}", e.render(first)));
     let before = cache.counts();
     parent.fork().elab_module_source("m", second).unwrap_or_else(|e| panic!("{}", e.render(second)));
     let c = cache.counts().since(&before);
     assert_eq!(c.hits, 0, "nothing the first fork checked vouches for the second's declarations");
 
-    let fresh = Rc::new(Cache::over(Store::empty("unused".into())));
+    let fresh = Arc::new(Cache::over(Store::empty("unused".into())));
     let mut alone = Elaborator::with_prelude().expect("prelude");
     fresh.begin_run();
-    alone.set_gate(Rc::clone(&fresh) as Rc<dyn heather_elab::gate::KernelGate>);
+    alone.set_gate(Arc::clone(&fresh) as Arc<dyn heather_elab::gate::KernelGate>);
     alone.elab_module_source("m", second).unwrap_or_else(|e| panic!("{}", e.render(second)));
     assert_eq!(cache.interface_hashes(), fresh.interface_hashes(), "the kept prefix is a fresh gate's");
     assert_eq!(c.checked, fresh.counts().checked);
@@ -1014,9 +1171,9 @@ fn a_longer_divergent_psi_does_not_inherit_the_last_ones_hashes() {
     let def = |body: Term| GlobalBinding::Tm {
         ctx: LocalCtx::nil(),
         layer: Layer::Code,
-        ty: Rc::new(Type::Nat),
+        ty: heather_kernel::rc::Rc::new(Type::Nat),
         level: Level::constant(0),
-        body: Some(Rc::new(body)),
+        body: Some(heather_kernel::rc::Rc::new(body)),
     };
     let unit = || Term::TmUnit { level: Level::constant(0) };
     // Committed bindings, as an elaborator's Ψ is: only a signature has keys.

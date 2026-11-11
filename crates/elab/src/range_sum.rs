@@ -11,7 +11,7 @@
 //! written. Every other law (reindexing, splitting, linearity) is a named
 //! lemma, not a reading.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{Term, nat_lit_pred};
 

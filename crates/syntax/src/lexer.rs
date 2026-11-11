@@ -492,10 +492,40 @@ fn lex_quoted(src: &str, open: usize, delim: u8) -> Result<(String, usize), LexE
 }
 
 pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
-    let bytes = src.as_bytes();
     let mut toks = Vec::new();
+    lex_into(src, &mut toks, |_| true)?;
+    Ok(toks)
+}
+
+/// The tokens of `src` before the first one `keep` refuses, or before the
+/// first that does not lex, then `Eof`. The refused token is the last thing
+/// read, so nothing past it is met, an error least of all. What a token is
+/// never depends on the tokens before it, which is why stopping early reads
+/// a prefix of what [`lex`] reads.
+pub fn lex_while(src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    if let Err(stopped) = lex_into(src, &mut toks, keep) {
+        let at = stopped.span.start;
+        toks.push(Tok { kind: TokKind::Eof, span: Span { start: at, end: at } });
+    }
+    toks
+}
+
+/// [`lex`] into `toks`, stopping before the first token `keep` refuses. `Eof`
+/// ends what was read unless an error does.
+fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> Result<(), LexError> {
+    let bytes = src.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
+    'toks: while i < bytes.len() {
+        macro_rules! emit {
+            ($tok:expr) => {{
+                let tok = $tok;
+                if !keep(&tok) {
+                    break 'toks;
+                }
+                toks.push(tok);
+            }};
+        }
         let c = bytes[i];
         // whitespace
         if c.is_ascii_whitespace() {
@@ -547,7 +577,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 }
             }
             let text = &src[start..i];
-            toks.push(Tok {
+            emit!(Tok {
                 kind: TokKind::Ident(text.to_string()),
                 span: Span { start, end: i },
             });
@@ -565,7 +595,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 Lexed::Num(n) => TokKind::Num(n),
                 Lexed::Scaled(s) => TokKind::Scaled(s),
             };
-            toks.push(Tok { kind, span: Span { start, end: i } });
+            emit!(Tok { kind, span: Span { start, end: i } });
             continue;
         }
         // character and string literals (docs/string-char-design.md §3). One
@@ -586,13 +616,13 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                     span: Span { start, end },
                 });
             };
-            toks.push(Tok { kind: TokKind::Char(ch), span: Span { start, end } });
+            emit!(Tok { kind: TokKind::Char(ch), span: Span { start, end } });
             i = end;
             continue;
         }
         if c == b'"' {
             let (text, end) = lex_quoted(src, start, b'"')?;
-            toks.push(Tok { kind: TokKind::Str(text), span: Span { start, end } });
+            emit!(Tok { kind: TokKind::Str(text), span: Span { start, end } });
             i = end;
             continue;
         }
@@ -606,7 +636,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 }
             }
             let name = (i > name_start).then(|| src[name_start..i].to_string());
-            toks.push(Tok { kind: TokKind::Hole(name), span: Span { start, end: i } });
+            emit!(Tok { kind: TokKind::Hole(name), span: Span { start, end: i } });
             continue;
         }
         // punctuation
@@ -620,7 +650,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         // runs off the end, or lands inside a codepoint, simply means "not a
         // token of this width".
         if src.get(i..i + 5) == Some("⁻¹") {
-            toks.push(Tok { kind: TokKind::SupInverse, span: Span { start, end: start + 5 } });
+            emit!(Tok { kind: TokKind::SupInverse, span: Span { start, end: start + 5 } });
             i += 5;
             continue;
         }
@@ -653,7 +683,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             _ => None,
         };
         if let Some(kind) = three_kind {
-            toks.push(Tok { kind, span: Span { start, end: start + 3 } });
+            emit!(Tok { kind, span: Span { start, end: start + 3 } });
             i += 3;
             continue;
         }
@@ -700,7 +730,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                     })?;
                 i += ch.len_utf8();
             }
-            toks.push(Tok {
+            emit!(Tok {
                 kind: TokKind::ArgSlot(indexed.then_some(index)),
                 span: Span { start, end: i },
             });
@@ -766,11 +796,11 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 }
             },
         };
-        toks.push(Tok { kind, span: Span { start, end: start + len } });
+        emit!(Tok { kind, span: Span { start, end: start + len } });
         i += len;
     }
     toks.push(Tok { kind: TokKind::Eof, span: Span { start: i, end: i } });
-    Ok(toks)
+    Ok(())
 }
 
 #[cfg(test)]

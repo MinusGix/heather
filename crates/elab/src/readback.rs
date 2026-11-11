@@ -29,7 +29,7 @@
 //! elaborator's, and what it produces is the reducer's spelling.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
@@ -736,7 +736,7 @@ pub(crate) fn verify_term(tm: &Term, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64
 /// Whether this readback is one the debug check compares, at the kernel's
 /// slow-check rate; the two readbacks share one counter.
 #[cfg(debug_assertions)]
-fn sampled() -> bool {
+pub(crate) fn sampled() -> bool {
     use std::cell::Cell;
     use heather_kernel::checks::{skip_verification, SkipVerification, SAMPLE_EVERY};
     thread_local! {

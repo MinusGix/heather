@@ -17,7 +17,7 @@
 //! exactly the budget of two identical spellings (`El «Nat»` against `Nat`
 //! needs budget of its own, see tests/conv.rs).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, ConvError};
 use heather_kernel::layer::Layer;

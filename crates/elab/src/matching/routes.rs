@@ -5,7 +5,7 @@
 //! this module owns built-in dispatch, Nat course-of-values recursion, and the
 //! unfolded sum reading of Fin.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};

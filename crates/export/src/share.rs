@@ -16,7 +16,7 @@
 //! like any other declaration, so sharing adds nothing to trust.
 
 use crate::Hx;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 use std::collections::HashMap;
 
 /// A node with its children interned.

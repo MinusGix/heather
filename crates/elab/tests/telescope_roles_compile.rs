@@ -22,7 +22,7 @@ fn a_structural_type_cannot_fill_the_emitted_telescope_slot() {
     }
     let _cleanup = Cleanup(dir.clone());
     let prefix = format!(r#"
-use std::sync::Arc;
+use heather_kernel::rc::Rc;
 use heather_kernel::{{level::Level, term::{{LocalCtx, Term, Type}}}};
 struct Cx;
 struct Elaborator;
@@ -33,8 +33,8 @@ impl Elaborator {{
 mod roles;
 use roles::{{StructuralWf, EmittedType}};
 fn probe(structural: &StructuralWf<'_>, emitted: &EmittedType,
-    gamma: &LocalCtx, level: &Level, motive: &Arc<Type>,
-    shape: &Arc<Type>, arity: &Arc<Term>) {{
+    gamma: &LocalCtx, level: &Level, motive: &Rc<Type>,
+    shape: &Rc<Type>, arity: &Rc<Term>) {{
 "#);
     for (name, arg) in [("valid", "emitted"), ("swapped", "structural")] {
         let source = dir.join(format!("{name}.rs"));

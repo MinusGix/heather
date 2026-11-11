@@ -288,7 +288,12 @@ by the tree.
   and exactly what re-lowering would give, since the template *is* the
   lowering with `El (Var i)` in the holes. Type arguments are themselves
   unspelled first, so a nested reference does not survive into the copy a
-  structural reader sees.
+  structural reader sees. Being context-free is also what lets an instance
+  be built once: it is a function of the template and the arguments alone,
+  an elaboration asks for the same one many times over at equal arguments on
+  other nodes, and the askings come close together, so a small table by
+  template and arguments answers them (`gendefs::Instances`, 2026-11-11,
+  `issues/template-instance-rebuilt-per-asking.md`).
 - *There is a fourth edit, and it is load-bearing.* `unification.rs`'s
   `unify_ty` is a **syntactic congruence**, not a reader that goes through
   `Elaborator::whnf`, so a callee domain arriving off its respelled statement
