@@ -1,0 +1,46 @@
+// Probes of `lib/std/data/assoc.hthr` (issues/finite-maps-and-multisets.md):
+// association lists as maps at closed keys by evaluation, the point laws at
+// an open key type, and a function out of a finite type as a table. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import fin; import fintype; import assoc;
+
+fn sample() → List<Pair<Nat, Bool>> { [Pair(3, True), Pair(5, False), Pair(3, False)] }
+
+// The first row with the key answers; a set shadows; a remove drops every row.
+theorem first_row(): sample().assoc_get(3) = Some(True) { refl }
+theorem later_row(): sample().assoc_get(5) = Some(False) { refl }
+theorem no_row(): sample().assoc_get(4) = None { refl }
+theorem set_shadows(): sample().assoc_set(5, True).assoc_get(5) = Some(True) { refl }
+theorem remove_all(): sample().assoc_remove(3).assoc_get(3) = None { refl }
+theorem remove_keeps(): sample().assoc_remove(3) = [Pair(5, False)] { refl }
+theorem keys(): sample().assoc_keys() = [3, 5, 3] { refl }
+theorem no_row_not_some(): ¬(sample().assoc_get(4) = Some(True)) { λ h => Option::none_ne_some(True, h, False) }
+
+// expect-error(kernel)
+theorem first_row_wrong(): sample().assoc_get(3) = Some(False) { refl }
+
+// The point laws at an open key type.
+theorem set_then_get<K: DecEq, V>(m: List<Pair<K, V>>, k: K, v: V): m.assoc_set(k, v).assoc_get(k) = Some(v) { m.assoc_get_set_same(k, v) }
+theorem set_elsewhere<K: DecEq, V>(m: List<Pair<K, V>>, k, i: K, v: V, ne: ¬(i = k)): m.assoc_set(k, v).assoc_get(i) = m.assoc_get(i) {
+    m.assoc_get_set_other(k, v, i, ne)
+}
+theorem set_twice<K: DecEq, V>(m: List<Pair<K, V>>, k: K, v, w: V): m.assoc_set(k, v).assoc_set(k, w).assoc_get(k) = Some(w) {
+    m.assoc_set(k, v).assoc_get_set_same(k, w)
+}
+theorem remove_then_set<K: DecEq, V>(m: List<Pair<K, V>>, k, i: K, v: V, ne: ¬(i = k)):
+    m.assoc_set(k, v).assoc_remove(k).assoc_get(i) = m.assoc_get(i)
+{
+    trans(m.assoc_set(k, v).assoc_get_remove_other(k, i, ne), m.assoc_get_set_other(k, v, i, ne))
+}
+
+// The other key's side condition is needed: without it the law is refused.
+// expect-error: too few arguments
+theorem set_elsewhere_unconditional<K: DecEq, V>(m: List<Pair<K, V>>, k, i: K, v: V): m.assoc_set(k, v).assoc_get(i) = m.assoc_get(i) {
+    m.assoc_get_set_other(k, v, i)
+}
+
+// A function out of a finite type as a table, read back.
+theorem table(): Fintype::tabulate<Bool, Nat>(λ b => match b { True => 1, False => 0 }) = [Pair(False, 0), Pair(True, 1)] { refl }
+theorem table_reads<B>(f: Fin(4) → B, i: Fin(4)): Fintype::tabulate(f).assoc_get(i) = Some(f(i)) { Fintype::tabulate_get(f, i) }
+theorem table_is_fn<A: Fintype + DecEq, B>(f: A → B, d: B, a: A): Fintype::tabulate(f).assoc_fn(d)(a) = f(a) { Fintype::assoc_fn_tabulate(f, d, a) }

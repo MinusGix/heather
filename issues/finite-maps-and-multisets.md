@@ -65,3 +65,17 @@ over `Fin n` with no local sum lemma.
   Kronecker-delta proof; the route is `over_fin` then `over_reindex` at
   `Fin(n)`, which needs the bijection of `Nat` below `n` carried to
   `Fin(n)`: a `Fin::of_nat` with its round trips).
+
+- 2026-11-11: Second round, the list-backed map and tabulation.
+  `lib/std/data/assoc.hthr`: a `List<Pair<K, V>>` read from the front at a
+  key type with `DecEq` (`assoc_get`, `assoc_set`, `assoc_remove`,
+  `assoc_keys`), the point laws under `nat_map.hthr`'s names
+  (`assoc_get_set_same`, `assoc_get_set_other`) with removal's two, what
+  the keys say (`assoc_get_absent`, `assoc_get_present`, `assoc_get_row`),
+  and a function out of a finite type as a table: `Fintype::tabulate`,
+  `tabulate_get`, and `assoc_fn` with both round trips. Probes in
+  `lib/_tests/std/data/assoc_tests.hthr`.
+
+  Remaining: one interface class over `NatMap` and the association list
+  (a class shape, so Minus's call; asked in the thread), and `range_perm`
+  re-derived from `fold_perm`.
