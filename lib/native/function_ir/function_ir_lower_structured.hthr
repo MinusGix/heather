@@ -713,6 +713,16 @@ fn Planned::met(self yes: Planned, no: Planned, known: List<Known>) → Planned 
 
 fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
 
+// The file after a node the leaf lowering has no code for: a load leaves
+// its byte in the register chosen (`function_ir_lower_reads` emits it,
+// a leaf of its own), and nothing else is known to follow.
+fn Node::planned_file(self node: Node, place: Place, file: File) → File {
+    match node {
+        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file },
+        _ => file,
+    }
+}
+
 // The nodes' places: folded as `folds` says, else registers from `pool`.
 // `live` is what the nodes and everything after them read, and `entries`
 // are wanted in `registers`.
@@ -727,7 +737,7 @@ fn plan_block(nodes: List<Node>, file: File, live: Reads(), entries: List<Port>,
                     entries, registers, pool, λ (id: Nat) => reads_has(crossed, id))),
             };
             shared(chosen, λ (place: Place) => match node.lower_at(place, file) {
-                None => Planned([place], file),
+                None => Planned([place], node.planned_file(place, file)),
                 Some(step) => plan_block(rest, step.file, later, entries, registers, pool, folds, crossed).put(place),
             })
         }),
