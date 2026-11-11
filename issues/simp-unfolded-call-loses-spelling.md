@@ -1,6 +1,6 @@
 ---
 title: A call simp computes at a constructor can leave its recursive call unmatched
-status: open
+status: closed
 labels: [tactics,simp]
 area: tactics
 created: 2026-11-11
@@ -27,3 +27,7 @@ function type, or a section's call), not an application of the named
 function, so neither the law's left side nor the display finds it.
 
 Done when the probe above closes, and the refusal spells the two sides.
+
+## Log
+
+- 2026-11-11: Fixed. Two causes, both in computing a call at a constructor (`recursion_at_constructor`, `crates/elab/src/goal_combinators.rs`): (1) `foldl`'s arm is its own recursion (a tail call on the accumulator), and the check that the match selected an arm took the whnf's eliminator head as a stuck match, so the call was never computed and `h` then found `f(z, a)` by unfolding, leaving the raw recursor; an `elim_Wf` firing on a `sup_f` now counts as selected. (2) A recursion on `Nat` (`range`) lowers to `elim_Nat`, which the reduct walk did not refold: `refold::refolded_fire_nat` spells its hypothesis as `λ q̄. g(…, n, q̄, …)` under the same node-for-node check as the `elim_Wf` case. Probes `computed_tail_call`, `computed_nat_recursion`, `computed_left_spelled` in `lib/_tests/std/tactic/simp_tests.hthr`; the `then :=` workarounds in `foldl_ext` and `range_ext` are gone.

@@ -52,6 +52,22 @@ impl Layout {
     /// `body`'s layout and the eliminator under its λs (scoped under them),
     /// when `body` is a structural recursion's lowering.
     pub(crate) fn of_body(body: &Term) -> Option<(Layout, &Term)> {
+        Self::of_recursion(body, |head| match head {
+            Term::ElimWf { scrut, .. } => Some(scrut),
+            _ => None,
+        })
+    }
+
+    /// [`Self::of_body`] for a recursion on `Nat`: `m` λs over
+    /// `elim_Nat(…; x_s) x_{varied[0]} …`.
+    fn of_nat_body(body: &Term) -> Option<(Layout, &Term)> {
+        Self::of_recursion(body, |head| match head {
+            Term::ElimNat { scrut, .. } => Some(scrut),
+            _ => None,
+        })
+    }
+
+    fn of_recursion(body: &Term, scrut_of: impl Fn(&Term) -> Option<&Rc<Term>>) -> Option<(Layout, &Term)> {
         let mut m = 0usize;
         let mut inner = body;
         while let Term::Lam { body, .. } = inner {
@@ -59,9 +75,7 @@ impl Layout {
             inner = body;
         }
         let (head, spine) = spelling::app_spine(inner);
-        let Term::ElimWf { scrut, .. } = head else {
-            return None;
-        };
+        let scrut = scrut_of(head)?;
         // Parameter `p` (0-based, outermost first) is `Var(m - 1 - p)` here.
         let param = |t: &Term| match t {
             Term::Var(LocalVar(i)) if (*i as usize) < m => Some(m - 1 - *i as usize),
@@ -264,6 +278,70 @@ pub(crate) fn refolded_fire(world: &GlobalCtx, gamma: &LocalCtx, call: &Term, cu
     let arity_at = arity.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(label)));
     let ih = layout.refolded_ih(g, &args, level, motive_level, shape, arity_at, arity, motive, children)?;
     let delta = LocalSubst::id(gamma).extended(Rc::clone(label)).extended(Rc::clone(children)).extended(Rc::new(ih));
+    Some(with_spine_head(current, step.apply_local(&delta)))
+}
+
+/// [`refolded_fire`] for a recursion on `Nat`: `current`'s head
+/// `elim_Nat` on a successor fires with the hypothesis spelled as calls of
+/// `call`'s head, `λ q̄. g(…, n, q̄, …)` at the predecessor `n`, when the
+/// eliminator is, node for node, the one `g`'s body holds at the call's
+/// fixed arguments. The kernel's own step copies the eliminator instead,
+/// which no source spells (`MonoidRel::range(op, Succ(m), f)` computes to
+/// `range(op, m, f) ∙ f(m)` this way).
+pub(crate) fn refolded_fire_nat(world: &GlobalCtx, gamma: &LocalCtx, call: &Term, current: &Term) -> Option<Term> {
+    let Term::ElimNat { level, motive, base, step, scrut } = spelling::app_spine(current).0 else {
+        return None;
+    };
+    let pred = match &**scrut {
+        Term::Succ(pred) => Rc::clone(pred),
+        Term::NatLit(n) if !heather_kernel::term::is_nat_zero(scrut) => Rc::new(heather_kernel::term::nat_lit_pred(n)),
+        _ => return None,
+    };
+    let (g, args) = spelling::app_spine(call);
+    let Term::GlobalTm { var, subst } = g else {
+        return None;
+    };
+    let stored = stored_body(world, *var, subst.terms.len())?;
+    Layout::of_nat_body(stored)?;
+    let body = stored.shift_global(var.rescope()).apply_local(subst);
+    let (layout, elim) = Layout::of_nat_body(&body)?;
+    let args: Vec<Rc<Term>> = args.into_iter().cloned().collect();
+    if args.len() < layout.m {
+        return None;
+    }
+    let Term::ElimNat { level: l, motive: mo, base: b, step: st, .. } = layout.instantiate(gamma, elim, &args) else {
+        return None;
+    };
+    if l != *level || mo != *motive || b != *base || st != *step {
+        return None;
+    }
+    // `λ q̄. g(…, n, q̄, …)` at `motive[n]`, the varied parameters bound in
+    // the order the body applies the eliminator to them.
+    let mut binders = Vec::with_capacity(layout.varied.len());
+    let mut goal = motive.inst_top(0, &pred);
+    for _ in &layout.varied {
+        let Type::Pi { dom_level, cod_level, dom, cod } = goal else {
+            return None;
+        };
+        binders.push((dom_level, cod_level, dom));
+        goal = (*cod).clone();
+    }
+    let r = layout.varied.len() as u32;
+    let mut ih = g.shift_local(r);
+    for (p, a) in args.iter().take(layout.m).enumerate() {
+        let a = if p == layout.s {
+            pred.shift_local(r)
+        } else if let Some(k) = layout.varied.iter().position(|&q| q == p) {
+            Term::Var(LocalVar(r - 1 - k as u32))
+        } else {
+            a.shift_local(r)
+        };
+        ih = Term::AppAt { fun: Rc::new(ih), arg: Rc::new(a) };
+    }
+    for (dom_level, cod_level, dom) in binders.into_iter().rev() {
+        ih = Term::Lam { dom_level, cod_level, dom, body: Rc::new(ih) };
+    }
+    let delta = LocalSubst::id(gamma).extended(pred).extended(Rc::new(ih));
     Some(with_spine_head(current, step.apply_local(&delta)))
 }
 

@@ -16,7 +16,7 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, Term, 
 use heather_kernel::value::{Head, VTy, Val, ValueArena};
 
 use crate::readback::Readback;
-use crate::refold::refolded_fire;
+use crate::refold::{refolded_fire, refolded_fire_nat};
 use crate::spelling;
 
 /// Steps the small-step reducer may spend on the *spelling* of a head the
@@ -472,7 +472,10 @@ impl Iterator for TermReducts<'_> {
             return None;
         }
         self.remaining -= 1;
-        let refolded = self.call.as_ref().and_then(|call| refolded_fire(&self.oracle.world, self.gamma, call, &self.current));
+        let refolded = self.call.as_ref().and_then(|call| {
+            refolded_fire(&self.oracle.world, self.gamma, call, &self.current)
+                .or_else(|| refolded_fire_nat(&self.oracle.world, self.gamma, call, &self.current))
+        });
         let next = match refolded {
             Some(next) => next,
             None => reduce::step_term_delta(&self.current, self.gamma, Defs::transparent(&self.oracle.world)).ok()??,

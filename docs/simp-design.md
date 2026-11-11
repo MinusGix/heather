@@ -591,8 +591,15 @@ argument the unifier leaves unsolved where the template applies it
 as `Exists` with `A` and `P`, and `P` as a λ that `Open` enters.
 
 Gaps left: a side condition of a law fired under a binder is not
-discharged there; each further consumer of a λ is one lemma and one
-evidence theorem; and a call computed at a constructor can leave its
-recursive call in no surface spelling (`foldl`, `range`), where a later law
-written over the call does not match
+discharged there; and each further consumer of a λ is one lemma and one
+evidence theorem.
+
+A call at a constructor computes to its arm with the recursive call
+written as a call (`goal_combinators::recursion_at_constructor`, over the
+reduct walk's refolded firing in `refold.rs`), so a law over the call
+matches what is left. Two shapes used to fall through to a law that found
+its instance by unfolding, which leaves the raw recursor that no source
+spells: a tail call on an accumulator (`foldl`'s arm is the recursion
+itself, which the check that an arm was selected read as stuck), and a
+recursion on `Nat` (`range`), whose `elim_Nat` the walk did not refold
 (`issues/simp-unfolded-call-loses-spelling.md`).

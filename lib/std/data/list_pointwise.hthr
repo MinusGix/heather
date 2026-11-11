@@ -79,7 +79,7 @@ theorem List::foldl_ext<A, B>(self xs: List<A>, f, g: B → A → B, h: (b: B) �
 {
     match xs {
         Nil => λ z => refl,
-        Cons(a, t) => λ z => simp_only(h(z, a), then := t.foldl_ext(f, g, h, g(z, a))),
+        Cons(a, t) => λ z => simp_only(h(z, a), t.foldl_ext(f, g, h, g(z, a))),
     }
 }
 
