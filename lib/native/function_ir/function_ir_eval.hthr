@@ -349,10 +349,10 @@ fn eval_nodes_over(buffers: Buffers(), nodes: List<Node>, values: Valuation()) �
     match nodes { Nil => values, Cons(node, rest) => eval_nodes_over(buffers, rest, node.step(values, buffers := buffers)) }
 }
 
-fn eval_nodes(nodes: List<Node>, values: Valuation(), buffers: Buffers() := Nil) → Valuation() { eval_nodes_over(buffers, nodes, values) }
+fn eval_nodes(nodes: List<Node>, values: Valuation()) → Valuation() { eval_nodes_over(Nil, nodes, values) }
 
 fn Region::eval(self region: Region, values: Valuation(), buffers: Buffers() := Nil) → Valuation() {
-    eval_nodes(region.nodes, values, buffers := buffers)
+    eval_nodes_over(buffers, region.nodes, values)
 }
 
 fn nodes_writes(nodes: List<Node>) → List<Nat> {
@@ -374,7 +374,7 @@ fn nodes_evaluable(nodes: List<Node>) → Bool {
 }
 
 theorem eval_nodes_frame(nodes: List<Node>, buffers: Buffers()): (values: Valuation()) → (w, id: Nat) →
-    absent(id, nodes_writes(nodes)).IsTrue() → eval_nodes(nodes, values, buffers := buffers)(w, id) = values(w, id) {
+    absent(id, nodes_writes(nodes)).IsTrue() → eval_nodes_over(buffers, nodes, values)(w, id) = values(w, id) {
     match nodes {
         Nil => λ values w id _ => refl,
         Cons(node, rest) => λ values w id h => {
@@ -389,7 +389,7 @@ theorem eval_nodes_frame(nodes: List<Node>, buffers: Buffers()): (values: Valuat
 // Any valuation agreeing with the evaluated one on what the nodes mention
 // satisfies them.
 theorem eval_nodes_holds(nodes: List<Node>, buffers: Buffers()): nodes_evaluable(nodes).IsTrue() → (values, after: Valuation()) →
-    ((w: Nat) → (id: Nat) → Mem(id, nodes_mentions(nodes)) → after(w, id) = eval_nodes(nodes, values, buffers := buffers)(w, id)) →
+    ((w: Nat) → (id: Nat) → Mem(id, nodes_mentions(nodes)) → after(w, id) = eval_nodes_over(buffers, nodes, values)(w, id)) →
     NodesHold(after, nodes, buffers := buffers) {
     match nodes {
         Nil => λ _ values after _ => trivial,
