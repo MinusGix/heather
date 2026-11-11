@@ -140,6 +140,24 @@ theorem or_pick_dec_not<P, A>(d: P ∨ ¬P, x, y: A, n: ¬P): or_pick(d, x, y) =
     }
 }
 
+// `Or` as data, a sum of two types: its injections are injective and apart.
+// The projections take a default, so they are total without an `Option`.
+fn Or::left_or<A, B>(self s: Or<A, B>, d: A) → A { match s { Inl(a) => a, Inr(_) => d } }
+fn Or::right_or<A, B>(self s: Or<A, B>, d: B) → B { match s { Inl(_) => d, Inr(b) => b } }
+fn Or::is_left<A, B>(self s: Or<A, B>) → Type { match s { Inl(_) => True, Inr(_) => False } }
+
+theorem Or::inl_inj<A, B>(a1, a2: A, e: Inl<A, B>(a1) = Inl(a2)): a1 = a2 {
+    j(e, λ y q => a1 = y.left_or(a1), refl)
+}
+
+theorem Or::inr_inj<A, B>(b1, b2: B, e: Inr<A, B>(b1) = Inr(b2)): b1 = b2 {
+    j(e, λ y q => b1 = y.right_or(b1), refl)
+}
+
+theorem Or::inl_ne_inr<A, B>(a: A, b: B): ¬(Inl<A, B>(a) = Inr(b)) {
+    λ (p: (Inl<A, B>(a) = Inr(b))) => j(p, λ y q => y.is_left(), trivial)
+}
+
 // ---------------------------------------------------------------------------
 // Bi-implication, as a record with NAMED directions rather than as
 // `And<P → Q, Q → P>`. Two reasons, both about use: `h.mp(p)` and

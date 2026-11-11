@@ -1,0 +1,22 @@
+// Probes of `lib/std/bitvec/bitvec_fintype.hthr`: words of a width as a
+// finite type, counted and quantified over by evaluation. Tests, not
+// library: nothing outside lib/_tests imports this module.
+import logic; import bool; import nat; import list; import bitvec; import fintype; import bitvec_fintype;
+
+theorem nibbles(): Fintype::card<BitVec(4)>() = 16 { refl }
+theorem bytes(): Fintype::card<BitVec(8)>() = 256 { refl }
+theorem one_empty_word(): Fintype::card<BitVec(0)>() = 1 { refl }
+
+// expect-error(kernel)
+theorem nibbles_wrong(): Fintype::card<BitVec(4)>() = 15 { refl }
+
+// A claim over every nibble, by evaluation, spent at an open one.
+theorem xor_self_all(): Fintype::All<BitVec(4)>(λ x => x.bxor(x).toNat().same(0)) { decide }
+theorem xor_self_at(x: BitVec(4)): x.bxor(x).toNat().same(0) = True { xor_self_all()(x) }
+
+// A false one is refuted, and the search names the counterexample.
+theorem not_all_zero(): ¬Fintype::All<BitVec(4)>(λ x => x.toNat().same(0)) { decide }
+theorem first_nonzero(): (Fintype::find<BitVec(2)>(λ x => !x.toNat().same(0))).map(λ x => x.toNat()) = Some(2) { refl }
+
+// At a neutral width: completeness is the instance's, with no evaluation.
+theorem word_listed(n: Nat, x: BitVec(n)): Mem(x, Fintype::enumerate<BitVec(n)>()) { Fintype::complete_of(x) }
