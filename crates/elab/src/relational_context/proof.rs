@@ -706,6 +706,78 @@ impl Builder<'_> {
         Ok((term, level))
     }
 
+    /// Both sides as one constructor of an inductive type applied to one or
+    /// two fields of the carrier: a context like a function's, whose
+    /// compatibility evidence is registered at the constructor's name
+    /// (`Respects2<…>(R, R, R, T::C)`, or `PreservesRelation(R, R, T::C)`
+    /// for one field). A lowered constructor value is not an application,
+    /// so the readers above never see it
+    /// (issues/rel-cong-under-constructors.md).
+    fn under_constructor(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> R<Option<String>> {
+        let Some((ind, i, lfields)) = self.e.view_ctor(&self.cx, left) else {
+            return Ok(None);
+        };
+        let Some((rind, j, rfields)) = self.e.view_ctor(&self.cx, right) else {
+            return Ok(None);
+        };
+        if ind.tag != rind.tag || i != j || lfields.len() != rfields.len() {
+            return Ok(None);
+        }
+        let op = format!("{}::{}", ind.name, ind.ctors[i].name);
+        let statement = match lfields.len() {
+            1 => format!("relation_props::PreservesRelation({r}, {r}, {op})", r = self.rel),
+            2 => format!(
+                "algebra_rel::Respects2<{a}, {a}, {a}>({r}, {r}, {r}, {op})",
+                a = self.carrier,
+                r = self.rel
+            ),
+            _ => return Ok(None),
+        };
+        // A constructor whose fields are not the carrier's has no such
+        // statement; it is not a context of this relation.
+        let Ok((ty, level)) = self.type_of(&statement) else {
+            return Ok(None);
+        };
+        let certificate = self.evidence(ty, level, "compatibility")?;
+        let x = self.value(lfields[0].clone());
+        let x2 = self.value(rfields[0].clone());
+        let hx = self.field(&lfields[0], &rfields[0], depth)?;
+        if lfields.len() == 1 {
+            return Ok(Some(format!("{certificate}({x}, {x2}, {hx})")));
+        }
+        let y = self.value(lfields[1].clone());
+        let y2 = self.value(rfields[1].clone());
+        let hy = self.field(&lfields[1], &rfields[1], depth)?;
+        Ok(Some(format!("{certificate}.respects2({x}, {x2}, {hx}, {y}, {y2}, {hy})")))
+    }
+
+    /// The proof for one field of a constructor context. A field of a
+    /// lowered constructor value carries the annotations of where it sits,
+    /// so the same expression inside a constructor and at the head of the
+    /// supplied proof's statement can be two spellings: where the walk's
+    /// syntactic tests do not place the pair, conversion decides whether it
+    /// is the supplied change or no change at all.
+    fn field(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> R<String> {
+        let (supplied_left, supplied_right) = self.sides();
+        if left == right || (*left == supplied_left && *right == supplied_right) {
+            return self.walk(left.clone(), right.clone(), depth + 1);
+        }
+        let l = self.value(left.clone());
+        let r = self.value(right.clone());
+        let (ty, level) = self.type_of(&format!("{}({l}, {r})", self.rel))?;
+        let sl = self.value(supplied_left);
+        let sr = self.value(supplied_right);
+        let (supplied, _) = self.type_of(&format!("{}({sl}, {sr})", self.rel))?;
+        if self.core_converts(&supplied, &ty, &level) {
+            return Ok(self.witness.clone());
+        }
+        let (fixed, _) = self.type_of(&format!("{}({l}, {l})", self.rel))?;
+        if self.core_converts(&fixed, &ty, &level) {
+            return self.walk(left.clone(), left.clone(), depth + 1);
+        }
+        self.walk(left.clone(), right.clone(), depth + 1)
+    }
+
     fn walk(&mut self, left: Rc<Term>, right: Rc<Term>, depth: usize) -> R<String> {
         self.nodes += 1;
         if self.nodes > (if self.derive { 512 } else { 256 })
@@ -823,6 +895,9 @@ impl Builder<'_> {
                 let h = self.walk(lx.clone(), rx.clone(), depth + 1)?;
                 return Ok(format!("{certificate}({x}, {y}, {h})"));
             }
+        }
+        if let Some(proof) = self.under_constructor(&left, &right, depth)? {
+            return Ok(proof);
         }
         if self.derive {
             if let Some(result) = self.expand(&left, &right, depth) {

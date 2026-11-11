@@ -158,6 +158,20 @@ theorem Regex::same_star({s, s2: Regex}, same: s ≈ s2): Star(s) ≈ Star(s2) {
             ⟨ws, ⟨e, Regex::each_mono(λ u => s2.Denotes(u), λ u => s.Denotes(u), λ u x => same(u).mpr(x), ws, each)⟩⟩ })
 }
 
+// The constructors respect `≈`, registered so that `rel_cong` and a
+// `rewrite` along `≈` work under them.
+instance Respects2<Regex, Regex, Regex>(Regex::Same, Regex::Same, Regex::Same, Regex::Seq) {
+    respects2 := λ a a2 sa b b2 sb => Regex::same_seq(sa, sb),
+}
+
+instance Respects2<Regex, Regex, Regex>(Regex::Same, Regex::Same, Regex::Same, Regex::Alt) {
+    respects2 := λ a a2 sa b b2 sb => Regex::same_alt(sa, sb),
+}
+
+evidence theorem Regex::star_respects(): PreservesRelation(Regex::Same, Regex::Same, Regex::Star) {
+    λ s s2 same => Regex::same_star(same)
+}
+
 // ---------------------------------------------------------------------------
 // Constructors that apply the units and zeros.
 
@@ -173,84 +187,66 @@ theorem Regex::is_eps_nil(self r: Regex, w: List<Nat>): r.is_eps() = True → (r
     match r { Eps => λ h => iff_refl(), _ => λ h => absurd(h) }
 }
 
-// `Alt` without an operand that accepts nothing. The tests are parameters
-// of `alt_at` so that its theorem can take them apart as variables.
-fn Regex::alt_at(za, zb: Bool, a, b: Regex) → Regex {
-    match za {
+// `Alt` without an operand that accepts nothing.
+fn Regex::alt(a, b: Regex) → Regex {
+    match a.is_no_match() {
         True => b,
-        False => match zb { True => a, False => Alt(a, b) },
-    }
-}
-
-fn Regex::alt(a, b: Regex) → Regex { Regex::alt_at(a.is_no_match(), b.is_no_match(), a, b) }
-
-theorem Regex::alt_at_same(a, b: Regex, za: Bool): a.is_no_match() = za → (zb: Bool) → b.is_no_match() = zb →
-    Regex::alt_at(za, zb, a, b) ≈ Alt(a, b)
-{
-    match za {
-        True => λ ha zb hb w => Iff(
-            mp := λ d => Inr(d),
-            mpr := λ d => match d { Inl(x) => false_elim(a.is_no_match_empty(w, ha, x)), Inr(y) => y }),
-        False => λ ha zb => match zb {
-            True => λ hb w => Iff(
-                mp := λ d => Inl(d),
-                mpr := λ d => match d { Inl(x) => x, Inr(y) => false_elim(b.is_no_match_empty(w, hb, y)) }),
-            False => λ hb w => iff_refl(),
-        },
+        False => match b.is_no_match() { True => a, False => Alt(a, b) },
     }
 }
 
 theorem Regex::alt_same(a, b: Regex): Regex::alt(a, b) ≈ Alt(a, b) {
-    Regex::alt_at_same(a, b, a.is_no_match(), refl, b.is_no_match(), refl)
-}
-
-// `Seq` without an operand that accepts nothing or only the empty word.
-fn Regex::seq_at(za, zb, ea, eb: Bool, a, b: Regex) → Regex {
-    match za {
-        True => NoMatch,
-        False => match zb {
-            True => NoMatch,
-            False => match ea {
-                True => b,
-                False => match eb { True => a, False => Seq(a, b) },
-            },
+    match ha: a.is_no_match() {
+        True => λ w => Iff(
+            mp := λ d => Inr(d),
+            mpr := λ d => match d { Inl(x) => false_elim(a.is_no_match_empty(w, ha, x)), Inr(y) => y }),
+        False => match hb: b.is_no_match() {
+            True => λ w => Iff(
+                mp := λ d => Inl(d),
+                mpr := λ d => match d { Inl(x) => x, Inr(y) => false_elim(b.is_no_match_empty(w, hb, y)) }),
+            False => λ w => iff_refl(),
         },
     }
 }
 
-fn Regex::seq(a, b: Regex) → Regex { Regex::seq_at(a.is_no_match(), b.is_no_match(), a.is_eps(), b.is_eps(), a, b) }
-
-theorem Regex::seq_at_same(a, b: Regex, za: Bool): a.is_no_match() = za → (zb: Bool) → b.is_no_match() = zb →
-    (ea: Bool) → a.is_eps() = ea → (eb: Bool) → b.is_eps() = eb →
-    Regex::seq_at(za, zb, ea, eb, a, b) ≈ Seq(a, b)
-{
-    match za {
-        True => λ ha zb hb ea hea eb heb w => Iff(
-            mp := λ d => false_elim(d),
-            mpr := λ d => match d { ⟨u, ⟨_, ⟨_, ⟨da, _⟩⟩⟩⟩ => a.is_no_match_empty(u, ha, da) }),
-        False => λ ha zb => match zb {
-            True => λ hb ea hea eb heb w => Iff(
-                mp := λ d => false_elim(d),
-                mpr := λ d => match d { ⟨_, ⟨v, ⟨_, ⟨_, db⟩⟩⟩⟩ => b.is_no_match_empty(v, hb, db) }),
-            False => λ hb ea => match ea {
-                True => λ hea eb heb w => Iff(
-                    mp := λ d => ⟨Nil, ⟨w, ⟨refl, ⟨a.is_eps_nil(Nil, hea).mpr(refl), d⟩⟩⟩⟩,
-                    mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
-                        subst(sym(trans(e, cong_fn(λ (x: List<Nat>) => x ++ v, a.is_eps_nil(u, hea).mp(da)))), db) }),
-                False => λ hea eb => match eb {
-                    True => λ heb w => Iff(
-                        mp := λ d => ⟨w, ⟨Nil, ⟨sym(w.append_nil()), ⟨d, b.is_eps_nil(Nil, heb).mpr(refl)⟩⟩⟩⟩,
-                        mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
-                            subst(sym(trans(e, trans(cong_fn(λ (x: List<Nat>) => u ++ x, b.is_eps_nil(v, heb).mp(db)), u.append_nil()))), da) }),
-                    False => λ heb w => iff_refl(),
-                },
+// `Seq` without an operand that accepts nothing or only the empty word.
+fn Regex::seq(a, b: Regex) → Regex {
+    match a.is_no_match() {
+        True => NoMatch,
+        False => match b.is_no_match() {
+            True => NoMatch,
+            False => match a.is_eps() {
+                True => b,
+                False => match b.is_eps() { True => a, False => Seq(a, b) },
             },
         },
     }
 }
 
 theorem Regex::seq_same(a, b: Regex): Regex::seq(a, b) ≈ Seq(a, b) {
-    Regex::seq_at_same(a, b, a.is_no_match(), refl, b.is_no_match(), refl, a.is_eps(), refl, b.is_eps(), refl)
+    match ha: a.is_no_match() {
+        True => λ w => Iff(
+            mp := λ d => false_elim(d),
+            mpr := λ d => match d { ⟨u, ⟨_, ⟨_, ⟨da, _⟩⟩⟩⟩ => a.is_no_match_empty(u, ha, da) }),
+        False => match hb: b.is_no_match() {
+            True => λ w => Iff(
+                mp := λ d => false_elim(d),
+                mpr := λ d => match d { ⟨_, ⟨v, ⟨_, ⟨_, db⟩⟩⟩⟩ => b.is_no_match_empty(v, hb, db) }),
+            False => match ea: a.is_eps() {
+                True => λ w => Iff(
+                    mp := λ d => ⟨Nil, ⟨w, ⟨refl, ⟨a.is_eps_nil(Nil, ea).mpr(refl), d⟩⟩⟩⟩,
+                    mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
+                        subst(sym(trans(e, cong_fn(λ (x: List<Nat>) => x ++ v, a.is_eps_nil(u, ea).mp(da)))), db) }),
+                False => match eb: b.is_eps() {
+                    True => λ w => Iff(
+                        mp := λ d => ⟨w, ⟨Nil, ⟨sym(w.append_nil()), ⟨d, b.is_eps_nil(Nil, eb).mpr(refl)⟩⟩⟩⟩,
+                        mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
+                            subst(sym(trans(e, trans(cong_fn(λ (x: List<Nat>) => u ++ x, b.is_eps_nil(v, eb).mp(db)), u.append_nil()))), da) }),
+                    False => λ w => iff_refl(),
+                },
+            },
+        },
+    }
 }
 
 // The derivative, built with those constructors.
@@ -273,32 +269,26 @@ theorem Regex::seq_left({da, da2: Regex}, b: Regex, sa: da ≈ da2): Regex::seq(
     calc {
         Regex::seq(da, b)
             ≈ Seq(da, b) := Regex::seq_same(da, b),
-            ≈ Seq(da2, b) := Regex::same_seq(sa, b.same_refl()),
-    }
-}
-
-// The `Seq` case, with the nullable test as a variable.
-theorem Regex::deriv_simp_seq({da, da2, db, db2: Regex}, n: Bool, b: Regex, sa: da ≈ da2, sb: db ≈ db2):
-    Regex::Same(match n { True => Regex::alt(Regex::seq(da, b), db), False => Regex::seq(da, b) },
-        match n { True => Alt(Seq(da2, b), db2), False => Seq(da2, b) })
-{
-    match n {
-        True => calc {
-            Regex::alt(Regex::seq(da, b), db)
-                ≈ Alt(Regex::seq(da, b), db) := Regex::alt_same(Regex::seq(da, b), db),
-                ≈ Alt(Seq(da2, b), db2) := Regex::same_alt(Regex::seq_left(b, sa), sb),
-        },
-        False => Regex::seq_left(b, sa),
+            ≈ Seq(da2, b) := rel_cong(sa),
     }
 }
 
 theorem Regex::deriv_simp_same(self r: Regex, c: Nat): r.deriv_simp(c) ≈ r.deriv(c) {
     match r {
-        Seq(a, b) => Regex::deriv_simp_seq(a.nullable(), b, a.deriv_simp_same(c), b.deriv_simp_same(c)),
+        Seq(a, b) => match ha: a.nullable() {
+            True => calc {
+                Regex::alt(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c))
+                    ≈ Alt(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c)) := Regex::alt_same(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c)),
+                    ≈ Alt(Seq(a.deriv(c), b), b.deriv_simp(c)) := rel_cong(Regex::seq_left(b, a.deriv_simp_same(c))),
+                    ≈ Alt(Seq(a.deriv(c), b), b.deriv(c)) := rel_cong(b.deriv_simp_same(c)),
+            },
+            False => Regex::seq_left(b, a.deriv_simp_same(c)),
+        },
         Alt(a, b) => calc {
             Regex::alt(a.deriv_simp(c), b.deriv_simp(c))
                 ≈ Alt(a.deriv_simp(c), b.deriv_simp(c)) := Regex::alt_same(a.deriv_simp(c), b.deriv_simp(c)),
-                ≈ Alt(a.deriv(c), b.deriv(c)) := Regex::same_alt(a.deriv_simp_same(c), b.deriv_simp_same(c)),
+                ≈ Alt(a.deriv(c), b.deriv_simp(c)) := rel_cong(a.deriv_simp_same(c)),
+                ≈ Alt(a.deriv(c), b.deriv(c)) := rel_cong(b.deriv_simp_same(c)),
         },
         Star(s) => Regex::seq_left(Star(s), s.deriv_simp_same(c)),
         _ => λ w => iff_refl(),
@@ -320,14 +310,16 @@ theorem Regex::simp_same(self r: Regex): r.simp() ≈ r {
         Seq(a, b) => calc {
             Regex::seq(a.simp(), b.simp())
                 ≈ Seq(a.simp(), b.simp()) := Regex::seq_same(a.simp(), b.simp()),
-                ≈ Seq(a, b) := Regex::same_seq(a.simp_same(), b.simp_same()),
+                ≈ Seq(a, b.simp()) := rel_cong(a.simp_same()),
+                ≈ Seq(a, b) := rel_cong(b.simp_same()),
         },
         Alt(a, b) => calc {
             Regex::alt(a.simp(), b.simp())
                 ≈ Alt(a.simp(), b.simp()) := Regex::alt_same(a.simp(), b.simp()),
-                ≈ Alt(a, b) := Regex::same_alt(a.simp_same(), b.simp_same()),
+                ≈ Alt(a, b.simp()) := rel_cong(a.simp_same()),
+                ≈ Alt(a, b) := rel_cong(b.simp_same()),
         },
-        Star(s) => Regex::same_star(s.simp_same()),
+        Star(s) => calc { Star(s.simp()) ≈ Star(s) := rel_cong(s.simp_same()), },
         _ => λ w => iff_refl(),
     }
 }
