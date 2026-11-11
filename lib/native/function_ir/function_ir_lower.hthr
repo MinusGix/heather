@@ -3133,6 +3133,26 @@ fn File::first_free(self file: File, live: Nat → Bool, pool: List<Gpr>) → Op
     }
 }
 
+// A free register of `pool` that is none of `kept`, else the first free
+// one. The planner keeps clear the registers something is wanted in where
+// a first plan of a branch lost a value (`StructuredRegion::plan_in`).
+fn File::first_unkept(self file: File, live: Nat → Bool, pool, kept: List<Gpr>) → Option<Gpr> {
+    match pool {
+        Nil => None,
+        Cons(register, rest) => match !register.listed(kept) && slot_free(file.at(register), live) {
+            True => Some(register),
+            False => file.first_unkept(live, rest, kept),
+        },
+    }
+}
+
+fn File::first_spare(self file: File, live: Nat → Bool, pool, kept: List<Gpr>) → Option<Gpr> {
+    match kept {
+        Nil => file.first_free(live, pool),
+        Cons(_, _) => match file.first_unkept(live, pool, kept) { None => file.first_free(live, pool), Some(register) => Some(register) },
+    }
+}
+
 fn target_of(id: Nat, entries: List<Port>, registers: List<Gpr>) → Option<Gpr> {
     match entries {
         Nil => None,
@@ -3190,14 +3210,14 @@ fn prefers_operand(node: Node) → Bool {
 // the first operand's register when the operand dies here and it is in
 // `pool`, or is RAX and the output is not read after a later call
 // (`crossed`; a call's result lands in RAX); else the first free register
-// of `pool`.
+// of `pool`, none of `kept` when one is free apart from them.
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
 fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: Nat → Bool) → Gpr
+    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = match file.first_free(live, pool) { None => Rax, Some(r) => r };
+    let fresh = match file.first_spare(live, pool, kept) { None => Rax, Some(r) => r };
     let reuse = match prefers_operand(node) {
         False => fresh,
         True => match node.in_place(file, later) {
@@ -3220,7 +3240,7 @@ fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: Lis
 {
     node.choose_by(file, λ (id: Nat) => function_ir_lower::mentions(node.reads() ++ later, id),
         λ (id: Nat) => function_ir_lower::mentions(later, id), entries, registers, pool,
-        λ (id: Nat) => function_ir_lower::mentions(crossed, id))
+        λ (id: Nat) => function_ir_lower::mentions(crossed, id), [])
 }
 
 fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,

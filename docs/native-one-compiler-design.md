@@ -423,8 +423,7 @@ that neither is needed, and what follows is the form that was built.
   a surface over this and is left for the export round, where the
   scanner's signature is written.
 
-  Linking is still at the empty file (`Compile::part`,
-  `f::agrees`, `program_linked_sources`): step 3c states it over a file.
+  Linking is stated over a file since step 3c (below).
 
   A loop needs more than the pin, and step 2 found where: a measured
   function is proved from its own `f::ext`, and `decreases` takes every
@@ -464,12 +463,13 @@ that neither is needed, and what follows is the form that was built.
   is `Byte(k, i, length)`. A recursion passes each span and its length
   word on as they came in, which is what the loop's lowering needs to
   keep the home in place, and the reflector says so where a body does
-  not. Every other use of the span is refused with the reason: read
-  under another word, read with `byte_at`, used as a value, or handed to
-  another function (which waits for linking over a file, step 3c, and a
-  callee's span `k ≠ j` for a `Call` that renames buffers, which
-  FunctionIR does not have). A byte list anywhere else among the
-  parameters is refused with what a span is.
+  not. A call of another lent function passes the caller's span `j` as
+  the callee's span `j`, with its own length word (step 3c): the callee
+  reads the caller's file, and a `Call` that renames buffers is not in
+  FunctionIR. Every other use of the span is refused with the reason:
+  read under another word, read with `byte_at`, used as a value, or
+  handed on in another place or under another word. A byte list anywhere
+  else among the parameters is refused with what a span is.
 
   The generator then makes the instance the class states
   (`lib/native/runtime/runtime.hthr`). The table of a lent function is
@@ -484,9 +484,53 @@ that neither is needed, and what follows is the form that was built.
   was entered with. `Setup::guarded_span` brings the family to each
   file's span 0, and that is `Setup::Guarded` by conversion at the
   function's own body. A loop over two spans is refused (the family has
-  one index). A lent function publishes `f::rt`, `f::world`, `f::judged`,
-  `f::reflects`, `f::code` and `f::compile`; its program and `f::agrees`
-  are step 3c's, so `compile-x86` does not take one yet.
+  one index).
+
+  Linking over a file (step 3c, built). The evaluator's two linking
+  lemmas are stated over the buffers (`Function::eval_answers_over`,
+  `Function::relabel_eval_over`; the old ones are these at no buffers),
+  and a program is linked at every file at once:
+  `program_linked_files(functions, arities, sources)` asks each function
+  to answer as `sources(b)` says over each file `b`, and
+  `program_linked_files_sources` gives `program_eval_over(b, functions)`
+  as `sources(b)`. `Compile::part` is the class's agreement in that
+  form, at the function's own table at `b`. Every generated program is
+  linked this way, lent or not, so there is one linking and a spanless
+  function's `f::agrees` is its reading at the empty file, as stated
+  before; the cost over the old linking is a small constant per
+  function. A lent function publishes `f::program`, `f::arities` and
+
+      f::agrees_over(b, words…):
+          program_eval_over(b, f::program, root, [words…]) = f(b.span(0), …)
+
+  where the words are the code's (a place and a length for each span,
+  then the function's own). A table is built an entry at a time
+  (`Setup::lent_callees` over `Setup::callees_nil`), each callee's entry
+  the callee at the file's spans, so a lent function calls lent and
+  spanless functions alike.
+
+  A tool's call states no address (`program_readers`: each home's place
+  stated as zero and its length the buffer's), so what a call answers is
+  the function at the tool's own buffer:
+  `count_newlines_called` (`lib/native/native_tool_spans.hthr`) is
+  `agrees_over` read at the buffers the tool holds. `compile-x86` still
+  cites `f::agrees` and so does not take a lent function; a Rust caller
+  that lends a buffer is the export round's.
+
+  Step 3c also met the function compiler's placement heuristic. The
+  reflector writes a call's arguments left to right, so a loop's next
+  index is made before the byte is read and lives across the read; the
+  heuristic then put the tally where the next index was wanted, the two
+  arms of the pass's branch disagreed on where the outputs lie, and the
+  code keeps only what the arms agree on (`File::meet`), so the loop was
+  refused. A branch whose first plan loses an output that is read after
+  it is now planned a second time with fresh places kept clear of every
+  register something is wanted in (`StructuredRegion::plan_in`). The
+  heuristic is untrusted, so nothing is proved of this, and a branch
+  whose first plan loses nothing is planned as before: no compiled code
+  changed. The emitter moving each arm's outputs to the branch's
+  targets, so that no plan can lose one, is
+  issues/function-ir-branch-arms-meet-by-placement.md.
 
 What step 1 built (`lib/_tests/native/runtime/rt_spans_tests.hthr` is
 its evidence): the term, its meaning, its lowering and the theorem, for
@@ -587,7 +631,7 @@ Each is a PR and ends with something that runs.
     between statements. *Runs:* `wc -l` with each read's newlines counted
     by `count_newlines` (`native_tool_spans.hthr`), a function lent the
     buffer, beside GNU's (`crates/cli/tests/native_tools.rs`). The
-    function is written as FunctionIR until U3c.
+    function was written as FunctionIR until U3c step 3c.
   - **U3c. A `runtime fn` reads a span**, so the loop is Heather source;
     the scanner's loop is the customer. Designed in §2.3, in three steps
     that each leave the library whole.
@@ -609,8 +653,11 @@ Each is a PR and ends with something that runs.
       loop as `runtime fn`s, a read of two spans, and a lent function
       calling a spanless one
       (`lib/_tests/native/runtime/runtime_lent_tests.hthr`).
-    - *Step 3c:* linking over a file. *Runs:* `wc -l` with
-      `count_newlines` a `runtime fn`.
+    - *Step 3c, built 2026-11-11:* linking over a file, a lent function
+      calling a lent one, and a tool's call proved to answer as the
+      Heather function. *Runs:* `wc -l` with `count_newlines` a
+      `runtime fn` (a loop and the function that starts it), beside
+      GNU's.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
   `write-elf`'s byte nodes move to the shared lowering. *Runs:* `tr` with
   its byte map as a called function.

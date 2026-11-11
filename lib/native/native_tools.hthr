@@ -112,13 +112,15 @@ fn wc_l(capacity: Nat) → Tool {
 fn wc_l_tool() → Tool { wc_l(256) }
 
 // wc -l once more, each read's newlines counted by `count_newlines`
-// (native_tool_spans): a function lent the buffer, compiled into the same
-// file by the function compiler and passed the buffer's address and
+// (native_tool_spans): a `runtime fn` lent the buffer, compiled into the
+// same file by the function compiler and passed the buffer's address and
 // capacity by the call (docs/native-one-compiler-design.md §2.3). The
-// function reads the bytes the read left in the program's buffer.
+// function reads the bytes the read left in the program's buffer, and the
+// call's answer is the Heather function's at them
+// (`count_newlines_called`).
 fn wc_l_called(capacity: Nat) → Tool {
     program(count_newlines_program(), buffer(capacity, λ buf => run(local(num(0), λ lines => local(num(0), λ found =>
-        each_read(stdin(), buf, λ n => compute(call(0, [n.get()], found)) ++ lines.set(lines.get() + found.get()))
+        each_read(stdin(), buf, λ n => compute(call(count_newlines_entry(), [n.get()], found)) ++ lines.set(lines.get() + found.get()))
         ++ exit(lines.get()))))))
 }
 

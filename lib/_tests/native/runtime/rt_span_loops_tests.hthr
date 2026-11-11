@@ -192,6 +192,28 @@ theorem count_split_accepted(): lower_program_lent([count_split_code()], plan_pr
 theorem count_split_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_split_code()], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
 
 // ---------------------------------------------------------------------------
+// The body in the order the reflector writes it (the call's arguments left
+// to right, so the next index is made before the byte is read, and the
+// branch's arm makes its own literal): the next index lives across the
+// read, and the placement heuristic's first plan of the pass's branch puts
+// the tally where the next index is wanted. The branch is planned a second
+// time, apart (`StructuredRegion::plan_in`), and the function compiler
+// takes the loop.
+
+fn count_early_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), IfEq(0, Let(Lit(Word(64), 1), Let(Prim(Add(64), [3, 0]), Let(Byte(0, 4, 5), Let(Lit(Word(8), 10),
+        Let(Prim(Eq(8), [1, 0]), Let(If(0, Let(Lit(Word(64), 1), Prim(Add(64), [7, 0])), Var(6)), Call(0, [10, 9, 4, 0]))))))), Var(1)))
+}
+
+fn count_early_code() → Function {
+    span_loop_code(Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_early_body(), Word(64), count_world(Nil), 1))
+}
+
+theorem count_early_placeless(): program_placeless([count_early_code()]).IsTrue() { trivial }
+theorem count_early_accepted(): lower_program_lent([count_early_code()], plan_program([count_early_code()]), [1]).is_some() = True { refl }
+theorem count_early_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_early_code()], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+
+// ---------------------------------------------------------------------------
 // What is refused.
 
 // A self-call that hands something else on at a kept slot (here the index

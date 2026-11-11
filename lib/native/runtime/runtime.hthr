@@ -423,13 +423,15 @@ theorem Setup::lent_every<F>(f: F, w: World, callees: (b: Buffers()) → Sig::Se
 // is stated before its world is.
 fn Setup::typed_once<F>(f: F) → Itself(F) = Itself(F) { refl }
 
-// The table of a function lent spans: entry 0 is the function at each
-// file's spans (a function that calls itself over a span is in its own
-// table at that span), the functions it calls after it, which read no
-// file.
+// The table of a function lent spans, an entry at a time: each function at
+// each file's spans. The function itself is entry 0 (one that calls itself
+// over a span is in its own table at that span), the functions it calls
+// come after it, and one lent nothing is itself at every file.
+fn Setup::callees_nil(tys: Nat → RecInfo) → (b: Buffers()) → Sig::Sems(tys, Nil) { λ _ => trivial }
+
 fn Setup::lent_callees<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(Ty::Lent(tys, lent, ps, r)),
-    sigs: List<Sig>, rest: Sig::Sems(tys, sigs)) → (b: Buffers()) → Sig::Sems(tys, Cons(Sig(ps, r), sigs)) {
-    λ b => Pair(Ty::lent_at(tys, lent, ps, r, typed, f, b), rest)
+    sigs: List<Sig>, rest: (b: Buffers()) → Sig::Sems(tys, sigs)) → (b: Buffers()) → Sig::Sems(tys, Cons(Sig(ps, r), sigs)) {
+    λ b => Pair(Ty::lent_at(tys, lent, ps, r, typed, f, b), rest(b))
 }
 
 // A runtime fn's instance, from its reflection: the default setup's code
@@ -804,20 +806,38 @@ theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → B
     }
 }
 
-// An instance's function as a word function: its meaning, uncurried.
-// Linking is at the empty file for now: a program's functions over a file
-// are U3c's last step (docs/native-one-compiler-design.md §2.3).
-fn Compile::uncurried<F>(f: F, c: Compile<F>(f)) → List<BitVec(64)> → BitVec(64) {
-    λ ws => Ty::uncurry(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
-        Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), ws)
+// An instance's function as a word function at a file: its meaning there,
+// uncurried. A program is linked at every file at once
+// (docs/native-one-compiler-design.md §2.3): a function lent spans reads
+// the file's, and a function lent nothing is the same at each.
+fn Compile::uncurried<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<BitVec(64)> → BitVec(64) {
+    λ ws => Ty::uncurry(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
+        Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b), ws)
 }
+
+// A program's word functions at each file, spelled with no binder: the
+// generator applies `Compile::uncurried` to a function and its instance
+// and leaves the file.
+fn link_files_nil() → Buffers() → List<List<BitVec(64)> → BitVec(64)> { λ _ => [] }
+
+fn link_files_cons(s: Buffers() → List<BitVec(64)> → BitVec(64), rest: Buffers() → List<List<BitVec(64)> → BitVec(64)>)
+    → Buffers() → List<List<BitVec(64)> → BitVec(64)> {
+    λ b => Cons(s(b), rest(b))
+}
+
+// Calls answered by a program's word functions at each file.
+fn link_sources_at(srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>) → Buffers() → Answers() { λ b => link_sources(srcs(b)) }
+
+// `x(b) = x(b)` at every file, spelled with no binder.
+theorem link_every<A>(x: Buffers() → A): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
 
 // An instance's code in a program: its calls renamed by `links`.
 fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
 
-// An instance's table of meanings, uncurried: what `links` must name.
-fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVec(64)> {
-    Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Nil))
+// An instance's table of meanings at a file, uncurried: what `links` must
+// name.
+fn Compile::table<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<List<BitVec(64)> → BitVec(64)> {
+    Sig::uncurried(c.world.tys, c.world.sigs, c.callees(b))
 }
 
 // How many words an instance's function takes.
@@ -829,31 +849,31 @@ fn link_arity(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat →
     linked_arity(functions.drop(k), arities.drop(k))
 }
 
-// An instance's code, linked into a program whose calls `srcs` answers and
-// whose functions take `arity` words: its calls fit the program, and it
-// returns its function's meaning. `links` names, for each entry of its
-// table, a function of the program answered by that entry's meaning
-// (`linked`, by conversion) and taking that entry's words (`named`, by
-// evaluating the two lists). That the code's calls fit its own table is
-// the instance's `fits`, so no link reads the code. This is one conjunct of
-// `program_linked`.
-theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>, arity: Nat → Option<Nat>,
-    linked: links.map(λ (n: Nat) => link_source(srcs, n)) = Compile::table(f, c),
+// An instance's code, linked into a program whose calls `srcs` answers at
+// each file and whose functions take `arity` words: its calls fit the
+// program, and over every file it returns its function's meaning there.
+// `links` names, for each entry of its table, a function of the program
+// answered by that entry's meaning (`linked`, by conversion, at every file)
+// and taking that entry's words (`named`, by evaluating the two lists).
+// That the code's calls fit its own table is the instance's `fits`, so no
+// link reads the code. This is one conjunct of `program_linked_files`.
+theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>, arity: Nat → Option<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
     named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue()):
     Compile::linked(f, c, links).calls_fit(arity).IsTrue()
-    ∧ ((words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
-        Compile::linked(f, c, links).eval(link_sources(srcs), words) = Compile::uncurried(f, c, words)) {
+    ∧ ((b: Buffers()) → (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
+        Compile::linked(f, c, links).eval(link_sources(srcs(b)), words, buffers := b) = Compile::uncurried(f, c, b, words)) {
     ⟨c.code.relabel_calls_fit(link_at(links), c.world.callee_arity(), arity,
         Sig::callee_links_fit_at(arity, c.world.sigs, links, named), c.fits),
-    λ words n => {
-        let at = c.world.at(c.callees, Nil);
-        let own = link_sources(Compile::table(f, c));
-        let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil);
-        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs),
-            c.agrees(Nil, own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
-        trans(c.code.relabel_eval(link_sources(srcs), link_at(links), words),
-            trans(c.code.eval_answers(own, Answers::relabel(link_sources(srcs), link_at(links)), c.world.callee_arity(),
-                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.callees(Nil), links, linked, k, ws,
+    λ b words n => {
+        let at = c.world.at(c.callees, b);
+        let own = link_sources(Compile::table(f, c, b));
+        let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
+        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs, buffers := b),
+            c.agrees(b, own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
+        trans(c.code.relabel_eval_over(b, link_sources(srcs(b)), link_at(links), words),
+            trans(c.code.eval_answers_over(b, own, Answers::relabel(link_sources(srcs(b)), link_at(links)), c.world.callee_arity(),
+                λ k ws fits => Sig::links_agree(c.world.tys, srcs(b), c.world.sigs, c.callees(b), links, linked(b), k, ws,
                     Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
                 answered))
     }⟩
@@ -1020,19 +1040,20 @@ fn runtime_callees(pair: Expr, unit: Expr, gs: List<Nat>) → Expr {
     match gs { Nil => unit, Cons(g, rest) => ap(pair, [Blank, Blank, Global(GlobalRef(g)), runtime_callees(pair, unit, rest)]) }
 }
 
-// A callee's signature, read off its type.
-fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Sig> {
+// A callee's signature, read off its type: the words its code takes (two
+// for each span it is lent, `rt_lent`), and how many spans it is lent.
+fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Pair<Nat, Sig>> {
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
             HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
                 runtime_sig_from(f, k, o.body, ps ++ [p]))),
-            _ => k.ty(t).bind(λ r => pure(Sig(ps, r))),
+            _ => k.ty(t).bind(λ r => { let lent = rt_lent(ps); pure(Pair(lent.fst, Sig(lent.snd, r))) }),
         }),
     }
 }
 
-fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Sig>> {
+fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Pair<Nat, Sig>>> {
     match gs {
         Nil => pure([]),
         Cons(g, rest) => infer(Global(GlobalRef(g))).or_fail("runtime: a callee's type: ").bind(λ t =>
@@ -1073,15 +1094,23 @@ fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>>
     })
 }
 
-// The globals a table of meanings lists, `Pair::of(g₀, Pair::of(g₁, … trivial))`.
-fn runtime_entries(fuel: Nat, h: Handle) → Tac<List<Nat>> {
+// The globals a table of meanings lists: `Pair::of(g₀, Pair::of(g₁, …
+// trivial))`, or the table of a function lent spans,
+// `Setup::lent_callees(g₀, …, Setup::lent_callees(g₁, …))`, whose entry is
+// its first argument and whose rest its eighth (applied to a file or not).
+fn runtime_entries(fuel: Nat, lent_callees: Nat, h: Handle) → Tac<List<Nat>> {
     match fuel {
         Zero => runtime_fail("a table longer than the linker reads"),
         Succ(more) => view(h).bind(λ v => {
-            let pair: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
+            let at_file: Bool = match v { HGlobal(g, _, _) => g.id.same(lent_callees), _ => False };
+            let parts: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
+            let pair: List<Handle> = match at_file {
+                True => match parts.nth(0) { Some(a) => match parts.nth(7) { Some(b) => [a, b], None => [] }, None => [] },
+                False => parts,
+            };
             match pair {
                 Cons(a, Cons(b, Nil)) => view(a).bind(λ entry => match entry {
-                    HGlobal(g, _, _) => runtime_entries(more, b).bind(λ rest => pure(Cons(g.id, rest))),
+                    HGlobal(g, _, _) => runtime_entries(more, lent_callees, b).bind(λ rest => pure(Cons(g.id, rest))),
                     _ => runtime_fail("a table entry that is not a function"),
                 }),
                 _ => pure([]),
@@ -1099,8 +1128,9 @@ fn runtime_table(name: String) → Tac<List<Nat>> {
     let value <- body(world).or_fail("runtime: the callee `" ++ name ++ "`'s table: ");
     let v <- view(value);
     let parts: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
+    let lent_callees <- runtime_ref("Setup::lent_callees");
     match parts.nth(2) {
-        Some(callees) => runtime_entries(4096, callees),
+        Some(callees) => runtime_entries(4096, lent_callees.id, callees),
         None => runtime_fail("the callee `" ++ name ++ "`'s `world` is not a table"),
     }
 }
@@ -1170,12 +1200,11 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 }
 
 // The program (the last function first, as `program_eval` reads it), the
-// word functions answering its calls, and the proof each function returns
-// its own (`program_sourced`).
+// word functions answering its calls at each file, and the proof each
+// function returns its own over every file (`program_linked_files`).
 record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr }
 
 fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<Linked> {
-    let srcs_ctors <- runtime_ctors_at(ts.srcs);
     let fn_ctors <- runtime_ctors_at(ts.functions);
     let uncurried <- runtime_global("Compile::uncurried");
     let linked <- runtime_global("Compile::linked");
@@ -1184,10 +1213,13 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let arity_of <- runtime_global("Compile::arity");
     let arity_at <- runtime_global("link_arity");
     let both <- runtime_global("link_both");
-    let rfl <- runtime_global("tactic::rfl");
+    let every <- runtime_global("link_every");
+    let files_nil <- runtime_global("link_files_nil");
+    let files_cons <- runtime_global("link_files_cons");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
-    let srcs <- runtime_held(RtQ::seq(srcs_ctors, insts.map(λ p => ap(uncurried, [Blank, p.fst, p.snd]))), "the program's sources");
+    // Each function at each file: `Compile::uncurried` short of its file.
+    let srcs <- runtime_held(insts.foldr(λ p acc => ap(files_cons, [ap(uncurried, [Blank, p.fst, p.snd]), acc]), files_nil), "the program's sources");
     let at = λ (i: Nat) => Pair(insts.nth(i).unwrap_or(Pair(Blank, Blank)), runtime_at(links, i));
     let indices = List::range(insts.len()).rev();
     let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
@@ -1198,7 +1230,7 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     // against the functions before it.
     let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
         ap(arity_at, [program, arities, NatLit(insts.len() - i)]),
-        ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h)]));
+        ap(every, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h)]));
     pure(Linked(program, srcs, arities, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
 }
 
@@ -1587,7 +1619,23 @@ fn runtime_lent_args(span, file: Expr, j: Nat, lent: Nat, xs: List<Expr>) → Li
     }
 }
 
-fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, l: Linking, reprs: List<ReprEntry>) → Tac<List<Decl>> {
+// A table at each file, an entry at a time (`Setup::lent_callees`): each
+// function with its signature and the spans it is lent.
+fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<Nat>, sigs: List<Sig>, lents: List<Nat>) → Expr {
+    match funs {
+        Nil => ap(nil, [tys_e]),
+        Cons(g, rest) => {
+            let s = sigs.head_or(Sig([], Bit));
+            ap(entry, [Blank, Global(GlobalRef(g)), tys_e, NatLit(lents.head_or(0)), Ty::quotes(s.params, q), Ty::quote(s.result, q),
+                ap(typed_once, [Blank, Global(GlobalRef(g))]), RtQ::seq(q.sigs, sigs.drop(1).map(λ t => Sig::quote(t, q))),
+                runtime_file_callees(entry, typed_once, nil, tys_e, q, rest, sigs.drop(1), lents.drop(1))])
+        },
+    }
+}
+
+// `lents` says how many spans each function of `funs` is lent (the function
+// itself first).
+fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -1605,22 +1653,23 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let meaning <- runtime_global("Fun::meaning");
     let code_of <- runtime_global("Setup::code");
     let program_eval <- runtime_global("program_eval");
-    let eval_sources <- runtime_global("program_linked_sources");
-    let sources <- runtime_global("link_sources");
+    let program_eval_over <- runtime_global("program_eval_over");
+    let eval_sources <- runtime_global("program_linked_files_sources");
+    let sources <- runtime_global("link_sources_at");
     let count <- runtime_global("runtime_count");
     let word_list <- runtime_ctors_at(ts.words);
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let rt_e = Fun::quote(rfun, q);
     let sigs_e = RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q)));
     // The table at each file. A function lent nothing has its world's own;
-    // one lent spans is its own entry 0 at each file's spans, and its world
-    // is the table at the empty file.
+    // one lent spans has each of its functions at each file's spans, and
+    // its world is that table at the empty file.
     let fixed <- runtime_global("World::fixed");
     let lent_callees <- runtime_global("Setup::lent_callees");
+    let callees_nil <- runtime_global("Setup::callees_nil");
     let typed_once <- runtime_global("Setup::typed_once");
     let no_file <- runtime_global("runtime_w_buffers");
-    let lent_table = ap(lent_callees, [Blank, Global(f), tys_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q),
-        ap(typed_once, [Blank, Global(f)]), RtQ::seq(q.sigs, sigs.drop(1).map(λ s => Sig::quote(s, q))), runtime_callees(pair, Hd(trivial_h), funs.drop(1))]);
+    let lent_table = runtime_file_callees(lent_callees, typed_once, callees_nil, tys_e, q, funs, sigs, lents);
     let world_e: Expr = match rfun.lent {
         Zero => ap(world_of, [tys_e, sigs_e, callees]),
         Succ(_) => ap(world_of, [tys_e, sigs_e, ap(lent_table, [no_file])]),
@@ -1644,13 +1693,19 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     let own_types = runtime_param_types(ts.word, reprs, rfun.params);
+    // The program: this function and every runtime fn it reaches, each
+    // callee's code from its own instance, linked at every file.
+    let insts <- runtime_instances(l.order, l.names, f.id, instance_e);
+    let linked <- runtime_linked(q, ts, l, insts);
+    let root = NatLit(l.order.len() - 1);
+    let linked_decls: List<Decl> = [
+        Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
+        // How many words each function of the program takes, as the
+        // program lists them: what a certificate checks each function's
+        // calls against without reading its callees' code.
+        Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities)];
     match rfun.lent {
         Zero => {
-            // The program: this function and every runtime fn it reaches, each
-            // callee's code from its own instance.
-            let insts <- runtime_instances(l.order, l.names, f.id, instance_e);
-            let linked <- runtime_linked(q, ts, l, insts);
-            let root = NatLit(l.order.len() - 1);
             // `f::reflects` and `f::agrees` quantify over the parameters (`f::agrees`
             // reads a count off its word, as a call passes it).
             let xs <- runtime_params_at(own_types, None, 0);
@@ -1667,22 +1722,19 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
                 _ => [],
             };
+            // A function lent nothing: its program at the empty file, which
+            // is `program_eval`.
             let tail: List<Decl> = [
-                Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
-                // How many words each function of the program takes, as the
-                // program lists them: what a certificate checks each function's
-                // calls against without reading its callees' code.
-                Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities),
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
                     Equation(ap(program_eval, [linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), runtime_args(count, reprs, rfun.params, at_ys)))),
-                    ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
+                    ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)])),
             ];
-            pure(head.append(pin).append(made).append(tail))
+            pure(head.append(pin).append(made).append(linked_decls).append(tail))
         },
-        // A function lent spans: its pin is at every file (the reflection's
-        // meaning in the world there, against the function at the file's
-        // spans). Its program, linked over a file, is the next step's
-        // (docs/native-one-compiler-design.md §2.3, U3c step 3c).
+        // A function lent spans: its pin and its program's agreement are at
+        // every file (the reflection's meaning in the world there, and the
+        // program evaluated over the file, against the function at the
+        // file's spans).
         Succ(_) => {
             let buffers_h <- runtime_type_of("runtime_w_buffers");
             let world_at <- runtime_global("World::at");
@@ -1696,7 +1748,17 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     ap(rfl, [Blank, ap(Global(f), own)]))],
                 _ => [],
             };
-            pure(head.append(pin).append(made))
+            let c <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
+            let ys <- runtime_params(ts.word, rfun.params, Some(c.ref), 0);
+            let at_ys = runtime_locals(ys);
+            let words_e = RtQ::seq(word_list, at_ys);
+            let at_file = runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_args(count, reprs, rfun.params, at_ys));
+            let tail: List<Decl> = [
+                Decl(AsTheorem, name ++ "::agrees_over", runtime_params_of(Cons(c.ref, ys)),
+                    Equation(ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), at_file))),
+                    ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root, words_e, Hd(trivial_h)])),
+            ];
+            pure(head.append(pin).append(made).append(linked_decls).append(tail))
         },
     }
 }
@@ -1714,11 +1776,12 @@ fn runtime(name: String) → Tac<List<Decl>> {
     // reprs added to the table as the walk meets them (design §16.13).
     let found <- rt_with_reprs(16, k0, λ k1 => runtime_reflect(k1, f.id, name).bind(λ r =>
         runtime_sigs(k1, r.snd.drop(1)).bind(λ ss => pure(Pair(r, ss)))));
+    let callee_sigs: List<Sig> = found.snd.snd.map(λ p => p.snd);
+    let lents: List<Nat> = Cons(found.snd.fst.fst.lent, found.snd.snd.map(λ p => p.fst));
     let k = found.fst;
     let reprs = k.reprs;
     let reflected = found.snd.fst;
     let rfun = reflected.fst;
-    let callee_sigs = found.snd.snd;
     let checked <- runtime_check_carriers(k, reprs);
     let sigs = Cons(rfun.sig(), callee_sigs);
     let tys = match reprs { Nil => RecInfo::none, Cons(_, _) => runtime_shapes(reprs) };
@@ -1727,11 +1790,8 @@ fn runtime(name: String) → Tac<List<Decl>> {
         Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
-            // A function lent spans is not linked yet (step 3c).
-            True => (match rfun.lent {
-                Zero => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1))], Linking([], [], [])),
-                Succ(_) => pure(Linking([], [], [])),
-            }).bind(λ l => runtime_publish(name, f, rfun, sigs, reflected.snd, l, reprs)),
+            True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1))], Linking([], [], [])).bind(λ l =>
+                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs)),
         },
     }
 }

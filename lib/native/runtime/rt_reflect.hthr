@@ -819,10 +819,13 @@ fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
     }
 }
 
-// A recursion's arguments, as variables: a lent span's bytes and its length
-// word are passed on as they came in (the loop keeps a span's home in
-// place), the words after them are operands.
-fn rt_self_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
+// A call's arguments, as variables, where the callee is lent `lent` spans
+// (the function itself, or another function lent spans): each span's bytes
+// and its length word are passed on as they came in, span `j` as the
+// callee's span `j` (a loop keeps a span's home in place, and a call reads
+// its callee over the caller's file), and the words after them are
+// operands.
+fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
     match lent {
         Zero => RSt::operands(step, st, args),
         Succ(n) => match args {
@@ -835,15 +838,33 @@ fn rt_self_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, 
                     _ => pure(j + j + 1),
                 });
                 let l <- passed;
-                match l.same(j + j) {
-                    False => rt_refuse("a recursion over a lent span passes the span on as it is: the loop keeps its home in place"),
+                match l.same(j + j).and(Succ(j).leb(k.lent)) {
+                    False => rt_refuse("a lent span is passed on as it is, in its own place: the loop keeps its home, and a callee reads the caller's file"),
                     True => step(st, length).bind(λ r => match RSt::level(r.snd).same(j + j + 1) {
-                        False => rt_refuse("a recursion over a lent span passes the span's length word on as it is: the loop keeps its home in place"),
-                        True => rt_self_args(step, k, r.fst, Succ(j), n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
+                        False => rt_refuse("a lent span's length word is passed on as it is: the loop keeps its home, and a callee reads the caller's file"),
+                        True => rt_lent_args(step, k, r.fst, Succ(j), n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
                     }),
                 }
             },
-            _ => rt_refuse("a recursion without its span"),
+            _ => rt_refuse("a call without its span"),
+        },
+    }
+}
+
+// How many spans a call's callee is lent, read off the arguments: its
+// leading byte lists, each with the word after it.
+fn rt_call_lent(fuel: Nat, k: Known, args: List<Handle>) → Tac<Nat> {
+    match fuel {
+        Zero => pure(0),
+        Succ(f) => match args {
+            Cons(bytes, Cons(_, rest)) => infer(Hd(bytes)).bind(λ c => match c {
+                Accepted(t) => k.is_bytes(t).bind(λ yes => match yes {
+                    True => rt_call_lent(f, k, rest).bind(λ n => pure(Succ(n))),
+                    False => pure(0),
+                }),
+                Refused(_) => pure(0),
+            }),
+            _ => pure(0),
         },
     }
 }
@@ -856,7 +877,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
             None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
                 HLocal(x, args) => match k.recursion {
                     Some(sc) => match x.id.same(sc.ih) {
-                        True => rt_self_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
+                        True => rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
                             pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
                         False => rt_local(k, st, h, operand, x, args),
                     },
@@ -970,7 +991,11 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         },
                     },
                     None => rt_callee(k, st, g, name).bind(λ found => match found {
-                        Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
+                        // In the generator's mode a callee may be lent the
+                        // caller's spans.
+                        Some(si) => (match k.discover { True => rt_call_lent(f, k, args), False => pure(0) }).bind(λ lent =>
+                            rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, si.fst, 0, lent, args).bind(λ r =>
+                                pure(r.fst.finish(h, operand, Call(si.snd, r.snd))))),
                         None => rt_transfer(k, g, h, name, args).bind(λ moved => match moved {
                             Some(u) => rt_go(f, k, st, u, operand),
                             None => match args {

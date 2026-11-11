@@ -1,8 +1,13 @@
-// Probes of `native_tool_spans`: what `count_newlines` computes, that it
-// may be called by a program (evaluable, placeless, lowered by the function
-// compiler under its count of lent buffers), and what a program's call of
-// it answers with no address stated (`program_readers`).
+// Probes of `native_tool_spans`: `count_newlines` is a `runtime fn`, so
+// what its program computes is the Heather function at every file
+// (`count_newlines::agrees_over`). Here: the program run on bytes, that it
+// may be called by a tool (evaluable, placeless, lowered by the function
+// compiler under its count of lent buffers), and what a tool's call of it
+// answers with no address stated (`program_readers`,
+// `count_newlines_called`).
 import native_tool_spans;
+import rt;
+import runtime;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -26,26 +31,50 @@ fn lines() → Buffers() { [[b(97), b(10), b(98), b(10), b(10), b(99)]] }
 // ---------------------------------------------------------------------------
 // What it computes
 
-theorem counts_all(): program_eval_over(lines(), count_newlines_program(), 0, [w(4096), w(6), w(6)]) = w(3) { refl }
+theorem counts_all(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(6)]) = w(3) { refl }
 // Only the first `count` bytes.
-theorem counts_first(): program_eval_over(lines(), count_newlines_program(), 0, [w(4096), w(6), w(2)]) = w(1) { refl }
-theorem counts_none(): program_eval_over(lines(), count_newlines_program(), 0, [w(4096), w(6), w(0)]) = w(0) { refl }
+theorem counts_first(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(2)]) = w(1) { refl }
+theorem counts_none(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(0)]) = w(0) { refl }
 // A count past the buffer's end reads nothing past it.
-theorem counts_to_end(): program_eval_over(lines(), count_newlines_program(), 0, [w(4096), w(6), w(9)]) = w(3) { refl }
+theorem counts_to_end(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(9)]) = w(3) { refl }
+
+// The function itself, with no program: the same counts.
+theorem function_counts(): count_newlines(lines().span(0), w(6), w(6)) = w(3) { refl }
+theorem function_counts_first(): count_newlines(lines().span(0), w(6), w(2)) = w(1) { refl }
+
+// At every file, wherever the span is said to lie, the program's root
+// answers as the function does.
+theorem counts_as_function(f: Buffers(), place, length, count: BitVec(64)):
+    program_eval_over(f, count_newlines_program(), count_newlines_entry(), [place, length, count]) = count_newlines(f.span(0), length, count) {
+    count_newlines::agrees_over(f, place, length, count)
+}
+
+// The program is the loop, then the function that starts it: the root is
+// the second, and both are lent the one span.
+theorem program_shape(): count_newlines_program().len() = 2 { refl }
+theorem loop_lent(): program_lent(count_newlines_program(), 0) = 1 { refl }
 
 // ---------------------------------------------------------------------------
 // What a program's call needs of it (`Prog::links`)
 
 theorem count_evaluable(): program_evaluable(count_newlines_program()) = True { refl }
 theorem count_placeless(): program_placeless(count_newlines_program()) = True { refl }
-theorem count_lent(): program_lent(count_newlines_program(), 0) = 1 { refl }
+theorem count_lent(): program_lent(count_newlines_program(), count_newlines_entry()) = 1 { refl }
 theorem count_lowers(): lower_program_lent(count_newlines_program(), plan_program(count_newlines_program()),
     program_counts(count_newlines_program())).is_some().IsTrue() { trivial }
 
 // ---------------------------------------------------------------------------
 // A program's call: the buffers it holds, no address, the count its word
 
-theorem call_answers(): program_readers(count_newlines_program())(lines(), 0, [w(6)]) = w(3) { refl }
+theorem call_answers(): program_readers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = w(3) { refl }
 // It is lent the first buffer only, and sees it as it is when called.
-theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], 0, [w(2)]) = w(2) { refl }
-theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], 0, [w(2)]) = w(1) { refl }
+theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], count_newlines_entry(), [w(2)]) = w(2) { refl }
+theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], count_newlines_entry(), [w(2)]) = w(1) { refl }
+
+// The same call at any buffers and any count, with no evaluation: the
+// Heather function at the tool's first buffer and its size.
+theorem call_is_function(held: Buffers(), count: BitVec(64)):
+    program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
+        = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
+    count_newlines_called(held, count)
+}

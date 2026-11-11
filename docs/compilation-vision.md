@@ -229,8 +229,11 @@ optimization that uses it is proved once under it as a hypothesis.
   taking a span and its length word where its code takes the home, and
   one code serving every file, and a `runtime fn` whose leading
   parameters are a byte list and its length word is such a function, a
-  loop over the span included. What is left of it is linking such a
-  function into a program, and writes.
+  loop over the span included. Such functions link into a program that
+  is proved at every file, call one another over the same span, and a
+  tool's call of one is proved to answer as the Heather function at the
+  tool's buffer: `wc -l` counts with a `runtime fn`. What is left of it
+  is writes.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

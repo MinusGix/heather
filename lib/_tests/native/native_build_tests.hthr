@@ -235,14 +235,81 @@ theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
     Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
 
 // A function lent the program's buffer (docs/native-one-compiler-design.md
-// §2.3): the newlines of "a\n\nb", counted by `count_newlines`
-// (native_tool_spans). The source's meaning answers the call over the
-// buffer as it is, with no address (`program_readers`).
+// §2.3): the newlines of "a\n\nb", counted by a function the program
+// calls. The source's meaning answers the call over the buffer as it is,
+// with no address (`program_readers`).
+fn span_word(id: Nat) → Port { Port(id := id, width := 64) }
+fn span_bit(id: Nat) → Port { Port(id := id, width := 1) }
+
+// tally_newlines(buffer, count): how many of the buffer's first `count`
+// bytes are newlines, a byte past the buffer's end counting as none.
+// Written as FunctionIR, where `count_newlines` (native_tool_spans) is a
+// `runtime fn`: the builder's call of a lent function is probed on a
+// function small enough that the whole compile is one evaluation.
+//
+// Parameters 0 and 1 are the buffer's home (its address and its length),
+// parameter 2 the count. The loop makes `count` passes over the home, the
+// index and the tally; a pass reads the byte only under the test of the
+// index against the length, which is what bounds the load.
+fn tally_newlines() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([span_word(0), span_word(1), span_word(2)]),
+                nodes := [Const(width := 64, output := 3, value := 0), Const(width := 64, output := 4, value := 0)],
+                outputs := Ports([span_word(0), span_word(1), span_word(2), span_word(3), span_word(4)])),
+            Loop(inputs := [0, 1, 3, 4], bound := 2, parameters := [10, 11, 12, 13], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_bit(20), span_bit(15)])),
+                    Conditional(Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_bit(20), span_bit(15)]), 15,
+                        Ports([span_word(12), span_word(13)]), Ports([span_word(16), span_word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([span_word(12), span_word(13)]),
+                                nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([span_word(12), span_word(13), span_word(18)])),
+                            Sequence(
+                                Region(inputs := Ports([span_word(12), span_word(13), span_word(18)]),
+                                    nodes := [Const(width := 64, output := 21, value := 10),
+                                        Equal(width := 64, output := 22, left := 18, right := 21)],
+                                    outputs := Ports([span_word(12), span_word(13), span_bit(22)])),
+                                Conditional(Ports([span_word(12), span_word(13), span_bit(22)]), 22,
+                                    Ports([span_word(12), span_word(13)]), Ports([span_word(16), span_word(17)]),
+                                    Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                                        nodes := [Const(width := 64, output := 19, value := 1),
+                                            Add(width := 64, output := 16, left := 13, right := 19),
+                                            Add(width := 64, output := 17, left := 12, right := 19)],
+                                        outputs := Ports([span_word(16), span_word(17)]))),
+                                    Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                                        nodes := [Const(width := 64, output := 19, value := 1),
+                                            Move(width := 64, output := 16, source := 13),
+                                            Add(width := 64, output := 17, left := 12, right := 19)],
+                                        outputs := Ports([span_word(16), span_word(17)])))))),
+                        Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                            nodes := [Move(width := 64, output := 16, source := 13), Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([span_word(16), span_word(17)]))))),
+                exit := 20, next := [10, 11, 17, 16], outputs := [5, 6, 7, 8], exhausted := 9)),
+        result := 8)
+}
+
+fn tally_program() → List<Function> { [tally_newlines()] }
+
 fn counted_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(10), BitVec::ofNat(10), BitVec::ofNat(98)] }
 fn counted() → Tool {
-    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get())))))
+    program(tally_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get())))))
 }
 theorem counted_runs(): counted().source().tree([], 0) = Ret(BitVec::ofNat(2)) { refl }
+
+// The same with `count_newlines` (native_tool_spans), a `runtime fn`: the
+// program is its generated one, the call its root. That the file compiles
+// is `write-elf`'s to check, in its own steps
+// (crates/cli/tests/native_tools.rs runs `wc_l_called_tool` against GNU's).
+fn counted_fn() → Tool {
+    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(count_newlines_entry(), [num(4)], r)) ++ exit(r.get())))))
+}
+theorem counted_fn_runs(): counted_fn().source().tree([], 0) = Ret(BitVec::ofNat(2)) { refl }
 
 // It compiles: the call passes the buffer's address and capacity before
 // the count (`Prog::function_call`), the function placeless and emitted
@@ -258,14 +325,14 @@ theorem counted_spelled(): counted().source().functions.spell_functions().last()
 // With no buffer in the file the call does not fit: the function is lent
 // one.
 fn counts_nothing() → Tool {
-    program(count_newlines_program(), run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get()))))
+    program(tally_program(), run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get()))))
 }
 theorem counts_nothing_refused(): refused_slots(counts_nothing().source()) = [2, 0, 16, 0, 0] { refl }
 
 // Nor with the homes written as arguments: the call passes them itself, so
 // the function takes one word after them.
 fn counts_by_hand() → Tool {
-    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+    program(tally_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
         compute(call(0, [num(0), num(4), num(4)], r)) ++ exit(r.get())))))
 }
 theorem counts_by_hand_refused(): refused_slots(counts_by_hand().source()) = [2, 0, 16, 0, 0] { refl }
