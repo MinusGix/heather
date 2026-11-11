@@ -56,16 +56,21 @@ fn CompareOp::Holds(self op: CompareOp, values: Valuation(), output, left, right
 // What the file knows of a value no register need hold, from a node the
 // placement folded: a constant's value, or a comparison's equation over its
 // operands (a branch on it CMPs them and jumps on the flags). It is a fact
-// about the valuation, so no register write disturbs it.
+// about the valuation, so no register write disturbs it. `Truth` is what a
+// path knows and no node says: the bit a conditional tested, in the arm
+// taken where it is set (`StructuredRegion::emit_calls`). A load of a lent
+// buffer is accepted under one (`function_ir_lower_reads`).
 inductive Known {
     Constant(id: Nat, value: Nat),
     Compared(id: Nat, op: CompareOp, left: Nat, right: Nat),
+    Truth(id: Nat),
 }
 
 fn Known::Holds(self known: Known, values: Valuation()) → Type {
     match known {
         Constant(id, value) => values(64, id) = BitVec::ofNat(value),
         Compared(id, op, left, right) => op.Holds(values, id, left, right),
+        Truth(id) => values(1, id).head_bit() = True,
     }
 }
 
@@ -419,6 +424,7 @@ fn known_value(known: List<Known>, id: Nat) → Option<Nat> {
         Cons(here, rest) => match here {
             Constant(other, value) => match other.same(id) { False => known_value(rest, id), True => Some(value) },
             Compared(_, _, _, _) => known_value(rest, id),
+            Truth(_) => known_value(rest, id),
         },
     }
 }
@@ -435,6 +441,7 @@ theorem known_value_holds(values: Valuation(), id, value: Nat, known: List<Known
                     j(other.same_sound(id, same), λ i _ => values(64, i) = BitVec::ofNat(v), holds.left)),
             }),
             Compared(_, _, _, _) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
+            Truth(_) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
         },
     }
 }
@@ -451,6 +458,7 @@ fn known_comparison(known: List<Known>, id: Nat) → Option<Comparison> {
                 False => known_comparison(rest, id),
                 True => Some(Comparison(op, left, right)),
             },
+            Truth(_) => known_comparison(rest, id),
         },
     }
 }
@@ -468,6 +476,7 @@ theorem known_comparison_holds(values: Valuation(), id: Nat, compared: Compariso
                 True => λ found holds => j(found, λ o _ => o.All(λ (c: Comparison) => c.op.Holds(values, id, c.left, c.right)),
                     j(other.same_sound(id, same), λ i _ => op.Holds(values, i, left, right), holds.left)),
             }),
+            Truth(_) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
         },
     }
 }
