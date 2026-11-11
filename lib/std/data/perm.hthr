@@ -575,3 +575,31 @@ theorem List::nodup_perm<A>(self xs: List<A>): (ys: List<A>) → xs.NoDup() → 
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A map carries a rearrangement to a rearrangement.
+
+theorem List::picks_map<A, B>(x: A, self ys: List<A>, f: A → B): (rest: List<A>) → Picks(x, ys, rest) → Picks(f(x), ys.map(f), rest.map(f)) {
+    match ys {
+        Nil => λ rest h => false_elim(h),
+        Cons(_, t) => λ rest => match rest {
+            Nil => λ h => match h { Inl(hd) => Inl(And(cong_fn(f, hd.left), cong_fn(λ (l: List<A>) => l.map(f), hd.right))), Inr(no) => false_elim(no) },
+            Cons(_, rs) => λ h => match h {
+                Inl(hd) => Inl(And(cong_fn(f, hd.left), cong_fn(λ (l: List<A>) => l.map(f), hd.right))),
+                Inr(later) => Inr(And(cong_fn(f, later.left), t.picks_map(x, f, rs, later.right))),
+            },
+        },
+    }
+}
+
+theorem List::perm_map<A, B>(self xs: List<A>, f: A → B): (ys: List<A>) → Perm(xs, ys) → Perm(xs.map(f), ys.map(f)) {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ p => trivial,
+            Cons(_, _) => λ p => false_elim(p),
+        },
+        Cons(x, t) => λ ys p => match p {
+            Exists(r, hr) => Exists(r.map(f), And(ys.picks_map(x, f, r, hr.left), t.perm_map(f, r, hr.right))),
+        },
+    }
+}
