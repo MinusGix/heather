@@ -158,6 +158,20 @@ theorem Regex::same_star({s, s2: Regex}, same: s ≈ s2): Star(s) ≈ Star(s2) {
             ⟨ws, ⟨e, Regex::each_mono(λ u => s2.Denotes(u), λ u => s.Denotes(u), λ u x => same(u).mpr(x), ws, each)⟩⟩ })
 }
 
+// The constructors respect `≈`, registered so that `rel_cong` and a
+// `rewrite` along `≈` work under them.
+instance Respects2<Regex, Regex, Regex>(Regex::Same, Regex::Same, Regex::Same, Regex::Seq) {
+    respects2 := λ a a2 sa b b2 sb => Regex::same_seq(sa, sb),
+}
+
+instance Respects2<Regex, Regex, Regex>(Regex::Same, Regex::Same, Regex::Same, Regex::Alt) {
+    respects2 := λ a a2 sa b b2 sb => Regex::same_alt(sa, sb),
+}
+
+evidence theorem Regex::star_respects(): PreservesRelation(Regex::Same, Regex::Same, Regex::Star) {
+    λ s s2 same => Regex::same_star(same)
+}
+
 // ---------------------------------------------------------------------------
 // Constructors that apply the units and zeros.
 
@@ -273,7 +287,7 @@ theorem Regex::seq_left({da, da2: Regex}, b: Regex, sa: da ≈ da2): Regex::seq(
     calc {
         Regex::seq(da, b)
             ≈ Seq(da, b) := Regex::seq_same(da, b),
-            ≈ Seq(da2, b) := Regex::same_seq(sa, b.same_refl()),
+            ≈ Seq(da2, b) := rel_cong(sa),
     }
 }
 
@@ -286,7 +300,8 @@ theorem Regex::deriv_simp_seq({da, da2, db, db2: Regex}, n: Bool, b: Regex, sa: 
         True => calc {
             Regex::alt(Regex::seq(da, b), db)
                 ≈ Alt(Regex::seq(da, b), db) := Regex::alt_same(Regex::seq(da, b), db),
-                ≈ Alt(Seq(da2, b), db2) := Regex::same_alt(Regex::seq_left(b, sa), sb),
+                ≈ Alt(Seq(da2, b), db) := rel_cong(Regex::seq_left(b, sa)),
+                ≈ Alt(Seq(da2, b), db2) := rel_cong(sb),
         },
         False => Regex::seq_left(b, sa),
     }
@@ -298,7 +313,8 @@ theorem Regex::deriv_simp_same(self r: Regex, c: Nat): r.deriv_simp(c) ≈ r.der
         Alt(a, b) => calc {
             Regex::alt(a.deriv_simp(c), b.deriv_simp(c))
                 ≈ Alt(a.deriv_simp(c), b.deriv_simp(c)) := Regex::alt_same(a.deriv_simp(c), b.deriv_simp(c)),
-                ≈ Alt(a.deriv(c), b.deriv(c)) := Regex::same_alt(a.deriv_simp_same(c), b.deriv_simp_same(c)),
+                ≈ Alt(a.deriv(c), b.deriv_simp(c)) := rel_cong(a.deriv_simp_same(c)),
+                ≈ Alt(a.deriv(c), b.deriv(c)) := rel_cong(b.deriv_simp_same(c)),
         },
         Star(s) => Regex::seq_left(Star(s), s.deriv_simp_same(c)),
         _ => λ w => iff_refl(),
@@ -320,14 +336,16 @@ theorem Regex::simp_same(self r: Regex): r.simp() ≈ r {
         Seq(a, b) => calc {
             Regex::seq(a.simp(), b.simp())
                 ≈ Seq(a.simp(), b.simp()) := Regex::seq_same(a.simp(), b.simp()),
-                ≈ Seq(a, b) := Regex::same_seq(a.simp_same(), b.simp_same()),
+                ≈ Seq(a, b.simp()) := rel_cong(a.simp_same()),
+                ≈ Seq(a, b) := rel_cong(b.simp_same()),
         },
         Alt(a, b) => calc {
             Regex::alt(a.simp(), b.simp())
                 ≈ Alt(a.simp(), b.simp()) := Regex::alt_same(a.simp(), b.simp()),
-                ≈ Alt(a, b) := Regex::same_alt(a.simp_same(), b.simp_same()),
+                ≈ Alt(a, b.simp()) := rel_cong(a.simp_same()),
+                ≈ Alt(a, b) := rel_cong(b.simp_same()),
         },
-        Star(s) => Regex::same_star(s.simp_same()),
+        Star(s) => calc { Star(s.simp()) ≈ Star(s) := rel_cong(s.simp_same()), },
         _ => λ w => iff_refl(),
     }
 }

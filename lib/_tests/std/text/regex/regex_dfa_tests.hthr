@@ -73,3 +73,29 @@ theorem both_languages(r, q: Regex, w: List<Nat>, h: r.automaton().both(q.automa
         trans(cong_fn(λ (x: Bool) => x && q.automaton().run(w), r.automaton_matches(w)),
             cong_fn(λ (x: Bool) => r.matches(w) && x, q.automaton_matches(w))))), h)
 }
+
+// `rel_cong` under constructors: `Seq`, `Alt` and `Star` are contexts of
+// `≈`, at any depth (issues/rel-cong-under-constructors.md).
+theorem under_alt(a, a2, b: Regex, h: a ≈ a2): Alt(a, b) ≈ Alt(a2, b) { rel_cong(h) }
+theorem under_right(a, b, b2: Regex, h: b ≈ b2): Seq(a, b) ≈ Seq(a, b2) { rel_cong(h) }
+theorem under_nested(a, a2, b, c: Regex, h: a ≈ a2): Alt(Seq(Star(a), b), c) ≈ Alt(Seq(Star(a2), b), c) { rel_cong(h) }
+theorem under_both(a, a2: Regex, h: a ≈ a2): Seq(a, Star(a)) ≈ Seq(a2, Star(a2)) { rel_cong(h) }
+theorem under_call(a, b, c: Regex): Alt(Regex::seq(a, b), c) ≈ Alt(Seq(a, b), c) { rel_cong(Regex::seq_same(a, b)) }
+theorem simp_twice(r, q: Regex): Alt(r.simp(), q.simp()) ≈ Alt(r, q) {
+    calc {
+        Alt(r.simp(), q.simp())
+            ≈ Alt(r, q.simp()) := rel_cong(r.simp_same()),
+            ≈ Alt(r, q) := rel_cong(q.simp_same()),
+    }
+}
+
+// A constructor with no registered compatibility is not a context: the
+// refusal names what is missing.
+inductive Shape { Dot, Join(l: Shape, r: Shape) }
+fn Shape::Alike(a, b: Shape) → Type { a = b }
+// expect-error: compatibility
+theorem under_join(a, a2, b: Shape, h: Shape::Alike(a, a2)): Shape::Alike(Join(a, b), Join(a2, b)) { rel_cong(h) }
+
+// A field that is not the carrier's is not a place to rewrite.
+// expect-error: context mismatch
+theorem under_range(a, a2: Regex, h: a ≈ a2): Alt(Range(1, 2), a) ≈ Alt(Range(3, 4), a2) { rel_cong(h) }

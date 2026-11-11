@@ -647,6 +647,28 @@ back, §10.4's `(z: Nat) -> PreservesRelation(Same, Same, g(z))`. A consumer
 whose context does not map those functions into the carrier is not crossed,
 and the walk goes on to its other rules, ending in the usual mismatch.
 
+### 10.7 `rel_cong` under constructors
+
+`issues/rel-cong-under-constructors.md`, 2026-11-11. A lowered constructor
+value is not an application, so the walk's readers of `f(x)` and `op(x, y)`
+never saw `Alt(a, b)`. A syntax type with a semantic equivalence (regular
+expressions up to language) has constructors as its only contexts. Now two
+sides that are one constructor of one declaration, with one or two fields,
+are a context whose evidence is registered at the constructor's qualified
+name: `Respects2<T, T, T>(R, R, R, T::C)` for two fields,
+`PreservesRelation(R, R, T::C)` for one. The statement is spelled as source
+and elaborated; a constructor whose fields are not the carrier's gives no
+statement and is not a context.
+
+A field of a lowered constructor carries the annotations of where it sits,
+so one expression inside a constructor and at the head of the supplied
+proof's statement can be two spellings. Where the syntactic tests do not
+place a field pair, conversion decides whether it is the supplied change or
+no change (`Builder::field`); the proof text is checked at the goal either
+way. Not built: constructors of other arities, and the relation `rewrite`
+(§9), whose walk rebuilds the term it leaves and so needs the constructor
+value rebuilt around a changed field.
+
 ## 11. Rewriting along `Eutt`
 
 `issues/eutt-setoid-rewrite.md`, 2026-11-03. Effectful-loop proofs
