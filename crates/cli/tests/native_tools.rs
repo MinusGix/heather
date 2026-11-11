@@ -153,6 +153,37 @@ fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// tr with each read's bytes raised by `raise_span`, a function lent the
+/// buffer that stores into it and calls `raise_letter` on each byte
+/// (docs/native-one-compiler-design.md §2.6): the write after the call
+/// sends what the function left, which is what GNU's sends.
+#[test]
+fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
+    let dir = scratch("tr-span");
+    let binary = dir.join("tr");
+    write_program("lib/native/native_tools.hthr", "tr_upper_span_tool", &binary, true);
+    let mut random = Bytes::seeded("tr-span");
+    let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"hello, World! az AZ `{@[\n", &every, &text, &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(&mut gnu_tr(), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tr exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // A write that fails: stdout is full, and both exit 1.
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full.try_clone().unwrap()));
+        let (gnu_code, _) = run(&mut gnu_tr(), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+        assert_eq!(code, gnu_code, "as GNU's does");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A procedure and a function in one file, the procedure's body calling the
 /// function and `main` both: 'a' and 'b' raised and summed is the status
 /// (`raised_twice_runs`).

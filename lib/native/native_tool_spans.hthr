@@ -5,8 +5,11 @@
 // (`Prog::function_call`). Each is a Heather function, and its program is
 // proved to compute it at every file (`f::agrees_over`,
 // lib/native/runtime/runtime.hthr); what a tool's call of it answers is
-// stated below from that. The probes are
-// lib/_tests/native/native_tool_spans_tests.hthr.
+// stated below from that. `raise_span`, which stores into the buffer, is
+// written as FunctionIR until the runtime language writes a span
+// (docs/native-one-compiler-design.md §3, U4 step 4c): what it does is
+// stated by evaluation, as any FunctionIR program's is (`program_run`).
+// The probes are lib/_tests/native/native_tool_spans_tests.hthr.
 import logic;
 import bool;
 import nat;
@@ -29,6 +32,8 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_placeless;
 import runtime;
+import native_tool_words;
+import native_tool_words_program;
 
 // The newlines among the span's bytes from `i` to below `count`, added to
 // `acc`. A byte is read under the span's own length word, so one past the
@@ -78,3 +83,54 @@ theorem count_newlines_called(held: Buffers(), count: BitVec(64)):
     trans(program_writers_quiet(count_newlines_program(), trivial, held, count_newlines_entry(), [count]),
         cong_fn<BitVec(64), Ending>(λ word => Ending(word, held), count_newlines_answers(held, count)))
 }
+
+// ---------------------------------------------------------------------------
+// A function that writes the buffer it is lent
+
+fn span_word(id: Nat) → Port { Port(id := id, width := 64) }
+fn span_bit(id: Nat) → Port { Port(id := id, width := 1) }
+
+// raise_span(buffer, count): each of the buffer's first `count` bytes put
+// through `raise_letter` (native_tool_words) and stored back, answering
+// how many it stored.
+//
+// Parameters 0 and 1 are the buffer's home (its address and its length),
+// parameter 2 the count. The loop makes `count` passes over the home and
+// the index. A pass tests the index against the length, which is what
+// bounds its load and its store, and between the two calls function 0 on
+// the byte. A count past the length stores nothing past it.
+fn raise_span() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([span_word(0), span_word(1), span_word(2)]), nodes := [Const(width := 64, output := 3, value := 0)],
+                outputs := Ports([span_word(0), span_word(1), span_word(2), span_word(3)])),
+            Loop(inputs := [0, 1, 3], bound := 2, parameters := [10, 11, 12], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([span_word(10), span_word(11), span_word(12), span_word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([span_word(10), span_word(11), span_word(12), span_bit(20), span_bit(15)])),
+                    Conditional(Ports([span_word(10), span_word(11), span_word(12), span_bit(20), span_bit(15)]), 15,
+                        Ports([span_word(12)]), Ports([span_word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([span_word(12)]), nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([span_word(12), span_word(18)])),
+                            Compose(Call(0, [18], 21),
+                                Sequence(
+                                    Region(inputs := Ports([span_word(12), span_word(21)]),
+                                        nodes := [BufferStore(output := 22, buffer := 0, index := 12, value := 21)],
+                                        outputs := Ports([span_word(12)])),
+                                    Dataflow(Region(inputs := Ports([span_word(12)]),
+                                        nodes := [Const(width := 64, output := 19, value := 1),
+                                            Add(width := 64, output := 17, left := 12, right := 19)],
+                                        outputs := Ports([span_word(17)])))))),
+                        Dataflow(Region(inputs := Ports([span_word(12)]), nodes := [Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([span_word(17)]))))),
+                exit := 20, next := [10, 11, 17], outputs := [4, 5, 6], exhausted := 8)),
+        result := 6)
+}
+
+// The program a tool calls it in: `raise_letter`'s reflected program, the
+// byte map, and this after it.
+fn raise_span_program() → List<Function> { Cons(raise_span(), raise_letter_native_program()) }
+fn raise_span_entry() → Nat { 1 }

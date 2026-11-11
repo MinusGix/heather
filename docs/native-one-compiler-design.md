@@ -905,7 +905,21 @@ Each is a PR and ends with something that runs.
       reads the byte its callee stored, compiled, with a store
       elsewhere and one past the capacity beside it
       (`native_build_tests.hthr`).
-    - *4b-4:* `tr`.
+    - *4b-4, built 2026-11-11:* `tr`'s loop as a called function.
+      `raise_span` (`native_tool_spans.hthr`) is lent the buffer and
+      makes one pass per byte: a load, a call of `raise_letter` (the
+      word function the tool already called), and a store, the load and
+      the store under the pass's one test of the index against the
+      length. It is written as FunctionIR, since `rt` has no write until
+      4c, so what it does is stated by evaluation and not yet at every
+      file; 4c's `runtime fn` replaces it and brings that statement.
+      Nothing in either compiler changed for it: a call between a load
+      and a store in a loop over a lent buffer is what 4a built. *Runs:*
+      `tr_upper_span_tool` beside GNU `tr`
+      (`crates/cli/tests/native_tools.rs`); the function over "aZz{" at
+      any address, a count short of the span and past it, and a
+      program's statements reading the raised bytes after the call
+      (`native_tool_spans_tests.hthr`, `native_build_tests.hthr`).
   - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
     *Runs:* the byte map as a `runtime fn`.
   - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,

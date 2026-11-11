@@ -239,8 +239,6 @@ theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
 // §2.3): the newlines of "a\n\nb", counted by a function the program
 // calls. The source's meaning answers the call over the buffer as it is,
 // with no address (`program_readers`).
-fn span_word(id: Nat) → Port { Port(id := id, width := 64) }
-fn span_bit(id: Nat) → Port { Port(id := id, width := 1) }
 
 // tally_newlines(buffer, count): how many of the buffer's first `count`
 // bytes are newlines, a byte past the buffer's end counting as none.
@@ -396,6 +394,22 @@ theorem overwriting_not_before(same: overwriting(3).source().tree([], 0) = Ret(B
 // the file: 98 and the 1 it answered, 98 and 256.
 theorem overwriting_elsewhere(): overwriting(1).source().tree([], 0) = Ret(BitVec::ofNat(99)) { refl }
 theorem overwriting_past(): overwriting(9).source().tree([], 0) = Ret(BitVec::ofNat(354)) { refl }
+
+// `raise_span` (native_tool_spans) rewrites the buffer through a function
+// it calls: "aZz{" read back after the call is "AZZ{", so its first and
+// third bytes sum to 65 + 90, and the count it answers is 4.
+fn mixed_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(90), BitVec::ofNat(122), BitVec::ofNat(123)] }
+fn raised_span(count: Nat) → Tool {
+    program(raise_span_program(), buffer_of(mixed_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(raise_span_entry(), [num(count)], r)) ++ exit(b.at(num(0)) + b.at(num(2)) + r.get())))))
+}
+theorem raised_span_runs(): raised_span(4).source().tree([], 0) = Ret(BitVec::ofNat(159)) { refl }
+// Only the first `count` bytes: 65 and the 122 left, and 1.
+theorem raised_span_first(): raised_span(1).source().tree([], 0) = Ret(BitVec::ofNat(188)) { refl }
+// A count past the buffer stops at its end.
+theorem raised_span_past(): raised_span(9).source().tree([], 0) = Ret(BitVec::ofNat(159)) { refl }
+theorem raised_span_compiles(): raised_span(4).source().refusal(region_low(),
+    Homes::slots(raised_span(4).source()).placed(plan_program(raised_span(4).source().functions))) = [] { refl }
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

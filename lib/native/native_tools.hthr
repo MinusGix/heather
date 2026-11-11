@@ -4,8 +4,9 @@
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native-procedures-design.md), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles;
-// tr through a word function it calls (`native_tool_words`), and `wc -l`
-// through a function lent the buffer (`native_tool_spans`).
+// tr through a word function it calls (`native_tool_words`) and through
+// one that rewrites the buffer it is lent, and `wc -l` through a function
+// lent the buffer (`native_tool_spans`).
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
 // source the tool lowers to).
@@ -67,6 +68,18 @@ fn tr_upper_called(capacity: Nat) → Tool {
 }
 
 fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
+
+// tr a third time, the loop itself a function: each read's bytes raised by
+// `raise_span` (native_tool_spans), which is lent the buffer, stores into
+// it and calls `raise_letter` on each byte. The write after the call sends
+// the buffer as the function left it
+// (docs/native-one-compiler-design.md §2.6).
+fn tr_upper_span(capacity: Nat) → Tool {
+    program(raise_span_program(), buffer(capacity, λ buf => run(local(num(0), λ raised => each_read(stdin(), buf, λ n =>
+        compute(call(raise_span_entry(), [n.get()], raised)) ++ write_all(stdout(), buf, n.get()))))))
+}
+
+fn tr_upper_span_tool() → Tool { tr_upper_span(256) }
 
 // ---------------------------------------------------------------------------
 // yes

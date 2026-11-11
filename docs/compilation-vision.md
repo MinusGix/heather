@@ -246,8 +246,10 @@ optimization that uses it is proved once under it as a hypothesis.
   file through its calls (`program_writers`). The program compiler
   proves such a call: it lends its buffers to write, and the statement
   after the call holds over the file the callee left
-  (`Target::held_left`), so a program whose functions store links.
-  `rt`'s write is next.
+  (`Target::held_left`), so a program whose functions store links:
+  `tr` runs with its loop a called function that rewrites the buffer
+  (`raise_span`, FunctionIR by hand until `rt` writes). `rt`'s write is
+  next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
