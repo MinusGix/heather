@@ -1469,11 +1469,25 @@ fn Source::main_end_names(self src: Source) → Nat { src.main.shape(Shape(src.m
 fn List::reading_of(self numbers: List<Nat>, lens: List<Nat>) → List<Nat> { Cons(numbers.len(), numbers ++ lens) }
 fn Prog::reading(self p: Prog) → List<Nat> { p.numbers().reading_of(asm_lens(p)) }
 
+// A program's bytes before its labels are placed: every item's as
+// `asm_bytes` writes them, with a jump's displacement (its last four bytes,
+// the one thing in an item's bytes that reads the labels or where it is)
+// taken to label offset 0 from offset 0, for the reader to write over once
+// it has laid the program out. From the last item back, as `numbers_onto`.
+fn Prog::unlinked_onto(self p: Prog, after: List<Nat>) → List<Nat> {
+    match p {
+        Start => after,
+        At(before, _, item) => before.unlinked_onto(asm_bytes(no_fills(), λ _ => 0, 0, item).map(λ (b: BitVec(8)) => b.toNat()) ++ after),
+    }
+}
+fn Prog::unlinked(self p: Prog) → List<Nat> { p.unlinked_onto([]) }
+
 // A part's emission at `Start`, which `emit` never looks into, read: the
-// label name after it, then its program's reading; nothing if it does not
-// emit.
+// label name after it, its program's reading, then its bytes unlinked, so
+// one evaluation of the emission gives the reader all it takes from a part;
+// nothing if it does not emit.
 fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat) → List<Nat> {
-    match s.emits(Start, layout, out, known, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+    match s.emits(Start, layout, out, known, names) { None => [], Some(c) => Cons(c.names, c.prog.reading() ++ c.prog.unlinked()) }
 }
 
 // Procedure `i`, or a stand-in past the last.

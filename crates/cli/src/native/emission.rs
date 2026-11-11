@@ -20,6 +20,16 @@
 //! tree it does not evaluate, and the program's literal is cut wherever a
 //! part starts or ends, so each statement's programs are definitions.
 //!
+//! The reads are made in the plan's order, in sessions that share what
+//! they force (`function_ir_source::read_sharing`): a part's statement, set
+//! and known words are a step from its parent's, and a read on its own
+//! worked each of them out from the root again, which was most of what the
+//! reads of a tool cost. A whole part's read gives its bytes with its
+//! items, from the one evaluation of its emission (`Prog::unlinked`: a
+//! jump's displacement is the only thing in an item's bytes that reads the
+//! labels, and `labels::link` writes each once the program is laid out);
+//! only the items around parts have their bytes read apart (`byte_reads`).
+//!
 //! The compile's check of the homes (`Stmt::checked`) is stated over the
 //! same parts (`Checks`), from the sets it finds before each statement,
 //! read on the fork (`Source::checked_spelled`); and the entry's stores of
@@ -91,9 +101,10 @@ impl Part {
 /// The reads to make, on a fork that has elaborated `text`: each a nullary
 /// `List<Nat>`, in program order, the first the entry `Source::compile`
 /// emits the main statement after, the last the exit it puts after it. `whole[r]` says whether read `r` is a part's
-/// (`Stmt::emission_reading`, the label name after it first) or the items
-/// around parts (`Prog::reading`). `programs[r]` spells read `r`'s program,
-/// at `Start`, for reading its bytes once the labels are known (`bytes`).
+/// (`Stmt::emission_reading`, the label name after it first and its bytes
+/// last) or the items around parts (`Prog::reading`). `programs[r]` spells
+/// read `r`'s program, at `Start`, for reading the bytes of a read that did
+/// not give them (`byte_reads`).
 pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part, exit: usize, calls: Option<Calls> }
 
 /// A source with procedures: each procedure's way in, its body's parts and
@@ -223,8 +234,10 @@ impl Planner<'_> {
 }
 
 /// One read: the label name after it (a whole part's only), its items as
-/// literals and their lengths.
-pub(super) struct Reading { names: Option<u64>, items: Vec<(u64, String)>, lens: Vec<u64> }
+/// literals, their lengths, and a whole part's bytes, unlinked
+/// (`Prog::unlinked`, native_compile: read in the evaluation that emitted
+/// the part, so its bytes do not emit it a second time).
+pub(super) struct Reading { names: Option<u64>, items: Vec<(u64, String)>, lens: Vec<u64>, bytes: Option<Vec<u8>> }
 
 impl Reading {
     /// A read's numbers; `None` for a part that does not emit.
@@ -238,9 +251,16 @@ impl Reading {
         let [count, rest @ ..] = rest else { return Err(bad()) };
         let count = usize::try_from(*count).ok().filter(|&c| c <= rest.len()).ok_or_else(bad)?;
         let items = verified::read_items_with(&rest[..count], word)?;
-        let lens = rest[count..].to_vec();
-        if lens.len() != items.len() { return Err(bad()); }
-        Ok(Some(Reading { names, items, lens }))
+        let rest = &rest[count..];
+        if !whole {
+            if rest.len() != items.len() { return Err(bad()); }
+            return Ok(Some(Reading { names, items, lens: rest.to_vec(), bytes: None }));
+        }
+        if rest.len() < items.len() { return Err(bad()); }
+        let (lens, bytes) = rest.split_at(items.len());
+        let bytes = bytes.iter().map(|&b| u8::try_from(b)).collect::<Result<Vec<u8>, _>>().map_err(|_| bad())?;
+        if bytes.len() as u64 != lens.iter().sum::<u64>() { return Err(bad()); }
+        Ok(Some(Reading { names, items, lens: lens.to_vec(), bytes: Some(bytes) }))
     }
 }
 
@@ -258,9 +278,9 @@ pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, 
 /// `{p}_deep` (the shared exit after them is `{p}_code()`).
 pub(super) struct CallsStated { pub main: String, pub names: u64, pub procedures: String, pub after: u64 }
 
-/// A read's program, spelled at `Start`, and where its items are in the
-/// whole: the first, and how many.
-pub(super) struct Span { program: String, pub start: usize, pub count: usize }
+/// A read's program, spelled at `Start`, where its items are in the
+/// whole (the first, and how many), and its bytes if the read gave them.
+pub(super) struct Span { program: String, pub start: usize, pub count: usize, pub bytes: Option<Vec<u8>> }
 
 /// A literal source's buffers (`lowered::Buffers`), for stating the entry's
 /// stores of their initial bytes a definition of them at a time: the
@@ -332,55 +352,77 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     if let Some(checks) = checks { writer.theorems.push_str(&checks.state(p, &plan.root)?); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
     let spans = plan.programs.into_iter().zip(&readings).zip(&starts)
-        .map(|((program, reading), &start)| Span { program, start, count: reading.items.len() }).collect();
+        .map(|((program, reading), &start)| Span { program, start, count: reading.items.len(), bytes: reading.bytes.clone() }).collect();
     Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts, spans, calls })
 }
 
 /// Items a byte read takes at most.
 const READ: usize = 256;
 
-/// The plan's definitions with every part's live-out set (`{p}_o_{id}`)
-/// replaced by the literal `read` gives for it, so no declaration works a
-/// set out from the root again.
-pub(super) fn live_literals(p: &str, text: &str, mut read: impl FnMut(&str) -> Result<Vec<u64>, String>) -> Result<String, String> {
-    let prefix = format!("fn {p}_o_");
+/// The live-out set a line of the plan's definitions defines, by name.
+fn live_name(p: &str, line: &str) -> Option<String> {
+    let (id, _) = line.strip_prefix("fn ")?.strip_prefix(p)?.strip_prefix("_o_")?.split_once("()")?;
+    id.bytes().all(|b| b.is_ascii_digit()).then(|| format!("{p}_o_{id}"))
+}
+
+/// What the fork reads of a plan: a part's live-out set (`{p}_o_{id}`, by
+/// name), or one of the plan's reads (by its place in `Plan::reads`).
+pub(super) enum Read { Live(String), Items(usize) }
+
+/// The plan's reads and the live-out sets it defines, in the order the plan
+/// defines them: a parent's set before its parts', and a part's set before
+/// its emission. Read in one session (`function_ir_source::read_sharing`),
+/// each is then a step from what was read before it.
+pub(super) fn reads(p: &str, plan: &Plan) -> Vec<Read> {
+    let read = format!("fn {p}_read_");
+    let mut next = 0;
+    plan.text.lines().filter_map(|line| match live_name(p, line) {
+        Some(name) => Some(Read::Live(name)),
+        None if line.starts_with(&read) => { next += 1; Some(Read::Items(next - 1)) }
+        None => None,
+    }).collect()
+}
+
+/// The plan's definitions with every part's live-out set replaced by the
+/// literal read for it (`sets`, in the plan's order), so no declaration
+/// works a set out from the root again.
+pub(super) fn live_literals(p: &str, text: &str, sets: &[Vec<u64>]) -> Result<String, String> {
+    let mut sets = sets.iter();
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
-        match line.strip_prefix(&prefix).and_then(|rest| rest.split_once("()")) {
-            Some((id, _)) if id.bytes().all(|b| b.is_ascii_digit()) => {
-                let name = format!("{p}_o_{id}");
-                let set: Vec<String> = read(&name)?.iter().map(u64::to_string).collect();
+        match live_name(p, line) {
+            Some(name) => {
+                let set: Vec<String> = sets.next().ok_or_else(out_of_order)?.iter().map(u64::to_string).collect();
                 out.push_str(&format!("fn {name}() → List<Nat> {{ [{}] }}\n", set.join(", ")));
             }
-            _ => out.push_str(line),
+            None => out.push_str(line),
         }
     }
     Ok(out)
 }
 
-/// The bytes a read at a time, on the fork that read the parts, once the
-/// labels are known: each read's program at `Start` again, encoded with its
-/// offsets carried down from where its items end in the whole
-/// (`asm_code_ending_onto`, x86_64_asm_table: consed from the back, so a
-/// long read is linear) and its jumps by the table
-/// `{p}_table()` the text must also define (`labels::table`). So the fork
-/// needs no literal of the program, and the literal is elaborated once, in
-/// the certificate (issues/write-elf-build-constants.md); bytes read wrong
-/// are a piece the kernel refuses. The reads, named in program order, with
-/// the spans they read.
-pub(super) fn byte_reads(p: &str, spans: &[Span], offsets: &[u64]) -> (String, Vec<(String, std::ops::Range<usize>)>) {
+/// The bytes of the reads that did not give theirs (the items around
+/// parts), a read at a time on the fork that read the parts: each read's
+/// program at `Start` again, encoded unlinked as a part's are
+/// (`asm_code_ending_onto` at no labels, x86_64_asm_table: consed from the
+/// back, so a long read is linear). So the fork needs no literal of the
+/// program, and the literal is elaborated once, in the certificate
+/// (issues/write-elf-build-constants.md); bytes read wrong are a piece the
+/// kernel refuses. The reads, named in program order, with the items they
+/// read.
+pub(super) fn byte_reads(p: &str, spans: &[Span]) -> (String, Vec<(String, std::ops::Range<usize>)>) {
     let mut text = String::new();
     let mut reads = Vec::new();
-    for (r, span) in spans.iter().enumerate().filter(|(_, span)| span.count > 0) {
+    for (r, span) in spans.iter().enumerate().filter(|(_, span)| span.count > 0 && span.bytes.is_none()) {
         // A long read (the entry's stores of a buffer's initial bytes) a
-        // window at a time, from the back: the fork's value cache keeps
-        // all of one read, so a read's memory is its window's.
+        // window at a time, from the back, so a read's memory is its
+        // window's.
         let end = span.start + span.count;
         for (w, from) in (span.start..end).step_by(READ).enumerate() {
             let to = (from + READ).min(end);
             let name = format!("{p}_bytes_{r}_{w}");
-            text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending_onto(no_fills(), {p}_table().labels(), asm_back({}, {}), {}, {}, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
-                span.program, end - to, to - from, offsets[to]));
+            text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending_onto(no_fills(), λ (_: Nat) => 0, asm_back({}, {}), {}, 0, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+                span.program, end - to, to - from));
             reads.push((name, from..to));
         }
     }

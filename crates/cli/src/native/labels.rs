@@ -36,8 +36,39 @@ pub(super) fn offsets(lens: &[u64]) -> Vec<u64> {
     offsets
 }
 
-/// The table, `{p}_table()`: what the fork reads the bytes by
-/// (`emission::byte_reads`), and what the certificate checks.
+/// The label a jump's item goes to, and whether the jump is conditional
+/// (`verified::read_items_with` spells the items).
+pub(super) fn jump(item: &str) -> Option<(u64, bool)> {
+    let target = |prefix: &str| item.strip_prefix(prefix)
+        .and_then(|rest| rest.trim_end_matches(')').rsplit(", ").next()?.parse::<u64>().ok());
+    match (target("Jcc("), target("Jmp(").or_else(|| target("CallTo("))) {
+        (Some(to), _) => Some((to, true)),
+        (_, Some(to)) => Some((to, false)),
+        _ => None,
+    }
+}
+
+/// The bytes linked: each jump's displacement, its item's last four bytes,
+/// written as `near_rel` has it (x86_64_layout), from the item's end to its
+/// label's offset around 2^32. The reads give every item's bytes before the
+/// labels are known (`Prog::unlinked`, native_compile), and a displacement
+/// is all of an item's bytes that depends on them (`asm_bytes`). Untrusted,
+/// as the reads are: bytes linked wrong are a piece the kernel refuses.
+pub(super) fn link(items: &[(u64, String)], offsets: &[u64], bytes: &mut [u8]) -> Result<(), String> {
+    let named: std::collections::BTreeMap<u64, u64> = items.iter().enumerate().filter(|(_, (name, _))| *name != 0).map(|(i, (name, _))| (*name, offsets[i])).collect();
+    for (i, (_, item)) in items.iter().enumerate() {
+        let Some((to, _)) = jump(item) else { continue };
+        let (end, to) = (offsets[i + 1], *named.get(&to).ok_or_else(|| format!("a jump to label {to}, which no item names"))?);
+        let displacement = (to.wrapping_sub(end) as u32).to_le_bytes();
+        let end = end as usize;
+        if end < 4 || end > bytes.len() || offsets[i + 1] - offsets[i] < 5 { return Err("a jump's bytes did not read back".into()); }
+        bytes[end - 4..end].copy_from_slice(&displacement);
+    }
+    Ok(())
+}
+
+/// The table, `{p}_table()`: what the certificate checks the layout and the
+/// bytes by.
 pub(super) fn table(p: &str, items: &[(u64, String)], offsets: &[u64]) -> String {
     let mut named: Vec<(u64, usize)> = items.iter().enumerate().filter(|(_, (name, _))| *name != 0).map(|(i, (name, _))| (*name, i)).collect();
     named.sort_unstable();
