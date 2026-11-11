@@ -44,7 +44,6 @@
 //! Everything here is `#[inline]` field reads on the hottest path of both
 //! walks; the drain is cold.
 
-use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::term::SPINE_ITERATE_AT;
@@ -215,7 +214,9 @@ impl<I> PremiseQueue<I> {
 /// them all final. (Not memoizing them at all would judge a shared subterm
 /// once per occurrence.)
 pub(crate) struct VerdictMemo<K> {
-    map: HashMap<K, bool>,
+    /// Keyed by the domain's own closures (addresses and scope lengths at
+    /// the value domain), so hashed as the arena's caches are.
+    map: crate::value::PtrMap<K, bool>,
     /// The provisional entries, in the order they were made.
     provisional: Vec<K>,
     /// Attempts open: while any is, a successful drain at depth zero keeps
@@ -232,7 +233,7 @@ pub(crate) struct MemoAttempt {
 
 impl<K: Hash + Eq + Clone> VerdictMemo<K> {
     pub(crate) fn new() -> VerdictMemo<K> {
-        VerdictMemo { map: HashMap::new(), provisional: Vec::new(), attempts_open: 0 }
+        VerdictMemo { map: Default::default(), provisional: Vec::new(), attempts_open: 0 }
     }
 
     #[inline]

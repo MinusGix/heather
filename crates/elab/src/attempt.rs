@@ -110,6 +110,13 @@ pub(super) struct DeclAttempt {
     /// reused while the entry stands. Contexts share their spine, so the
     /// tactic calls of one block respell each binder once.
     pub(super) emitted_entries: RefCell<std::collections::HashMap<(usize, usize, usize), (Rc<Type>, Rc<Type>)>>,
+    /// [`crate::Elaborator::local`]'s memo: a binder's type weakened past the
+    /// binders after it, by the stored type's allocation and how many there
+    /// are. The stored `Rc` rides along so its address cannot be reused
+    /// while the entry stands. A name is read many times under one scope,
+    /// and each reading walked and rebuilt its type; the readings now share
+    /// everything below the root, which the kernel's memos key on.
+    pub(super) weakened_entries: RefCell<std::collections::HashMap<(usize, u32), (Rc<Type>, Rc<Type>)>>,
 
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,
@@ -173,6 +180,7 @@ impl DeclAttempt {
         self.instance_matches.get_mut().clear();
         self.char_literals.get_mut().clear();
         self.emitted_entries.get_mut().clear();
+        self.weakened_entries.get_mut().clear();
         self.match_eq_wanted.get_mut().clear();
         self.goal_arena.prepare();
     }
@@ -190,6 +198,7 @@ impl DeclAttempt {
         self.instance_matches.get_mut().clear();
         self.char_literals.get_mut().clear();
         self.emitted_entries.get_mut().clear();
+        self.weakened_entries.get_mut().clear();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
@@ -225,6 +234,8 @@ impl DeclAttempt {
             // probe unless it allocated a goal (`Self::restore`).
             instance_matches: _,
             emitted_entries: _,
+            // A function of the node and the distance alone: kept.
+            weakened_entries: _,
             char_literals,
             slot_probe_target,
             motive_speculation,
@@ -286,6 +297,9 @@ impl DeclAttempt {
             wf_slot_annotations,
             instance_matches,
             emitted_entries,
+            // A weakening is a function of the node and the distance, and
+            // names no slot: a probe's entries stand whatever it allocated.
+            weakened_entries: _,
             char_literals,
             slot_probe_target,
             motive_speculation,

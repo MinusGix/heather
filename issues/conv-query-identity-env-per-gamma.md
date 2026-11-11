@@ -5,7 +5,7 @@ labels: [kernel,performance,inductives]
 area: kernel
 code: crates/kernel/src/conv.rs:624 @ 3e23503
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-11-10
 ---
 
 Found by `inductive/isa-roundtrip` after
@@ -56,3 +56,4 @@ on `inductive/isa-roundtrip`), measured with `scripts/perf ab`.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/conv.rs`); [[indexed-families]] (`crates/kernel/src/conv.rs`).
+- 2026-11-10: The first direction is built, in [[conversion-query-identity-environment]]: an identity environment is a length (`Env::identity(n)` allocates nothing, a lookup below the base answers the variable at its level), and the conversion scope carries no value environment, so a query under `k` case layers no longer pays for Γ before it compares anything. Left open only for its acceptance, which was not re-run: `ident_id`'s gate against its counters from 128 to 256 forms on `inductive/isa-roundtrip`.

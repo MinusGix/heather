@@ -1213,7 +1213,7 @@ fn check(
         let mut a = Agree::new(psi, transparent, gamma, &arena);
         let v = a
             .ev
-            .eval_tm(t, &Env::identity(&arena, gamma.entries.len() as u32))
+            .eval_tm(t, &Env::identity(gamma.entries.len() as u32))
             .unwrap_or_else(|_| panic!("seed {seed}: {what}: evaluator exhausted fuel"));
         let v = a
             .ev
@@ -1236,7 +1236,7 @@ fn check_ty(seed: u64, psi: &GlobalCtx, gamma: &LocalCtx, t: &Rc<Type>, what: &s
         let mut a = Agree::new(psi, transparent, gamma, &arena);
         let v = a
             .ev
-            .eval_ty(t, &Env::identity(&arena, gamma.entries.len() as u32))
+            .eval_ty(t, &Env::identity(gamma.entries.len() as u32))
             .unwrap_or_else(|_| panic!("seed {seed}: {what}: evaluator exhausted fuel"));
         let v = a
             .ev
@@ -1512,7 +1512,7 @@ fn low_fuel_never_produces_a_wrong_answer() {
         let env = gen_wt_env(&mut r);
         let (t, _, _) = gen_wt_term(&env, &mut r, BUDGET);
         let arena = ValueArena::new();
-        let root = Env::identity(&arena, env.gamma.entries.len() as u32);
+        let root = Env::identity(env.gamma.entries.len() as u32);
         let mut succeeded_somewhere = false;
         for budget in [0u64, 1, 2, 4, 8, 32, 256] {
             let mut a = Agree::new(&env.psi, true, &env.gamma, &arena);

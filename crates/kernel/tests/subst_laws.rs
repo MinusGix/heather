@@ -487,6 +487,40 @@ fn abstraction_inverts_substitution() {
         for p in pats {
             let Some(m) = ty.abstract_local(&p) else { continue };
             law!(seed, m.apply_local(&LocalSubst::id(&gamma).extended(Rc::clone(&p))), ty);
+            // And it found every occurrence: none is left under `z`. With the
+            // law above that says which type the motive is, so the walk may
+            // skip and share what it likes and still have one answer.
+            assert!(
+                m.abstract_local(&p.shift_local(1)).is_none(),
+                "seed {seed}: an occurrence was left in the motive"
+            );
         }
     }
+}
+
+/// What abstraction leaves alone it does not rebuild: a subtree that mentions
+/// no variable of the scope holds no occurrence of a pattern that does, and
+/// needs no room made for `z`, so the motive shares it with the goal.
+#[test]
+fn abstraction_shares_what_it_cannot_change() {
+    let closed = Rc::new(Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Zero)))));
+    let x = Rc::new(Term::Var(LocalVar(0)));
+    let goal = Type::Id {
+        level: Level::Zero,
+        ty: Rc::new(Type::Nat),
+        lhs: Rc::clone(&closed),
+        rhs: Rc::clone(&x),
+    };
+    let Some(Type::Id { lhs, rhs, .. }) = goal.abstract_local(&x) else {
+        panic!("the pattern occurs")
+    };
+    assert!(Rc::ptr_eq(&lhs, &closed));
+    assert_eq!(*rhs, Term::Var(LocalVar(0)));
+    // A pattern that mentions no variable can sit in such a subtree, and is
+    // still found there.
+    let Some(Type::Id { lhs, rhs, .. }) = goal.abstract_local(&closed) else {
+        panic!("the closed pattern occurs")
+    };
+    assert_eq!(*lhs, Term::Var(LocalVar(0)));
+    assert_eq!(*rhs, Term::Var(LocalVar(1)));
 }

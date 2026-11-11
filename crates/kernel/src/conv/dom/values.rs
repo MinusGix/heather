@@ -87,22 +87,6 @@ fn glen<'v>(env: &Env<'v>) -> u32 {
     env.gamma.entries.len() as u32
 }
 
-/// The neutral variable a binder pushed at Γ-length `level` is bound to.
-fn fresh<'v>(arena: &'v ValueArena<'v>, level: u32) -> &'v TmClo<'v> {
-    arena.tm(TmClo::val(arena.val(Val::var(arena, level))))
-}
-
-/// The same variable, taken from the environment that already holds it
-/// rather than allocated again — `open_*` asks for it once per binder
-/// descent, which is conversion's hottest path.
-fn var_at<'v>(env: &Env<'v>, level: u32) -> &'v TmClo<'v> {
-    let n = env.gamma.entries.len() as u32;
-    match n.checked_sub(1 + level).map(|i| env.rho.lookup(i)) {
-        Some(value::Lookup::Bound(c)) => c,
-        _ => fresh(env.arena, level),
-    }
-}
-
 #[cfg(test)]
 mod closed_nat_depth_tests;
 
@@ -177,7 +161,8 @@ mod tests {
         let body = || {
             Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) })
         };
-        let rho = value::Env::empty().push(&arena, fresh(&arena, 0));
+        let held = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let rho = value::Env::empty().push(&arena, held);
         let a = TyC { clo: arena.ty(TyClo::new(rho, body())), home: 2, sat: 3 };
 
         // Distinct closures, same environment spine, α-equal bodies: a hit.
@@ -189,13 +174,21 @@ mod tests {
         // is deliberately not inspected (the head pointer is the test).
         let other_env = TyC {
             clo: arena.ty(TyClo::new(
-                value::Env::empty().push(&arena, fresh(&arena, 0)),
+                value::Env::empty().push(&arena, held),
                 body(),
             )),
             home: 2,
             sat: 3,
         };
         assert!(!Values::ty_eq_fast(&a, &other_env));
+
+        // An identity environment has no spine to differ in: built twice,
+        // by its length or by pushing each variable, it is one environment.
+        let pushed = value::Env::empty().push(&arena, arena.var(0));
+        let id = TyC { clo: arena.ty(TyClo::new(pushed, body())), home: 2, sat: 3 };
+        let again = TyC { clo: arena.ty(TyClo::new(value::Env::identity(1), body())), home: 2, sat: 3 };
+        assert!(Values::ty_eq_fast(&id, &again));
+        assert!(!Values::ty_eq_fast(&a, &id));
 
         // A different body is never a hit; scope metadata still gates.
         let other_body = TyC { clo: arena.ty(TyClo::new(rho, Rc::new(Type::Nat))), home: 2, sat: 3 };
@@ -205,10 +198,10 @@ mod tests {
 
         // The term side takes the same shortcut.
         let t = || Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
-        let rho = value::Env::empty().push(&arena, fresh(&arena, 0));
+        let rho = value::Env::empty().push(&arena, arena.var(0));
         let ta = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
         let tb = TmC { clo: arena.tm(TmClo::syn(rho, t())), home: 2, sat: 3 };
-        assert!(Values::tm_identity_fast(&ta, &tb));
+        assert!(tm_identity(&arena, &ta, &tb));
     }
 
     #[test]
@@ -221,9 +214,9 @@ mod tests {
         let other_home = TmC { clo, home: 1, sat: 3 };
         let other_sat = TmC { clo, home: 2, sat: 4 };
 
-        assert!(Values::tm_identity_fast(&a, &same));
-        assert!(!Values::tm_identity_fast(&a, &other_home));
-        assert!(!Values::tm_identity_fast(&a, &other_sat));
+        assert!(tm_identity(&arena, &a, &same));
+        assert!(!tm_identity(&arena, &a, &other_home));
+        assert!(!tm_identity(&arena, &a, &other_sat));
 
         let psi = crate::term::GlobalCtx::default();
         let gamma = LocalCtx::nil();
@@ -242,8 +235,8 @@ mod tests {
         let arena = ValueArena::new();
         let z = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let same_z = arena.tm(TmClo::val(arena.val(Val::Zero)));
-        let x = fresh(&arena, 0);
-        let y = fresh(&arena, 1);
+        let x = arena.var(0);
+        let y = arena.var(1);
         let rho = |outer, inner| value::Env::empty().push(&arena, outer).push(&arena, inner);
         let body = Rc::new(Term::AppAt {
             fun: Rc::new(Term::Var(LocalVar(3))),
@@ -255,11 +248,11 @@ mod tests {
         // Under two pending binders x3 reads captured index 1; x1 is a
         // pending binder. Captured index 0 is unused and may differ.
         let a = mk(rho(z, x), 4);
-        assert!(Values::tm_identity_fast(&a, &mk(rho(same_z, y), 4)));
-        assert!(!Values::tm_identity_fast(&a, &mk(rho(y, x), 4)));
-        assert!(!Values::tm_identity_fast(&a, &mk(rho(same_z, y), 3)));
-        assert!(!clo_identity(a.clo, mk(rho(same_z, y), 4).clo, 1, &mut 64));
-        assert!(!clo_identity(a.clo, mk(rho(same_z, y), 4).clo, 2, &mut 0));
+        assert!(tm_identity(&arena, &a, &mk(rho(same_z, y), 4)));
+        assert!(!tm_identity(&arena, &a, &mk(rho(y, x), 4)));
+        assert!(!tm_identity(&arena, &a, &mk(rho(same_z, y), 3)));
+        assert!(!clo_identity(&arena, a.clo, mk(rho(same_z, y), 4).clo, 1, &mut 64));
+        assert!(!clo_identity(&arena, a.clo, mk(rho(same_z, y), 4).clo, 2, &mut 0));
     }
 
     /// Only the captures a body reads are compared, so two spines of
@@ -269,32 +262,32 @@ mod tests {
     #[test]
     fn suspended_identity_ignores_spine_length_past_the_used_captures() {
         let arena = ValueArena::new();
-        let x = fresh(&arena, 0);
-        let y = fresh(&arena, 1);
+        let x = arena.var(0);
+        let y = arena.var(1);
         let short = value::Env::empty().push(&arena, x);
         let long = value::Env::empty().push(&arena, y).push(&arena, x);
         let mk = |env, body: &Rc<Term>| TmC { clo: arena.tm(TmClo::syn(env, Rc::clone(body))), home: 1, sat: 2 };
         // x0 is the pending binder: no capture is read.
         let pending = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
-        assert!(Values::tm_identity_fast(&mk(short, &pending), &mk(long, &pending)));
+        assert!(tm_identity(&arena, &mk(short, &pending), &mk(long, &pending)));
         // x1 reads capture 0, the same `x` on both sides.
         let inner = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))));
-        assert!(Values::tm_identity_fast(&mk(short, &inner), &mk(long, &inner)));
+        assert!(tm_identity(&arena, &mk(short, &inner), &mk(long, &inner)));
         // x2 reads capture 1, which only the long spine has.
         let outer = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(2)))));
-        assert!(!Values::tm_identity_fast(&mk(short, &outer), &mk(long, &outer)));
+        assert!(!tm_identity(&arena, &mk(short, &outer), &mk(long, &outer)));
         // An empty tail records no length: a reference to a closed global
         // is one value under either spine.
         let gamma = LocalCtx::nil();
         let empty = Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: crate::term::LocalSubst::id(&gamma) });
-        assert!(clo_identity(&TmClo::syn(short, Rc::clone(&empty)), &TmClo::syn(long, empty), 0, &mut 64));
+        assert!(clo_identity(&arena, &TmClo::syn(short, Rc::clone(&empty)), &TmClo::syn(long, empty), 0, &mut 64));
         // A weakening counts the spine's length, whatever it reads.
         let wk = crate::term::LocalSubst {
             tail: crate::term::SubstTail::Wk { len: 0, ctx_var: GlobalVar::index(0) },
             terms: Vec::new(),
         };
         let tail = Rc::new(Term::GlobalTm { var: GlobalVar::index(1), subst: wk });
-        assert!(!clo_identity(&TmClo::syn(short, Rc::clone(&tail)), &TmClo::syn(long, tail), 0, &mut 64));
+        assert!(!clo_identity(&arena, &TmClo::syn(short, Rc::clone(&tail)), &TmClo::syn(long, tail), 0, &mut 64));
     }
 
     #[test]
@@ -326,16 +319,16 @@ mod tests {
             fold(head(), Level::Zero, motive(), arena.tm(TmClo::syn(rho, Rc::new(Term::Succ(Rc::new(Term::Zero))))), step()),
             fold(head(), Level::Zero, motive(), base(), arena.tm(TmClo::syn(rho, Rc::new(Term::Var(LocalVar(0)))))),
         ] {
-            assert!(!Values::tm_identity_fast(&a, &different));
+            assert!(!tm_identity(&arena, &a, &different));
         }
         // Captures in a motive still count *outside* its one pending binder.
         let ty = Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(1))) });
-        let m1 = arena.ty(TyClo::new(rho.push(&arena, fresh(&arena, 0)), Rc::clone(&ty)));
-        let m2 = arena.ty(TyClo::new(rho.push(&arena, fresh(&arena, 1)), ty));
-        assert!(!ty_clo_identity(m1, m2, 1, &mut 64));
+        let m1 = arena.ty(TyClo::new(rho.push(&arena, arena.var(0)), Rc::clone(&ty)));
+        let m2 = arena.ty(TyClo::new(rho.push(&arena, arena.var(1)), ty));
+        assert!(!ty_clo_identity(&arena, m1, m2, 1, &mut 64));
         let shifted = rho.with_gshift(1);
         let t = Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: crate::term::LocalSubst::id(&gamma) });
-        assert!(!clo_identity(&TmClo::syn(rho, Rc::clone(&t)), &TmClo::syn(shifted, t), 0, &mut 64));
+        assert!(!clo_identity(&arena, &TmClo::syn(rho, Rc::clone(&t)), &TmClo::syn(shifted, t), 0, &mut 64));
     }
 
     #[test]
@@ -496,7 +489,7 @@ fn open_ty<'v>(env: &Env<'v>, c: &TyC<'v>, pending: u32) -> &'v TyClo<'v> {
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
-        let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| var_at(env, l)).collect();
+        let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| env.arena.var(l)).collect();
         clo = apply_ty_clo(env.arena, clo, &args);
     }
     clo
@@ -512,7 +505,7 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
-        let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| var_at(env, l)).collect();
+        let args: Vec<&'v TmClo<'v>> = (c.home..stop).map(|l| env.arena.var(l)).collect();
         clo = apply_tm_clo(env.arena, clo, &args);
     }
     clo
@@ -586,43 +579,62 @@ thread_local! {
     static FILLER: Rc<Type> = Rc::new(Type::Nat);
 }
 
+/// Scoped identity for terms, including bounded congruence of suspended
+/// Nat folds and the syntactic closures that use their hypotheses. The
+/// same pending binders must be opened on both sides.
+fn tm_identity<'v>(arena: &'v ValueArena<'v>, a: &TmC<'v>, b: &TmC<'v>) -> bool {
+    a.home == b.home && a.sat == b.sat
+        && (std::ptr::eq(a.clo, b.clo)
+            || match (a.clo.as_syn(), b.clo.as_syn()) {
+                (Some((e1, b1)), Some((e2, b2))) => {
+                    value::Env::ptr_eq(e1, e2) && (Rc::ptr_eq(b1, b2) || b1 == b2)
+                }
+                _ => false,
+            }
+            // Ordinary closed computations retain the normal fuel/depth
+            // path. Look through captures only for a branch with pending
+            // binders or for an explicitly suspended elimination.
+            || (a.sat > a.home || matches!((a.clo, b.clo), (TmClo::Elim { .. }, TmClo::Elim { .. })))
+                && clo_identity(arena, a.clo, b.clo, a.sat - a.home, &mut 64))
+}
+
 // Bounded structural identity of suspended computations. Nat induction
 // hypotheses can denote the same fold without forcing its literal scrutinee.
 // `pending` binders are in the syntax but not yet in the captured environment.
 // A miss always falls back to ordinary conversion.
-fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
+fn clo_identity<'v>(arena: &'v ValueArena<'v>, a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
     if std::ptr::eq(a, b) { return true; }
     if *budget == 0 { return false; }
     *budget -= 1;
     if pending == 0 {
         if let Some((rho, body)) = a.as_syn()
             && let Term::Var(v) = &**body
-            && let value::Lookup::Bound(x) = rho.lookup(v.0)
-        { return clo_identity(x, b, 0, budget); }
+            && let value::Lookup::Bound(x) = rho.lookup(arena, v.0)
+        { return clo_identity(arena, x, b, 0, budget); }
         if let Some((rho, body)) = b.as_syn()
             && let Term::Var(v) = &**body
-            && let value::Lookup::Bound(y) = rho.lookup(v.0)
-        { return clo_identity(a, y, 0, budget); }
+            && let value::Lookup::Bound(y) = rho.lookup(arena, v.0)
+        { return clo_identity(arena, a, y, 0, budget); }
     }
     match (a, b) {
-        (TmClo::Syn { env: e1, body: b1 }, TmClo::Syn { env: e2, body: b2 }) => {
+        (TmClo::Syn { env: e1, body: b1, .. }, TmClo::Syn { env: e2, body: b2, .. }) => {
             (Rc::ptr_eq(b1, b2) || b1 == b2)
                 && (value::Env::ptr_eq(e1, e2) || match &**b1 {
                     Term::Var(v) if v.0 < pending => true,
-                    Term::Var(v) => match (e1.lookup(v.0 - pending), e2.lookup(v.0 - pending)) {
-                        (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(x, y, 0, budget),
+                    Term::Var(v) => match (e1.lookup(arena, v.0 - pending), e2.lookup(arena, v.0 - pending)) {
+                        (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(arena, x, y, 0, budget),
                         (value::Lookup::Base(x), value::Lookup::Base(y)) => x == y,
                         _ => false,
                     },
                     Term::AppAt { fun, arg } => {
                         // Only the captures this application reads matter;
                         // unused predecessor slots can differ legitimately.
-                        clo_identity(&TmClo::syn(*e1, Rc::clone(fun)), &TmClo::syn(*e2, Rc::clone(fun)), pending, budget)
-                            && clo_identity(&TmClo::syn(*e1, Rc::clone(arg)), &TmClo::syn(*e2, Rc::clone(arg)), pending, budget)
+                        clo_identity(arena, &TmClo::syn(*e1, Rc::clone(fun)), &TmClo::syn(*e2, Rc::clone(fun)), pending, budget)
+                            && clo_identity(arena, &TmClo::syn(*e1, Rc::clone(arg)), &TmClo::syn(*e2, Rc::clone(arg)), pending, budget)
                     }
                     _ => {
                         let u = crate::bounds::term_local_use(b1);
-                        env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
+                        env_identity(arena, e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
                     }
                 })
         }
@@ -630,16 +642,16 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
             (Val::Zero, Val::Zero) => true,
             (Val::NatRun { program: p1, tail: t1 }, Val::NatRun { program: p2, tail: t2 }) => {
                 value::program::ContextProgram::equivalent_fast(p1, p2)
-                    && clo_identity(t1, t2, 0, budget)
+                    && clo_identity(arena, t1, t2, 0, budget)
             }
             _ => false,
         },
-        (TmClo::Elim { head: h1, elim: e1 }, TmClo::Elim { head: h2, elim: e2 }) if pending == 0 => {
-            clo_identity(h1, h2, 0, budget) && (std::ptr::eq::<Elim<'v>>(*e1, *e2) || match (&**e1, &**e2) {
+        (TmClo::Elim { head: h1, elim: e1, .. }, TmClo::Elim { head: h2, elim: e2, .. }) if pending == 0 => {
+            clo_identity(arena, h1, h2, 0, budget) && (std::ptr::eq::<Elim<'v>>(*e1, *e2) || match (&**e1, &**e2) {
                 (Elim::ElimNat { level: l1, motive: m1, base: z1, step: s1 },
                  Elim::ElimNat { level: l2, motive: m2, base: z2, step: s2 }) => {
-                    l1 == l2 && ty_clo_identity(m1, m2, 1, budget)
-                        && clo_identity(z1, z2, 0, budget) && clo_identity(s1, s2, 2, budget)
+                    l1 == l2 && ty_clo_identity(arena, m1, m2, 1, budget)
+                        && clo_identity(arena, z1, z2, 0, budget) && clo_identity(arena, s1, s2, 2, budget)
                 }
                 _ => false,
             })
@@ -648,14 +660,14 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
     }
 }
 
-fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut u32) -> bool {
+fn ty_clo_identity<'v>(arena: &'v ValueArena<'v>, a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut u32) -> bool {
     if std::ptr::eq(a, b) { return true; }
     match (a.as_syn(), b.as_syn()) {
         (Some((e1, b1)), Some((e2, b2))) => {
             (Rc::ptr_eq(b1, b2) || b1 == b2)
                 && (value::Env::ptr_eq(e1, e2) || {
                     let u = crate::bounds::type_local_use(b1);
-                    env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
+                    env_identity(arena, e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
                 })
         }
         _ => false,
@@ -666,15 +678,15 @@ fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut 
 // length past them, unless the body holds a weakening `wk^k_g`: it counts
 // the whole environment's length (`bounds.rs`), so then the lengths must
 // agree too.
-fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, tail: bool, budget: &mut u32) -> bool {
+fn env_identity<'v>(arena: &'v ValueArena<'v>, a: &value::Env<'v>, b: &value::Env<'v>, used: u32, tail: bool, budget: &mut u32) -> bool {
     if a.gshift() != b.gshift() { return false; }
     if a.len() != b.len() && (tail || used > a.len().min(b.len())) { return false; }
     if value::Env::ptr_eq(a, b) { return true; }
     (0..used.min(a.len()).min(b.len())).all(|i| {
         if *budget == 0 { return false; }
         *budget -= 1;
-        match (a.lookup(i), b.lookup(i)) {
-            (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(x, y, 0, budget),
+        match (a.lookup(arena, i), b.lookup(arena, i)) {
+            (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(arena, x, y, 0, budget),
             _ => false,
         }
     })
@@ -703,11 +715,11 @@ impl<'v> Dom<'v> for Values {
     }
 
     fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<&'v VTy<'v>> {
-        run(cv, env, |ev| ev.eval_ty(t, &env.rho))
+        run(cv, env, |ev| ev.eval_ty(t, &env.rho()))
     }
 
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<&'v Val<'v>> {
-        run(cv, env, |ev| ev.eval_tm_ref(t, &env.rho))
+        run(cv, env, |ev| ev.eval_tm_ref(t, &env.rho()))
     }
 
     fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<&'v Val<'v>> {
@@ -804,10 +816,10 @@ impl<'v> Dom<'v> for Values {
     /// would — so the children are read **here**, where the vector is.
     fn vec_former(_cv: &Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> Option<(Level, TyC<'v>, TmC<'v>)> {
         match open_ty(env, t, 0) {
-            TyClo::Vec { level, elem, len } => {
+            TyClo::Vec { level, elem, len, .. } => {
                 Some(((*level).clone(), TyC::here(env, elem), TmC::here(env, len)))
             }
-            TyClo::Syn { env: e, body } => match &**body {
+            TyClo::Syn { env: e, body, .. } => match &**body {
                 Type::Vec { level, elem, len } => Some((
                     level.clone(),
                     TyC::here(env, env.arena.ty(TyClo::new(e.clone(), Rc::clone(elem)))),
@@ -1072,7 +1084,7 @@ impl<'v> Dom<'v> for Values {
     fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v> {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
-            let vty = e.arena.ty(TyClo::new(e.rho, Rc::clone(ty)));
+            let vty = e.arena.ty(TyClo::new(e.rho(), Rc::clone(ty)));
             e = e.push_entry(Rc::clone(ty), vty, level.clone());
         }
         e.tele.2 = tele.locals.len() as u32;
@@ -1102,7 +1114,7 @@ impl<'v> Dom<'v> for Values {
         let Some(e) = env.gamma.entries.nth_inner(x.0) else {
             return Err(NC);
         };
-        let rho = value::Env::identity(env.arena, i);
+        let rho = value::Env::identity(i);
         let clo = env.arena.ty(TyClo::new(rho, Rc::clone(&e.ty)));
         Ok((TyC::here(env, clo), e.level.clone()))
     }
@@ -1126,11 +1138,11 @@ impl<'v> Dom<'v> for Values {
     // -- embedding ----------------------------------------------------------
 
     fn embed_ty(env: &Env<'v>, t: Rc<Type>) -> TyC<'v> {
-        TyC::here(env, env.arena.ty(TyClo::new(env.rho, t)))
+        TyC::here(env, env.arena.ty(TyClo::new(env.rho(), t)))
     }
 
     fn embed_tm(env: &Env<'v>, t: Rc<Term>) -> TmC<'v> {
-        TmC::here(env, env.arena.tm(TmClo::syn(env.rho, t)))
+        TmC::here(env, env.arena.tm(TmClo::syn(env.rho(), t)))
     }
 
     /// Raw syntax scoped in Γ-plus-telescope, read in the recursor's own
@@ -1552,23 +1564,8 @@ impl<'v> Dom<'v> for Values {
         (closed(b1) && closed(b2)).then(|| (Rc::clone(b1), Rc::clone(b2)))
     }
 
-    /// Scoped identity for terms, including bounded congruence of suspended
-    /// Nat folds and the syntactic closures that use their hypotheses. The
-    /// same pending binders must be opened on both sides.
-    fn tm_identity_fast(a: &TmC<'v>, b: &TmC<'v>) -> bool {
-        a.home == b.home && a.sat == b.sat
-            && (std::ptr::eq(a.clo, b.clo)
-                || match (a.clo.as_syn(), b.clo.as_syn()) {
-                    (Some((e1, b1)), Some((e2, b2))) => {
-                        value::Env::ptr_eq(e1, e2) && (Rc::ptr_eq(b1, b2) || b1 == b2)
-                    }
-                    _ => false,
-                }
-                // Ordinary closed computations retain the normal fuel/depth
-                // path. Look through captures only for a branch with pending
-                // binders or for an explicitly suspended elimination.
-                || (a.sat > a.home || matches!((a.clo, b.clo), (TmClo::Elim { .. }, TmClo::Elim { .. })))
-                    && clo_identity(a.clo, b.clo, a.sat - a.home, &mut 64))
+    fn tm_identity_fast(env: &Env<'v>, a: &TmC<'v>, b: &TmC<'v>) -> bool {
+        tm_identity(env.arena, a, b)
     }
 
     fn cancel_nat_prefix(
@@ -1750,7 +1747,7 @@ impl<'v> Dom<'v> for Values {
                 dom: open_ty(outer, dom, 0),
                 cod: open_ty(outer, cod, 1),
             }),
-            arg: var_at(inner, glen(outer)),
+            arg: inner.arena.var(glen(outer)),
         };
         let (a, b) = (*a, *b);
         let (x, y) = run(cv, inner, |ev| {
@@ -1883,9 +1880,9 @@ impl<'v> Dom<'v> for Values {
             wf_step_telescope(&gamma, level, motive_level, &sbody, &abody, &mbody);
         let l = glen(env);
         let senv = &senv.with_gshift(0);
-        let e1 = senv.push(env.arena, fresh(env.arena, l));
-        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
-        let e3 = e2.push(env.arena, fresh(env.arena, l + 2));
+        let e1 = senv.push(env.arena, env.arena.var(l));
+        let e2 = e1.push(env.arena, env.arena.var(l + 1));
+        let e3 = e2.push(env.arena, env.arena.var(l + 2));
         Ok((
             TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(cs))), home: l + 1, sat: l + 1 },
             TyC { clo: env.arena.ty(TyClo::new(e2, Rc::new(ih))), home: l + 2, sat: l + 2 },
@@ -1914,9 +1911,9 @@ impl<'v> Dom<'v> for Values {
         let (cs, ih, step) = iwf_step_telescope(&sig, motive_level, &mbody);
         let l = glen(env);
         let senv = &senv.with_gshift(0);
-        let e1 = senv.push(env.arena, fresh(env.arena, l));
-        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
-        let e3 = e2.push(env.arena, fresh(env.arena, l + 2));
+        let e1 = senv.push(env.arena, env.arena.var(l));
+        let e2 = e1.push(env.arena, env.arena.var(l + 1));
+        let e3 = e2.push(env.arena, env.arena.var(l + 2));
         Ok((
             TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(mot))), home: l + 1, sat: l + 1 },
             TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(cs))), home: l + 1, sat: l + 1 },
@@ -1953,8 +1950,8 @@ impl<'v> Dom<'v> for Values {
         }
         let ty = m_step_ty(&sig, carrier_level, &amb_ty(cenv, cbody)).shift_local(1);
         let l = glen(env);
-        let e1 = senv.with_gshift(0).push(env.arena, fresh(env.arena, l));
-        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
+        let e1 = senv.with_gshift(0).push(env.arena, env.arena.var(l));
+        let e2 = e1.push(env.arena, env.arena.var(l + 1));
         Ok(TyC { clo: env.arena.ty(TyClo::new(e2, Rc::new(ty))), home: l + 2, sat: l + 2 })
     }
 
@@ -2148,7 +2145,7 @@ fn rec_env<'v>(rec: &RecEnv<'v>, env: &Env<'v>) -> value::Env<'v> {
     );
     let base = glen(env) - tl;
     for i in 0..tl {
-        e = e.push(env.arena, fresh(env.arena, base + i));
+        e = e.push(env.arena, env.arena.var(base + i));
     }
     e
 }
@@ -2399,6 +2396,7 @@ pub(crate) fn eval_ity<'v>(
     match t {
         ITy::Owned(s) => eval_ity_syn(cv, env, s, depth, delta_final),
         ITy::Syn(s) => eval_ity_syn(cv, env, s, depth, delta_final),
+        ITy::At { ty, depth } => eval_ity_syn(cv, env, ty, *depth, delta_final),
         ITy::Sel { of, sel, at_depth } => {
             crate::stats::sel_evals(1);
             let w = eval_ity(cv, env, of, sel.of_depth(*at_depth), true)?;
@@ -2433,16 +2431,10 @@ pub(crate) fn select_ity<'v>(
         _ => return Err(NC),
     };
     let arg: Option<&'v TmClo<'v>> = match sel {
-        Sel::Snd(a) | Sel::App(a) => {
-            let rho = if at_depth == glen(env) {
-                env.rho.clone()
-            } else {
-                value::Env::identity(env.arena, at_depth)
-            };
-            let v = run(cv, env, |ev| ev.eval_tm_ref(a, &rho))?;
-            Some(env.arena.tm(TmClo::val(v)))
-        }
-        Sel::Cod => Some(fresh(env.arena, at_depth.saturating_sub(1))),
+        // Unevaluated: a component that does not mention the binder never
+        // asks for it, and one that does shares the spine below it.
+        Sel::Snd(a) | Sel::App(a) => Some(env.arena.subject(a, at_depth)),
+        Sel::Cod => Some(env.arena.var(at_depth.saturating_sub(1))),
         _ => None,
     };
     run(cv, env, |ev| {
@@ -2463,11 +2455,7 @@ fn eval_ity_syn<'v>(
     depth: u32,
     delta_final: bool,
 ) -> R<&'v VTy<'v>> {
-    let rho = if depth == glen(env) {
-        env.rho.clone()
-    } else {
-        value::Env::identity(env.arena, depth)
-    };
+    let rho = value::Env::identity(depth);
     run(cv, env, |ev| {
         let v = ev.eval_ty(s, &rho)?;
         if delta_final { ev.delta_whnf_ty(v) } else { Ok(v) }

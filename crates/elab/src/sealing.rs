@@ -48,7 +48,7 @@ pub(crate) fn carries_data(psi: &GlobalCtx, stmt: &Type) -> bool {
     let arena = ValueArena::new();
     let mut ev = Eval::new(FUEL, Defs::transparent(psi), CtxBase::Nil, &arena);
     let mut walk = Walk { ev: &mut ev, psi, arena: &arena, nodes: NODES };
-    let Ok(v) = walk.ev.eval_ty(stmt, &Env::identity(&arena, 0)) else { return false };
+    let Ok(v) = walk.ev.eval_ty(stmt, &Env::identity(0)) else { return false };
     walk.data(v, 0, true).unwrap_or(false)
 }
 

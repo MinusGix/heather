@@ -25,7 +25,7 @@
 //! unfold the body ordinary δ would, so either is sound.
 
 use super::Eval;
-use crate::value::{Elim, Head, Lookup, TmClo, VNeutral, Val};
+use crate::value::{Elim, Head, Lookup, TmClo, VNeutral, Val, ValueArena};
 
 /// Value nodes the closedness walk visits per call before it answers
 /// "open". Generous next to the literals a verdict is stated over.
@@ -124,7 +124,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     Err(_) => return false,
                 },
             };
-            if !parts(v, &mut work) {
+            if !parts(self.arena, v, &mut work) {
                 return false;
             }
         }
@@ -134,7 +134,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
 /// Push `v`'s parts onto the walk; `false` when `v` is open or of a form the
 /// walk does not open.
-fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
+fn parts<'v>(arena: &'v ValueArena<'v>, v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
     macro_rules! push {
         ($($c:expr),*) => {{ $(work.push(Item::Clo($c));)* }};
     }
@@ -164,10 +164,10 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
         // Universe and context binders bind no local variable.
         Val::ULam { body, .. } | Val::CtxLam { body, .. } | Val::TyLam { body, .. } => push!(body),
         // A term binder's body cannot be forced: its syntax decides.
-        Val::Lam { body, .. } => return binder(body, 1, work),
-        Val::TmPi { dom, cod, .. } => return { push!(dom); binder(cod, 1, work) },
-        Val::TmSigma { fst, snd, .. } => return { push!(fst); binder(snd, 1, work) },
-        Val::TmW { shape, pos, .. } => return { push!(shape); binder(pos, 1, work) },
+        Val::Lam { body, .. } => return binder(arena, body, 1, work),
+        Val::TmPi { dom, cod, .. } => return { push!(dom); binder(arena, cod, 1, work) },
+        Val::TmSigma { fst, snd, .. } => return { push!(fst); binder(arena, snd, 1, work) },
+        Val::TmW { shape, pos, .. } => return { push!(shape); binder(arena, pos, 1, work) },
         // An eliminator stuck on a glued scrutinee is where a δ-lazy force
         // stopped and a δ-transparent one goes on (`Eval::step_neutral`).
         // [`Eval::closed`] forces transparently, but the memo can still
@@ -205,9 +205,9 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
 /// its environment, and those entries, which sit under no binder, go on the
 /// work list to be forced like any argument. `false` when it reads a base
 /// variable or is of a form the walk does not open.
-fn binder<'v>(c: &'v TmClo<'v>, pending: u32, work: &mut Vec<Item<'v>>) -> bool {
+fn binder<'v>(arena: &'v ValueArena<'v>, c: &'v TmClo<'v>, pending: u32, work: &mut Vec<Item<'v>>) -> bool {
     match c {
-        TmClo::Syn { env, body } => {
+        TmClo::Syn { env, body, .. } => {
             // Every `u^δ` carries a substitution tail, so a tail is no sign
             // of a variable: an empty tail reads none. A `wk_g` tail
             // reads a context variable's prefix, which an elaborator's Γ
@@ -217,7 +217,7 @@ fn binder<'v>(c: &'v TmClo<'v>, pending: u32, work: &mut Vec<Item<'v>>) -> bool 
                 if i < 64 && used.uses & (1u64 << i) == 0 {
                     return true;
                 }
-                match env.lookup(i - pending) {
+                match env.lookup(arena, i - pending) {
                     Lookup::Bound(entry) => {
                         work.push(Item::Clo(entry));
                         true

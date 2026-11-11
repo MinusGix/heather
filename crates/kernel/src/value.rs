@@ -49,6 +49,7 @@ use std::fmt;
 use std::sync::Arc as Rc;
 use typed_arena::Arena;
 
+use crate::few_map::FewMap;
 use crate::fmt::node;
 use crate::level::Level;
 use crate::term::{Branches, GlobalRef, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
@@ -70,6 +71,14 @@ use program::ContextProgram;
 /// innermost first, as a region-backed persistent list so that pushing a
 /// binder is one allocation and capturing it in a closure is a pointer copy.
 ///
+/// The list may stop short of `len`: the entries it does not hold are the
+/// outermost ones, and each is **the neutral variable at its own level**
+/// ([`ValueArena::var`]). So the identity environment of a Γ is a length and
+/// no list ([`Env::identity`]), every conversion starts from one without
+/// allocating, and a binder pushed onto one with its own variable is the
+/// next identity environment and not a cell ([`Env::push`]): there is one
+/// spelling of each, which is what [`Env::ptr_eq`] compares.
+///
 /// De Bruijn *indices* resolve against it from the inside; anything past the
 /// end is a variable of the abstract prefix `g` (see [`Lookup`]). Because
 /// the list only ever grows on the right, the *level* `len - 1 - i` assigned
@@ -82,7 +91,7 @@ use program::ContextProgram;
 /// (`docs/lazy-global-offset-design.md`). It rides here rather than on the
 /// closure because every site in the kernel that pairs syntax with an
 /// environment does so through this handle, because it fits in the padding
-/// (closures stay four words), and because [`Env::ident`]/[`Env::ptr_eq`] are
+/// (a closure is four words and its memo), and because [`Env::ident`]/[`Env::ptr_eq`] are
 /// the identity of a syntactic closure — so two closures over the same body
 /// at different offsets are already different objects to every memo.
 ///
@@ -105,6 +114,13 @@ pub struct Env<'v> {
     /// whose body this environment reads (offset 0).
     scope: u32,
 }
+
+/// The projections [`ValueArena::subject`] passes before it needs a vector.
+const NEAR: usize = 8;
+
+/// How far past the levels already asked for [`ValueArena::var`] extends its
+/// table in one request.
+const VAR_TABLE_STEP: usize = 1 << 12;
 
 /// The tag on [`Env::scope`] for "a constant's body": the same bit
 /// [`GlobalVar`] spells a constant with.
@@ -239,6 +255,11 @@ impl<'v> Env<'v> {
 
     /// `ρ, v` — one more binder, innermost.
     pub fn push(&self, arena: &'v ValueArena<'v>, val: &'v TmClo<'v>) -> Env<'v> {
+        // An identity environment extended by its own next variable is the
+        // next identity environment.
+        if self.node.is_none() && arena.is_var(val, self.len) {
+            return Env { node: None, len: self.len + 1, scope: self.scope };
+        }
         #[cfg(feature = "value-metrics")]
         if let Some(m) = arena.metrics {
             ValueMetrics::bump(&m.inner.env_nodes);
@@ -261,8 +282,9 @@ impl<'v> Env<'v> {
         e
     }
 
-    /// Resolve a de Bruijn index (0 = innermost).
-    pub fn lookup(&self, i: u32) -> Lookup<'v> {
+    /// Resolve a de Bruijn index (0 = innermost). An entry the list does not
+    /// hold is the variable at its level, as the arena's one closure of it.
+    pub fn lookup(&self, arena: &'v ValueArena<'v>, i: u32) -> Lookup<'v> {
         let len = self.len();
         if i >= len {
             return Lookup::Base(i - len);
@@ -270,9 +292,8 @@ impl<'v> Env<'v> {
         let mut cur = self.node;
         let mut k = i;
         loop {
-            // Safe by the length invariant: `k < cur.len` at every step.
             let Some(n) = cur else {
-                return Lookup::Base(k);
+                return Lookup::Bound(arena.var(len - 1 - i));
             };
             if k == 0 {
                 return Lookup::Bound(n.val);
@@ -286,17 +307,10 @@ impl<'v> Env<'v> {
     /// (counted from the *outer* end) is the neutral variable at level `j`.
     /// This is the environment at the root of a conversion.
     ///
-    /// Every identity environment is a *prefix* of every longer one. A query
-    /// builds the requested spine once in its arena and every sub-conversion
-    /// shares that spine; no identity state escapes the query or lives in a
-    /// thread-local cache.
-    pub fn identity(arena: &'v ValueArena<'v>, n: u32) -> Env<'v> {
-        let mut env = Env::empty();
-        for level in 0..n {
-            let value = arena.val(Val::var(arena, level));
-            env = env.push(arena, arena.tm(TmClo::val(value)));
-        }
-        env
+    /// It is a length: no cell is allocated, every identity environment is a
+    /// prefix of every longer one, and two of one length are one object.
+    pub fn identity(n: u32) -> Env<'v> {
+        Env { node: None, len: n, scope: 0 }
     }
 
     /// The outermost `n` entries — the identity environment of a Γ-prefix.
@@ -308,23 +322,28 @@ impl<'v> Env<'v> {
                     cur.node = node.rest;
                     cur.len -= 1;
                 }
-                None => break,
+                None => {
+                    cur.len = n;
+                    break;
+                }
             }
         }
         cur
     }
 
-    /// The entries, **outermost first** — the order [`Env::extend`] wants.
-    /// Used by the outer-namespace maps, which have to rebuild the list.
-    pub fn to_vec(&self) -> Vec<&'v TmClo<'v>> {
-        let mut out = Vec::with_capacity(self.len() as usize);
+    /// The entries the list holds, **outermost first** — the order
+    /// [`Env::extend`] wants — and the length of the identity prefix under
+    /// them. Used by the outer-namespace maps, which have to rebuild the
+    /// list; the prefix is variables, which those maps leave alone.
+    pub fn held(&self) -> (u32, Vec<&'v TmClo<'v>>) {
+        let mut out = Vec::new();
         let mut cur = self.node;
         while let Some(n) = cur {
             out.push(n.val);
             cur = n.rest;
         }
         out.reverse();
-        out
+        (self.len - out.len() as u32, out)
     }
 }
 
@@ -334,8 +353,9 @@ impl<'v> Env<'v> {
 pub struct ValueArena<'v> {
     #[cfg(feature = "value-metrics")]
     metrics: Option<&'v ValueMetrics>,
-    term_cache: RefCell<ValueCache<*const TmClo<'v>, &'v Val<'v>>>,
-    type_cache: RefCell<ValueCache<*const TyClo<'v>, &'v VTy<'v>>>,
+    /// How many closures of each sort hold a value, for the metrics' peaks.
+    #[cfg(feature = "value-metrics")]
+    forced: (Cell<usize>, Cell<usize>),
     /// The probed class of each `Nat` fold step (`eval/probe.rs`), by the
     /// step's [`TmClo::ident_under`] its two binders: the class depends on
     /// nothing but what the step's body reads and the definitions, which are
@@ -348,15 +368,15 @@ pub struct ValueArena<'v> {
     /// `transducers`'.
     fold_classes: RefCell<PtrMap<CloId, Rc<algebra::FoldClass>>>,
     /// Closed closures' values, by [`TmClo::closed_ident`]
-    /// ([`ValueArena::memo_closed`]); kept, like `term_cache`, for the
-    /// query, and alive by the same argument as `transducers`' keys.
+    /// ([`ValueArena::memo_closed`]); kept, like a closure's own memo, for
+    /// the query, and alive by the same argument as `transducers`' keys.
     closed_values: RefCell<PtrMap<CloId, &'v Val<'v>>>,
     /// Whether each element type satisfies the bit criterion, and with what
     /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
     /// element closure's identity. Decided once per type, beside the fold
     /// classes and for the same reason: the verdict depends on nothing but
     /// the closure and the definitions, both fixed for one arena.
-    bit_types: RefCell<HashMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
+    bit_types: RefCell<PtrMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
     /// Lazily made: `typed_arena::Arena::new` allocates its first chunk up
     /// front, and a value arena is built per query — one more eager chunk
     /// was a 1.27× constant on `nat/step-once`, a single β-step.
@@ -403,6 +423,16 @@ pub struct ValueArena<'v> {
     /// which live as long as this map, so no address is freed and reused
     /// under it; kept for the query like the force cache.
     shared_apps: RefCell<ValueCache<(usize, usize), &'v Val<'v>>>,
+    /// The neutral variable at each concrete level, as one closure
+    /// ([`ValueArena::var`]).
+    vars: RefCell<Vec<&'v TmClo<'v>>>,
+    /// The closure of each term a description is instantiated at, by the
+    /// term's node and the Γ-length it is scoped at
+    /// ([`ValueArena::subject`]). The entry holds the node, so its address
+    /// stays its own while the arena lives.
+    subjects: RefCell<FewMap<(usize, u32), (Rc<Term>, &'v TmClo<'v>)>>,
+    /// The two eliminations [`ValueArena::subject`] pends, made once.
+    projections: [Cell<Option<&'v Elim<'v>>>; 2],
     envs: Arena<EnvNode<'v>>,
     /// The forced values themselves (`issues/value-cache-memo-in-arena.md`):
     /// a value is born here, so forcing a node is a bump of this region
@@ -688,38 +718,45 @@ impl ValueMetricsSnapshot {
     }
 }
 
-/// The cache keys are closure addresses. `RandomState`'s SipHash on a
-/// pointer costs more than the lookup it protects, and there is nothing to
-/// protect: the keys are this region's own allocations, not attacker-chosen
-/// input, so a multiply-shift mix of the address is exactly as good a hash
-/// and an order of magnitude cheaper (it was ~7% of a generated x86 module's
-/// profile as `hash_one` + `DefaultHasher::write`).
+/// The hasher for tables keyed by this kernel's own addresses and small
+/// integers (closure addresses, scope lengths, node addresses).
+/// `RandomState`'s SipHash on such a key costs more than the lookup it
+/// protects, and there is nothing to protect: the keys are this process's
+/// own allocations, not attacker-chosen input, so a multiply mix is exactly
+/// as good a hash and an order of magnitude cheaper.
+///
+/// `finish` rotates the product. A product's low bits depend only on its
+/// factors' low bits, an aligned address has four that are zero, and the
+/// table picks a bucket by the hash's low bits: returned unrotated, every
+/// key would start its probe at a multiple of sixteen.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct PtrHasher(u64);
 
 impl std::hash::Hasher for PtrHasher {
     #[inline]
     fn finish(&self) -> u64 {
-        self.0
+        self.0.rotate_left(26)
     }
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
-            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            self.write_u64(u64::from(b));
         }
     }
     #[inline]
-    fn write_usize(&mut self, n: usize) {
-        // Fibonacci hashing; the low bits of an aligned pointer are zero and
-        // the multiply spreads the informative middle bits upward.
-        self.0 = (self.0 ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
     #[inline]
-    fn write_u64(&mut self, n: u64) {
-        self.0 = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
     }
     #[inline]
     fn write_u32(&mut self, n: u32) {
+        self.write_u64(u64::from(n));
+    }
+    #[inline]
+    fn write_u8(&mut self, n: u8) {
         self.write_u64(u64::from(n));
     }
 }
@@ -752,15 +789,6 @@ impl<K: Copy + Eq + std::hash::Hash, V: Copy> ValueCache<K, V> {
                 true
             }
         }
-    }
-
-    fn replace(&mut self, key: K, value: V) {
-        self.values.insert(key, value);
-    }
-
-    #[cfg(feature = "value-metrics")]
-    fn len(&self) -> usize {
-        self.values.len()
     }
 }
 
@@ -815,17 +843,20 @@ impl<'v> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]
             metrics: None,
-            term_cache: RefCell::new(ValueCache::new()),
-            type_cache: RefCell::new(ValueCache::new()),
+            #[cfg(feature = "value-metrics")]
+            forced: (Cell::new(0), Cell::new(0)),
             fold_classes: RefCell::new(PtrMap::default()),
             closed_values: RefCell::new(PtrMap::default()),
-            bit_types: RefCell::new(HashMap::new()),
+            bit_types: RefCell::new(PtrMap::default()),
             bit_tys: std::cell::OnceCell::new(),
             transducers: RefCell::new(PtrMap::default()),
             sealed_glues: RefCell::new(Vec::new()),
             sealed_any: Cell::new(false),
             w_ih: RefCell::new(PtrMap::default()),
             shared_apps: RefCell::new(ValueCache::new()),
+            vars: RefCell::new(Vec::new()),
+            subjects: RefCell::new(FewMap::default()),
+            projections: [Cell::new(None), Cell::new(None)],
             envs: Arena::new(),
             vals: Arena::new(),
             vtys: Arena::new(),
@@ -845,18 +876,21 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&metrics.inner.arenas);
             ValueArena {
                 metrics: Some(metrics),
-                term_cache: RefCell::new(ValueCache::new()),
-                type_cache: RefCell::new(ValueCache::new()),
+                #[cfg(feature = "value-metrics")]
+                forced: (Cell::new(0), Cell::new(0)),
                 fold_classes: RefCell::new(PtrMap::default()),
                 closed_values: RefCell::new(PtrMap::default()),
-                bit_types: RefCell::new(HashMap::new()),
+                bit_types: RefCell::new(PtrMap::default()),
                 bit_tys: std::cell::OnceCell::new(),
                 transducers: RefCell::new(PtrMap::default()),
                 sealed_glues: RefCell::new(Vec::new()),
                 sealed_any: Cell::new(false),
                 w_ih: RefCell::new(PtrMap::default()),
                 shared_apps: RefCell::new(ValueCache::new()),
-                envs: Arena::new(),
+                vars: RefCell::new(Vec::new()),
+            subjects: RefCell::new(FewMap::default()),
+            projections: [Cell::new(None), Cell::new(None)],
+            envs: Arena::new(),
                 vals: Arena::new(),
                 vtys: Arena::new(),
                 neutrals: Arena::new(),
@@ -880,6 +914,99 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&m.inner.term_closures);
         }
         self.terms.alloc(value)
+    }
+
+    /// The neutral variable at concrete level `lvl`, as this arena's one
+    /// closure of it: an identity environment's entry ([`Env::lookup`]) and
+    /// the variable a binder is opened with are the same object, so two
+    /// closures over the same variables are the same to every identity
+    /// check, whoever built them.
+    pub fn var(&'v self, lvl: u32) -> &'v TmClo<'v> {
+        let mut vars = self.vars.borrow_mut();
+        if lvl as usize >= vars.len() {
+            // Levels are Γ's length plus the binders a query is under. One
+            // far past what has been asked for is not worth a table that
+            // long, and is answered apart.
+            if lvl as usize > vars.len() + VAR_TABLE_STEP {
+                return self.tm(TmClo::val(self.val(Val::var(self, lvl))));
+            }
+            for l in vars.len() as u32..=lvl {
+                vars.push(self.tm(TmClo::val(self.val(Val::var(self, l)))));
+            }
+        }
+        vars[lvl as usize]
+    }
+
+    /// Whether `c` is [`ValueArena::var`]'s closure for `lvl`.
+    fn is_var(&self, c: &'v TmClo<'v>, lvl: u32) -> bool {
+        self.vars.borrow().get(lvl as usize).is_some_and(|v| std::ptr::eq(*v, c))
+    }
+
+    /// The closure of `t` in the identity environment of a Γ of length
+    /// `depth`: the term a description's selection is instantiated at
+    /// (`Sel::Snd`, `Sel::App` of `typing/ity.rs`), unevaluated, and one
+    /// closure per node for the query.
+    ///
+    /// A checked projection `fst@(p)` or `snd@(p)` is the pending
+    /// elimination of `p`'s closure, which is what evaluating it does
+    /// (`Eval::elim_of` pushes the same unannotated elimination). The
+    /// selections of a projection spine are instantiated at
+    /// `fst@(p)`, `fst@(snd@(p))`, `fst@(snd@(snd@(p)))`, … over shared
+    /// nodes, so with one closure per node each is one elimination of a
+    /// value the query already holds, where evaluating each term by itself
+    /// walked its whole spine again: the type of a record's `k`-th field
+    /// cost `k²` eliminations to describe, per query
+    /// (`issues/projection-description-quadratic.md`).
+    pub(crate) fn subject(&'v self, t: &Rc<Term>, depth: u32) -> &'v TmClo<'v> {
+        let key = |t: &Rc<Term>| (Rc::as_ptr(t) as usize, depth);
+        // Down the projections to a node the query has met, or to their
+        // head; a loop, since a spine is as long as its author made it.
+        // The projections passed are few, so they wait in an array and only
+        // a long spine's in a vector.
+        let mut near: [&Rc<Term>; NEAR] = [t; NEAR];
+        let mut far: Vec<&Rc<Term>> = Vec::new();
+        let mut passed = 0;
+        let mut at = t;
+        let mut clo = loop {
+            if let Some((_, c)) = self.subjects.borrow().get(&key(at)) {
+                break *c;
+            }
+            match &**at {
+                Term::FstAt { pair } | Term::SndAt { pair } => {
+                    match near.get_mut(passed) {
+                        Some(slot) => *slot = at,
+                        None => far.push(at),
+                    }
+                    passed += 1;
+                    at = pair;
+                }
+                _ => {
+                    let c = self.tm(TmClo::syn(Env::identity(depth), Rc::clone(at)));
+                    self.subjects.borrow_mut().insert(key(at), (Rc::clone(at), c));
+                    break c;
+                }
+            }
+        };
+        while passed > 0 {
+            passed -= 1;
+            let node = if passed < NEAR { near[passed] } else { far[passed - NEAR] };
+            let second = matches!(&**node, Term::SndAt { .. });
+            let cell = &self.projections[second as usize];
+            let elim = match cell.get() {
+                Some(elim) => elim,
+                None => {
+                    let elim = self.elim_cell(match second {
+                        true => Elim::Snd { ann: None },
+                        false => Elim::Fst { ann: None },
+                    });
+                    cell.set(Some(elim));
+                    elim
+                }
+            };
+            clo = self.tm(TmClo::elim(clo, elim));
+            self.subjects.borrow_mut().insert(key(node), (Rc::clone(node), clo));
+        }
+        clo
     }
 
     /// A value, born in this region.
@@ -997,8 +1124,8 @@ impl<'v> ValueArena<'v> {
     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<&'v Val<'v>> {
         match clo {
             TmClo::Val(value) => Some(*value),
-            _ => {
-                let found = self.term_cache.borrow().get(clo as *const TmClo<'v>);
+            TmClo::Syn { memo, .. } | TmClo::Elim { memo, .. } => {
+                let found = memo.get();
                 #[cfg(feature = "value-metrics")]
                 if let Some(m) = self.metrics {
                     ValueMetrics::bump(&m.inner.term_cache_lookups);
@@ -1040,8 +1167,8 @@ impl<'v> ValueArena<'v> {
     pub(crate) fn memo_ty(&self, clo: &'v TyClo<'v>) -> Option<&'v VTy<'v>> {
         match clo {
             TyClo::Val(value) => Some(*value),
-            _ => {
-                let found = self.type_cache.borrow().get(clo as *const TyClo<'v>);
+            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } | TyClo::El { memo, .. } => {
+                let found = memo.get();
                 #[cfg(feature = "value-metrics")]
                 if let Some(m) = self.metrics {
                     ValueMetrics::bump(&m.inner.type_cache_lookups);
@@ -1057,10 +1184,10 @@ impl<'v> ValueArena<'v> {
     /// Remember that `clo` forced to `value`, for the rest of the query.
     ///
     /// The memo keeps every entry: nothing is evicted while the arena lives.
-    /// Each key is a closure of this arena, which the arena already keeps
-    /// until the query ends, together with its environment cells; one `Rc`
-    /// value per forced closure is a constant factor over that, the same
-    /// order as the work the query did, which its fuel bounds. A bound
+    /// The value is held by the closure itself ([`Memo`]), which the arena
+    /// already keeps until the query ends, together with its environment
+    /// cells; one value per forced closure is a constant factor over that,
+    /// the same order as the work the query did, which its fuel bounds. A bound
     /// below the query's live set, on the other hand, is not a constant
     /// factor of anything: whatever it evicts and the query reads again is
     /// forced again, and so are the evicted cells the re-force reads, back
@@ -1085,16 +1212,19 @@ impl<'v> ValueArena<'v> {
     /// Policy changes the fuel a query spends, never its value: the memo is
     /// a function of the closure alone, and only successes are remembered.
     pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
-        if !matches!(clo, TmClo::Val(_)) {
-            let mut cache = self.term_cache.borrow_mut();
-            let inserted = cache.insert(clo as *const TmClo<'v>, value);
-            #[cfg(feature = "value-metrics")]
-            if let Some(m) = self.metrics {
-                if inserted { ValueMetrics::bump(&m.inner.term_cache_inserts); }
-                ValueMetrics::record_peak(&m.inner.term_cache_peak, cache.len());
+        if let TmClo::Syn { memo, .. } | TmClo::Elim { memo, .. } = clo {
+            // The first value stands: a closure forces to one value, and
+            // whoever read the first holds its address. (`recache_tm` is
+            // the one exception, and what it puts is the same value.)
+            if memo.get().is_none() {
+                memo.set(Some(value));
+                #[cfg(feature = "value-metrics")]
+                if let Some(m) = self.metrics {
+                    self.forced.0.set(self.forced.0.get() + 1);
+                    ValueMetrics::bump(&m.inner.term_cache_inserts);
+                    ValueMetrics::record_peak(&m.inner.term_cache_peak, self.forced.0.get());
+                }
             }
-            #[cfg(not(feature = "value-metrics"))]
-            let _ = inserted;
         }
     }
 
@@ -1104,23 +1234,23 @@ impl<'v> ValueArena<'v> {
     /// The memo stays a function of the closure: only its representation of
     /// that value changes.
     pub(crate) fn recache_tm(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
-        if !matches!(clo, TmClo::Val(_)) {
-            self.term_cache.borrow_mut().replace(clo as *const TmClo<'v>, value);
+        if let TmClo::Syn { memo, .. } | TmClo::Elim { memo, .. } = clo {
+            memo.set(Some(value));
         }
     }
 
     /// [`Self::cache_tm`] for types.
     pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &'v VTy<'v>) {
-        if !matches!(clo, TyClo::Val(_)) {
-            let mut cache = self.type_cache.borrow_mut();
-            let inserted = cache.insert(clo as *const TyClo<'v>, value);
-            #[cfg(feature = "value-metrics")]
-            if let Some(m) = self.metrics {
-                if inserted { ValueMetrics::bump(&m.inner.type_cache_inserts); }
-                ValueMetrics::record_peak(&m.inner.type_cache_peak, cache.len());
+        if let TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } | TyClo::El { memo, .. } = clo {
+            if memo.get().is_none() {
+                memo.set(Some(value));
+                #[cfg(feature = "value-metrics")]
+                if let Some(m) = self.metrics {
+                    self.forced.1.set(self.forced.1.get() + 1);
+                    ValueMetrics::bump(&m.inner.type_cache_inserts);
+                    ValueMetrics::record_peak(&m.inner.type_cache_peak, self.forced.1.get());
+                }
             }
-            #[cfg(not(feature = "value-metrics"))]
-            let _ = inserted;
         }
     }
 }
@@ -1145,23 +1275,34 @@ impl<'v> ValueArena<'v> {
 /// **A thunk never memoizes a failure**: the memo is written only on `Ok`, so
 /// a value graph forced under an insufficient budget and re-forced under a
 /// larger one still succeeds (design §6). Successful results are born in the
-/// query arena and memoized there by the closure's address, so a forced graph
-/// is freed flat when the query ends, never by a recursive drop.
+/// query arena and remembered in the closure's own word ([`Memo`]), so a
+/// forced graph is freed flat when the query ends, never by a recursive drop.
 pub enum TmClo<'v> {
     Syn {
         env: Env<'v>,
         body: Rc<Term>,
+        memo: Memo<&'v Val<'v>>,
     },
     Val(&'v Val<'v>),
     Elim {
         head: &'v TmClo<'v>,
         elim: &'v Elim<'v>,
+        memo: Memo<&'v Val<'v>>,
     },
 }
 
+/// What a closure forced to, once it has: the closure's own word, written
+/// once ([`ValueArena::cache_tm`]) and read by [`ValueArena::memo_tm`].
+///
+/// It used to be a table per arena keyed by the closure's address, which
+/// hashed at every force and grew by rehashing in every query
+/// (`issues/value-domain-allocation-constant.md`, 2026-11-10). The word is
+/// the fifth of a closure, and a value is found where the closure is read.
+pub type Memo<V> = Cell<Option<V>>;
+
 impl<'v> TmClo<'v> {
     pub fn syn(env: Env<'v>, body: Rc<Term>) -> TmClo<'v> {
-        TmClo::Syn { env, body }
+        TmClo::Syn { env, body, memo: Cell::new(None) }
     }
 
     pub fn val(v: &'v Val<'v>) -> TmClo<'v> {
@@ -1169,7 +1310,7 @@ impl<'v> TmClo<'v> {
     }
 
     pub fn elim(head: &'v TmClo<'v>, elim: &'v Elim<'v>) -> TmClo<'v> {
-        TmClo::Elim { head, elim }
+        TmClo::Elim { head, elim, memo: Cell::new(None) }
     }
 
     /// The environment and syntax, when this is a syntactic closure. Used
@@ -1190,7 +1331,7 @@ impl<'v> TmClo<'v> {
     /// meets. Anything else is only itself.
     pub fn ident(&self) -> CloId {
         match self {
-            TmClo::Syn { env, body } => {
+            TmClo::Syn { env, body, .. } => {
                 let (node, len, gshift) = env.ident();
                 (Rc::as_ptr(body) as usize, node, len, gshift)
             }
@@ -1215,7 +1356,7 @@ impl<'v> TmClo<'v> {
     /// way). `None` for a body that reads a capture, and for anything
     /// that is not syntax.
     pub fn closed_ident(&self, pending: u32) -> Option<CloId> {
-        let TmClo::Syn { env, body } = self else { return None };
+        let TmClo::Syn { env, body, .. } = self else { return None };
         let used = crate::bounds::term_local_use(body);
         (used.bound <= pending).then(|| {
             let len = if used.has_wk { env.len() } else { 0 };
@@ -1244,19 +1385,21 @@ pub type CloId = (usize, usize, u32, u32);
 ///   a value with no syntax. Forcing it is `Eval::vec_ty`.
 ///
 /// The uncommon synthesized forms store their universe level out of line in
-/// the query arena. That keeps both closure enums at four words on 64-bit
-/// targets instead of making every syntactic closure pay for `Level`'s rare
-/// largest variant.
+/// the query arena. That keeps both closure enums at four words and a memo
+/// on 64-bit targets instead of making every syntactic closure pay for
+/// `Level`'s rare largest variant.
 pub enum TyClo<'v> {
     Syn {
         env: Env<'v>,
         body: Rc<Type>,
+        memo: Memo<&'v VTy<'v>>,
     },
     Val(&'v VTy<'v>),
     Vec {
         level: &'v Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
+        memo: Memo<&'v VTy<'v>>,
     },
     /// `El^l t` held **unforced**. `El` has no canonical value — it decodes
     /// or it is stuck — but it is still a perfectly good *sub-structure*, and
@@ -1265,12 +1408,13 @@ pub enum TyClo<'v> {
     El {
         level: &'v Level,
         tm: &'v TmClo<'v>,
+        memo: Memo<&'v VTy<'v>>,
     },
 }
 
 impl<'v> TyClo<'v> {
     pub fn new(env: Env<'v>, body: Rc<Type>) -> TyClo<'v> {
-        TyClo::Syn { env, body }
+        TyClo::Syn { env, body, memo: Cell::new(None) }
     }
 
     pub fn val(v: &'v VTy<'v>) -> TyClo<'v> {
@@ -1278,11 +1422,11 @@ impl<'v> TyClo<'v> {
     }
 
     fn vec(level: &'v Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
-        TyClo::Vec { level, elem, len }
+        TyClo::Vec { level, elem, len, memo: Cell::new(None) }
     }
 
     fn el(level: &'v Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
-        TyClo::El { level, tm }
+        TyClo::El { level, tm, memo: Cell::new(None) }
     }
 
     /// The environment and syntax, when this is a syntactic closure. See
@@ -1291,7 +1435,7 @@ impl<'v> TyClo<'v> {
     /// See [`TmClo::ident`].
     pub fn ident(&self) -> CloId {
         match self {
-            TyClo::Syn { env, body } => {
+            TyClo::Syn { env, body, .. } => {
                 let (node, len, gshift) = env.ident();
                 (Rc::as_ptr(body) as usize, node, len, gshift)
             }
@@ -1301,7 +1445,7 @@ impl<'v> TyClo<'v> {
 
     /// See [`TmClo::ident_under`].
     pub fn ident_under(&self, pending: u32) -> CloId {
-        if let TyClo::Syn { env, body } = self {
+        if let TyClo::Syn { env, body, .. } = self {
             let used = crate::bounds::type_local_use(body);
             if used.bound <= pending {
                 let len = if used.has_wk { env.len() } else { 0 };
@@ -2575,8 +2719,8 @@ mod tests {
     fn hot_value_handles_stay_four_words_or_smaller() {
         assert_eq!(std::mem::size_of::<Env<'_>>(), 16);
         assert_eq!(std::mem::size_of::<EnvNode<'_>>(), 16);
-        assert_eq!(std::mem::size_of::<TmClo<'_>>(), 32);
-        assert_eq!(std::mem::size_of::<TyClo<'_>>(), 32);
+        assert_eq!(std::mem::size_of::<TmClo<'_>>(), 40);
+        assert_eq!(std::mem::size_of::<TyClo<'_>>(), 40);
         // The bitvector run (`docs/native-bitvector-values-design.md` §11.1)
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
@@ -2657,10 +2801,62 @@ mod tests {
         let prefix = env.prefix(1);
         assert_eq!(prefix.len(), 1);
         assert!(matches!(
-            prefix.lookup(0),
+            prefix.lookup(&arena, 0),
             super::Lookup::Bound(v) if std::ptr::eq(v, outer)
         ));
-        assert!(matches!(prefix.lookup(1), super::Lookup::Base(0)));
+        assert!(matches!(prefix.lookup(&arena, 1), super::Lookup::Base(0)));
+    }
+
+    #[test]
+    fn an_identity_environment_is_a_length_and_its_entries_are_the_arenas_variables() {
+        let arena = ValueArena::new();
+        let id = super::Env::identity(3);
+        assert_eq!(id.len(), 3);
+        assert_eq!(arena.envs.len(), 0, "an identity environment allocates no cell");
+        // Entry `i` from the inside is the variable at level `len - 1 - i`,
+        // and it is the arena's one closure of that variable.
+        for i in 0..3u32 {
+            let super::Lookup::Bound(c) = id.lookup(&arena, i) else { panic!("entry {i} is bound") };
+            assert!(std::ptr::eq(c, arena.var(2 - i)));
+            let TmClo::Val(Val::Neutral(n)) = c else { panic!("a variable is a neutral value") };
+            assert!(matches!(n.head, super::Head::Var(l) if l == 2 - i) && n.spine.is_empty());
+        }
+        // Past the end is the abstract prefix, as for any environment.
+        assert!(matches!(id.lookup(&arena, 3), super::Lookup::Base(0)));
+        // Two of one length are one object, and a prefix of one is one.
+        assert!(super::Env::ptr_eq(&id, &super::Env::identity(3)));
+        assert!(!super::Env::ptr_eq(&id, &super::Env::identity(2)));
+        assert!(super::Env::ptr_eq(&id.prefix(2), &super::Env::identity(2)));
+        assert_eq!(id.held().0, 3);
+    }
+
+    #[test]
+    fn pushing_its_own_next_variable_onto_an_identity_environment_is_the_next_one() {
+        let arena = ValueArena::new();
+        let id = super::Env::identity(2);
+        let next = id.push(&arena, arena.var(2));
+        assert!(super::Env::ptr_eq(&next, &super::Env::identity(3)));
+        assert_eq!(arena.envs.len(), 0);
+
+        // Any other value is a cell over the identity prefix: another
+        // variable, or the next variable under a cell.
+        let other = id.push(&arena, arena.var(0));
+        assert!(!super::Env::ptr_eq(&other, &super::Env::identity(3)));
+        assert_eq!(other.len(), 3);
+        assert!(matches!(other.lookup(&arena, 0), super::Lookup::Bound(c) if std::ptr::eq(c, arena.var(0))));
+        assert!(matches!(other.lookup(&arena, 1), super::Lookup::Bound(c) if std::ptr::eq(c, arena.var(1))));
+        assert!(matches!(other.lookup(&arena, 2), super::Lookup::Bound(c) if std::ptr::eq(c, arena.var(0))));
+        let over = other.push(&arena, arena.var(3));
+        assert_eq!(over.held().1.len(), 2);
+        assert_eq!(over.held().0, 2);
+        // Cutting the cells off leaves the identity prefix, and cutting
+        // into it leaves a shorter one.
+        assert!(super::Env::ptr_eq(&over.prefix(2), &id));
+        assert!(super::Env::ptr_eq(&over.prefix(1), &super::Env::identity(1)));
+        // The global offset is the handle's, and survives the push.
+        let at = id.with_gshift(4).push(&arena, arena.var(2));
+        assert_eq!((at.len(), at.gshift()), (3, 4));
+        assert!(super::Env::ptr_eq(&at, &super::Env::identity(3).with_gshift(4)));
     }
 
     #[test]

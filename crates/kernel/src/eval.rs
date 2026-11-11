@@ -1159,7 +1159,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             Val::NatRun { program, tail } => Val::nat_run_pred(self.arena, program, tail),
             _ => return stuck(),
         };
-        let TyClo::Syn { env: fenv, body } = fam else { return stuck() };
+        let TyClo::Syn { env: fenv, body, .. } = fam else { return stuck() };
         let (fenv, body) = (*fenv, Rc::clone(body));
         self.spend()?;
         let k = Env::empty().push(self.arena, pred);
@@ -1287,7 +1287,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => (fun, arg),
             _ => return self.eval_tm(pair, env),
         };
-        let (Some(k), Some(y)) = (bound_root(env, fun), bound_root(env, arg)) else {
+        let (Some(k), Some(y)) = (bound_root(self.arena, env, fun), bound_root(self.arena, env, arg)) else {
             return self.eval_tm(pair, env);
         };
         if !matches!(&*self.force(k)?, Val::Lam { .. }) {
@@ -1311,7 +1311,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// it (docs/native-depth-budget-design.md §8).
     fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
         let v = match t {
-            Term::Var(x) => match env.lookup(x.0) {
+            Term::Var(x) => match env.lookup(self.arena, x.0) {
                 Lookup::Bound(c) => return Ok(Work::Force(c)),
                 Lookup::Base(d) => Val::base_var(self.arena, d),
             },
@@ -1394,7 +1394,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the syntax's.
     fn await_bound(&mut self, head: &Rc<Term>, t: &Term, env: &Env<'v>) -> Option<Work<'v>> {
         let Term::Var(x) = &**head else { return None };
-        let Lookup::Bound(c) = env.lookup(x.0) else { return None };
+        let Lookup::Bound(c) = env.lookup(self.arena, x.0) else { return None };
         let e = self.elim_of(t, env);
         self.frames.push(Frame::Owned(e));
         Some(Work::Force(c))
@@ -3172,7 +3172,7 @@ pub fn whnf_value<'v>(
     fuel: u64,
 ) -> Result<&'v Val<'v>, OutOfFuel> {
     let mut ev = Eval::new(fuel, defs, gamma.base, arena);
-    let env = Env::identity(arena, gamma.entries.len() as u32);
+    let env = Env::identity(gamma.entries.len() as u32);
     let v = ev.eval_tm(t, &env)?;
     ev.delta_whnf(v)
 }
@@ -3191,7 +3191,7 @@ pub fn nat_value(
 ) -> Result<Option<u64>, OutOfFuel> {
     let arena = ValueArena::new();
     let mut ev = Eval::new(fuel, defs, gamma.base, &arena);
-    let env = Env::identity(&arena, gamma.entries.len() as u32);
+    let env = Env::identity(gamma.entries.len() as u32);
     let mut v = ev.eval_tm(t, &env)?;
     let mut total = 0u64;
     loop {
@@ -3228,7 +3228,7 @@ pub fn whnf_value_ty<'v>(
     fuel: u64,
 ) -> Result<&'v VTy<'v>, OutOfFuel> {
     let mut ev = Eval::new(fuel, defs, gamma.base, arena);
-    let env = Env::identity(arena, gamma.entries.len() as u32);
+    let env = Env::identity(gamma.entries.len() as u32);
     let v = ev.eval_ty(t, &env)?;
     ev.delta_whnf_ty(v)
 }
@@ -3245,12 +3245,12 @@ fn nat_lit_program(n: &crate::term::Numeral) -> Rc<ContextProgram<()>> {
 /// that are themselves only a bound variable (an argument passed on as it
 /// is: `λy. ⟨f y, c y⟩` hands `f` and `c` each a closure of `y`). `None` for
 /// any other term and for a variable of the base context.
-fn bound_root<'v>(env: &Env<'v>, t: &Term) -> Option<&'v TmClo<'v>> {
+fn bound_root<'v>(arena: &'v ValueArena<'v>, env: &Env<'v>, t: &Term) -> Option<&'v TmClo<'v>> {
     let Term::Var(x) = t else { return None };
-    let Lookup::Bound(mut c) = env.lookup(x.0) else { return None };
-    while let TmClo::Syn { env, body } = c {
+    let Lookup::Bound(mut c) = env.lookup(arena, x.0) else { return None };
+    while let TmClo::Syn { env, body, .. } = c {
         let Term::Var(x) = &**body else { break };
-        let Lookup::Bound(next) = env.lookup(x.0) else { break };
+        let Lookup::Bound(next) = env.lookup(arena, x.0) else { break };
         c = next;
     }
     Some(c)
