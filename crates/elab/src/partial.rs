@@ -520,7 +520,17 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
     Ok(Family { parts: vec![body_decl, wrapper], unfold, designations: vec![(designed, minted)] })
 }
 
-impl Elaborator {
+/// Partial functions' part of the elaborator.
+pub(crate) struct Partial<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Partial<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Partial<'_> {
     /// Whether `name`, the head of a call written in `cx`, is a `partial
     /// fn`. Partial is read off what the lowering left, which a module image
     /// carries, so an imported function is recognised as a local one is: the

@@ -17,9 +17,20 @@
 use heather_syntax::ast::{Block, Expr, ExprKind, Stmt, Ty, TyKind};
 
 use crate::{err, Cx, Elaborator, R};
+use crate::name_lookup::NameLookup;
 
 /// The names `Lookup` answers without a declaration (host.rs).
 const BUILTIN_NAMES: &[&str] = &["Nat", "Succ", "True", "False"];
+
+/// Registered definitions' part of the elaborator.
+pub(crate) struct Registered<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Registered<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
 
 impl Elaborator {
     /// `register def x: T = e;`: elaborate the `def`, then register it at
@@ -48,7 +59,7 @@ impl Elaborator {
                 d.result.span,
             );
         };
-        let ty_key = self.key_of_kinds(written, &[crate::names::NameKind::Inductive]);
+        let ty_key = NameLookup(self).key_of_kinds(written, &[crate::names::NameKind::Inductive]);
         let (Some(ty_key), Some(ind)) = (ty_key, self.lookup_inductive(written).cloned()) else {
             return err(
                 format!("`{written}` is not a record or inductive here: a registered value's type is one"),
@@ -74,7 +85,9 @@ impl Elaborator {
         self.semantic_commit_registered(ty_key, key);
         Ok(())
     }
+}
 
+impl Registered<'_> {
     /// `name_of(p)` and `registered(T)`, rewritten to the expressions they
     /// stand for: a string literal, and a list literal of the registered
     /// globals at their written type. `None` for anything else, and where a
@@ -104,7 +117,7 @@ impl Elaborator {
             })?;
             return Ok(Some(Expr { kind: ExprKind::Str(name), span }));
         }
-        let Some(key) = self.key_of_kinds(written, &[crate::names::NameKind::Inductive]) else {
+        let Some(key) = NameLookup(self).key_of_kinds(written, &[crate::names::NameKind::Inductive]) else {
             return err(
                 format!("`registered({written})`: `{written}` names no record or inductive type here"),
                 arg.span,
@@ -158,7 +171,7 @@ impl Elaborator {
         if BUILTIN_NAMES.contains(&written) && self.lookup_global(written).is_none() {
             return Some(written.to_string());
         }
-        if let Some(key) = self.key_of_kinds(written, &[crate::names::NameKind::Inductive]) {
+        if let Some(key) = NameLookup(self).key_of_kinds(written, &[crate::names::NameKind::Inductive]) {
             return Some(key);
         }
         let key = self.key_of(written)?;

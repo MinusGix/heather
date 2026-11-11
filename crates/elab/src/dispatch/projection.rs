@@ -14,8 +14,24 @@ use crate::{
     BUILTIN_METHODS, Cx, DotResolution, ElabError, Elaborator, NameRes, R, Upcast, err,
     expression_as_type, names, resolve, skel_of_ty, subject_text, traits,
 };
+use crate::application::Callables;
+use crate::dispatch::Carriers;
+use crate::dispatch::Dictionaries;
+use crate::dispatch::Receivers;
+use crate::inductive::Inductives;
+use crate::resolve::Resolution;
 
-impl Elaborator {
+/// Projection dispatch's part of the elaborator.
+pub(crate) struct Projections<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Projections<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Projections<'_> {
     /// The classes that **declare** `name` — not the ones that merely inherit
     /// it — and are visible here, in sorted canonical-name order
     /// (docs/traits-owner-dispatch-design.md §2). Never `HashMap` order and
@@ -112,7 +128,7 @@ impl Elaborator {
         let Some((carrier, clvl)) = self.type_subject(cx, recv, span) else {
             return Ok(None);
         };
-        let ns = self.type_namespace(cx, &carrier, span);
+        let ns = Carriers(self).type_namespace(cx, &carrier, span);
         let other = self.other_reading_of_a_type_subject(cx, &ns, name, args, span);
         let with_field = self.declaring_classes(name);
         let cands: Vec<(String, Rc<traits::ClassInfo>)> = with_field
@@ -222,7 +238,7 @@ impl Elaborator {
                 continue;
             };
             let targs = [(carrier.clone(), clvl.clone())];
-            let (gargs, vargs) = match self.index_vargs(cx, key, info, &ind, &targs, &subject, span) {
+            let (gargs, vargs) = match Dictionaries(self).index_vargs(cx, key, info, &ind, &targs, &subject, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {
@@ -239,7 +255,7 @@ impl Elaborator {
             // Every candidate is tried even once one has succeeded: the
             // ambiguity is the point (§4 rule 3).
             let mut up = None;
-            match self.resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up) {
+            match Resolution(self).resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up) {
                 Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
             }
@@ -291,7 +307,7 @@ impl Elaborator {
         }
         // As in receiver dispatch: an upcast answer is read through
         // (docs/traits-named-upcast-design.md §2).
-        let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
+        let (ind, goal, dict) = Receivers(self).through_upcast(ind, goal, dict, up, name);
         let Some(idx) = ind.field_index(name) else {
             return err(
                 format!("internal: `{}` has no field `{name}` after all", ind.name),
@@ -371,13 +387,13 @@ impl Elaborator {
         let Ok((_, ty, _)) = resolved else {
             return true;
         };
-        let params = self.params_of(name);
+        let params = Callables(self).params_of(name);
         // Where the subject lands in *declaration* order. `subject_index`
         // counts explicit non-type parameters only, and the Π-telescope has
         // one domain per parameter in order, so this converts between the two.
         let mut pos = 0usize;
         if !params.is_empty() {
-            let subj = self.subject_index(name);
+            let subj = Callables(self).subject_index(name);
             let mut seen = 0usize;
             let Some(i) = params.iter().position(|p| {
                 if p.implicit || p.is_type {
@@ -469,9 +485,9 @@ impl Elaborator {
         }
         // A carrier declared at a universe is the record's leading value
         // argument (`docs/frame-locale-design.md` §3).
-        let lead = self.universe_carrier(cx, &info, &targs).ok()?;
+        let lead = Dictionaries(self).universe_carrier(cx, &info, &targs).ok()?;
         let gargs: Vec<(Type, Level)> = if lead.is_some() { Vec::new() } else { targs.to_vec() };
-        let vargs = match self.valparam_args_after(cx, &ind, &gargs, lead.into_iter().collect(), &written, span) {
+        let vargs = match Inductives(self).valparam_args_after(cx, &ind, &gargs, lead.into_iter().collect(), &written, span) {
             Ok(v) => v,
             Err(e) => return Some(Err(e)),
         };

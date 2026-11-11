@@ -29,6 +29,9 @@ use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 use crate::inductive::{IdxTy, Inductive, Member, expr_mentions, named_head, occurs};
 use crate::names::NameKind;
 use crate::{Cx, Elaborator, R, err};
+use crate::iwf_family::IwfFamily;
+use crate::inductive::Inductives;
+use crate::name_lookup::NameLookup;
 
 /// The generated family's name (§2).
 pub(crate) fn family_name(first: &str) -> String {
@@ -146,12 +149,22 @@ enum Occurrence<'a> {
     FnChild { member: usize, index: Option<&'a Expr> },
 }
 
+/// Mutual inductive families' part of the elaborator.
+pub(crate) struct MutualFamily<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for MutualFamily<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     /// A mutual group (§1–§2): validate it in the members' terms, generate the
     /// member index type and the family, elaborate both by the ordinary
     /// routes, and declare the members.
     pub(crate) fn elab_mutual_inductives(&mut self, decls: &[&InductiveDecl]) -> R<()> {
-        let heads = self.validate_group(decls)?;
+        let heads = MutualFamily(self).validate_group(decls)?;
         let first = &decls[0].name;
         let members_decl = members_decl(first, &heads);
         self.elab_inductive(&members_decl)?;
@@ -162,7 +175,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl MutualFamily<'_> {
     /// §1's requirements, each refused in the members' own terms before
     /// anything is generated — the generated family's refusals would name
     /// it, and nobody wrote it.
@@ -172,10 +187,10 @@ impl Elaborator {
         let group = names.join("`, `");
         let mut heads = Vec::with_capacity(decls.len());
         for d in decls {
-            if self.own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
+            if NameLookup(self).own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
                 return err(format!("duplicate name `{}`", d.name), d.span);
             }
-            self.check_declarable(&d.name, d.span)?;
+            NameLookup(self).check_declarable(&d.name, d.span)?;
             if d.name == "Nat" {
                 return err("`Nat` is built in", d.span);
             }
@@ -249,7 +264,7 @@ impl Elaborator {
                         );
                     }
                     // The single-family rules for what can be an index type.
-                    self.index_type(dom, &d.name, &[])?;
+                    Inductives(self).index_type(dom, &d.name, &[])?;
                     Some((n.clone(), (**dom).clone()))
                 }
             };
@@ -395,7 +410,7 @@ impl Elaborator {
             lowered.push(self.elab_ty(cx, a)?);
         }
         let idx_t = self.member_index(cx, fam, k, idx, span)?;
-        self.lower_iwf_instance(cx, fam, &lowered, &[], idx_t, span)
+        IwfFamily(self).lower_iwf_instance(cx, fam, &lowered, &[], idx_t, span)
     }
 
     /// The member a type is, when it is a mutual group's family at one of
@@ -404,7 +419,7 @@ impl Elaborator {
     /// the member index type (the spelling [`Self::member_index`] builds);
     /// a neutral index is no member.
     pub(crate) fn member_of_family_ty(&self, ty: &Type) -> Option<(Rc<Inductive>, usize)> {
-        let (fam, iwf) = self.iwf_of(ty)?;
+        let (fam, iwf) = IwfFamily(self).iwf_of(ty)?;
         if fam.members.is_empty() {
             return None;
         }

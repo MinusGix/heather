@@ -26,6 +26,8 @@ use crate::application::ParamMeta;
 use crate::names::qkey;
 use crate::resolve::DerivedInst;
 use crate::{ElabError, Elaborator, R, err};
+use crate::dispatch::Carriers;
+use crate::declarations::Declarations;
 
 /// A declared class: the record it is, plus what `extends` and the instance
 /// assembler need to know about it.
@@ -1501,6 +1503,16 @@ fn body_of(e: Expr) -> Block {
     }
 }
 
+/// Classes and instances: their part of the elaborator.
+pub(crate) struct Classes<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Classes<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     // -- classes ------------------------------------------------------------
 
@@ -1563,8 +1575,8 @@ impl Elaborator {
                 // mentions; copies of a unit or an inverse are different
                 // terms in generic code, so a theorem stated through one copy
                 // would not apply through the other.
-                if let Some(info) = self.lookup_class(&candidate.name)
-                    && !self.proof_only(&info)
+                if let Some(info) = Classes(self).lookup_class(&candidate.name)
+                    && !Classes(self).proof_only(&info)
                 {
                     return err(
                         format!(
@@ -1601,7 +1613,7 @@ impl Elaborator {
                 // convertible. Such a class cannot support two canonical
                 // structures at one carrier.
                 if same_parent_carrier(previous, &candidate)
-                    && let Some(info) = self.lookup_class(&candidate.name)
+                    && let Some(info) = Classes(self).lookup_class(&candidate.name)
                 {
                     for (i, (left, right)) in
                         previous.index.iter().zip(&candidate.index).enumerate()
@@ -1650,9 +1662,9 @@ impl Elaborator {
         // scope, where the parent's module (and a computed index's globals,
         // `RelId`) need not be imported
         // (issues/class-parent-names-resolve-in-client-scope.md).
-        let qualified: Vec<ClassRef> = d.extends.iter().map(|p| self.qualified_parent(d, p)).collect();
+        let qualified: Vec<ClassRef> = d.extends.iter().map(|p| Classes(self).qualified_parent(d, p)).collect();
         for parent in &qualified {
-            let (pinfo, rename) = self.parent_view(d, parent)?;
+            let (pinfo, rename) = Classes(self).parent_view(d, parent)?;
             // The parent's own ancestors come with it, renamed the same way.
             for a in &pinfo.ancestors {
                 let mut path = parent.path.clone();
@@ -1819,7 +1831,9 @@ impl Elaborator {
     pub(crate) fn carrier_key(&self, head: &str) -> String {
         self.key_of(head).unwrap_or_else(|| head.to_string())
     }
+}
 
+impl Classes<'_> {
     /// The registry head key of a solver parameter's carrier at a call
     /// site, read off the parameter's **written** type — `Decide<P>` with
     /// `P` a type parameter the call has already solved, or `Decide<Le(n, m)>`
@@ -2394,7 +2408,9 @@ impl Elaborator {
             _ => None,
         }
     }
+}
 
+impl Elaborator {
     /// Inline constraints that **share a symbol at one carrier** become one
     /// constraint at a synthesized class extending them all
     /// (issues/constraints-sharing-indices.md).
@@ -2425,8 +2441,8 @@ impl Elaborator {
             if p.solver.is_none() || !p.name.starts_with("#constraint") {
                 continue;
             }
-            let Some(r) = self.class_ref_of_ty(&p.ty) else { continue };
-            let Some(class) = self.lookup_class(&r.name) else { continue };
+            let Some(r) = Classes(self).class_ref_of_ty(&p.ty) else { continue };
+            let Some(class) = Classes(self).lookup_class(&r.name) else { continue };
             if class.valparams.is_empty()
                 || class.is_kinded()
                 || r.index.len() != class.valparams.len()
@@ -2565,7 +2581,7 @@ impl Elaborator {
                 });
             }
             let name = members.iter().map(|m| m.2.name.as_str()).collect::<Vec<_>>().join("+");
-            match self.lookup_class(&name) {
+            match Classes(self).lookup_class(&name) {
                 // Found by name: the same parents, linked the same way, or a
                 // different linking that this declaration cannot share.
                 Some(have) => {
@@ -2619,7 +2635,9 @@ impl Elaborator {
             .collect();
         Ok(Some(Decl { params, ..decl.clone() }))
     }
+}
 
+impl Classes<'_> {
     /// The constraint binders' desugaring
     /// (docs/operation-indexed-classes-design.md §4, §4.1).
     ///
@@ -2971,7 +2989,9 @@ impl Elaborator {
             p.span,
         )
     }
+}
 
+impl Elaborator {
     // -- designations -------------------------------------------------------
 
     /// `designation + at Nat := add`
@@ -2997,7 +3017,7 @@ impl Elaborator {
         let head = head.to_string();
         // A type parameter of this very declaration is not a carrier: it names
         // no head, so keying on it would key on a binder.
-        if !self.names_a_carrier(&head) || d.tyvars.contains(&head) {
+        if !Carriers(self).names_a_carrier(&head) || d.tyvars.contains(&head) {
             return err(
                 format!(
                     "`{head}` is not a type or a type former in scope, so a designation \
@@ -3089,7 +3109,9 @@ impl Elaborator {
             .designated(fixity, sym, head_key)
             .map(str::to_string)
     }
+}
 
+impl Classes<'_> {
     /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
     /// symbol — what a value-slot refusal lists so that the reader is told
     /// which binder would have worked (§6, §7). `head_key` is resolved, as
@@ -3097,7 +3119,9 @@ impl Elaborator {
     pub(crate) fn designations_at(&self, head_key: &str) -> Vec<(String, String)> {
         self.traits.designations_at(head_key)
     }
+}
 
+impl Elaborator {
     // -- instances ----------------------------------------------------------
 
     /// `instance C<T⃗> { … }` (design §4).
@@ -3121,9 +3145,9 @@ impl Elaborator {
     }
 
     fn elab_instance_inner(&mut self, d: &InstanceDecl) -> R<()> {
-        let class = match self.lookup_class(&d.class.name) {
+        let class = match Classes(self).lookup_class(&d.class.name) {
             Some(c) => c,
-            None => return Err(self.not_a_class(&d.class.name, "instance", d.class.span)),
+            None => return Err(Classes(self).not_a_class(&d.class.name, "instance", d.class.span)),
         };
         let class_key = self
             .key_of(&d.class.name)
@@ -3140,7 +3164,7 @@ impl Elaborator {
             );
         }
         let carrier = &d.class.args[0];
-        self.check_binders(d)?;
+        Classes(self).check_binders(d)?;
         // Most carriers own an ordinary namespace (`Le::Decide`). Equality is
         // the one headless former whose instances have a better owner: the
         // endpoints' inferred type. The registry therefore distinguishes Nat
@@ -3148,12 +3172,12 @@ impl Elaborator {
         // every other carrier uses, while the full instance type remains what
         // candidate trial checks against a goal.
         let (head, head_key, headless_suffix) = if matches!(carrier.kind, TyKind::Eq(..)) {
-            let cx = self.instance_head_cx(d)?;
+            let cx = Declarations(self).instance_head_cx(d)?;
             let (lowered, _) = self.elab_ty(&cx, carrier)?;
             let crate::Type::Id { ty, .. } = lowered else {
                 unreachable!("a lowered equality carrier is an identity type")
             };
-            let Some(owner) = self.carrier_of_ty(&cx, &ty, carrier.span) else {
+            let Some(owner) = Carriers(self).carrier_of_ty(&cx, &ty, carrier.span) else {
                 return err(
                     format!(
                         "the equality carrier `{}` has endpoints at a type with no \
@@ -3191,7 +3215,7 @@ impl Elaborator {
                 );
             };
             let head = head.to_string();
-            if !self.names_a_carrier(&head) {
+            if !Carriers(self).names_a_carrier(&head) {
                 return err(
                     format!(
                         "`{head}` is not a type or a type former in scope, so `{head}::{}` \
@@ -3227,7 +3251,7 @@ impl Elaborator {
                 d.class.span,
             );
         }
-        let index = self.index_spelling(&d.class, &class, d)?;
+        let index = Classes(self).index_spelling(&d.class, &class, d)?;
         let prefix = if index.is_empty() {
             format!("{head}::{}{headless_suffix}", class.name)
         } else {
@@ -3285,7 +3309,7 @@ impl Elaborator {
         let written = class_ref_written(&d.class);
         // Termination, checked here rather than detected when it hangs
         // (docs/traits-layer2-design.md §6).
-        self.check_decrease(d, &written)?;
+        Classes(self).check_decrease(d, &written)?;
 
         // The class type as a surface type: `Monoid<Rat>`, or `Monoid<Nat>(add)`
         // where the class is indexed.
@@ -3508,7 +3532,7 @@ impl Elaborator {
             let Some(ainfo) = self.traits.class(&akey).cloned() else {
                 continue;
             };
-            let aindex = self.index_spelling(&anc_ref(a), &ainfo, d)?;
+            let aindex = Classes(self).index_spelling(&anc_ref(a), &ainfo, d)?;
             let Some(inst) = self
                 .traits
                 .instance(&instance_key(&akey, head_key, &aindex))
@@ -3544,7 +3568,7 @@ impl Elaborator {
             // dictionary. An untagged inherited field keeps the original
             // fill-by-projection behavior. Tagged ancestors never participate
             // in that latter search: their components live below the tag.
-            let tagged_ref = self.class_ref_of_ty(&f.ty);
+            let tagged_ref = Classes(self).class_ref_of_ty(&f.ty);
             let from_parent = tagged_ref
                 .as_ref()
                 .and_then(|field_ref| {
@@ -3669,7 +3693,7 @@ impl Elaborator {
             let r = anc_ref(r);
             heather_syntax::class_ty(r.name, r.args, r.index, span)
         };
-        for (fname, (over, parent)) in self.shared_ancestor_agreements(&class, &lit_fields, &tag_ty, span) {
+        for (fname, (over, parent)) in Classes(self).shared_ancestor_agreements(&class, &lit_fields, &tag_ty, span) {
             let stmt = Ty {
                 kind: TyKind::Eq(Box::new(over), Box::new(parent)),
                 span,
@@ -3702,7 +3726,7 @@ impl Elaborator {
                 continue;
             };
             let aref = anc_ref(&a);
-            let aindex = self.index_spelling(&aref, &ainfo, d)?;
+            let aindex = Classes(self).index_spelling(&aref, &ainfo, d)?;
             if self
                 .traits
                 .has_instance(&instance_key(&akey, head_key, &aindex))
@@ -3742,7 +3766,7 @@ impl Elaborator {
                 else {
                     return err("internal: tagged parent has no field declaration", span);
                 };
-                let Some(root_ref) = self.class_ref_of_ty(&root_field.ty) else {
+                let Some(root_ref) = Classes(self).class_ref_of_ty(&root_field.ty) else {
                     return err("internal: tagged parent field is not a class", span);
                 };
                 let root_ref = anc_ref(&root_ref);
@@ -3852,7 +3876,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Classes<'_> {
     /// The agreements a class's shared ancestors owe at one instance. For
     /// every ancestor reached inside a tagged parent at a fiber the class
     /// keeps canonically at another path (untagged, or under an earlier tag),
@@ -4139,7 +4165,7 @@ impl Elaborator {
     /// names its binders is never elaborated here. The index is not
     /// consulted: it joins the registry key as a spelling.
     fn binder_in_elaborated_head(&self, d: &InstanceDecl, k: usize) -> bool {
-        let Ok(cx) = self.instance_head_cx(d) else {
+        let Ok(cx) = Declarations(self).instance_head_cx(d) else {
             return false;
         };
         let m = (d.tyvars.len() + d.valparams.len()) as u32;
@@ -4220,7 +4246,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Elaborator {
     /// One synthesized declaration carrying the instance's own telescope.
     fn synth_decl(
         &mut self,

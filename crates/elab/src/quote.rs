@@ -30,6 +30,7 @@ use crate::names::NameKind;
 use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
 use crate::statements::LetValue;
 use crate::{Alias, Cx, ElabError, Elaborator, MetaDef, R, err};
+use crate::name_lookup::NameLookup;
 
 /// One binder of a `meta fn`'s signature, in written order.
 ///
@@ -126,6 +127,16 @@ fn wk_to_base(gamma: &LocalCtx, span: Span) -> R<LocalSubst> {
     })
 }
 
+/// Quotation's part of the elaborator.
+pub(crate) struct Quotation<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Quotation<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     /// A `meta fn` declaration (docs/in-language-map-design.md §3): elaborate
     /// the modal signature and quotation body, kernel-check the whole thing
@@ -136,7 +147,9 @@ impl Elaborator {
         // it, error or not.
         self.scoped(|s| s.meta_pushed.get_mut(), Vec::new(), |me| me.elab_meta_decl_inner(decl))
     }
+}
 
+impl Quotation<'_> {
     /// A `meta fn`'s signature: the binder list and the result type, in the
     /// scope they build up. Shared by the declaration path and by analyzer-slot
     /// registration, whose expected type is *written in Heather* and has to
@@ -286,9 +299,11 @@ impl Elaborator {
         }
         term
     }
+}
 
+impl Elaborator {
     fn elab_meta_decl_inner(&mut self, decl: &Decl) -> R<()> {
-        if self.own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
+        if NameLookup(self).own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
         if !decl.tyvars.is_empty() {
@@ -305,7 +320,7 @@ impl Elaborator {
             );
         }
 
-        let (_menv, mut cx, sig, result_ty, result_lvl) = self.meta_sig(decl)?;
+        let (_menv, mut cx, sig, result_ty, result_lvl) = Quotation(self).meta_sig(decl)?;
 
         // The body: `let`/`let code` aliases, then the quote, checked against
         // the result code type. An alias is inlined at its splice, exactly as
@@ -347,8 +362,8 @@ impl Elaborator {
         // gate (`statements.rs`).
         let body = LetValue::discard_around(self, &cx, values, body, &result_ty, &result_lvl);
 
-        let (stmt, lvl) = Self::close_meta_ty(&sig, result_ty, result_lvl.clone());
-        let term = Self::close_meta_term(&sig, body, result_lvl);
+        let (stmt, lvl) = Quotation::close_meta_ty(&sig, result_ty, result_lvl.clone());
+        let term = Quotation::close_meta_term(&sig, body, result_lvl);
 
         // The kernel is the gate, at the meta layer. The same oracle seam as
         // the two Ψ sites (`gate.rs`) — this is where a `match code` shell's
@@ -410,11 +425,11 @@ impl Elaborator {
             // docs/meta-def-registration-design.md's extension section).
             Some(path) if slots::lookup_analyzer(path).is_some() => {
                 let spec = slots::lookup_analyzer(path).expect("just looked up");
-                self.register_analyzer(spec, decl, &stmt, &lvl)?;
+                Quotation(self).register_analyzer(spec, decl, &stmt, &lvl)?;
                 Some((spec.slot, Vec::new()))
             }
             Some(path) => {
-                let (spec, order) = self.register_slot(decl, path, &stmt)?;
+                let (spec, order) = Quotation(self).register_slot(decl, path, &stmt)?;
                 Some((spec.slot, order))
             }
             None => None,
@@ -435,7 +450,9 @@ impl Elaborator {
         self.semantic_commit_meta(module, name, slot, definition);
         Ok(())
     }
+}
 
+impl Quotation<'_> {
     /// Registration-time validation of an **analyzer** slot: elaborate the
     /// slot's expected signature — written in Heather, in *this* file's scope,
     /// so it may name the library types an analyzer traffics in — and require

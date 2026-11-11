@@ -30,6 +30,8 @@ use crate::sum_layout::Child;
 use crate::recursion::{FnChildIh, Guard, GuardKind};
 use crate::spelling::checked_app;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -258,7 +260,17 @@ impl WParts {
     }
 }
 
-impl Elaborator {
+/// Infinitary families' part of the elaborator.
+pub(crate) struct Infinitary<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Infinitary<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Infinitary<'_> {
     // -- the type (§3–§5) ---------------------------------------------------
 
     /// `⟦D<args>⟧` for a tier-2 declaration (§5).
@@ -271,14 +283,14 @@ impl Elaborator {
         span: Span,
     ) -> R<(Type, Level)> {
         let n = ind.ctors.len();
-        let (shape, ls) = self.lower_shape(cx, ind, args, vargs, span)?;
+        let (shape, ls) = Inductives(self).lower_shape(cx, ind, args, vargs, span)?;
         // §4: each constructor's recursive field, and the function domains'
         // one level `lp`.
         let mut kinds = Vec::with_capacity(n);
         let mut lp: Option<(Level, String)> = None;
         for (i, ctor) in ind.ctors.iter().enumerate() {
             if ctor.kind.contains(&FieldKind::FnChild) {
-                let (_, _, dom) = self.lower_ctor_with_domain(cx, ind, i, args, vargs, span)?;
+                let (_, _, dom) = Inductives(self).lower_ctor_with_domain(cx, ind, i, args, vargs, span)?;
                 let Some((a, la, j)) = dom else {
                     return err("internal: a function field lowered no domain", span);
                 };
@@ -504,7 +516,9 @@ impl Elaborator {
         p.canon = Rc::new(canon);
         Ok((p.d_at(0), lw))
     }
+}
 
+impl Elaborator {
     // -- the leaf predicate as a generated definition ------------------------
 
     /// `D#canon := λ(A₁ : Ty 0)…(v_m : T_m). λ(t : W₀). canon t`, at
@@ -518,10 +532,10 @@ impl Elaborator {
         if self.types.gdefs().abs_for(&key).is_some() {
             return;
         }
-        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+        let Some((cx, binders, targs, vargs)) = GeneratedDefs(self).tycode_fn_telescope(ind, span) else {
             return;
         };
-        let Ok((d_ty, lw)) = self.lower_instance_w(&cx, ind, &targs, &vargs, span) else {
+        let Ok((d_ty, lw)) = Infinitary(self).lower_instance_w(&cx, ind, &targs, &vargs, span) else {
             return;
         };
         let Some(p) = WParts::read(&d_ty, &cx.gamma) else {
@@ -547,7 +561,7 @@ impl Elaborator {
         let mut ty_level = Level::max(lw, succ_lw);
         // The telescope's domains in the emission spelling, as
         // `register_ty_code_fn`'s: the statement and the λ read one list.
-        for (dom, dom_level) in self.emitted_tel(&binders).iter().rev() {
+        for (dom, dom_level) in GeneratedDefs(self).emitted_tel(&binders).iter().rev() {
             body = Term::Lam {
                 dom_level: dom_level.clone(),
                 cod_level: ty_level.clone(),
@@ -564,7 +578,9 @@ impl Elaborator {
         }
         let _ = self.push_gen_def(key, &ind.name, ty, ty_level, body, span);
     }
+}
 
+impl Infinitary<'_> {
     /// `El (app(D#canon^δ; ⌜A₁⌝, …, v̄, t))` over `(cx, t : W₀)` — the leaf
     /// predicate of the instance `args`/`vargs` as a reference, when the
     /// declaration registered one and the instance is at its profile: every
@@ -1208,8 +1224,8 @@ inductive List1 { Nil1, Cons1(x: Nat, r: List1) }
                 panic!("the predicate is a decoded code")
             };
             let (head, spine) = crate::spelling::app_spine(tm);
-            assert!(e.el.is_gen_ref(head, GenDef::WCanon(ind.tag)), "`{}`'s own", ind.name);
-            assert!(!e.el.is_gen_ref(head, GenDef::WCanon(other.tag)), "not `{}`'s", other.name);
+            assert!(GeneratedDefs(&e.el).is_gen_ref(head, GenDef::WCanon(ind.tag)), "`{}`'s own", ind.name);
+            assert!(!GeneratedDefs(&e.el).is_gen_ref(head, GenDef::WCanon(other.tag)), "not `{}`'s", other.name);
             let mut want: Vec<Term> = args
                 .iter()
                 .map(|(a, _)| crate::code::code_of(a).unwrap().shift_local(1))

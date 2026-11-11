@@ -35,6 +35,7 @@ use heather_kernel::typing;
 use crate::oracle::SemanticOracle;
 use crate::unification::{Sol, zonked};
 use crate::{Cx, Elaborator, stats};
+use crate::app_unify::AppUnify;
 
 /// One unifier root's check: the slots' declared types in the call's
 /// scratch world (`n` metas), the world the solutions are typed in (read
@@ -176,7 +177,7 @@ impl Elaborator {
                 let Ok((ty, _)) = stats::time_kernel(|| typing::infer_term(psi, 0, Layer::Prog, &cx.gamma, &s, fuel)) else {
                     continue;
                 };
-                self.unify_arg_ty(cx, dom, &ty, n, sols, meta_doms, crate::unification::Guesses::Take, span);
+                AppUnify(self).unify_arg_ty(cx, dom, &ty, n, sols, meta_doms, crate::unification::Guesses::Take, span);
             }
             if open(sols) == before {
                 return learned;

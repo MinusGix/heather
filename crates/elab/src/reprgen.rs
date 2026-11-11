@@ -45,6 +45,7 @@ use crate::Elaborator;
 use crate::datarepr::{
     CtorView, appc, impl_record_name, lams, params_src, spec_rec_name, spell_ty,
 };
+use crate::datarepr::DataRepr;
 
 /// One transfer: the surface source, plus what a caller needs to key it.
 pub struct ReprEmission {
@@ -196,6 +197,16 @@ struct Fragment<'a> {
     arms: Vec<Arm<'a>>,
 }
 
+/// Representation generators' part of the elaborator.
+pub(crate) struct ReprGen<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for ReprGen<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     /// Transfer `op` to repr `repr`, emitting a derived `Impl` (§3).
     ///
@@ -224,7 +235,7 @@ impl Elaborator {
         // emits a callee's artifacts before the caller's — so the last write
         // here is the top-level transfer's.
         let mut target = None;
-        self.transfer(op, repr, &mut out, &mut done, &mut stack, &mut target)?;
+        ReprGen(self).transfer(op, repr, &mut out, &mut done, &mut stack, &mut target)?;
         let t = target.expect("a successful transfer emits its `impl` block");
         Ok(ReprEmission {
             op: op.to_string(),
@@ -237,7 +248,9 @@ impl Elaborator {
             rec_param: t.rec_param,
         })
     }
+}
 
+impl ReprGen<'_> {
     /// One transfer, appended to `out` after everything it depends on.
     ///
     /// `done` is what this run has already emitted (a diamond in the callee
@@ -435,7 +448,7 @@ impl Elaborator {
         // (docs/obligation-records-design.md §2.1): the derived `Impl`'s
         // statements and a hand-written one's are the same paragraph, and were
         // written twice until this call replaced the second copy.
-        let sch = self.impl_schema(op, repr)?;
+        let sch = DataRepr(self).impl_schema(op, repr)?;
         let params = sch.binders.clone();
         let derived = format!("{op}_derived");
         let arglist: Vec<String> = sch.args();

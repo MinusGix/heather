@@ -289,7 +289,17 @@ pub(crate) fn spell_ty(t: &Ty) -> Option<String> {
     })
 }
 
-impl Elaborator {
+/// Data representations' part of the elaborator.
+pub(crate) struct DataRepr<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for DataRepr<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl DataRepr<'_> {
     /// Resolve the spec type into the constructor list the record's shape is
     /// computed from.
     fn spec_view(&self, spec: &Ty, span: Span) -> R<SpecView> {
@@ -490,7 +500,9 @@ impl Elaborator {
             ctors,
         })
     }
+}
 
+impl Elaborator {
     /// `datarepr N for S { … }` / `datarepr N for S := repr::naive();`
     /// (design §1.4).
     ///
@@ -507,7 +519,7 @@ impl Elaborator {
     }
 
     fn elab_datarepr_inner(&mut self, d: &DatareprDecl) -> R<()> {
-        let mut spec = self.spec_view(&d.spec, d.spec.span)?;
+        let mut spec = DataRepr(self).spec_view(&d.spec, d.spec.span)?;
         if let Some(prev) = self.representations.for_spec(&spec.key) {
             return err(
                 format!(
@@ -528,7 +540,7 @@ impl Elaborator {
         self.register_repr_access(&d.name, &ctors);
         let mut sp = Splices::default();
         let mut holes = Vec::new();
-        let clauses = self.clauses_of(d, &spec, &mut sp, &mut holes)?;
+        let clauses = DataRepr(self).clauses_of(d, &spec, &mut sp, &mut holes)?;
         if clauses.fold.is_none() {
             self.register_fold_default_access(&d.name);
         }
@@ -562,7 +574,9 @@ impl Elaborator {
         self.semantic_commit_repr(key, name, info, monomorph, obs);
         Ok(())
     }
+}
 
+impl DataRepr<'_> {
     /// The clause table: every field of the generated record, as the source
     /// expression that fills it. Either read off the written clauses or minted
     /// by `repr::naive()`.
@@ -771,7 +785,9 @@ impl Elaborator {
             inv_trivial,
         })
     }
+}
 
+impl Elaborator {
     /// Parse and elaborate generated source in the *current* module and scope.
     /// A failure here is a failure of the `datarepr` declaration, reported
     /// against it — the generated text is an implementation detail, so it is
@@ -2258,7 +2274,7 @@ impl ImplSchema {
     }
 }
 
-impl Elaborator {
+impl DataRepr<'_> {
     /// Build §1.2's schema at `(op, repr)`. Both callers have already checked
     /// that the repr and the declaration are in scope and that the operation is
     /// monomorphic — with their own messages, which differ deliberately — so
@@ -2370,7 +2386,7 @@ impl Elaborator {
         // occurrences, per-position mixing deferred), and §1.2's conclusions —
         // one computation, shared with the transfer generator (§2.1).
         let s = &rp.written;
-        let sch = match self.impl_schema(&d.op, &d.repr) {
+        let sch = match DataRepr(self).impl_schema(&d.op, &d.repr) {
             Ok(sch) => sch,
             Err(msg) => return err(msg, d.span),
         };

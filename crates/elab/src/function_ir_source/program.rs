@@ -35,6 +35,7 @@
 //! (`split_all`).
 use super::*;
 use heather_kernel::rc::Rc;
+use crate::name_lookup::NameLookup;
 
 /// A structured region of the verified lowering's FunctionIR, with calls.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,8 +186,8 @@ impl Program<'_> {
     /// The global's word parameter count and its result type, when its
     /// parameters are words.
     fn signature(&self, at: usize) -> Option<(usize, Type)> {
-        let name = self.elaborator.global_qualified_name_at(at)?;
-        let (ty, _) = self.elaborator.global_body(&name)?;
+        let name = NameLookup(self.elaborator).global_qualified_name_at(at)?;
+        let (ty, _) = NameLookup(self.elaborator).global_body(&name)?;
         let mut arity = 0;
         let mut current = &*ty;
         while let Type::Pi { dom, cod, .. } = current {
@@ -200,8 +201,8 @@ impl Program<'_> {
     /// The global's word parameter count, when it recurses on a fuel: a
     /// `Nat`, then words, returning a word. Such a loop is a `runtime fn`'s.
     fn loop_signature(&self, at: usize) -> Option<usize> {
-        let name = self.elaborator.global_qualified_name_at(at)?;
-        let (ty, _) = self.elaborator.global_body(&name)?;
+        let name = NameLookup(self.elaborator).global_qualified_name_at(at)?;
+        let (ty, _) = NameLookup(self.elaborator).global_body(&name)?;
         let Type::Pi { dom, cod, .. } = &*ty else { return None; };
         if !matches!(&**dom, Type::Nat) { return None; }
         let mut arity = 0;
@@ -229,13 +230,13 @@ impl Program<'_> {
     /// function's: a call of its generated recursor.
     fn measured(&self, at: usize, name: &str, body: &Term) -> bool {
         let (head, _) = application_spine(body);
-        absolute(head, at).and_then(|g| self.elaborator.global_qualified_name_at(g)).is_some_and(|r| r == crate::measure::rec_name(name))
+        absolute(head, at).and_then(|g| NameLookup(self.elaborator).global_qualified_name_at(g)).is_some_and(|r| r == crate::measure::rec_name(name))
     }
 
     /// A transparent global's body under its `arity` parameters' λs.
     fn body_of(&self, at: usize, arity: usize) -> Result<(String, Rc<Term>), SourceError> {
-        let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
-        let (_, body) = self.elaborator.global_body(&name).ok_or_else(|| SourceError::Unsupported(format!("`{name}` must be transparent")))?;
+        let name = NameLookup(self.elaborator).global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
+        let (_, body) = NameLookup(self.elaborator).global_body(&name).ok_or_else(|| SourceError::Unsupported(format!("`{name}` must be transparent")))?;
         let mut term = body;
         for _ in 0..arity {
             let Term::Lam { body, .. } = &*term else { return unsupported("a function's parameters must be λs"); };
@@ -248,7 +249,7 @@ impl Program<'_> {
     fn function(&mut self, at: usize) -> Result<usize, SourceError> {
         if let Some(index) = self.index.get(&at) { return Ok(*index); }
         if self.stack.contains(&at) { return unsupported("a recursive function is not compiled: a program's functions call only those below them"); }
-        let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
+        let name = NameLookup(self.elaborator).global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
         let arity = self.word_signature(at)
             .ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not a function of at most six BitVec(64) parameters returning BitVec(64)")))?;
         let (_, term) = self.body_of(at, arity)?;
@@ -407,11 +408,11 @@ impl Body {
             return self.node(pending, Some(Key::Binary(operation, left, right)), 64, None, spelling, |output| operation.node_at_width(64, output, left, right));
         }
         if program.loop_signature(at).is_some() {
-            let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
+            let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
             return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
         }
         let Some(arity) = program.word_signature(at) else {
-            let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
+            let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
             return unsupported(&format!("`{name}` is not an operation this compiler lowers, nor a function of BitVec(64) words it can call"));
         };
         if args.len() != arity { return unsupported("a call must apply every parameter"); }

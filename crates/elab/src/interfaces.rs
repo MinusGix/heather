@@ -57,7 +57,17 @@ impl Interfaces {
     }
 }
 
-impl Elaborator {
+/// Interface definitions' part of the elaborator.
+pub(crate) struct InterfaceDefs<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for InterfaceDefs<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl InterfaceDefs<'_> {
     /// The interface boundary of the module being elaborated: every
     /// registered interface definition of another module, at its arity.
     /// `None` when there is none, which leaves every world as it was.
@@ -214,7 +224,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Register the elaborated interface definition `decl`.
     pub(crate) fn register_interface(&mut self, decl: &Decl, equations: Vec<String>) -> R<()> {
         let refuse = |msg: String| Err(ElabError::Elab { msg, span: decl.span });

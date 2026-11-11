@@ -36,6 +36,20 @@ use crate::names::{NameKind, Scope, qkey};
 use crate::sum_layout::{Child, Layout};
 use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar, embed, err};
+use crate::wf::Wf;
+use crate::codata::Codata;
+use crate::indexed::IndexedFamilies;
+use crate::infinitary::Infinitary;
+use crate::iwf_family::IwfFamily;
+use crate::iwf_w::IwfW;
+use crate::constructor::Constructors;
+use crate::defaults::Defaults;
+use crate::iwf_confusion::IwfConfusion;
+use crate::mutual_family::MutualFamily;
+use crate::gendefs::GeneratedDefs;
+use crate::checking::Checking;
+use crate::mismatch_notes::MismatchNotes;
+use crate::name_lookup::NameLookup;
 
 type Equation = (Term, Type, Level, Rc<Term>, Rc<Term>);
 type CtorEquation = (
@@ -995,6 +1009,16 @@ pub(crate) fn tag_value(t: &Type) -> Term {
     }
 }
 
+/// Inductive declarations' part of the elaborator.
+pub(crate) struct Inductives<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Inductives<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     // -- declaration --------------------------------------------------------
 
@@ -1013,10 +1037,10 @@ impl Elaborator {
         d: &InductiveDecl,
         members: Vec<Member>,
     ) -> R<()> {
-        if self.own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
+        if NameLookup(self).own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
             return err(format!("duplicate name `{}`", d.name), d.span);
         }
-        self.check_declarable(&d.name, d.span)?;
+        NameLookup(self).check_declarable(&d.name, d.span)?;
         if d.name == "Nat" {
             return err("`Nat` is built in", d.span);
         }
@@ -1135,7 +1159,7 @@ impl Elaborator {
                 if *implicit {
                     return err(crate::IMPLICIT_MARK_REFUSED, ty.span);
                 }
-                let ity = self.index_type(dom, &d.name, &d.params)?;
+                let ity = Inductives(self).index_type(dom, &d.name, &d.params)?;
                 if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
                     return err(
                         "an index telescope ends in bare `Type`; the family's level is \
@@ -1193,10 +1217,10 @@ impl Elaborator {
                     c.span,
                 );
             }
-            if self.own_declares(&c.name, &[NameKind::Global, NameKind::Inductive]) {
+            if NameLookup(self).own_declares(&c.name, &[NameKind::Global, NameKind::Inductive]) {
                 return err(format!("duplicate name `{}`", c.name), c.span);
             }
-            self.check_declarable(&c.name, c.span)?;
+            NameLookup(self).check_declarable(&c.name, c.span)?;
             // The result annotation: mandatory on an indexed declaration's
             // constructors, an error elsewhere
             // (docs/inductive-indexed-lowering.md §2).
@@ -1509,10 +1533,10 @@ impl Elaborator {
             } else {
                 // An indexed one at a neutral index: the field types, the
                 // children's indices and the positions are all read there.
-                let (ity, li) = self.codata_index_ty(&Cx::empty(), &ind, &[], &[], d.span)?;
+                let (ity, li) = Codata(self).codata_index_ty(&Cx::empty(), &ind, &[], &[], d.span)?;
                 let mut icx = Cx::empty();
                 icx.push("#i".into(), ity, li);
-                self.lower_instance_m(&icx, &ind, &[], &[], Some(Term::Var(LocalVar(0))), d.span)?;
+                Codata(self).lower_instance_m(&icx, &ind, &[], &[], Some(Term::Var(LocalVar(0))), d.span)?;
             }
         }
         // The same for an `IWf`-route family: its written indices are only
@@ -1524,18 +1548,18 @@ impl Elaborator {
         if ind.skel.is_some() && ind.params.is_empty() && ind.valparams.is_empty() {
             let from = self.attempt.check_notes.borrow().len();
             if ind.iwf_infinitary() {
-                self.iw_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
+                IwfW(self).iw_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
             } else {
-                self.iwf_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
+                IwfFamily(self).iwf_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
             }
-            if let Some(e) = self.mismatch_since(from) {
+            if let Some(e) = MismatchNotes(self).mismatch_since(from) {
                 return Err(e);
             }
         }
         // A field's default is checked here, used or not (§9.7 of
         // docs/named-arguments-design.md), as a parameter's is at its
         // declaration.
-        self.check_field_defaults_at_declaration(&ind)?;
+        Inductives(self).check_field_defaults_at_declaration(&ind)?;
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.
@@ -1568,7 +1592,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Inductives<'_> {
     /// The index telescope's domain (docs/inductive-indexed-lowering.md §2,
     /// §8.2): `Nat`, or a previously declared inductive that can carry a
     /// family. Each rejection below is a *shape* the scheme has no branch for,
@@ -1730,7 +1756,7 @@ impl Elaborator {
         if self.lookup_inductive(name).is_none()
             && let Some((fam, k)) = self.lookup_member(name)
         {
-            return self.lower_member(cx, &fam, k, args, None, span);
+            return MutualFamily(self).lower_member(cx, &fam, k, args, None, span);
         }
         let Some(ind) = self.lookup_inductive(name) else {
             if name == "True" && args.is_empty() {
@@ -1746,7 +1772,7 @@ impl Elaborator {
                     return err(format!("type alias `{name}` takes no type arguments"), span);
                 }
                 let expression = Expr { kind: ExprKind::Var(name.to_string()), span };
-                return self.expr_elab().lower_expression_type(self, cx, &expression, span);
+                return self.expr_elab().lower_expression_type(self.0, cx, &expression, span);
             }
             if args.is_empty()
                 && let Some(lowered) = self.lower_type_value(cx, name, span)?
@@ -1851,7 +1877,7 @@ impl Elaborator {
             lowered.push(self.elab_ty(cx, a)?);
         }
         let out = self.lower_instance(cx, &ind, &lowered, &[], span)?;
-        let out = if args.is_empty() { self.share_registered_lowering(ind.tag, out) } else { out };
+        let out = if args.is_empty() { GeneratedDefs(self).share_registered_lowering(ind.tag, out) } else { out };
         // Kept only when closed over the locals, so a hit is the same type at
         // any depth. Hiding the use site's binders should make every bare
         // lowering closed; this is the backstop, paid once per miss. And only
@@ -2192,7 +2218,7 @@ impl Elaborator {
             .try_valparam_ty(&pcx, &sat, span)?
             .expect("a declared type former with value parameters lowers here");
         let mut t =
-            crate::expr::ExprElab::quote_type_at(self, &pcx, &lowered, &level, &want, span)?;
+            crate::expr::ExprElab::quote_type_at(self.0, &pcx, &lowered, &level, &want, span)?;
         for (_, dom_level, cod_level, dom) in peeled.into_iter().rev() {
             t = Term::Lam {
                 dom_level,
@@ -2346,7 +2372,7 @@ impl Elaborator {
         for targ in targs {
             fixed.push(self.elab_ty(cx, targ)?);
         }
-        if let Some(entry) = self.ty_code_fn_entry(ind.tag)
+        if let Some(entry) = GeneratedDefs(self).ty_code_fn_entry(ind.tag)
             && entry.level.equiv(&want)
             && entry.param_levels.len() == fixed.len() + peeled.len()
             && entry.param_levels.iter().zip(&fixed).all(|(l, (_, k))| k.equiv(l))
@@ -2357,9 +2383,9 @@ impl Elaborator {
         {
             let mut codes = Vec::with_capacity(fixed.len());
             for (t, l) in &fixed {
-                codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self, cx, t, l, l, span)?));
+                codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self.0, cx, t, l, l, span)?));
             }
-            if let Some(head) = self.code_fn_prefix(cx, ind.tag, &codes) {
+            if let Some(head) = GeneratedDefs(self).code_fn_prefix(cx, ind.tag, &codes) {
                 return Ok(Some(head));
             }
         }
@@ -2455,7 +2481,7 @@ impl Elaborator {
         let (lowered, level) = self.lower_instance(&pcx, ind, &targs, &vargs, span)?;
         let want = want.cloned().unwrap_or_else(|| level.clone());
         let mut t =
-            crate::expr::ExprElab::quote_type_at(self, &pcx, &lowered, &level, &want, span)?;
+            crate::expr::ExprElab::quote_type_at(self.0, &pcx, &lowered, &level, &want, span)?;
         let mut cod_level = Level::succ(want);
         for l in levels.iter().rev() {
             let dom_level = Level::succ(l.clone());
@@ -2524,7 +2550,9 @@ impl Elaborator {
         }
         Ok(out)
     }
+}
 
+impl Elaborator {
     /// Check a use site's value arguments against the declared telescope
     /// (docs/surface-value-parameters.md §2). Parameter `j`'s declared type may
     /// mention parameters `0..j`, so it is elaborated in a context carrying the
@@ -2546,9 +2574,11 @@ impl Elaborator {
         args: &[Expr],
         span: Span,
     ) -> R<Vec<(Term, Type, Level)>> {
-        self.valparam_args_after(cx, ind, targs, Vec::new(), args, span)
+        Inductives(self).valparam_args_after(cx, ind, targs, Vec::new(), args, span)
     }
+}
 
+impl Inductives<'_> {
     /// [`Self::valparam_args`] after `given`, the leading value arguments
     /// already elaborated (a universe-declared class carrier, passed as its
     /// code: `crate::dispatch::dictionary`'s `universe_carrier`).
@@ -2704,7 +2734,9 @@ impl Elaborator {
         }
         eta(body).unwrap_or(tm)
     }
+}
 
+impl Elaborator {
     /// `⟦D<ā>⟧`: the tag spine at tier 0, and the `Wf` over it at tier 1
     /// (`docs/inductive-tier1-wf-lowering.md` §4). Every other lowering in
     /// this crate goes through here, so the two tiers cannot disagree about
@@ -2731,14 +2763,14 @@ impl Elaborator {
         // Tier 2 (docs/inductive-tier2-w-lowering.md §5): the shape is this
         // same sum-of-Σs, wrapped in `W` and the leaf predicate.
         if ind.infinitary() {
-            return self.lower_instance_w(cx, ind, args, vargs, span);
+            return Infinitary(self).lower_instance_w(cx, ind, args, vargs, span);
         }
         // Codata (docs/codata-elaborator-design.md §2): the same shape under
         // the negative `M`.
         if ind.codata {
-            return self.lower_instance_m(cx, ind, args, vargs, None, span);
+            return Codata(self).lower_instance_m(cx, ind, args, vargs, None, span);
         }
-        let (shape, level) = self.lower_shape(cx, ind, args, vargs, span)?;
+        let (shape, level) = Inductives(self).lower_shape(cx, ind, args, vargs, span)?;
         if !ind.recursive {
             return Ok((shape, level));
         }
@@ -2746,7 +2778,7 @@ impl Elaborator {
         // context extended by that binder (§3).
         let mut xcx = cx.clone();
         xcx.push("#shape".into(), shape.clone(), level.clone());
-        let arity = self.lower_arity(&xcx, ind, &shape, &level, span)?;
+        let arity = Inductives(self).lower_arity(&xcx, ind, &shape, &level, span)?;
         Ok((
             Type::Wf {
                 level: level.clone(),
@@ -2756,7 +2788,9 @@ impl Elaborator {
             level,
         ))
     }
+}
 
+impl Inductives<'_> {
     /// The tag spine (§3.2): the constructors' payloads joined by `+` in the
     /// tree [`crate::sum_layout`] decides; `Empty` with no constructors, and no `+` at all with one. At tier 1
     /// this is the `Wf`'s *shape*, so the recursive fields are already gone
@@ -2862,7 +2896,9 @@ impl Elaborator {
         let (t, l, mut domains) = self.lower_ctor_with_domains(cx, ind, i, args, vargs, span)?;
         Ok((t, l, domains.pop()))
     }
+}
 
+impl Elaborator {
     /// The context a declaration's own field types are read in, over the use
     /// site's `cx`: the type parameters and value parameters bound to `args`
     /// and `vargs` (scoped in `cx`), the use site's binders out of reach by
@@ -2933,7 +2969,9 @@ impl Elaborator {
         }
         fcx
     }
+}
 
+impl Inductives<'_> {
     /// A record's field defaults, checked where they are written
     /// (docs/named-arguments-design.md §9.7), by the rule a parameter's
     /// default is: a discharge is left to each construction, a value is
@@ -3000,7 +3038,7 @@ impl Elaborator {
                 let (fty, flvl) = self.elab_ty(&fcx, ty)?;
                 let fname = name.clone().unwrap_or_else(|| "#field".into());
                 if let Some(default) = &ctor.defaults[k] {
-                    self.check_default_at_declaration(&fcx.hygienic(), &ind.name, &fname, default, &fty, &flvl)?;
+                    Defaults(self).check_default_at_declaration(&fcx.hygienic(), &ind.name, &fname, default, &fty, &flvl)?;
                 }
                 fcx.push(fname.clone(), fty.clone(), flvl);
                 if let Type::Ty(level) = fty {
@@ -3107,7 +3145,9 @@ impl Elaborator {
         }
         Ok((acc, acc_lvl, domains))
     }
+}
 
+impl Elaborator {
     // -- reading a lowered type back ----------------------------------------
 
     /// Split a lowered `⟦D⟧` into its `n` constructor summands (§3.2). `n`
@@ -3176,15 +3216,17 @@ impl Elaborator {
         let nodes = nodes.into_iter().map(|c| c.expect("every node is reached")).collect();
         Ok(Spine { layout, ctors, nodes })
     }
+}
 
+impl Inductives<'_> {
     /// [`Self::spine`] of a type scoped in `cx`, a named codata signature
     /// unfolded first (docs/codata-named-signature-design.md §3): the readers
     /// that take a codata equation apart (`inj`, `absurd`) arrive with one.
     pub(crate) fn spine_in(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
         if let Type::M { sig, index } = &*decoded(ty)
-            && self.m_sig_tag(sig).is_some()
+            && Codata(self).m_sig_tag(sig).is_some()
         {
-            let Some(inline) = self.m_sig_inline(sig) else {
+            let Some(inline) = Codata(self).m_sig_inline(sig) else {
                 return err("internal: a named codata signature did not unfold", span);
             };
             return self.spine(&inline.shape_at(index), &sig.level, n, span);
@@ -3208,7 +3250,7 @@ impl Elaborator {
             .ctors
             .first()
             .and_then(|(c, _)| self.tag_of(c))
-            .and_then(|ind| self.spine_refs_by_position(ind.tag, spine));
+            .and_then(|ind| GeneratedDefs(self).spine_refs_by_position(ind.tag, spine));
         let (ctor_refs, node_refs) = match by_position {
             Some((c, t)) => (c, t),
             None => (vec![None; spine.ctors.len()], vec![None; spine.nodes.len()]),
@@ -3232,7 +3274,9 @@ impl Elaborator {
             nodes,
         }
     }
+}
 
+impl Elaborator {
     /// Which declaration a lowered type belongs to, by its nominal tag: walk
     /// to the leftmost constructor and read its tag field (§3.3). `None` for
     /// anything that is not an inductive encoding.
@@ -3244,7 +3288,7 @@ impl Elaborator {
             // Codata: the tag is in the `M`'s shape, under its index binder,
             // which the shape never mentions (docs/codata-elaborator-design.md
             // §2).
-            Type::M { sig, index } => match self.m_sig_tag(sig) {
+            Type::M { sig, index } => match Codata(self).m_sig_tag(sig) {
                 // A named signature (docs/codata-named-signature-design.md):
                 // the tag is its shape definition's key.
                 Some(tag) => self.types.by_tag(tag).cloned(),
@@ -3259,7 +3303,9 @@ impl Elaborator {
             _ => None,
         }
     }
+}
 
+impl Inductives<'_> {
     /// The inline constructor shape of a type on the display path. Recursive
     /// values and types may carry `D#shape` rather than the shape itself; no
     /// ordinary structural reader unfolds generated globals, so display uses
@@ -3286,18 +3332,22 @@ impl Elaborator {
             Type::Wf { shape, .. } => &**shape,
             _ => ty,
         };
-        self.unspell_shape_here(shape)
+        GeneratedDefs(self).unspell_shape_here(shape)
             .or_else(|| self.unspell_here(shape))
-            .or_else(|| self.unspell_sum_components(shape))
+            .or_else(|| GeneratedDefs(self).unspell_sum_components(shape))
             .unwrap_or_else(|| shape.clone())
     }
+}
 
+impl Elaborator {
     /// The declaration at the head of a displayable inductive type, including
     /// a recursive `Wf` whose shape has been respelled as a generated global.
     pub(crate) fn display_tag_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
-        self.tag_of(&self.display_shape(ty))
+        self.tag_of(&Inductives(self).display_shape(ty))
     }
+}
 
+impl Inductives<'_> {
     /// Recover a monomorphized inductive instance's type arguments for
     /// diagnostics. A candidate comes only from a payload field whose written
     /// type is exactly one declaration parameter. It is strengthened out of
@@ -3400,11 +3450,15 @@ impl Elaborator {
     pub(crate) fn ctor_fields(&self, ind: &Inductive, i: usize) -> Vec<Ty> {
         ind.ctors[i].fields.iter().map(|(_, t)| t.clone()).collect()
     }
+}
 
+impl Elaborator {
     pub(crate) fn ctor_of(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
         self.lookup_ctor(name)
     }
+}
 
+impl Inductives<'_> {
     // -- constructors (§4) --------------------------------------------------
 
     /// A constructor in checking position, saturated **or not**
@@ -3495,7 +3549,9 @@ impl Elaborator {
         }
         Ok(t)
     }
+}
 
+impl Elaborator {
     /// Build `⟦c_i(a⃗)⟧` at a known type: the injection path, then the field
     /// tuple. Every annotation comes from `expected`, so this is total on a
     /// well-formed encoding and produces a kernel-rejected term otherwise.
@@ -3527,42 +3583,42 @@ impl Elaborator {
             // type, not its whnf (docs/inductive-indexed-lowering.md §5;
             // docs/inductive-fording-lowering.md §6.3 for route 2b's).
             if ind.skel.is_some() {
-                return self.build_iwf_ctor(cx, ind, i, args, expected, expected_lvl, span);
+                return IwfFamily(self).build_iwf_ctor(cx, ind, i, args, expected, expected_lvl, span);
             }
-            return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
+            return IndexedFamilies(self).build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
         let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
         if ind.infinitary() {
             // Tier 2 (docs/inductive-tier2-w-lowering.md §6).
-            return self.build_ctor_w(cx, ind, i, &args, expected, span);
+            return Infinitary(self).build_ctor_w(cx, ind, i, &args, expected, span);
         }
         if ind.codata {
             // Codata (docs/codata-elaborator-design.md §3).
-            return self.build_ctor_m(cx, ind, i, &args, expected, span);
+            return Codata(self).build_ctor_m(cx, ind, i, &args, expected, span);
         }
-        let prepared = self.prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
+        let prepared = Inductives(self).prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
         if !ind.recursive { return Ok(prepared.term); }
         let child_ty = self.whnf(cx, expected, span)?;
         let Type::Wf { level: child_lvl, .. } = &child_ty else { unreachable!() };
         let iterative = !args.iter().any(|arg| crate::surface::has_free_slots(arg));
-        let mut frames = vec![self.ctor_work_frame(cx, prepared, &child_ty, span)?];
+        let mut frames = vec![Inductives(self).ctor_work_frame(cx, prepared, &child_ty, span)?];
         loop {
             let frame = frames.last_mut().expect("the root is returned, not popped empty");
             if let Some(child) = frame.prepared.children.pop() {
                 // Plain recursive fields have exactly this family's type and
                 // context. Other expressions retain the ordinary checker.
                 let call = if iterative {
-                    self.recursive_ctor_call(cx, child, ind, &child_ty)?
+                    Constructors(self).recursive_ctor_call(cx, child, ind, &child_ty)?
                 } else { None };
                 if let Some((i, args)) = call {
-                    let prepared = self.prepare_ctor(
+                    let prepared = Inductives(self).prepare_ctor(
                         cx, ind, i, &args, &child_ty, child_lvl, child.span,
                     )?;
-                    frames.push(self.ctor_work_frame(cx, prepared, &child_ty, child.span)?);
+                    frames.push(Inductives(self).ctor_work_frame(cx, prepared, &child_ty, child.span)?);
                     continue;
                 }
                 let term = self.elab_check(cx, child, &child_ty, child_lvl)?;
-                self.add_ctor_child(cx, frame, &child_ty, term);
+                Inductives(self).add_ctor_child(cx, frame, &child_ty, term);
                 continue;
             }
             let frame = frames.pop().expect("just inspected");
@@ -3571,17 +3627,19 @@ impl Elaborator {
                 *children = Rc::new(frame.children);
             }
             match frames.last_mut() {
-                Some(parent) => self.add_ctor_child(cx, parent, &child_ty, term),
+                Some(parent) => Inductives(self).add_ctor_child(cx, parent, &child_ty, term),
                 None => return Ok(term),
             }
         }
     }
+}
 
+impl Inductives<'_> {
     fn ctor_work_frame<'a>(
         &self, cx: &Cx, prepared: PreparedCtor<'a>, expected: &Type, span: Span,
     ) -> R<CtorWorkFrame<'a>> {
         let (children, tail_len) = match &prepared.term {
-            Term::Supf { level, .. } => self.constructor_children_tail(
+            Term::Supf { level, .. } => Wf(self).constructor_children_tail(
                 cx, expected, level,
                 prepared.container.as_ref().map(|(a, len)| (*a, Rc::clone(len))), span,
             )?,
@@ -3593,7 +3651,7 @@ impl Elaborator {
     fn add_ctor_child(&self, cx: &Cx, frame: &mut CtorWorkFrame<'_>, expected: &Type, child: Term) {
         let Term::Supf { level, .. } = &frame.prepared.term else { unreachable!() };
         let children = std::mem::replace(&mut frame.children, Term::Zero);
-        frame.children = self.prepend_constructor_child(
+        frame.children = Wf(self).prepend_constructor_child(
             cx, expected, level, child, children, &frame.tail_len,
         );
         frame.tail_len = Term::Succ(Rc::new(std::mem::replace(&mut frame.tail_len, Term::Zero)));
@@ -3691,9 +3749,9 @@ impl Elaborator {
                     .map(|(_, _, pair)| pair.clone());
                 Some(match known {
                     Some(pair) => pair,
-                    None => match self.wf_slot_refs(shape, arity) {
+                    None => match GeneratedDefs(self).wf_slot_refs(shape, arity) {
                         Some((s, a)) => (Rc::new(s), Rc::new(a)),
-                        None => self
+                        None => GeneratedDefs(self)
                             .emit_wf_slots(cx, shape, arity, 0)
                             .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
                     },
@@ -3775,9 +3833,9 @@ impl Elaborator {
         // module, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match wf_slots {
             Some(pair) => pair,
-            None => match self.wf_slot_refs(shape, arity) {
+            None => match GeneratedDefs(self).wf_slot_refs(shape, arity) {
                 Some((s, a)) => (Rc::new(s), Rc::new(a)),
-                None => self
+                None => GeneratedDefs(self)
                     .emit_wf_slots(cx, shape, arity, 0)
                     .unwrap_or_else(|| (Rc::clone(shape), Rc::clone(arity))),
             },
@@ -3804,7 +3862,9 @@ impl Elaborator {
             children, container,
         })
     }
+}
 
+impl Elaborator {
     /// The field tuple: `pair(tag_refl, pair(a₁, … pair(a_k, ⟨⟩)))`, walking
     /// the Σ spine of `⟦c_i⟧` and checking each argument against the component
     /// the spine says it must have. `tag` marks the first component, which is
@@ -3817,9 +3877,11 @@ impl Elaborator {
         tag: bool,
         span: Span,
     ) -> R<Term> {
-        self.build_fields_skel(cx, ctor_ty, args, tag, &[], span)
+        Inductives(self).build_fields_skel(cx, ctor_ty, args, tag, &[], span)
     }
+}
 
+impl Inductives<'_> {
     /// [`Self::build_fields`] plus, aligned positionally with `args`, each
     /// field's implicitness skeleton derived from its *stored surface* type
     /// (docs/implicit-binders-design.md §6.1's third site) — what lets a
@@ -3867,7 +3929,7 @@ impl Elaborator {
             })?;
             let skel = skels.first().and_then(|s| s.as_deref());
             (
-                self.elab_check_skel(cx, arg.borrow(), &fst, &fst_level, None, skel)?,
+                Checking(self).elab_check_skel(cx, arg.borrow(), &fst, &fst_level, None, skel)?,
                 rest,
                 skels.get(1..).unwrap_or(&[]),
             )
@@ -4013,18 +4075,18 @@ impl Elaborator {
         if ind.codata {
             // Codata: a case tree on the label of `out(s)`, at the motive's
             // instance at `s` itself (docs/codata-elaborator-design.md §4).
-            return self.elab_match_m(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+            return Codata(self).elab_match_m(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         if ind.recursive {
             // Tier 1: one `elim_Wf`, not a case tree over the scrutinee
             // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
             // surface bookkeeping and is shared.
-            return self.elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+            return Wf(self).elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         if ind.infinitary() {
             // Tier 2: one `elim_W` over the tree, applied to its leaf proof
             // (docs/inductive-tier2-w-lowering.md §7).
-            return self.elab_match_w(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+            return Infinitary(self).elab_match_w(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
         // The tier-0 twin of `wf.rs`'s motive respell
@@ -4039,7 +4101,7 @@ impl Elaborator {
         // rather than shifted afterwards, because the instance route mints an
         // *open* reference whose arguments are already scoped there
         // (`docs/per-instantiation-type-codes-design.md` §4.1).
-        let motive = self.respell_ty_at(cx, &motive, 1, 0).unwrap_or(motive);
+        let motive = GeneratedDefs(self).respell_ty_at(cx, &motive, 1, 0).unwrap_or(motive);
         // The emission copy of the spine, beside the structural one — the same
         // split the tier-1 lowering takes (`docs/wf-shape-code-design.md`
         // §3.4). A tier-0 `match` writes the constructor payload types into
@@ -4312,7 +4374,9 @@ impl Elaborator {
         }
         self.elab_check(&acx, &arm.body, expected, mlvl)
     }
+}
 
+impl Elaborator {
     /// Project field `idx` out of a record value (docs/surface-records.md
     /// §4.3). This is [`Self::elab_arm`]'s walk with the aliasing removed:
     /// step down the Σ spine, skipping the nominal tag, and stop at the
@@ -4376,13 +4440,13 @@ impl Elaborator {
         // `inner.end`, `close.forward`) is off a **bare** binder, which is
         // precisely what the gate declines.
         let admits = !telescoped
-            || self.rec_projs_are_dependent(ind.tag)
+            || GeneratedDefs(self).rec_projs_are_dependent(ind.tag)
             || receiver_admits_reference(&value);
         let args = admits
-            .then(|| self.instance_args(cx, ind, record_ty))
+            .then(|| GeneratedDefs(self).instance_args(cx, ind, record_ty))
             .flatten();
         if let Some(args) = args.as_ref()
-            && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, args, &value)
+            && let Some(t) = GeneratedDefs(self).rec_proj_ref_at(cx, ind.tag, idx, args, &value)
         {
             crate::stats::count(crate::stats::Counter::ProjectionNamed);
             return Ok(t);
@@ -4574,14 +4638,18 @@ impl Elaborator {
         }
         unreachable!("the loop returns at step idx + 1")
     }
+}
 
+impl Inductives<'_> {
     /// The record declaration a lowered type belongs to, if it is one. A
     /// non-record inductive gives `None`: its field names are positional, not
     /// accessors (docs/surface-records.md §2).
     pub(crate) fn record_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
         self.tag_of(ty).filter(|i| i.is_record)
     }
+}
 
+impl Elaborator {
     /// [`Self::record_of`] with a reduction step behind it, for a receiver
     /// whose type arrived through a **`Val -> Type` value** rather than through
     /// a type annotation: `dom(env)` with `dom := λ e => NatEnv(e)` is `El` of
@@ -4591,7 +4659,7 @@ impl Elaborator {
     /// read is tried first and unchanged, and `whnf` is paid only when it
     /// fails, which is exactly the new shape.
     pub(crate) fn record_of_at(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Rc<Inductive>> {
-        if let Some(ind) = self.record_of(ty) {
+        if let Some(ind) = Inductives(self).record_of(ty) {
             return Some(ind);
         }
         let head = self.whnf(cx, ty, span).ok()?;
@@ -4603,8 +4671,8 @@ impl Elaborator {
         // where the rewriter's reduct was the inline lowering, and `tag_of`
         // reads a *shape*. `unspell_here` is the registry's own exact inverse
         // and is what restores it.
-        self.record_of(&head)
-            .or_else(|| self.record_of(&self.unspell_here(&head)?))
+        Inductives(self).record_of(&head)
+            .or_else(|| Inductives(self).record_of(&self.unspell_here(&head)?))
     }
 }
 
@@ -6223,7 +6291,7 @@ impl Elaborator {
         let j = match at {
             // A payload: no `Case`, so the branch body is scoped in `cx`
             // itself with the scrutinee standing in for the binder.
-            Child::Leaf(k) => return self.const_body(cx, spine, k, &scrut, body, d, span),
+            Child::Leaf(k) => return Inductives(self).const_body(cx, spine, k, &scrut, body, d, span),
             Child::Node(j) => j,
         };
         let node = *spine.layout.node(j);
@@ -6272,7 +6340,9 @@ impl Elaborator {
             scrut,
         })
     }
+}
 
+impl Inductives<'_> {
     /// One branch of [`Self::const_case_tree`], for constructor `j`, with
     /// `value : ⟦c_j⟧` scoped in `cx`.
     #[allow(clippy::too_many_arguments)]
@@ -6323,7 +6393,9 @@ impl Elaborator {
             }
         }
     }
+}
 
+impl Elaborator {
     /// The `k`-th field projection `fst(snd^{k+1} value)` and its type (§5.1;
     /// the `+1` is the nominal tag). `ctor_ty` is `⟦c_i⟧` scoped in `cx`.
     pub(crate) fn projection(
@@ -6386,7 +6458,9 @@ impl Elaborator {
         }
         err("internal: projection walked off the end", span)
     }
+}
 
+impl Inductives<'_> {
     /// [`Self::projection`] in the checked spelling, `fst@(snd@^{k+1} value)`,
     /// where the caller's receiver infers (a case binder): no component
     /// annotations, so a field's term does not carry every earlier field's
@@ -6791,13 +6865,13 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         if ind.recursive {
-            return self.const_elim_wf(mcx, d_ty, spine, motive, mlvl, scrut, body, 2, span);
+            return Wf(self).const_elim_wf(mcx, d_ty, spine, motive, mlvl, scrut, body, 2, span);
         }
         if ind.infinitary() {
-            return self.const_elim_w(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
+            return Infinitary(self).const_elim_w(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
         }
         if ind.codata {
-            return self.const_out_m(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
+            return Codata(self).const_out_m(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
         }
         self.const_case_tree(
             mcx,
@@ -6906,8 +6980,8 @@ impl Elaborator {
     ) -> R<Term> {
         // An `IWf`-route family, either form: its tag is in the label, under
         // the family's own eliminator (docs/iwf-infinitary-design.md §13).
-        if let Some((ind, fam)) = self.iwf_of_at(cx, &written.1) {
-            return self.fam_absurd(cx, &ind, &fam, written, expected, expected_lvl, span);
+        if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, &written.1) {
+            return IwfConfusion(self).fam_absurd(cx, &ind, &fam, written, expected, expected_lvl, span);
         }
         if matches!(written.1, Type::Nat) {
             let (proof, _, _, lhs, rhs) = written;
@@ -7040,8 +7114,8 @@ impl Elaborator {
         arg_span: Span,
         span: Span,
     ) -> R<(Term, Type, Level)> {
-        if let Some((ind, fam)) = self.iwf_of_at(cx, &equation.1) {
-            return self.fam_inj(cx, &ind, &fam, k, equation, span);
+        if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, &equation.1) {
+            return IwfConfusion(self).fam_inj(cx, &ind, &fam, k, equation, span);
         }
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
             self.declared_equation(cx, equation, "inj", true, arg_span)?;
@@ -7190,7 +7264,7 @@ impl Elaborator {
                     .iter()
                     .filter(|f| **f == FieldKind::Plain)
                     .count();
-                self.child_projection(
+                Wf(self).child_projection(
                     &mcx,
                     &ind,
                     &sty.shift_local(2),

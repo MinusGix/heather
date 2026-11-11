@@ -40,8 +40,12 @@ use crate::{Alias, Cx, Elaborator, R, embed, err};
 
 mod node;
 mod upto;
+pub(crate) use upto::UpTo;
 pub(crate) use node::CtorNode;
 pub(crate) use upto::{Free, FriendMode};
+use crate::infinitary::Infinitary;
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -334,7 +338,7 @@ impl MParts {
     }
 
     fn inline(&self, el: &Elaborator) -> Option<&Rc<MSig>> {
-        self.inline.get_or_init(|| el.m_sig_inline(&self.sig)).as_ref()
+        self.inline.get_or_init(|| Codata(el).m_sig_inline(&self.sig)).as_ref()
     }
 
     /// `S` at `j` inline, for the spine.
@@ -696,7 +700,17 @@ impl CorecSite {
     }
 }
 
-impl Elaborator {
+/// Codata declarations' part of the elaborator.
+pub(crate) struct Codata<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Codata<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Codata<'_> {
     // -- the type (§2) ------------------------------------------------------
 
     /// `⟦D<args>⟧` for a `codata` declaration (§2), at `index` when it is
@@ -750,7 +764,7 @@ impl Elaborator {
         let mut parts = Vec::with_capacity(n);
         let mut all_doms = Vec::with_capacity(n);
         for i in 0..n {
-            let (t, l, doms) = self.lower_ctor_with_domains_at(&bcx, ind, i, &args_b, &vargs_b, &extra, span)?;
+            let (t, l, doms) = Inductives(self).lower_ctor_with_domains_at(&bcx, ind, i, &args_b, &vargs_b, &extra, span)?;
             parts.push((t, l));
             all_doms.push(doms);
         }
@@ -847,7 +861,7 @@ impl Elaborator {
                 scrut: var(0),
             }
         } else {
-            self.w_case_tree(
+            Infinitary(self).w_case_tree(
                 &xcx,
                 &spine,
                 spine.root(),
@@ -891,7 +905,7 @@ impl Elaborator {
                 dom: Rc::new(pos.shift_local_above(1, 1)),
                 cod: Rc::new(ity.shift_local(4)),
             };
-            let tree = self.w_case_tree(
+            let tree = Infinitary(self).w_case_tree(
                 &xcx,
                 &spine,
                 spine.root(),
@@ -943,7 +957,9 @@ impl Elaborator {
         let lw = sig.family_level();
         Ok((sig.at(Rc::new(index.expect("indexed"))), lw))
     }
+}
 
+impl Elaborator {
     // -- the named signature (docs/codata-named-signature-design.md) -----------
 
     /// `D#mshape`, `D#mpos` and (indexed) `D#mnext` at declaration time: the
@@ -956,26 +972,26 @@ impl Elaborator {
         if self.types.gdefs().abs_for(&GenDef::MShape(ind.tag)).is_some() {
             return;
         }
-        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+        let Some((cx, binders, targs, vargs)) = GeneratedDefs(self).tycode_fn_telescope(ind, span) else {
             return;
         };
         let indexed = !ind.co_index.is_empty();
         let (ity, li) = if indexed {
-            match self.codata_index_ty(&cx, ind, &targs, &vargs, span) {
+            match Codata(self).codata_index_ty(&cx, ind, &targs, &vargs, span) {
                 Ok(i) => i,
                 Err(_) => return,
             }
         } else {
             (Type::Unit { level: Level::Zero }, Level::Zero)
         };
-        let Ok((d_ty, _)) = self.lower_instance_m(&cx, ind, &targs, &vargs, indexed.then(|| Term::Triv { level: Level::Zero }), span) else {
+        let Ok((d_ty, _)) = Codata(self).lower_instance_m(&cx, ind, &targs, &vargs, indexed.then(|| Term::Triv { level: Level::Zero }), span) else {
             return;
         };
         let Type::M { sig, .. } = d_ty else {
             return;
         };
         let (ls, lp) = (sig.level.clone(), sig.pos_level.clone());
-        let tel = self.emitted_tel(&binders);
+        let tel = GeneratedDefs(self).emitted_tel(&binders);
         let n = tel.len() as u32;
         let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| var(n - 1 - k)).collect();
         let mut icx = cx.clone();
@@ -995,7 +1011,7 @@ impl Elaborator {
             return;
         }
         // `El(D#mshape ā i)` over `(tel, i)`.
-        let Some(s_ref) = self.m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1) else {
+        let Some(s_ref) = Codata(self).m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1) else {
             return;
         };
         let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
@@ -1020,8 +1036,8 @@ impl Elaborator {
         // `El(D#mshape ā i)` and `El(D#mpos ā i s)` over `(tel, i)` and `(tel,
         // i, s)`, both minted now.
         let (Some(s_ref), Some(p_ref)) = (
-            self.m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1),
-            self.m_ref_app(GenDef::MPos(ind.tag), &tel_vars, 2),
+            Codata(self).m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1),
+            Codata(self).m_ref_app(GenDef::MPos(ind.tag), &tel_vars, 2),
         ) else {
             return;
         };
@@ -1060,7 +1076,9 @@ impl Elaborator {
         }
         self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok()
     }
+}
 
+impl Codata<'_> {
     /// The result universe of a registered code function's statement, past its
     /// first `n` binders.
     pub(crate) fn gen_stmt_level(&self, key: GenDef, n: usize) -> Option<Level> {
@@ -1161,15 +1179,15 @@ impl Elaborator {
         let Some((GenDef::MShape(tag), args)) = self.gen_app_of(tm) else {
             return Some(Rc::clone(sig));
         };
-        let shape = self.unfold_gen_app(GenDef::MShape(tag), &args)?;
+        let shape = GeneratedDefs(self).unfold_gen_app(GenDef::MShape(tag), &args)?;
         let Type::El { tm: ptm, .. } = &*sig.pos else {
             return None;
         };
         let (_, pargs) = self.gen_app_of(ptm)?;
-        let pos = self.unfold_gen_app(GenDef::MPos(tag), &pargs)?;
+        let pos = GeneratedDefs(self).unfold_gen_app(GenDef::MPos(tag), &pargs)?;
         let next = match self.gen_app_of(&sig.next) {
             Some((GenDef::MNext(t), nargs)) if t == tag => {
-                Rc::new(self.unfold_gen_app(GenDef::MNext(tag), &nargs)?)
+                Rc::new(GeneratedDefs(self).unfold_gen_app(GenDef::MNext(tag), &nargs)?)
             }
             _ => Rc::clone(&sig.next),
         };
@@ -1887,7 +1905,7 @@ impl Elaborator {
         let mut ocx = cx.clone();
         ocx.push("#out".into(), (*o_ty).clone(), o_level.clone());
         ocx.codata_match = Some(ind.name.as_str().into());
-        let cased = self.w_case_tree(
+        let cased = Infinitary(self).w_case_tree(
             &ocx,
             &spine,
             spine.root(),
@@ -1943,7 +1961,7 @@ impl Elaborator {
                         }
                         _ => {
                             let r = if self.emits_at_forms() {
-                                self.projection_at(&acx, &ctor_ty, &value_here, payload_k, span)?
+                                Inductives(self).projection_at(&acx, &ctor_ty, &value_here, payload_k, span)?
                             } else {
                                 self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?
                             };
@@ -2217,7 +2235,7 @@ impl Elaborator {
         // of the friends over the seeds, existing trees and (with
         // constructors nested above a call) pending nodes.
         let seeds = levels[0].clone();
-        let friends = self.corec_friends(cx, selfref, &upto::SiteTy { ind: &ind, d_ty: &head }, &body)?;
+        let friends = UpTo(self).corec_friends(cx, selfref, &upto::SiteTy { ind: &ind, d_ty: &head }, &body)?;
         let mut free_parts = None;
         if let Some(first) = friends.first() {
             // The seed's own index `g[v]`, over (body, v).
@@ -2235,7 +2253,7 @@ impl Elaborator {
             } else {
                 triv()
             };
-            let ty = Rc::new(self.free_ty(cx, &p, (&vtuple, &vtuple_level), seed_out, &friends, nest > 0, first.span)?);
+            let ty = Rc::new(UpTo(self).free_ty(cx, &p, (&vtuple, &vtuple_level), seed_out, &friends, nest > 0, first.span)?);
             levels = vec![Carrier { fam: ty.fam(), level: ty.level.clone() }];
             free_parts = Some((ty, friends));
         }
@@ -2245,7 +2263,7 @@ impl Elaborator {
         let step_level = Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf.clone()));
         let free = match free_parts {
             Some((ty, friends)) => {
-                Some(Rc::new(self.free_arms(cx, &ind, &p, &carrier, ty, friends, &decl.name, &step_level)?))
+                Some(Rc::new(UpTo(self).free_arms(cx, &ind, &p, &carrier, ty, friends, &decl.name, &step_level)?))
             }
             None => None,
         };
@@ -2284,7 +2302,7 @@ impl Elaborator {
                 best = best.max(b);
                 calls |= k;
             });
-            if calls && el.codata_ctor_app(cx, ind, e).is_some() && surface_self_call(selfref, e).is_none() {
+            if calls && Codata(el).codata_ctor_app(cx, ind, e).is_some() && surface_self_call(selfref, e).is_none() {
                 best += 1;
             }
             (best, calls)
@@ -2362,7 +2380,7 @@ impl Elaborator {
         let nest = site.levels.len() - 1;
         let step = if let Some(free) = &site.free {
             // A free carrier (§5.5): structural recursion on the `Wf` tree.
-            self.free_step(cx, site, free, &p, &|kk, v| body_tuple(kk, (*v).clone()).0)
+            UpTo(self).free_step(cx, site, free, &p, &|kk, v| body_tuple(kk, (*v).clone()).0)
         } else if nest == 0 {
             body_at(0, var(0))
         } else {
@@ -2508,7 +2526,7 @@ impl Elaborator {
         };
         // A carrier position of a free carrier (§5.6).
         if let Some(free) = &site.free
-            && let Some(t) = self.free_site_check(cx, site, free, e, expected)?
+            && let Some(t) = UpTo(self).free_site_check(cx, site, free, e, expected)?
         {
             return Ok(Some(t));
         }
@@ -3039,7 +3057,7 @@ impl Elaborator {
         // A named signature's `D#mnext` is the one global unfolded: it is
         // the case tree itself.
         let top = match self.gen_app_of(idx) {
-            Some((GenDef::MNext(tag), args)) => self
+            Some((GenDef::MNext(tag), args)) => GeneratedDefs(self)
                 .unfold_gen_app(GenDef::MNext(tag), &args)
                 .map(Rc::new),
             _ => None,

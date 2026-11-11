@@ -12,7 +12,17 @@ use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 use super::{ParamMeta, Skel};
 use crate::{Cx, Elaborator, GlobalInfo, mentions_binder};
 
-impl Elaborator {
+/// Callable heads' part of the elaborator.
+pub(crate) struct Callables<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Callables<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Callables<'_> {
     // -- application (explicit + implicit spines) ---------------------------
 
     /// The implicit-parameter mask of a callable global (empty for locals,

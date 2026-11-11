@@ -27,6 +27,9 @@ use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
 use crate::oracle::Unfold;
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
+use crate::gendefs::GeneratedDefs;
+use crate::app_unify::AppUnify;
+use crate::name_lookup::NameLookup;
 
 /// How deep backchaining may go before it refuses. Declaration-time
 /// structural decrease (design §6) is what makes this unreachable; the cap is
@@ -208,7 +211,17 @@ impl SearchMark {
     }
 }
 
-impl Elaborator {
+/// Instance resolution's part of the elaborator.
+pub(crate) struct Resolution<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Resolution<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Resolution<'_> {
     /// The surface shape an `evidence theorem` must have before it is
     /// elaborated (docs/positivity-evidence-design.md §6 A). A rule is applied
     /// by search, so search has to be able to fill every parameter: a `{…}`
@@ -237,7 +250,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Register a checked `evidence theorem`: key it by its conclusion's
     /// relation and check that backchaining through it terminates.
     ///
@@ -340,9 +355,11 @@ impl Elaborator {
         span: Span,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
-        self.resolve_goal_from(cx, goal, lvl, display, prefer, span, tr, &mut None)
+        Resolution(self).resolve_goal_from(cx, goal, lvl, display, prefer, span, tr, &mut None)
     }
+}
 
+impl Resolution<'_> {
     /// [`Self::resolve_goal`], reporting **where an upcast came from**.
     ///
     /// When step 1b answers, `up` receives the *child* dictionary and its class
@@ -543,7 +560,7 @@ impl Elaborator {
                 },
             ));
             // A conclusion that cannot meet the goal is dropped unbuilt.
-            if self.conclusion_clashes(cx, &g, goal, span) {
+            if AppUnify(self).conclusion_clashes(cx, &g, goal, span) {
                 crate::stats::count(crate::stats::Counter::ConclusionClashes);
                 tr.push(line(depth + 1, "rejected", "conclusion does not match".to_string()));
                 continue;
@@ -638,7 +655,7 @@ impl Elaborator {
         };
         let args = match read {
             Some(args) => args,
-            None => self.instance_match(cx, ind, goal, 0, 0)?.1,
+            None => GeneratedDefs(self).instance_match(cx, ind, goal, 0, 0)?.1,
         };
         let np = class.params.len();
         if args.len() != np + class.valparams.len() {
@@ -679,7 +696,7 @@ impl Elaborator {
                 let at = class.valparams.iter().position(|v| v.name == *name)?;
                 aargs.push(Rc::clone(&args[np + at]));
             }
-            let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
+            let (aty, alvl) = GeneratedDefs(self).instance_type_at(cx, aind.tag, &aargs)?;
             tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
             self.scope.resolve_depth.set(depth + 1);
             let shown = ainfo.name.clone();
@@ -1260,13 +1277,17 @@ impl Elaborator {
         }
         None
     }
+}
 
+impl Elaborator {
     /// [`Self::conv_here`] for consumers outside this module — the value-slot
     /// ladder's carrier test (`docs/operation-indexed-classes-design.md` §5).
     pub(crate) fn conv_types(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
-        self.conv_here(cx, ty, goal, lvl)
+        Resolution(self).conv_here(cx, ty, goal, lvl)
     }
+}
 
+impl Resolution<'_> {
     /// Is `ty` the goal type, here? Conversion, in the use site's context.
     fn conv_here(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
         stats::time_kernel(|| {
@@ -1555,7 +1576,7 @@ impl Elaborator {
         if !self.traits.derived().iter().any(|d| d.abs == abs && is_open_head(d.head.as_deref())) {
             return None;
         }
-        let (_, body) = self.global_body_at(abs as usize)?;
+        let (_, body) = NameLookup(self).global_body_at(abs as usize)?;
         // Scoped in its prefix of Ψ; rescoped as `resolve` rescopes a
         // global's type, by the reference's own distance.
         let mut inner: Term = body.shift_global(var.rescope());
@@ -1573,7 +1594,9 @@ impl Elaborator {
         };
         Some(inner.apply_local(&delta))
     }
+}
 
+impl Elaborator {
     /// Mint one open derivation ([`Self::record_open`]): `ty` is the closed
     /// `Π prefix. goal` and `body` the λ over the same binders.
     fn mint_open(&mut self, ty: &Type, lvl: &Level, body: &Term, head: Option<&str>) {
@@ -1610,7 +1633,9 @@ impl Elaborator {
         self.semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
+}
 
+impl Resolution<'_> {
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
     /// makes for a written name: a committed binding is a constant, and a
     /// closed statement's delayed substitution is the empty map out of the
@@ -1681,7 +1706,9 @@ impl Elaborator {
             .is_ok()
         })
     }
+}
 
+impl Elaborator {
     /// May `body : ty` be minted at the end of Ψ? The gate's pair, a closed
     /// statement in the empty context and the body against it, asked through
     /// the gate's oracle as every other bodied binding's is (`gate.rs`). So a
@@ -1766,7 +1793,7 @@ impl Elaborator {
 
     fn mint_one(&mut self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
         let cx = Cx::empty();
-        if self.derived_hit(&cx, goal, prefer).is_some() {
+        if Resolution(self).derived_hit(&cx, goal, prefer).is_some() {
             return;
         }
         let mut tr = Vec::new();

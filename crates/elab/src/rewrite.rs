@@ -31,10 +31,23 @@ use crate::matching::MotiveSynthesisElab;
 use crate::{Cx, ElabError, Elaborator, R};
 
 mod relation;
+pub(crate) use relation::Relations;
 
 use relation::Polarity;
+use crate::subst_local::LocalSubsts;
+use crate::resolve::Resolution;
 
-impl Elaborator {
+/// Rewriting's part of the elaborator.
+pub(crate) struct Rewrites<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Rewrites<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Rewrites<'_> {
     /// `rewrite(h₁, …, hₙ, e)` at `goal`. `args` is the whole written
     /// argument list; the last one is the proof of the rewritten goal.
     /// `at := k` or `at := [k, …]` selects occurrences, and only with one
@@ -97,7 +110,7 @@ impl Elaborator {
             return self.elab_check(cx, body, goal, lvl);
         };
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
-        if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, goal, GOAL)? {
+        if let Some(mut step) = Relations(self).relation_step(cx, h, &proof, &proof_ty, goal, GOAL)? {
             if at.is_some() {
                 return Err(relation_at_refused(h.span));
             }
@@ -115,7 +128,7 @@ impl Elaborator {
             // (issues/pattern-variables-not-rewritable.md). Only here, where
             // the rewrite was about to refuse.
             Err(e) => {
-                let local = self.reduces_to_local(cx, &lhs, h.span).and_then(|p| {
+                let local = LocalSubsts(self).reduces_to_local(cx, &lhs, h.span).and_then(|p| {
                     let x = Rc::new(Term::Var(LocalVar((cx.names.len() - 1 - p) as u32)));
                     let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &x, &rhs, lvl).ok()?;
                     Some((x, motive))
@@ -123,7 +136,7 @@ impl Elaborator {
                 match local {
                     Some(found) => found,
                     None => {
-                        let Some(split) = self.split_projection(cx, &lhs, goal, h.span) else {
+                        let Some(split) = LocalSubsts(self).split_projection(cx, &lhs, goal, h.span) else {
                             return Err(e);
                         };
                         let term = self.rewrite_from(&split.cx, equations, at, body, &split.goal, lvl)?;
@@ -215,7 +228,7 @@ impl Elaborator {
         let (mut term, mut ty_now, lvl) = self.elab_infer(cx, &hyp.expr)?;
         for h in args {
             let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
-            if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, &ty_now, HYPOTHESIS)? {
+            if let Some(mut step) = Relations(self).relation_step(cx, h, &proof, &proof_ty, &ty_now, HYPOTHESIS)? {
                 if at.is_some() {
                     return Err(relation_at_refused(h.span));
                 }
@@ -266,7 +279,7 @@ impl Elaborator {
         lvl: &Level,
     ) -> R<Type> {
         let shown = |t: &Term| self.spell_term_clean(cx, t).map_or_else(String::new, |s| format!(" `{s}`"));
-        let exposed = || crate::matching::expose(self, cx, goal, h.span);
+        let exposed = || crate::matching::expose(self.0, cx, goal, h.span);
         let spellings = |g: &Type| self.spellings(cx, g, lhs, carrier, carrier_level);
         let motive = match at {
             None => goal.abstract_local_any(&spellings(goal)).or_else(|| {
@@ -383,7 +396,7 @@ impl Elaborator {
                 span: h.span,
             });
         }
-        let found = goal_terms(goal, |t| same_key(&lhs, t, k), || crate::matching::expose(self, cx, goal, h.span))
+        let found = goal_terms(goal, |t| same_key(&lhs, t, k), || crate::matching::expose(self.0, cx, goal, h.span))
             .into_iter()
             .take(CANDIDATES)
             .find_map(|t| {
@@ -560,7 +573,7 @@ impl Elaborator {
         // parameters (docs/traits-layer2-design.md §8.1), is what a written
         // record was before: compared by conversion once the dictionaries
         // are bound, not spine by spine against the goal's instance.
-        if self.is_open_app(pat) {
+        if Resolution(self).is_open_app(pat) {
             deferred.push((pat.clone(), Rc::clone(t)));
             return true;
         }

@@ -23,6 +23,7 @@ use crate::cutsat::{
 };
 use crate::omega::{Coeffs, Derivation, DerivationId, Interval, LinearExpr, Outcome, Problem, Z};
 use crate::{Cx, Elaborator};
+use crate::gendefs::GeneratedDefs;
 
 pub(crate) struct CertificateScope<'a> {
     depth: &'a std::cell::Cell<usize>,
@@ -1408,7 +1409,7 @@ fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) ->
         }
         return Some(Rc::clone(field));
     }
-    let named = elab.named_field_read(tm);
+    let named = GeneratedDefs(elab).named_field_read(tm);
     let (_, receiver) = named.clone().unwrap_or_else(|| projection_path(tm));
     if !head_is_global(receiver) {
         return None;
@@ -1803,7 +1804,7 @@ fn convertible_atom(
 /// Is `tm` a field read: an inline projection, or a named one
 /// ([`Elaborator::named_field_read`])?
 fn is_field_read(elab: &Elaborator, tm: &Rc<Term>) -> bool {
-    crate::spelling::proj_of(tm).is_some() || elab.named_field_read(tm).is_some()
+    crate::spelling::proj_of(tm).is_some() || GeneratedDefs(elab).named_field_read(tm).is_some()
 }
 
 /// The projections `tm` reads, outermost first (`true` for `fst`), and the

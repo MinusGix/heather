@@ -26,8 +26,19 @@ use crate::context::Alias;
 use crate::resolve::SearchMark;
 use crate::unification::{EarlierArg, strengthen_ty};
 use crate::{Cx, ElabError, Elaborator, R, ResolutionScope, application, datarepr, err, stats, surface};
+use crate::refusals::Refusals;
 
-impl Elaborator {
+/// Defaults' part of the elaborator.
+pub(crate) struct Defaults<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Defaults<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Defaults<'_> {
     /// A defaulted parameter, filled: its default checked at `expected`, the
     /// parameter's domain with this call's earlier arguments substituted.
     ///
@@ -182,11 +193,13 @@ impl Elaborator {
         // elaborator works in, before the attempt's slots are rolled back.
         let world = self.goal_psi();
         stats::time_kernel(|| self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl))
-            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Prog, &cx.gamma, None, ty, lvl))?;
+            .map_err(|e| Refusals(self).kernel_refusal(decl, default.span, e, &world, Layer::Prog, &cx.gamma, None, ty, lvl))?;
         stats::time_kernel(|| self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl))
-            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Code, &cx.gamma, Some(&term), ty, lvl))
+            .map_err(|e| Refusals(self).kernel_refusal(decl, default.span, e, &world, Layer::Code, &cx.gamma, Some(&term), ty, lvl))
     }
+}
 
+impl Elaborator {
     /// Install a stored declaration scope for one read of stored syntax. The
     /// guard restores the caller's scope on every return path.
     pub(crate) fn use_scope<'a>(&'a self, scope: &Rc<crate::names::Scope>) -> ResolutionScope<'a> {

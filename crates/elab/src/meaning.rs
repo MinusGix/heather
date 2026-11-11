@@ -165,7 +165,17 @@ fn arm(ctor: &str, binders: Vec<Pat>, body: Expr, span: Span) -> Arm {
     Arm { ctor: ctor.to_string(), default: false, binders, body, span }
 }
 
-impl Elaborator {
+/// Meaning's part of the elaborator.
+pub(crate) struct Meaning<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Meaning<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Meaning<'_> {
     /// The proof of the equation: `scrut` split `depth` levels deep along its
     /// recursive fields, `refl` at every leaf. One level is the ordinary
     /// structural recursion; a course-of-values recursion that reads the
@@ -314,7 +324,7 @@ impl Elaborator {
         // split's own parameter is a constructor (`inner`, #389's outer case
         // split).
         let mut plans: Vec<Expr> = (1..=MAX_SPLIT_DEPTH)
-            .map(|depth| self.meaning_split(&dec_name, &dec_ty, depth, &mut 0, span))
+            .map(|depth| Meaning(self).meaning_split(&dec_name, &dec_ty, depth, &mut 0, span))
             .collect();
         for (i, p) in decl.params.iter().enumerate() {
             if i == dec || !scrutinized(&decl.body, &p.name) {
@@ -322,8 +332,8 @@ impl Elaborator {
             }
             for depth in 1..=2 {
                 let mut fresh = 0;
-                let inner = self.meaning_split(&dec_name, &dec_ty, depth, &mut fresh, span);
-                let outer = self.meaning_split(&p.name, &p.ty, 1, &mut fresh, span);
+                let inner = Meaning(self).meaning_split(&dec_name, &dec_ty, depth, &mut fresh, span);
+                let outer = Meaning(self).meaning_split(&p.name, &p.ty, 1, &mut fresh, span);
                 plans.push(replace_refl(outer, &inner));
             }
         }

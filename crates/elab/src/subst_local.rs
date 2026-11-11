@@ -25,7 +25,17 @@ use heather_syntax::{Expr, NamedArg, Span};
 use crate::context::Alias;
 use crate::{Cx, ElabError, Elaborator, R};
 
-impl Elaborator {
+/// Local substitution's part of the elaborator.
+pub(crate) struct LocalSubsts<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for LocalSubsts<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl LocalSubsts<'_> {
     /// `subst(h, e)` at `goal`.
     pub(crate) fn elab_subst(
         &self,
@@ -443,7 +453,7 @@ fn projection_path(el: &Elaborator, cx: &Cx, t: &Term, span: Span) -> Option<(us
     }
 }
 
-impl Elaborator {
+impl LocalSubsts<'_> {
     /// `t`, when it is not a local itself but reduces to one: the local's
     /// position.
     pub(crate) fn reduces_to_local(&self, cx: &Cx, t: &Term, span: Span) -> Option<usize> {

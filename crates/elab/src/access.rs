@@ -26,6 +26,7 @@
 
 use crate::Elaborator;
 use std::collections::HashMap;
+use crate::module_delta::Deltas;
 
 #[derive(Clone)]
 /// Why a minted name is not spellable, as the second half of its diagnostic.
@@ -75,7 +76,7 @@ impl Elaborator {
                 .or_default()
                 .push(member.to_string());
         }
-        self.record_module_event(|| crate::module_delta::DeltaEvent::Access {
+        Deltas(self).record_module_event(|| crate::module_delta::DeltaEvent::Access {
             designed: designed.to_string(),
             minted: minted.to_string(),
         });
@@ -87,7 +88,7 @@ impl Elaborator {
             .access_mut()
             .restricted
             .insert(minted.to_string(), Restriction::Internal(of.to_string()));
-        self.record_module_event(|| crate::module_delta::DeltaEvent::InternalAccess {
+        Deltas(self).record_module_event(|| crate::module_delta::DeltaEvent::InternalAccess {
             minted: minted.to_string(),
             owner: of.to_string(),
         });

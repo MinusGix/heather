@@ -48,6 +48,10 @@ use crate::sum_layout::Child;
 use crate::recursion::{Guard, GuardKind};
 use crate::wf::{Branches, Tel};
 use crate::{Alias, Cx, Elaborator, R, code, err};
+use crate::wf::Wf;
+use crate::iwf_family::IwfFamily;
+use crate::mutual_family::MutualFamily;
+use crate::gendefs::GeneratedDefs;
 
 /// A type in **family form**: `El^l` of the index type's eliminator at motive
 /// `Ty l`, read back into its parts. This is the indexed analogue of `tag_of`
@@ -360,7 +364,17 @@ pub(crate) fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
     )
 }
 
-impl Elaborator {
+/// Indexed families' part of the elaborator.
+pub(crate) struct IndexedFamilies<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for IndexedFamilies<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl IndexedFamilies<'_> {
     /// Read a type back as a family form, when it is one of a declared
     /// indexed inductive. `None` for everything else — including the same
     /// family *reduced* at a constructor-headed index, which has lost its
@@ -570,7 +584,7 @@ impl Elaborator {
                     }
                     _ => return err(format!("`{name}` takes exactly one index"), span),
                 };
-                return self.lower_member(cx, &fam, k, targs, idx, span).map(Some);
+                return MutualFamily(self).lower_member(cx, &fam, k, targs, idx, span).map(Some);
             }
             return Ok(None);
         };
@@ -611,7 +625,7 @@ impl Elaborator {
         // (docs/inductive-fording-lowering.md §6); the classifier decided which
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
-            return self
+            return IwfFamily(self)
                 .lower_iwf_instance(cx, &ind, &lowered, &vargs, idx_t, span)
                 .map(Some);
         }
@@ -638,7 +652,7 @@ impl Elaborator {
         // closed, so a parameterized family has none and takes the inline path
         // below (§5).
         if args.is_empty()
-            && let Some(r) = self.fam_occurrence(cx, ind, &idx, span)
+            && let Some(r) = GeneratedDefs(self).fam_occurrence(cx, ind, &idx, span)
         {
             return Ok(r);
         }
@@ -876,7 +890,7 @@ impl Elaborator {
                     let branch = self.wf_branch_env(bcx, iind, tel, k, value, d_body, span)?;
                     body(bcx, k, &branch, e)
                 };
-                self.build_elim_wf(
+                Wf(self).build_elim_wf(
                     cx,
                     iind,
                     &ity_ty,
@@ -1569,7 +1583,7 @@ impl Elaborator {
                         body: Rc::new(inner),
                     })
                 };
-                self.build_elim_wf(
+                Wf(self).build_elim_wf(
                     cx,
                     iind,
                     &ity_ty,
@@ -1948,7 +1962,7 @@ inductive W : (n: Nat) -> Type {
 
     /// `V`'s family type as the generator emits it, taken apart.
     fn occurrence(t: &Two, ind: &Inductive, idx: Term) -> (Type, Level) {
-        t.el.lower_indexed_instance(&t.cx, ind, &[], idx, SPAN)
+        IndexedFamilies(&t.el).lower_indexed_instance(&t.cx, ind, &[], idx, SPAN)
             .expect("the family lowers")
     }
 
@@ -1979,14 +1993,14 @@ inductive W : (n: Nat) -> Type {
         let Some((fun, _)) = crate::spelling::app_of(tm) else {
             panic!("…of the family function")
         };
-        assert!(t.el.is_gen_ref(fun, GenDef::Fam(t.v.tag)));
+        assert!(GeneratedDefs(&t.el).is_gen_ref(fun, GenDef::Fam(t.v.tag)));
         // A `Type`-valued field puts it above level 0, which is where a
         // dropped join would show (§10.5).
         assert_ne!(l, Level::Zero);
         // The positive: it still reads back, as `V`, and the node still fills
         // at a scrutinee — what every consumer downstream (`el_at`, the arm
         // builders) needs.
-        let (ind, fam) = t.el.indexed_of(&ty).expect("reads back as a family");
+        let (ind, fam) = IndexedFamilies(&t.el).indexed_of(&ty).expect("reads back as a family");
         assert_eq!(ind.tag, t.v.tag);
         assert_eq!(fam.level, l);
         assert!(matches!(
@@ -2009,7 +2023,7 @@ inductive W : (n: Nat) -> Type {
             t.el.gen_ref(GenDef::Fam(t.w.tag))
                 .expect("W has a family definition");
         let (ind, _) =
-            t.el.indexed_of(&with_head(&ty, w_fam))
+            IndexedFamilies(&t.el).indexed_of(&with_head(&ty, w_fam))
                 .expect("it is W's family");
         assert_eq!(ind.tag, t.w.tag);
         assert_ne!(ind.tag, t.v.tag);
@@ -2042,7 +2056,7 @@ inductive W : (n: Nat) -> Type {
                 terms: vec![],
             },
         };
-        assert!(t.el.indexed_of(&with_head(&ty, dup)).is_none());
+        assert!(IndexedFamilies(&t.el).indexed_of(&with_head(&ty, dup)).is_none());
     }
 
     /// A parameterized family keeps its inlined spelling (design §5), and the
@@ -2071,20 +2085,20 @@ inductive Pv<A> : (n: Nat) -> Type {
         );
         let cx = Cx::empty();
         assert!(el.gen_ref(GenDef::Fam(p.tag)).is_none());
-        let (pty, _) = el
+        let (pty, _) = IndexedFamilies(&el)
             .lower_indexed_instance(&cx, &p, &[(Type::Nat, Level::Zero)], Term::Zero, SPAN)
             .expect("the parameterized family lowers");
         let Type::El { tm, .. } = &pty else {
             panic!("a route-1 family is an El")
         };
         assert!(!crate::spelling::is_app(tm));
-        let (ind, _) = el.indexed_of(&pty).expect("reads back structurally");
+        let (ind, _) = IndexedFamilies(&el).indexed_of(&pty).expect("reads back structurally");
         assert_eq!(ind.tag, p.tag);
         // …and `V`'s reference is `V`, never `Pv`.
-        let (vty, _) = el
+        let (vty, _) = IndexedFamilies(&el)
             .lower_indexed_instance(&cx, &v, &[], Term::Zero, SPAN)
             .expect("lowers");
-        let (ind, _) = el.indexed_of(&vty).expect("reads back nominally");
+        let (ind, _) = IndexedFamilies(&el).indexed_of(&vty).expect("reads back nominally");
         assert_eq!(ind.tag, v.tag);
         assert_ne!(ind.tag, p.tag);
     }
@@ -2127,7 +2141,7 @@ inductive Bal : (s: Shape) -> Type {
             let idx = el
                 .build_ctor(&cx, &iind, 0, &[] as &[Expr], &ity, &ilvl, SPAN)
                 .expect("builds");
-            let (ty, _) = el
+            let (ty, _) = IndexedFamilies(&el)
                 .lower_indexed_instance(&cx, &ind, &[], idx, SPAN)
                 .expect("the family lowers");
             let Type::El { tm, .. } = &ty else {
@@ -2136,14 +2150,14 @@ inductive Bal : (s: Shape) -> Type {
             let Some((fun, _)) = crate::spelling::app_of(tm) else {
                 panic!("…of the family function")
             };
-            assert!(el.is_gen_ref(fun, GenDef::Fam(ind.tag)));
+            assert!(GeneratedDefs(&el).is_gen_ref(fun, GenDef::Fam(ind.tag)));
             // The occurrence used to state its domain, which had to be the
             // index type's code reference so that every occurrence did not
             // copy the index type inline. Since
             // `docs/app-by-head-type-design.md` it states none: the domain
             // is the family function's, once, in Ψ.
             assert!(matches!(&**tm, Term::AppAt { .. }), "the occurrence is `app@`");
-            assert_eq!(el.indexed_of(&ty).expect("reads back").0.tag, ind.tag);
+            assert_eq!(IndexedFamilies(&el).indexed_of(&ty).expect("reads back").0.tag, ind.tag);
         }
     }
 
@@ -2161,15 +2175,15 @@ inductive Bal : (s: Shape) -> Type {
         cx.push("n".into(), Type::Nat, Level::Zero);
         let idx = Term::Var(LocalVar(0));
         let (ty, l) =
-            t.el.lower_indexed_instance(&cx, &t.v, &[], idx.clone(), SPAN)
+            IndexedFamilies(&t.el).lower_indexed_instance(&cx, &t.v, &[], idx.clone(), SPAN)
                 .expect("the family lowers");
         // The unfold by hand: the generator's own two passes, which is what δ
         // plus β plus decode of the reference arrives at.
         let (_, l2) =
-            t.el.build_family(&cx, &t.v, &[], &Level::Zero, idx.clone(), SPAN)
+            IndexedFamilies(&t.el).build_family(&cx, &t.v, &[], &Level::Zero, idx.clone(), SPAN)
                 .expect("the level pass");
         let (fam, _) =
-            t.el.build_family(&cx, &t.v, &[], &l2, idx, SPAN)
+            IndexedFamilies(&t.el).build_family(&cx, &t.v, &[], &l2, idx, SPAN)
                 .expect("the family builds");
         assert_eq!(l, l2);
         let inline = Type::El {
@@ -2177,7 +2191,7 @@ inductive Bal : (s: Shape) -> Type {
             tm: Rc::new(fam),
         };
         let (ind, refam) =
-            t.el.indexed_of(&inline)
+            IndexedFamilies(&t.el).indexed_of(&inline)
                 .expect("the pre-unfolded spelling still reads back");
         assert_eq!(ind.tag, t.v.tag);
         assert!(matches!(refam.at(Term::Zero, 0), Term::ElimNat { .. }));

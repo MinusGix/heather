@@ -37,6 +37,7 @@ use heather_syntax::{Decl, Pat, Ty};
 use crate::ElabError;
 use crate::TyVar;
 use crate::names::Scope;
+use crate::codata::Codata;
 
 /// Whether `name`'s innermost binding in `cx` is `alias` itself.
 fn binds(cx: &Cx, name: &str, alias: &Rc<Alias>) -> bool {
@@ -907,7 +908,17 @@ pub(crate) struct SiteTy<'a> {
     pub(super) d_ty: &'a Type,
 }
 
-impl Elaborator {
+/// Corecursion up to friends' part of the elaborator.
+pub(crate) struct UpTo<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for UpTo<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl UpTo<'_> {
     // -- finding the friends ---------------------------------------------------
 
     /// The friends a corecursive body calls: a call inside one of the
@@ -917,7 +928,7 @@ impl Elaborator {
     /// guard's own diagnostics apply to it).
     pub(super) fn corec_friends(&self, cx: &Cx, selfref: &SelfRef, site: &SiteTy<'_>, body: &Expr) -> R<Vec<Friend>> {
         fn go(el: &Elaborator, cx: &Cx, selfref: &SelfRef, ind: &Inductive, e: &Expr, under: bool, out: &mut Vec<(String, Span)>) {
-            let ctor = el.codata_ctor_app(cx, ind, e).is_some();
+            let ctor = Codata(el).codata_ctor_app(cx, ind, e).is_some();
             if under
                 && !ctor
                 && surface_self_call(selfref, e).is_none()
@@ -1267,9 +1278,9 @@ impl Elaborator {
     /// `k`): `Π(j : I). El(ok z j) → F(C)(j)`, or `F(C)` unindexed.
     fn free_mot(&self, p: &MParts, ty: &FreeTy, carrier: &Carrier, sl: &Level, k: u32, z: Rc<Term>) -> Type {
         if !ty.indexed {
-            return self.step_ty(p, k, carrier);
+            return Codata(self).step_ty(p, k, carrier);
         }
-        let f = self.node_ty_at(p, k + 2, &var(1), carrier);
+        let f = Codata(self).node_ty_at(p, k + 2, &var(1), carrier);
         pi(&ty.li, &join(&ty.lk, sl), ty.idx.shift_local(k), pi(&ty.lk, sl, ty.ok_at(k + 1, Rc::new(z.shift_local(1)), var(0)), f))
     }
 
@@ -1397,11 +1408,11 @@ impl Elaborator {
                 fcx.aliases.push(alias);
             }
             let res = Rc::new(friend.result.apply_local(&friend.subst(&cx.gamma, 4, &vals, 0)));
-            let want = self.node_ty_at(p, 4, &res, carrier);
+            let want = Codata(self).node_ty_at(p, 4, &res, carrier);
             fcx.friend = Some(Rc::new(FriendMode { trees, ..mode_stub }));
             let arm = {
                 let _scope = friend.scope.as_ref().map(|s| self.use_scope(s));
-                crate::statements::check_block(self, &fcx, &friend.decl.body, &want, step_level, None, None, true)
+                crate::statements::check_block(self.0, &fcx, &friend.decl.body, &want, step_level, None, None, true)
             };
             match arm {
                 Ok(t) => arms.push(t),
@@ -1623,7 +1634,7 @@ impl Elaborator {
     #[allow(clippy::too_many_arguments)]
     fn free_pending(&self, cx: &Cx, p: &MParts, free: &FreeTy, ind: &Inductive, carrier: &Carrier, k: u32, idx: &Rc<Term>, i: usize, args: &[&Expr], span: Span) -> R<Term> {
         let q = if free.indexed { p.reindexed(0, Rc::clone(idx)) } else { p.reindexed(0, triv()) };
-        let node = Rc::new(self.corec_node(cx, &q, ind, carrier, i, args, span)?);
+        let node = Rc::new(Codata(self).corec_node(cx, &q, ind, carrier, i, args, span)?);
         let lab = fst(Rc::clone(&node));
         let v = if free.indexed {
             Rc::new(Term::Pair {
@@ -1676,7 +1687,7 @@ impl Elaborator {
                 {
                     return err("a corecursive call takes no type arguments: they are the definition's own", e.span);
                 }
-                let seed = self.corec_seed(cx, site, &p, &site.seeds.under(k), &idx, &args, e.span)?;
+                let seed = Codata(self).corec_seed(cx, site, &p, &site.seeds.under(k), &idx, &args, e.span)?;
                 return Ok(Some(ty.seed_leaf(k, &idx, Rc::new(seed))));
             }
             if let Some((f, tys, args)) = self.friend_call(cx, free, e)
@@ -1700,7 +1711,7 @@ impl Elaborator {
             }
             if nested_self_call(&site.selfref, e).is_some() {
                 if ty.pending
-                    && let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e)
+                    && let Some((i, args)) = Codata(self).codata_ctor_app(cx, &site.ind, e)
                 {
                     let carrier = site.carrier.under(k);
                     return Ok(Some(self.free_pending(cx, &p, ty, &site.ind, &carrier, k, &idx, i, &args, e.span)?));
@@ -1744,8 +1755,8 @@ impl Elaborator {
         let Some(p) = MParts::read(&free.dsig.shift_local(k).at(Rc::clone(&res)), &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
         };
-        let node_ty = self.step_ty(&p, 0, &carrier);
-        let node_level = Self::node_level(&p, &carrier);
+        let node_ty = Codata(self).step_ty(&p, 0, &carrier);
+        let node_level = Codata::node_level(&p, &carrier);
         let at_node = *expected == node_ty || {
             let head = self.whnf(cx, expected, e.span).ok();
             matches!(head, Some(Type::Sigma { .. })) && self.conv_types(cx, expected, &node_ty, &node_level)
@@ -1826,7 +1837,7 @@ impl Elaborator {
                 let Some(q) = MParts::read(&free.dsig.shift_local(k).at(pi_idx), &cx.gamma) else {
                     return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
                 };
-                let t = self.match_m_over(cx, &mode.ind, &arms, &q, expected.clone(), lvl.clone(), Observed::Node(mode.node_of(now, j, y), &carrier), e.span)?;
+                let t = Codata(self).match_m_over(cx, &mode.ind, &arms, &q, expected.clone(), lvl.clone(), Observed::Node(mode.node_of(now, j, y), &carrier), e.span)?;
                 return Ok(Some(t));
             }
             if let ExprKind::Var(s) = &scrut.kind
@@ -2051,12 +2062,12 @@ impl Elaborator {
                 e.span,
             );
         }
-        if let Some((i, args)) = self.codata_ctor_app(cx, &mode.ind, e) {
-            return Ok(Some(self.corec_node(cx, &p, &mode.ind, &carrier, i, &args, e.span)?));
+        if let Some((i, args)) = Codata(self).codata_ctor_app(cx, &mode.ind, e) {
+            return Ok(Some(Codata(self).corec_node(cx, &p, &mode.ind, &carrier, i, &args, e.span)?));
         }
         unfriendly(e)?;
         let t = Rc::new(self.elab_check(cx, e, &p.d_at(0), &p.lw)?);
-        Ok(Some(self.observe_node(&p, 0, &carrier, &node_level, t)))
+        Ok(Some(Codata(self).observe_node(&p, 0, &carrier, &node_level, t)))
     }
 
     /// The step over a free carrier, in `(body, i, x)`: structural recursion
@@ -2094,9 +2105,9 @@ impl Elaborator {
                     0 => body_at(kk, v),
                     1 if ty.indexed => {
                         let q = p.reindexed(kk, fst(Rc::clone(&v)));
-                        self.observe_node(&q, 0, &carrier.under(kk), &sl, snd(v))
+                        Codata(self).observe_node(&q, 0, &carrier.under(kk), &sl, snd(v))
                     }
-                    1 => self.observe_node(p, kk, carrier, &sl, v),
+                    1 => Codata(self).observe_node(p, kk, carrier, &sl, v),
                     2 if ty.pending => {
                         // Emit the pending node: its label, its children the
                         // tree's children at the same positions.
@@ -2126,7 +2137,7 @@ impl Elaborator {
                                 val: kid,
                             },
                         );
-                        self.step_pair(&pq, 0, lab, &c, kids)
+                        Codata(self).step_pair(&pq, 0, lab, &c, kids)
                     }
                     _ => free.arms[r - ty.first_friend].apply_local(&embed(&cx.gamma, kk).extended(v).extended(f).extended(ih).extended(okrest)),
                 }
@@ -2142,7 +2153,7 @@ impl Elaborator {
                     motive_level: sl.clone(),
                     ty: Rc::new(ty.idx.shift_local(kk)),
                     lhs: ty.out_r(r, kk, &Rc::new(v.shift_local(kk - d))),
-                    motive: Rc::new(self.node_ty_at(p, kk + 2, &var(1), carrier)),
+                    motive: Rc::new(Codata(self).node_ty_at(p, kk + 2, &var(1), carrier)),
                     case: Rc::new(body(kk, snd(Rc::clone(&okp)), 2)),
                     rhs: var(1),
                     proof: fst(okp),

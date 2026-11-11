@@ -8,6 +8,7 @@ use heather_syntax::Span;
 
 use crate::inductive::Inductive;
 use crate::{Cx, Elaborator};
+use crate::mutual_family::MutualFamily;
 
 /// A carrier the operator path read off a type: what a diagnostic prints, and
 /// what a registry is keyed by.
@@ -42,7 +43,17 @@ impl Carrier {
     }
 }
 
-impl Elaborator {
+/// Carrier dispatch's part of the elaborator.
+pub(crate) struct Carriers<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Carriers<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Carriers<'_> {
     /// Does this name refer to a *type* here — a declared inductive/record, or
     /// a kernel type that has no declaration? Used only to check a member
     /// declaration's qualifier, so a false answer costs a rejection at the
@@ -187,7 +198,7 @@ impl Elaborator {
     /// index inside the group's own recursion) has no member and answers
     /// `None`, as the family always did.
     fn member_carrier(&self, ty: &Type) -> Option<Carrier> {
-        let (fam, k) = self.member_of_family_ty(ty)?;
+        let (fam, k) = MutualFamily(self).member_of_family_ty(ty)?;
         let name = fam.members[k].name.clone();
         Some(Carrier { key: crate::names::qkey(&fam.scope.module, &name), written: name })
     }

@@ -44,6 +44,9 @@ use crate::inductive::{IdxTy, Inductive};
 use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar};
 use crate::layered::{Layer as RegistryLayer, Layered, index_hash};
+use crate::indexed::IndexedFamilies;
+use crate::inductive::Inductives;
+use crate::name_lookup::NameLookup;
 
 /// The key of a machine-named definition. Keys are **nominal**: a declaration
 /// tag plus, where the device is per-constructor, its position. That is what
@@ -420,7 +423,7 @@ impl Holes<'_> {
     /// because a quote can be a multi-megabyte literal while a reference
     /// unspells to the copy the walk was already comparing.
     fn see_through(&self, ty: &Type) -> Option<Type> {
-        self.el.unspell_here_in(ty, self.g)
+        GeneratedDefs(self.el).unspell_here_in(ty, self.g)
     }
 
     /// [`Self::see_through`] at a **code**: the inline copy a code reference
@@ -1332,6 +1335,16 @@ impl GenDefs {
     }
 }
 
+/// Generated definitions' part of the elaborator.
+pub(crate) struct GeneratedDefs<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for GeneratedDefs<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     // -- registration -------------------------------------------------------
 
@@ -1470,7 +1483,7 @@ impl Elaborator {
             // kernel walk the inline shape against the reference.
             self.register_wf_slots(ind, &d_ty, &l, at, span);
             let named = match &d_ty {
-                Type::Wf { level, shape, arity } => self
+                Type::Wf { level, shape, arity } => GeneratedDefs(self)
                     .wf_slot_refs(shape, arity)
                     .map(|(shape, arity)| Type::Wf {
                         level: level.clone(),
@@ -1490,7 +1503,7 @@ impl Elaborator {
                 // payload code's, so one δ exposes `Σ(El (F#tycode^δ)). …` —
                 // what the constructor tuple is annotated with — rather than
                 // `F` inline, walked per constructor value.
-                None => self
+                None => GeneratedDefs(self)
                     .respell_ty_deep(&cx, &d_ty, 0)
                     .and_then(|t| crate::code::code_of(&t))
                     .unwrap_or_else(inline_body),
@@ -1525,7 +1538,7 @@ impl Elaborator {
             return;
         }
         let profile = vec![Level::Zero; ind.params.len()];
-        let Some(CodeFnAt { template, l, targs, ty, ty_level, body }) = self.tycode_fn_at_profile(ind, &profile, span) else {
+        let Some(CodeFnAt { template, l, targs, ty, ty_level, body }) = GeneratedDefs(self).tycode_fn_at_profile(ind, &profile, span) else {
             return;
         };
         let at = self.lowering_scope();
@@ -1545,7 +1558,9 @@ impl Elaborator {
             );
         }
     }
+}
 
+impl GeneratedDefs<'_> {
     /// `register_ty_code_fn`'s definition at a parameter level **profile**:
     /// the body `λ(A₁ : Ty l₁)…(v̄). ⌜⟦D<El A₁,…>(v̄)⟧⌝`, its statement, and
     /// the open template it was quoted from. The registered definition is
@@ -1596,7 +1611,9 @@ impl Elaborator {
         }
         Some(CodeFnAt { template, l, targs, ty, ty_level, body })
     }
+}
 
+impl Elaborator {
     /// The whole-type code function of the unindexed declaration with tag
     /// `tag` at the type parameters' levels `profile`, with the
     /// declaration's module-qualified name: closed and scoped in Ψ as it
@@ -1611,10 +1628,12 @@ impl Elaborator {
         if profile.len() != ind.params.len() {
             return None;
         }
-        let code = self.tycode_fn_at_profile(&ind, profile, Span { start: 0, end: 0 })?.body;
+        let code = GeneratedDefs(self).tycode_fn_at_profile(&ind, profile, Span { start: 0, end: 0 })?.body;
         Some((crate::names::qkey(&ind.scope.module, &ind.name), code))
     }
+}
 
+impl GeneratedDefs<'_> {
     /// A declaration's telescope with every domain in the **emission**
     /// spelling (`docs/annotation-component-respell-design.md` §2.5/§2.6).
     ///
@@ -1754,7 +1773,9 @@ impl Elaborator {
             .collect();
         Some((cx, binders, targs, vargs))
     }
+}
 
+impl Elaborator {
     /// `D#payloadₖ := ⌜⟦cₖ⟧⌝` per constructor and `D#suffixₖ :=
     /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a declaration's
     /// sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`) — for a
@@ -1795,7 +1816,7 @@ impl Elaborator {
         let spine = self.spine(d_ty, l, n, span).ok()?;
         let cx = Cx::empty();
         for (k, (ctor, lk)) in spine.ctors.iter().enumerate() {
-            let emit = self.respell_ty_deep(&cx, ctor, 0);
+            let emit = GeneratedDefs(self).respell_ty_deep(&cx, ctor, 0);
             let body = crate::code::code_of(emit.as_ref().unwrap_or(ctor))?;
             self.push_gen_def(
                 GenDef::PayloadCode(ind.tag, k),
@@ -1914,7 +1935,7 @@ impl Elaborator {
         // `register_ty_code_fn`'s, verbatim, which is what makes the two
         // definitions' arguments the same `ā` at every use site.
         let (tel, cx, targs, vargs) = if telescoped {
-            let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+            let Some((cx, binders, targs, vargs)) = GeneratedDefs(self).tycode_fn_telescope(ind, span) else {
                 decline!("register_rec_projs", &ind.name, "telescope");
                 return;
             };
@@ -1922,7 +1943,7 @@ impl Elaborator {
             // `D#tycode_fn`'s own statement, for the same reason and so that
             // the two definitions' `Π`s over `Θ` are one spelling: `saturate`
             // reads these back at every field read.
-            (self.emitted_tel(&binders), cx, targs, vargs)
+            (GeneratedDefs(self).emitted_tel(&binders), cx, targs, vargs)
         } else {
             (Vec::new(), Cx::empty(), Vec::new(), Vec::new())
         };
@@ -1951,7 +1972,7 @@ impl Elaborator {
         // size of its name, and every `t.r` converted the two
         // (`issues/native-lemma-kernel-steps.md`).
         let d_ty = Rc::new(if telescoped {
-            let Some(r) = self.respell_ty(&cx, &template) else {
+            let Some(r) = GeneratedDefs(self).respell_ty(&cx, &template) else {
                 decline!("register_rec_projs", &ind.name, "binder-reference");
                 return;
             };
@@ -2002,7 +2023,7 @@ impl Elaborator {
         // devices — and the one declined cell is the closed non-dependent
         // record, §13.6's own deliberate omission, whose walk is linear
         // already and whose definitions would be all cost.
-        let dependent = self.record_spine_is_dependent(&vcx, &cur, nfields, span);
+        let dependent = GeneratedDefs(self).record_spine_is_dependent(&vcx, &cur, nfields, span);
         if !telescoped && !dependent {
             decline!(
                 "register_rec_projs",
@@ -2139,7 +2160,9 @@ impl Elaborator {
             pair = next;
         }
     }
+}
 
+impl GeneratedDefs<'_> {
     /// Does any entry of the record's Σ spine occur in the entries after it?
     ///
     /// This is the whole precondition of the device. The inline walk in
@@ -2186,7 +2209,9 @@ impl Elaborator {
         }
         false
     }
+}
 
+impl Elaborator {
     /// `D#famⱼ := λ(v : ⟦D⟧). λ(x : Fⱼ). ⌜Sⱼ⌝`, the Σ tail family at spine
     /// entry `j`, and the annotation that stands for `Sⱼ` afterwards:
     /// `El (D#famⱼ^δ v x)`, scoped in `·, v, x` exactly as `Sⱼ` was.
@@ -2329,7 +2354,9 @@ impl Elaborator {
         )?;
         Some(Rc::new(tm))
     }
+}
 
+impl GeneratedDefs<'_> {
     /// `app(D#projⱼ^δ; ā, v)` and its type, for a projection of field `idx`
     /// off `value` at the instantiation `ā`
     /// (`issues/theorem-field-projection-oom.md`;
@@ -2426,7 +2453,9 @@ impl Elaborator {
         let np = ind.params.len();
         (args.len() == np + ind.valparams.len()).then(|| args[np..].to_vec())
     }
+}
 
+impl Elaborator {
     /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
     /// **recursive** declaration whose lowering is `Wf(x : S). n`
     /// (`docs/wf-shape-code-design.md` §2.1). Runs off `register_ty_code`'s own
@@ -2472,7 +2501,7 @@ impl Elaborator {
             Some(named) => named,
             None => {
                 // A spine that declined part way pushed its first payloads.
-                let emitted = self.respell_ty_deep(&cx, shape, 0);
+                let emitted = GeneratedDefs(self).respell_ty_deep(&cx, shape, 0);
                 let Some(scode) = crate::code::code_of(emitted.as_ref().unwrap_or(shape)) else {
                     return;
                 };
@@ -2495,7 +2524,7 @@ impl Elaborator {
         // The λ's domain is the shape *reference* just registered: the arity
         // definition is the one place where writing the shape out again would
         // undo half of what this pair buys.
-        let Some(sref) = self.gen_type_ref(skey, l) else {
+        let Some(sref) = GeneratedDefs(self).gen_type_ref(skey, l) else {
             return;
         };
         let ty = Type::Pi {
@@ -2530,7 +2559,9 @@ impl Elaborator {
             );
         }
     }
+}
 
+impl GeneratedDefs<'_> {
     /// `El (D#shape^δ)` and `app(D#arity^δ; x₀)` for a `Wf`'s slot pair, if and
     /// only if the pair in front of us **is** the one the two definitions were
     /// minted from (design §2.3's guard). `None` is every emission site's cue
@@ -2741,7 +2772,7 @@ impl Elaborator {
             if !entry.param_levels[i].equiv(&l) {
                 return Ok(None);
             }
-            codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self, cx, &t, &l, &l, span)?));
+            codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self.0, cx, &t, &l, &l, span)?));
         }
         if s + 1 == codes.len() {
             codes.pop();
@@ -2804,7 +2835,7 @@ impl Elaborator {
         let (level, args) = self.instance_match_entry(cx, &ind, &entry, ty, 0, 0)?;
         let np = ind.params.len();
         let mut head = if ind.valparams.is_empty() {
-            self.generic_former_lambda(cx, &ind, &entry.param_levels, span).ok()?
+            Inductives(self).generic_former_lambda(cx, &ind, &entry.param_levels, span).ok()?
         } else {
             // The value arguments are fixed under the type binders, so none
             // of their types may read a type parameter (`Parser<T>(x: T)`
@@ -2829,7 +2860,7 @@ impl Elaborator {
                 }
                 cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
             }
-            self.generic_former_lambda_with_values(cx, &ind, &vargs, &entry.param_levels, span).ok()?
+            Inductives(self).generic_former_lambda_with_values(cx, &ind, &vargs, &entry.param_levels, span).ok()?
         };
         // The constructor's own type: the statement's type binders over
         // `Ty l`, without the value binders the constructor fixed.
@@ -2932,7 +2963,7 @@ impl Elaborator {
     /// (`docs/codata-named-signature-design.md` §3).
     pub(crate) fn unfold_gen_app(&self, key: GenDef, args: &[Rc<Term>]) -> Option<Term> {
         let abs = *self.types.gdefs().abs_for(&key)?;
-        let (_, body) = self.global_body_at(abs as usize)?;
+        let (_, body) = NameLookup(self).global_body_at(abs as usize)?;
         let mut cur: &Term = &body;
         for _ in args {
             let Term::Lam { body, .. } = cur else {
@@ -3284,7 +3315,9 @@ impl Elaborator {
         let arity = self.respell_arity_at(cx, arity, depth + 1, 0).ok()??;
         Some((Rc::new(shape), Rc::new(arity)))
     }
+}
 
+impl Elaborator {
     /// **The one emission chokepoint** for an annotation slot's spelling
     /// (`docs/annotation-component-respell-design.md` §2.5): the inline form
     /// where the decode handed back a code literal
@@ -3300,7 +3333,7 @@ impl Elaborator {
     /// this optional form when the caller needs to distinguish a rewrite
     /// from an unchanged type (e.g. the emission walker or shared Rc slots).
     pub(crate) fn emit_ty(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
-        self.emit_ty_in(cx, ty, depth, 0)
+        GeneratedDefs(self).emit_ty_in(cx, ty, depth, 0)
     }
 
     /// Default representation for an emitted annotation: closed references,
@@ -3314,7 +3347,9 @@ impl Elaborator {
     pub(crate) fn annotation_type(&self, cx: &Cx, ty: &Type, depth: u32) -> Type {
         self.emit_ty(cx, ty, depth).unwrap_or_else(|| ty.clone())
     }
+}
 
+impl GeneratedDefs<'_> {
     /// [`Self::emit_ty`] for a slot living in an application's **scratch
     /// world** ([`Self::respell_ty_deep_in`]'s `scratch`).
     pub(crate) fn emit_ty_in(&self, cx: &Cx, ty: &Type, depth: u32, scratch: u32) -> Option<Type> {
@@ -3602,7 +3637,9 @@ impl Elaborator {
             _ => None,
         }
     }
+}
 
+impl Elaborator {
     /// `El (D#tycode^δ)` back to the registry's inline `⟦D⟧`, at the head only
     /// and in the **current** Ψ world (goal and meta padding included, which is
     /// what [`Self::gen_def_of`] knows and [`Self::unspell_ty_deep`]'s explicit
@@ -3615,9 +3652,11 @@ impl Elaborator {
     /// use-site guard is written against. Closed by construction, so nothing
     /// is shifted.
     pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
-        self.unspell_here_in(ty, 0)
+        GeneratedDefs(self).unspell_here_in(ty, 0)
     }
+}
 
+impl GeneratedDefs<'_> {
     /// [`Self::unspell_here`] for a type living in an application's **scratch
     /// world** ([`Self::respell_ty_deep_in`]'s `scratch`), where `g`
     /// metavariables sit below the committed globals. The recognizer runs
@@ -4011,7 +4050,9 @@ impl Elaborator {
             _ => None,
         }
     }
+}
 
+impl Elaborator {
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
     /// Only an **unparameterized** declaration gets one, for
     /// [`Elaborator::register_ty_code`]'s reason: the family's branches mention the
@@ -4024,7 +4065,7 @@ impl Elaborator {
         if self.types.gdefs().contains_key(&key) {
             return;
         }
-        let Ok((ty, level, body, l, ilvl)) = self.fam_def(ind, span) else {
+        let Ok((ty, level, body, l, ilvl)) = GeneratedDefs(self).fam_def(ind, span) else {
             return;
         };
         if self
@@ -4199,7 +4240,9 @@ impl Elaborator {
             },
         })
     }
+}
 
+impl GeneratedDefs<'_> {
     /// `El (code^δ)` — the **type** occurrence of a registered code
     /// definition (`docs/family-type-code-defs-design.md` §1.3): composition
     /// of the existing `Type::El` former with [`Self::gen_ref`]. `level` is
@@ -4211,7 +4254,9 @@ impl Elaborator {
             tm: Rc::new(tm),
         })
     }
+}
 
+impl Elaborator {
     /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,
     /// a `GlobalVar` occurring in a term denotes. This is the whole of the
     /// recognizers' key — a reader asks "is this global *the* `D#fam`", not
@@ -4222,7 +4267,9 @@ impl Elaborator {
         let abs = var.position(self.lowering_scope() as usize)? as u32;
         self.types.gdefs().key_for_abs(&abs).copied()
     }
+}
 
+impl GeneratedDefs<'_> {
     /// A named field read `D#projⱼ(ā, v)` (`register_rec_projs`) as the
     /// inline walk it stands for: the projections `fst(sndʲ⁺¹ v)`, outermost
     /// first with `true` for `fst` (entry 0 of the spine is the tag, as
@@ -4250,16 +4297,20 @@ impl Elaborator {
         path.extend(std::iter::repeat_n(false, field + 1));
         Some((path, args.last()?))
     }
+}
 
+impl Elaborator {
     /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
     /// out, mirroring `resolve`'s `meta_off` (`lib.rs`). Zero everywhere else.
     /// The Ψ length a term built here counts its globals from, padding and
     /// a `meta fn`'s pushed binders included: what a guard copy records as
     /// its scope.
     pub(crate) fn lowering_scope(&self) -> u32 {
-        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset()
+        self.psi.bindings.len() as u32 + self.global_padding() + GeneratedDefs(self).meta_offset()
     }
+}
 
+impl GeneratedDefs<'_> {
     fn meta_offset(&self) -> u32 {
         self.scope.meta_pushed.borrow().len() as u32
     }
@@ -4270,7 +4321,9 @@ impl Elaborator {
     pub(crate) fn is_gen_ref(&self, t: &Term, key: GenDef) -> bool {
         matches!(t, Term::GlobalTm { var, .. } if self.gen_def_of(*var) == Some(key))
     }
+}
 
+impl Elaborator {
     /// The definition and arguments of an application spine `u^δ ā`, when its
     /// head is a registered definition — the application-aware sibling of
     /// [`Self::is_gen_ref`]/[`Self::gen_def_of`]
@@ -4294,7 +4347,9 @@ impl Elaborator {
         };
         Some((self.gen_def_of(*var)?, args))
     }
+}
 
+impl GeneratedDefs<'_> {
     /// A non-dependent application of a registered definition. `dom`/`cod` are
     /// the annotations the kernel's `App` carries; both are scoped where `arg`
     /// is, and `cod` is weakened under the (vacuous) binder for it.
@@ -4327,9 +4382,9 @@ impl Elaborator {
     /// because the λ's binder replaces the scrutinee afterwards.
     fn fam_def(&self, ind: &Inductive, span: Span) -> R<(Type, Level, Term, Level, Level)> {
         let cx = Cx::empty();
-        let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
-        let (_, l) = self.build_family(&cx, ind, &[], &Level::Zero, Term::Zero, span)?;
-        let (fam, _) = self.build_family(&cx, ind, &[], &l, Term::Zero, span)?;
+        let (ity, ilvl) = IndexedFamilies(self).index_type_of(&cx, ind, span)?;
+        let (_, l) = IndexedFamilies(self).build_family(&cx, ind, &[], &Level::Zero, Term::Zero, span)?;
+        let (fam, _) = IndexedFamilies(self).build_family(&cx, ind, &[], &l, Term::Zero, span)?;
         let cod_level = Level::succ(l.clone());
         let body = Term::Lam {
             dom_level: ilvl.clone(),
@@ -4371,7 +4426,7 @@ impl Elaborator {
         let dom = match ind.index_ty.as_ref() {
             Some(IdxTy::Decl(iind)) => self
                 .gen_type_ref(GenDef::IdxCode(iind.tag), &ilvl)
-                .or_else(|| self.index_type_of(cx, ind, span).ok().map(|(t, _)| t))?,
+                .or_else(|| IndexedFamilies(self).index_type_of(cx, ind, span).ok().map(|(t, _)| t))?,
             _ => Type::Nat,
         };
         let tm = Self::gen_app(

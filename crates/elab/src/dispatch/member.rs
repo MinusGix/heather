@@ -17,6 +17,12 @@ use crate::{
 };
 
 use super::receiver::OtherReading;
+use crate::application::Callables;
+use crate::dispatch::Carriers;
+use crate::constructor::Constructors;
+use crate::dispatch::Dictionaries;
+use crate::dispatch::Projections;
+use crate::dispatch::Receivers;
 
 /// Only disjoint outer carriers are used to discard imported candidates.
 /// Type arguments and callbacks never break a tie; an unknown carrier keeps
@@ -41,7 +47,17 @@ impl Reach {
     const FUEL: u32 = 128;
 }
 
-impl Elaborator {
+/// Member lookup's part of the elaborator.
+pub(crate) struct Members<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Members<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Members<'_> {
     // -- field access (docs/surface-records.md §4) ---------------------------
 
     /// Whether `recv` is a chain of bare projections rooted at an argument
@@ -102,7 +118,7 @@ impl Elaborator {
                 heather_kernel::level::Level::Zero,
             ));
         }
-        if let Some(d) = self.type_projection(cx, recv, name, args, span)? {
+        if let Some(d) = Projections(self).type_projection(cx, recv, name, args, span)? {
             return Ok(d);
         }
         // The **index pseudo-projection** (`docs/operation-indexed-classes-
@@ -113,7 +129,7 @@ impl Elaborator {
         // there: a class cannot have a field named like its own index (the
         // record lowering refuses the collision), so the two never compete.
         if let ExprKind::Var(d) = &recv.kind
-            && let Some(e) = self.index_of_dict(cx, d, name)
+            && let Some(e) = Dictionaries(self).index_of_dict(cx, d, name)
         {
             let (t, ty, lvl) = self.elab_infer(cx, &e)?;
             return Ok(DotResolution::Project(t, ty, lvl, None));
@@ -226,7 +242,7 @@ impl Elaborator {
         } else {
             None
         };
-        if let Some(d) = self.class_dispatch(cx, recv, name, other, args, span)? {
+        if let Some(d) = Receivers(self).class_dispatch(cx, recv, name, other, args, span)? {
             return Ok(d);
         }
         if vector_map {
@@ -234,9 +250,9 @@ impl Elaborator {
             let [f] = args.as_slice() else {
                 let mut supplied = vec![recv.clone()];
                 supplied.extend(args.iter().cloned());
-                return vec::method_arity_error(self, cx, &supplied, name, "`(f)`", span);
+                return vec::method_arity_error(self.0, cx, &supplied, name, "`(f)`", span);
             };
-            let (t, ty, lvl) = vec::elab_map(self, cx, f, recv, span)?;
+            let (t, ty, lvl) = vec::elab_map(self.0, cx, f, recv, span)?;
             return Ok(DotResolution::Inferred(t, ty, lvl));
         }
         let name = &head;
@@ -251,7 +267,7 @@ impl Elaborator {
         let at = match cx.selfref.as_ref().filter(|self_ref| self_ref.matches(name)) {
             Some(self_ref) => self_ref.receiver_slot,
             None => {
-                let params = self.params_of(name);
+                let params = Callables(self).params_of(name);
                 // A member the receiver's type selected that marks no `self`:
                 // remembered by the receiver's span, since a receiver meant
                 // for a later parameter shows up only when the gate rejects
@@ -408,7 +424,7 @@ impl Elaborator {
             // better than "unbound" — a reading that resolved is never touched.
             if let ExprKind::Var(f) = &recv.kind
                 && !cx.names.iter_inner().any(|n| n == f)
-                && self.names_a_function(f)
+                && Carriers(self).names_a_function(f)
                 && matches!(self.resolve_name(name), NameRes::NotFound)
                 && matches!(self.resolve_name(&format!("{f}::{name}")), NameRes::Found(_))
             {
@@ -673,7 +689,7 @@ impl Elaborator {
         let ExprKind::Var(name) = head else {
             return None;
         };
-        let (ind, _) = self.ctor_here(cx, name)?;
+        let (ind, _) = Constructors(self).ctor_here(cx, name)?;
         let key = crate::names::qkey(&ind.scope.module, &ind.name);
         Some((ReceiverCarrier::Named(key), ind.name.clone()))
     }
@@ -709,7 +725,7 @@ impl Elaborator {
         if matches!(&*crate::inductive::decoded(ty), Type::Vec { .. }) {
             return Some(ReceiverCarrier::Vector);
         }
-        self.carrier_of_ty(cx, ty, span).map(|c| ReceiverCarrier::Named(c.key))
+        Carriers(self).carrier_of_ty(cx, ty, span).map(|c| ReceiverCarrier::Named(c.key))
     }
 
     /// Can a value of `ty` provably never have the outer carrier `carrier`?
@@ -1024,7 +1040,7 @@ impl Elaborator {
         carrier: &ReceiverCarrier,
         span: Span,
     ) -> Option<String> {
-        let params = self.params_of(member);
+        let params = Callables(self).params_of(member);
         if params.iter().any(|p| p.is_self) {
             return None;
         }
@@ -1115,7 +1131,7 @@ impl Elaborator {
     /// A type's carrier together with the namespace its members live in —
     /// the pair `member_head` selects `D::name` by.
     fn receiver_owner(&self, cx: &Cx, ty: &Type, span: Span) -> Option<(ReceiverCarrier, String)> {
-        Some((self.receiver_carrier(cx, ty, span)?, self.type_namespace(cx, ty, span)?))
+        Some((self.receiver_carrier(cx, ty, span)?, Carriers(self).type_namespace(cx, ty, span)?))
     }
 
     /// The owner of a receiver that does not infer on its own, read off its
@@ -1300,5 +1316,4 @@ impl Elaborator {
         // carrier query as evidence for selecting a different operation.
         Err(self.name_miss(name, String::new(), span))
     }
-
 }

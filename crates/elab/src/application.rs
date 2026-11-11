@@ -17,7 +17,9 @@ use crate::unification::{DeferredArg, EarlierArg, Guesses, ResolveOb, Sol, zonke
 use crate::{Cx, ElabError, R, err};
 
 mod callable;
+pub(crate) use callable::Callables;
 mod polymorphic;
+pub(crate) use polymorphic::Polymorphic;
 pub(crate) use callable::subject_index_in;
 mod named;
 pub(crate) use named::{
