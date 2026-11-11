@@ -240,10 +240,17 @@ fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
 fn contains(e: &Expr) -> bool { PROPAGATE.contains(e) }
 // Substitute only a private, globally fresh continuation slot. It is never a
 // written binder, so this substitution needs no capture-avoidance convention.
+//
+// In place: the walk copies the value where the slot is and nothing else. It
+// once rebuilt each child from a copy of it, so a node was copied once per
+// ancestor, and a block's continuation is plugged once per statement.
 fn plug(mut e: Expr, slot: &str, value: &Expr) -> Expr {
-    if matches!(&e.kind, ExprKind::Var(n) if n == slot) { return value.clone(); }
-    children(&mut e, &mut |x| *x = plug(x.clone(),slot,value));
+    plug_in(&mut e, slot, value);
     e
+}
+fn plug_in(e: &mut Expr, slot: &str, value: &Expr) {
+    if matches!(&e.kind, ExprKind::Var(n) if n == slot) { *e = value.clone(); return; }
+    children(e, &mut |x| plug_in(x,slot,value));
 }
 
 struct Lower { next: usize, p: Protocol }

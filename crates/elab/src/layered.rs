@@ -54,7 +54,7 @@ fn avalanche(mut x: u64) -> u64 {
 }
 
 #[derive(Default)]
-struct WordHasher(u64);
+pub(crate) struct WordHasher(u64);
 
 impl WordHasher {
     #[inline]
