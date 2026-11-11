@@ -104,7 +104,7 @@ theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m
     let words = held.witness;
     let placed = j(eq2(λ (bufs: Buffers()) (args: List<List<BitVec(8)>>) => Env(words, bufs, args), like.right.left, like.right.right),
         λ e _ => t.Placed(e, m), held.proof.left);
-    Exists(words, ⟨placed, λ i mi => trans(held.proof.right(i, mi), like.left(i, mi))⟩)
+    Exists(words, ⟨placed, ⟨λ i mi => trans(held.proof.right.left(i, mi), like.left(i, mi)), held.proof.right.right⟩⟩)
 }
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),
@@ -418,13 +418,11 @@ theorem Prog::within_function_call(self p: Prog, layout: Layout, out: List<Nat>,
     p.Within(p.function_call(layout, out, callee, arguments, result)) {
     let lent = program_lent(layout.functions, callee);
     let regs = call_registers().drop(2 * lent);
-    let framed = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)));
-    let passed = framed.words_to(layout, arguments, regs);
+    let passed = p.words_to(layout, arguments, regs);
     let back = then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(Succ(callee))),
         Block([MovRR(R10, Rbx)]));
-    p.within_trans(framed, back.word_from(layout, out, result, Rax), Exists(2, refl),
-        framed.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, regs, framed),
-            passed.within_trans(back, back.word_from(layout, out, result, Rax), Exists(3, refl), back.within_word_from(layout, out, result, Rax))))
+    p.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, regs, p),
+        passed.within_trans(back, back.word_from(layout, out, result, Rax), Exists(3, refl), back.within_word_from(layout, out, result, Rax)))
 }
 
 theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Layout): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →

@@ -173,11 +173,11 @@ theorem Target::frames_kept(self t: Target, m, later: X86Memory(t.r.profile), i:
     }
 }
 
-// The activation in the region's two slots, and its frames from the frame
-// up.
+// The activation: its room in the region's slot, and its frames from the
+// frame up. Where the frame is has no slot: it is RSP between statements
+// (`Target::Held`).
 fn Target::Framing(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
-    (word_in(v, t.layout().frame_offset()) = t.frame()) ∧
-    ((word_in(v, t.layout().room_offset()).toNat() = t.room) ∧ t.FramesAt(m, t.frames, t.index))
+    (word_in(v, t.layout().room_offset()).toNat() = t.room) ∧ t.FramesAt(m, t.frames, t.index)
 }
 
 // The command line at the RSP its slot holds, and the activation…
@@ -367,7 +367,7 @@ theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8
 
 // The slot RSP is saved to ends inside the region…
 theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r.size {
-    let slots: (t.layout().stack_offset() + 24 <= t.r.size) = t.fits;
+    let slots: (t.layout().stack_offset() + 16 <= t.r.size) = t.fits;
     omega(slots)
 }
 
@@ -520,13 +520,11 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
     let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
     let kept = t.kept_store(m, q, bytes, size);
     let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k _ => t.r.cells_outside(v, q, bytes, so + k, Inr(omega(fits))));
-    let frame: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k _ => t.r.cells_outside(v, q, bytes, so + 8 + k, Inr(omega(fits))));
-    let room: (word_in(w, so + 16) = word_in(v, so + 16)) = word_in_agree(w, v, so + 16, λ k _ => t.r.cells_outside(v, q, bytes, so + 16 + k, Inr(omega(fits))));
+    let room: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k _ => t.r.cells_outside(v, q, bytes, so + 8 + k, Inr(omega(fits))));
     ⟨j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
         argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.left)),
-     ⟨trans(frame, stacking.right.left),
-      ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.right.right.left),
-       t.frames_store(m, q, bytes, size, t.frames, t.index, stacking.right.right.right)⟩⟩⟩
+     ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.right.left),
+      t.frames_store(m, q, bytes, size, t.frames, t.index, stacking.right.right)⟩⟩
 }
 
 theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,

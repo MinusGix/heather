@@ -681,7 +681,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                 let s1 = execute_block_normal([MovRI(Rdx, BitVec::ofNat(0))], u);
                 let ends = t.path_ended(placed_env, name, m, held.right.right.right.right.right.left, room, nonzero, nul, refl);
                 let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Exists(words, ⟨ends.left,
-                    j(sym(held.right.right.right.right.right.right), λ x _ => t.homes.Agrees(live, env, words, x), agrees)⟩);
+                    j(sym(held.right.right.right.right.right.right), λ x _ => t.Agreeing(live, env, words, x), agrees)⟩);
                 let landing = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧ (t.site().Resident(t.r.profile.store(m, a, one)) ∧
                     call_pre(execute_block_normal(asking, MachineState(s1.gprs, s1.flags, next_rip(s1.rip, 3), t.r.profile.store(m, a, one)))));
                 let landed: landing(next_rip(t.r.low, so + name.len())) = ⟨t.writable(m, so + name.len(), 1, fits),

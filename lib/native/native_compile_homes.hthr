@@ -7,16 +7,21 @@
 // between statements (`Target::Held`) is over a set of live words: some file
 // of words is placed in the region with the environment's buffers and
 // command line, and every live word reads as the environment's from its
-// home (`Homes::Agrees`). A dead word is anywhere.
+// home (`Homes::Agrees`). A dead word is anywhere. And RSP is the running
+// activation's frame (`Target::Agreeing`): no statement moves it, so a
+// CALL pushes below the frame and a callee finds its own frame in RSP
+// (docs/native-procedures-are-functions-design.md §3, step 5a).
 //
 // The registers enter only through `home_values`, the home pool's six read
-// in order. A write to a register outside the pool leaves it as it was by
-// evaluation, so the scratch a statement uses (RAX, RBX, RCX, RDX, RSI, RDI,
-// R8, R9, R11, everything Linux's SYSCALL writes) passes `Held` along
-// unchanged, and only a write to a pool register needs a lemma: a home's
-// own write (`held_reg_set`), a register no word lives in
-// (`held_unused`), or code that keeps every register a word lives in
-// (`held_kept`).
+// in order and RSP after them. A write to a register outside the pool
+// other than RSP leaves it as it was by evaluation, so the scratch a
+// statement uses (RAX, RBX, RCX, RDX, RSI, RDI, R8, R9, R11, everything
+// Linux's SYSCALL writes) passes `Held` along unchanged, and only a write
+// to a pool register needs a lemma: a home's own write (`held_reg_set`), a
+// register no word lives in (`held_unused`), or code that keeps RSP and
+// every register a word lives in (`held_kept`). What moves RSP (a push, a
+// pop, a CALL, a RET) moves the claim to another activation
+// (`Target::held_moved`, native_compile_perform).
 import native_source;
 import native_alloc;
 import native_compile;
@@ -342,7 +347,10 @@ theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) 
 // ---------------------------------------------------------------------------
 // The pool's registers, read
 
-fn home_values(g: Gprs) → List<BitVec(64)> { home_pool().map(λ (register: Gpr) => read_gpr(register, g)) }
+// What code between two statements keeps: the pool's registers, and after
+// them the stack pointer, which is the running frame
+// (docs/native-procedures-are-functions-design.md §3, step 5a).
+fn home_values(g: Gprs) → List<BitVec(64)> { home_pool().map(λ (register: Gpr) => read_gpr(register, g)) ++ [read_gpr(Rsp, g)] }
 
 theorem home_value(g: Gprs): (k: Nat) → k < 6 → home_values(g).get_or(k, BitVec::zero()) = read_gpr(home_register(k), g) {
     λ k => match k {
@@ -424,16 +432,30 @@ fn Homes::Agrees(self homes: Homes, live: List<Nat>, env: Env, words: List<Nat>,
 
 fn Env::with_words(self env: Env, words: List<Nat>) → Env { Env(words, env.buffers, env.args) }
 
+// What the kept values say: every live word reads as the environment's
+// from its home, and the stack pointer, after the pool's registers among
+// `values`, is the running frame.
+fn Target::Agreeing(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) → Type {
+    t.homes.Agrees(live, env, words, values) ∧ (values.get_or(6, BitVec::zero()) = t.frame())
+}
+
 // The region placed with the environment's buffers and command line and some
-// file of words, and every live word as the environment's in its home.
+// file of words, every live word as the environment's in its home, and RSP
+// the running frame.
 fn Target::Held(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    Exists<List<Nat>>(λ words => t.Placed(env.with_words(words), m) ∧ t.homes.Agrees(live, env, words, home_values(g)))
+    Exists<List<Nat>>(λ words => t.Placed(env.with_words(words), m) ∧ t.Agreeing(live, env, words, home_values(g)))
+}
+
+// RSP, read off the claim.
+theorem Target::held_rsp(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
+    read_gpr(Rsp, g) = t.frame() {
+    held.proof.right.right
 }
 
 // Fewer words live.
 theorem Target::held_sub(self t: Target, live, wider: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(wider, env, g, m),
     sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.Held(live, env, g, m) {
-    Exists(held.witness, ⟨held.proof.left, λ i m2 => held.proof.right(i, sub(i, m2))⟩)
+    Exists(held.witness, ⟨held.proof.left, ⟨λ i m2 => held.proof.right.left(i, sub(i, m2)), held.proof.right.right⟩⟩)
 }
 
 // The environment is the same.
@@ -442,38 +464,49 @@ theorem Target::held_same(self t: Target, live: List<Nat>, env, other: Env, g: G
     j(same, λ e _ => t.Held(live, e, g, m), held)
 }
 
-// The registers a word lives in read as they did.
-theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+// The registers a word lives in read as they did: every live word agrees
+// still.
+theorem Target::agrees_regs(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, g, g2: Gprs,
+    agrees: t.homes.Agrees(live, env, words, home_values(g)),
     same: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g)):
-    t.Held(live, env, g2, m) {
-    let words = held.witness;
-    Exists(words, ⟨held.proof.left, λ i m2 => (match t.homes.home(i) as λ h => t.homes.home(i) = h →
+    t.homes.Agrees(live, env, words, home_values(g2)) {
+    λ i m2 => (match t.homes.home(i) as λ h => t.homes.home(i) = h →
             (match h { InSlot => words.get_or(i, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(i) →
             (match h { InSlot => words.get_or(i, 0), InReg(k) => home_values(g2).get_or(k, BitVec::zero()).toNat() }) = env.number(i) {
-        InSlot => λ _ agrees => agrees,
-        InReg(k) => λ at agrees => {
+        InSlot => λ _ agreed => agreed,
+        InReg(k) => λ at agreed => {
             let inside = t.homes.in_pool(t.homed, i, k, at);
             trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), trans(home_value(g2, k, inside),
-                trans(same(k, inside, t.homes.used(i, k, at)), sym(home_value(g, k, inside))))), agrees)
+                trans(same(k, inside, t.homes.used(i, k, at)), sym(home_value(g, k, inside))))), agreed)
         },
-    })(refl, held.proof.right(i, m2))⟩)
+    })(refl, agrees(i, m2))
 }
 
-// A register no word lives in written.
+// The registers a word lives in, and RSP, read as they did.
+theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    same: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g),
+    rsp: read_gpr(Rsp, g2) = read_gpr(Rsp, g)):
+    t.Held(live, env, g2, m) {
+    Exists(held.witness, ⟨held.proof.left, ⟨t.agrees_regs(live, env, held.witness, g, g2, held.proof.right.left, same), trans(rsp, held.proof.right.right)⟩⟩)
+}
+
+// A register no word lives in, and not RSP, written.
 theorem Target::held_unused(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    register: Gpr, value: BitVec(64), unused: t.homes.uses(register) = False): t.Held(live, env, write_gpr(register, value, g), m) {
+    register: Gpr, value: BitVec(64), unused: t.homes.uses(register) = False, apart: register.same(Rsp) = False):
+    t.Held(live, env, write_gpr(register, value, g), m) {
     t.held_regs(live, env, g, write_gpr(register, value, g), m, held, λ k inside used =>
         read_gpr_other(register, home_register(k), value, g, match e: register.same(home_register(k)) {
             True => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), register.same_sound(home_register(k), e)), used))),
             False => refl,
-        }))
+        }), read_gpr_other(register, Rsp, value, g, apart))
 }
 
-// Code that keeps every register a word lives in.
+// Code that keeps RSP and every register a word lives in.
 theorem Target::held_kept(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    kept: Kept(t.homes.registers(), g, g2)): t.Held(live, env, g2, m) {
+    kept: Kept(Cons(Rsp, t.homes.registers()), g, g2)): t.Held(live, env, g2, m) {
     t.held_regs(live, env, g, g2, m, held, λ k inside used =>
-        kept_filter(home_pool(), λ (register: Gpr) => t.homes.uses(register), g, g2, home_register(k), used, kept, home_register_mem(k, inside)))
+        kept_filter(home_pool(), λ (register: Gpr) => t.homes.uses(register), g, g2, home_register(k), used, kept.right, home_register_mem(k, inside)),
+        kept.left)
 }
 
 // Every live word in its slot: the region placed is held.
@@ -493,12 +526,12 @@ theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(id
 theorem Env::with_own_words(self env: Env): env.with_words(env.words) = env { match env { Env(_, _, _) => refl } }
 
 theorem Target::held_placed(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), placed: t.Placed(env, m),
-    slotted: t.homes.slotted(live).IsTrue()): t.Held(live, env, g, m) {
-    Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, sym(env.with_own_words())), λ i m2 =>
+    slotted: t.homes.slotted(live).IsTrue(), rsp: read_gpr(Rsp, g) = t.frame()): t.Held(live, env, g, m) {
+    Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, sym(env.with_own_words())), ⟨λ i m2 =>
         j(sym(t.homes.slotted_home(live, slotted, i, m2)), λ h _ => (match h {
             InSlot => env.words.get_or(i, 0),
             InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
-        }) = env.number(i), refl)⟩)
+        }) = env.number(i), refl), rsp⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +544,7 @@ theorem Target::held_slot_word(self t: Target, live: List<Nat>, env: Env, g: Gpr
     cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), j(slot, λ h _ => (match h {
         InSlot => words.get_or(id, 0),
         InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
-    }) = env.number(id), held.proof.right(id, holds)))
+    }) = env.number(id), held.proof.right.left(id, holds)))
 }
 
 // …or its register's.
@@ -523,7 +556,7 @@ theorem Target::held_reg_word(self t: Target, live: List<Nat>, env: Env, g: Gprs
         home_value(g, k, t.homes.in_pool(t.homed, id, k, at)))), j(at, λ h _ => (match h {
             InSlot => words.get_or(id, 0),
             InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat(),
-        }) = env.number(id), held.proof.right(id, holds)));
+        }) = env.number(id), held.proof.right.left(id, holds)));
     trans(sym(BitVec::ofNat_toNat(64, read)), cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), number))
 }
 
@@ -531,7 +564,7 @@ theorem Target::held_reg_word(self t: Target, live: List<Nat>, env: Env, g: Gprs
 theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     id: Nat, holds: Mem(id, live), inside: id < t.words): env.word(id).toNat() = env.number(id) {
     let words = held.witness;
-    let agrees = held.proof.right(id, holds);
+    let agrees = held.proof.right.left(id, holds);
     let fits: (env.number(id) < Nat::pow(2, 64)) = (match t.homes.home(id) as λ h => t.homes.home(id) = h →
             (match h { InSlot => words.get_or(id, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(id) →
             env.number(id) < Nat::pow(2, 64) {
@@ -549,10 +582,10 @@ theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, 
 theorem Target::held_dead(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), dead: out.holds(id) = False):
     t.Held(out, env.set_word(id, w), g, m) {
-    Exists(held.witness, ⟨held.proof.left, λ i m2 => {
+    Exists(held.witness, ⟨held.proof.left, ⟨λ i m2 => {
         let ne: (i ≠ id) = λ e => absurd(trans(sym(dead), out.mem_holds(id, j(e, λ x _ => Mem(x, out), m2))));
-        trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))
-    }⟩)
+        trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))
+    }, held.proof.right.right⟩⟩)
 }
 
 // Another word's number where the written slot is put.
@@ -571,14 +604,14 @@ theorem Target::held_slot_set(self t: Target, live, out: List<Nat>, env: Env, id
     let words = held.witness;
     let words2 = words.put(id, w.toNat(), 0);
     let values = home_values(g);
-    Exists(words2, ⟨t.placed_word(env.with_words(words), m, held.proof.left, id, inside, w), λ i m2 => match i.eq_dec(id) {
+    Exists(words2, ⟨t.placed_word(env.with_words(words), m, held.proof.left, id, inside, w), ⟨λ i m2 => match i.eq_dec(id) {
         Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words2, values) = env.set_word(id, w).number(x),
             j(sym(slot), λ h _ => (match h { InSlot => words2.get_or(id, 0), InReg(k) => values.get_or(k, BitVec::zero()).toNat() }) =
                 env.set_word(id, w).number(id),
                 trans(words2.get_or_some(id, 0, w.toNat(), List::put_here(id, words, w.toNat(), 0)), sym(env.number_set_here(id, w))))),
         Inr(ne) => trans(t.homes.number_put_other(i, id, words, w.toNat(), values, ne),
-            trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
-    }⟩)
+            trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+    }, held.proof.right.right⟩⟩)
 }
 
 // A word written into register `k` misses every other live word's.
@@ -647,10 +680,12 @@ theorem Target::held_reg_set(self t: Target, live, out: List<Nat>, env: Env, id:
             InSlot => λ _ => refl,
             InReg(r) => λ at_i => cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
                 List::put_other(k, home_values(g), w, BitVec::zero(), r, miss(i, m2, ne, r, at_i))),
-        })(refl), trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+        })(refl), trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
     };
-    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.homes.Agrees(out, env.set_word(id, w), ws, vs)),
-        Exists(words, ⟨held.proof.left, agrees⟩))
+    let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
+        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.proof.right.right);
+    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.Agreeing(out, env.set_word(id, w), ws, vs)),
+        Exists(words, ⟨held.proof.left, ⟨agrees, rsp⟩⟩))
 }
 
 // What a write to a word's home leaves the rest of the registers: every one

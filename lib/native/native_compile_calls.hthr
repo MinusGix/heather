@@ -539,12 +539,12 @@ theorem Target::copy_goes_on(self t: Target, v: Nat → BitVec(8), buf, cap: Nat
 // The head with every byte copied: the live words held with the buffer
 // filled.
 theorem Target::copy_held(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, v: Nat → BitVec(8), keeps: t.layout().Keeps(env.with_words(words), v),
-    same: env.args = t.args, vals: List<BitVec(64)>, agrees: t.homes.Agrees(live, env, words, vals), buf, cap: Nat,
+    same: env.args = t.args, vals: List<BitVec(64)>, agrees: t.Agreeing(live, env, words, vals), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap, i: Nat, all: i = bytes.len(),
     g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, vals, g, m)):
     t.Held(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), g, m) {
     Exists(words, ⟨t.copy_filled(env.with_words(words), v, keeps, same, buf, cap, found, bytes, short, i, all, vals, g, m, at),
-        j(sym(at.right.right.right.right.right.right), λ vs _ => t.homes.Agrees(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), words, vs), agrees)⟩)
+        j(sym(at.right.right.right.right.right.right), λ vs _ => t.Agreeing(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), words, vs), agrees)⟩)
 }
 
 // The head: CMP R8, RAX and a JE out, each way on from the invariant.
@@ -619,7 +619,7 @@ theorem Target::goes_copy_loop(self t: Target, live: List<Nat>, env: Env, p: Pro
     next: t.GoesR(prog_len(done_before), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         t.Held(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), g, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, bytes.len()))),
     words: List<Nat>, v: Nat → BitVec(8), keeps: t.layout().Keeps(env.with_words(words), v), same: env.args = t.args,
-    vals: List<BitVec(64)>, agrees: t.homes.Agrees(live, env, words, vals),
+    vals: List<BitVec(64)>, agrees: t.Agreeing(live, env, words, vals),
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(t.layout().scratch_offset() + k) = c, left: Nat):
     (i: Nat) → i + left = bytes.len() →
     t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, vals, g, m)) {
@@ -674,7 +674,7 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
 
 // The live words held, and a read's bytes landed in the scratch range.
 fn Target::HeldLanded(self t: Target, live: List<Nat>, env: Env, bytes: List<BitVec(8)>, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    Exists<List<Nat>>(λ words => t.Landed(env.with_words(words), bytes, m) ∧ t.homes.Agrees(live, env, words, home_values(g)))
+    Exists<List<Nat>>(λ words => t.Landed(env.with_words(words), bytes, m) ∧ t.Agreeing(live, env, words, home_values(g)))
 }
 
 // Where the copy's head sits, read off where the copy sits.
@@ -732,7 +732,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
     let so = layout.scratch_offset();
     let copy_pre: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<List<Nat>>(λ words => Exists<Nat → BitVec(8)>(λ v =>
         layout.Keeps(env.with_words(words), v) ∧ (((k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(so + k) = c) ∧
-        (t.CopyAt(v, buf, bytes, 0, home_values(u.gprs), u.gprs, u.memory) ∧ ((env.args = t.args) ∧ t.homes.Agrees(live, env, words, home_values(u.gprs)))))));
+        (t.CopyAt(v, buf, bytes, 0, home_values(u.gprs), u.gprs, u.memory) ∧ ((env.args = t.args) ∧ t.Agreeing(live, env, words, home_values(u.gprs)))))));
     let at_head: t.Goes(prog_len(then(tested, Block(init))), tree, copy_pre) = λ u here resident held =>
         t.goes_copy_loop(live, env, tested, buf, cap, found, Succ(names), Succ(Succ(names)), w_copied, w_labelled.witness, copied, Block([]), w_labelled.proof,
             bytes, short, tree, at_done, held.witness, held.proof.witness, held.proof.proof.left, held.proof.proof.right.right.right.left, home_values(u.gprs),

@@ -50,9 +50,9 @@ fn head10() → Source { head_c(10) }
 
 // A layout takes a slot for each word the source declares, each buffer at
 // its capacity, a scratch range one byte longer than the largest, and the
-// saved RSP, the frame and the count of calls: cat names twenty words.
+// saved RSP and the count of calls: cat names twenty words.
 theorem cat_words(): cat(1024).words = 20 { refl }
-theorem cat_layout_size(): Layout::of(low(), cat(1024).words, cat(1024).capacities(), Homes([], [])).size() = 160 + 1024 + 1025 + 24 { refl }
+theorem cat_layout_size(): Layout::of(low(), cat(1024).words, cat(1024).capacities(), Homes([], [])).size() = 160 + 1024 + 1025 + 16 { refl }
 
 // cat with a MiB buffer, and so a MiB scratch range: `write-elf` gives it a
 // data segment of its layout in whole pages. One with a GiB buffer is past
@@ -60,7 +60,7 @@ theorem cat_layout_size(): Layout::of(low(), cat(1024).words, cat(1024).capaciti
 fn mib_cat() → Source { cat(1048576) }
 fn huge_cat() → Source { cat(0x40000000) }
 
-theorem mib_cat_layout_size(): Layout::of(low(), mib_cat().words, mib_cat().capacities(), Homes([], [])).size() = 160 + 1048576 + 1048577 + 24 { refl }
+theorem mib_cat_layout_size(): Layout::of(low(), mib_cat().words, mib_cat().capacities(), Homes([], [])).size() = 160 + 1048576 + 1048577 + 16 { refl }
 
 // An `open` and a `close` compile; a `stat` is the call the compiler does
 // not make yet.

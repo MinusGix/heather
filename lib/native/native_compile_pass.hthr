@@ -165,7 +165,7 @@ theorem Target::held_agree(self t: Target, live: List<Nat>, env, other: Env, g: 
     t.Held(live, other, g, m) {
     let words = held.witness;
     Exists(words, ⟨j(eq2(λ (b: Buffers()) (a: List<List<BitVec(8)>>) => Env(words, b, a), buffers, args), λ e _ => t.Placed(e, m), held.proof.left),
-        λ i mm => trans(held.proof.right(i, mm), numbers(i, mm))⟩)
+        ⟨λ i mm => trans(held.proof.right.left(i, mm), numbers(i, mm)), held.proof.right.right⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
