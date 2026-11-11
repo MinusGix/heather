@@ -67,3 +67,39 @@ cites the derivative automaton's language theorem for its soundness.
   type and the derivative automaton's language theorem (what
   [[regex-dfa-compiler]] cites); product and complement; longest-match
   tokenisation as a specification.
+
+- 2026-11-11: Second round, automata and the automaton of derivatives.
+  `lib/std/text/regex_dfa.hthr`: `Dfa<S>` (start, step, accepting test,
+  over any state type), `run_from` and `run`; `Dfa::residual` is the one
+  theorem about what an automaton accepts (label every state with a
+  language the accepting test and the step respect, and a run from a
+  state accepts its label); `complement`, `both` and `either` with their
+  run equations, so product and complement are done at the level of
+  automata. `Regex::Same` (one language) with its congruences over `Seq`,
+  `Alt` and `Star`. `Regex::automaton_by(r, step)` has expressions as
+  states and any step that lands on the derivative's language;
+  `automaton_by_accepts` says it accepts `r`'s language and
+  `automaton_by_matches` that its run is the matcher's Boolean. Two steps
+  are supplied: the plain derivative (`automaton`) and `deriv_simp`
+  (`automaton_simp`), the derivative built with `Regex::alt` and
+  `Regex::seq`, which apply the units and zeros; `Regex::simp` rebuilds an
+  expression with them (`simp_same`). Probes in
+  `lib/_tests/std/text/regex_dfa_tests.hthr` (`(a|b)*` stays on one state
+  under `deriv_simp`).
+
+  The smart constructors take their Boolean tests as parameters
+  (`alt_at`, `seq_at`): a `match h: test` in a proof does not reach a
+  test under a folded definition, and a theorem over the tests as
+  variables needs no motive.
+
+  Remaining: the state type is `Regex`, which is not finite. Next is
+  similarity (`Alt` associative, commutative and idempotent, which needs
+  a Boolean equality on `Regex` with its soundness) and that the
+  derivatives of an expression up to it are finitely many; or, by the
+  checked-witness route, a builder that explores the reachable states
+  with fuel and returns a table over `Fin(n)` together with the map from
+  states to expressions that `Dfa::residual` checks, which is what
+  [[regex-dfa-compiler]] needs and does not wait on the finiteness
+  theorem. Both need the step over character classes instead of single
+  codes. Then the language laws module for
+  [[kleene-algebra-with-tests]] and longest-match tokenisation.

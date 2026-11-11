@@ -1,0 +1,75 @@
+// Probes of `lib/std/text/regex_dfa.hthr`
+// (issues/regular-languages-by-derivatives.md): automata run at closed
+// words, complement and products at open automata, the simplifying
+// derivative keeping a state where the plain one grows, and the automaton's
+// verdict carried to the language. Tests, not library: nothing imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
+import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
+
+// A hand-written automaton over `Bool`: an even number of 97s.
+fn even_as() → Dfa<Bool> { Dfa(True, λ s c => match c.same(97) { True => !s, False => s }, λ s => s) }
+
+theorem even_in(): even_as().run([97, 98, 97]) = True { refl }
+theorem even_out(): even_as().run([97, 98]) = False { refl }
+theorem odd_in(): even_as().complement().run([97, 98]) = True { refl }
+
+// expect-error(kernel)
+theorem even_wrong(): even_as().run([97, 98]) = True { refl }
+
+// Its language by labels: a state accepts the words whose count of 97s has
+// the state's parity. The labels are checked once, for every word.
+fn even_from(s: Bool, w: List<Nat>) → Bool {
+    match w { Nil => s, Cons(c, t) => even_from(match c.same(97) { True => !s, False => s }, t) }
+}
+theorem even_language(w: List<Nat>, s: Bool): even_as().run_from(s, w) = True ↔ even_from(s, w) = True {
+    even_as().residual(λ q u => even_from(q, u) = True, λ q => iff_refl(), λ q c u => iff_refl(), w, s)
+}
+
+// Complement and products at open automata.
+theorem and_not(x: Bool): (x && !x) = False { match x { True => refl, False => refl } }
+theorem or_not(x: Bool): (x || !x) = True { match x { True => refl, False => refl } }
+theorem never_both<S>(d: Dfa<S>, w: List<Nat>): d.both(d.complement()).run(w) = False {
+    trans(d.run_both(d.complement(), w), trans(cong_fn(λ (x: Bool) => d.run(w) && x, d.run_complement(w)), and_not(d.run(w))))
+}
+theorem always_either<S>(d: Dfa<S>, w: List<Nat>): d.either(d.complement()).run(w) = True {
+    trans(d.run_either(d.complement(), w), trans(cong_fn(λ (x: Bool) => d.run(w) || x, d.run_complement(w)), or_not(d.run(w))))
+}
+
+// `(a|b)*` over the codes 97 and 98.
+fn ab_star() → Regex { Star(Alt(Range(97, 97), Range(98, 98))) }
+
+// The simplifying derivative stays on the one state; the plain one does not.
+theorem one_state_a(): ab_star().deriv_simp(97) = ab_star() { refl }
+theorem one_state_b(): ab_star().deriv_simp(98) = ab_star() { refl }
+theorem dead_state(): ab_star().deriv_simp(99) = NoMatch { refl }
+theorem plain_grows(): ab_star().deriv(97) = Seq(Alt(Eps, NoMatch), ab_star()) { refl }
+
+// expect-error(kernel)
+theorem plain_one_state(): ab_star().deriv(97) = ab_star() { refl }
+
+// The constructors at their units and zeros, and away from them.
+theorem alt_zero_l(r: Regex): Regex::alt(NoMatch, r) = r { refl }
+theorem seq_zero_l(r: Regex): Regex::seq(NoMatch, r) = NoMatch { refl }
+theorem seq_unit_r(): Regex::seq(Range(1, 2), Eps) = Range(1, 2) { refl }
+theorem seq_kept(): Regex::seq(Range(1, 2), Range(3, 4)) = Seq(Range(1, 2), Range(3, 4)) { refl }
+theorem simp_example(): Alt(Seq(Eps, Range(1, 2)), Seq(Range(3, 4), NoMatch)).simp() = Range(1, 2) { refl }
+
+// The automata run, and agree with the matcher at every word.
+theorem runs(): ab_star().automaton_simp().run([97, 98, 97]) = True { refl }
+theorem refuses(): ab_star().automaton_simp().run([97, 99]) = False { refl }
+theorem agree(r: Regex, w: List<Nat>): r.automaton_simp().run(w) = r.automaton().run(w) {
+    trans(r.automaton_simp_matches(w), sym(r.automaton_matches(w)))
+}
+
+// A run's verdict is membership in the language, and a simplified
+// expression has the language it came from.
+theorem run_member(): ab_star().Denotes([97, 98, 97]) { (ab_star().automaton_simp_accepts([97, 98, 97])).mp(refl) }
+theorem simp_member(r: Regex, w: List<Nat>, d: r.Denotes(w)): r.simp().Denotes(w) { (r.simp_same()(w)).mpr(d) }
+
+// The intersection of two expressions' languages, by the product.
+theorem both_languages(r, q: Regex, w: List<Nat>, h: r.automaton().both(q.automaton()).run(w) = True): (r.matches(w) && q.matches(w)) = True {
+    trans(sym(trans(r.automaton().run_both(q.automaton(), w),
+        trans(cong_fn(λ (x: Bool) => x && q.automaton().run(w), r.automaton_matches(w)),
+            cong_fn(λ (x: Bool) => r.matches(w) && x, q.automaton_matches(w))))), h)
+}
