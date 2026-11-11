@@ -248,8 +248,12 @@ optimization that uses it is proved once under it as a hypothesis.
   after the call holds over the file the callee left
   (`Target::held_left`), so a program whose functions store links:
   `tr` runs with its loop a called function that rewrites the buffer
-  (`raise_span`, FunctionIR by hand until `rt` writes). `rt`'s write is
-  next.
+  (`raise_span`, FunctionIR by hand until `rt` writes). `rt` writes as
+  a computation over the span, a layer over its pure terms as the layer
+  over Linux is (`FTm`, `rt_file.hthr`): the meaning threads the bytes
+  of the one span written, and the lowering's code runs to it
+  (`FTm::lower_sound`, `rt_file_lower.hthr`). Loops, the reflector and
+  the generator are next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

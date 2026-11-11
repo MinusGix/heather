@@ -1019,8 +1019,49 @@ Each is a PR and ends with something that runs.
       (`native_tool_spans_tests.hthr`, `native_build_tests.hthr`).
   - *Step 4c:* a `runtime fn` writes a span (§2.6), in four steps.
     *Runs:* `tr`'s loop as a `runtime fn`, stated at every file.
-    - *4c-1:* the computation layer and its meaning (`FTm`), its
-      loop-free lowering and that lowering's theorem over the run.
+    - *4c-1 (built 2026-11-11):* the computation layer and its meaning
+      (`FTm`, `FFun`, `FWorld`, `rt_file.hthr`), its loop-free lowering
+      and that lowering's theorem over the run (`FTm::lower_sound`,
+      `FFun::lower_sound`, `rt_file_lower.hthr`): the code a computation
+      function lowers to, run on any words over any file
+      `Cons(own, rest)` with its calls answered by the program
+      (`FTm::CallsAgree`), answers the meaning's value and leaves the
+      meaning's span over `rest`. What the build settled:
+      - *One promise for every step.* A bound pure term, a call and a
+        whole computation each promise the same thing of the region they
+        lower to (`FTm::StepHolds`, over any meaning of the step), so the
+        induction composes promises (`FTm::bind_sound`, `FTm::put_sound`,
+        `FTm::if_sound`) and never reads a term.
+      - *A pure term beside functions that write.* Its region is
+        `Tm::lower`'s, unchanged, and its theorem is `Tm::lower_sound` at
+        the world of the file as it is then; the bridge from that
+        evaluation to the run is `StructuredRegion::run_quiet_among`
+        (`function_ir_run.hthr`), which asks stillness only of the
+        functions the region calls. That the region stores nothing and
+        calls only pure functions is checked by evaluation where it is
+        lowered (`FTm::value_checked`); both hold of every region
+        `Tm::lower` builds, and a theorem saying so would retire the
+        check (`issues/rt-pure-regions-are-quiet.md`).
+      - *The program's order.* Pure functions sit below computations:
+        computation `f` is FunctionIR function `base + f`, `base` the
+        count of pure functions, so a pure function cannot call one that
+        writes and the stillness the bridge asks is of indices below
+        `base`.
+      - *The store's shape.* The index against the length word is a leaf
+        of its own, and the arm it guards widens the byte and stores it,
+        the store a leaf of its own (`FTm::put_region`). The function
+        compiler knows the comparison where the test ends its leaf: with
+        the widening after the test in one leaf it refuses the store.
+      - *Kept for the optimizer.* A store of a word's low byte narrows
+        the word (`Trunc`) and `Put` widens it again: two `Resize` nodes
+        the store does not need.
+
+      *Runs:* `poke` (a store), `poke_low` (a store under a branch) and
+      `poke_pair` (two calls of `poke`, then the first byte read back
+      from the span they left), each pinned by conversion at any span,
+      instantiated from the once-proof over any file, run on bytes and
+      accepted by the function compiler; four refusals and a control
+      (`lib/_tests/native/runtime/rt_file_tests.hthr`).
     - *4c-2:* the measured loop with the file carried.
     - *4c-3:* the class's statement of the run, the reflector over a
       `mut self` span, the generator and linking; `raise_span` becomes a
