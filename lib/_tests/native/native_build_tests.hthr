@@ -250,44 +250,46 @@ theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
 // parameter 2 the count. The loop makes `count` passes over the home, the
 // index and the tally; a pass reads the byte only under the test of the
 // index against the length, which is what bounds the load.
+fn tally_word(id: Nat) → Port { Port(id := id, width := 64) }
+fn tally_bit(id: Nat) → Port { Port(id := id, width := 1) }
 fn tally_newlines() → Function {
     Function(parameters := [0, 1, 2], lent := 1,
         body := Sequence(
-            Region(inputs := Ports([span_word(0), span_word(1), span_word(2)]),
+            Region(inputs := Ports([tally_word(0), tally_word(1), tally_word(2)]),
                 nodes := [Const(width := 64, output := 3, value := 0), Const(width := 64, output := 4, value := 0)],
-                outputs := Ports([span_word(0), span_word(1), span_word(2), span_word(3), span_word(4)])),
+                outputs := Ports([tally_word(0), tally_word(1), tally_word(2), tally_word(3), tally_word(4)])),
             Loop(inputs := [0, 1, 3, 4], bound := 2, parameters := [10, 11, 12, 13], count := 14,
                 body := Sequence(
-                    Region(inputs := Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_word(14)]),
+                    Region(inputs := Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_word(14)]),
                         nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
                             UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
-                        outputs := Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_bit(20), span_bit(15)])),
-                    Conditional(Ports([span_word(10), span_word(11), span_word(12), span_word(13), span_bit(20), span_bit(15)]), 15,
-                        Ports([span_word(12), span_word(13)]), Ports([span_word(16), span_word(17)]),
+                        outputs := Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_bit(20), tally_bit(15)])),
+                    Conditional(Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_bit(20), tally_bit(15)]), 15,
+                        Ports([tally_word(12), tally_word(13)]), Ports([tally_word(16), tally_word(17)]),
                         Sequence(
-                            Region(inputs := Ports([span_word(12), span_word(13)]),
+                            Region(inputs := Ports([tally_word(12), tally_word(13)]),
                                 nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
-                                outputs := Ports([span_word(12), span_word(13), span_word(18)])),
+                                outputs := Ports([tally_word(12), tally_word(13), tally_word(18)])),
                             Sequence(
-                                Region(inputs := Ports([span_word(12), span_word(13), span_word(18)]),
+                                Region(inputs := Ports([tally_word(12), tally_word(13), tally_word(18)]),
                                     nodes := [Const(width := 64, output := 21, value := 10),
                                         Equal(width := 64, output := 22, left := 18, right := 21)],
-                                    outputs := Ports([span_word(12), span_word(13), span_bit(22)])),
-                                Conditional(Ports([span_word(12), span_word(13), span_bit(22)]), 22,
-                                    Ports([span_word(12), span_word(13)]), Ports([span_word(16), span_word(17)]),
-                                    Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                                    outputs := Ports([tally_word(12), tally_word(13), tally_bit(22)])),
+                                Conditional(Ports([tally_word(12), tally_word(13), tally_bit(22)]), 22,
+                                    Ports([tally_word(12), tally_word(13)]), Ports([tally_word(16), tally_word(17)]),
+                                    Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
                                         nodes := [Const(width := 64, output := 19, value := 1),
                                             Add(width := 64, output := 16, left := 13, right := 19),
                                             Add(width := 64, output := 17, left := 12, right := 19)],
-                                        outputs := Ports([span_word(16), span_word(17)]))),
-                                    Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                                        outputs := Ports([tally_word(16), tally_word(17)]))),
+                                    Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
                                         nodes := [Const(width := 64, output := 19, value := 1),
                                             Move(width := 64, output := 16, source := 13),
                                             Add(width := 64, output := 17, left := 12, right := 19)],
-                                        outputs := Ports([span_word(16), span_word(17)])))))),
-                        Dataflow(Region(inputs := Ports([span_word(12), span_word(13)]),
+                                        outputs := Ports([tally_word(16), tally_word(17)])))))),
+                        Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
                             nodes := [Move(width := 64, output := 16, source := 13), Move(width := 64, output := 17, source := 12)],
-                            outputs := Ports([span_word(16), span_word(17)]))))),
+                            outputs := Ports([tally_word(16), tally_word(17)]))))),
                 exit := 20, next := [10, 11, 17, 16], outputs := [5, 6, 7, 8], exhausted := 9)),
         result := 8)
 }
@@ -397,19 +399,22 @@ theorem overwriting_past(): overwriting(9).source().tree([], 0) = Ret(BitVec::of
 
 // `raise_span` (native_tool_spans) rewrites the buffer through a function
 // it calls: "aZz{" read back after the call is "AZZ{", so its first and
-// third bytes sum to 65 + 90, and the count it answers is 4.
+// third bytes sum to 65 + 90, and the index it answers is 4.
 fn mixed_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(90), BitVec::ofNat(122), BitVec::ofNat(123)] }
 fn raised_span(count: Nat) → Tool {
     program(raise_span_program(), buffer_of(mixed_bytes(), λ b => run(local(num(0), λ r =>
-        compute(call(raise_span_entry(), [num(count)], r)) ++ exit(b.at(num(0)) + b.at(num(2)) + r.get())))))
+        compute(call(raise_span_entry(), [num(count), num(0)], r)) ++ exit(b.at(num(0)) + b.at(num(2)) + r.get())))))
 }
 theorem raised_span_runs(): raised_span(4).source().tree([], 0) = Ret(BitVec::ofNat(159)) { refl }
 // Only the first `count` bytes: 65 and the 122 left, and 1.
 theorem raised_span_first(): raised_span(1).source().tree([], 0) = Ret(BitVec::ofNat(188)) { refl }
-// A count past the buffer stops at its end.
-theorem raised_span_past(): raised_span(9).source().tree([], 0) = Ret(BitVec::ofNat(159)) { refl }
-theorem raised_span_compiles(): raised_span(4).source().refusal(region_low(),
-    Homes::slots(raised_span(4).source()).placed(plan_program(raised_span(4).source().functions))) = [] { refl }
+// A count past the buffer stores nothing past its end, and is answered.
+theorem raised_span_past(): raised_span(5).source().tree([], 0) = Ret(BitVec::ofNat(160)) { refl }
+// That the function compiler takes `raise_span`'s program is `raise_lowers`
+// (native_tool_spans_tests), and a whole tool that calls it is compiled and
+// its certificate checked by `write-elf` (`tr_upper_span_tool`,
+// crates/cli/tests/native_tools.rs): the generated program's compile is
+// not one evaluation here, as `count_newlines`'s is not.
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

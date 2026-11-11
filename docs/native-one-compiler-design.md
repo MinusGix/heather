@@ -803,10 +803,18 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   A loop is spelled the second way today. A loop is a function that
   `decreases`, and `decreases` does not yet cover a declaration with a
   `self` parameter (issues/decreases-self-parameter.md), so
-  `raise_from` takes its span as a plain parameter, shadows it with a
-  `let mut`, stores through `put_within`, and ends in its own call on
-  the span as the pass left it. The reflector reads both spellings as
-  the same thing, since it reads the kernel term.
+  `raise_from` takes its span as a plain parameter and ends in its own
+  call on the span as the pass left it. The reflector reads every
+  spelling of that as the same thing, since it reads the kernel term.
+  The generator asks more: a loop's instance is built from its
+  recursor's `ext` and `irrel` companions, and a `decreases` arm with a
+  `mut self` call statement before its self-call (`span.put_within(…);
+  raise_from(span, …)`) has none today
+  (issues/decreases-mut-call-statement-companions.md). So a loop that
+  is a `runtime fn` makes its store in the self-call's argument
+  (`raise_from(span.with_byte_within(…), …)`, or
+  `List::put_within(span, …).after`), until the companions follow the
+  statement.
 
   The reflector (`rt_file_reflect.hthr`, built in 4c-3a) reads the
   elaborated body the way the one over `Io` does. Each end of the body
@@ -910,6 +918,43 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   stores nothing is read off the code once per link today; it belongs
   in the instance, or in a theorem of the pure lowering
   (issues/rt-pure-regions-are-quiet.md).
+
+- *The generator is the one `runtime fn` has, told by the type.* A
+  function whose type ends in `Mutated` writes; any other only reads
+  (`runtime`, `runtime.hthr`). For one that writes the generator
+  reflects it over the file, with every `runtime fn` it calls found by
+  name and sorted into the ones that only read (their `Compile`
+  instances) and the ones that write (their `CompileSpan` instances);
+  builds its instance, by `FFun::compile` where the reflection's
+  meaning converts to it and by `FFun::compile_measured` where it calls
+  itself last; links it with everything it reaches, of either kind,
+  each function one `spanned` step; and publishes, beside the function:
+
+  | name | what it is |
+  |---|---|
+  | `f::rt`, `f::world`, `f::writes` | the reflection, the functions it calls that only read, the ones that write |
+  | `f::code`, `f::compile` | the FunctionIR function and the `CompileSpan(f)` instance |
+  | `f::program`, `f::arities`, `f::stills` | the linked program, how many words each function takes, which of them leave the file |
+  | `f::runs_over` | `program_run(f::program, Cons(span, rest), root, [place, length, xs…]) = FTm::end_of(rest, f(span, length, xs…))`, at every span, rest, place and words |
+
+  Nothing in the group is proved about `f` for `f`. A loop's equation
+  (`FFun::Guarded`) is spelled by the generator from the recursor's
+  companions, as the pure loop's is, and its measure is the function's
+  own `decreases` term read at the words and the span, which has to be
+  a word's `toNat` so that it is below 2^64 by that alone. What a
+  tool's call does is then one step from `f::runs_over` with no
+  evaluation of bytes: `program_writers` hands the function the home of
+  the buffer it is lent, and takes the span back
+  (`raise_span_called`, `native_tool_spans.hthr`).
+
+  What the generator refuses in this round, each by name: a parameter
+  or result beside the span that is not a 64-bit word (the pure
+  generator's representations are not carried over yet); a loop with
+  no `ext` companion; a callee that writes and is an ordinary `fn`; and
+  whatever the reflector refuses. The names it publishes mention
+  `runtime_file` and the linking modules, so a module that declares
+  such a function imports them, and a module whose `runtime fn`s only
+  read does not pay for them.
 
 After U5 the two computation layers are one. `ETm` lowers to a
 `Source`'s statements because that is where a call to Linux and a
@@ -1245,12 +1290,28 @@ Each is a PR and ends with something that runs.
       `raise` with the file left (`linked_raise`), from the instances
       alone; a link that names the wrong function is refused by the
       kernel (`lib/_tests/native/runtime/runtime_file_tests.hthr`).
-    - *4c-3c:* the class's statement of the run, the generator
-      (`runtime fn` on a function whose result is `Mutated` over a
-      span: reflect, lower, the instance by `refl` or from the
-      recursor's `ext` and `irrel`, link, publish `f::program` and
-      `f::runs_over`), and `raise_span` as a `runtime fn` with the tool
-      rebuilt on it.
+    - *4c-3c (built 2026-11-11):* the generator (`runtime.hthr`; §2.6
+      has what it publishes and what it refuses). `runtime fn` on a
+      function whose type ends in `Mutated` reflects it over the file,
+      builds its `CompileSpan` instance, links it with every
+      `runtime fn` it reaches and publishes `f::program` and
+      `f::runs_over`. *Runs:* a store, two calls of a function that
+      writes with a read of what they left, a loop with a callee that
+      reads, a loop with a callee that writes, and a function whose
+      reading callee is lent the span it writes, each stated at every
+      file from its generated theorem, run on bytes and accepted by the
+      function compiler; three bodies refused with their reasons
+      (`lib/_tests/native/runtime/runtime_span_tests.hthr`).
+      `raise_span` is a `runtime fn` (`native_tool_spans.hthr`), the
+      FunctionIR written by hand is gone, and `tr_upper_span_tool`
+      calls the generated program: `write-elf` compiles it with its
+      certificate and it runs as `tr a-z A-Z`. What a call of it does
+      at every buffer is `raise_span_called`. *Found:* a `decreases`
+      arm with a `mut self` call statement has no `ext` companion
+      (issues/decreases-mut-call-statement-companions.md); the compile
+      of a tool over a generated program is not one kernel evaluation,
+      so the build probe states that the function compiler takes the
+      program and leaves the whole compile to `write-elf`.
     - *4c-4:* the layer over Linux drops `Writers::Quiet`, so a tool
       written as a `runtime fn` over `Io` calls a function that writes.
   - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,

@@ -131,8 +131,8 @@ fn linked_program() → List<Function> {
 }
 
 fn linked_srcs(rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
-    span_srcs_cons(Compile::span_source(twice, twice::compile, rest), span_srcs_cons(Compile::span_source(raise, raise::compile, rest),
-        span_srcs_cons(CompileSpan::source(raise_from, raise_from_compile(), rest), span_srcs_nil())))
+    span_all_cons(Compile::span_source(twice, twice::compile), span_all_cons(Compile::span_source(raise, raise::compile),
+        span_all_cons(CompileSpan::source(raise_from, raise_from_compile()), span_all_nil())))(rest)
 }
 
 // It runs: "abc" from index 1 becomes "aBC".

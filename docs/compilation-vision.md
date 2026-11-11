@@ -248,7 +248,7 @@ optimization that uses it is proved once under it as a hypothesis.
   after the call holds over the file the callee left
   (`Target::held_left`), so a program whose functions store links:
   `tr` runs with its loop a called function that rewrites the buffer
-  (`raise_span`, FunctionIR by hand until `rt` writes). `rt` writes as
+  (`raise_span`, a `runtime fn`). `rt` writes as
   a computation over the span, a layer over its pure terms as the layer
   over Linux is (`FTm`, `rt_file.hthr`): the meaning threads the bytes
   of the one span written, and the lowering's code runs to it
@@ -264,7 +264,10 @@ optimization that uses it is proved once under it as a hypothesis.
   (`CompileSpan<F>(f)`, `runtime_file.hthr`), and a program is linked
   from instances of both classes over the files with a span first, a
   function at a time (`program_spanned`, `function_ir_link.hthr`). The
-  generator is next.
+  generator is `runtime fn`'s own, told by the type: a function whose
+  type ends in `Mutated` gets a `CompileSpan` instance, a linked
+  program and its run stated at every file (`f::runs_over`), with
+  nothing proved for the function in particular.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

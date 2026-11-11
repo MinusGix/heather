@@ -1,0 +1,211 @@
+// Probes of `runtime fn` on functions that write a span
+// (lib/native/runtime/runtime.hthr's `runtime_span`;
+// docs/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
+// generator publishes for a store, for calls of functions that write, and
+// for a loop with a callee that only reads, each stated at every file, and
+// what it refuses. Tests, not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// A store
+
+// `v`'s low byte at `i` under the length word, returning the index.
+runtime fn List::poke(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    span.put_within(length, i, v.truncate(8, 56));
+    i
+}
+
+theorem poke_runs(): program_run(List::poke::program, [[b(97), b(98), b(99)], [b(7)]], 0, [w(4096), w(3), w(1), w(88)]) =
+    Ending(w(1), [[b(97), b(88), b(99)], [b(7)]]) { refl }
+
+// What the generator states, at every file: the word and the span are the
+// method's.
+theorem poke_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    program_run(List::poke::program, Cons(span, rest), 0, [place, length, i, v]) =
+        Ending(List::poke(span, length, i, v).value, Cons(List::poke(span, length, i, v).after, rest)) {
+    List::poke::runs_over(span, rest, place, length, i, v)
+}
+
+// The reflection the group is built on is the one the reflector's probes
+// pin (`rt_file_reflect_tests.hthr`).
+theorem poke_reflection(): List::poke::rt = FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+    Let(Prim(Trunc(8, 56), [0]), Put(2, 3, 0, Pure(Var(2))))) { refl }
+
+// ---------------------------------------------------------------------------
+// Calls of a function that writes, and a read of what they left
+
+runtime fn List::poke_pair(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    let at = span.poke(length, i, v);
+    span.poke(length, at.add(BitVec::ofNat(1)), v);
+    span.byte_within(length, at).zero_extend(56)
+}
+
+// The program is `poke` and then `poke_pair`, which calls it twice.
+theorem poke_pair_runs(): program_run(List::poke_pair::program, [[b(97), b(98), b(99)], [b(7)]], 1, [w(4096), w(3), w(1), w(88)]) =
+    Ending(w(88), [[b(97), b(88), b(88)], [b(7)]]) { refl }
+
+theorem poke_pair_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    program_run(List::poke_pair::program, Cons(span, rest), 1, [place, length, i, v]) =
+        FTm::end_of(rest, List::poke_pair(span, length, i, v)) {
+    List::poke_pair::runs_over(span, rest, place, length, i, v)
+}
+
+theorem poke_pair_stills(): List::poke_pair::stills = [False, False] { refl }
+
+// ---------------------------------------------------------------------------
+// A loop, with a callee that only reads
+
+runtime fn raise(x: BitVec(64)) → BitVec(64) {
+    match x.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { False => x, True => x.sub(BitVec::ofNat(32)) }
+}
+
+// Every byte from `i` raised, the index it stopped at returned.
+runtime fn raise_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => raise_from(span.with_byte_within(length, i, raise(span.byte_within(length, i).zero_extend(56)).truncate(8, 56)), length,
+            i.add(BitVec::ofNat(1))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// `raise` is function 0 and the loop function 1: "a1c" becomes "A1C".
+theorem raise_from_runs(): program_run(raise_from::program, [[b(97), b(49), b(99)], [b(7)]], 1, [w(4096), w(3), w(0)]) =
+    Ending(w(3), [[b(65), b(49), b(67)], [b(7)]]) { refl }
+
+theorem raise_from_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(raise_from::program, Cons(span, rest), 1, [place, length, i]) = FTm::end_of(rest, raise_from(span, length, i)) {
+    raise_from::runs_over(span, rest, place, length, i)
+}
+
+theorem raise_from_stills(): raise_from::stills = [False, True] { refl }
+
+// The function compiler takes each program, the functions that write lent
+// one buffer.
+theorem programs_counted(): program_counts(raise_from::program) = [0, 1] ∧ program_counts(List::poke_pair::program) = [1, 1] { ⟨refl, refl⟩ }
+
+theorem raise_from_accepted():
+    lower_program_lent(raise_from::program, plan_program(raise_from::program), program_counts(raise_from::program)).is_some() = True { refl }
+
+theorem poke_pair_accepted(): lower_program_lent(List::poke_pair::program, plan_program(List::poke_pair::program),
+    program_counts(List::poke_pair::program)).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A loop that calls a function that writes
+
+// `v` at every index from `i`, by `poke`: the callee's span is the one the
+// next pass takes.
+runtime fn fill_from(span: List<BitVec(8)>, length, i, v: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => fill_from(List::poke(span, length, i, v).after, length, i.add(BitVec::ofNat(1)), v),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+theorem fill_from_runs(): program_run(fill_from::program, [[b(97), b(98), b(99)], [b(7)]], 1, [w(4096), w(3), w(1), w(45)]) =
+    Ending(w(3), [[b(97), b(45), b(45)], [b(7)]]) { refl }
+
+theorem fill_from_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    program_run(fill_from::program, Cons(span, rest), 1, [place, length, i, v]) = FTm::end_of(rest, fill_from(span, length, i, v)) {
+    fill_from::runs_over(span, rest, place, length, i, v)
+}
+
+// ---------------------------------------------------------------------------
+// A function that writes after a function that reads the span
+
+runtime fn first_byte(span: List<BitVec(8)>, length: BitVec(64)) → BitVec(64) { span.byte_within(length, BitVec::ofNat(0)).zero_extend(56) }
+
+// The first byte copied to `i`: the callee is lent the span the store then
+// writes, and reads it before the store.
+runtime fn List::copy_first(mut self span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) {
+    span.put_within(length, i, first_byte(span, length).truncate(8, 56));
+    i
+}
+
+theorem copy_first_runs(): program_run(List::copy_first::program, [[b(97), b(98), b(99)], [b(7)]], 1, [w(4096), w(3), w(2)]) =
+    Ending(w(2), [[b(97), b(98), b(97)], [b(7)]]) { refl }
+
+theorem copy_first_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(List::copy_first::program, Cons(span, rest), 1, [place, length, i]) = FTm::end_of(rest, List::copy_first(span, length, i)) {
+    List::copy_first::runs_over(span, rest, place, length, i)
+}
+
+// ---------------------------------------------------------------------------
+// What the generator refuses
+
+// A callee that writes and is not a runtime fn.
+fn List::poke_plain(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    span.put_within(length, i, v.truncate(8, 56));
+    i
+}
+
+// expect-error: `poke_plain` writes the span and is an ordinary fn: mark it `runtime fn`
+runtime fn List::poke_through(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) { span.poke_plain(length, i, v) }
+
+// A byte across the boundary: the code takes 64-bit words.
+// expect-error: it takes and returns 64-bit words for now, beside its span
+runtime fn List::poke_byte(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → BitVec(64) {
+    span.put_within(length, i, v);
+    i
+}
+
+// A loop whose store is a statement before its own call: the function
+// checks, and has no `ext` to build the instance from.
+// expect-error: it has no `ext` companion, which a loop's instance is built from
+runtime fn clear_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => {
+            let mut span = span;
+            span.put_within(length, i, BitVec::ofNat(0));
+            clear_from(span, length, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}

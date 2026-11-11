@@ -202,13 +202,14 @@ fn span_sources(rest: List<List<BitVec(8)>>, srcs: List<BitVec(8)> → List<List
     λ own k words => span_source(srcs(own), Cons(own, rest), k, words)
 }
 
-// The list spelled with no binder, as `link_files_cons` spells a reading
-// program's.
-fn span_srcs_nil() → List<BitVec(8)> → List<List<BitVec(64)> → Ending> { λ _ => [] }
+// The lists at every rest of the file, spelled with no binder, as
+// `link_files_cons` spells a reading program's.
+fn span_all_nil() → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending> { λ _ _ => [] }
 
-fn span_srcs_cons(s: List<BitVec(8)> → List<BitVec(64)> → Ending, more: List<BitVec(8)> → List<List<BitVec(64)> → Ending>)
-    → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
-    λ own => Cons(s(own), more(own))
+fn span_all_cons(s: List<List<BitVec(8)>> → List<BitVec(8)> → List<BitVec(64)> → Ending,
+    more: List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending>)
+    → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
+    λ rest own => Cons(s(rest, own), more(rest, own))
 }
 
 theorem span_source_word(held: Buffers(), srcs: List<List<BitVec(64)> → Ending>): (k: Nat) → (ws: List<BitVec(64)>) →
@@ -466,3 +467,50 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitV
                 sym(c.reflected.params.len().matches_eq(words.len(), n))))
     }, λ never _ _ => false_elim(never)⟩
 }
+
+// ---------------------------------------------------------------------------
+// What the generator spells (`runtime_span`, `runtime.hthr`): each with no
+// binder, so that a generated declaration is applications of globals.
+
+// The pin of a function its reflection's meaning converts to: it at every
+// rest of the file and every span.
+theorem FFun::source_every<F>(f: F, tys: Nat → RecInfo, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, ps, r))):
+    (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
+    FTm::source_at(tys, ps, r, typed, f, own) = FTm::source_at(tys, ps, r, typed, f, own) {
+    λ _ _ => refl
+}
+
+// The table of the functions that write, an entry at a time: each function
+// as a meaning.
+fn FTm::sems_nil(tys: Nat → RecInfo) → FTm::Sems(tys, Nil) { trivial }
+
+fn FTm::sems_cons<F>(f: F, tys: Nat → RecInfo, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, ps, r)), sigs: List<Sig>,
+    rest: FTm::Sems(tys, sigs)) → FTm::Sems(tys, Cons(Sig(ps, r), sigs)) {
+    Pair(FTm::source_at(tys, ps, r, typed, f), rest)
+}
+
+// A measure over the span and the words, from a function of them.
+fn FFun::on_words(ps: List<Ty>, v: List<BitVec(8)> → Ty::WordsToNat(ps)) → List<BitVec(64)> → List<BitVec(8)> → Nat {
+    λ xs own => Ty::on_words(ps, v(own), xs)
+}
+
+// `x(own) = x(own)` at every span: what a link's two lists are checked by,
+// each side of the statement converting to `x(own)`.
+theorem span_every<A>(x: List<BitVec(8)> → A): (own: List<BitVec(8)>) → x(own) = x(own) { λ _ => refl }
+
+// The tables a link is checked against, at each span.
+fn Compile::span_table<F>(f: F, c: Compile<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → BitVec(64)> {
+    λ own => Compile::table(f, c, Cons(own, rest))
+}
+
+fn CompileSpan::reads_table<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → BitVec(64)> {
+    λ own => Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Cons(own, rest)))
+}
+
+fn CompileSpan::writes_table<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
+    λ own => FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers)
+}
+
+// The functions marked still before function `k` from the last: what that
+// function's callees are checked against.
+fn link_still(functions: List<Function>, stills: List<Bool>, k: Nat) → Nat → Bool { linked_still(functions.drop(k), stills.drop(k)) }

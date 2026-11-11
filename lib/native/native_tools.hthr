@@ -70,13 +70,14 @@ fn tr_upper_called(capacity: Nat) → Tool {
 fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
 
 // tr a third time, the loop itself a function: each read's bytes raised by
-// `raise_span` (native_tool_spans), which is lent the buffer, stores into
-// it and calls `raise_letter` on each byte. The write after the call sends
-// the buffer as the function left it
-// (docs/native-one-compiler-design.md §2.6).
+// `raise_span` (native_tool_spans), a `runtime fn` that is lent the
+// buffer, stores into it and calls `raise_word` on each byte. The write
+// after the call sends the buffer as the function left it
+// (docs/native-one-compiler-design.md §2.6; `raise_span_called` is what
+// the call is in the tool's meaning).
 fn tr_upper_span(capacity: Nat) → Tool {
     program(raise_span_program(), buffer(capacity, λ buf => run(local(num(0), λ raised => each_read(stdin(), buf, λ n =>
-        compute(call(raise_span_entry(), [n.get()], raised)) ++ write_all(stdout(), buf, n.get()))))))
+        compute(call(raise_span_entry(), [n.get(), num(0)], raised)) ++ write_all(stdout(), buf, n.get()))))))
 }
 
 fn tr_upper_span_tool() → Tool { tr_upper_span(256) }

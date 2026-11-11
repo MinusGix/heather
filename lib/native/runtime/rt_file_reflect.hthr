@@ -168,7 +168,7 @@ fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Ta
         Some(i) => pure(Pair(cfuns, i)),
         None => match k.discover {
             False => rt_refuse("`" ++ name ++ "` writes the span and is not a computation of the program"),
-            True => lookup(name ++ "::rt").bind(λ c => match c {
+            True => rt_name_of(g, name).bind(λ n => lookup(n ++ "::rt")).bind(λ c => match c {
                 Accepted(_) => pure(Pair(cfuns ++ [g.id], cfuns.len())),
                 Refused(_) => rt_refuse("`" ++ name ++ "` writes the span and is an ordinary fn: mark it `runtime fn`"),
             }),

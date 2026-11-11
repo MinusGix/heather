@@ -5,8 +5,10 @@
 // compiler under its count of lent buffers), and what a tool's call of it
 // answers with no address stated (`program_readers`,
 // `count_newlines_answers`), and what the call is in the tool's meaning
-// (`program_writers`, `count_newlines_called`). And `raise_span`, which
-// stores into the span: what it leaves, by evaluation, at any address.
+// (`program_writers`, `count_newlines_called`). And `raise_span`, a
+// `runtime fn` that stores into the span: what its program leaves on
+// bytes, at any address, and what a tool's call of it is at every buffer
+// (`raise_span_called`, from `raise_span::runs_over`).
 import native_tool_spans;
 import rt;
 import runtime;
@@ -101,16 +103,16 @@ fn mixed_raised() → Buffers() { [[b(65), b(90), b(90), b(123)], [b(120)]] }
 
 // It raises the first buffer's letters and answers how many bytes it went
 // over, wherever the buffer is said to lie.
-theorem raise_runs(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(4)]) = Ending(w(4), mixed_raised()) {
+theorem raise_runs(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(4), w(0)]) = Ending(w(4), mixed_raised()) {
     refl
 }
 // Only the first `count` bytes.
 theorem raise_first(place: BitVec(64)):
-    program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(1)]) = Ending(w(1), [[b(65), b(90), b(122), b(123)], [b(120)]]) {
+    program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(1), w(0)]) = Ending(w(1), [[b(65), b(90), b(122), b(123)], [b(120)]]) {
     refl
 }
-// A count past the span's length stores nothing past it.
-theorem raise_to_end(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(9)]) = Ending(w(4), mixed_raised()) {
+// A count past the span's length stores nothing past it, and is answered.
+theorem raise_to_end(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(9), w(0)]) = Ending(w(9), mixed_raised()) {
     refl
 }
 
@@ -125,10 +127,18 @@ theorem raise_lowers(): lower_program_lent(raise_span_program(), plan_program(ra
 
 // A program's call: the buffers it holds and the count, no address. The
 // first buffer comes back raised, the second as it was.
-theorem raise_called(): program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4)]) = Ending(w(4), mixed_raised()) { refl }
+theorem raise_called(): program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed_raised()) { refl }
+
+// And at every buffer, count and index, with no evaluation: the function
+// itself, the tool's other buffers as they were.
+theorem raise_called_every(bytes, other: List<BitVec(8)>, count, i: BitVec(64)):
+    program_writers(raise_span_program())([bytes, other], raise_span_entry(), [count, i]).buffers
+        = [raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).after, other] {
+    cong_fn<Ending, Buffers()>(λ answer => answer.buffers, raise_span_called(bytes, [other], count, i))
+}
 
 // The control: the call does not leave the file as it was.
-theorem raise_changes(same: program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4)]) = Ending(w(4), mixed())): False {
+theorem raise_changes(same: program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed())): False {
     let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(65)), same);
     absurd(verdict)
 }
