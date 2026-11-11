@@ -44,7 +44,7 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -102,14 +102,27 @@ record Known {
     // The types the program holds by their `datarepr`, after `recs` in the
     // type table.
     reprs: List<ReprEntry>,
+    // How many spans the function being walked is lent (the generator's
+    // mode): span `j`'s bytes are the parameter at level `2j`, its length
+    // word the one at `2j + 1`.
+    lent: Nat,
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent)
+}
+
+fn Known::lending(self k: Known, lent: Nat) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent)
+}
+
+// The span a parameter level is the bytes of, if it is one.
+fn Known::span_of(self k: Known, l: Nat) → Option<Nat> {
+    match Succ(l).leb(k.lent + k.lent).and(l.mod(2).same(0)) { True => Some(l.div(2)), False => None }
 }
 
 // Whether the walk reads types held by their repr: the generator's mode
@@ -398,6 +411,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         Fold(over, init, step) => Fold(st.index(over), st.index(init), step),
         If(c, yes, no) => If(st.index(c), yes, no),
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
+        Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
         _ => t,
     }
 }
@@ -656,7 +670,10 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
 fn rt_local(k: Known, st: RSt, h: Handle, operand: Bool, x: LocalRef, args: List<Handle>) → Tac<Pair<RSt, Tm>> {
     match args {
         Nil => match rt_assoc(st.locals, x.id) {
-            Some(l) => pure(st.finish(h, operand, Var(l))),
+            Some(l) => match k.span_of(l) {
+                None => pure(st.finish(h, operand, Var(l))),
+                Some(_) => rt_refuse("a lent span used as a value: its bytes are read by `byte_within` under its own length word, and a loop passes it on as it is"),
+            },
             None => match k.is_world(x) {
                 True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
                 False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
@@ -789,6 +806,48 @@ fn rt_transfer(k: Known, g: GlobalRef, h: Handle, name: String, args: List<Handl
     }
 }
 
+// The lent span an expression is: a span parameter, by number.
+fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
+    let v <- view(h);
+    let found: Option<Nat> = match v {
+        HLocal(x, args) => match args { Nil => rt_assoc(st.locals, x.id).and_then(λ l => k.span_of(l)), Cons(_, _) => None },
+        _ => None,
+    };
+    match found {
+        Some(j) => pure(j),
+        None => rt_refuse("`byte_within` of bytes that are not a lent span (a leading `List<BitVec(8)>` parameter followed by its length word)"),
+    }
+}
+
+// A recursion's arguments, as variables: a lent span's bytes and its length
+// word are passed on as they came in (the loop keeps a span's home in
+// place), the words after them are operands.
+fn rt_self_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
+    match lent {
+        Zero => RSt::operands(step, st, args),
+        Succ(n) => match args {
+            Cons(bytes, Cons(length, rest)) => {
+                let passed: Tac<Nat> = Tac::bind<Head, Nat>(view(bytes), λ v => match v {
+                    HLocal(x, more) => match more {
+                        Nil => match rt_assoc(st.locals, x.id) { Some(l) => pure(l), None => pure(j + j + 1) },
+                        Cons(_, _) => pure(j + j + 1),
+                    },
+                    _ => pure(j + j + 1),
+                });
+                let l <- passed;
+                match l.same(j + j) {
+                    False => rt_refuse("a recursion over a lent span passes the span on as it is: the loop keeps its home in place"),
+                    True => step(st, length).bind(λ r => match RSt::level(r.snd).same(j + j + 1) {
+                        False => rt_refuse("a recursion over a lent span passes the span's length word on as it is: the loop keeps its home in place"),
+                        True => rt_self_args(step, k, r.fst, Succ(j), n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
+                    }),
+                }
+            },
+            _ => rt_refuse("a recursion without its span"),
+        },
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -797,7 +856,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
             None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
                 HLocal(x, args) => match k.recursion {
                     Some(sc) => match x.id.same(sc.ih) {
-                        True => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args.take(sc.varied.len())).bind(λ r =>
+                        True => rt_self_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
                             pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
                         False => rt_local(k, st, h, operand, x, args),
                     },
@@ -878,6 +937,17 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 _ => rt_refuse("`toNat` of something other than a word"),
                             }),
                             Nil => rt_refuse("`toNat` without its operand"),
+                        },
+                        // `span.byte_within(length, i)`: a byte of a lent span,
+                        // under the span's own length word.
+                        PWithin => match args {
+                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_span(k, st, bytes).bind(λ j =>
+                                rt_go(f, k, st, length, True).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
+                                    False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
+                                    True => rt_go(f, k, rl.fst, i, True).bind(λ ri =>
+                                        pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
+                                })),
+                            _ => rt_refuse("`byte_within` without its span, length word and index"),
                         },
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
@@ -996,14 +1066,54 @@ fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pai
     }
 }
 
+// The spans a function is lent, read off its parameters' codes: each
+// leading byte list followed by a 64-bit word is a span and its length
+// word, and its code takes two words for them (where the bytes are, how
+// many). Their count, and the codes the function's code takes.
+fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
+    match tys {
+        Nil => Pair(0, tys),
+        Cons(bytes, more) => match more {
+            Nil => Pair(0, tys),
+            Cons(length, rest) => match bytes {
+                Bytes(_) => match (match length { Word(w) => w.same(64), _ => False }) {
+                    True => { let r = rt_lent(rest); Pair(Succ(r.fst), Cons(Word(64), Cons(Word(64), r.snd))) },
+                    False => Pair(0, tys),
+                },
+                _ => Pair(0, tys),
+            },
+        },
+    }
+}
+
+fn rt_has_bytes(tys: List<Ty>) → Bool {
+    match tys { Nil => False, Cons(t, rest) => match t { Bytes(_) => True, _ => rt_has_bytes(rest) } }
+}
+
+// In the generator's mode a function may be lent spans; any other byte
+// list among its parameters is refused here, with what a span is.
+fn rt_lend(k: Known, tys: List<Ty>) → Tac<Pair<Nat, List<Ty>>> {
+    match k.discover {
+        False => pure(Pair(0, tys)),
+        True => {
+            let r = rt_lent(tys);
+            match rt_has_bytes(r.snd) {
+                False => pure(r),
+                True => rt_refuse("a byte list parameter that is not a lent span: a span comes before the other parameters, each followed by its 64-bit length word"),
+            }
+        },
+    }
+}
+
 // A function, and the program's functions after it was walked (`k.funs`
 // and the runtime fns it was found to call).
 fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
     body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c)).bind(λ b =>
     rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b).bind(λ p =>
+    rt_lend(k, p.fst.snd).bind(λ lent =>
     k.ty_of(p.snd).bind(λ result =>
-    rt_go(fuel, k, p.fst.fst, p.snd, False).bind(λ r =>
-    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
+    rt_go(fuel, k.lending(lent.fst), p.fst.fst, p.snd, False).bind(λ r =>
+    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs)))))))
 }
 
 // How many parameters a function type takes.
@@ -1041,10 +1151,11 @@ fn rt_reflect_measured(fuel: Nat, k: Known, g: Nat, step: Nat) → Tac<Pair<Fun,
     let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
     let sc = SelfCall(o2.local.ref.id, [], List::range(n), List::range(n));
     let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let lent <- rt_lend(k, p.fst.snd);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
     let result <- k.ty_of(o3.body);
-    let r <- rt_go(fuel, k.within(sc), p.fst.fst, o3.body, False);
-    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))
+    let r <- rt_go(fuel, k.within(sc).lending(lent.fst), p.fst.fst, o3.body, False);
+    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
 }
 
 fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => pure(r.fst)) }
@@ -1066,7 +1177,7 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("BitVec::sign_extend", PSext), Pair("List::foldl", PFoldl),
      Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat),
      Pair("BitVec::truncate", PTrunc), Pair("BitVec::shift_left", PShift(0)), Pair("BitVec::shift_right", PShift(1)),
-     Pair("BitVec::arithmetic_shift_right", PShift(2))]
+     Pair("BitVec::arithmetic_shift_right", PShift(2)), Pair("List::byte_within", PWithin)]
 }
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -1093,7 +1204,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [])))))))))
+    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [], 0)))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

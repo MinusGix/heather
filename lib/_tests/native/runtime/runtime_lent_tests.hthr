@@ -1,0 +1,170 @@
+// Probes of `runtime fn` at a function lent a span
+// (docs/native-one-compiler-design.md §2.3, U3c step 3b): a leading
+// `List<BitVec(8)>` parameter followed by a 64-bit word is a span and its
+// length word, `byte_within` on it under that word is the read, and the
+// generator makes the instance the class states at every file. The same two
+// functions are built by hand in runtime_spans_tests.hthr. Tests, not
+// library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// One byte of a span, widened.
+
+runtime fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte_within(length, i).zero_extend(56) }
+
+// Its code takes two words where the function takes the bytes, and is lent
+// one span.
+theorem peek_reflected(): peek::rt = Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 1), Prim(Zext(8, 56), [0])), 1) { refl }
+
+// The pin, at every file: the reflection's meaning in the world there is
+// the function at the file's span.
+theorem peek_pinned(f: Buffers(), place, length, i: BitVec(64)):
+    peek::rt.meaning(peek::world.at(peek::compile.callees, f))(place, length, i) = peek(f.span(0), length, i) {
+    peek::reflects(f, place, length, i)
+}
+
+// Over any file, at any place and length word, the code returns `peek` of
+// the file's span.
+theorem peek_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(peek::world.at(peek::compile.callees, f), call),
+    place, length, i: BitVec(64)):
+    peek::code.eval(call, [place, length, i], buffers := f) = peek(f.span(0), length, i) {
+    peek::compile.agrees(f, call, agree, place, length, i)
+}
+
+fn abc() → List<BitVec(8)> { [b(97), b(98), b(99)] }
+
+theorem peek_abc(): program_eval_over([abc()], [peek::code], 0, [w(4096), w(3), w(1)]) = w(98) { refl }
+theorem peek_abc_short(): program_eval_over([abc()], [peek::code], 0, [w(4096), w(1), w(1)]) = w(0) { refl }
+
+// ---------------------------------------------------------------------------
+// The newlines of a span from `i`, added to `acc`: a loop over the span,
+// written with `decreases`. The recursion passes the span and its length
+// word on as they are.
+
+runtime fn count_from(span: List<BitVec(8)>, length, i, acc: BitVec(64)) → BitVec(64) decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => acc,
+        True => count_from(span, length, i.add(BitVec::ofNat(1)), match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            False => acc,
+            True => acc.add(BitVec::ofNat(1)),
+        }),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+theorem count_shaped(): count_from::rt.lent = 1 { refl }
+
+// Over any file, lent at any place with any length word, the one code
+// counts as the function does at the file's span, wherever its own entry
+// of the table is answered with it.
+theorem count_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(count_from::world.at(count_from::compile.callees, f), call),
+    place, length, i, acc: BitVec(64)):
+    count_from::code.eval(call, [place, length, i, acc], buffers := f) = count_from(f.span(0), length, i, acc) {
+    count_from::compile.agrees(f, call, agree, place, length, i, acc)
+}
+
+theorem count_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_from::code], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+theorem count_runs_from(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_from::code], 0, [w(4096), w(4), w(1), w(5)]) = w(7) { refl }
+theorem count_runs_short(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_from::code], 0, [w(4096), w(1), w(0), w(0)]) = w(1) { refl }
+
+// ---------------------------------------------------------------------------
+// A function lent a span that calls a function lent nothing: the callee is
+// in its table after it, the same at every file.
+
+runtime fn twice(a: BitVec(64)) → BitVec(64) { a.add(a) }
+
+runtime fn peek_twice(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { twice(span.byte_within(length, i).zero_extend(56)) }
+
+theorem peek_twice_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(peek_twice::world.at(peek_twice::compile.callees, f), call),
+    place, length, i: BitVec(64)):
+    peek_twice::code.eval(call, [place, length, i], buffers := f) = peek_twice(f.span(0), length, i) {
+    peek_twice::compile.agrees(f, call, agree, place, length, i)
+}
+
+// ---------------------------------------------------------------------------
+// Two spans, read side by side: spans are numbered in order, each with its
+// own length word.
+
+runtime fn differ(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>, yn: BitVec(64), i: BitVec(64)) → BitVec(64) {
+    xs.byte_within(xn, i).bxor(ys.byte_within(yn, i)).zero_extend(56)
+}
+
+theorem differ_shaped(): differ::rt.lent = 2 { refl }
+
+theorem differ_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(differ::world.at(differ::compile.callees, f), call),
+    xp, xn, yp, yn, i: BitVec(64)):
+    differ::code.eval(call, [xp, xn, yp, yn, i], buffers := f) = differ(f.span(0), xn, f.span(1), yn, i) {
+    differ::compile.agrees(f, call, agree, xp, xn, yp, yn, i)
+}
+
+theorem differ_runs(): program_eval_over([abc(), [b(97), b(96), b(99)]], [differ::code], 0, [w(4096), w(3), w(8192), w(3), w(1)]) = w(2) { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals, each with its reason.
+
+// expect-error: `byte_within` under a word that is not the span's own length parameter
+runtime fn peek_under(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte_within(i, i).zero_extend(56) }
+
+// expect-error: a lent span used as a value
+runtime fn peek_at(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte_at(i).zero_extend(56) }
+
+// expect-error: a byte list parameter that is not a lent span
+runtime fn peek_late(i: BitVec(64), span: List<BitVec(8)>, length: BitVec(64)) → BitVec(64) { span.byte_within(length, i).zero_extend(56) }
+
+// A span is not handed to another function yet (linking over a file is
+// step 3c).
+// expect-error: a lent span used as a value
+runtime fn peek_through(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { peek(span, length, i) }
+
+// A loop keeps its span's home in place: a recursion at another length word
+// is not this loop.
+// expect-error: passes the span's length word on as it is
+runtime fn count_shrinking(span: List<BitVec(8)>, length, i, acc: BitVec(64)) → BitVec(64) decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => acc,
+        True => count_shrinking(span, length.sub(BitVec::ofNat(0)), i.add(BitVec::ofNat(1)), acc),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// expect-error: a loop over more than one lent span has no instance yet
+runtime fn differ_from(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>, yn: BitVec(64), i, acc: BitVec(64)) → BitVec(64)
+    decreases xn.sub(i).toNat()
+{
+    match h: i.unsigned_lt_bit(xn) {
+        False => acc,
+        True => differ_from(xs, xn, ys, yn, i.add(BitVec::ofNat(1)), acc.add(xs.byte_within(xn, i).bxor(ys.byte_within(yn, i)).zero_extend(56))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, xn, h);
+        bv_omega
+    };
+}

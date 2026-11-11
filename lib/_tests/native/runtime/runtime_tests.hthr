@@ -294,5 +294,8 @@ theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
 // expect-error: a result that is not a 64-bit word
 runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
 
-// expect-error: a parameter that is not a 64-bit word
-runtime fn sum_bytes(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { start }
+// A byte list is a lent span only where a span may stand: before the other
+// parameters, followed by its length word
+// (lib/_tests/native/runtime/runtime_lent_tests.hthr).
+// expect-error: a byte list parameter that is not a lent span
+runtime fn sum_bytes(start: BitVec(64), xs: List<BitVec(8)>) → BitVec(64) { start }

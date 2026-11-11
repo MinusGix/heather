@@ -227,8 +227,10 @@ optimization that uses it is proved once under it as a hypothesis.
   reads its input and calls a compiled loop over it. `Compile(f)` says so
   for a function over memory: it is stated at every file, the function
   taking a span and its length word where its code takes the home, and
-  one code serving every file. What is left of it is the reflector
-  reading such a function, so the loop is a `runtime fn`, and writes.
+  one code serving every file, and a `runtime fn` whose leading
+  parameters are a byte list and its length word is such a function, a
+  loop over the span included. What is left of it is linking such a
+  function into a program, and writes.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

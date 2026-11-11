@@ -455,15 +455,38 @@ that neither is needed, and what follows is the form that was built.
   So a loop is lent one span for now; a loop over two is a family over
   pairs, built when something needs it.
 
-  The reflector decides what is a span (step 3b): leading parameters
-  of a pure `runtime fn` that come as `List<BitVec(8)>` followed by a
-  64-bit word, numbered in order, become the two words, and
-  `byte_within` on the span under its own length word is the read.
-  It may be passed to a call of the
-  function itself in the same place and to another `runtime fn` as the
-  same span number; any other use is refused with the reason. Passing
-  span `j` as a callee's span `k ≠ j` waits for a `Call` that renames
-  buffers, which FunctionIR does not have.
+  The reflector decides what is a span (step 3b, built): in the
+  generator's mode, each leading parameter of a pure `runtime fn` that
+  is a `List<BitVec(8)>` followed by a 64-bit word is a span and its
+  length word, numbered in order, and the function's code takes two
+  words for the pair (`rt_lent`, `lib/native/runtime/rt_reflect.hthr`).
+  `span.byte_within(length, i)` on such a span under its own length word
+  is `Byte(k, i, length)`. A recursion passes each span and its length
+  word on as they came in, which is what the loop's lowering needs to
+  keep the home in place, and the reflector says so where a body does
+  not. Every other use of the span is refused with the reason: read
+  under another word, read with `byte_at`, used as a value, or handed to
+  another function (which waits for linking over a file, step 3c, and a
+  callee's span `k ≠ j` for a `Call` that renames buffers, which
+  FunctionIR does not have). A byte list anywhere else among the
+  parameters is refused with what a span is.
+
+  The generator then makes the instance the class states
+  (`lib/native/runtime/runtime.hthr`). The table of a lent function is
+  `Setup::lent_callees`: entry 0 the function at each file's spans, the
+  spanless functions it calls after it, and its world is that table at
+  the empty file. A function without a loop is pinned at every file
+  (`Setup::lent_every`, and `f::reflects` is stated over the file). A
+  loop over one span proves `Setup::GuardedSpans`, the family of §2.3's
+  step 2 at the one-span files, with the generator's usual proof from
+  `f::ext` and `f::irrel`: the span is the statement's first binder and
+  each ih's, and every recursive answer is asked at the place the loop
+  was entered with. `Setup::guarded_span` brings the family to each
+  file's span 0, and that is `Setup::Guarded` by conversion at the
+  function's own body. A loop over two spans is refused (the family has
+  one index). A lent function publishes `f::rt`, `f::world`, `f::judged`,
+  `f::reflects`, `f::code` and `f::compile`; its program and `f::agrees`
+  are step 3c's, so `compile-x86` does not take one yet.
 
 What step 1 built (`lib/_tests/native/runtime/rt_spans_tests.hthr` is
 its evidence): the term, its meaning, its lowering and the theorem, for
@@ -485,10 +508,9 @@ runs by evaluation, and at every span, place and length word it
 computes `count_from` (`count_compiled`), `GuardedAt` proved from
 `count_from::ext` and `count_from::irrel` as the generator will. A
 self-call that moves a home is not lowered; a loop that keeps nothing,
-or is lent nothing, is lowered and not accepted. The generator makes no
-instance for such a loop yet (it says so): the class admits one since
-step 3a, built by hand in `runtime_spans_tests.hthr`, and the reflector
-reads a span in step 3b.
+or is lent nothing, is lowered and not accepted. The class admits such a loop's
+instance since step 3a (built by hand in `runtime_spans_tests.hthr`), and
+the generator makes it since step 3b.
 
 One limit of the source language showed while writing it: a `decreases`
 body that branches under its `match h:` arm with a self-call below the
@@ -582,8 +604,11 @@ Each is a PR and ends with something that runs.
       under it. *Runs:* a span read and a span loop as instances built by
       hand through the generator's own builders
       (`lib/_tests/native/runtime/runtime_spans_tests.hthr`).
-    - *Step 3b:* the reflector reads a span parameter and the generator
-      makes the instance. *Runs:* the same two as `runtime fn`s.
+    - *Step 3b, built 2026-11-11:* the reflector reads a span parameter
+      and the generator makes the instance. *Runs:* the same read and
+      loop as `runtime fn`s, a read of two spans, and a lent function
+      calling a spanless one
+      (`lib/_tests/native/runtime/runtime_lent_tests.hthr`).
     - *Step 3c:* linking over a file. *Runs:* `wc -l` with
       `count_newlines` a `runtime fn`.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
