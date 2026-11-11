@@ -259,6 +259,33 @@ fn compiled_wc_counts_lines_as_gnu_wc() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// wc -l with each read's newlines counted by `count_newlines`, a function
+/// lent the buffer: compiled into the same file by the function compiler
+/// and passed the buffer's address and capacity by the call
+/// (docs/native-one-compiler-design.md §2.3). GNU's counts, and so the
+/// counts of the wc above, whose loop is the program's own.
+#[test]
+fn compiled_wc_calling_a_function_over_its_buffer_counts_as_gnu_wc() {
+    let dir = scratch("wc-called");
+    let binary = dir.join("wc");
+    write_program("lib/native/native_tools.hthr", "wc_l_called_tool", &binary, true);
+
+    let mut random = Bytes::seeded("wc-called");
+    let lines = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    // Reads of every length up to the buffer's 256 bytes and past it: a
+    // newline at each end of a read, and none.
+    let ends: Vec<u8> = (0..1024u32).map(|i| if i % 256 == 0 || i % 256 == 255 { b'\n' } else { b'x' }).collect();
+    for input in [&b""[..], b"no newline", b"one\n", b"\n\n\n", &ends, &lines, &bytes] {
+        let (code, _) = run(&mut Command::new(&binary), input, Stdio::null());
+        let (_, gnu_out) = run(Command::new("wc").arg("-l"), input, Stdio::piped());
+        let count: u64 = String::from_utf8(gnu_out).unwrap().trim().parse().unwrap();
+        assert_eq!(code, Some((count % 256) as i32), "wc's status is GNU's count ({} bytes in)", input.len());
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Argument lists GNU's `echo` and `yes` take as text (none starts with
 /// `-`, which GNU's read as flags): none, empty ones, spaces and bytes past
 /// ASCII inside one, many, and random ones.

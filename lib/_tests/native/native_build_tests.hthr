@@ -16,8 +16,13 @@ import native_structured;
 import linux_x86_64_image;
 import native_tool_words;
 import native_tool_words_program;
+import native_tool_spans;
 import function_ir_eval;
+import function_ir_lower;
 import function_ir_lower_calls;
+import function_ir_placeless;
+import x86_64_asm;
+import logic;
 import linux_trees;
 
 // An exit's status computed into a temporary, the first word.
@@ -228,6 +233,58 @@ fn raised_twice() → Tool {
 theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::ofNat(131)) { refl }
 theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
     Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
+
+// A function lent the program's buffer (docs/native-one-compiler-design.md
+// §2.3): the newlines of "a\n\nb", counted by `count_newlines`
+// (native_tool_spans). The source's meaning answers the call over the
+// buffer as it is, with no address (`program_readers`).
+fn counted_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(10), BitVec::ofNat(10), BitVec::ofNat(98)] }
+fn counted() → Tool {
+    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get())))))
+}
+theorem counted_runs(): counted().source().tree([], 0) = Ret(BitVec::ofNat(2)) { refl }
+
+// It compiles: the call passes the buffer's address and capacity before
+// the count (`Prog::function_call`), the function placeless and emitted
+// under its count of lent buffers (`Prog::links`).
+theorem counted_compiles(): counted().source().refusal(region_low(),
+    Homes::slots(counted().source()).placed(plan_program(counted().source().functions))) = [] { refl }
+
+// The source spelled for `write-elf` says the function is lent a buffer:
+// its last number before the procedures' count, which is the last but the
+// statement's.
+theorem counted_spelled(): counted().source().functions.spell_functions().last() = Some(1) { refl }
+
+// With no buffer in the file the call does not fit: the function is lent
+// one.
+fn counts_nothing() → Tool {
+    program(count_newlines_program(), run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get()))))
+}
+theorem counts_nothing_refused(): refused_slots(counts_nothing().source()) = [2, 0, 16, 0, 0] { refl }
+
+// Nor with the homes written as arguments: the call passes them itself, so
+// the function takes one word after them.
+fn counts_by_hand() → Tool {
+    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(0, [num(0), num(4), num(4)], r)) ++ exit(r.get())))))
+}
+theorem counts_by_hand_refused(): refused_slots(counts_by_hand().source()) = [2, 0, 16, 0, 0] { refl }
+
+// A function whose answer is where its buffer lies does not link: the
+// program states no address, so it would have no answer to state.
+fn where_it_lies() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Dataflow(Region(inputs := Ports([Port(0, 64), Port(1, 64)]), nodes := [], outputs := Ports([Port(0, 64)]))), result := 0)
+}
+fn asks_where() → Tool {
+    program([where_it_lies()], buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [], r)) ++ exit(r.get())))))
+}
+// It is evaluable and the function compiler lowers it; placeless it is not.
+theorem where_it_lies_evaluable(): program_evaluable([where_it_lies()]) = True { refl }
+theorem where_it_lies_lowers(): lower_program_lent([where_it_lies()], plan_program([where_it_lies()]), [1]).is_some().IsTrue() { trivial }
+theorem where_it_lies_placed(): program_placeless([where_it_lies()]) = False { refl }
+theorem asks_where_refused(): asks_where().source().refusal(region_low(),
+    Homes::slots(asks_where().source()).placed(plan_program(asks_where().source().functions))) = [0, 5, 17, 0, 0] { refl }
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

@@ -4,7 +4,8 @@
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native-procedures-design.md), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles;
-// and tr through a word function it calls (`native_tool_words`).
+// tr through a word function it calls (`native_tool_words`), and `wc -l`
+// through a function lent the buffer (`native_tool_spans`).
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
 // source the tool lowers to).
@@ -13,6 +14,7 @@ import native_decimal;
 import native_source;
 import native_tool_words;
 import native_tool_words_program;
+import native_tool_spans;
 import list;
 import bitvec;
 import string;
@@ -108,6 +110,19 @@ fn wc_l(capacity: Nat) → Tool {
 }
 
 fn wc_l_tool() → Tool { wc_l(256) }
+
+// wc -l once more, each read's newlines counted by `count_newlines`
+// (native_tool_spans): a function lent the buffer, compiled into the same
+// file by the function compiler and passed the buffer's address and
+// capacity by the call (docs/native-one-compiler-design.md §2.3). The
+// function reads the bytes the read left in the program's buffer.
+fn wc_l_called(capacity: Nat) → Tool {
+    program(count_newlines_program(), buffer(capacity, λ buf => run(local(num(0), λ lines => local(num(0), λ found =>
+        each_read(stdin(), buf, λ n => compute(call(0, [n.get()], found)) ++ lines.set(lines.get() + found.get()))
+        ++ exit(lines.get()))))))
+}
+
+fn wc_l_called_tool() → Tool { wc_l_called(256) }
 
 // ---------------------------------------------------------------------------
 // echo
