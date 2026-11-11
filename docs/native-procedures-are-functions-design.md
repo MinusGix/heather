@@ -1,6 +1,7 @@
 # Procedures are functions: one frame, one call, one contract
 
-Status: **proposed 2026-11-11**, nothing built. Round U5 of
+Status: **proposed 2026-11-11; step 5a built the same day** (§3), the
+rest not. §1 describes the code before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
 before the round. Owner: `issues/native-one-compiler.md`; it draws in
 `issues/native-procedure-contracts.md`,
@@ -64,7 +65,7 @@ Checked against the branch of PR #551, 2026-11-11.
 | results | one, in RAX | up to six, in the argument registers |
 | what a call keeps | `callee_kept()`: RBX, RBP, R12 to R15, because a body never writes them (`leaves_all`) | nothing: the callee may write any home, so the caller pushes `out` less the results and pops them back (`Prog::pushes`, `pops`) |
 | callee's words at entry | its parameters, placed where they arrive | "zero but the parameters" in the meaning; the code has whatever the homes hold, and a body that reads anything else is refused (`Procedure::fits`) |
-| RSP | the frame, for the whole body | not in the invariant: reloaded from a static slot before each CALL (`call_enters`, `Layout::frame_at`) |
+| RSP | the frame, for the whole body | before 5a, not in the invariant: reloaded from a static slot before each CALL (`call_enters`, `Layout::frame_at`); since 5a the frame, in `Target::Held` |
 | contract | `Site::Returns` from the label under `Stack::CalledOver` to `Stack::AnsweredOver`: result in RAX, `Kept(callee_kept())`, stores only below the entry and into lent spans (`Stack::WroteIn`), the file after in memory | `Target::Runs(Perform(…))`, continuation-passing over `Target::At` |
 | linked by | induction on the list (`lower_program_lent_correct`) | induction on the room left (`Target::calls`), the callee at `Target::activation` |
 | a call's code in a program | `Prog::call_lent`: RSP reloaded, arguments, lent homes as immediates, R10 carried in RBX, CALL, RAX to the result's home | `Prog::performs`: depth test and count, RSP reloaded, pushes, arguments, CALL, pops, count back, results to their homes |
@@ -390,11 +391,40 @@ Not part of U5, and listed so the unification is aimed at them.
 Each is a PR's worth, changes no meaning, and ends with the tools' GNU
 gates passing on the new code.
 
-- **5a. RSP is the frame.** RSP in the invariant; the static frame slot,
-  its store at each entry and its load before each CALL go. Words stay
-  where they are and the caller still pushes. Small, and it settles how
-  every rule shows RSP kept before the large step leans on it. *Runs:*
-  every tool; `grep -F` for the procedures.
+- **5a. RSP is the frame** (built 2026-11-11). RSP in the invariant; the
+  static frame slot, its store at each entry and its load before each CALL
+  go. Words stay where they are and the caller still pushes. Small, and it
+  settles how every rule shows RSP kept before the large step leans on it.
+  *Runs:* every tool; `grep -F` for the procedures.
+
+  What it settled:
+  - *The invariant.* `home_values` reads RSP after the six pool registers,
+    and `Target::Agreeing` is the homes' agreement and that seventh value
+    being `t.frame()`. A write to any other register keeps the claim as
+    before, by evaluation; `Target::held_rsp` reads RSP off it.
+  - *What moves RSP moves the claim.* With RSP in `Held`, the claim cannot
+    be stated at a displaced RSP, so a push, a pop, a CALL and a RET are
+    each a move to another activation (`Target::activation`), through one
+    lemma, `Target::held_moved`: RSP written with the address of offset
+    `index`, the frames from there given. A pushed word is the top of the
+    lower activation's frames, and so is a return address. `goes_pushes`
+    and `goes_pops` are inductions over activations; the callee's entry
+    and return are stated in the callee's own activation, and
+    `perform_call` names the four a call passes through.
+  - *The proofs of an activation.* `Target` carries two proofs (`framed`,
+    `roomy`), and a claim at an activation built with other proofs of the
+    same facts is the same type only by unfolding. Statements that end in
+    an activation they compute take those proofs as arguments
+    (`(fr: …) → (ro: …) → …`), and `Target::held_proofs` changes them.
+    Step 5b meets this again and may prefer a `Target` whose bounds are
+    evaluated verdicts.
+  - *The code.* The start-up is four items (was six), a call's way in six
+    (was eight) and out four (was six), a procedure's entry its label and
+    its exit its RET; a function call loses its two. The data region is a
+    word shorter.
+  - *What 5b replaces of it.* `goes_pushes` and `goes_pops` go with the
+    pushes. `held_moved`, RSP in `Agreeing` and the entry and return
+    stated in the callee's activation stay.
 - **5b. Words in the frame, and the callee saves.** Slot words on the
   stack; `main`'s frame made by the start-up and a procedure's by its
   entry, which saves what it must keep; pushes and pops go. The two land

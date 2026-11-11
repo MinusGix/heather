@@ -96,8 +96,8 @@ is a `runtime fn`, compiled once and called.
   `Succ(f)`; the program names its procedures, its deep exit and `main`'s
   labels past the functions' (`Layout.functions`), and the functions'
   inner labels start where the program's end.
-- *The call.* RSP is loaded from the frame slot, as a procedure call
-  does; the arguments go from their homes to the six registers
+- *The call.* RSP is the frame (since U5's step 5a; before it, loaded
+  from a static slot); the arguments go from their homes to the six registers
   (`Prog::words_to`); R10 goes to RBX, CALL, and back; RAX goes to the
   result's home. A function keeps RBX, RBP and R12 to R15, so with R10
   carried in RBX every home register is as it was, and no allocator

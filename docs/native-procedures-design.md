@@ -153,6 +153,12 @@ fuel per call. With a depth, the question disappears: the handler is
 
 ## 4. The code
 
+*Since 2026-11-11 (U5's step 5a,
+`docs/native-procedures-are-functions-design.md` §3) there is no `frame`
+slot: RSP is the frame, held in the claim between statements, and nothing
+reloads it. What follows describes the code before that step; the `room`
+slot, the pushes and the depth test are as written.*
+
 ### 4.1 Layout
 
 The data region gains two slots past the saved entry RSP: `frame`, where

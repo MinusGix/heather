@@ -38,3 +38,7 @@ exempt images younger than the running processes from a sweep.
 
 Until then a red `native_tools` with this message on a store at its
 budget is this race: rerun the test.
+
+## Log
+
+- 2026-11-11: Seen again on a suite run over a store past its budget (`target/cli-check-images` at 4.5 GiB of 4 GiB): `compiled_yes_takes_its_line_as_gnu_yes` failed with "the image of `char` is gone from the store", and a rerun of `native_tools` alone failed the same way, so on such a store a rerun does not help. Deleting images older than a day (`find target/cli-check-images -name '*.hmi' -mmin +1440 -delete`, 2.2 GiB left) and rerunning passed, 19 of 19. Until one of the options above is taken, that trim is the workaround, not a rerun.
