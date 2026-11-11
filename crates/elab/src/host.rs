@@ -25,7 +25,7 @@
 //! **Quoting.** While a tactic expression is elaborated, a position that
 //! expects a `tactic::Expr` but is given some other term of the goal's
 //! context (`by exact(h)`) takes a handle to that term instead
-//! ([`Elaborator::quote_for_by`]). The quoted term is replaced by a closed
+//! ([`Host::quote_for_by`]). The quoted term is replaced by a closed
 //! `host_quote(n)`, so the tactic value stays closed. A term that infers no
 //! type (an unannotated `λ`) is quoted as written ([`Quoted::Surface`]) and
 //! checked where the tactic's result places it (design §26).
@@ -72,6 +72,13 @@ use crate::oracle::Unfold;
 use crate::context::{Alias, Cx};
 use crate::unification::Sol;
 use crate::{err, Elaborator, R};
+use crate::dispatch::Dictionaries;
+use crate::interfaces::InterfaceDefs;
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
+use crate::app_unify::AppUnify;
+use crate::inference::Inference;
+use crate::traits::ClassesMut;
 
 /// Fuel for **one force** of the tree's value graph — the kernel's own
 /// default, deliberately not a bespoke larger one. Each force runs on the
@@ -204,7 +211,7 @@ impl MatchDicts {
         if ind.params.len() == 1 {
             for d in cx.dicts.iter_inner() {
                 let Ok((carrier, clvl)) = el.elab_ty(cx, &d.carrier) else { continue };
-                let Some(index) = el.scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
+                let Some(index) = Dictionaries(el).scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
                 let targs = [(carrier, clvl)];
                 let Ok(vargs) = el.valparam_args(cx, ind, &targs, &index, span) else { continue };
                 let Ok((goal, glvl)) = el.lower_instance(cx, ind, &targs, &vargs, span) else { continue };
@@ -514,7 +521,7 @@ pub trait NativeTactic {
     fn resume(&mut self, answer: Answer) -> Result<Step, String>;
 }
 
-/// The protocol from the host's side: the loop in [`Elaborator::run_tactic`]
+/// The protocol from the host's side: the loop in [`Host::run_tactic`]
 /// drives every tactic through this.
 trait Speaker {
     fn start(&mut self) -> Result<Step, String>;
@@ -551,7 +558,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             return Ok(hit.clone());
         }
         let key = format!("tactic::{name}");
-        let abs = self.elab.protocol_abs(name).ok_or_else(|| {
+        let abs = Host(self.elab).protocol_abs(name).ok_or_else(|| {
             format!("`{key}` is not declared; `by` needs the protocol from `import tactic;`")
         })?;
         let GlobalBinding::Tm { ty, .. } = &self.world.bindings[abs] else {
@@ -1186,7 +1193,7 @@ pub(crate) enum Leaves {
     /// given.
     Fill(Vec<(Term, usize)>),
     /// A generated declaration's parameter types, statement and body
-    /// ([`Elaborator::elab_generate`]), in a context of the length given.
+    /// ([`HostMut::elab_generate`]), in a context of the length given.
     /// They were built in a world of `psi` globals, and the declarations
     /// published since are shifted past.
     Member { fills: Vec<(Held, usize)>, psi: usize },
@@ -1568,7 +1575,7 @@ struct Reified {
 pub(crate) enum Quoted {
     Held(Held),
     /// A term that infers no type of its own (an unannotated `λ`), checked
-    /// where the result places it ([`Elaborator::check_surface`]).
+    /// where the result places it ([`Host::check_surface`]).
     Surface(Expr),
 }
 
@@ -1590,7 +1597,17 @@ pub(crate) struct Quoting {
     no_goal: bool,
 }
 
-impl Elaborator {
+/// The tactic host's part of the elaborator: what answers a running tactic's requests.
+pub(crate) struct Host<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Host<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Host<'_> {
     /// `tactic::name`'s absolute index: by the name where the `by` is, or,
     /// where the module only imports `tactic` through another (a tactic
     /// library such as `set_tactic`), by its key in the import closure, as
@@ -2174,7 +2191,7 @@ impl Elaborator {
                 })
                 .collect();
             let d = (run.len(at) - run.len(home)) as u32;
-            self.unify_under(&hcx, pat, subj, m as u32, d, &mut trial, &[], run.span);
+            AppUnify(self).unify_under(&hcx, pat, subj, m as u32, d, &mut trial, &[], run.span);
             for (k, t) in trial.into_iter().enumerate() {
                 if matches!(sols[k], Sol::Unsolved) && t.solved().is_some() {
                     sols[k] = t;
@@ -2431,7 +2448,7 @@ impl Elaborator {
         // module's `interface fn` stays folded at open arguments
         // (docs/interface-definitions-design.md §3), so no spelling it
         // returns is one the gate would refuse to convert.
-        let world = match self.withheld_policy() {
+        let world = match InterfaceDefs(self).withheld_policy() {
             Some(w) => self.goal_psi().withholding(Some(w)),
             None => self.goal_psi(),
         };
@@ -2583,9 +2600,9 @@ impl Elaborator {
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
-        let inline = self.unspell_here_in(&template, m)?;
+        let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
         let mut sols = vec![Sol::Unsolved; m as usize];
-        self.unify_root(cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
+        AppUnify(self).unify_root(cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
         let solved = crate::unification::zonked(&inline, m, &sols)?;
         if !self.conv_types(cx, &solved, ty, level) {
             return None;
@@ -2791,7 +2808,7 @@ impl Elaborator {
             return Err(Fault::Ill("it mentions a hole nothing has solved".into()));
         };
         let cx = run.cx(at)?;
-        let (p, pty, plevel) = self
+        let (p, pty, plevel) = Inductives(self)
             .inj_of_term(&cx, k as usize, t, &ty, span)
             .map_err(|e| Fault::Ill(elab_message(e)))?;
         Ok(run.issue(at, Held::Term(p, pty, plevel)))
@@ -2821,7 +2838,7 @@ impl Elaborator {
         let expected = run.lift(gs, at, |k| gty.shift_local(k))?;
         let expected = run.committed_ty(&expected).ok_or_else(unsolved)?;
         let cx = run.cx(at)?;
-        let p = self
+        let p = Inductives(self)
             .absurd_of_term(&cx, t, &ty, &expected, &glevel, span)
             .map_err(|e| Fault::Ill(elab_message(e)))?;
         Ok(run.issue(at, Held::Term(p, expected, glevel)))
@@ -3070,7 +3087,7 @@ impl Elaborator {
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
             && let Some(ind) = self.display_tag_of(ty)
         {
-            let Some(targs) = self.display_targs(&run.scopes[at].cx, ty, &ind, 0) else {
+            let Some(targs) = Inductives(self).display_targs(&run.scopes[at].cx, ty, &ind, 0) else {
                 return HeadView::Other;
             };
             let args = targs.into_iter().map(|(t, l)| run.issue(at, Held::Type(t, l))).collect();
@@ -3118,9 +3135,9 @@ impl Elaborator {
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
-        let inline = self.unspell_here_in(&template, m)?;
+        let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
         let mut sols = vec![Sol::Unsolved; m as usize];
-        self.unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
+        AppUnify(self).unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
         let solved = crate::unification::zonked(&inline, m, &sols)?;
         if !self.conv_types(&cx, &solved, ty, level) {
             return None;
@@ -3335,7 +3352,7 @@ impl Elaborator {
             {
                 return Err(false);
             }
-            self.unify_root(cx, &pat, target, n, &mut sols, &slot_tys, span);
+            AppUnify(self).unify_root(cx, &pat, target, n, &mut sols, &slot_tys, span);
             self.match_dictionaries(cx, doms, n, &mut sols, dicts, None, span);
             let solved = crate::unification::zonked(&pat, n, &sols).ok_or(true)?;
             if !self.conv_types(cx, &solved, target, lvl) {
@@ -3405,13 +3422,13 @@ impl Elaborator {
             // The candidates are lowered inline, and a lemma's parameter is
             // usually the reference `El (app(C#tycode_fn^δ; ā))`: read it
             // inline too, so the two unify field by field.
-            let inline = self.unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
+            let inline = GeneratedDefs(self).unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
             let mut fitting = 0;
             let mut found = false;
             for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {
                 let mut trial = sols.to_vec();
                 let slot_tys = slot_tys.get_or_insert_with(|| Self::match_slot_tys(cx, doms, n));
-                self.unify_root(cx, &inline, goal, n, &mut trial, slot_tys, span);
+                AppUnify(self).unify_root(cx, &inline, goal, n, &mut trial, slot_tys, span);
                 let fits = crate::unification::zonked(&pat, n, &trial).is_some_and(|z| self.conv_types(cx, &z, goal, glvl));
                 if !fits {
                     continue;
@@ -3997,7 +4014,7 @@ impl Elaborator {
     fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
         let state = Rc::new(RefCell::new(leaves));
         let built = self.scoped_cell(|s| &s.host_leaves, Some(Rc::clone(&state)), || match skeleton {
-            Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
+            Skeleton::Cases { scrut, ty, level, motive, equation, arms } => Inference(self).elab_convoy(
                 cx,
                 heather_syntax::MatchForm::Match,
                 true,
@@ -4060,7 +4077,25 @@ impl Elaborator {
             _ => err("a generated declaration's type outside its declaration", span),
         }
     }
+}
 
+/// The host interface's part of the elaborator that writes: prefixed and tactic declarations.
+pub(crate) struct HostMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for HostMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for HostMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl HostMut<'_> {
     /// `generate g(args);`: run the generator `g(args)`, a
     /// `tactic::Tac<List<tactic::Decl>>`, at the module's empty context,
     /// and publish the declarations it ends with, every one of them or none
@@ -4076,7 +4111,7 @@ impl Elaborator {
     /// rolls back the ones before it.
     pub(crate) fn elab_generate(&mut self, g: &heather_syntax::ast::GenerateItem) -> R<()> {
         let label = format!("generate {}", tactic_name(&g.generator));
-        let (members, psi) = self.run_generator(&g.generator, &label, g.span)?;
+        let (members, psi) = Host(self).run_generator(&g.generator, &label, g.span)?;
         self.publish_members(&members, psi, &label, g.span)
     }
 
@@ -4084,7 +4119,7 @@ impl Elaborator {
     fn publish_members(&mut self, members: &[Member], psi: usize, label: &str, span: Span) -> R<()> {
         self.session_transaction(|me| {
             for m in members {
-                me.publish_member(m, psi, span).map_err(|e| match e {
+                HostMut(me).publish_member(m, psi, span).map_err(|e| match e {
                     crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
                         msg: format!("`{label}`: the generated `{}` was refused: {msg}", m.name),
                         span,
@@ -4208,7 +4243,7 @@ impl Elaborator {
             } else {
                 format!("a generator prefixing a `{form}` is called as `{prefix}(name, …)`")
             };
-            let (members, psi) = me.run_generator(&generator, &label, p.span).map_err(|e| match e {
+            let (members, psi) = Host(me).run_generator(&generator, &label, p.span).map_err(|e| match e {
                 crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
                     msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
                     span,
@@ -4228,10 +4263,12 @@ impl Elaborator {
                     p.span,
                 );
             }
-            me.publish_members(&members, psi, &label, p.span)
+            HostMut(me).publish_members(&members, psi, &label, p.span)
         })
     }
+}
 
+impl Host<'_> {
     /// Run a generator to its declarations, each read back and checked as
     /// far as the run can (its body against its statement), and the number
     /// of globals of the world they were built in.
@@ -4331,7 +4368,9 @@ impl Elaborator {
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
         Ok(Member { theorem: d.theorem, value: d.value, instance, name: name.clone(), params, result: (result, level), body })
     }
+}
 
+impl HostMut<'_> {
     /// Elaborate one generated declaration from its skeleton (see
     /// [`Self::elab_generate`]).
     fn publish_member(&mut self, m: &Member, psi: usize, span: Span) -> R<()> {
@@ -4450,9 +4489,11 @@ impl Elaborator {
             span,
         };
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_instance(&decl))
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| ClassesMut(me).elab_instance(&decl))
     }
+}
 
+impl Host<'_> {
     /// `Close(split, proofs)`: each proof checked at its branch's goal
     /// (which may solve holes), then the skeleton elaborated with them. A
     /// refused close solves nothing.
@@ -4509,7 +4550,9 @@ impl Elaborator {
         }
         Ok(fills)
     }
+}
 
+impl Elaborator {
     /// Make `name` available as `by name` (design §8a). A name a source file
     /// declares, or a local, takes precedence over a native tactic.
     pub fn register_native_tactic(&mut self, name: &str, make: fn() -> Box<dyn NativeTactic>) {

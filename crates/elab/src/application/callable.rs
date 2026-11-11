@@ -12,7 +12,17 @@ use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 use super::{ParamMeta, Skel};
 use crate::{Cx, Elaborator, GlobalInfo, mentions_binder};
 
-impl Elaborator {
+/// Callable heads' part of the elaborator.
+pub(crate) struct Callables<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Callables<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Callables<'_> {
     // -- application (explicit + implicit spines) ---------------------------
 
     /// The implicit-parameter mask of a callable global (empty for locals,
@@ -52,13 +62,13 @@ impl Elaborator {
     /// precondition of the bare-reference route
     /// (docs/unifier-completeness-design.md §5.3)? Returns the prefix length.
     ///
-    /// The precedence checks replicate [`Self::resolve`]'s order exactly:
+    /// The precedence checks replicate [`Elaborator::resolve`]'s order exactly:
     /// locals, aliases and constructors keep their existing wins, `Zero`/
     /// `Succ` stay primitives, a `meta fn` slice stays pure quotation, and
     /// the enclosing declaration's own name stays a recursion marker. The
     /// route runs only when `resolve` would land on the global anyway.
     /// The implicitness skeleton a bare `name` offers as a *value* head: the
-    /// local binder's `Cx` entry or the alias's, following [`Self::resolve`]'s
+    /// local binder's `Cx` entry or the alias's, following [`Elaborator::resolve`]'s
     /// precedence exactly (an alias bound at depth `d` shadows every binder
     /// at position `< d`), so a skeleton is consulted only for the entity the
     /// name resolves to (docs/implicit-binders-design.md §4.1). `None` for
@@ -79,7 +89,7 @@ impl Elaborator {
     }
 
     /// The committed global a bare `name` resolves to here, as an absolute Ψ
-    /// index — `None` whenever [`Self::resolve`] would land anywhere else
+    /// index — `None` whenever [`Elaborator::resolve`] would land anywhere else
     /// (a local, an alias, a constructor, a primitive, the declaration's own
     /// name, a `meta fn` slice). The precedence is [`Self::bare_implicit_prefix`]'s,
     /// for its reason: the answer is about the entity the name *resolves to*.
@@ -123,7 +133,7 @@ impl Elaborator {
     /// explicit parameter's domain mentions** — a *result-only* implicit
     /// (docs/congruence-in-inference-position-design.md §2)?
     ///
-    /// This is the semantic half of [`Self::is_checking_only`]'s sentence.
+    /// This is the semantic half of [`AppUnify::is_checking_only`](crate::app_unify::AppUnify::is_checking_only)'s sentence.
     /// The syntactic members of that set are forms whose `elab_infer` arm
     /// *refuses*; a call with a result-only implicit is a form whose
     /// `apply_implicit` refuses, for the same reason and with the same
@@ -221,7 +231,7 @@ impl Elaborator {
     }
 }
 
-/// [`Elaborator::subject_index`] over a parameter table already in hand, so a
+/// [`Callables::subject_index`] over a parameter table already in hand, so a
 /// caller that also reads the table's `self` markers looks it up once.
 pub(crate) fn subject_index_in(params: &[ParamMeta]) -> usize {
     params

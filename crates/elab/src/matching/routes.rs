@@ -14,9 +14,14 @@ use heather_syntax::{Arm, Expr, ExprKind, MatchForm, Span};
 use crate::recursion::{Guard, GuardKind};
 use crate::surface::walk_expr;
 use crate::{Cx, Elaborator, R, embed, err};
+use crate::indexed::IndexedFamilies;
+use crate::iwf_family::IwfFamily;
+use crate::patterns::Patterns;
+use crate::inductive::Inductives;
+use crate::declarations::Declarations;
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
-/// chain's end needs it — see [`Elaborator::chain_convoy`], which builds one,
+/// chain's end needs it — see [`Routes::chain_convoy`], which builds one,
 /// and `docs/course-of-values-recursion-design.md` §5 for why passing it
 /// through the `match` is what makes the deeper values usable.
 struct Convoy {
@@ -82,7 +87,17 @@ impl Convoy {
     }
 }
 
-impl Elaborator {
+/// The match routes' part of the elaborator.
+pub(crate) struct Routes<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Routes<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Routes<'_> {
     pub(crate) fn elab_match(
         &self,
         cx: &Cx,
@@ -106,7 +121,7 @@ impl Elaborator {
         let result =
             motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
         let independent = motive == result.shift_local(1);
-        let prepared = self.prepare_arms(
+        let prepared = Patterns(self).prepare_arms(
             cx,
             form,
             generated,
@@ -131,20 +146,20 @@ impl Elaborator {
         // reduces the family away, index and all. The `Empty` case wins
         // first: a family whose branch at this literal index is `Empty`
         // (`Fin(0)`) is matched as the empty type, arms and all.
-        if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
-            let (motive2, how) = self.iwf_match_motive(cx, &ind, &fam, &motive, &mlvl, span)?;
-            return self
+        if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, scrut_ty) {
+            let (motive2, how) = IwfFamily(self).iwf_match_motive(cx, &ind, &fam, &motive, &mlvl, span)?;
+            return IwfFamily(self)
                 .elab_match_iwf(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, how, span);
         }
         if !matches!(head, Type::Empty { .. })
-            && let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty)
+            && let Some((ind, fam)) = IndexedFamilies(self).indexed_of_at(cx, scrut_ty)
         {
-            let motive2 = self.generalize_index(cx, &motive, &fam.idx);
-            return self
+            let motive2 = IndexedFamilies(self).generalize_index(cx, &motive, &fam.idx);
+            return IndexedFamilies(self)
                 .elab_match_indexed(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
         }
         if let Some(ind) = self.tag_of(&head) {
-            return self.elab_match_data(
+            return Inductives(self).elab_match_data(
                 cx, form, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span,
             );
         }
@@ -300,7 +315,7 @@ impl Elaborator {
         // some other term), the enclosing arm's guard — if any — still stands,
         // possibly *extended* by this match (§ course-of-values below).
         let dec = if ih.is_none() {
-            self.top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut_t, arms))
+            Declarations(self).top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut_t, arms))
         } else {
             None
         };
@@ -311,7 +326,7 @@ impl Elaborator {
             // At the top the chain starts at the parameter itself, which the
             // body's own `match` takes apart (`recursion_at_top_body`): seeded
             // there, every depth is one more than it is below the arm.
-            Some(dec) if self.top_guard(span).is_some() => match cx.selfref.as_ref() {
+            Some(dec) if Declarations(self).top_guard(span).is_some() => match cx.selfref.as_ref() {
                 Some(s) => self.cov_depth(cx, succ_body, &s.params[dec].0, dec, None).saturating_sub(1).max(1),
                 None => 1,
             },

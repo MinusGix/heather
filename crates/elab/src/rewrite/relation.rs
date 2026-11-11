@@ -39,8 +39,20 @@ use heather_syntax::{Expr, Item, Span, parse_file};
 use super::{CANDIDATES, MAX_OPEN, same_key};
 use crate::relational_context::proof::Relation;
 use crate::{Alias, Cx, ElabError, Elaborator, R, TyVar};
+use crate::relational_context::proof::RelationalProof;
+use crate::rewrite::Rewrites;
 
-impl Elaborator {
+/// Relational rewriting's part of the elaborator.
+pub(crate) struct Relations<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Relations<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Relations<'_> {
     /// The relation step `proof` gives, when its type, as written below a Π
     /// telescope, is a relation application `R(a, b)`; `None` leaves the
     /// proof to the equation form, which reads its type up to weak head
@@ -124,7 +136,7 @@ impl Elaborator {
             let mut binds = vec![None; k as usize];
             let at_depth: Vec<_> =
                 telescope.iter().enumerate().map(|(j, (dom, level))| (dom.shift_local_above(d, j as u32), level.clone())).collect();
-            if self.match_pattern(&here, &left, t, k, &mut binds, &at_depth, h.span) {
+            if Rewrites(self).match_pattern(&here, &left, t, k, &mut binds, &at_depth, h.span) {
                 found = Some((binds, here, d));
                 break;
             }
@@ -834,7 +846,7 @@ impl<'a> RelationRewrite<'a> {
         let (lhs_head, lhs_args) = crate::spelling::app_spine(lhs);
         let (head, args) = crate::spelling::app_spine(t);
         head == lhs_head
-            && args.iter().zip(&lhs_args).all(|(a, b)| a == b || self.e.terms_convert(self.here(), b, a))
+            && args.iter().zip(&lhs_args).all(|(a, b)| a == b || Rewrites(self.e).terms_convert(self.here(), b, a))
     }
 
     /// A λ: its body rewritten one binder down, and the two λs related by
@@ -1510,7 +1522,7 @@ impl<'a> RelationRewrite<'a> {
     /// `RelId` there?
     fn is_identity_here(&self, r: &Rc<Term>, c: &str) -> R<bool> {
         let id = self.relid_here(c)?;
-        Ok(self.e.terms_convert(&self.cx, r, &id))
+        Ok(Rewrites(self.e).terms_convert(&self.cx, r, &id))
     }
 
     /// The relations evidence about `PreservesRelation` names for the result
@@ -1538,7 +1550,7 @@ impl<'a> RelationRewrite<'a> {
             let [.., _, s, f] = args.as_slice() else { continue };
             let by = (n - i) as u32;
             let (s, f) = (s.shift_local(by), f.shift_local(by));
-            if (f == **context || self.e.terms_convert(&self.cx, &f, context)) && !out.iter().any(|o| **o == s) {
+            if (f == **context || Rewrites(self.e).terms_convert(&self.cx, &f, context)) && !out.iter().any(|o| **o == s) {
                 out.push(Rc::new(s));
             }
         }
@@ -1558,7 +1570,7 @@ impl<'a> RelationRewrite<'a> {
             let (_, args) = crate::spelling::app_spine(tm);
             let [.., _, s, f] = args.as_slice() else { continue };
             let mut binds = vec![None; k as usize];
-            if !self.e.match_deep(&self.cx, f, context, k, 0, &mut binds) {
+            if !Rewrites(self.e).match_deep(&self.cx, f, context, k, 0, &mut binds) {
                 continue;
             }
             if let Some(named) = super::instantiate(&self.cx.gamma, s, k, &binds) {
@@ -1706,7 +1718,7 @@ impl<'a> RelationRewrite<'a> {
     /// written, or by conversion (`Eutt::Rel<R>(E)` and the λ a goal
     /// `Eutt<R>(E, t, u)` is read by).
     fn same_relation(&self, a: &Rc<Term>, b: &Rc<Term>) -> bool {
-        a == b || self.e.terms_convert(self.original, a, b)
+        a == b || Rewrites(self.e).terms_convert(self.original, a, b)
     }
 
     /// `class<C>(relations…)`'s `field`, resolved or an obligation, once.
@@ -1796,7 +1808,7 @@ impl<'a> RelationRewrite<'a> {
 
     fn obligation(&mut self, ty: Type, level: Level, label: &str) -> R<Term> {
         self.goals += 1;
-        self.e.relation_obligation(self.original, "rewrite", label, self.goals - 1, ty, level, self.span)
+        RelationalProof(self.e).relation_obligation(self.original, "rewrite", label, self.goals - 1, ty, level, self.span)
     }
 
     /// `dict.field`, elaborated as written.

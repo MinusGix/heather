@@ -220,7 +220,7 @@ pub(crate) fn lgg_body_up_to_conversion(
 /// every difference is a stop: what comes back is the path to the first one
 /// and the two formers there. `None` means the terms are `==`.
 ///
-/// It exists for the diagnostic in [`crate::Elaborator::cong_mismatch`]. When
+/// It exists for the diagnostic in [`AppUnify::cong_mismatch`](crate::app_unify::AppUnify::cong_mismatch). When
 /// the position the LGG stopped at *spells* like the proof's endpoint and is
 /// not it, the reason is invisible in surface syntax — a type spelled as a raw
 /// code on one side and `El` of that code on the other, say — and the message

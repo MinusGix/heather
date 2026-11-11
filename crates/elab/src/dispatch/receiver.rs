@@ -12,6 +12,13 @@ use crate::inductive::Inductive;
 use crate::{
     Cx, DotResolution, ElabError, Elaborator, R, Upcast, err, resolve, skel_of_ty, traits,
 };
+use crate::dispatch::Members;
+use crate::application::Callables;
+use crate::dispatch::Carriers;
+use crate::dispatch::Dictionaries;
+use crate::dispatch::Projections;
+use crate::resolve::Resolution;
+use crate::name_lookup::NameLookup;
 
 /// The reading a `.name(…)` call has besides the class member
 /// (docs/traits-receiver-dispatch-design.md §3, "another reading exists"):
@@ -24,7 +31,7 @@ pub(crate) struct OtherReading {
     pub(crate) fix: String,
     /// The callee the desugared call is to — never for a builtin. Resolved
     /// only once a dispatch has succeeded beside it, to the committed global
-    /// [`Elaborator::field_is_global`] compares the dispatched field against
+    /// [`Receivers::field_is_global`] compares the dispatched field against
     /// (issues/receiver-dispatch-coinciding-readings.md). Resolving it only
     /// there keeps every other method call at its old price.
     pub(crate) callee: Option<String>,
@@ -35,7 +42,17 @@ pub(crate) struct OtherReading {
     pub(crate) ambient: Option<String>,
 }
 
-impl Elaborator {
+/// Receiver dispatch's part of the elaborator.
+pub(crate) struct Receivers<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Receivers<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Receivers<'_> {
     /// `x.op(y)` where `op` is a class member and `x`'s type is a carrier with
     /// an instance (docs/traits-receiver-dispatch-design.md).
     ///
@@ -74,7 +91,7 @@ impl Elaborator {
         let other = other.filter(|o| {
             !o.ambient
                 .as_ref()
-                .is_some_and(|n| self.ambient_cannot_take(cx, n, &rty, span))
+                .is_some_and(|n| Members(self).ambient_cannot_take(cx, n, &rty, span))
         });
         // Candidates: every class **visible here** (the ordinary §4 regime,
         // asked by resolving the class's own name) that **declares** this
@@ -88,7 +105,7 @@ impl Elaborator {
         // is what makes an inherited member dispatchable without a tiebreak,
         // and it leaves two *unrelated* declaring classes ambiguous, which is
         // the case §4 rule 3 exists for.
-        let with_field = self.declaring_classes(name);
+        let with_field = Projections(self).declaring_classes(name);
         let cands: Vec<(String, Rc<traits::ClassInfo>)> = with_field
             .iter()
             .filter(|(_, i)| i.params.len() == 1)
@@ -120,7 +137,7 @@ impl Elaborator {
         // What the trace calls the carrier. A display and never a key: an open
         // carrier has no nominal tag to name, and saying so beats rendering a
         // lowered type nothing can render totally (layer 2 §7).
-        let carrier = self
+        let carrier = Carriers(self)
             .type_namespace(cx, &rty, span)
             .unwrap_or_else(|| "the receiver's type".to_string());
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
@@ -134,7 +151,7 @@ impl Elaborator {
             let targs = [(rty.clone(), rlvl.clone())];
             // An indexed class's goal has a value slot, and the ladder's step 2
             // is what fills it here (§5.1): scope, then refuse by name.
-            let (gargs, vargs) = match self.index_vargs(cx, key, info, &ind, &targs, &carrier, span) {
+            let (gargs, vargs) = match Dictionaries(self).index_vargs(cx, key, info, &ind, &targs, &carrier, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {
@@ -155,7 +172,7 @@ impl Elaborator {
             // goal is answered from a child dictionary, the child is what the
             // projection below reads from.
             let mut up = None;
-            let found = self.resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up);
+            let found = Resolution(self).resolve_goal_from(cx, &goal, &glvl, &display, None, span, &mut tr, &mut up);
             match found {
                 Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
@@ -217,7 +234,7 @@ impl Elaborator {
             // still only ever adds errors, never reinterpretations
             // (issues/receiver-dispatch-coinciding-readings.md).
             if callee
-                .and_then(|c| self.bare_global_abs(cx, &c))
+                .and_then(|c| Callables(self).bare_global_abs(cx, &c))
                 .is_some_and(|g| self.field_is_global(&dict, idx, g))
             {
                 return Ok(None);
@@ -439,7 +456,7 @@ impl Elaborator {
         }
         // Called the same way: `n` leading implicit type parameters, then
         // explicit value parameters with the subject first.
-        let params = self.params_at(g);
+        let params = NameLookup(self).params_at(g);
         if params.len() < n {
             return false;
         }

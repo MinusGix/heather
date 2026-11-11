@@ -104,7 +104,7 @@ pub(super) struct DeclAttempt {
     /// otherwise an elaboration and a `Decide` resolution with its kernel
     /// check, and the shared allocation is what the kernel's memo keys on.
     pub(super) char_literals: RefCell<Vec<(char, (Option<u32>, usize, u32), Type, Term)>>,
-    /// [`crate::Elaborator::emitted_cx`]'s memo: a binder's type in the
+    /// [`Declarations::emitted_cx`](crate::declarations::Declarations::emitted_cx)'s memo: a binder's type in the
     /// emission spelling, by the stored type's allocation, its position and
     /// the Ψ scope. The stored `Rc` rides along so its address cannot be
     /// reused while the entry stands. Contexts share their spine, so the

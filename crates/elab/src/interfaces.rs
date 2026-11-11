@@ -18,6 +18,7 @@ use heather_kernel::term::{GlobalCtx, GlobalRef, GlobalVar, Term, Type, Withheld
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::{ElabError, Elaborator, R};
+use crate::module_delta::DeltasMut;
 
 /// One registered interface definition.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,7 +58,17 @@ impl Interfaces {
     }
 }
 
-impl Elaborator {
+/// Interface definitions' part of the elaborator.
+pub(crate) struct InterfaceDefs<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for InterfaceDefs<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl InterfaceDefs<'_> {
     /// The interface boundary of the module being elaborated: every
     /// registered interface definition of another module, at its arity.
     /// `None` when there is none, which leaves every world as it was.
@@ -214,7 +225,25 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+/// Interface definitions' part of the elaborator that writes.
+pub(crate) struct InterfaceDefsMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for InterfaceDefsMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for InterfaceDefsMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl InterfaceDefsMut<'_> {
     /// Register the elaborated interface definition `decl`.
     pub(crate) fn register_interface(&mut self, decl: &Decl, equations: Vec<String>) -> R<()> {
         let refuse = |msg: String| Err(ElabError::Elab { msg, span: decl.span });
@@ -226,7 +255,7 @@ impl Elaborator {
         };
         let arity = global.params.len() as u32;
         let module = self.names.scope().module.clone();
-        self.semantic_commit_interface(key, InterfaceInfo { module, arity, name: decl.name.clone(), equations });
+        DeltasMut(self).semantic_commit_interface(key, InterfaceInfo { module, arity, name: decl.name.clone(), equations });
         Ok(())
     }
 }
@@ -329,7 +358,7 @@ fn theorem(decl: &Decl, name: String, lhs: Expr, rhs: Expr, span: Span) -> Decl 
     }
 }
 
-impl Elaborator {
+impl InterfaceDefsMut<'_> {
     /// The unfolding equations of the interface definition `decl`, elaborated
     /// in its module right after it (docs/interface-definitions-design.md §5):
     ///

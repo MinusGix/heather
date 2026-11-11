@@ -8,7 +8,7 @@
 //!
 //! One consumer reads an answer rather than taking it: a dispatched
 //! projection, which asked for a dictionary only to take one field out of it.
-//! [`Elaborator::resolve_goal_from`] tells it where an **upcast** answer came
+//! [`Resolution::resolve_goal_from`] tells it where an **upcast** answer came
 //! from, and `docs/traits-named-upcast-design.md` is why that matters.
 //!
 //! Nothing here is trusted. Every proposal, from every source, is handed to
@@ -27,6 +27,10 @@ use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
 use crate::oracle::Unfold;
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
+use crate::gendefs::GeneratedDefs;
+use crate::app_unify::AppUnify;
+use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
 
 /// How deep backchaining may go before it refuses. Declaration-time
 /// structural decrease (design §6) is what makes this unreachable; the cap is
@@ -36,7 +40,7 @@ use crate::{Cx, ElabError, Elaborator, oracle, stats};
 const MAX_DEPTH: usize = 32;
 
 /// The reduction allowance for a derived-table lookup
-/// ([`Elaborator::derived_hit`]) and for the pending queue's duplicate check.
+/// ([`Resolution::derived_hit`]) and for the pending queue's duplicate check.
 /// The table is keyed by conversion, and a conversion that has to reduce two
 /// closed goals' operands to find them *unequal* can cost a proof's whole
 /// budget (`issues/type-level-reduction-over-computed-operands.md`); the
@@ -73,7 +77,7 @@ fn heads_may_agree(a: Option<&str>, b: Option<&str>) -> bool {
     }
 }
 
-/// The head an **open** derivation is filed under ([`Elaborator::record_open`]):
+/// The head an **open** derivation is filed under ([`Resolution::record_open`]):
 /// this prefix and the goal class's key. A lookup compares only the entries
 /// of its own class, and the closed table's lookups none of them.
 const OPEN_HEAD: &str = "#open:";
@@ -84,7 +88,7 @@ pub(crate) fn is_open_head(head: Option<&str>) -> bool {
 
 /// `t`, read out of the goal world into the committed Ψ: its committed
 /// globals renumbered down past the `pad` goals, or `None` if it mentions a
-/// goal (the test [`Elaborator::record_joined`] makes of a type).
+/// goal (the test [`Resolution::record_joined`] makes of a type).
 fn below_goals_ty(t: &Type, pad: u32) -> Option<Type> {
     if pad == 0 {
         return Some(t.clone());
@@ -156,7 +160,7 @@ pub(crate) struct DerivedInst {
     /// by the difference (the same bookkeeping the pending queue does).
     pub at: u32,
     /// The goal carrier's head the search was ordered by, when it was read
-    /// ([`Elaborator::solver_carrier_head`]). A lookup at a goal with a
+    /// ([`Classes::solver_carrier_head`](crate::traits::Classes::solver_carrier_head)). A lookup at a goal with a
     /// *different* known head skips the conversion: two goals at different
     /// heads can still convert, but deciding that means unfolding both, which
     /// over computed operands is the cost the head order exists to avoid
@@ -208,7 +212,17 @@ impl SearchMark {
     }
 }
 
-impl Elaborator {
+/// Instance resolution's part of the elaborator.
+pub(crate) struct Resolution<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Resolution<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Resolution<'_> {
     /// The surface shape an `evidence theorem` must have before it is
     /// elaborated (docs/positivity-evidence-design.md §6 A). A rule is applied
     /// by search, so search has to be able to fill every parameter: a `{…}`
@@ -237,7 +251,25 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+/// Instance resolution's part of the elaborator that writes: registering evidence.
+pub(crate) struct ResolutionMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for ResolutionMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for ResolutionMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl ResolutionMut<'_> {
     /// Register a checked `evidence theorem`: key it by its conclusion's
     /// relation and check that backchaining through it terminates.
     ///
@@ -318,17 +350,19 @@ impl Elaborator {
         if self.traits.has_evidence(&key) {
             return refuse(format!("`{}` is already an evidence rule", decl.name));
         }
-        self.semantic_commit_evidence(crate::traits::EvidenceRule { global: key, relation, heads });
+        DeltasMut(self).semantic_commit_evidence(crate::traits::EvidenceRule { global: key, relation, heads });
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Resolve one goal, or explain in `tr` why not.
     ///
     /// `display` is what the diagnostic calls the goal (the parameter's
     /// written type). It is a display and never a key.
     ///
     /// `prefer` is the goal carrier's head key when the caller could read it
-    /// off the solver parameter's written type ([`Elaborator::solver_carrier_head`]);
+    /// off the solver parameter's written type ([`Classes::solver_carrier_head`](crate::traits::Classes::solver_carrier_head));
     /// it orders the registry's candidates and decides nothing.
     pub(crate) fn resolve_goal(
         &self,
@@ -340,10 +374,12 @@ impl Elaborator {
         span: Span,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
-        self.resolve_goal_from(cx, goal, lvl, display, prefer, span, tr, &mut None)
+        Resolution(self).resolve_goal_from(cx, goal, lvl, display, prefer, span, tr, &mut None)
     }
+}
 
-    /// [`Self::resolve_goal`], reporting **where an upcast came from**.
+impl Resolution<'_> {
+    /// [`Elaborator::resolve_goal`], reporting **where an upcast came from**.
     ///
     /// When step 1b answers, `up` receives the *child* dictionary and its class
     /// type — the two things a consumer needs to read the answer as a
@@ -355,7 +391,7 @@ impl Elaborator {
     /// Only the two **dispatch** sites call this. Every other consumer wants a
     /// dictionary value and takes the plain entry point, whose `&mut None`
     /// makes the whole mechanism inert — including the recursive one, since
-    /// backchaining recurses through `elab_check` into [`Self::resolve_goal`]
+    /// backchaining recurses through `elab_check` into [`Elaborator::resolve_goal`]
     /// and so can never leak a nested search's provenance into an outer one.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_goal_from(
@@ -543,7 +579,7 @@ impl Elaborator {
                 },
             ));
             // A conclusion that cannot meet the goal is dropped unbuilt.
-            if self.conclusion_clashes(cx, &g, goal, span) {
+            if AppUnify(self).conclusion_clashes(cx, &g, goal, span) {
                 crate::stats::count(crate::stats::Counter::ConclusionClashes);
                 tr.push(line(depth + 1, "rejected", "conclusion does not match".to_string()));
                 continue;
@@ -638,7 +674,7 @@ impl Elaborator {
         };
         let args = match read {
             Some(args) => args,
-            None => self.instance_match(cx, ind, goal, 0, 0)?.1,
+            None => GeneratedDefs(self).instance_match(cx, ind, goal, 0, 0)?.1,
         };
         let np = class.params.len();
         if args.len() != np + class.valparams.len() {
@@ -679,7 +715,7 @@ impl Elaborator {
                 let at = class.valparams.iter().position(|v| v.name == *name)?;
                 aargs.push(Rc::clone(&args[np + at]));
             }
-            let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
+            let (aty, alvl) = GeneratedDefs(self).instance_type_at(cx, aind.tag, &aargs)?;
             tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
             self.scope.resolve_depth.set(depth + 1);
             let shown = ainfo.name.clone();
@@ -1260,13 +1296,17 @@ impl Elaborator {
         }
         None
     }
+}
 
-    /// [`Self::conv_here`] for consumers outside this module — the value-slot
+impl Elaborator {
+    /// [`Resolution::conv_here`] for consumers outside this module — the value-slot
     /// ladder's carrier test (`docs/operation-indexed-classes-design.md` §5).
     pub(crate) fn conv_types(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
-        self.conv_here(cx, ty, goal, lvl)
+        Resolution(self).conv_here(cx, ty, goal, lvl)
     }
+}
 
+impl Resolution<'_> {
     /// Is `ty` the goal type, here? Conversion, in the use site's context.
     fn conv_here(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
         stats::time_kernel(|| {
@@ -1555,7 +1595,7 @@ impl Elaborator {
         if !self.traits.derived().iter().any(|d| d.abs == abs && is_open_head(d.head.as_deref())) {
             return None;
         }
-        let (_, body) = self.global_body_at(abs as usize)?;
+        let (_, body) = NameLookup(self).global_body_at(abs as usize)?;
         // Scoped in its prefix of Ψ; rescoped as `resolve` rescopes a
         // global's type, by the reference's own distance.
         let mut inner: Term = body.shift_global(var.rescope());
@@ -1573,8 +1613,10 @@ impl Elaborator {
         };
         Some(inner.apply_local(&delta))
     }
+}
 
-    /// Mint one open derivation ([`Self::record_open`]): `ty` is the closed
+impl ResolutionMut<'_> {
+    /// Mint one open derivation ([`Resolution::record_open`]): `ty` is the closed
     /// `Π prefix. goal` and `body` the λ over the same binders.
     fn mint_open(&mut self, ty: &Type, lvl: &Level, body: &Term, head: Option<&str>) {
         if self
@@ -1607,10 +1649,12 @@ impl Elaborator {
             at: abs,
             head: head.map(str::to_string),
         };
-        self.semantic_commit_derived(derived);
+        DeltasMut(self).semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
+}
 
+impl Resolution<'_> {
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
     /// makes for a written name: a committed binding is a constant, and a
     /// closed statement's delayed substitution is the empty map out of the
@@ -1681,7 +1725,9 @@ impl Elaborator {
             .is_ok()
         })
     }
+}
 
+impl ResolutionMut<'_> {
     /// May `body : ty` be minted at the end of Ψ? The gate's pair, a closed
     /// statement in the empty context and the body against it, asked through
     /// the gate's oracle as every other bodied binding's is (`gate.rs`). So a
@@ -1766,7 +1812,7 @@ impl Elaborator {
 
     fn mint_one(&mut self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
         let cx = Cx::empty();
-        if self.derived_hit(&cx, goal, prefer).is_some() {
+        if Resolution(self).derived_hit(&cx, goal, prefer).is_some() {
             return;
         }
         let mut tr = Vec::new();
@@ -1804,7 +1850,7 @@ impl Elaborator {
             at: abs,
             head: prefer.map(str::to_string),
         };
-        self.semantic_commit_derived(derived);
+        DeltasMut(self).semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
 }
@@ -1826,7 +1872,7 @@ fn written_head(ty: &heather_syntax::Ty) -> Option<&str> {
     }
 }
 
-/// [`Elaborator::rule_clashes`]'s match of one rule argument against one
+/// [`Resolution::rule_clashes`]'s match of one rule argument against one
 /// goal argument. `assigned` holds the binders already set to a goal local,
 /// as (binder, local index).
 fn pattern_clashes(rule: &Term, goal: &Term, binders: u32, assigned: &mut Vec<(u32, u32)>) -> bool {

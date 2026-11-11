@@ -23,6 +23,7 @@ use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo, InstKey};
 use crate::{pool, stats, ElabError, Elaborator, R};
 use crate::module_image::same_proof;
+use crate::module_pass::ModulePassMut;
 
 /// Ordered dependency-interface identities supplied by the module loader.
 /// The digest algorithm lives outside the elaborator; these stable bytes are
@@ -150,7 +151,7 @@ impl ModuleDelta {
     }
 
     /// The sealed proofs of the extension range `range`, re-indexed from its
-    /// start, as [`Elaborator::recheck_extension`] takes them.
+    /// start, as [`DeltasMut::recheck_extension`] takes them.
     pub(crate) fn sealed_in(&self, range: std::ops::Range<usize>) -> Vec<(usize, Rc<SealedProof>)> {
         self.sealed
             .iter()
@@ -465,7 +466,17 @@ impl std::ops::Deref for JournalSlot {
     }
 }
 
-impl Elaborator {
+/// Module deltas' part of the elaborator.
+pub(crate) struct Deltas<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Deltas<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Deltas<'_> {
     /// Append one journal event only while extracting a module. Taking a
     /// closure keeps payload cloning off every ordinary source-elaboration
     /// path and off replay itself.
@@ -474,9 +485,27 @@ impl Elaborator {
             journal.events.push(event());
         }
     }
+}
 
+/// Module deltas' part of the elaborator that writes: replaying and rechecking a delta's declarations.
+pub(crate) struct DeltasMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for DeltasMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for DeltasMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl DeltasMut<'_> {
     pub(crate) fn semantic_commit_name(&mut self, name: &str, kind: NameKind) {
-        self.record_module_event(|| DeltaEvent::Name {
+        Deltas(self).record_module_event(|| DeltaEvent::Name {
             name: name.to_string(),
             kind,
         });
@@ -490,7 +519,7 @@ impl Elaborator {
         is_axiom: bool,
         direct_dependencies: Vec<String>,
     ) {
-        self.record_module_event(|| DeltaEvent::Global {
+        Deltas(self).record_module_event(|| DeltaEvent::Global {
             abs,
             registration: registration.clone(),
             is_axiom,
@@ -502,7 +531,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_gen_def(&mut self, key: GenDef, abs: u32) {
-        self.record_module_event(|| DeltaEvent::GenDef { key, abs });
+        Deltas(self).record_module_event(|| DeltaEvent::GenDef { key, abs });
         self.types.gdefs_mut().insert_binding(key, abs);
     }
 
@@ -513,7 +542,7 @@ impl Elaborator {
         level: Level,
         at: u32,
     ) {
-        self.record_module_event(|| DeltaEvent::GenTyCode {
+        Deltas(self).record_module_event(|| DeltaEvent::GenTyCode {
             tag,
             inline: Rc::clone(&inline),
             level: level.clone(),
@@ -526,7 +555,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn, at: u32) {
-        self.record_module_event(|| DeltaEvent::GenTyCodeFn {
+        Deltas(self).record_module_event(|| DeltaEvent::GenTyCodeFn {
             tag,
             entry: entry.clone(),
             at,
@@ -535,7 +564,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots, at: u32) {
-        self.record_module_event(|| DeltaEvent::GenWfSlots {
+        Deltas(self).record_module_event(|| DeltaEvent::GenWfSlots {
             tag,
             slots: slots.clone(),
             at,
@@ -546,7 +575,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes, at: u32) {
-        self.record_module_event(|| DeltaEvent::GenSpineCodes {
+        Deltas(self).record_module_event(|| DeltaEvent::GenSpineCodes {
             tag,
             codes: codes.clone(),
             at,
@@ -561,7 +590,7 @@ impl Elaborator {
         level: Level,
         index_level: Level,
     ) {
-        self.record_module_event(|| DeltaEvent::GenFamLevels {
+        Deltas(self).record_module_event(|| DeltaEvent::GenFamLevels {
             tag,
             level: level.clone(),
             index_level: index_level.clone(),
@@ -572,7 +601,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_inductive(&mut self, module: String, info: Rc<Inductive>) {
-        self.record_module_event(|| DeltaEvent::Inductive {
+        Deltas(self).record_module_event(|| DeltaEvent::Inductive {
             module: module.clone(),
             info: Rc::clone(&info),
         });
@@ -580,7 +609,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_class(&mut self, key: String, info: ClassInfo) {
-        self.record_module_event(|| DeltaEvent::Class {
+        Deltas(self).record_module_event(|| DeltaEvent::Class {
             key: key.clone(),
             info: info.clone(),
         });
@@ -588,7 +617,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_instance(&mut self, key: InstKey, info: InstanceInfo) {
-        self.record_module_event(|| DeltaEvent::Instance {
+        Deltas(self).record_module_event(|| DeltaEvent::Instance {
             key: key.clone(),
             info: info.clone(),
         });
@@ -600,7 +629,7 @@ impl Elaborator {
         key: (OpFixity, String, String),
         info: DesignationInfo,
     ) {
-        self.record_module_event(|| DeltaEvent::Designation {
+        Deltas(self).record_module_event(|| DeltaEvent::Designation {
             key: key.clone(),
             info: info.clone(),
         });
@@ -608,23 +637,23 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_evidence(&mut self, rule: EvidenceRule) {
-        self.record_module_event(|| DeltaEvent::Evidence(rule.clone()));
+        Deltas(self).record_module_event(|| DeltaEvent::Evidence(rule.clone()));
         self.traits.commit_evidence(rule);
     }
 
     pub(crate) fn semantic_commit_registered(&mut self, ty: String, global: String) {
-        self.record_module_event(|| DeltaEvent::Registered { ty: ty.clone(), global: global.clone() });
+        Deltas(self).record_module_event(|| DeltaEvent::Registered { ty: ty.clone(), global: global.clone() });
         self.traits.commit_registered(ty, global);
     }
 
     pub(crate) fn semantic_commit_interface(&mut self, key: String, info: crate::interfaces::InterfaceInfo) {
-        self.record_module_event(|| DeltaEvent::Interface { key: key.clone(), info: info.clone() });
+        Deltas(self).record_module_event(|| DeltaEvent::Interface { key: key.clone(), info: info.clone() });
         self.interfaces.commit(key, info);
         self.refresh_delta_psi();
     }
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
-        self.record_module_event(|| DeltaEvent::Derived(info.clone()));
+        Deltas(self).record_module_event(|| DeltaEvent::Derived(info.clone()));
         self.traits.commit_derived(info);
     }
 
@@ -636,7 +665,7 @@ impl Elaborator {
         monomorph: Option<(u32, String)>,
         obligations: Vec<Obligation>,
     ) {
-        self.record_module_event(|| DeltaEvent::Repr {
+        Deltas(self).record_module_event(|| DeltaEvent::Repr {
             key: key.clone(),
             name: name.clone(),
             info: info.clone(),
@@ -654,7 +683,7 @@ impl Elaborator {
         entry: ImplEntry,
         obligations: Vec<Obligation>,
     ) {
-        self.record_module_event(|| DeltaEvent::Impl {
+        Deltas(self).record_module_event(|| DeltaEvent::Impl {
             repr: repr.clone(),
             op: op.clone(),
             entry: entry.clone(),
@@ -670,7 +699,7 @@ impl Elaborator {
         slot: Option<Slot>,
         definition: MetaDef,
     ) {
-        self.record_module_event(|| DeltaEvent::Meta {
+        Deltas(self).record_module_event(|| DeltaEvent::Meta {
             module: module.clone(),
             name: name.clone(),
             slot,
@@ -678,7 +707,9 @@ impl Elaborator {
         });
         self.meta_programs.commit(module, name, slot, definition);
     }
+}
 
+impl Elaborator {
     /// Elaborate a whole module atomically and return its logical semantic
     /// delta. A later item failure rolls back successful items before it.
     pub fn elab_module_delta(
@@ -702,9 +733,11 @@ impl Elaborator {
             .take()
             .expect("module journal was installed");
         result?;
-        Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
+        Ok(Deltas(self).delta_from_journal(module, dependencies, dependency_psi, journal))
     }
+}
 
+impl Deltas<'_> {
     /// The delta the journal describes, once the module has checked.
     fn delta_from_journal(
         &self,
@@ -748,7 +781,9 @@ impl Elaborator {
             scope_at_entry: journal.scope_at_entry,
         }
     }
+}
 
+impl Elaborator {
     /// [`Self::check_module_delta`] with the module's *previous* delta to
     /// replay unchanged items from (`docs/declaration-slice-replay-design.md`
     /// §4): an item whose source text matches the previous slice at its
@@ -796,7 +831,9 @@ impl Elaborator {
         let plan = self.pass.slice_plan.take().expect("the slice plan was installed");
         result.map(|delta| (delta, plan.report, plan.met))
     }
+}
 
+impl DeltasMut<'_> {
     /// Is any of `names` (an item's name, or a group's members' names) one
     /// the plan forces from source? Records the ones it met.
     pub(crate) fn slice_forced(&mut self, names: &[String]) -> bool {
@@ -843,7 +880,9 @@ impl Elaborator {
         plan.report = SliceReport::default();
         plan.changed = changed;
     }
+}
 
+impl Deltas<'_> {
     pub(crate) fn slice_begin(&self) -> Option<SliceMark> {
         let journal = self.pass.module_journal.borrow();
         let journal = journal.as_ref()?;
@@ -853,8 +892,10 @@ impl Elaborator {
             warnings: self.pass.warnings.borrow().len() - journal.base_warnings,
         })
     }
+}
 
-    /// Close the slice an item opened with [`Self::slice_begin`], after
+impl DeltasMut<'_> {
+    /// Close the slice an item opened with [`Deltas::slice_begin`], after
     /// everything the item contributes (its derived instances included) has
     /// landed, and keep the plan's `exact` flag honest: it means the prefix
     /// through the items completed so far equals the previous delta's, so
@@ -867,7 +908,7 @@ impl Elaborator {
         replayed: bool,
         unsealed: Vec<usize>,
     ) {
-        let Some(begun) = self.slice_begin() else { return };
+        let Some(begun) = Deltas(self).slice_begin() else { return };
         let mut unsealed = unsealed;
         if replayed {
             // A replayed slice computed with what its first elaboration
@@ -1031,7 +1072,7 @@ impl Elaborator {
         let events = crate::module_image::relocate_events(&previous.events[slice.events.clone()], offset)
             .map_err(|_| ModuleReplayError::MetadataConflict("relocated slice"))?;
         for event in &events {
-            self.preflight_module_event(event)?;
+            Deltas(self).preflight_module_event(event)?;
         }
         extend_sealed(&mut self.psi, bindings, &sealed);
         for event in events {
@@ -1052,7 +1093,9 @@ impl Elaborator {
         }));
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Check a whole module with the ordinary diagnostic-recovery policy and,
     /// when every item succeeds, return the same logical delta as
     /// [`Self::elab_module_delta`].
@@ -1075,7 +1118,7 @@ impl Elaborator {
         let base_len = dependency_psi.bindings.len();
         *self.pass.module_journal.borrow_mut() =
             Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
-        let errs = self.check_module_source_inner(module, src);
+        let errs = ModulePassMut(self).check_module_source_inner(module, src);
         let journal = self
             .pass.module_journal
             .borrow_mut()
@@ -1084,7 +1127,7 @@ impl Elaborator {
         if !errs.is_empty() {
             return Err(errs);
         }
-        Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
+        Ok(Deltas(self).delta_from_journal(module, dependencies, dependency_psi, journal))
     }
 
     /// [`Self::check_module_delta`], keeping the delta of what checked when
@@ -1107,13 +1150,13 @@ impl Elaborator {
         let base_len = dependency_psi.bindings.len();
         *self.pass.module_journal.borrow_mut() =
             Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
-        let errs = self.check_module_source_inner(module, src);
+        let errs = ModulePassMut(self).check_module_source_inner(module, src);
         let journal = self
             .pass.module_journal
             .borrow_mut()
             .take()
             .expect("module journal was installed");
-        (self.delta_from_journal(module, dependencies, dependency_psi, journal), errs)
+        (Deltas(self).delta_from_journal(module, dependencies, dependency_psi, journal), errs)
     }
 
     /// Recheck the stored suffix, install metadata into a private candidate,
@@ -1164,7 +1207,7 @@ impl Elaborator {
             (Some(g), Some(key)) if g.admits_replay(key) => {}
             _ => {
                 let mut clean = true;
-                self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
+                DeltasMut(self).recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
                 if let (Some(g), Some(key), true) = (&gate, replay, clean) {
                     g.replay_accepted(key);
                 }
@@ -1179,17 +1222,19 @@ impl Elaborator {
         // name across correlated registries; intra-delta duplicates were
         // already rejected by the image decoder.
         for event in &delta.events {
-            candidate.preflight_module_event(event)?;
+            Deltas(&candidate).preflight_module_event(event)?;
         }
         for event in delta.events.iter().cloned() {
-            candidate.apply_module_event(event);
+            DeltasMut(&mut candidate).apply_module_event(event);
         }
         candidate.refresh_delta_psi();
         self.committed = candidate.committed;
         self.memos.clear_positional();
         Ok(())
     }
+}
 
+impl DeltasMut<'_> {
     /// `⊢_L Ψ, Ψ'` for the stored suffix — the kernel recheck of a replayed
     /// module, on the kernel worker pool when the elaborator has one, and
     /// through the installed gate oracle when there is one.
@@ -1305,7 +1350,7 @@ impl Elaborator {
                     } else {
                         // Its seals are known only at the join.
                         *clean = false;
-                        self.pass.kernel_pool.submit(pool::Deferred {
+                        self.0.pass.kernel_pool.submit(pool::Deferred {
                             name: name.clone(),
                             span: heather_syntax::Span { start: 0, end: 0 },
                             psi: Rc::clone(&prefix),
@@ -1316,7 +1361,7 @@ impl Elaborator {
                             opaque: false,
                             layer: item.layer,
                             lands_in_psi: true,
-                            fuel: self.policy.fuel,
+                            fuel: self.0.policy.fuel,
                             unsealed: Vec::new(),
                             row: None,
                         });
@@ -1435,7 +1480,9 @@ impl Elaborator {
             }
         }
     }
+}
 
+impl Deltas<'_> {
     fn preflight_module_event(&self, event: &DeltaEvent) -> Result<(), ModuleReplayError> {
         let conflict = match event {
             DeltaEvent::Name { name, .. }
@@ -1543,12 +1590,12 @@ mod tests {
         // the live journal at the snapshot's lengths.
         let mut e = Elaborator::new();
         *e.pass.module_journal.borrow_mut() = Some(ModuleJournal::new(0, 0));
-        e.semantic_commit_name("before", NameKind::Global);
+        DeltasMut(&mut e).semantic_commit_name("before", NameKind::Global);
         let snapshot = e.clone();
         let mut probe = e.clone();
         assert!(probe.pass.module_journal.borrow().is_none());
-        probe.semantic_commit_name("probed", NameKind::Global);
-        e.semantic_commit_name("failed", NameKind::Global);
+        DeltasMut(&mut probe).semantic_commit_name("probed", NameKind::Global);
+        DeltasMut(&mut e).semantic_commit_name("failed", NameKind::Global);
         assert_eq!(e.pass.module_journal.borrow().as_ref().unwrap().events.len(), 2);
         e.restore_from_clone(snapshot);
         let journal = e.pass.module_journal.borrow();

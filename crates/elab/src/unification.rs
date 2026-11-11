@@ -31,7 +31,7 @@ pub(crate) struct ResolveOb {
     /// The application as built up to this parameter, scratch world: its
     /// leading arguments are the callee's type arguments, which is where a
     /// solver parameter's carrier lives once its type parameter is solved
-    /// ([`Elaborator::solver_carrier_head`]). `None` where no application
+    /// ([`Classes::solver_carrier_head`](crate::traits::Classes::solver_carrier_head)). `None` where no application
     /// was being built.
     pub(crate) applied: Option<Term>,
 }
@@ -169,13 +169,13 @@ pub(super) struct U<'a> {
     /// A rigid subject type of a generic declaration that registered no code
     /// function, spelled as its **constructor** applied to its type arguments
     /// (`El(app(λ A. ⌜Tac<El A>⌝; ⌜Nat⌝))`,
-    /// [`crate::Elaborator::constructor_spelling`]): what [`Self::respell`]
+    /// [`GeneratedDefs::constructor_spelling`](crate::gendefs::GeneratedDefs::constructor_spelling)): what [`Self::respell`]
     /// cannot give, asked only by an applied meta's pattern
     /// (issues/higher-kinded-classes.md). `None` declines.
     pub(super) constructor: &'a dyn Fn(&Type) -> Option<Type>,
     /// A re-spelled subject `El(app(D#tycode_fn^δ; ā))` read as the type
     /// constructor at `D`'s declared slot and the argument there
-    /// ([`crate::Elaborator::slot_view`],
+    /// ([`GeneratedDefs::slot_view`](crate::gendefs::GeneratedDefs::slot_view),
     /// docs/lambda-carrier-instances-design.md §7.3 reader 2), asked only by
     /// an applied meta of one argument. `None` declines, and the aligned
     /// spine's head-plus-leading-arguments rule applies.

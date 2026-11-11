@@ -27,6 +27,8 @@ use heather_syntax::{
 
 use crate::inductive::{FieldKind, decoded};
 use crate::{Alias, Cx, Elaborator, R, err};
+use crate::indexed::IndexedFamilies;
+use crate::iwf_family::IwfFamily;
 
 /// One row of the matrix: a pattern per column, the body it selects, and the
 /// pattern variables the columns it has already been specialized *past* bound
@@ -134,7 +136,17 @@ fn slot(body: usize) -> String {
     format!("#arm{body}")
 }
 
-impl Elaborator {
+/// Pattern elaboration's part of the elaborator.
+pub(crate) struct Patterns<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Patterns<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Patterns<'_> {
     /// §9. Rewrite a `match`'s arms so that every binder is a plain name and
     /// no arm is `_`. Returns `None` when there was nothing to do — the common
     /// case, and the one that must stay free.
@@ -309,10 +321,10 @@ impl Elaborator {
         }
         // §7: an index field's binder is not a value binder — it is aliased to
         // a component of the index pattern, and the guard's `rebind` reads it.
-        let fam = self
+        let fam = IwfFamily(self)
             .iwf_of_at(cx, scrut_ty)
             .map(|(i, _)| i)
-            .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(i, _)| i));
+            .or_else(|| IndexedFamilies(self).indexed_of_at(cx, scrut_ty).map(|(i, _)| i));
         let Some(ind) = fam else { return Ok(()) };
         for a in arms {
             let Some(i) = crate::inductive::arm_ctor_index(&ind, &a.ctor) else {
@@ -1085,12 +1097,12 @@ impl Elaborator {
         ty: &Type,
         span: Span,
     ) -> Option<Rc<crate::inductive::Inductive>> {
-        if let Some((ind, _)) = self.iwf_of_at(cx, ty) {
+        if let Some((ind, _)) = IwfFamily(self).iwf_of_at(cx, ty) {
             return Some(ind);
         }
         let head = self.whnf(cx, ty, span).ok()?;
         if !matches!(head, Type::Empty { .. })
-            && let Some((ind, _)) = self.indexed_of_at(cx, ty)
+            && let Some((ind, _)) = IndexedFamilies(self).indexed_of_at(cx, ty)
         {
             return Some(ind);
         }
@@ -1098,7 +1110,7 @@ impl Elaborator {
     }
 
     /// §4: the scrutinee type's constructors and their arities, in declaration
-    /// order. Mirrors [`Elaborator::elab_match`]'s dispatch, and deliberately
+    /// order. Mirrors [`Routes::elab_match`](crate::matching::Routes::elab_match)'s dispatch, and deliberately
     /// so: a `_` must expand to exactly the arms that dispatch will demand.
     fn ctors_at(&self, cx: &Cx, scrut_ty: &Type, span: Span) -> Option<Vec<(String, usize)>> {
         let named = |ind: &crate::inductive::Inductive| {
@@ -1107,11 +1119,11 @@ impl Elaborator {
                 .map(|c| (c.name.clone(), c.fields.len()))
                 .collect::<Vec<_>>()
         };
-        if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
+        if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, scrut_ty) {
             // A mutual group's member: its own constructors, the only ones a
             // `match` on it has arms for (docs/mutual-inductive-design.md §4).
             if let Some(m) = (!ind.members.is_empty())
-                .then(|| self.iwf_member_at(cx, &ind, &fam.idx, span))
+                .then(|| IwfFamily(self).iwf_member_at(cx, &ind, &fam.idx, span))
                 .flatten()
             {
                 return Some(
@@ -1126,7 +1138,7 @@ impl Elaborator {
         }
         let head = self.whnf(cx, scrut_ty, span).ok()?;
         if !matches!(head, Type::Empty { .. })
-            && let Some((ind, _)) = self.indexed_of_at(cx, scrut_ty)
+            && let Some((ind, _)) = IndexedFamilies(self).indexed_of_at(cx, scrut_ty)
         {
             return Some(named(&ind));
         }

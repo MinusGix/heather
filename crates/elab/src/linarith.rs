@@ -45,6 +45,11 @@ use crate::relational_context::proof::Relation;
 use crate::ring::{FieldReading, Linear};
 use crate::statements::LetValue;
 use crate::{Cx, ElabError, Elaborator, R};
+use crate::dispatch::Carriers;
+use crate::ring::Ring;
+use crate::inductive::Inductives;
+use crate::resolve::Resolution;
+use crate::inference::Inference;
 
 type Z = i128;
 
@@ -75,7 +80,7 @@ fn stated(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Stated> {
     let Type::El { tm, .. } = ty else {
         return None;
     };
-    let Some(carrier) = elab.carrier_of_ty(cx, &relation.carrier, span) else {
+    let Some(carrier) = Carriers(elab).carrier_of_ty(cx, &relation.carrier, span) else {
         let field = ClassField::of(elab, cx, &relation.carrier)?;
         let rel = [(&field.same, Rel::Same), (&field.lt, Rel::Lt), (&field.le, Rel::Le)]
             .into_iter()
@@ -123,7 +128,7 @@ const CLASS_FIELD: &str = "__lin_ints";
 
 impl ClassField {
     fn of(elab: &Elaborator, cx: &Cx, carrier: &Type) -> Option<ClassField> {
-        elab.scope_memo(cx, carrier, "linarith::ClassField", || ClassField::read(elab, cx, carrier))
+        Resolution(elab).scope_memo(cx, carrier, "linarith::ClassField", || ClassField::read(elab, cx, carrier))
     }
 
     fn read(elab: &Elaborator, cx: &Cx, carrier: &Type) -> Option<ClassField> {
@@ -1558,7 +1563,17 @@ impl Drop for Depth<'_> {
     }
 }
 
-impl Elaborator {
+/// Linear arithmetic's part of the elaborator.
+pub(crate) struct Linarith<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Linarith<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Linarith<'_> {
     /// `linarith` and `linarith(h₁, …, hₖ)` in checking position; with
     /// `nonlinear`, `nlinarith`, which multiplies the facts too
     /// (docs/nonlinear-arithmetic-design.md §4).
@@ -1606,7 +1621,7 @@ impl Elaborator {
         // (issues/constraints-sharing-indices.md), so both have to be there;
         // or a class carrier (`ClassField`), whose integers are put in scope.
         let classes = [self.key_of("ordered_field::OrderedField"), self.key_of("semiring::CommRingOfInt")];
-        let supported = |carrier: &Type| match self.carrier_of_ty(cx, carrier, span) {
+        let supported = |carrier: &Type| match Carriers(self).carrier_of_ty(cx, carrier, span) {
             Some(key) => classes.iter().all(|class| {
                 class.as_ref().is_some_and(|class| !self.traits.instances_answering(class, Some(&key.key)).is_empty())
             }),
@@ -1663,7 +1678,7 @@ impl Elaborator {
         let Some(reading) = FieldReading::at(self, cx, &carrier_ty, carrier_level.clone(), span) else {
             return Err(err(format!("`linarith` could not read `{carrier_shown}` as a ring with its integers named")));
         };
-        let class_field = match self.carrier_of_ty(cx, &carrier_ty, span) {
+        let class_field = match Carriers(self).carrier_of_ty(cx, &carrier_ty, span) {
             Some(_) => None,
             None => ClassField::of(self, cx, &carrier_ty),
         };
@@ -1760,7 +1775,7 @@ impl Elaborator {
         let Some((source, cited)) = found else {
             // Stuck: an arm equation not yet in scope might be the missing
             // fact (docs/dependent-match-compiler-design.md §4.3.1).
-            self.want_match_equations(cx);
+            Inference(self).want_match_equations(cx);
             // An order that unfolds to one at `Int` (`Rat::Le` is a
             // cross-multiplication) may follow there with products as
             // monomials, as `ring` falls back to the unfolded equation.
@@ -1846,7 +1861,7 @@ impl Elaborator {
         // section's ordered field and the integers every ring has, put in
         // scope here (issues/constraints-sharing-indices.md).
         if let Some(field) = &class_field {
-            inner = self
+            inner = Ring(self)
                 .class_dictionary_scope(
                     &inner,
                     &problem.carrier,
@@ -1871,11 +1886,11 @@ impl Elaborator {
             .filter(|(i, _)| !used.contains(i))
             .map(|(_, (term, ty, level))| LetValue::new(Rc::new(term), ty, level))
             .collect();
-        Ok(LetValue::discard_around(self, cx, unused, proof, goal, lvl))
+        Ok(LetValue::discard_around(self.0, cx, unused, proof, goal, lvl))
     }
 }
 
-impl Elaborator {
+impl Linarith<'_> {
     /// A conjunction goal (`conj`, `goal` itself or what its head unfolds
     /// to), each side proved by the call that met it, and paired. A side the
     /// call cannot prove is named as a side of the goal as written, whose
@@ -1887,7 +1902,7 @@ impl Elaborator {
         let err = |msg: String| ElabError::Elab { msg, span };
         let sides = self
             .display_tag_of(conj)
-            .and_then(|ind| self.display_targs(cx, conj, &ind, 0))
+            .and_then(|ind| Inductives(self).display_targs(cx, conj, &ind, 0))
             .filter(|sides| sides.len() == 2)
             .ok_or_else(|| err(format!("`{tactic}` could not read the two sides of the conjunction it was asked to prove")))?;
         let shown = resugar(&self.spell_type_clean(cx, goal).unwrap_or_else(|| self.display_type(cx, goal)), None);
@@ -1928,7 +1943,7 @@ impl Elaborator {
     }
 }
 
-impl Elaborator {
+impl Linarith<'_> {
     /// `linarith` at `Int` and `Nat` (design §8): every side of the goal
     /// and of the facts read by `ring`'s reifier, each side that multiplies
     /// stated equal to its normal form over monomials, and `omega` given

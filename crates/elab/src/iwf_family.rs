@@ -6,7 +6,7 @@
 //! recomputed from the child, so `match` needs no `transp` and β fires on
 //! open data, and the fording fragment's F1–F3 are gone. A `match` at a
 //! specific index inverts or abstracts it in the motive (§8.3,
-//! [`Elaborator::iwf_match_motive`]). The doctrine is the
+//! [`IwfFamily::iwf_match_motive`]). The doctrine is the
 //! tiers' (`inductive.rs`): the lowering is untrusted, the kernel re-checks
 //! every emitted term, and annotations are read off the type being
 //! eliminated wherever one exists.
@@ -43,6 +43,13 @@ use crate::inductive::{Ctor, FieldKind, Inductive, Spine, inject, nat_lit, tag_v
 use crate::recursion::{Guard, GuardKind};
 use crate::wf::fin_index;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
+use crate::codata::Codata;
+use crate::indexed::IndexedFamilies;
+use crate::iwf_w::IwfW;
+use crate::mutual_family::MutualFamily;
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
+use crate::codata::CodataMut;
 
 /// The two spellings of an `IWf`-route family: the kernel's finitary
 /// `IWf(sig)(m)`, or, for a family with a recursive function field, the
@@ -139,7 +146,17 @@ pub(crate) fn child_index(ctor: &Ctor, j: usize) -> &Expr {
     }
 }
 
-impl Elaborator {
+/// Indexed well-founded families' part of the elaborator.
+pub(crate) struct IwfFamily<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for IwfFamily<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl IwfFamily<'_> {
     // -- reading the form back ----------------------------------------------
 
     /// Read a type back as an `IWf`-route family. `None` for everything
@@ -194,7 +211,7 @@ impl Elaborator {
         span: Span,
     ) -> R<(Type, Level)> {
         if ind.iwf_infinitary() {
-            let sig = self.iw_sig(cx, ind, args, vargs, span)?;
+            let sig = IwfW(self).iw_sig(cx, ind, args, vargs, span)?;
             return Ok((sig.fam(0, &idx), sig.lvl()));
         }
         let sig = self.iwf_sig(cx, ind, args, vargs, span)?;
@@ -215,7 +232,7 @@ impl Elaborator {
     /// (`issues/iwf-shape-spine-comb-depth.md`). The guard is a structural
     /// `==`, the order of the lowering itself, so a hit is the same type in
     /// the same scope and which copy stands is a matter of sharing only, as
-    /// for [`Self::share_registered_lowering`]. A miss (other arguments,
+    /// for [`GeneratedDefs::share_registered_lowering`]. A miss (other arguments,
     /// other globals) replaces the entry.
     fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
         let mut memo = self.memos.iwf_part_memo.borrow_mut();
@@ -245,7 +262,7 @@ impl Elaborator {
             .expect("an IWf-route declaration has a shape declaration");
         let n = ind.ctors.len();
         let (shape, l) = self.lower_instance(cx, shape_decl, args, vargs, span)?;
-        let (ity, ilvl) = self.index_type_at(cx, ind, args, vargs, span)?;
+        let (ity, ilvl) = IndexedFamilies(self).index_type_at(cx, ind, args, vargs, span)?;
         // The index expressions and the payload are written over the type
         // and value parameters: bound here, to `args` and `vargs`.
         let mut pcx = cx.clone();
@@ -271,7 +288,7 @@ impl Elaborator {
             |_: &Cx, k: usize, _: &Rc<Term>, _: u32, _: &Type| -> R<Term> {
                 Ok(nat_lit(children_of(ind, k)))
             };
-        let arity = self.idx_case_tree(
+        let arity = IndexedFamilies(self).idx_case_tree(
             &xcx,
             &spine,
             spine.root(),
@@ -286,7 +303,7 @@ impl Elaborator {
             let acx = self.decl_payload_cx(bcx, ind, &spine, k, value, d, span)?;
             self.elab_check(&acx, res_expr(ind, k), &ity.shift_local(d), &ilvl).map(index_value)
         };
-        let out = self.idx_case_tree(
+        let out = IndexedFamilies(self).idx_case_tree(
             &xcx,
             &spine,
             spine.root(),
@@ -323,7 +340,7 @@ impl Elaborator {
             }),
             cod: Rc::new(ity.shift_local(3)),
         };
-        let tree = self.idx_case_tree(
+        let tree = IndexedFamilies(self).idx_case_tree(
             &xcx,
             &spine,
             spine.root(),
@@ -352,11 +369,29 @@ impl Elaborator {
             child: Rc::new(child),
         }))
     }
+}
 
+/// Indexed W families' part of the elaborator that writes: registering a signature.
+pub(crate) struct IwfFamilyMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for IwfFamilyMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for IwfFamilyMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl IwfFamilyMut<'_> {
     // -- the named signature (docs/iwf-named-signature-design.md) -----------
 
     /// `D#iarity`, `D#iout` and `D#ichild` at declaration time: the inline
-    /// signature [`Self::iwf_sig`] builds over [`Self::tycode_fn_telescope`]'s
+    /// signature [`IwfFamily::iwf_sig`] builds over [`GeneratedDefs::tycode_fn_telescope`]'s
     /// all-`Ty 0` telescope, its three index functions abstracted over the
     /// telescope and their own binders. From then on every instance at that
     /// profile is spelled with them (§2). Best-effort like every generated
@@ -369,13 +404,13 @@ impl Elaborator {
         {
             return;
         }
-        let Some((cx, binders, targs, _)) = self.tycode_fn_telescope(ind, span) else {
+        let Some((cx, binders, targs, _)) = GeneratedDefs(self).tycode_fn_telescope(ind, span) else {
             return;
         };
-        let Ok(sig) = self.iwf_sig(&cx, ind, &targs, &[], span) else {
+        let Ok(sig) = IwfFamily(self).iwf_sig(&cx, ind, &targs, &[], span) else {
             return;
         };
-        let tel = self.emitted_tel(&binders);
+        let tel = GeneratedDefs(self).emitted_tel(&binders);
         let n = tel.len() as u32;
         let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| Rc::new(Term::Var(LocalVar(n - 1 - k)))).collect();
         let (l, li) = (sig.level.clone(), sig.idx_level.clone());
@@ -393,7 +428,7 @@ impl Elaborator {
             dom: Rc::clone(&sig.shape),
             body: Rc::clone(&sig.arity),
         };
-        if !self.push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
             return;
         }
         // The pieces built before a push name committed definitions only, so
@@ -410,11 +445,11 @@ impl Elaborator {
             dom: Rc::clone(&sig.shape),
             body: Rc::clone(&sig.out),
         };
-        if !self.push_m_def(GenDef::IOut(ind.tag), ind, &tel, out_stmt, lvl(&l, &li), out_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IOut(ind.tag), ind, &tel, out_stmt, lvl(&l, &li), out_body, span) {
             return;
         }
         // `Fin(D#iarity ā x)` over `(tel, x)`, minted now.
-        let Some(aref) = self.m_ref_app(GenDef::IArity(ind.tag), &tel_vars, 1) else {
+        let Some(aref) = Codata(self).m_ref_app(GenDef::IArity(ind.tag), &tel_vars, 1) else {
             return;
         };
         let fin = Rc::new(Type::Fin { len: aref });
@@ -437,12 +472,12 @@ impl Elaborator {
                 body: Rc::clone(&sig.child),
             }),
         };
-        if !self.push_m_def(GenDef::IChild(ind.tag), ind, &tel, child_stmt, lvl(&l, &li), child_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IChild(ind.tag), ind, &tel, child_stmt, lvl(&l, &li), child_body, span) {
             return;
         }
         // `dnth` over the children tuple, at the named signature built now: in
         // `(tel, a, cs, i)`, as `iwf_step_telescope` spells it.
-        let Ok(nsig) = self.iwf_sig(&cx, ind, &targs, &[], span) else {
+        let Ok(nsig) = IwfFamily(self).iwf_sig(&cx, ind, &targs, &[], span) else {
             return;
         };
         let fl = nsig.family_level();
@@ -471,9 +506,11 @@ impl Elaborator {
                 body: Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: fl.clone(), dom: fin, body: Rc::new(nth) }),
             }),
         };
-        let _ = self.push_m_def(GenDef::IDnth(ind.tag), ind, &tel, stmt, lvl(&l, &fl), body, span);
+        let _ = CodataMut(self).push_m_def(GenDef::IDnth(ind.tag), ind, &tel, stmt, lvl(&l, &fl), body, span);
     }
+}
 
+impl IwfFamily<'_> {
     /// [`iwf_step_telescope`] for a match in `cx`, with the ih type's `dnth`
     /// spelled as the family's `D#idnth` when its signature is named: the
     /// convoy repeats the telescope at every level of the case tree, and
@@ -504,7 +541,7 @@ impl Elaborator {
         }
         // The telescope's arguments, read out of the shape binder.
         let tel: Vec<Rc<Term>> = tel.iter().map(|a| Rc::new(a.inst_top(0, &Term::Zero))).collect();
-        self.m_ref_app(GenDef::IDnth(tag), &tel, 3).map(|t| (*t).clone())
+        Codata(self).m_ref_app(GenDef::IDnth(tag), &tel, 3).map(|t| (*t).clone())
     }
 
     /// The named signature of an instance (§2): `None` when the family
@@ -535,9 +572,9 @@ impl Elaborator {
             idx_level: ilvl.clone(),
             idx: Rc::clone(ity),
             shape: Rc::clone(shape),
-            arity: self.m_ref_app(GenDef::IArity(ind.tag), &tel, 1)?,
-            out: self.m_ref_app(GenDef::IOut(ind.tag), &tel, 1)?,
-            child: self.m_ref_app(GenDef::IChild(ind.tag), &tel, 2)?,
+            arity: Codata(self).m_ref_app(GenDef::IArity(ind.tag), &tel, 1)?,
+            out: Codata(self).m_ref_app(GenDef::IOut(ind.tag), &tel, 1)?,
+            child: Codata(self).m_ref_app(GenDef::IChild(ind.tag), &tel, 2)?,
         }))
     }
 
@@ -655,7 +692,7 @@ impl Elaborator {
 
     /// The written result index at a constructor's *arguments* — what the
     /// constructor's index check compares against the expected family's
-    /// index, and what [`Elaborator::infer_ctor`] needs to build the family at
+    /// index, and what [`Constructors::infer_ctor`](crate::constructor::Constructors::infer_ctor) needs to build the family at
     /// all.
     pub(crate) fn iwf_ctor_index<A: Borrow<Expr>>(
         &self,
@@ -830,7 +867,7 @@ impl Elaborator {
                     format!(
                         "`{}` is a constructor of `{}`, and a `{}` is expected here",
                         ctor.name,
-                        Self::member_name_of(ind, i),
+                        MutualFamily::member_name_of(ind, i),
                         ind.members[want].name
                     ),
                     span,
@@ -851,7 +888,7 @@ impl Elaborator {
             (FamForm::IWf(sig), Some(children)) => Ok(sig.supi(Rc::new(label), Rc::new(children))),
             (FamForm::W(sig), _) => {
                 let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
-                self.build_iw_ctor(cx, &acx, ind, i, &args, sig, label, &target, &fam.idx, span)
+                IwfW(self).build_iw_ctor(cx, &acx, ind, i, &args, sig, label, &target, &fam.idx, span)
             }
             (FamForm::IWf(_), None) => err("internal: an IWf constructor built no children", span),
         }
@@ -948,7 +985,7 @@ impl Elaborator {
         mlvl: &Level,
         span: Span,
     ) -> R<(Type, IndexMotive)> {
-        let plain = self.generalize_index(cx, motive, &fam.idx);
+        let plain = IndexedFamilies(self).generalize_index(cx, motive, &fam.idx);
         if matches!(&*fam.idx, Term::Var(_)) {
             return Ok((plain, IndexMotive::Plain));
         }
@@ -1084,7 +1121,7 @@ impl Elaborator {
         };
         let mut hcx = cx.clone();
         hcx.push("#j".into(), fam.ity.clone(), fam.ilvl.clone());
-        let case = self.index_case(
+        let case = IndexedFamilies(self).index_case(
             &hcx,
             ity,
             case_motive,
@@ -1179,7 +1216,7 @@ impl Elaborator {
                     .collect();
                 self.inverted_level(ncx, inv, ne, next, pairs)
             };
-            return self.index_case(
+            return IndexedFamilies(self).index_case(
                 bcx,
                 &nity,
                 motive,
@@ -1250,7 +1287,7 @@ impl Elaborator {
             crate::inductive::IdxTy::Decl(iind) => {
                 let (ty, l) = self.lower_instance(cx, iind, &[], &[], span).ok()?;
                 let spine = self.spine(&ty, &l, iind.ctors.len(), span).ok()?;
-                self.read_ctor(cx, iind, &spine, &w, true, span).ok()?
+                Inductives(self).read_ctor(cx, iind, &spine, &w, true, span).ok()?
             }
             // An open index type has no constructors to read off.
             crate::inductive::IdxTy::Open { .. } => None,
@@ -1302,7 +1339,7 @@ impl Elaborator {
                         "`{}` is a constructor of `{}`, not of `{shown}`: a `{}` on a \
                          `{shown}` has an arm for each of `{shown}`'s constructors",
                         a.ctor,
-                        Self::member_name_of(ind, i),
+                        MutualFamily::member_name_of(ind, i),
                         form.keyword()
                     ),
                     a.span,
@@ -1404,7 +1441,7 @@ impl Elaborator {
             FamForm::IWf(sig) => sig,
             // A family with a function field eliminates by `elim_W` and
             // carries its equations by `J` (docs/iwf-infinitary-design.md §7).
-            FamForm::W(sig) => return self.iw_match(cx, &env, sig, scrut),
+            FamForm::W(sig) => return IwfW(self).iw_match(cx, &env, sig, scrut),
         };
         let fl = sig.family_level();
         // The step telescope, `cs` in (Γ, a), `ih` in (Γ, a, cs), the step's
@@ -1427,7 +1464,7 @@ impl Elaborator {
         let body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, e: &Type| -> R<Term> {
             self.iwf_arm(bcx, &env, k, value, d, e)
         };
-        let tree = self.idx_case_tree(
+        let tree = IndexedFamilies(self).idx_case_tree(
             &acx,
             &spine,
             spine.root(),
@@ -1730,7 +1767,7 @@ impl ArmEnv<'_> {
     }
 }
 
-/// The fixed part of one inverted motive ([`Elaborator::iwf_inverted_motive`]).
+/// The fixed part of one inverted motive ([`IwfFamily::iwf_inverted_motive`]).
 struct Inversion<'a> {
     /// `cx.names.len()` of the ambient context, Γ.
     base: usize,
@@ -1899,10 +1936,10 @@ mod named_signature {
             "V",
         );
         registered(&el, &v);
-        let sig = el.iwf_sig(&Cx::empty(), &v, &[], &[], SPAN).expect("signature");
+        let sig = IwfFamily(&el).iwf_sig(&Cx::empty(), &v, &[], &[], SPAN).expect("signature");
         let t = v.tag;
         assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
-        let nth = el.iwf_named_dnth(&sig).expect("the ih is spelled with `V#idnth`");
+        let nth = IwfFamily(&el).iwf_named_dnth(&sig).expect("the ih is spelled with `V#idnth`");
         assert!(matches!(el.gen_app_of(&nth), Some((GenDef::IDnth(k), _)) if k == t));
     }
 
@@ -1921,7 +1958,7 @@ mod named_signature {
             &crate::mutual_family::family_name("M0"),
         );
         registered(&el, &fam);
-        let sig = el.iwf_sig(&Cx::empty(), &fam, &[], &[], SPAN).expect("signature");
+        let sig = IwfFamily(&el).iwf_sig(&Cx::empty(), &fam, &[], &[], SPAN).expect("signature");
         let t = fam.tag;
         assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
     }
@@ -1940,12 +1977,12 @@ mod named_signature {
         );
         registered(&el, &p);
         let t = p.tag;
-        let at_nat = el.iwf_sig(&Cx::empty(), &p, &[(Type::Nat, Level::Zero)], &[], SPAN).expect("signature at Nat");
+        let at_nat = IwfFamily(&el).iwf_sig(&Cx::empty(), &p, &[(Type::Nat, Level::Zero)], &[], SPAN).expect("signature at Nat");
         assert_eq!(heads(&el, &at_nat), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
-        let at_type = el
+        let at_type = IwfFamily(&el)
             .iwf_sig(&Cx::empty(), &p, &[(Type::Ty(Level::Zero), Level::succ(Level::Zero))], &[], SPAN)
             .expect("signature at Type");
         assert_eq!(heads(&el, &at_type), [None, None, None]);
-        assert!(el.iwf_named_dnth(&at_type).is_none());
+        assert!(IwfFamily(&el).iwf_named_dnth(&at_type).is_none());
     }
 }

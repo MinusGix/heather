@@ -37,6 +37,8 @@ use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 use crate::inductive::{IdxTy, Inductive, named_head};
 use crate::measure::{mentions, mentions_ty, pat_names, subst};
 use crate::{ElabError, Elaborator, R, base_name, count_holes, err};
+use crate::mutual_family::MutualFamily;
+use crate::declarations::Declarations;
 
 /// `f#mot` — the group's motive, keyed on its first member.
 fn mot_name(first: &str) -> String {
@@ -508,11 +510,21 @@ impl Group<'_> {
     }
 }
 
+/// Mutual recursion's part of the elaborator.
+pub(crate) struct MutualRec<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for MutualRec<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     /// A group of `structural_groups` (§6): generate the motive, the
     /// recursion and the members, and elaborate them.
     pub(crate) fn elab_structural_group(&mut self, decls: &[&Decl]) -> R<()> {
-        let Some(group) = self.structural_plan(decls)? else {
+        let Some(group) = MutualRec(self).structural_plan(decls)? else {
             // The written type named a member syntactically and resolves to
             // none: the group has no family to recurse over, and its members'
             // own elaboration says what is wrong.
@@ -523,7 +535,7 @@ impl Elaborator {
         };
         let level = self.group_universe(&group)?;
         let mot = mot_decl(&group, level);
-        let rec = self.rec_decl(&group)?;
+        let rec = MutualRec(self).rec_decl(&group)?;
         self.elab_decl_one(&mot, None)?;
         self.elab_decl_one(&rec, None).map_err(|e| reword(&group, e))?;
         for r in &group.recs {
@@ -531,7 +543,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl MutualRec<'_> {
     fn structural_head<'a>(&self, d: &'a Decl) -> Head<'a> {
         let b = &d.body;
         let Some((name, targs, idx, scrut_at)) = recursive_param_type(d) else {
@@ -714,7 +728,9 @@ impl Elaborator {
         }
         Ok(Some(Group { fam, prefix, targs, recs, sites: RefCell::new(Vec::new()), unplaced: RefCell::new(Vec::new()) }))
     }
+}
 
+impl Elaborator {
     /// `ℓ` in `f#mot … -> Type<ℓ>`: the largest level of the members'
     /// `(x̄_t) -> R_t`, elaborated over each member's own parameters.
     fn group_universe(&mut self, g: &Group) -> R<u64> {
@@ -724,7 +740,7 @@ impl Elaborator {
             self.attempt.prepare();
             self.attempt.goal_arena.configure(count_holes(r.decl), 0);
             self.refresh_delta_psi();
-            let l = self.decl_head_cx(r.decl).and_then(|cx| self.elab_ty(&cx, &pi).map(|(_, l)| l));
+            let l = Declarations(self).decl_head_cx(r.decl).and_then(|cx| self.elab_ty(&cx, &pi).map(|(_, l)| l));
             self.attempt.finish();
             self.refresh_delta_psi();
             match l?.normalize() {
@@ -746,7 +762,9 @@ impl Elaborator {
         }
         Ok(level)
     }
+}
 
+impl MutualRec<'_> {
     /// `f#rec`: one `match` on the whole family, holding every member's arms
     /// and, for a family member no group member recurses on, `trivial`.
     fn rec_decl(&self, g: &Group) -> R<Decl> {
@@ -852,7 +870,7 @@ impl Elaborator {
                         "`{}` is a constructor of `{}`, not of `{mname}`: `{}` matches on \
                          `{mname}`, whose arms are its own constructors",
                         a.ctor,
-                        Elaborator::member_name_of(&g.fam, k),
+                        MutualFamily::member_name_of(&g.fam, k),
                         r.base()
                     ),
                     a.span,

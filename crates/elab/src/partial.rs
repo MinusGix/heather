@@ -46,8 +46,8 @@
 //! A call used where `B` is expected (`fn g(n: Nat) → Nat { f(n) }`) is
 //! refused by the gate as a mismatch between `Partial(B)` and `B`; the
 //! elaborator records the call's head, and when the gate refuses and the
-//! head is a partial function ([`Elaborator::is_partial_fn`]) the refusal
-//! names it ([`Elaborator::partial_use_note`], §4.2's refusal).
+//! head is a partial function ([`Partial::is_partial_fn`]) the refusal
+//! names it ([`Partial::partial_use_note`], §4.2's refusal).
 
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, LamBinder, Param, ParamOrigin, Span, Stmt, Ty, TyKind};
 
@@ -520,7 +520,17 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
     Ok(Family { parts: vec![body_decl, wrapper], unfold, designations: vec![(designed, minted)] })
 }
 
-impl Elaborator {
+/// Partial functions' part of the elaborator.
+pub(crate) struct Partial<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Partial<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Partial<'_> {
     /// Whether `name`, the head of a call written in `cx`, is a `partial
     /// fn`. Partial is read off what the lowering left, which a module image
     /// carries, so an imported function is recognised as a local one is: the

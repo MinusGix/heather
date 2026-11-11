@@ -12,7 +12,7 @@
 //!
 //! Two invariants carry over from the rest of the recursion machinery:
 //!
-//! - **The scan is a sizing decision only.** [`Elaborator::varying_params`]
+//! - **The scan is a sizing decision only.** [`Generalize::varying_params`]
 //!   works on names, so shadowing can mislead it in either direction — and
 //!   neither direction produces a wrong term. A missed parameter meets the
 //!   by-binder refusal that stood before this existed; a parameter generalized
@@ -57,7 +57,17 @@ pub(crate) fn guard_gen(cx: &Cx, dec: usize, span: Option<Span>) -> Option<Rc<Ve
         .map(|g| Rc::clone(&g.positions))
 }
 
-impl Elaborator {
+/// Generalization's part of the elaborator.
+pub(crate) struct Generalize<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Generalize<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Generalize<'_> {
     /// Which of the declaration's parameters a self-call inside `arms` passes
     /// at something other than the parameter itself, closed under dependency
     /// (a later parameter whose type mentions a generalized one is generalized
@@ -463,7 +473,7 @@ mod tests {
             rhs: Rc::new(Term::Var(LocalVar(1))),
         };
         let e = Elaborator::with_prelude().expect("prelude");
-        let (generalized, lvl) = e.generalize_expected(&cx, &[1], &goal, &Level::Zero);
+        let (generalized, lvl) = Generalize(&e).generalize_expected(&cx, &[1], &goal, &Level::Zero);
         assert_eq!(lvl, Level::max(Level::Zero, Level::Zero));
         let Type::Pi { dom, cod, .. } = &generalized else {
             panic!("a Π, got {generalized:?}");
@@ -505,7 +515,7 @@ pub(crate) struct DependentAlias {
     pub(crate) alias: Rc<crate::Alias>,
 }
 
-impl Elaborator {
+impl Generalize<'_> {
     /// The aliases visible here whose type contains `scrutinee` and that some
     /// arm names. An alias is a term, not a binder, so nothing else would
     /// refine it: in the arm for `C`, its type would still speak of the

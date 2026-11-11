@@ -15,6 +15,7 @@ use heather_kernel::term::Type;
 use heather_syntax::{Expr, ExprKind, Span};
 
 use crate::{Cx, Elaborator, R, err, names};
+use crate::dispatch::Carriers;
 
 /// One edge: the map's global, and the carrier it maps into.
 struct Edge {
@@ -22,7 +23,17 @@ struct Edge {
     target: String,
 }
 
-impl Elaborator {
+/// Casting's part of the elaborator.
+pub(crate) struct Casts<'e>(pub(crate) &'e Elaborator);
+
+impl std::ops::Deref for Casts<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl Casts<'_> {
     fn cast_class_key() -> String {
         names::qkey("morphism", "Cast")
     }
@@ -40,7 +51,7 @@ impl Elaborator {
                     let Ok((_, ty, _)) = self.elab_infer(cx, &head) else { continue };
                     let Ok(ty) = self.whnf(cx, &ty, span) else { continue };
                     let Type::Pi { cod, .. } = &ty else { continue };
-                    let Some(target) = self.carrier_of_ty(cx, cod, span) else { continue };
+                    let Some(target) = Carriers(self).carrier_of_ty(cx, cod, span) else { continue };
                     target.key
                 }
             };
@@ -126,10 +137,10 @@ impl Elaborator {
         if self.conv_types(cx, &source_ty, target, &level) {
             return Ok(operand.clone());
         }
-        let Some(to) = self.carrier_of_ty(cx, target, span) else {
+        let Some(to) = Carriers(self).carrier_of_ty(cx, target, span) else {
             return err("`↑` needs a carrier to cast into, and this position expects no named type", span);
         };
-        let Some(from) = self.carrier_of_ty(cx, &source_ty, operand.span) else {
+        let Some(from) = Carriers(self).carrier_of_ty(cx, &source_ty, operand.span) else {
             return err("`↑`'s operand has no named carrier to cast from", operand.span);
         };
         if from.key == to.key {
@@ -183,7 +194,7 @@ impl Elaborator {
         if self.traits.class(&Self::cast_class_key()).is_none() {
             return String::new();
         }
-        let (Some(from), Some(to)) = (self.carrier_of_ty(cx, got, span), self.carrier_of_ty(cx, expected, span)) else {
+        let (Some(from), Some(to)) = (Carriers(self).carrier_of_ty(cx, got, span), Carriers(self).carrier_of_ty(cx, expected, span)) else {
             return String::new();
         };
         if from.key == to.key {

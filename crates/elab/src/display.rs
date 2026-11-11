@@ -45,6 +45,11 @@ use crate::gendefs::GenDef;
 use crate::unification::Sol;
 use crate::{Cx, Elaborator, ParamMeta, dress_true, show_level};
 use heather_syntax::{OpFixity, OperatorForm};
+use crate::iwf_family::IwfFamily;
+use crate::gendefs::GeneratedDefs;
+use crate::inductive::Inductives;
+use crate::app_unify::AppUnify;
+use crate::name_lookup::NameLookup;
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
 /// spelled node is a handful of characters where a raw one is a record.
@@ -67,7 +72,7 @@ impl Elaborator {
     ) -> String {
         let selected = match head {
             Term::GlobalTm { var, .. } => self.global_abs_of(*var)
-                .and_then(|abs| self.global_qualified_name_at(abs)),
+                .and_then(|abs| NameLookup(self).global_qualified_name_at(abs)),
             _ => self.spell_term_clean(cx, head),
         }.unwrap_or_else(|| "…".to_string());
         let first = self.placeholder_base();
@@ -103,7 +108,7 @@ impl Elaborator {
     /// instance embeds it into, over the literal as local `0`, scoped where
     /// the display reads (docs/carrier-directed-numerals-design.md): the
     /// body of the instance's `ofNat` field, which is what
-    /// [`Self::reduced_embedding`] leaves of a literal at that carrier —
+    /// [`Literals::reduced_embedding`](crate::literals::Literals::reduced_embedding) leaves of a literal at that carrier —
     /// `Rat::ofInt(OfNat(n))` at `Rat`, and at `Int`, whose field is the
     /// constructor `OfNat`, that constructor's value. Read off the
     /// definitions; nothing is reduced. A parameterized instance (`BitVec(n)`)
@@ -343,7 +348,7 @@ impl Elaborator {
     }
 
     fn type_name_shape_at(&self, abs: u32, depth: u32) -> Option<(u32, TypeNameShape)> {
-        let (_, body) = self.global_body_at(abs as usize)?;
+        let (_, body) = NameLookup(self).global_body_at(abs as usize)?;
         let closed = |t: &Rc<Term>| t.shift_local(1) == **t && !crate::gendefs::names_global(t);
         let (family, inner) = match &*body {
             Term::Lam { body, .. } => (true, body),
@@ -497,7 +502,7 @@ impl Speller<'_> {
         candidates.into_iter().find_map(|n| {
             let hidden = self.names.borrow().contains(&n.written)
                 || self.cx.aliases.iter_inner().any(|a| a.name == n.written);
-            if hidden || self.el.global_value(&n.written).as_deref() != Some(n.def.as_str()) {
+            if hidden || Inductives(self.el).global_value(&n.written).as_deref() != Some(n.def.as_str()) {
                 return None;
             }
             match (&n.shape, values) {
@@ -511,7 +516,7 @@ impl Speller<'_> {
                     if let Some(k) = crate::inductive::nat_numeral(v) {
                         let short = format!("{}{k}", n.written);
                         if matches!(crate::inductive::split_width(&short), Some((f, _)) if f == n.written)
-                            && self.el.global_value(&short).is_none()
+                            && Inductives(self.el).global_value(&short).is_none()
                         {
                             return Some(short);
                         }
@@ -692,7 +697,7 @@ impl Speller<'_> {
             }
             let targs = if ind.params.is_empty() {
                 String::new()
-            } else if let Some(args) = self.el.display_targs(self.cx, &shape, &ind, self.binders()) {
+            } else if let Some(args) = Inductives(self.el).display_targs(self.cx, &shape, &ind, self.binders()) {
                 let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>().join(", ");
                 format!("<{shown}>")
             } else {
@@ -706,14 +711,14 @@ impl Speller<'_> {
         // `D<ā>(e)`, or for a mutual group's family the member the index
         // selects, `Tm(e)` (docs/mutual-inductive-design.md §2).
         if let Type::IWf { sig, index } = ty
-            && let Some((ind, _)) = self.el.iwf_of(ty)
+            && let Some((ind, _)) = IwfFamily(self.el).iwf_of(ty)
         {
             return self.iwf_instance(&ind, &sig.shape, index, d);
         }
         // …and its `W` encoding, for a family with a function field
         // (docs/iwf-infinitary-design.md §5).
         if matches!(ty, Type::Sigma { .. })
-            && let Some((ind, fam)) = self.el.iwf_of(ty)
+            && let Some((ind, fam)) = IwfFamily(self.el).iwf_of(ty)
         {
             return self.iwf_instance(&ind, fam.shape().0, &fam.idx, d);
         }
@@ -728,7 +733,7 @@ impl Speller<'_> {
                 if self.names.borrow().len() != self.cx.names.len() {
                     return self.raw_ty(ty);
                 }
-                let Some(args) = self.el.instance_args(self.cx, &ind, ty) else {
+                let Some(args) = GeneratedDefs(self.el).instance_args(self.cx, &ind, ty) else {
                     return self.raw_ty(ty);
                 };
                 return self.source_instance(&ind, &args, d).unwrap_or_else(|| self.raw_ty(ty));
@@ -743,7 +748,7 @@ impl Speller<'_> {
             // what it emits stays what it was.
             if !ind.valparams.is_empty()
                 && !self.qualified
-                && let Some(values) = self.el.display_vargs(self.cx, &ind, ty, self.binders())
+                && let Some(values) = GeneratedDefs(self.el).display_vargs(self.cx, &ind, ty, self.binders())
             {
                 if ind.params.is_empty() && let Some(name) = self.named(ind.tag, &values, d) {
                     return name;
@@ -764,7 +769,7 @@ impl Speller<'_> {
                 let named = if ind.valparams.is_empty() { self.named(ind.tag, &[], d) } else { None };
                 named.unwrap_or_else(|| ind.name.clone())
             } else if let Some(args) =
-                self.el.display_targs(self.cx, ty, &ind, self.binders())
+                Inductives(self.el).display_targs(self.cx, ty, &ind, self.binders())
             {
                 let shown = args
                     .iter()
@@ -951,7 +956,7 @@ impl Speller<'_> {
             String::new()
         } else {
             match ind.skel.as_ref().and_then(|skel| {
-                self.el.display_targs(self.cx, shape, skel, self.binders())
+                Inductives(self.el).display_targs(self.cx, shape, skel, self.binders())
             }) {
                 Some(args) => {
                     let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>();
@@ -990,7 +995,7 @@ impl Speller<'_> {
     /// A lowered constructor value as `C(f₁, …)` — the shape a `match` arm's
     /// motive is instantiated at, so it is what a goal statement inside an arm
     /// shows. This is the *canonical* half of
-    /// [`Elaborator::read_ctor`](crate::Elaborator::read_ctor): an injection
+    /// [`Elaborator::read_ctor`](Inductives::read_ctor): an injection
     /// path over a `Pair`, whose payload fields sit in the label's Σ spine and
     /// whose plain children sit in the tuple. Deliberately not a call to that
     /// method — it takes a constructor spine, can elaborate projections, and
@@ -1228,7 +1233,7 @@ impl Speller<'_> {
         let (head, args) = crate::spelling::app_spine(t);
         let Term::GlobalTm { var, subst } = head else { return None };
         let abs = self.el.global_abs_of(*var)?;
-        (subst.terms.is_empty() && self.el.global_qualified_name_at(abs)? == key).then_some(args)
+        (subst.terms.is_empty() && NameLookup(self.el).global_qualified_name_at(abs)? == key).then_some(args)
     }
 
     /// `r.name` for a field read a record's declaration left inline. A closed
@@ -1241,7 +1246,7 @@ impl Speller<'_> {
     /// (issues/omega-record-projection-atoms.md).
     ///
     /// The receiver's type decides it: read off the receiver's spine
-    /// ([`Elaborator::spine_type`]) when its head is a variable, a global or
+    /// ([`AppUnify::spine_type`]) when its head is a variable, a global or
     /// another field read — the receivers a written `.name` leaves — and only
     /// at the context's own scope, since a binder the walk descended under has
     /// no type in `cx.gamma`. Re-elaborating the spelling walks the same
@@ -1551,7 +1556,7 @@ impl Speller<'_> {
                 let (spine_head, _) = crate::spelling::app_spine(t);
                 let Term::GlobalTm { var, .. } = spine_head else { return None };
                 let abs = self.el.global_abs_of(*var)?;
-                let op = self.el.global_qualified_name_at(abs)?;
+                let op = NameLookup(self.el).global_qualified_name_at(abs)?;
                 let carrier = self.operand_carrier(abs, first?, &args)?;
                 let mut found = self.el.traits.symbols_designating(&op, &carrier).into_iter().filter(|(fixity, sym)| {
                     let arity = if *fixity == OpFixity::Infix { 2 } else { 1 };
@@ -1743,16 +1748,16 @@ impl Speller<'_> {
         // elsewhere resolves to nothing (or, worse, to something else). Fall
         // back to the qualified spelling exactly where the base one does not
         // come back here.
-        if self.qualified && !self.el.base_name_resolves_to(&name, abs) {
-            name = self.el.global_qualified_name_at(abs)?;
+        if self.qualified && !NameLookup(self.el).base_name_resolves_to(&name, abs) {
+            name = NameLookup(self.el).global_qualified_name_at(abs)?;
             // Nor the qualified one, from a module this one does not import:
             // a spelling that does not re-parse here declines like any
             // other unspellable node, and `omega` abstracts it.
-            if !self.el.base_name_resolves_to(&name, abs) {
+            if !NameLookup(self.el).base_name_resolves_to(&name, abs) {
                 return None;
             }
         }
-        let params = self.el.params_at(abs);
+        let params = NameLookup(self.el).params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written
         // determines: `BitVec::ofNat(5)` alone cannot say its width, so it is
         // spelled `BitVec::ofNat(5, n := 64)`
@@ -1946,7 +1951,7 @@ impl Elaborator {
             return None;
         }
         let span = heather_syntax::Span { start: 0, end: 0 };
-        let ty = self.spine_type(cx, pair, span)?;
+        let ty = AppUnify(self).spine_type(cx, pair, span)?;
         let record = self.record_of_at(cx, &ty, span)?;
         record.ctors[0].fields.get(idx)?;
         Some((pair, record, idx))
@@ -1958,7 +1963,7 @@ impl Elaborator {
     /// answers `true`; so does every parameter when the type is not a plain
     /// Π telescope, the conservative side (the call then spells as before).
     fn implicits_determined(&self, abs: usize, count: usize) -> Vec<bool> {
-        let params = self.params_at(abs);
+        let params = NameLookup(self).params_at(abs);
         let Some(heather_kernel::term::GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(abs) else {
             return vec![true; count];
         };
