@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use heather_elab::LintProfile;
-use heather_syntax::{parse_file, Item};
 
 /// One module of the closure, ready to elaborate.
 #[derive(Clone)]
@@ -274,28 +273,21 @@ impl Walk<'_> {
                 LoadError::at(format!("cannot read `{}`: {e}", canon.display()), path)
             })?,
         };
-        // A parse error is the elaborator's to report, with a snippet: here it
-        // only means "no imports readable", and the module still gets fed on so
-        // the real diagnostic comes out where it belongs.
-        let imports: Vec<(String, PathBuf)> = match parse_file(&src) {
-            Ok(file) => {
-                let mut v = Vec::new();
-                for item in &file.items {
-                    let Item::Import(imp) = item else { continue };
-                    if imp.module == heather_elab::PRELUDE_MODULE {
-                        continue;
-                    }
-                    match self.resolve(&imp.module, &canon) {
-                        Ok(path) => v.push((imp.module.clone(), path)),
-                        Err(Unresolved::Missing(_)) if self.provided.contains(&imp.module.as_str()) => {}
-                        Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
-                    }
-                }
-                v
+        // Only the import lines are read: imports come first, so the DAG costs
+        // nothing of a module's bodies (`heather_syntax::leading_imports`). A
+        // source that does not parse is fed on with the imports it opens with,
+        // and the elaborator reports what is wrong with it, with a snippet.
+        let mut imports: Vec<(String, PathBuf)> = Vec::new();
+        for imp in heather_syntax::leading_imports(&src) {
+            if imp.module == heather_elab::PRELUDE_MODULE {
+                continue;
             }
-            Err(_) => Vec::new(),
-        };
-        let mut imports = imports;
+            match self.resolve(&imp.module, &canon) {
+                Ok(path) => imports.push((imp.module, path)),
+                Err(Unresolved::Missing(_)) if self.provided.contains(&imp.module.as_str()) => {}
+                Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
+            }
+        }
         if let Some((path, closure)) = self.common_prelude()?
             && !closure.contains(&name)
             && !imports.iter().any(|(m, _)| m == heather_elab::COMMON_MODULE)
