@@ -419,7 +419,7 @@ theorem u(P: Type, Q: Type, h: Iff<(n: Nat) -> P, Q>): ((n: Nat) -> P) ↔ Q { h
     );
     // The rival reading is refused with both readings spelled
     // (issues/check-fallback-discards-expected-type.md).
-    assert!(err.contains("this has type `P -> Iff<…>`"), "got: {err}");
+    assert!(err.contains("this has type `P -> Iff<Q, Q -> P>`"), "got: {err}");
 }
 
 /// A type-argument-applied type as a connective's left operand. `ty_atom`

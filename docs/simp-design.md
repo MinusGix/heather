@@ -503,10 +503,52 @@ that is unification of the two; and nothing forces a registered set to
 have its check, so an unchecked set is only caught by the loop report at a
 call.
 
-Not built: the `--json` report, unfolding by name. Known gaps: a law between statements,
-`P ↔ Q` (`issues/simp-iff-laws.md`); an equation's instance under a binder
+Not built: the `--json` report, unfolding by name. Known gaps: an
+equation's instance under a λ, and any law below an `∃`
 (`issues/simp-under-binders.md`); a goal a named case split left unfolded
 past its relation, which is restated in a one-step `calc`
 (`issues/case-split-unfolds-the-goals-relation.md`). Each step is one walk
 of the goal (`issues/rewrite-every-instance.md`), and a default set is
 tried law by law at each step, so a set's size is a cost at every call.
+
+## 12. Laws between statements, as built
+
+`P ↔ Q` as a law (2026-11-11, `crates/elab/src/rewrite/statement.rs`,
+`issues/simp-iff-laws.md`).
+
+- **The positions** are a statement's, not a term's: the goal itself, the
+  operands of `∧`, `∨`, `↔`, `¬` and a non-dependent `→`, and the body of a
+  `∀`, one binder down. Each is matched against the law's left side on its
+  own, so two positions may be two instances and an instance may mention a
+  bound variable. A position that is an instance is not walked into; the
+  next step sees what replaced it.
+- **The proof** is `goal ↔ next`, built from `logic`'s congruences for `↔`,
+  one per former (`iff_and_congr`, `iff_or_congr`, `iff_imp_congr`,
+  `iff_not_congr`, `iff_iff_congr`, `iff_forall_congr`), with `iff_refl()`
+  at an operand that did not change. A closing call uses its `mpr`, a
+  `using :=` fact its `mp`.
+- **The left side** is matched by its shape: an application along its spine
+  (`Mem(a, xs ++ ys)`), an equation side by side (`Succ(a) = Succ(b) ↔ a =
+  b`), a connective operand by operand, a statement variable by the whole
+  statement (`P ∧ True ↔ P`). `¬` is the call `Not(P)` as written, never a
+  definition that unfolds to an implication into `False`; and a relation
+  that is defined as a `↔` (`Regex::Same`) is that relation, read by §5.
+- **Equations and relation steps reach the same positions.** A connective
+  lowers to a record or a sum whose operands sit below the lowering's own
+  binders, where the equation form's motive does not look, so before this
+  an equation fired at `Mem(a, xs ++ Nil)` and not at `Mem(a, xs ++ Nil) ∧
+  R`. A law that has no instance at the goal as a whole is now tried at
+  each operand; where it fires, its two directions are that operand's `↔`,
+  and the same congruences carry it out. This also takes an equation below
+  a `∀`.
+- **Sets and checks** take such laws unchanged: `List::shape` has
+  `List::mem_append_iff`, the types inside a statement bring their
+  defaults (a record's type arguments are now read through a field typed
+  as an arrow between them, which is also why a diagnostic prints
+  `Iff<P, Q>` where it printed `Iff<…>`), and `simp_check` compares the
+  two sides of a `↔` law as statements.
+
+Not reached: the body of an `∃` (`Exists(λ x => …)` takes its predicate as
+a value, a λ, which is the equation-under-a-λ gap again), and a statement
+inside a user's own predicate former. A law's two sides have to live at one
+universe level.

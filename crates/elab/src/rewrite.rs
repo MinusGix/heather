@@ -32,6 +32,7 @@ use crate::{Cx, ElabError, Elaborator, R};
 
 mod relation;
 mod simp;
+mod statement;
 pub(crate) use relation::Relations;
 pub(crate) use simp::Simps;
 
@@ -425,12 +426,35 @@ impl Rewrites<'_> {
         let Some(binds) = found else {
             return Err(Miss::NoInstance);
         };
-        // Binder `j` (outermost first) is `Var(k - 1 - j)` in `pcx`.
+        let (term, ty_now) = self.instantiated(cx, proof, proof_ty, k, &binds, premise, h.span, &not_an_equation)?;
+        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &ty_now, h.span)? else {
+            return Err(not_an_equation(proof_ty).into());
+        };
+        Ok((term, Equation { level, ty, lhs, rhs }))
+    }
+
+    /// `proof` applied to the arguments matching bound, and its type there.
+    /// Binder `j` of the `k` (outermost first) is `binds[k - 1 - j]`; one
+    /// that matching left open is a side condition `premise` is asked for,
+    /// when nothing after it depends on it. `not_a_law` is the error for a
+    /// type with fewer than `k` binders.
+    #[allow(clippy::too_many_arguments)]
+    fn instantiated(
+        &self,
+        cx: &Cx,
+        proof: Term,
+        proof_ty: &Type,
+        k: u32,
+        binds: &[Option<Rc<Term>>],
+        premise: Option<Premise<'_>>,
+        span: Span,
+        not_a_law: &dyn Fn(&Type) -> ElabError,
+    ) -> Result<(Term, Type), Miss> {
         let mut term = proof;
         let mut ty_now = proof_ty.clone();
         for j in 0..k {
-            let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty_now, h.span)? else {
-                return Err(not_an_equation(proof_ty).into());
+            let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty_now, span)? else {
+                return Err(not_a_law(proof_ty).into());
             };
             let arg = match binds[(k - 1 - j) as usize].clone() {
                 Some(arg) => arg,
@@ -447,10 +471,7 @@ impl Rewrites<'_> {
             ty_now = cod.inst_top(0, &arg);
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
-        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &ty_now, h.span)? else {
-            return Err(not_an_equation(proof_ty).into());
-        };
-        Ok((term, Equation { level, ty, lhs, rhs }))
+        Ok((term, ty_now))
     }
 
     /// First-order matching of `pat` (scoped in Γ, x₁ … xₖ, the `x`s its
@@ -585,6 +606,10 @@ impl Rewrites<'_> {
         if Resolution(self).is_open_app(pat) {
             deferred.push((pat.clone(), Rc::clone(t)));
             return true;
+        }
+        // `Succ(n)` is a node of its own, not an application.
+        if let (Term::Succ(p), Term::Succ(n)) = (pat, &**t) {
+            return self.match_spine(cx, p, n, k, binds, deferred);
         }
         match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
             (Some((pf, pa)), Some((tf, ta))) => {

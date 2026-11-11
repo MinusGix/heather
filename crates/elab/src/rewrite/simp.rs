@@ -1,8 +1,9 @@
 //! `simp_only(r₁, …, rₙ)`: the goal normalised by a list of laws
 //! (`docs/simp-design.md`, `issues/simp-tactic.md`).
 //!
-//! Each law is an equation `a = b` or a relation step `R(a, b)`, applied or
-//! not, used left to right. The driver takes the first law that has an
+//! Each law is an equation `a = b`, a relation step `R(a, b)` or a law
+//! between statements `P ↔ Q` (`statement.rs`), applied or not, used left to
+//! right. The driver takes the first law that has an
 //! instance in the goal, rewrites every occurrence of that instance exactly
 //! as `rewrite` would (the `J` form for an equation, the relation walk with
 //! its congruence evidence for a relation), and starts again from the first
@@ -31,6 +32,7 @@ use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Expr, ExprKind, Item, NamedArg, Span, parse_file};
 
 use super::relation::{Plan, Polarity, RelationRewrite, Relations};
+use super::statement::{Leaf, StatementOutcome, StatementStep, Statements};
 use super::{Equation, Miss, Rewrites};
 use crate::relational_context::proof::Relation;
 use crate::{Cx, ElabError, Elaborator, R};
@@ -60,12 +62,21 @@ struct Rule<'x> {
     proof: Term,
     ty: Type,
     name: String,
+    /// A law between statements, `P ↔ Q`.
+    iff: bool,
 }
 
 /// One step taken: what `rewrite` needs to build its proof.
 enum Fired<'a> {
     Relation { step: Box<RelationRewrite<'a>>, plan: Plan },
     Equation { level: Level, ty: Rc<Type>, lhs: Rc<Term>, rhs: Rc<Term>, proof: Term, motive: Type },
+    Statement(Box<StatementStep>),
+}
+
+/// The two sides of the instance a step rewrote, as a route prints them.
+enum Sides {
+    Terms(Rc<Term>, Rc<Term>),
+    Statements(String, String),
 }
 
 struct Step<'a> {
@@ -73,7 +84,7 @@ struct Step<'a> {
     fired: Fired<'a>,
     /// The instance's two sides, where they are scoped in the goal's
     /// context: what the route prints.
-    sides: Option<(Rc<Term>, Rc<Term>)>,
+    sides: Option<Sides>,
 }
 
 /// A type normalised: the steps in the order taken, where they end, and the
@@ -89,7 +100,7 @@ struct Run<'a> {
 }
 
 enum Outcome<'a> {
-    Fired(Fired<'a>, Type, Option<(Rc<Term>, Rc<Term>)>),
+    Fired(Fired<'a>, Type, Option<Sides>),
     Blocked(String),
     Miss,
 }
@@ -224,9 +235,20 @@ impl Simps<'_> {
                 Type::Id { lhs, rhs, .. } => Some((Rc::clone(lhs), Rc::clone(rhs))),
                 end => Relation::of_type(self.0, &here, end, span).map(|rel| (rel.left, rel.right)),
             };
-            let Some((left, right)) = sides else { continue };
-            if left != right && !Rewrites(self.0).terms_convert(&here, &left, &right) {
-                let shown = |t: &Term| self.spell_term_clean(&here, t).unwrap_or_else(|| "…".into());
+            // A law between statements: its two sides are statements.
+            let apart = match (&sides, Statements(self.0).iff_sides(&here, &run.end)) {
+                (Some((left, right)), _) => {
+                    (left != right && !Rewrites(self.0).terms_convert(&here, left, right)).then(|| {
+                        let shown = |t: &Term| self.spell_term_clean(&here, t).unwrap_or_else(|| "…".into());
+                        (shown(left), shown(right))
+                    })
+                }
+                (None, Some([(left, level), (right, _)])) => (left != right && !self.conv_types(&here, &left, &right, &level))
+                    .then(|| (self.display_type(&here, &left), self.display_type(&here, &right))),
+                (None, None) => None,
+            };
+            if let Some((left, right)) = apart {
+                let shown = |t: &String| t.clone();
                 return Err(ElabError::Elab {
                     msg: format!(
                         "`simp_check`: law {} `{name}` overlaps another law, and the two results \
@@ -254,24 +276,19 @@ impl Simps<'_> {
         while let Type::Pi { cod, .. } = conclusion {
             conclusion = cod;
         }
-        if !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
-            let shown = self.display_type(cx, &ty);
+        let iff = Statements(self.0).is_law(cx, &ty, h.span);
+        if !iff && !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
             return Err(ElabError::Elab {
                 msg: format!(
-                    "`{form}`: {name} is not a law: a law is a proof of an equation `a = b` or \
-                     of a relation `R(a, b)`, under any hypotheses, and this is of type \
-                     `{shown}`{}",
-                    if shown.starts_with("Iff<") {
-                        "\n  note: a law `P ↔ Q` between statements is not rewritten yet \
-                         (issues/simp-iff-laws.md); use its direction, `h.mp(…)`, in `then :=`"
-                    } else {
-                        ""
-                    }
+                    "`{form}`: {name} is not a law: a law is a proof of an equation `a = b`, of \
+                     a relation `R(a, b)` or of `P ↔ Q`, under any hypotheses, and this is of \
+                     type `{}`",
+                    self.display_type(cx, &ty)
                 ),
                 span: h.span,
             });
         }
-        Ok(Rule { expr: h, proof, ty, name })
+        Ok(Rule { expr: h, proof, ty, name, iff })
     }
 
     /// The run and what closes it, for laws already elaborated.
@@ -420,12 +437,112 @@ impl Simps<'_> {
     fn met(&self, cx: &Cx, ty: &Type, span: Span) -> bool {
         match ty {
             Type::Id { lhs, rhs, .. } => lhs == rhs,
-            _ => Relation::of_type(self.0, cx, ty, span).is_some_and(|rel| rel.left == rel.right),
+            _ => {
+                Relation::of_type(self.0, cx, ty, span).is_some_and(|rel| rel.left == rel.right)
+                    || Statements(self.0).iff_sides(cx, ty).is_some_and(|[(l, _), (r, _)]| l == r)
+            }
         }
     }
 
     /// One law at `ty`: every occurrence of its first instance rewritten.
+    /// An equation or a relation step that has none at the goal as a whole
+    /// is tried at the goal's operands, below `∧`, `∨`, `↔`, `¬`, `→` and
+    /// `∀` (`statement.rs`): a connective's lowering holds an operand where
+    /// a motive does not reach.
     fn fire<'a>(
+        &self,
+        relations: &'a Relations<'a>,
+        cx: &'a Cx,
+        rule: &Rule<'_>,
+        ty: &Type,
+        lvl: &Level,
+        premise: super::Premise<'_>,
+    ) -> R<Outcome<'a>> {
+        let direct = self.fire_at(relations, cx, rule, ty, lvl, premise)?;
+        if rule.iff || matches!(direct, Outcome::Fired(..)) {
+            return Ok(direct);
+        }
+        let leaf = |at: &Cx, depth: u32, operand: &Type, level: &Level| -> R<Result<Option<Leaf>, String>> {
+            let deep = Rule {
+                expr: rule.expr,
+                proof: rule.proof.shift_local(depth),
+                ty: rule.ty.shift_local(depth),
+                name: rule.name.clone(),
+                iff: false,
+            };
+            let relations = Relations(self.0);
+            Ok(match self.fire_at(&relations, at, &deep, operand, level, premise)? {
+                Outcome::Fired(mut fired, to, sides) => match self.directions(&mut fired, operand, &to, level) {
+                    Ok((forward, backward)) => {
+                        let sides = sides.and_then(|sides| match sides {
+                            Sides::Terms(l, r) => Some((self.spell_term_clean(at, &l)?, self.spell_term_clean(at, &r)?)),
+                            Sides::Statements(l, r) => Some((l, r)),
+                        });
+                        Ok(Some(Leaf { to, forward, backward, sides }))
+                    }
+                    Err(e) => Err(soft(e)?),
+                },
+                Outcome::Blocked(why) => Err(why),
+                Outcome::Miss => Ok(None),
+            })
+        };
+        Ok(match Statements(self.0).within(cx, ty, lvl, &leaf, rule.expr.span)? {
+            StatementOutcome::Fired(mut step) => {
+                let next = step.next.clone();
+                let sides = step.sides.take().map(|(l, r)| Sides::Statements(l, r));
+                Outcome::Fired(Fired::Statement(step), next, sides)
+            }
+            StatementOutcome::Blocked(why) if matches!(direct, Outcome::Miss) => Outcome::Blocked(why),
+            _ => direct,
+        })
+    }
+
+    /// The two directions of one step, `from → to` and `to → from`, as
+    /// functions.
+    fn directions(&self, fired: &mut Fired<'_>, from: &Type, to: &Type, lvl: &Level) -> R<(Term, Term)> {
+        let lam = |dom: &Type, body: Term| Term::Lam {
+            dom_level: lvl.clone(),
+            cod_level: lvl.clone(),
+            dom: Rc::new(dom.clone()),
+            body: Rc::new(body),
+        };
+        let var = || Rc::new(Term::Var(LocalVar(0)));
+        Ok(match fired {
+            Fired::Statement(step) => (step.forward.0.clone(), step.backward.0.clone()),
+            Fired::Relation { step, plan } => {
+                let forward = step.emit(plan, Polarity::Forward, var(), 1)?;
+                let backward = step.emit(plan, Polarity::Backward, var(), 1)?;
+                (lam(from, Rc::unwrap_or_clone(forward)), lam(to, Rc::unwrap_or_clone(backward)))
+            }
+            // `J(h; y q. M[a] → M[y]; λ p. p) : M[a] → M[b]`, and the same
+            // with the arrow turned round.
+            Fired::Equation { level, ty, lhs, rhs, proof, motive } => {
+                let arrow = |dom: Type, cod: Type| Type::Pi {
+                    dom_level: lvl.clone(),
+                    cod_level: lvl.clone(),
+                    dom: Rc::new(dom),
+                    cod: Rc::new(cod),
+                };
+                let transport = |motive: Type| Term::J {
+                    ty_level: level.clone(),
+                    motive_level: Level::join(lvl.clone(), lvl.clone()),
+                    ty: Rc::clone(ty),
+                    lhs: Rc::clone(lhs),
+                    motive: Rc::new(motive),
+                    case: Rc::new(lam(from, Term::Var(LocalVar(0)))),
+                    rhs: Rc::clone(rhs),
+                    proof: Rc::new(proof.clone()),
+                };
+                // Under `y`, `q`, and the arrow's own binder.
+                let forward = transport(arrow(from.shift_local(2), motive.shift_local(2)));
+                let backward = transport(arrow(motive.shift_local(1), from.shift_local(3)));
+                (forward, backward)
+            }
+        })
+    }
+
+    /// [`Self::fire`] at `ty` as a whole.
+    fn fire_at<'a>(
         &self,
         relations: &'a Relations<'a>,
         cx: &'a Cx,
@@ -450,17 +567,27 @@ impl Simps<'_> {
                 };
                 Err(ElabError::Elab {
                     msg: format!(
-                        "`simp_only`: {} is not a law: a law is a proof of an equation `a = b` \
-                         or of a relation `R(a, b)`, under any hypotheses, and this is a proof \
-                         of {rest}\n  note: a law `P ↔ Q` between statements is not rewritten \
-                         yet (issues/simp-iff-laws.md); use its direction, `h.mp(…)`, in \
-                         `then :=`",
+                        "`simp_only`: {} is not a law: a law is a proof of an equation `a = b`, \
+                         of a relation `R(a, b)` or of `P ↔ Q`, under any hypotheses, and this \
+                         is a proof of {rest}",
                         rule.name
                     ),
                     span: rule.expr.span,
                 })
             }
         };
+        if rule.iff {
+            let outcome = Statements(self.0).step(cx, &rule.name, &rule.proof, &rule.ty, ty, lvl, Some(premise), rule.expr.span)?;
+            return Ok(match outcome {
+                StatementOutcome::Fired(mut step) => {
+                    let next = step.next.clone();
+                    let sides = step.sides.take().map(|(l, r)| Sides::Statements(l, r));
+                    Outcome::Fired(Fired::Statement(step), next, sides)
+                }
+                StatementOutcome::Blocked(why) => Outcome::Blocked(why),
+                StatementOutcome::Miss => Outcome::Miss,
+            });
+        }
         match relations.relation_step_or(cx, rule.expr, &rule.proof, &rule.ty, ty, Some(premise)) {
             Ok(Some(mut step)) => {
                 step.refused = Some(Vec::new());
@@ -470,7 +597,7 @@ impl Simps<'_> {
                         if step.occurrences() == 0 || next == *ty {
                             return Ok(Outcome::Miss);
                         }
-                        let sides = step.sides();
+                        let sides = step.sides().map(|(l, r)| Sides::Terms(l, r));
                         Ok(Outcome::Fired(Fired::Relation { step: Box::new(step), plan }, next, sides))
                     }
                     Err(e) => soft(e).map(Outcome::Blocked),
@@ -498,7 +625,7 @@ impl Simps<'_> {
         if next == *ty {
             return Ok(Outcome::Miss);
         }
-        let sides = Some((Rc::clone(&lhs), Rc::clone(&rhs)));
+        let sides = Some(Sides::Terms(Rc::clone(&lhs), Rc::clone(&rhs)));
         Ok(Outcome::Fired(Fired::Equation { level, ty: carrier, lhs, rhs, proof, motive }, next, sides))
     }
 
@@ -602,6 +729,24 @@ impl Simps<'_> {
         };
         for i in order {
             term = match &mut run.steps[i].fired {
+                // `goal ↔ next`, by the direction asked for.
+                Fired::Statement(step) => {
+                    let (fun, ty) = match polarity {
+                        Polarity::Forward => &step.forward,
+                        Polarity::Backward => &step.backward,
+                    };
+                    let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
+                        unreachable!("a direction of `↔` is a function")
+                    };
+                    crate::spelling::checked_app(
+                        Rc::new(fun.clone()),
+                        dom_level.clone(),
+                        cod_level.clone(),
+                        Rc::clone(dom),
+                        Rc::clone(cod),
+                        Rc::new(term),
+                    )
+                }
                 Fired::Relation { step, plan } => Rc::unwrap_or_clone(step.emit(plan, polarity, Rc::new(term), 0)?),
                 Fired::Equation { level, ty, lhs, rhs, proof, motive } => match polarity {
                     // `J(h; y q. M; hyp) : M[b/y]`.
@@ -685,8 +830,11 @@ impl Simps<'_> {
         } else {
             out.push_str(&format!("\n  {label} ({} step{}):", run.steps.len(), if run.steps.len() == 1 { "" } else { "s" }));
             let line = |k: usize, step: &Step<'_>| {
-                let sides = step.sides.as_ref().and_then(|(l, r)| {
-                    Some(format!(": `{}` ⟶ `{}`", self.spell_term_clean(cx, l)?, self.spell_term_clean(cx, r)?))
+                let sides = step.sides.as_ref().and_then(|sides| match sides {
+                    Sides::Terms(l, r) => {
+                        Some(format!(": `{}` ⟶ `{}`", self.spell_term_clean(cx, l)?, self.spell_term_clean(cx, r)?))
+                    }
+                    Sides::Statements(l, r) => Some(format!(": `{l}` ⟶ `{r}`")),
                 });
                 format!("\n    {}. {}{}", k + 1, rules[step.rule].name, sides.unwrap_or_default())
             };

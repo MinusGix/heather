@@ -178,6 +178,46 @@ theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
     Iff(mp := λ (p: P) => h2.mp(h1.mp(p)), mpr := λ (r: R) => h1.mpr(h2.mpr(r)))
 }
 
+// The record from its two directions, positionally: what a generated proof
+// calls, with the sides as type arguments.
+theorem iff_of<P, Q>(mp: P → Q, mpr: Q → P): P ↔ Q { Iff(mp := mp, mpr := mpr) }
+
+// `↔` is a congruence for every connective: what lets a law `P ↔ Q` rewrite
+// an occurrence of `P` inside a statement (`simp_only`, docs/simp-design.md
+// §12). One lemma per former, each taking both operands' steps; an operand
+// that does not change takes `iff_refl()`.
+theorem iff_and_congr<P, Q, R, S>(h1: P ↔ Q, h2: R ↔ S): P ∧ R ↔ Q ∧ S {
+    Iff(mp := λ (h: P ∧ R) => And(h1.mp(h.left), h2.mp(h.right)),
+        mpr := λ (h: Q ∧ S) => And(h1.mpr(h.left), h2.mpr(h.right)))
+}
+
+theorem iff_or_congr<P, Q, R, S>(h1: P ↔ Q, h2: R ↔ S): P ∨ R ↔ Q ∨ S {
+    Iff(mp := λ (h: P ∨ R) => match h { Inl(p) => Inl(h1.mp(p)), Inr(r) => Inr(h2.mp(r)) },
+        mpr := λ (h: Q ∨ S) => match h { Inl(q) => Inl(h1.mpr(q)), Inr(s) => Inr(h2.mpr(s)) })
+}
+
+// The premise's step is used the other way round from the conclusion's.
+theorem iff_imp_congr<P, Q, R, S>(h1: P ↔ Q, h2: R ↔ S): (P → R) ↔ (Q → S) {
+    Iff(mp := λ (f: P → R) (q: Q) => h2.mp(f(h1.mpr(q))),
+        mpr := λ (g: Q → S) (p: P) => h2.mpr(g(h1.mp(p))))
+}
+
+theorem iff_not_congr<P, Q>(h: P ↔ Q): ¬P ↔ ¬Q {
+    Iff(mp := λ (n: ¬P) (q: Q) => n(h.mpr(q)),
+        mpr := λ (n: ¬Q) (p: P) => n(h.mp(p)))
+}
+
+theorem iff_iff_congr<P, Q, R, S>(h1: P ↔ Q, h2: R ↔ S): (P ↔ R) ↔ (Q ↔ S) {
+    Iff(mp := λ (h: P ↔ R) => iff_trans(iff_trans(iff_sym(h1), h), h2),
+        mpr := λ (h: Q ↔ S) => iff_trans(iff_trans(h1, h), iff_sym(h2)))
+}
+
+// Below a `∀` the step is pointwise.
+theorem iff_forall_congr<A>(P, Q: A → Type, h: (x: A) → (P(x) ↔ Q(x))): ((x: A) → P(x)) ↔ ((x: A) → Q(x)) {
+    Iff(mp := λ (f: (x: A) → P(x)) (x: A) => h(x).mp(f(x)),
+        mpr := λ (g: (x: A) → Q(x)) (x: A) => h(x).mpr(g(x)))
+}
+
 // ---------------------------------------------------------------------------
 // The existential: a record whose second field's type depends on its first,
 // with the predicate arriving as a value parameter

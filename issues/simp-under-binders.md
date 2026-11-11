@@ -28,3 +28,11 @@ enclosing context by congruence), and the failure report says "an instance
 sits under a binder" when it does not.
 
 Done when `under_a_binder` closes by `simp_only(List::append_nil)`.
+
+The same gap hides the body of an `∃`: `Exists(λ x => P(x))` takes its
+predicate as a value, so a law (an equation, or `P ↔ Q` since
+`docs/simp-design.md` §12) whose instance is in `P(x)` sits under that λ
+(`below_exists` in the same test module). There the crossing is
+`iff_exists_congr` over the pointwise `↔`, which wants the statement walk
+to read a value-parameterised former's predicate argument. A `∀` is
+crossed: its body is a statement one binder down.
