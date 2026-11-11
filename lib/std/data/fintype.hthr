@@ -148,3 +148,36 @@ instance<A: Fintype>(p: A → Bool) Decide<Fintype::Any<A>(p)> {
     reflects := And(λ e => Fintype::any_sound(p, e),
         λ e => λ w => absurd(trans(sym(w.proof), Fintype::any_refute(p, e, w.witness)))),
 }
+
+// ---------------------------------------------------------------------------
+// Functions out of a finite type are compared point by point when the
+// codomain decides equality. `Fintype::Agree<A, B>(f, g)` is the claim as a
+// former, for `decide` (as `All` above).
+
+fn Fintype::agree<A: Fintype, B: DecEq>(f, g: A → B) → Bool { Fintype::all<A>(λ (a: A) => or_bit(B.eq_dec(f(a), g(a)))) }
+
+theorem Fintype::agree_sound<A: Fintype, B: DecEq>(f, g: A → B, h: Fintype::agree(f, g) = True): (a: A) → f(a) = g(a) {
+    λ a => or_bit_reflects(B.eq_dec(f(a), g(a))).left(Fintype::all_sound(λ (a: A) => or_bit(B.eq_dec(f(a), g(a))), h, a))
+}
+
+theorem Fintype::agree_refute<A: Fintype, B: DecEq>(f, g: A → B, h: Fintype::agree(f, g) = False): Exists(λ (a: A) => ¬(f(a) = g(a))) {
+    match Fintype::all_refute(λ (a: A) => or_bit(B.eq_dec(f(a), g(a))), h) {
+        Exists(a, w) => Exists(a, or_bit_reflects(B.eq_dec(f(a), g(a))).right(w)),
+    }
+}
+
+fn Fintype::Agree<A, B>(f, g: A → B) → Type { (a: A) → f(a) = g(a) }
+
+fn Fintype::agree_dec<A: Fintype, B: DecEq>(f, g: A → B) → Fintype::Agree<A, B>(f, g) ∨ ¬Fintype::Agree<A, B>(f, g) {
+    match h: Fintype::agree(f, g) {
+        True => Inl(Fintype::agree_sound(f, g, h)),
+        False => Inr(λ e => match Fintype::agree_refute(f, g, h) { Exists(a, w) => w(e(a)) }),
+    }
+}
+
+instance<A: Fintype, B: DecEq>(f, g: A → B) Decide<Fintype::Agree<A, B>(f, g)> {
+    dec := Fintype::agree_dec(f, g),
+    bit := Fintype::agree(f, g),
+    reflects := And(λ e => Fintype::agree_sound(f, g, e),
+        λ e => λ p => match Fintype::agree_refute(f, g, e) { Exists(a, w) => w(p(a)) }),
+}

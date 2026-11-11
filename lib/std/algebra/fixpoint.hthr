@@ -1,0 +1,235 @@
+// Fixed points of monotone maps a predicative library can state
+// (issues/galois-connections-and-checked-fixpoints.md).
+//
+// Knaster–Tarski's least fixed point is a meet over every pre-fixpoint,
+// which quantifies over the carrier's subsets. What is stated here needs no
+// such meet:
+//
+// - Park induction against a checked witness: a pre-fixpoint `f(p) ≤ p`
+//   above the start bounds every iterate (`iterate_le_prefix`). A solver
+//   stays untrusted; its answer is checked by one comparison
+//   (docs/compilation-vision.md).
+// - An iterate that has stopped rising, `f(xₙ) ≤ xₙ`, is the least
+//   pre-fixpoint above the start and a fixed point (`stable_least`,
+//   `stable_fixed`).
+// - On a finite carrier with a decidable order the ascending iteration
+//   stops within the carrier's size, by the chain bound
+//   (`Fintype::chain_len_le`): `kleene` computes the point and
+//   `kleene_total` says it answers.
+//
+// The order is a `PartialOrderRel(≈, ≤)`, so a carrier whose equality is a
+// setoid is served and a fixed point is stated up to `≈`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import lattice;
+import perm;
+import sorting;
+import fintype;
+import fintype_card;
+
+// `f` applied `n` times to `x`.
+fn Nat::iterate<A>(self n: Nat, f: A → A, x: A) → A {
+    match n { Zero => x, Succ(m) => f(m.iterate(f, x)) }
+}
+
+// Iterating from an iterate: the applications add.
+theorem Nat::iterate_add<A>(self n, k: Nat, f: A → A, x: A): (n + k).iterate(f, x) = k.iterate(f, n.iterate(f, x)) {
+    match k {
+        Zero => refl,
+        Succ(m) => cong_fn(f, n.iterate_add(m, f, x)),
+    }
+}
+
+// The outermost application moved innermost.
+theorem Nat::iterate_succ_inner<A>(self n: Nat, f: A → A, x: A): Succ(n).iterate(f, x) = n.iterate(f, f(x)) {
+    match n {
+        Zero => refl,
+        Succ(m) => cong_fn(f, m.iterate_succ_inner(f, x)),
+    }
+}
+
+section<A: PartialOrderRel(same, le)>(same as ≈: A → A → Type, le as <=: A → A → Type) {
+
+// `f` preserves the order.
+fn PartialOrderRel::Monotone(f: A → A) → Type { (a, b: A) → a <= b → f(a) <= f(b) }
+
+// Park induction: a pre-fixpoint above the start is above every iterate.
+theorem PartialOrderRel::iterate_le_prefix(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x, p: A, above: x <= p, pre: f(p) <= p,
+    n: Nat): n.iterate(f, x) <= p
+{
+    match n {
+        Zero => above,
+        Succ(m) => PartialOrderRel::le_trans(f(m.iterate(f, x)), f(p), p,
+            mono(m.iterate(f, x), p, PartialOrderRel::iterate_le_prefix(same, le, f, mono, x, p, above, pre, m)), pre),
+    }
+}
+
+// From a point below its image the iterates ascend.
+theorem PartialOrderRel::iterate_ascends(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: x <= f(x), n: Nat):
+    n.iterate(f, x) <= Succ(n).iterate(f, x)
+{
+    match n {
+        Zero => rise,
+        Succ(m) => mono(m.iterate(f, x), Succ(m).iterate(f, x), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, m)),
+    }
+}
+
+theorem PartialOrderRel::iterate_le_later(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: x <= f(x), n, k: Nat):
+    n.iterate(f, x) <= (n + k).iterate(f, x)
+{
+    match k {
+        Zero => PartialOrderRel::le_refl(n.iterate(f, x)),
+        Succ(m) => PartialOrderRel::le_trans(n.iterate(f, x), (n + m).iterate(f, x), Succ(n + m).iterate(f, x),
+            PartialOrderRel::iterate_le_later(same, le, f, mono, x, rise, n, m), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, n + m)),
+    }
+}
+
+// An iterate that has stopped rising bounds every later one,
+theorem PartialOrderRel::stable_bounds(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, n: Nat,
+    stop: f(n.iterate(f, x)) <= n.iterate(f, x), k: Nat): (n + k).iterate(f, x) <= n.iterate(f, x)
+{
+    j(sym(n.iterate_add(k, f, x)), λ w _ => w <= n.iterate(f, x),
+        PartialOrderRel::iterate_le_prefix(same, le, f, mono, n.iterate(f, x), n.iterate(f, x), PartialOrderRel::le_refl(n.iterate(f, x)), stop, k))
+}
+
+// is below every pre-fixpoint above the start,
+theorem PartialOrderRel::stable_least(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, n: Nat, p: A, above: x <= p, pre: f(p) <= p):
+    n.iterate(f, x) <= p
+{
+    PartialOrderRel::iterate_le_prefix(same, le, f, mono, x, p, above, pre, n)
+}
+
+// and, the iteration having ascended to it, is a fixed point.
+theorem PartialOrderRel::stable_fixed(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: x <= f(x), n: Nat,
+    stop: f(n.iterate(f, x)) <= n.iterate(f, x)): f(n.iterate(f, x)) ≈ n.iterate(f, x)
+{
+    A.le_antisymm(f(n.iterate(f, x)), n.iterate(f, x), stop, PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, n))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Kleene iteration with a decidable order: apply `f` until it stops rising.
+
+// The first `k` points of the iteration from `x`, the start first.
+fn Nat::orbit<A>(self k: Nat, f: A → A, x: A) → List<A> {
+    match k { Zero => Nil, Succ(m) => Cons(x, m.orbit(f, f(x))) }
+}
+
+theorem Nat::len_orbit<A>(self k: Nat, f: A → A): (x: A) → k.orbit(f, x).len() = k {
+    match k {
+        Zero => λ x => refl,
+        Succ(m) => λ x => Nat::cong_succ(m.len_orbit(f, f(x))),
+    }
+}
+
+section<A: PartialOrderRel(same, le) + DecidableRel(le)>(same as ≈: A → A → Type, le as <=: A → A → Type) {
+
+// Strictly below: the order a rising iteration climbs.
+fn PartialOrderRel::Strict(a, b: A) → Type { a <= b ∧ ¬(b <= a) }
+
+theorem PartialOrderRel::strict_irrefl(x: A): ¬PartialOrderRel::Strict(same, le, x, x) { λ s => s.right(s.left) }
+
+theorem PartialOrderRel::strict_trans(x, y, z: A, a: PartialOrderRel::Strict(same, le, x, y), b: PartialOrderRel::Strict(same, le, y, z)):
+    PartialOrderRel::Strict(same, le, x, z)
+{
+    And(PartialOrderRel::le_trans(x, y, z, a.left, b.left), λ back => b.right(PartialOrderRel::le_trans(z, x, y, back, a.left)))
+}
+
+// The first point within `fuel` steps of `x` that `f` does not raise.
+fn PartialOrderRel::kleene(f: A → A, fuel: Nat, x: A) → Option<A> {
+    match fuel {
+        Zero => None,
+        Succ(m) => match A.rel_dec(f(x), x) { Inl(_) => Some(x), Inr(_) => PartialOrderRel::kleene(same, le, f, m, f(x)) },
+    }
+}
+
+// Its answer is an iterate that has stopped rising.
+theorem PartialOrderRel::kleene_sound(f: A → A, fuel: Nat): (x, y: A) → PartialOrderRel::kleene(same, le, f, fuel, x) = Some(y) →
+    f(y) <= y ∧ Exists(λ (n: Nat) => y = n.iterate(f, x))
+{
+    match fuel {
+        Zero => λ x y h => Option::none_ne_some(y, h, f(y) <= y ∧ Exists(λ (n: Nat) => y = n.iterate(f, x))),
+        Succ(m) => λ x y => match A.rel_dec(f(x), x) as λ d =>
+            (match d { Inl(_) => Some(x), Inr(_) => PartialOrderRel::kleene(same, le, f, m, f(x)) }) = Some(y) →
+                f(y) <= y ∧ Exists(λ (n: Nat) => y = n.iterate(f, x))
+        {
+            Inl(stop) => λ h => And(j(Option::some_inj(x, y, h), λ w _ => f(w) <= w, stop), Exists(Zero, sym(Option::some_inj(x, y, h)))),
+            Inr(_) => λ h => match PartialOrderRel::kleene_sound(same, le, f, m, f(x), y, h) {
+                And(stop, reach) => And(stop, Exists(Succ(reach.witness), trans(reach.proof, sym(reach.witness.iterate_succ_inner(f, x))))),
+            },
+        },
+    }
+}
+
+// While it has no answer the points visited rise strictly.
+theorem PartialOrderRel::kleene_none_chain(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), fuel: Nat): (x: A) → x <= f(x) →
+    PartialOrderRel::kleene(same, le, f, fuel, x) = None → fuel.orbit(f, x).Sorted(λ a b => PartialOrderRel::Strict(same, le, a, b))
+{
+    match fuel {
+        Zero => λ x rise h => trivial,
+        Succ(m) => λ x rise => match A.rel_dec(f(x), x) as λ d =>
+            (match d { Inl(_) => Some(x), Inr(_) => PartialOrderRel::kleene(same, le, f, m, f(x)) }) = None →
+                Cons(x, m.orbit(f, f(x))).Sorted(λ a b => PartialOrderRel::Strict(same, le, a, b))
+        {
+            Inl(_) => λ h => Option::none_ne_some(x, sym(h), Cons(x, m.orbit(f, f(x))).Sorted(λ a b => PartialOrderRel::Strict(same, le, a, b))),
+            Inr(up) => λ h => And(
+                match m as λ q => List::LeHead(λ a b => PartialOrderRel::Strict(same, le, a, b), x, q.orbit(f, f(x))) {
+                    Zero => trivial,
+                    Succ(_) => And(rise, up),
+                },
+                PartialOrderRel::kleene_none_chain(same, le, f, mono, m, f(x), mono(x, f(x), rise), h)),
+        },
+    }
+}
+
+}
+
+// On a finite carrier the rising iteration answers within the carrier's
+// size: a run with no answer would be a strict chain longer than the type.
+theorem Fintype::kleene_total<A: Fintype + PartialOrderRel(same, le) + DecidableRel(le)>(same: A → A → Type, le: A → A → Type,
+    f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: le(x, f(x))):
+    Exists(λ (y: A) => PartialOrderRel::kleene(same, le, f, Succ(Fintype::card<A>()), x) = Some(y))
+{
+    match h: PartialOrderRel::kleene(same, le, f, Succ(Fintype::card<A>()), x) {
+        Some(y) => Exists(y, refl),
+        None => false_elim(Fintype::card<A>().lt_irrefl(
+            j(Succ(Fintype::card<A>()).len_orbit(f, x), λ w _ => w <= Fintype::card<A>(),
+                Fintype::chain_len_le(λ a b => PartialOrderRel::Strict(same, le, a, b),
+                    λ a => PartialOrderRel::strict_irrefl(same, le, a), λ a b c ab bc => PartialOrderRel::strict_trans(same, le, a, b, c, ab, bc),
+                    Succ(Fintype::card<A>()).orbit(f, x),
+                    PartialOrderRel::kleene_none_chain(same, le, f, mono, Succ(Fintype::card<A>()), x, rise, h))))),
+    }
+}
+
+section<A: PartialOrderRel(same, le) + DecidableRel(le)>(same as ≈: A → A → Type, le as <=: A → A → Type) {
+
+// What `kleene` answers is below every pre-fixpoint above the start, and
+// from a start below its image it is a fixed point: the least fixed point
+// above the start, found by running and checked by nothing further.
+theorem PartialOrderRel::kleene_least(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), fuel: Nat, x, y: A,
+    h: PartialOrderRel::kleene(same, le, f, fuel, x) = Some(y), p: A, above: x <= p, pre: f(p) <= p): y <= p
+{
+    match PartialOrderRel::kleene_sound(same, le, f, fuel, x, y, h) {
+        And(_, reach) => j(sym(reach.proof), λ w _ => w <= p, PartialOrderRel::iterate_le_prefix(same, le, f, mono, x, p, above, pre, reach.witness)),
+    }
+}
+
+theorem PartialOrderRel::kleene_fixed(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), fuel: Nat, x, y: A, rise: x <= f(x),
+    h: PartialOrderRel::kleene(same, le, f, fuel, x) = Some(y)): f(y) ≈ y
+{
+    match PartialOrderRel::kleene_sound(same, le, f, fuel, x, y, h) {
+        And(stop, reach) => A.le_antisymm(f(y), y, stop,
+            j(sym(reach.proof), λ w _ => w <= f(w), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, reach.witness))),
+    }
+}
+
+}

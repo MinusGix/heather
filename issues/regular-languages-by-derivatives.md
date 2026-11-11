@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,automata,lexer]
 area: mathematics
 milestone: [math-formal-languages,self-lexer]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 Area 5 of the 2026-11-10 ranking. The mathematics under
@@ -38,3 +38,32 @@ cites the derivative automaton's language theorem for its soundness.
 
 - **[[kleene-algebra-with-tests]]** takes regular languages as a model.
   Assumed here: nothing.
+
+## Log
+
+- 2026-11-11: First round, the denotation and the matcher.
+  `lib/std/text/regex_language.hthr`, over `regex.hthr`'s `Regex` (codes
+  as `Nat`): `Regex::Denotes(r, w)` by recursion on `r`, with the star as
+  a word cut into pieces (`Regex::Starred`, `Regex::Each`);
+  `nullable_sound` and `nullable_complete`; `deriv_sound` and
+  `deriv_complete` (the derivative by `c` denotes the words `w` with
+  `c :: w` in the language; the star's case is `star_step`);
+  `matches_iff`, which is the first half of "done when": the matcher's
+  correctness is one theorem. Membership decides by running the matcher
+  (`denotes_dec`, a `Decide` instance, `matches_refutes`), a `regex def`'s
+  Boolean is membership (`accepts_iff`), and `deriv_word_denotes` restates
+  the derivative at a word. `list.hthr` gains `append_nil_parts`; the pieces are joined by
+  `algebra.hthr`'s `concat`. Probes in
+  `lib/_tests/std/text/regex_language_tests.hthr`.
+
+  Kept `Regex` at `Nat` codes instead of a `Regex<A>`: the generator, the
+  parser and `regex def` are written against it, and ranges need an
+  ordered alphabet. A generic alphabet is a separate step if a second
+  client wants one.
+
+  Remaining: the language operations' laws up to extensional equality as
+  a module of their own (for [[kleene-algebra-with-tests]]); derivatives
+  modulo similarity are finitely many; a DFA record over a finite state
+  type and the derivative automaton's language theorem (what
+  [[regex-dfa-compiler]] cites); product and complement; longest-match
+  tokenisation as a specification.
