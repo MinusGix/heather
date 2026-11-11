@@ -70,6 +70,14 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 // in order.
 record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
 
+// What the body of a function over a span it writes knows of that span
+// (`rt_file_reflect`, docs/native-one-compiler-design.md §2.6): the span
+// parameter's local, the span as it is now (`None` while nothing has
+// written it: the parameter itself; after a store or a call that writes,
+// that link of the chain), and the calls that wrote it so far, in order,
+// each with the variable its word is bound to.
+record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes> }
+
 // A recursion the walk is inside (design §16.11): a fuel recursion's `Succ`
 // arm, or a measured function's step (`f::body`). `ih` is the local the
 // recursion is called through, and a call of it is a call of the function
@@ -106,18 +114,20 @@ record Known {
     // mode): span `j`'s bytes are the parameter at level `2j`, its length
     // word the one at `2j + 1`.
     lent: Nat,
+    // The span a computation writes; `None` for code that writes nothing.
+    file: Option<FileKnown>,
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file)
 }
 
 fn Known::lending(self k: Known, lent: Nat) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file)
 }
 
 // The span a parameter level is the bytes of, if it is one.
@@ -629,6 +639,26 @@ fn rt_answer(fuel: Nat, io: IoKnown, c: Handle) → Tac<CallRes> {
     }
 }
 
+// The call that wrote the span which `r` is, among those made so far: the
+// same handle, or a copy of one (the elaborator repeats a call wherever
+// its record is read).
+fn rt_file_answer_in(cs: List<CallRes>, g: Nat, r: Handle) → Tac<Option<CallRes>> {
+    match cs {
+        Nil => pure(None),
+        Cons(c, rest) => match c.method.same(g) {
+            False => rt_file_answer_in(rest, g, r),
+            True => defeq(Hd(r), Hd(c.call)).bind(λ same => match same { True => pure(Some(c)), False => rt_file_answer_in(rest, g, r) }),
+        },
+    }
+}
+
+fn rt_file_answer(fk: FileKnown, r: Handle) → Tac<Option<CallRes>> {
+    match rt_call_by_handle(fk.calls, r.id) {
+        Some(a) => pure(Some(a)),
+        None => view(r).bind(λ v => match v { HGlobal(g, _, _) => rt_file_answer_in(fk.calls, g.id, r), _ => pure(None) }),
+    }
+}
+
 // A field read. In effectful code, the answer of a call is the variables its
 // `Invoke` bound, and the world after a call is never a value; anything else
 // is an ordinary record's field.
@@ -636,7 +666,19 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     match k.io {
-        None => rt_field(f, k, st, h, operand, r, name, step),
+        None => match k.file {
+            None => rt_field(f, k, st, h, operand, r, name, step),
+            Some(fk) => rt_file_answer(fk, r).bind(λ found => match found {
+                None => rt_field(f, k, st, h, operand, r, name, step),
+                Some(a) => match Known::str_same(name, "value") {
+                    True => match a.value {
+                        Some(l) => pure(st.finish(h, operand, Var(l))),
+                        None => rt_refuse("a call's whole answer used as one value"),
+                    },
+                    False => rt_refuse("the span after a call used as a value: it is threaded on to the next store or call, never runtime data"),
+                },
+            }),
+        },
         Some(io) => rt_call_of(io, r).bind(λ direct => match direct {
             True => match Known::str_same(name, "after") {
                 True => rt_refuse("the world after a call used as a value: it is threaded on to the next call, never runtime data"),
@@ -806,8 +848,23 @@ fn rt_transfer(k: Known, g: GlobalRef, h: Handle, name: String, args: List<Handl
     }
 }
 
-// The lent span an expression is: a span parameter, by number.
-fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
+// Whether `h` is the written span as it is now.
+fn rt_same_span(fk: FileKnown, h: Handle) → Tac<Bool> {
+    match fk.now {
+        None => view(h).bind(λ v => match v {
+            HLocal(x, args) => match args { Nil => pure(x.id.same(fk.span)), Cons(_, _) => pure(False) },
+            _ => pure(False),
+        }),
+        Some(now) => match h.id.same(now.id) { True => pure(True), False => defeq(Hd(h), Hd(now)) },
+    }
+}
+
+fn rt_old_span<A>() → Tac<A> {
+    rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
+}
+
+// A span parameter, by number.
+fn rt_param_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
     let v <- view(h);
     let found: Option<Nat> = match v {
         HLocal(x, args) => match args { Nil => rt_assoc(st.locals, x.id).and_then(λ l => k.span_of(l)), Cons(_, _) => None },
@@ -816,6 +873,15 @@ fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
     match found {
         Some(j) => pure(j),
         None => rt_refuse("`byte_within` of bytes that are not a lent span (a leading `List<BitVec(8)>` parameter followed by its length word)"),
+    }
+}
+
+// The lent span an expression is: a span parameter, by number. In a
+// computation the written span is span 0, as it is now.
+fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
+    match k.file {
+        Some(fk) => rt_same_span(fk, h).bind(λ same => match same { True => pure(0), False => rt_old_span() }),
+        None => rt_param_span(k, st, h),
     }
 }
 
@@ -830,13 +896,19 @@ fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, 
         Zero => RSt::operands(step, st, args),
         Succ(n) => match args {
             Cons(bytes, Cons(length, rest)) => {
-                let passed: Tac<Nat> = Tac::bind<Head, Nat>(view(bytes), λ v => match v {
+                let param: Tac<Nat> = Tac::bind<Head, Nat>(view(bytes), λ v => match v {
                     HLocal(x, more) => match more {
                         Nil => match rt_assoc(st.locals, x.id) { Some(l) => pure(l), None => pure(j + j + 1) },
                         Cons(_, _) => pure(j + j + 1),
                     },
                     _ => pure(j + j + 1),
                 });
+                // In a computation the span passed is the written one as it
+                // is now, wherever the chain stands.
+                let passed: Tac<Nat> = match k.file {
+                    None => param,
+                    Some(fk) => match j { Zero => rt_same_span(fk, bytes).bind(λ same => match same { True => pure(0), False => rt_old_span() }), Succ(_) => param },
+                };
                 let l <- passed;
                 match l.same(j + j).and(Succ(j).leb(k.lent)) {
                     False => rt_refuse("a lent span is passed on as it is, in its own place: the loop keeps its home, and a callee reads the caller's file"),
@@ -1229,7 +1301,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [], 0)))))))))
+    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None)))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

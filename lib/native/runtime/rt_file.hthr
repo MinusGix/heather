@@ -47,6 +47,12 @@ fn List::with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: Bi
     match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }
 }
 
+// The same as a statement on a span a body threads: `span.put_within(length,
+// i, v);`, which rebinds `span` to the span with the byte stored.
+fn List::put_within(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → True {
+    span := span.with_byte_within(length, i, v);
+}
+
 // ---------------------------------------------------------------------------
 // Computations
 

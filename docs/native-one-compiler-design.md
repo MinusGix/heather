@@ -786,24 +786,56 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   word that is not the span's length home is lowered soundly and refused
   by the function compiler.
 
-- *The source is a `mut self` method on the span.* The language has
-  state-threading already: `fn T::m(mut self x: T, …) → R` has kernel
-  type `T → … → Mutated<T, R>`, and a body's calls of such methods are
-  threaded by the elaborator (docs/effects-capabilities-design.md §2).
-  A function that writes a span is one over its bytes:
-  `runtime fn List::raise_from(mut self span: List<BitVec(8)>, length,
-  count, i: BitVec(64)) → BitVec(64)`, whose body says
-  `span.put_within(length, i, v)`. The written span is the receiver and
-  is span 0; spans it only reads follow as in U3c. One written span is
-  what `mut self` gives, and it is enough for `tr`, the scanner and the
-  hashes' output; a second is a language question (`mut` on a parameter
-  that is not the receiver) and is left there.
+- *The source is a function from the span to `Mutated`.* The language
+  has state-threading already: `fn T::m(mut self x: T, …) → R` has
+  kernel type `T → … → Mutated<T, R>`, and a body's calls of such
+  methods are threaded by the elaborator
+  (docs/effects-capabilities-design.md §2). A function that writes a
+  span is one of that kernel type over its bytes, however it is
+  spelled: a `mut self` method on `List<BitVec(8)>` whose body says
+  `span.put_within(length, i, v)`, or a function that returns
+  `Mutated(span′, value)` itself. The written span is the first
+  parameter and is span 0, its length word the next. One written span
+  is what `mut self` gives, and it is enough for `tr`, the scanner and
+  the hashes' output; a second is a language question (`mut` on a
+  parameter that is not the receiver) and is left there.
 
-  The reflector reads the elaborated body the way the one over `Io`
-  does: it walks the chain of `Mutated` records from the result's span
-  back to the parameter, which gives the order of the stores and the
-  writing calls, reflects each operand as pure `rt`, and refuses a body
-  where a span other than the chain's is read.
+  A loop is spelled the second way today. A loop is a function that
+  `decreases`, and `decreases` does not yet cover a declaration with a
+  `self` parameter (issues/decreases-self-parameter.md), so
+  `raise_from` takes its span as a plain parameter, shadows it with a
+  `let mut`, stores through `put_within`, and ends in its own call on
+  the span as the pass left it. The reflector reads both spellings as
+  the same thing, since it reads the kernel term.
+
+  The reflector (`rt_file_reflect.hthr`, built in 4c-3a) reads the
+  elaborated body the way the one over `Io` does. Each end of the body
+  is a `Mutated` record, and its span is a chain of links back to the
+  parameter: a link is a store (`with_byte_within`) or the `.after` of
+  a call of a computation of the program. The chain is the order the
+  stores and the calls happen in; each link's operands are reflected as
+  pure `rt` in the file as that link finds it, and a call's word is
+  bound for what follows. A branch that ends in a record in each arm is
+  an `If`; the function's own call through its recursor's `ih`, last,
+  is `Again`. What it refuses, each with its reason:
+  - *The span as it was.* A value whose term reads the span before a
+    link, used after it. No `FTm` names an old file, so there is no
+    reflection to give. A byte read before a store and wanted after it
+    is the case that costs something: the elaborator inlines the `let`,
+    so the read's term is of the old span wherever it is used
+    (issues/rt-file-read-before-store.md).
+  - *A span that branches and joins.* A statement `if` that stores,
+    with code after it, makes the span a `match`; `FTm`'s branches each
+    run to an end, and a join would duplicate the rest.
+  - *A store under a word that is not the span's length parameter*,
+    which the function compiler would refuse later with less to say.
+  - *A call of a function that writes and is not in the table.*
+  - *Another computation called last, directly.* The body's end would
+    be the callee's record, not a record of its `.after` and `.value`,
+    and the kernel has no η for records, so the pin could not be a
+    conversion. Calling it and returning its word is the spelling that
+    reflects; only the self-call is direct, because the recursor's `ih`
+    is what the continuation of `tail_sem` stands for.
 
 - *A loop is the measured recursion, with the file carried.* A writing
   loop is a method that calls itself last (`raise_from` at `i + 1`); the
@@ -1125,9 +1157,37 @@ Each is a PR and ends with something that runs.
       `FTm::CallsAgree` is `program_run_quiet` and the pure once-proof
       (`raise_agrees`)
       (`lib/_tests/native/runtime/rt_file_loop_tests.hthr`).
-    - *4c-3:* the class's statement of the run, the reflector over a
-      `mut self` span, the generator and linking; `raise_span` becomes a
-      `runtime fn`.
+    - *4c-3a (built 2026-11-11):* the reflector for a function over a
+      span (`rt_file_reflect.hthr`; §2.6 has what it reads and what it
+      refuses). `rt_file_reflect(computations, functions)` reads a table
+      of writing functions over a table of pure ones and gives each
+      `FFun`; a function with a recursor (`f::body`) is read as a loop,
+      its body opened under the bound and `ih`. The pure reflector is
+      the one the operands go through: its `Known` carries the file's
+      state (`FileKnown`: which term is the span now, the calls so far
+      and their words), so a read is of span 0 only when its list is the
+      span as it is, and a writing call's `.value` is its variable.
+      `List::put_within` is the `mut self` store beside
+      `with_byte_within`. *Runs:* `reflects_file_as` holds four sources
+      to the reflections 4c-1 and 4c-2 wrote by hand: `poke` (a `mut
+      self` store), `poke_low` (a function returning `Mutated` under a
+      branch), `poke_pair` (two calls of `poke` and a read of what they
+      left) and `raise_from` (the loop, with `raise` its pure callee).
+      Each reflection is pinned to its function by `refl`, the loop's
+      to its recursor's step; four bodies are refused with their reasons
+      (`lib/_tests/native/runtime/rt_file_reflect_tests.hthr`).
+    - *4c-3b:* linking over the run. A computation's code numbers its
+      callees in its own table; a linked program renumbers them
+      (`Function::relabel`) and the theory that says a relabelled
+      function among its callees answers as it did alone is over `eval`
+      today (`function_ir_eval.hthr`). The same theory over `run`, with
+      a table of `Writers`, and where a loop sits in its own table.
+    - *4c-3c:* the class's statement of the run, the generator
+      (`runtime fn` on a function whose result is `Mutated` over a
+      span: reflect, lower, the instance by `refl` or from the
+      recursor's `ext` and `irrel`, link, publish `f::program` and
+      `f::runs_over`), and `raise_span` as a `runtime fn` with the tool
+      rebuilt on it.
     - *4c-4:* the layer over Linux drops `Writers::Quiet`, so a tool
       written as a `runtime fn` over `Io` calls a function that writes.
   - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,

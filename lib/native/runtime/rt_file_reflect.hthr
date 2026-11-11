@@ -1,0 +1,460 @@
+// The reflector for functions that write a span: a function from a span's
+// bytes to `Mutated<List<BitVec(8)>, R>`, read from its elaborated body as
+// an `FFun` (docs/native-one-compiler-design.md §2.6, U4 step 4c-3).
+//
+// The source is the kernel type a `mut self` method on the bytes has:
+// `fn List::m(mut self span: List<BitVec(8)>, length: BitVec(64), …) → R`,
+// or the same function written out, returning `Mutated(span, value)`
+// itself (a loop is written that way: `decreases` does not cover a `self`
+// parameter yet, issues/decreases-self-parameter.md). The span comes
+// first, then its 64-bit length word, as a lent span does; the code takes
+// two words for the pair.
+//
+// A body threads its span through stores (`span.put_within(length, i, v)`
+// or `span.with_byte_within(length, i, v)`) and through calls of other
+// such functions, whose `.after` is the span the next step takes and whose
+// `.value` is the word the call returned. It ends in `Mutated(span,
+// value)`, in a `match` on a `Bool` whose arms end so, or, in a function
+// that `decreases`, in its own call. The reflector:
+//
+// 1. reads the chain of stores and calls from an end's span back to the
+//    parameter, which gives their order (`rt_file_chain`);
+// 2. reflects each one's operands as pure `rt` at the span as it is then
+//    (`rt_go`, the pure walk, with the span now for `byte_within`), binds
+//    them with `Let`s, and emits the `Put` or the `Call`;
+// 3. reads a later `.value` of a call as the variable its `Call` bound;
+// 4. refuses a read of the span as it was before a store, the span used as
+//    a value, and a span that branches and joins again (a statement `if`
+//    that stores, with code after it): an `FTm` cannot name any of them.
+//
+// Untrusted like every producer: the pin of the reflection's meaning to
+// the function is what a `runtime fn` publishes, and a wrong reflection
+// fails it.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import rt;
+import rt_file;
+import rt_reflect;
+
+// The globals the walk knows by name: the record a body ends in, and the
+// two spellings of a store.
+record FileNames { mutated: Nat, put: Nat, with_byte: Nat }
+
+fn rt_file_names() → Tac<FileNames> {
+    let mutated <- rt_global("Mutated");
+    let put <- rt_global("List::put_within");
+    let with_byte <- rt_global("List::with_byte_within");
+    pure(FileNames(mutated, put, with_byte))
+}
+
+// ---------------------------------------------------------------------------
+// The walk
+
+// A computation read so far, the most recent step first: a pure value
+// bound, a store, or a call that writes. Operands are indices at the depth
+// the step is emitted at.
+inductive FSeg { FLet(e: Tm), FPut(i: Nat, length: Nat, v: Nat), FCall(f: Nat, args: List<Nat>) }
+
+fn FSeg::close(segs: List<FSeg>, last: FTm) → FTm {
+    segs.foldl(λ acc s => match s {
+        FLet(e) => FTm::Let(e, acc),
+        FPut(i, length, v) => FTm::Put(i, length, v, acc),
+        FCall(f, args) => FTm::Call(f, args, acc),
+    }, last)
+}
+
+fn FSeg::lets(lets: List<Tm>) → List<FSeg> { lets.map(λ e => FLet(e)) }
+
+// Pure code read at the span as it is now. A self-call is not pure code:
+// the walk reads it itself, where a body ends.
+fn Known::at_file(self k: Known, fk: FileKnown) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs, k.lent, Some(fk))
+}
+
+// The values numbered so far that still stand after the span is written:
+// a read of the span and a call (whose callee may read it) are made again.
+fn RSt::written(self st: RSt, depth: Nat) → RSt {
+    RSt(depth, [], st.memo.filter(λ p => match p.fst { Byte(_, _, _) => False, Call(_, _) => False, Fold(_, _, _) => False, _ => True }),
+        st.handles, st.locals, st.funs)
+}
+
+// `done` counts the links of the chain walked so far; `cfuns` is the
+// program's computations so far, a `Call`'s index.
+record FWalk { st: RSt, segs: List<FSeg>, fk: FileKnown, done: Nat, cfuns: List<Nat> }
+
+// The stores and calls a span has been through, the first first: the
+// parameter has been through none.
+fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List<Handle>> {
+    match fuel {
+        Zero => rt_refuse("the span's chain of stores is longer than the reflector's fuel"),
+        Succ(f) => view(h).bind(λ v => match v {
+            HLocal(x, _) => match x.id.same(span) {
+                True => pure([]),
+                False => rt_refuse("a span that is not the function's own"),
+            },
+            HField(c, name, _) => match Known::str_same(name, "after") {
+                True => view(c).bind(λ cv => match cv {
+                    HGlobal(_, cname, args) => match args {
+                        Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
+                        Nil => rt_refuse("`" ++ cname ++ "` without its span"),
+                    },
+                    _ => rt_refuse("the span after something other than a call"),
+                }),
+                False => rt_refuse("a span read out of a record (`." ++ name ++ "`)"),
+            },
+            HGlobal(g, name, args) => match g.id.same(names.with_byte) {
+                True => match args {
+                    Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
+                    Nil => rt_refuse("`" ++ name ++ "` without its span"),
+                },
+                False => rt_refuse("`" ++ name ++ "` makes a span the reflector does not know: a store is `put_within` or `with_byte_within`, and a call that writes hands its span on as `.after`"),
+            },
+            HMatch(_) => rt_refuse("the span through a branch that joins again (an `if` that stores, with code after it) is not reflected yet: end each arm in its own result"),
+            _ => rt_refuse("a span that is not the function's own, threaded through stores and calls"),
+        }),
+    }
+}
+
+// The links between the span as it is now and `target`.
+fn rt_file_links(fuel: Nat, names: FileNames, w: FWalk, target: Handle) → Tac<List<Handle>> {
+    let chain <- rt_file_chain(fuel, names, w.fk.span, target);
+    match w.done {
+        Zero => pure(chain),
+        Succ(d) => match chain.nth(d) {
+            None => rt_old_span(),
+            Some(link) => rt_same_span(w.fk, link).bind(λ same => match same { True => pure(chain.drop(w.done)), False => rt_old_span() }),
+        },
+    }
+}
+
+fn rt_file_length<A>(what: String) → Tac<A> {
+    rt_refuse(what ++ " under a word that is not the span's own length parameter")
+}
+
+// A store: its index and its byte as variables, read before it.
+fn rt_file_store(fuel: Nat, k: Known, w: FWalk, link: Handle, ops: List<Handle>) → Tac<FWalk> {
+    match ops.take(3) {
+        Cons(length, Cons(i, Cons(v, Nil))) => {
+            let kk = k.at_file(w.fk);
+            let rl <- rt_go(fuel, kk, w.st, length, True);
+            match RSt::level(rl.snd).same(1) {
+                False => rt_file_length("a store"),
+                True => {
+                    let ri <- rt_go(fuel, kk, rl.fst, i, True);
+                    let rv <- rt_go(fuel, kk, ri.fst, v, True);
+                    let st = rv.fst;
+                    pure(FWalk(st.written(st.depth),
+                        Cons(FPut(st.index(RSt::level(ri.snd)), st.index(1), st.index(RSt::level(rv.snd))), FSeg::lets(st.lets) ++ w.segs),
+                        FileKnown(w.fk.span, Some(link), w.fk.calls), Succ(w.done), w.cfuns))
+                },
+            }
+        },
+        _ => rt_refuse("a store without its length word, index and byte"),
+    }
+}
+
+// The program index of a called computation: its place among those so far
+// or, in the generator's mode, a runtime fn not met before, appended.
+fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
+    match Known::index(cfuns, g.id, 0) {
+        Some(i) => pure(Pair(cfuns, i)),
+        None => match k.discover {
+            False => rt_refuse("`" ++ name ++ "` writes the span and is not a computation of the program"),
+            True => lookup(name ++ "::rt").bind(λ c => match c {
+                Accepted(_) => pure(Pair(cfuns ++ [g.id], cfuns.len())),
+                Refused(_) => rt_refuse("`" ++ name ++ "` writes the span and is an ordinary fn: mark it `runtime fn`"),
+            }),
+        },
+    }
+}
+
+// A call of a computation: it is handed the span as it is and the span's
+// length word, then its own words; its word is bound for what follows.
+fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: GlobalRef, name: String, ops: List<Handle>) → Tac<FWalk> {
+    match ops {
+        Cons(length, rest) => {
+            let found <- rt_file_callee(k, w.cfuns, g, name);
+            let kk = k.at_file(w.fk);
+            let rl <- rt_go(fuel, kk, w.st, length, True);
+            match RSt::level(rl.snd).same(1) {
+                False => rt_file_length("a call that writes"),
+                True => {
+                    let r <- RSt::operands(λ s a => rt_go(fuel, kk, s, a, True), rl.fst, rest);
+                    let st = r.fst;
+                    pure(FWalk(st.written(Succ(st.depth)),
+                        Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(r.snd)))), FSeg::lets(st.lets) ++ w.segs),
+                        FileKnown(w.fk.span, Some(link), w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
+                        Succ(w.done), found.fst))
+                },
+            }
+        },
+        Nil => rt_refuse("`" ++ name ++ "` without its span's length word"),
+    }
+}
+
+fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) → Tac<FWalk> {
+    let v <- view(link);
+    match v {
+        HGlobal(_, _, args) => rt_file_store(fuel, k, w, link, args.drop(1)),
+        HField(c, _, _) => view(c).bind(λ cv => match cv {
+            HGlobal(g, name, args) => match g.id.same(names.put) {
+                True => rt_file_store(fuel, k, w, link, args.drop(1)),
+                False => rt_file_call(fuel, k, w, link, c, g, name, args.drop(1)),
+            },
+            _ => rt_refuse("the span after something other than a call"),
+        }),
+        _ => rt_refuse("a span that is not the function's own, threaded through stores and calls"),
+    }
+}
+
+fn rt_file_run(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>) → Tac<FWalk> {
+    match links {
+        Nil => pure(w),
+        Cons(link, rest) => rt_file_link(fuel, k, names, w, link).bind(λ w1 => rt_file_run(fuel, k, names, w1, rest)),
+    }
+}
+
+// The walk up to the span `target`: the stores and calls not yet read.
+fn rt_file_upto(fuel: Nat, k: Known, names: FileNames, w: FWalk, target: Handle) → Tac<FWalk> {
+    rt_file_links(fuel, names, w, target).bind(λ links => rt_file_run(fuel, k, names, w, links))
+}
+
+// What a body's walk leaves: its computation, and the program's pure
+// functions and computations after it.
+record FileEnd { term: FTm, funs: List<Nat>, cfuns: List<Nat> }
+
+fn rt_file_ends<A>() → Tac<A> {
+    rt_refuse("a function over a span ends in `Mutated(span, value)`, in a `match` on a `Bool` whose arms do, or (where it `decreases`) in its own call")
+}
+
+// A body in tail position. `ih` is the local a measured step calls itself
+// through and `arity` the words that call passes, the span and its length
+// word first.
+fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: Nat, w: FWalk, h: Handle) → Tac<FileEnd> {
+    match fuel {
+        Zero => rt_refuse("the body is deeper than the reflector's fuel"),
+        Succ(f) => view(h).bind(λ v => match v {
+            HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {
+                False => rt_file_ends(),
+                True => match fields.rev() {
+                    Cons(value, Cons(after, _)) => {
+                        let w1 <- rt_file_upto(f, k, names, w, after);
+                        let r <- rt_go(f, k.at_file(w1.fk), w1.st, value, False);
+                        pure(FileEnd(FSeg::close(FSeg::lets(r.fst.lets) ++ w1.segs, FTm::Pure(r.snd)), r.fst.funs, w1.cfuns))
+                    },
+                    _ => rt_refuse("`Mutated` without its span and value"),
+                },
+            },
+            HMatch(_) => {
+                let m <- arms(h).bind(λ c => rt_accepted("a `match`", c));
+                let t <- k.ty_of(m.scrut);
+                match t {
+                    Bit => {
+                        let rc <- rt_go(f, k.at_file(w.fk), w.st, m.scrut, True);
+                        let yes_h <- rt_arm(m, 1);
+                        let no_h <- rt_arm(m, 0);
+                        let base = RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs);
+                        let ry <- rt_file_tail(f, k, names, ih, arity, FWalk(base, [], w.fk, w.done, w.cfuns), yes_h);
+                        let rn <- rt_file_tail(f, k, names, ih, arity, FWalk(base.with_funs(ry.funs), [], w.fk, w.done, ry.cfuns), no_h);
+                        let c = rc.fst.index(RSt::level(rc.snd));
+                        let node: FTm = match m.args { Nil => FTm::If(c, ry.term, rn.term), Cons(_, _) => FTm::IfEq(c, ry.term, rn.term) };
+                        pure(FileEnd(FSeg::close(FSeg::lets(rc.fst.lets) ++ w.segs, node), rn.funs, rn.cfuns))
+                    },
+                    _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
+                }
+            },
+            HLocal(x, args) => match ih.map(λ i => i.same(x.id)).unwrap_or(False) {
+                False => rt_file_ends(),
+                True => match args.take(arity) {
+                    Cons(after, Cons(length, rest)) => {
+                        let w1 <- rt_file_upto(f, k, names, w, after);
+                        let kk = k.at_file(w1.fk);
+                        let rl <- rt_go(f, kk, w1.st, length, True);
+                        match RSt::level(rl.snd).same(1) {
+                            False => rt_file_length("a loop's own call"),
+                            True => {
+                                let r <- RSt::operands(λ s a => rt_go(f, kk, s, a, True), rl.fst, rest);
+                                let st = r.fst;
+                                pure(FileEnd(FSeg::close(FSeg::lets(st.lets) ++ w1.segs,
+                                    FTm::Again(Cons(st.index(0), Cons(st.index(1), st.indices(r.snd))))), st.funs, w1.cfuns))
+                            },
+                        }
+                    },
+                    _ => rt_refuse("a loop's own call without its span and length word"),
+                },
+            },
+            _ => rt_file_ends(),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function
+
+// The code of the value a function's type returns beside the span: the
+// `R` of `… → Mutated<List<BitVec(8)>, R>`.
+fn rt_file_result(fuel: Nat, k: Known, names: FileNames, t: Handle) → Tac<Ty> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_file_result(f, k, names, o.body)),
+            HGlobal(g, _, args) => match g.id.same(names.mutated) {
+                True => match args.rev() {
+                    Cons(r, _) => k.ty(r),
+                    Nil => rt_refuse("`Mutated` without its value's type"),
+                },
+                False => rt_refuse("a function over a span returns `Mutated<List<BitVec(8)>, R>`"),
+            },
+            _ => rt_refuse("a function over a span returns `Mutated<List<BitVec(8)>, R>`"),
+        }),
+    }
+}
+
+// The local at level 0: the span.
+fn rt_file_span(locals: List<Pair<Nat, Nat>>) → Tac<Nat> {
+    match locals {
+        Nil => rt_refuse("a function over a span takes the span first"),
+        Cons(p, rest) => match p.snd { Zero => pure(p.fst), Succ(_) => rt_file_span(rest) },
+    }
+}
+
+// The codes the function's code takes: two words for the span and its
+// length word, then the function's own words. One span, the written one.
+fn rt_file_codes(tys: List<Ty>) → Tac<List<Ty>> {
+    let lent = rt_lent(tys);
+    match lent.fst.same(1).and(!rt_has_bytes(lent.snd)) {
+        True => pure(lent.snd),
+        False => rt_refuse("a function over a span takes the span first and then its 64-bit length word, and no other byte list (a second span, read or written, is not reflected yet)"),
+    }
+}
+
+// A function, and the program's pure functions (`k.funs` and the runtime
+// fns it was found to call) and computations (`cfuns` likewise) after it
+// was walked.
+record FileReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat> }
+
+fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>, g: Nat) → Tac<FileReflected> {
+    let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
+    let result <- rt_file_result(fuel, k, names, t);
+    let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
+    let p <- rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b);
+    let codes <- rt_file_codes(p.fst.snd);
+    let span <- rt_file_span(p.fst.fst.locals);
+    let r <- rt_file_tail(fuel, k.lending(1), names, None, 0, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), p.snd);
+    pure(FileReflected(FFun(codes, result, r.term, 1), r.funs, r.cfuns))
+}
+
+// A function that `decreases`, read from its step `f::body`: `λ k g span
+// length x… h => …`, its recursion `g(span′, length, y…, p)` the function
+// itself on the span as the pass left it.
+fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>, g: Nat, step: Nat) → Tac<FileReflected> {
+    let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
+    let result <- rt_file_result(fuel, k, names, t);
+    let n <- rt_arity(fuel, t);
+    let b <- body(GlobalRef(step)).bind(λ c => rt_accepted("its step's body", c));
+    let o1 <- open(b, "k").bind(λ c => rt_accepted("its step's bound", c));
+    let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
+    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let codes <- rt_file_codes(p.fst.snd);
+    let span <- rt_file_span(p.fst.fst.locals);
+    let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
+    let r <- rt_file_tail(fuel, k.lending(1), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), o3.body);
+    pure(FileReflected(FFun(codes, result, r.term, 1), r.funs, r.cfuns))
+}
+
+fn rt_file_reflect_one(k: Known, names: FileNames, cfuns: List<Nat>, g: Nat, name: String) → Tac<FileReflected> {
+    lookup(name ++ "::body").bind(λ c => match c {
+        Accepted(step) => rt_file_reflect_measured(4096, k, names, cfuns, g, step.id),
+        Refused(_) => rt_file_reflect_plain(4096, k, names, cfuns, g),
+    })
+}
+
+fn rt_file_reflect_each(k: Known, names: FileNames, cfuns: List<Nat>, gs: List<Nat>, ns: List<String>) → Tac<List<FFun>> {
+    match gs {
+        Nil => pure([]),
+        Cons(g, rest) => match ns {
+            Nil => pure([]),
+            Cons(n, more) => rt_file_reflect_one(k, names, cfuns, g, n).bind(λ r =>
+                rt_file_reflect_each(k, names, cfuns, rest, more).bind(λ rs => pure(Cons(r.reflected, rs)))),
+        },
+    }
+}
+
+// The computations `cfuns`, by name, reflected from their elaborated
+// bodies; they may call one another (a `Call`'s index is the place in
+// `cfuns`) and the pure runtime functions `funs`.
+fn rt_file_reflect(cfuns: List<String>, funs: List<String>) → Tac<List<FFun>> {
+    let k <- rt_known(funs, []);
+    let names <- rt_file_names();
+    let cs <- rt_globals(cfuns);
+    rt_file_reflect_each(k, names, cs, cs, cfuns)
+}
+
+// ---------------------------------------------------------------------------
+// Equality and rendering, for the check and its failures.
+
+fn FTm::same(self t: FTm) → FTm → Bool {
+    match t {
+        Pure(v) => λ u => match u { Pure(v2) => v.same(v2), _ => False },
+        Let(e, body) => λ u => match u { Let(e2, body2) => e.same(e2).and(body.same(body2)), _ => False },
+        If(c, yes, no) => λ u => match u { If(c2, yes2, no2) => c.same(c2).and(yes.same(yes2)).and(no.same(no2)), _ => False },
+        IfEq(c, yes, no) => λ u => match u { IfEq(c2, yes2, no2) => c.same(c2).and(yes.same(yes2)).and(no.same(no2)), _ => False },
+        Put(i, length, v, body) => λ u => match u {
+            Put(i2, length2, v2, body2) => i.same(i2).and(length.same(length2)).and(v.same(v2)).and(body.same(body2)),
+            _ => False,
+        },
+        Call(f, args, body) => λ u => match u { Call(f2, args2, body2) => f.same(f2).and(Tm::nats_same(args, args2)).and(body.same(body2)), _ => False },
+        Again(args) => λ u => match u { Again(args2) => Tm::nats_same(args, args2), _ => False },
+    }
+}
+
+fn FFun::same(self f: FFun, g: FFun) → Bool {
+    Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.body.same(g.body)).and(f.lent.same(g.lent))
+}
+
+fn FTm::show(self t: FTm) → String {
+    match t {
+        Pure(v) => "Pure(" ++ v.show() ++ ")",
+        Let(e, body) => "Let(" ++ e.show() ++ ", " ++ body.show() ++ ")",
+        If(c, yes, no) => "If(" ++ rt_nat(c) ++ ", " ++ yes.show() ++ ", " ++ no.show() ++ ")",
+        IfEq(c, yes, no) => "IfEq(" ++ rt_nat(c) ++ ", " ++ yes.show() ++ ", " ++ no.show() ++ ")",
+        Put(i, length, v, body) => "Put(" ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ", " ++ rt_nat(v) ++ ", " ++ body.show() ++ ")",
+        Call(f, args, body) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
+        Again(args) => "Again([" ++ rt_nats(args) ++ "])",
+    }
+}
+
+fn FFun::show(self f: FFun) → String {
+    "FFun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.body.show() ++ ")"
+}
+
+fn rt_file_compare(got: List<FFun>, expected: List<FFun>) → Tac<Expr> {
+    match got {
+        Nil => match expected {
+            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))),
+            Cons(_, _) => rt_refuse("fewer functions reflected than expected"),
+        },
+        Cons(g, rest) => match expected {
+            Nil => rt_refuse("more functions reflected than expected"),
+            Cons(e, more) => match g.same(e) {
+                True => rt_file_compare(rest, more),
+                False => rt_refuse("the reflection differs:\n  got      " ++ g.show() ++ "\n  expected " ++ e.show()),
+            },
+        },
+    }
+}
+
+// The check `lib/_tests` runs: the reflection of the computations `cfuns`
+// is `expected`, function by function. Proves `True`; a difference fails,
+// showing both.
+fn reflects_file_as(cfuns: List<String>, funs: List<String>, expected: List<FFun>) → Tac<Expr> {
+    rt_file_reflect(cfuns, funs).bind(λ got => rt_file_compare(got, expected))
+}

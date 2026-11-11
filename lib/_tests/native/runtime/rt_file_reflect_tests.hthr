@@ -1,0 +1,192 @@
+// Probes of the reflector for functions that write a span
+// (lib/native/runtime/rt_file_reflect.hthr; docs/native-one-compiler-design.md
+// §2.6, U4 step 4c-3): ordinary Heather over a span's bytes, as a `mut
+// self` method or returning `Mutated` itself, read from its elaborated
+// body as the `FFun` the lowering takes (`reflects_file_as`), and the pin
+// of that reflection's meaning to the function by `refl`. What the
+// reflector refuses is here with its reason. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_file;
+import rt_file_loop;
+import rt_reflect;
+import rt_file_reflect;
+
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+
+// ---------------------------------------------------------------------------
+// A store
+
+// `v`'s low byte at `i` under the length word, returning the index.
+fn List::poke(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    span.put_within(length, i, v.truncate(8, 56));
+    i
+}
+
+// Four words: the span's place and its length word, then the index and
+// the value. The byte is bound before the store that reads it.
+fn poke_rt() → FFun { FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Let(Prim(Trunc(8, 56), [0]), Put(2, 3, 0, Pure(Var(2))))) }
+
+theorem poke_reflected(): True { by reflects_file_as(["List::poke"], [], [poke_rt()]) }
+
+// The pin: the reflection means the method at any span, by conversion.
+theorem poke_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_rt().meaning(alone(rest), span, place, length, i, v) = List::poke(span, length, i, v) { refl }
+
+// The store spelled as the function it is, the body returning `Mutated`
+// itself under a branch: each arm ends in its own span and value.
+fn poke_low(span: List<BitVec(8)>, length, i, v: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match v.unsigned_lt_bit(BitVec::ofNat(128)) {
+        False => Mutated(span, BitVec::ofNat(0)),
+        True => Mutated(span.with_byte_within(length, i, v.truncate(8, 56)), BitVec::ofNat(1)),
+    }
+}
+
+fn poke_low_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Lit(Word(64), 128), Let(Prim(Ult(64), [1, 0]),
+            If(0, Let(Prim(Trunc(8, 56), [2]), Put(4, 5, 0, Pure(Lit(Word(64), 1)))), Pure(Lit(Word(64), 0))))))
+}
+
+theorem poke_low_reflected(): True { by reflects_file_as(["poke_low"], [], [poke_low_rt()]) }
+
+theorem poke_low_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_low_rt().meaning(alone(rest), span, place, length, i, v) = poke_low(span, length, i, v) { refl }
+
+// ---------------------------------------------------------------------------
+// Calls that write, and a read of what they left
+
+// Two bytes stored by two calls of `poke`, then the first read back from
+// the span the calls left. The second call's `.value` is not read; the
+// first's is.
+fn List::poke_pair(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    let at = span.poke(length, i, v);
+    span.poke(length, at.add(BitVec::ofNat(1)), v);
+    span.byte_within(length, at).zero_extend(56)
+}
+
+// `poke` is computation 0. Each `Call` binds its word: the first's is
+// what the second's index and the read are made from.
+fn poke_pair_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Call(0, [3, 2, 1, 0], Let(Lit(Word(64), 1), Let(Prim(Add(64), [1, 0]),
+            Call(0, [6, 5, 0, 3], Let(Byte(0, 3, 6), Pure(Prim(Zext(8, 56), [0]))))))))
+}
+
+theorem poke_pair_reflected(): True { by reflects_file_as(["List::poke", "List::poke_pair"], [], [poke_rt(), poke_pair_rt()]) }
+
+fn pair_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(World(RecInfo::none, [], trivial), λ _ => trivial, [poke_rt().sig()],
+        Pair(λ (span: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (v: BitVec(64)) => List::poke(span, length, i, v), trivial), rest)
+}
+
+// The pin, the callee's meaning the callee itself: no callee is unfolded.
+theorem poke_pair_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_pair_rt().meaning(pair_world(rest), span, place, length, i, v) = List::poke_pair(span, length, i, v) { refl }
+
+// ---------------------------------------------------------------------------
+// A loop
+
+fn raise(x: BitVec(64)) → BitVec(64) {
+    match x.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { False => x, True => x.sub(BitVec::ofNat(32)) }
+}
+
+// Every byte from `i` raised, the index it stopped at returned. A loop is
+// a function that `decreases`, which is not a method yet
+// (issues/decreases-self-parameter.md): it returns `Mutated` itself, and
+// its own call, on the span as the pass left it, is its last step.
+fn raise_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => {
+            let mut span = span;
+            span.put_within(length, i, raise(span.byte_within(length, i).zero_extend(56)).truncate(8, 56));
+            raise_from(span, length, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// The reflection `rt_file_loop_tests` wrote by hand: the read, the call of
+// pure function 0, the store, and `Again` on the next index.
+fn raise_from_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64)], Word(64),
+        Let(Prim(Ult(64), [0, 1]), IfEq(0,
+            Let(Byte(0, 1, 2), Let(Prim(Zext(8, 56), [0]), Let(Call(0, [0]), Let(Prim(Trunc(8, 56), [0]), Put(5, 6, 0,
+                Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]), Again([9, 8, 0])))))))),
+            Pure(Var(1)))))
+}
+
+theorem raise_from_reflected(): True { by reflects_file_as(["raise_from"], ["raise"], [raise_from_rt()]) }
+
+fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)),
+        λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], trivial, rest)
+}
+
+// The pin of a loop is of its step: the body with its own call answered by
+// `again` is the recursor's step with an ih that drops its proof.
+theorem raise_from_step(rest: List<List<BitVec(8)>>, span: List<BitVec(8)>, place, length, i: BitVec(64),
+    again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>):
+    raise_from_rt().body.tail_sem(raise_world(rest), Word(64), again, [Word(64), Word(64), Word(64)], Pair(i, Pair(length, Pair(place, trivial))), span) =
+        raise_from::body(length.sub(i).toNat(), λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => again([place, y1, y2], s),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat())) { refl }
+
+// ---------------------------------------------------------------------------
+// A value read before a store and used after it
+
+// The byte that was at `i`, returned after the store over it.
+fn List::swap_in(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    let old = span.byte_within(length, i);
+    span.put_within(length, i, v.truncate(8, 56));
+    old.zero_extend(56)
+}
+
+// expect-error: the span as it was before a store
+theorem swap_in_refused(): True { by reflects_file_as(["List::swap_in"], [], []) }
+
+// ---------------------------------------------------------------------------
+// What the reflector refuses
+
+// A store under an `if`, with code after it: the span branches and joins.
+fn List::poke_if(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    if v.unsigned_lt_bit(BitVec::ofNat(128)) { span.put_within(length, i, v.truncate(8, 56)); }
+    span.byte_within(length, i).zero_extend(56)
+}
+
+// expect-error: the span through a branch that joins again
+theorem poke_if_refused(): True { by reflects_file_as(["List::poke_if"], [], []) }
+
+// A store under a word that is not the span's length parameter.
+fn List::poke_under(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    span.put_within(i, i, v.truncate(8, 56));
+    i
+}
+
+// expect-error: a store under a word that is not the span's own length parameter
+theorem poke_under_refused(): True { by reflects_file_as(["List::poke_under"], [], []) }
+
+// A call of a function that writes and is not of the program.
+fn List::poke_twice(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) {
+    span.poke(length, i, v);
+    span.poke(length, i, v)
+}
+
+// expect-error: writes the span and is not a computation of the program
+theorem poke_twice_refused(): True { by reflects_file_as(["List::poke_twice"], [], []) }

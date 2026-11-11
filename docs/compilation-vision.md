@@ -256,7 +256,12 @@ optimization that uses it is proved once under it as a hypothesis.
   itself last under a measure is one loop with the span carried from
   pass to pass, proved once against any function that satisfies the
   body's equation (`FFun::measured_sound`, `rt_file_loop.hthr`); the
-  measure may read the span. The reflector and the generator are next.
+  measure may read the span. Such a function is ordinary Heather of
+  type span to `Mutated`, a `mut self` method or a function returning
+  the record, and its reflection is read from its elaborated body by
+  the chain of stores and calls that makes each end's span
+  (`rt_file_reflect.hthr`). Linking over the run and the generator are
+  next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
