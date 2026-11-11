@@ -571,6 +571,30 @@ fn StructuredRegion::calls_among(self region: StructuredRegion, among: Nat → B
 }
 
 fn every_function(f: Nat) → Bool { True }
+fn no_function(f: Nat) → Bool { False }
+
+// The functions numbered below `base`: a program's functions that only
+// read, where the ones that write are numbered after them.
+fn functions_below(base: Nat) → Nat → Bool { λ f => Succ(f).leb(base) }
+
+// Callees that leave every file as it was, asked only of the functions
+// `among` accepts: what a region that stores nothing needs of the functions
+// it calls, in a program where others write.
+fn Writers::Still(call: Writers(), among: Nat → Bool) → Type {
+    (held: Buffers()) → (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(held, f, words).buffers = held
+}
+
+theorem Writers::still_none(call: Writers()): Writers::Still(call, no_function) { λ held f never words => false_elim(never) }
+
+theorem Writers::quiet_still(call: Writers(), quiet: Writers::Quiet(call), among: Nat → Bool): Writers::Still(call, among) {
+    λ held f _ words => quiet(held, f, words)
+}
+
+// Stillness among more functions is stillness among fewer.
+theorem Writers::still_within(call: Writers(), among, wider: Nat → Bool, still: Writers::Still(call, wider),
+    within: (f: Nat) → among(f).IsTrue() → wider(f).IsTrue()): Writers::Still(call, among) {
+    λ held f ok words => still(held, f, within(f, ok), words)
+}
 
 theorem StructuredRegion::calls_among_every(self region: StructuredRegion): region.calls_among(every_function).IsTrue() {
     match region {

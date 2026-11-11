@@ -126,14 +126,17 @@ theorem echo_meaning_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(E
 }
 
 // The theorem at this program: the lowered statements' tree, read against
-// any world, is the program's meaning, up to silent steps.
-fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
-    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(no_calls(), perform)(start(buf)),
+// any world, is the program's meaning, up to silent steps. It holds with the
+// program's functions answering anything (`call`), ones that write the file
+// among them: the loop calls none, and nothing is asked of a function it
+// does not call.
+fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(call, perform)(start(buf)),
             λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
         λ io => echo_all_prog().sem(ETm::plain_world(), echo_g(), Pair(buf, trivial), io))
 {
     echo_all_prog().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        no_calls(), λ held f ws => refl, λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(no_calls(), held)), perform, start(buf), Pair(buf, trivial),
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 

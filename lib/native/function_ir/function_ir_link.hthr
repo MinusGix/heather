@@ -27,6 +27,7 @@ import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
 import function_ir_run;
+import function_ir_placeless;
 import bitvec;
 import bool;
 import list;
@@ -173,6 +174,65 @@ fn linked_still(functions: List<Function>, stills: List<Bool>) → Nat → Bool 
             Inl(_) => stills.head_or(False),
             Inr(_) => linked_still(earlier, stills.tail(), f),
         },
+    }
+}
+
+// Whether each function marked still stores nothing and calls only
+// functions marked still: decided once for a program, by evaluation.
+fn program_stills(functions: List<Function>, stills: List<Bool>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (match stills.head_or(False) {
+            False => True,
+            True => last.body.quiet() && last.body.calls_among(linked_still(earlier, stills.tail())),
+        }) && program_stills(earlier, stills.tail()),
+    }
+}
+
+// Then a function marked still leaves every file it is run over, whatever
+// the program's other functions do.
+theorem program_run_still(functions: List<Function>): (stills: List<Bool>) → program_stills(functions, stills).IsTrue() → (buffers: Buffers()) →
+    (f: Nat) → linked_still(functions, stills, f).IsTrue() → (words: List<BitVec(64)>) →
+    program_run(functions, buffers, f, words).buffers = buffers {
+    match functions {
+        Nil => λ stills _ buffers f never words => false_elim(never),
+        Cons(last, earlier) => λ stills ok buffers f => {
+            let among = linked_still(earlier, stills.tail());
+            let parts = Bool::is_true_and(match stills.head_or(False) { False => True, True => last.body.quiet() && last.body.calls_among(among) },
+                program_stills(earlier, stills.tail()), ok);
+            let below = program_run(earlier);
+            let ih = program_run_still(earlier, stills.tail(), parts.right, buffers);
+            let own: stills.head_or(False).IsTrue() → (last.body.quiet() && last.body.calls_among(among)).IsTrue() =
+                (match stills.head_or(False) as λ b => (match b { False => True, True => last.body.quiet() && last.body.calls_among(among) }).IsTrue() →
+                    b.IsTrue() → (last.body.quiet() && last.body.calls_among(among)).IsTrue() {
+                    False => λ _ never => false_elim(never),
+                    True => λ both _ => both,
+                })(parts.left);
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d { Inl(_) => stills.head_or(False), Inr(_) => linked_still(earlier, stills.tail(), f) }).IsTrue() →
+                (words: List<BitVec(64)>) →
+                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }).buffers = buffers {
+                Inl(_) => λ marked words => {
+                    let both = Bool::is_true_and(last.body.quiet(), last.body.calls_among(among), own(marked));
+                    cong_fn<Ending, Buffers()>(λ end => end.buffers,
+                        last.run_still(below, buffers, among, λ g m ws => ih(g, m, ws), both.left, both.right, words))
+                },
+                Inr(_) => λ marked words => ih(f, marked, words),
+            }
+        },
+    }
+}
+
+// So a caller's calls of them leave its file: the functions marked still
+// are among what a region that stores nothing may call
+// (`Writers::Still`), in a program whose other functions write.
+theorem program_writers_stills(functions: List<Function>, stills: List<Bool>, ok: program_stills(functions, stills).IsTrue()):
+    Writers::Still(program_writers(functions), linked_still(functions, stills)) {
+    λ held f marked words => {
+        let k = program_lent(functions, f);
+        trans(cong_fn<Buffers(), Buffers()>(λ file => relent(k, file, held),
+                program_run_still(functions, stills, ok, lent_buffers(k, held), f, marked, stated_homes(0, k, held) ++ words)),
+            relent_same(k, held))
     }
 }
 

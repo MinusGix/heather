@@ -956,6 +956,14 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   such a function imports them, and a module whose `runtime fn`s only
   read does not pay for them.
 
+The layer over Linux lives in such a program without joining it yet.
+What its theorems ask of the program's functions is that the ones a
+pure term can call leave the file (`Writers::Still`), which a linked
+program's marks decide (`program_writers_stills`); a function that
+writes may sit beside them. A computation over `Io` that calls such a
+function is the one thing the two layers cannot say apart, and it is
+said when they are one.
+
 After U5 the two computation layers are one. `ETm` lowers to a
 `Source`'s statements because that is where a call to Linux and a
 program's buffer live today; when a program's statements are functions,
@@ -1312,10 +1320,37 @@ Each is a PR and ends with something that runs.
       of a tool over a generated program is not one kernel evaluation,
       so the build probe states that the function compiler takes the
       program and leaves the whole compile to `write-elf`.
-    - *4c-4:* the layer over Linux drops `Writers::Quiet`, so a tool
-      written as a `runtime fn` over `Io` calls a function that writes.
-  - *Step 4d:* `write-elf`'s own byte nodes move to the shared lowering,
-    here or with U5, whichever the frames make cheaper.
+    - *4c-4 (built 2026-11-11):* the layer over Linux drops
+      `Writers::Quiet`. Its theorems (`ETm::lower_sound`,
+      `ELoop::lower_sound`, the `lower_reads` of each) asked that every
+      function of the program leave the file; they ask it now of the
+      functions a pure term can call (`Writers::Still` among
+      `functions_below(w.sigs.len())`, `function_ir_run.hthr`), which
+      the lowering holds each pure region to by evaluation
+      (`ETm::value_checked`), and the moves of a loop's rebinding ask
+      nothing. So a computation over `Io` is its meaning in a program
+      whose other functions write. Which functions of a linked program
+      leave every file is one check of its marks (`program_stills`,
+      `program_run_still`, `program_writers_stills`,
+      `function_ir_link.hthr`), the marks the generator publishes as
+      `f::stills`. *Runs:* the echo probes hold with the program's
+      functions answering anything; a computation that reads and
+      answers `raise_word` of the count is its surface method with its
+      calls answered by `tr`'s program, where `raise_span` writes
+      (`lib/_tests/native/runtime/rt_io_among_tests.hthr`).
+      *Not here:* a computation over `Io` that itself calls a function
+      that writes. That is a node of the computation language, and U5
+      makes the layer over Linux a layer of the file's (`Invoke` beside
+      `Put` and `Call`), where the call already exists; adding it to
+      `ETm` first would build it twice.
+  - *Step 4d, with U5:* `write-elf`'s own byte nodes move to the shared
+    lowering. A program's own region reaches its buffers by the data
+    region's addresses, as immediates; the shared lowering reads a home
+    from two parameters and stores under the test against the length
+    word. The two meet when a program's statements are a function's body
+    and its static buffers are homes `main` is lent (§2.5), which is
+    U5's frame change. Done before it, the step would re-prove the
+    program compiler's byte nodes over global homes that U5 removes.
 - **U5. Procedures are functions** (§2.4), after its own note. *Runs:* the
   tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the

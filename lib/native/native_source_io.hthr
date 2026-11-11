@@ -35,6 +35,8 @@ import linux_world_co;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
 import native_source;
 import native_source_co;
 import dec_set;
@@ -343,33 +345,39 @@ theorem StructuredRegion::eval_byte_free(self region: StructuredRegion, call: An
     }
 }
 
-theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Writers(), quiet: Writers::Quiet(call)): region.byte_free().IsTrue() →
-    (values: Valuation()) → (buffers: Buffers()) → region.run(call, values, buffers) = State(region.eval(Writers::words(call, buffers), values), buffers) {
+// A byte-free region runs as it evaluates and keeps the buffers, where the
+// functions it calls leave the file. Nothing is asked of a function it does
+// not call, so the program may have functions that write.
+theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Writers(), among: Nat → Bool, still: Writers::Still(call, among)):
+    region.byte_free().IsTrue() → region.calls_among(among).IsTrue() → (values: Valuation()) → (buffers: Buffers()) →
+    region.run(call, values, buffers) = State(region.eval(Writers::words(call, buffers), values), buffers) {
     match region {
-        Dataflow(body) => λ free values buffers => run_nodes_pure(body.nodes, free, values, buffers),
-        Sequence(prefix, continuation) => λ free values buffers => {
+        Dataflow(body) => λ free _ values buffers => run_nodes_pure(body.nodes, free, values, buffers),
+        Sequence(prefix, continuation) => λ free fits values buffers => {
             let parts = Bool::is_true_and(nodes_pure(prefix.nodes), continuation.byte_free(), free);
             j(sym(run_nodes_pure(prefix.nodes, parts.left, values, buffers)),
                 λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(Writers::words(call, buffers), eval_nodes(prefix.nodes, values)), buffers),
-                continuation.run_byte_free(call, quiet, parts.right, eval_nodes(prefix.nodes, values), buffers))
+                continuation.run_byte_free(call, among, still, parts.right, fits, eval_nodes(prefix.nodes, values), buffers))
         },
-        Compose(prefix, continuation) => λ free values buffers => {
+        Compose(prefix, continuation) => λ free fits values buffers => {
             let parts = Bool::is_true_and(prefix.byte_free(), continuation.byte_free(), free);
-            j(sym(prefix.run_byte_free(call, quiet, parts.left, values, buffers)),
+            let fit = Bool::is_true_and(prefix.calls_among(among), continuation.calls_among(among), fits);
+            j(sym(prefix.run_byte_free(call, among, still, parts.left, fit.left, values, buffers)),
                 λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(Writers::words(call, buffers), prefix.eval(Writers::words(call, buffers), values)), buffers),
-                continuation.run_byte_free(call, quiet, parts.right, prefix.eval(Writers::words(call, buffers), values), buffers))
+                continuation.run_byte_free(call, among, still, parts.right, fit.right, prefix.eval(Writers::words(call, buffers), values), buffers))
         },
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ free values buffers => {
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ free fits values buffers => {
             let parts = Bool::is_true_and(when_true.byte_free(), when_false.byte_free(), free);
+            let fit = Bool::is_true_and(when_true.calls_among(among), when_false.calls_among(among), fits);
             let b = values(1, condition).head_bit();
             let same_either: ((match b as λ _ => Buffers() { False => buffers, True => buffers }) = buffers) =
                 match b { False => refl, True => refl };
-            j(sym(when_false.run_byte_free(call, quiet, parts.right, values, buffers)), λ f _ => State(λ w id => match b {
+            j(sym(when_false.run_byte_free(call, among, still, parts.right, fit.right, values, buffers)), λ f _ => State(λ w id => match b {
                         False => f.values(w, id),
                         True => when_true.run(call, values, buffers).values(w, id),
                     }, match b { False => f.buffers, True => when_true.run(call, values, buffers).buffers }) =
                     State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(Writers::words(call, buffers), values), buffers),
-                j(sym(when_true.run_byte_free(call, quiet, parts.left, values, buffers)), λ t _ => State(λ w id => match b {
+                j(sym(when_true.run_byte_free(call, among, still, parts.left, fit.left, values, buffers)), λ t _ => State(λ w id => match b {
                             False => when_false.eval(Writers::words(call, buffers), values)(w, id),
                             True => t.values(w, id),
                         }, match b { False => buffers, True => t.buffers }) =
@@ -377,9 +385,9 @@ theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Wri
                     cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(Writers::words(call, buffers), values), held),
                         same_either)))
         },
-        Call(callee, arguments, result) => λ _ values buffers => cong_fn<Buffers(), State>(
+        Call(callee, arguments, result) => λ _ fits values buffers => cong_fn<Buffers(), State>(
             λ held => State(Valuation::set(values, result, word_value(call(buffers, callee, words_of(values, arguments)).word)), held),
-            quiet(buffers, callee, words_of(values, arguments))),
+            still(buffers, callee, fits, words_of(values, arguments))),
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
     }
 }
@@ -442,13 +450,14 @@ theorem StructuredRegion::written_within(self region: StructuredRegion, call: Wr
     }
 }
 
-// A byte-free region keeps the buffers, its callees leaving the file.
-theorem Env::compute_buffers(self env: Env, call: Writers(), quiet: Writers::Quiet(call), region: StructuredRegion,
-    free: region.byte_free().IsTrue()):
+// A byte-free region keeps the buffers, the functions it calls leaving the
+// file.
+theorem Env::compute_buffers(self env: Env, call: Writers(), among: Nat → Bool, still: Writers::Still(call, among), region: StructuredRegion,
+    free: region.byte_free().IsTrue(), fits: region.calls_among(among).IsTrue()):
     env.compute(call, region).buffers = env.buffers {
     let after = region.run(call, env.valuation(), env.buffers);
     trans(Env::settle_buffers(after.values, region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
-        cong_fn(λ (s: State) => s.buffers, region.run_byte_free(call, quiet, free, env.valuation(), env.buffers)))
+        cong_fn(λ (s: State) => s.buffers, region.run_byte_free(call, among, still, free, fits, env.valuation(), env.buffers)))
 }
 
 // A word the region does not name as written keeps its number.
@@ -461,15 +470,15 @@ theorem Env::compute_other(self env: Env, call: Writers(), region: StructuredReg
 
 // A byte-free region followed by a move to `out`: `out` holds the moved
 // port's value, at the move's width.
-theorem Env::compute_moved(self env: Env, call: Writers(), quiet: Writers::Quiet(call), region: StructuredRegion,
-    free: region.byte_free().IsTrue(), width, out, src: Nat):
+theorem Env::compute_moved(self env: Env, call: Writers(), among: Nat → Bool, still: Writers::Still(call, among), region: StructuredRegion,
+    free: region.byte_free().IsTrue(), fits: region.calls_among(among).IsTrue(), width, out, src: Nat):
     env.compute(call, Compose(region, Dataflow(Region(Ports(Nil), [Move(width, out, src)], Ports(Nil))))).number(out) =
         region.eval(Writers::words(call, env.buffers), env.valuation())(width, src).toNat() {
     let after = region.run(call, env.valuation(), env.buffers);
     let moved = Valuation::set(after.values, out, λ wd => after.values(wd, src));
     trans(Env::settle_last(moved, Port(out, width), region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
         trans(cong_fn(λ (x: BitVec(width)) => x.toNat(), Valuation::set_here(after.values, out, λ wd => after.values(wd, src), width)),
-            cong_fn(λ (s: State) => s.values(width, src).toNat(), region.run_byte_free(call, quiet, free, env.valuation(), env.buffers))))
+            cong_fn(λ (s: State) => s.values(width, src).toNat(), region.run_byte_free(call, among, still, free, fits, env.valuation(), env.buffers))))
 }
 
 // ---------------------------------------------------------------------------
