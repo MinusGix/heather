@@ -1,0 +1,111 @@
+// Galois connections between two orders, the closure one induces, and the
+// soundness of an abstract interpretation
+// (issues/galois-connections-and-checked-fixpoints.md).
+//
+// `Galois(LA, LB, l, u)` is the adjunction `l(a) ≤ b ↔ a ≤ u(b)`. Both maps
+// are then monotone, `u ∘ l` is a closure (above the identity, monotone,
+// idempotent up to `≈`) and `l ∘ u` is below the identity. The analysis
+// theorem is stated twice: with a bare monotone concretisation `γ`, for a
+// domain with no best abstraction (`concretisation_sound`), and with a
+// connection, where local soundness is `l(f(u(b))) ≤ f♯(b)`
+// (`analysis_sound`). Each says a checked abstract pre-fixpoint
+// `f♯(b) ≤ b` covers every iterate of the concrete map from a covered
+// start, by Park induction (`fixpoint.hthr`): the solver that found `b` is
+// not trusted.
+
+import logic;
+import nat;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import lattice;
+import fixpoint;
+
+fn Galois<A, B>(LA: A → A → Type, LB: B → B → Type, l: A → B, u: B → A) → Type {
+    (a: A) → (b: B) → (LB(l(a), b) ↔ LA(a, u(b)))
+}
+
+theorem Galois::unit<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), a: A): LA(a, u(l(a)))
+{
+    g(a, l(a)).mp(B.le_preorder.rel_refl(l(a)))
+}
+
+theorem Galois::counit<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), b: B): LB(l(u(b)), b)
+{
+    g(u(b), b).mpr(A.le_preorder.rel_refl(u(b)))
+}
+
+theorem Galois::lower_mono<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), a, a2: A, h: LA(a, a2)): LB(l(a), l(a2))
+{
+    g(a, l(a2)).mpr(A.le_preorder.rel_trans(a, a2, u(l(a2)), h, Galois::unit(SA, LA, SB, LB, l, u, g, a2)))
+}
+
+theorem Galois::upper_mono<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), b, b2: B, h: LB(b, b2)): LA(u(b), u(b2))
+{
+    g(u(b), b2).mp(B.le_preorder.rel_trans(l(u(b)), b, b2, Galois::counit(SA, LA, SB, LB, l, u, g, b), h))
+}
+
+// `u ∘ l` is a closure: above the identity (`unit`), monotone, idempotent.
+theorem Galois::closure_mono<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), a, a2: A, h: LA(a, a2)): LA(u(l(a)), u(l(a2)))
+{
+    Galois::upper_mono(SA, LA, SB, LB, l, u, g, l(a), l(a2), Galois::lower_mono(SA, LA, SB, LB, l, u, g, a, a2, h))
+}
+
+theorem Galois::closure_idem<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), a: A): SA(u(l(u(l(a)))), u(l(a)))
+{
+    A.le_antisymm(u(l(u(l(a)))), u(l(a)),
+        Galois::upper_mono(SA, LA, SB, LB, l, u, g, l(u(l(a))), l(a), Galois::counit(SA, LA, SB, LB, l, u, g, l(a))),
+        Galois::unit(SA, LA, SB, LB, l, u, g, u(l(a))))
+}
+
+// `l ∘ u ∘ l` is `l`, and `u ∘ l ∘ u` is `u`.
+theorem Galois::lower_upper_lower<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), a: A): SB(l(u(l(a))), l(a))
+{
+    B.le_antisymm(l(u(l(a))), l(a), Galois::counit(SA, LA, SB, LB, l, u, g, l(a)),
+        Galois::lower_mono(SA, LA, SB, LB, l, u, g, a, u(l(a)), Galois::unit(SA, LA, SB, LB, l, u, g, a)))
+}
+
+theorem Galois::upper_lower_upper<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), b: B): SA(u(l(u(b))), u(b))
+{
+    A.le_antisymm(u(l(u(b))), u(b),
+        Galois::upper_mono(SA, LA, SB, LB, l, u, g, l(u(b)), b, Galois::counit(SA, LA, SB, LB, l, u, g, b)),
+        Galois::unit(SA, LA, SB, LB, l, u, g, u(b)))
+}
+
+// ---------------------------------------------------------------------------
+// A sound analysis. `f` is the concrete step and `fs` the abstract one.
+
+// With a bare concretisation: `fs` over-approximates `f` at each abstract
+// point, `b` is a checked abstract pre-fixpoint, and the start is covered;
+// then every iterate is covered.
+theorem Galois::concretisation_sound<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    gamma: B → A, gamma_mono: (b, b2: B) → LB(b, b2) → LA(gamma(b), gamma(b2)),
+    f: A → A, mono: (x, y: A) → LA(x, y) → LA(f(x), f(y)), fs: B → B,
+    local: (b: B) → LA(f(gamma(b)), gamma(fs(b))),
+    b: B, pre: LB(fs(b), b), x: A, above: LA(x, gamma(b)), n: Nat): LA(n.iterate(f, x), gamma(b))
+{
+    PartialOrderRel::iterate_le_prefix(SA, LA, f, mono, x, gamma(b), above,
+        A.le_preorder.rel_trans(f(gamma(b)), gamma(fs(b)), gamma(b), local(b), gamma_mono(fs(b), b, pre)), n)
+}
+
+// With a connection: local soundness is `l(f(u(b))) ≤ fs(b)`, and the
+// conclusion is on the abstract side.
+theorem Galois::analysis_sound<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u),
+    f: A → A, mono: (x, y: A) → LA(x, y) → LA(f(x), f(y)), fs: B → B,
+    local: (b: B) → LB(l(f(u(b))), fs(b)),
+    b: B, pre: LB(fs(b), b), x: A, above: LB(l(x), b), n: Nat): LB(l(n.iterate(f, x)), b)
+{
+    g(n.iterate(f, x), b).mpr(Galois::concretisation_sound(SA, LA, SB, LB, u,
+        λ b1 b2 h => Galois::upper_mono(SA, LA, SB, LB, l, u, g, b1, b2, h), f, mono, fs,
+        λ b1 => g(f(u(b1)), fs(b1)).mp(local(b1)), b, pre, x, g(x, b).mp(above), n))
+}

@@ -1,0 +1,84 @@
+// Probes of `lib/std/algebra/fixpoint.hthr` and `galois.hthr`
+// (issues/galois-connections-and-checked-fixpoints.md): iteration and
+// Kleene's run at `Nat` by evaluation, Park induction and the least fixed
+// point at an open order, totality at an open finite carrier, and a Galois
+// connection on `Nat` with what it induces. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import relation; import relation_props; import order;
+import algebra_rel; import lattice; import perm; import sorting; import fintype; import fintype_card; import fixpoint; import galois;
+import omega;
+
+// Iteration and its orbit compute.
+theorem iterate_three(): Nat::iterate(3, λ (n: Nat) => n + 2, 1) = 7 { refl }
+theorem orbit_three(): Nat::orbit(3, λ (n: Nat) => n + 2, 1) = [1, 3, 5] { refl }
+
+// A capped successor: Kleene's run from 0 stops at the cap, and not before.
+fn capped(n: Nat) → Nat { Nat::min(Succ(n), 5) }
+theorem capped_run(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 10, 0) = Some(5) { refl }
+theorem capped_out_of_fuel(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 3, 0) = None { refl }
+theorem capped_from_above(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 1, 9) = Some(9) { refl }
+
+// expect-error(kernel)
+theorem capped_run_wrong(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 10, 0) = Some(4) { refl }
+
+// The run's answer is a pre-fixpoint, by the soundness theorem at the run.
+theorem capped_stops(): capped(5) <= 5 {
+    PartialOrderRel::kleene_sound(RelId<Nat>, Nat::Le, capped, 10, 0, 5, refl).left
+}
+
+// Park induction at an open order: a checked pre-fixpoint bounds every iterate.
+theorem park<A: PartialOrderRel(same, le)>(same as ≈: A → A → Type, le as <=: A → A → Type, f: A → A,
+    mono: (x, y: A) → x <= y → f(x) <= f(y), x, p: A, above: x <= p, pre: f(p) <= p): f(f(f(x))) <= p
+{
+    PartialOrderRel::iterate_le_prefix(same, le, f, mono, x, p, above, pre, 3)
+}
+
+// Without the pre-fixpoint the bound is not available.
+// expect-error: too few arguments
+theorem park_unchecked<A: PartialOrderRel(same, le)>(same as ≈: A → A → Type, le as <=: A → A → Type, f: A → A,
+    mono: (x, y: A) → x <= y → f(x) <= f(y), x, p: A, above: x <= p): f(f(f(x))) <= p
+{
+    PartialOrderRel::iterate_le_prefix(same, le, f, mono, x, p, above, 3)
+}
+
+// On an open finite carrier with a decidable order the run answers, and its
+// answer is a fixed point below every pre-fixpoint above the start.
+theorem least_fixed_point<A: Fintype + PartialOrderRel(same, le) + DecidableRel(le)>(same as ≈: A → A → Type, le as <=: A → A → Type,
+    f: A → A, mono: (x, y: A) → x <= y → f(x) <= f(y), x: A, rise: x <= f(x)):
+    Exists(λ (y: A) => f(y) ≈ y ∧ ((p: A) → x <= p → f(p) <= p → y <= p))
+{
+    match Fintype::kleene_total(same, le, f, mono, x, rise) {
+        Exists(y, h) => Exists(y, And(
+            PartialOrderRel::kleene_fixed(same, le, f, mono, Succ(Fintype::card<A>()), x, y, rise, h),
+            λ p above pre => PartialOrderRel::kleene_least(same, le, f, mono, Succ(Fintype::card<A>()), x, y, h, p, above, pre))),
+    }
+}
+
+// A Galois connection on `Nat`: truncated subtraction of three is left
+// adjoint to adding three.
+theorem sub_add_mp(a, b: Nat, h: a - 3 <= b): a <= b + 3 { omega(h) }
+theorem sub_add_mpr(a, b: Nat, h: a <= b + 3): a - 3 <= b { omega(h) }
+theorem sub_add(): Galois(Nat::Le, Nat::Le, λ (a: Nat) => a - 3, λ (b: Nat) => b + 3) {
+    λ a b => Iff(mp := λ h => sub_add_mp(a, b, h), mpr := λ h => sub_add_mpr(a, b, h))
+}
+
+// Its closure rounds up to at least three, and rounding twice is rounding once.
+theorem sub_add_unit(a: Nat): a <= (a - 3) + 3 {
+    Galois::unit(RelId<Nat>, Nat::Le, RelId<Nat>, Nat::Le, λ (a: Nat) => a - 3, λ (b: Nat) => b + 3, sub_add(), a)
+}
+theorem sub_add_closure_idem(a: Nat): ((((a - 3) + 3) - 3) + 3) = ((a - 3) + 3) {
+    Galois::closure_idem(RelId<Nat>, Nat::Le, RelId<Nat>, Nat::Le, λ (a: Nat) => a - 3, λ (b: Nat) => b + 3, sub_add(), a)
+}
+
+// The other pairing is no connection: at 0 and 1 it would give 3 ≤ 1.
+theorem add_sub_not(): ¬Galois(Nat::Le, Nat::Le, λ (a: Nat) => a + 3, λ (b: Nat) => b - 3) {
+    λ g => g(0, 1).mpr(trivial)
+}
+
+// An analysis is sound at open orders once its abstract pre-fixpoint is checked.
+theorem analysis<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(SA, LA: A → A → Type, SB, LB: B → B → Type,
+    l: A → B, u: B → A, g: Galois(LA, LB, l, u), f: A → A, mono: (x, y: A) → LA(x, y) → LA(f(x), f(y)), fs: B → B,
+    local: (b: B) → LB(l(f(u(b))), fs(b)), b: B, pre: LB(fs(b), b), x: A, above: LB(l(x), b)): LB(l(f(f(x))), b)
+{
+    Galois::analysis_sound(SA, LA, SB, LB, l, u, g, f, mono, fs, local, b, pre, x, above, 2)
+}
