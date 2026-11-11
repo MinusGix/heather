@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 /// The hash the index files a key under, computed once per lookup.
 ///

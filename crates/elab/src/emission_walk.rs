@@ -152,8 +152,8 @@ impl Walk<'_> {
         &mut self,
         name: &'static str,
         level: &heather_kernel::level::Level,
-        shape: &std::sync::Arc<Type>,
-        arity: &std::sync::Arc<Term>,
+        shape: &heather_kernel::rc::Rc<Type>,
+        arity: &heather_kernel::rc::Rc<Term>,
         d: u32,
     ) {
         // The question a slot asks is the *component* respell
@@ -179,7 +179,7 @@ impl Walk<'_> {
         }
     }
 
-    fn terms(&mut self, ts: &[std::sync::Arc<Term>], d: u32) {
+    fn terms(&mut self, ts: &[heather_kernel::rc::Rc<Term>], d: u32) {
         for t in ts {
             self.term(t, d);
         }

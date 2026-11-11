@@ -69,7 +69,7 @@
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::layer::Layer;
 use crate::premises::{PremiseQueue, VerdictMemo};
@@ -294,7 +294,7 @@ impl<'a> Spelled<'a> {
     /// base? Then it means one thing under every Γ of its Ψ. A decoded
     /// code's `El` node is allocated afresh at every decode
     /// (`Eval::decode`), so the footprint is asked of the code under it,
-    /// which the bounds table has met.
+    /// whose node has the answer.
     pub(crate) fn closed(self) -> bool {
         let u = match self {
             Spelled::Ty(t) => crate::bounds::type_local_use(t),
@@ -2246,7 +2246,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         if known && crate::checks::verify_this_skip() {
             // Judge the pair again without the table. Exhaustion is not a
             // verdict: the first judgment had the table's help below it.
-            let again = crate::stats::unobserved(|| {
+            let again = crate::checks::rederive(crate::checks::Claim::Kept, || {
                 let mut cv = Conv::<D>::new(crate::typing::DEFAULT_FUEL, &env.psi);
                 cv.rejudging = true;
                 cv.depth = self.depth;

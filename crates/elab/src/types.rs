@@ -6,7 +6,7 @@
 //! here rather than as parallel fields on `Elaborator`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use crate::gendefs::GenDefs;
 use crate::inductive::Inductive;

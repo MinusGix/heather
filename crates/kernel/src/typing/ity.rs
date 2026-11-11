@@ -37,7 +37,7 @@
 //! declaration with no `@` form the checker's behaviour is byte-identical to
 //! the one before this module existed, which is the stage-1b gate.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::{LocalCtx, LocalSubst, Term, Type};

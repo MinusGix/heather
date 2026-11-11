@@ -59,7 +59,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
+use std::sync::Arc;
 
 use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
@@ -1867,7 +1868,7 @@ impl Elaborator {
     /// neither audits the oracle nor knows what it is —
     /// `docs/cache-v1-design.md` §6 is where the argument for the one shipped
     /// implementation lives.
-    pub fn set_gate(&mut self, gate: Rc<dyn gate::KernelGate>) {
+    pub fn set_gate(&mut self, gate: Arc<dyn gate::KernelGate>) {
         self.policy.gate = Some(gate);
     }
 
@@ -2504,7 +2505,7 @@ impl Elaborator {
             // charged to this declaration. A no-op without `value-metrics`.
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Rc::from(name.as_str())));
+                metrics.set_current_item(Some(Arc::from(name.as_str())));
             }
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
@@ -3320,7 +3321,7 @@ impl Elaborator {
             let item_scope = stats::scope(stats::ScopeKind::Item, module, &name);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Rc::from(name.as_str())));
+                metrics.set_current_item(Some(Arc::from(name.as_str())));
             }
             // A slice of the previous delta stands in for the item when its
             // text and the prefix so far match

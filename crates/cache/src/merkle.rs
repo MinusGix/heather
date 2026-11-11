@@ -427,7 +427,7 @@ impl<'a> Walk<'a> {
     #[inline]
     /// An optional type annotation: one byte for the presence, then the
     /// type when there is one.
-    fn opt_ty(&mut self, t: &Option<std::sync::Arc<Type>>) {
+    fn opt_ty(&mut self, t: &Option<heather_kernel::rc::Rc<Type>>) {
         match t {
             Some(t) => {
                 self.tag(1);

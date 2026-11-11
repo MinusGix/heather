@@ -22,7 +22,7 @@
 //! - **The kernel is the judge.** Nothing here is trusted: the recursor is
 //!   checked like any other term.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};

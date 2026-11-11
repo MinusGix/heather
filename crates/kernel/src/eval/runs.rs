@@ -26,7 +26,7 @@
 //! `docs/kernel-model-design.md` §7). Programs and binary powering against
 //! that iteration rest on `value/algebra.rs`'s reference test.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::value::algebra::{AffineTree, FoldClass, Increment, Proj};
 use crate::value::program::ContextProgram;

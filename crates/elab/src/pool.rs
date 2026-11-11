@@ -38,7 +38,7 @@ use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
 use heather_kernel::typing::{self, TypeError};
 use heather_syntax::Span;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 /// The `Arc`-by-alias premise, as a compile error rather than a mystery: a
 /// kernel type that grows a non-`Send` field breaks the build here and not in

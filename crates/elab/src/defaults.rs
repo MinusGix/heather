@@ -14,7 +14,7 @@
 //! A default is also checked once where it is written, as far as the
 //! declaration decides it (§9.7): [`Elaborator::check_default_at_declaration`].
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

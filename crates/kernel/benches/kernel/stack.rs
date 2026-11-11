@@ -28,7 +28,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::eval::Eval;
 use heather_kernel::layer::Layer;

@@ -54,7 +54,7 @@
 //! between steps. The one exception is [`Interpreted::pin`], which looks at
 //! a resumed tree's outer pair to keep its proof from chaining.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};

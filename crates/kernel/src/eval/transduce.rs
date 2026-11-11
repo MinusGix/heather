@@ -41,7 +41,7 @@
 //! bit's payload, and for the same reason (it is proof-irrelevant, so
 //! rebuilding it reproduces the value rather than a merely convertible one).
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::Type;

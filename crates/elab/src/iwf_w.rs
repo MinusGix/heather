@@ -21,7 +21,7 @@
 //! helper taking `by` builds its result `by` binders past `B`, with every term
 //! argument already scoped there.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};

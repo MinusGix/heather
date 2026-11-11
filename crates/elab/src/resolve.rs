@@ -17,7 +17,7 @@
 //! guess, and what keeps a wrong candidate from surfacing pages later as a
 //! declaration-gate rejection.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -1397,7 +1397,7 @@ impl Elaborator {
             aliases: cx.aliases.clone(),
             dicts: cx.dicts.clone(),
             carrier: carrier.clone(),
-            value: Rc::new(value.clone()),
+            value: std::sync::Arc::new(value.clone()),
         });
         Some(value)
     }

@@ -7,6 +7,7 @@
 //! code-analysis functions produce terms/proofs that this crate re-checks.
 
 mod bounds;
+pub mod rc;
 pub mod checks;
 pub mod conv;
 pub mod eval;

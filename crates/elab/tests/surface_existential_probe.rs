@@ -29,7 +29,7 @@
 //! (§1, §4, §5, §7), the eliminated family `Q` is an open type family (§4),
 //! §4 is a checking position, and §6/§8 are negative controls.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

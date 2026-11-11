@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, LocalVar, SealedProof, Term, Type};
 

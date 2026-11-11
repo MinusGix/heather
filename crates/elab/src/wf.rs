@@ -22,7 +22,7 @@
 mod types;
 use types::{EmittedType, StructuralWf};
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalVar, Term, Type, nth, wf_step_telescope};

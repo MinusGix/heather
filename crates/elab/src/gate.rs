@@ -22,7 +22,8 @@
 //! not run on that declaration and it is pushed to Ψ regardless. Whoever
 //! installs one owns the trust argument (`docs/cache-v1-design.md` §6).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
+use std::sync::Arc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -169,12 +170,12 @@ impl KernelGate for NoGate {
 /// bare — the gate sees `GateItem::name`, not the module — which is the
 /// probe's own granularity.
 pub struct Except {
-    inner: Rc<dyn KernelGate>,
+    inner: Arc<dyn KernelGate>,
     names: std::collections::BTreeSet<String>,
 }
 
 impl Except {
-    pub fn new(inner: Rc<dyn KernelGate>, names: std::collections::BTreeSet<String>) -> Except {
+    pub fn new(inner: Arc<dyn KernelGate>, names: std::collections::BTreeSet<String>) -> Except {
         Except { inner, names }
     }
 }

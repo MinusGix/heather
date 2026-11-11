@@ -34,7 +34,7 @@
 //! connective or a helper (`decided`) by case analysis on its comparisons
 //! (`split_all`).
 use super::*;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 /// A structured region of the verified lowering's FunctionIR, with calls.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -673,7 +673,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         let var = self.psi.reference(abs).ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not in the world read")))?;
         let head = Term::GlobalTm { var,
             subst: heather_kernel::term::LocalSubst::id(&heather_kernel::term::LocalCtx::nil()) };
-        Ok(self.arena.tm(TmClo::syn(Env::empty(), std::sync::Arc::new(head))))
+        Ok(self.arena.tm(TmClo::syn(Env::empty(), heather_kernel::rc::Rc::new(head))))
     }
 
     fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, SourceError> {

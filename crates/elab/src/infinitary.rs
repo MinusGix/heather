@@ -18,7 +18,7 @@
 //! binders pushed since the context `⟦D⟧` was read back in (`g`), and every
 //! term argument is already scoped at that depth.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, LocalSubst, LocalVar, Term, Type};

@@ -51,7 +51,7 @@
 
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, LamBinder, Param, ParamOrigin, Span, Stmt, Ty, TyKind};
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::Type;
 

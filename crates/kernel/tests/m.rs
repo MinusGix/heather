@@ -22,7 +22,7 @@
 //! at a convertibly spelled index), and negative controls: two `corec`s of
 //! one tree, a `corec` against a neutral, `t` against `in(out t)`.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, conv_type, oracle};
 use heather_kernel::layer::Layer;

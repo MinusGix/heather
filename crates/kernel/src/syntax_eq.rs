@@ -40,7 +40,7 @@
 //! destructured whole, so a new variant or field does not compile until it
 //! is compared.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::*;
@@ -90,8 +90,13 @@ impl<T: SharedEq> SharedEq for Rc<T> {
             m.hits += 1;
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
+                // Compared again with no pair under it compared again in
+                // turn, and with the walk's own counts put back.
+                let counted = (m.nodes, m.hits);
+                let again = crate::checks::rederive(crate::checks::Claim::Kept, || (**self).shared_eq(other, m));
+                (m.nodes, m.hits) = counted;
                 assert!(
-                    (**self).shared_eq(other, m),
+                    again,
                     "syntax equality memoized a pair that comparing it again finds unequal \
                      (term output suppressed: see CLAUDE.md)"
                 );

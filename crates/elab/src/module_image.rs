@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};

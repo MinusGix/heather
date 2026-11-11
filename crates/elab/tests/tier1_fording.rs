@@ -13,7 +13,7 @@
 //! elided — the prototype is about the height recursion, and the tag rides
 //! along unchanged as field 0 of each constructor.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

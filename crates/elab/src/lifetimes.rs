@@ -508,7 +508,7 @@ pub(crate) struct Policy {
     /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
-    pub(crate) gate: Option<Rc<dyn gate::KernelGate>>,
+    pub(crate) gate: Option<Arc<dyn gate::KernelGate>>,
     pub(crate) fuel: u64,
     /// Project-local style policy for written-source lints. General lints run
     /// under every profile; the CLI selects `Stdlib` only for `lib/std`.
@@ -616,7 +616,7 @@ pub(crate) struct ScopeMemo {
     pub(crate) aliases: crate::spine::Spine<Rc<Alias>>,
     pub(crate) dicts: crate::spine::Spine<Rc<crate::context::DictBinder>>,
     pub(crate) carrier: Type,
-    pub(crate) value: Rc<dyn std::any::Any + Send + Sync>,
+    pub(crate) value: Arc<dyn std::any::Any + Send + Sync>,
 }
 
 impl Memos {

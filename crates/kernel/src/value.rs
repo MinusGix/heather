@@ -46,7 +46,8 @@ use std::collections::HashMap;
 #[cfg(feature = "value-metrics")]
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
+use std::sync::Arc;
 use typed_arena::Arena;
 
 use crate::few_map::FewMap;
@@ -477,7 +478,7 @@ struct ValueMetricCells {
     /// (issues/conv-miss-sampler-item-attribution.md). `None` outside any
     /// item, and always `None` without the feature.
     #[cfg(feature = "value-metrics")]
-    current_item: RefCell<Option<Rc<str>>>,
+    current_item: RefCell<Option<Arc<str>>>,
     arenas: Cell<u64>,
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
@@ -507,7 +508,7 @@ struct ConvMissBucket {
     /// name current when the miss was recorded. Misses outside any item
     /// (imports, replay, generated definitions minted between items) are
     /// keyed by the empty name.
-    items: BTreeMap<Rc<str>, (u64, u64)>,
+    items: BTreeMap<Arc<str>, (u64, u64)>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -587,7 +588,7 @@ impl ValueMetrics {
             .current_item
             .borrow()
             .clone()
-            .unwrap_or_else(|| Rc::from(""));
+            .unwrap_or_else(|| Arc::from(""));
         let share = bucket.items.entry(item).or_default();
         share.0 += 1;
         share.1 = share.1.saturating_add(ns);
@@ -599,11 +600,11 @@ impl ValueMetrics {
     /// collector is enabled.
     /// The item named by [`ValueMetrics::set_current_item`], if any.
     #[cfg(feature = "value-metrics")]
-    pub fn current_item(&self) -> Option<Rc<str>> {
+    pub fn current_item(&self) -> Option<Arc<str>> {
         self.inner.current_item.borrow().clone()
     }
 
-    pub fn set_current_item(&self, item: Option<Rc<str>>) {
+    pub fn set_current_item(&self, item: Option<Arc<str>>) {
         #[cfg(feature = "value-metrics")]
         {
             *self.inner.current_item.borrow_mut() = item;
@@ -627,7 +628,7 @@ impl ValueMetrics {
             // Per item: its heaviest bucket, gathered while walking the
             // buckets below. Keyed by name; the value is (ns in that bucket,
             // its heads, count) so the print is one line per item.
-            let mut per_item: BTreeMap<Rc<str>, (u64, (&str, &str), u64, u64)> = BTreeMap::new();
+            let mut per_item: BTreeMap<Arc<str>, (u64, (&str, &str), u64, u64)> = BTreeMap::new();
             for ((expected, inferred), bucket) in rows {
                 let _ = writeln!(
                     out,
@@ -2712,7 +2713,7 @@ impl fmt::Debug for Val<'_> {
 #[cfg(test)]
 mod tests {
     use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, VTy, Val, ValueArena, ValueMetrics};
-    use std::sync::Arc as Rc;
+    use crate::rc::Rc;
 
     #[test]
     #[cfg(target_pointer_width = "64")]

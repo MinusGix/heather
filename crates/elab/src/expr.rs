@@ -5,7 +5,7 @@
 //! an `&Elaborator`, registry commit access, or a cloned session.
 
 use std::cell::Cell;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::reduce::OutOfFuel;

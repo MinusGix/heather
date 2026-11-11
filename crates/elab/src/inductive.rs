@@ -25,7 +25,7 @@
 //! not mis-lowered.
 
 use std::borrow::{Borrow, Cow};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

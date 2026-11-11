@@ -152,7 +152,7 @@
 //! variable), [`RootTerms`] and [`RebuildChecked`] (state per visit). Debug
 //! builds re-run the real traversal behind a sample of hits, as for skips.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::bounds;
 use crate::few_map::FewMap;
@@ -383,15 +383,16 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if let Some(count) = M::COUNT_NODES {
         count(1);
     }
-    if m.skip_ty(t, at) {
+    if !(M::VERIFY_SKIPS && crate::checks::unskipped()) && m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
         // claim in debug builds, exactly as shared_ty verifies the change
         // counter — at the level `checks` sets, because the whole cost of
-        // the walk being skipped is paid again.
+        // the walk being skipped is paid again: the subtree is walked with
+        // no skip taken inside it (`checks::rederive`).
         #[cfg(debug_assertions)]
         if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
-            let mapped = map_type(t, m, at);
+            let mapped = crate::checks::rederive(crate::checks::Claim::Skip, || map_type(t, m, at));
             assert!(
                 *m.changes() == before && mapped == **t,
                 "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
@@ -412,7 +413,7 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 let before = *m.changes();
-                let again = map_type(t, m, at);
+                let again = crate::checks::rederive(crate::checks::Claim::Kept, || map_type(t, m, at));
                 assert!(
                     (*m.changes() != before) == changed && again == *out,
                     "{} memoized a shared node's result that walking it again does not build \
@@ -517,11 +518,11 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
         m.note();
         return Some(r.into_rc());
     }
-    if m.skip_tm(t, at) {
+    if !(M::VERIFY_SKIPS && crate::checks::unskipped()) && m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
         if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
-            let mapped = map_term(t, m, at);
+            let mapped = crate::checks::rederive(crate::checks::Claim::Skip, || map_term(t, m, at));
             assert!(
                 *m.changes() == before && mapped == **t,
                 "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
@@ -568,7 +569,7 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
             #[cfg(debug_assertions)]
             if crate::checks::verify_this_skip() {
                 let before = *m.changes();
-                let again = map_term(t, m, at);
+                let again = crate::checks::rederive(crate::checks::Claim::Kept, || map_term(t, m, at));
                 assert!(
                     (*m.changes() != before) == changed && again == *out,
                     "{} memoized a shared node's result that walking it again does not build \
@@ -1054,7 +1055,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             Term::VecItems {
                 level: m.level(level, at),
                 elem: sub_ty(elem, m, at),
-                items: if same { Rc::clone(items) } else { mapped.into() },
+                items: if same { std::sync::Arc::clone(items) } else { mapped.into() },
                 from: if same { *from } else { 0 },
             }
         }
@@ -3080,7 +3081,7 @@ pub fn holds_checked_spelling_ty(t: &Rc<Type>) -> bool {
 }
 
 /// 1 + the largest free local de Bruijn index of `t` (0 when it is locally
-/// closed), from the bounds memo the local traversals already keep
+/// closed), from the bounds the node keeps for the local traversals
 /// (`bounds.rs`). For a reader outside the kernel that pairs syntax with
 /// captured entries — the elaborator's readback of a closure — and must not
 /// pay for the entries the syntax cannot reach.

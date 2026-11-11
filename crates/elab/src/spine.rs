@@ -17,7 +17,8 @@
 //!
 //! [`Cx`]: crate::context::Cx
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
+use std::sync::Arc;
 
 pub(crate) struct Spine<T>(Option<Rc<Node<T>>>);
 
@@ -229,13 +230,13 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Spine<T> {
 /// name it was written under and the implicitness skeleton of its written
 /// type, where it had one (docs/implicit-binders-design.md §3.1).
 pub(crate) struct Binder {
-    pub(crate) name: Rc<str>,
+    pub(crate) name: Arc<str>,
     pub(crate) skel: Option<Rc<crate::Skel>>,
 }
 
 impl Clone for Binder {
     fn clone(&self) -> Self {
-        Binder { name: Rc::clone(&self.name), skel: self.skel.clone() }
+        Binder { name: Arc::clone(&self.name), skel: self.skel.clone() }
     }
 }
 
@@ -252,7 +253,7 @@ impl Binders {
         self.0.len()
     }
 
-    pub(crate) fn push(&mut self, name: impl Into<Rc<str>>, skel: Option<Rc<crate::Skel>>) {
+    pub(crate) fn push(&mut self, name: impl Into<Arc<str>>, skel: Option<Rc<crate::Skel>>) {
         self.0.push(Binder { name: name.into(), skel });
     }
 

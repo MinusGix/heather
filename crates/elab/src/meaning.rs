@@ -203,7 +203,7 @@ impl Elaborator {
         };
         let ind = match self.lookup_inductive(name) {
             Some(ind) if ind.ctors.iter().all(|c| c.res.is_none()) && !ind.codata && (depth == 1 || linear(ind)) => {
-                std::sync::Arc::clone(ind)
+                heather_kernel::rc::Rc::clone(ind)
             }
             _ if depth == 1 => {
                 return split_on(scrut, vec![Arm { ctor: "_".into(), default: true, binders: Vec::new(), body: refl, span }], span);

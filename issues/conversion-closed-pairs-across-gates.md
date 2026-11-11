@@ -36,3 +36,12 @@ type (numbers in that issue's log).
   a pair an earlier gate of the module judged.
 - If built: the counters stay reproducible at width one, and the design
   note says what they mean at other widths.
+
+## Log
+
+- 2026-11-10: The first obstacle has a place to stand now. Since
+  [[free-variable-bounds-in-the-node]] a syntax node carries a head the kernel
+  fills on demand, with room for a word more. A memoized structural hash kept
+  there (with `==` behind it, as this issue says a hash must have) is the key
+  that is not an address. Not started; the measurement in Acceptance still
+  comes first.

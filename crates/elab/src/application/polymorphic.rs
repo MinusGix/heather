@@ -1,6 +1,6 @@
 //! Instantiate a deferred bare polymorphic argument from a partial domain.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};

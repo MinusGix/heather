@@ -2,7 +2,7 @@
 //! size* — the difference between these and the hand-built terms in
 //! `tests/` is that a benchmark needs a family, not a case.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, CtxEntry, LocalCtx, LocalVar, Term, Type};

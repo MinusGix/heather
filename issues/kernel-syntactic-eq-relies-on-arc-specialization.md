@@ -1,10 +1,10 @@
 ---
 title: The conversion shortcut's speed is a std Arc specialization the kernel never wrote down
-status: open
+status: closed
 labels: [kernel,conversion,performance,representation,docs]
 area: kernel
 created: 2026-09-13
-updated: 2026-09-13
+updated: 2026-11-10
 ---
 
 The kernel's syntactic reflexivity shortcut — `typing.rs:678`'s
@@ -46,3 +46,7 @@ Any round that touches the term representation, the `Eq`/`PartialEq` derives,
 or the conversion shortcut — and `kernel-arena-terms-frozen-prefix` first of
 all, whose adequacy draft explicitly notes that index equality is sound but
 not complete for structural equality.
+
+## Log
+
+- 2026-11-10: Written down by [[free-variable-bounds-in-the-node]]: syntax is shared through the kernel's own `Rc` (`crates/kernel/src/rc.rs`), whose `PartialEq` is `Rc::ptr_eq(a, b) || **a == **b` under `T: Eq`, with the reason beside it, so the pointer test at the root and at every child is the kernel's code and not a specialization of `Arc`'s. The children of `Term` and `Type` are this `Rc`, so another handle in their place is a type error and not a slope. The two hooks the third point compared are `ty_eq_fast` and `tm_identity_fast` now, each with its contract in `conv/dom.rs`.

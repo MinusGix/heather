@@ -29,7 +29,7 @@
 //! elaborator's, and what it produces is the reducer's spelling.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 #[cfg(debug_assertions)]

@@ -11,7 +11,7 @@
 //! fact is refused by the checker, never trusted.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{Term, Type};
 

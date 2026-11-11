@@ -371,7 +371,7 @@ fn a_forged_slice_is_refused_and_the_item_elaborated() {
     let (_, mut previous) = fresh(1, &base());
     let at = previous.items()[0].psi.start;
     let GlobalBinding::Tm { body, .. } = &mut previous.extension_mut()[at] else { unreachable!() };
-    *body = Some(std::sync::Arc::new(Term::TmNat));
+    *body = Some(heather_kernel::rc::Rc::new(Term::TmNat));
     for workers in [1usize, 4] {
         let (_, fresh_delta) = fresh(workers, &base());
         let (_, sliced_delta, report) = sliced(workers, &previous, &base());

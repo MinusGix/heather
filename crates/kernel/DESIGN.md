@@ -612,7 +612,7 @@ deep (docs/deep-term-walks-design.md), in time still quadratic in the length
 **A deep data value is walked by a loop, not a frame per level.** Data is
 deep along one child (a list's tail, a vector chain's rest, a successor's
 predecessor), and `term::spine_child` names it. Past `SPINE_ITERATE_AT`
-frames, the bounds cache warms the spine bottom-up and substitution
+frames, the bounds walk answers the spine bottom-up and substitution
 rebuilds it in a loop over a heap path; the checker and conversion queue
 the premise they meet that deep instead of descending (premises of a yes/no
 judgment are a conjunction), with every later premise of the same context
@@ -917,7 +917,7 @@ paper too).
   re-evaluated and re-probed once per call — on a native certificate piece
   that was over a third of the evaluator's steps
   (`issues/native-certificate-pieces-remaining-cost.md`). The test is the
-  bounds memo's footprint, the same reading conversion's closure identity
+  node's bounds (`bounds.rs`), the same reading conversion's closure identity
   makes.
   Hot handles are kept compact: an environment closure captures only its
   persistent head and length, while whichever machine extends it supplies the
@@ -1064,8 +1064,7 @@ paper too).
   both tokens. A hit skips whole judgments, conversion queries and their
   fuel included, so which lookups hit must be a function of the input, and
   is by construction: entries are chosen
-  by node kind, never by reference count (the bounds memo's keep-alives
-  perturb counts), nothing is evicted, and failures are not cached. A
+  by node kind, never by reference count, nothing is evicted, and failures are not cached. A
   node with no weakening tail that reads only Γ's innermost few entries, whose types stay
   among them, is keyed by those entries instead of by Γ (a *strengthened*
   scope): its judgment is the same under any Γ ending in them, which is what
@@ -1082,27 +1081,52 @@ paper too).
 - **Separate `Type` and `Term` enums**, mutually recursive, mirroring the
   Tarski split. Judgment functions will be similarly mutual.
 - `Rc` for sub-terms (substitution clones aggressively; sharing keeps that
-  cheap; no interior mutability anywhere *in the terms* — which is exactly
-  what makes the bounds memo below sound). **`Rc` is `std::sync::Arc` under
-  an alias** since 2026-09-11: every workspace file spells
-  `use std::sync::Arc as Rc;`. The serial tax was measured first, as the
-  control the decision turned on (1.04× bench median, +2% at module scale,
-  1.20–1.28× on the refcount-dense nat micro-steps;
-  `issues/kernel-arena-terms-frozen-prefix.md`). A mechanical rename to
-  `Arc` is a later diff-hygiene follow-up, not a design question.
+  cheap; no interior mutability anywhere *in the terms*, which is exactly
+  what makes the bounds below sound). **`Rc` is the kernel's own pointer**
+  (`rc.rs`, 2026-11-10): `std::sync::Arc` around the value and a head, three
+  words in which the kernel keeps what it has computed about the node. Every
+  workspace file that holds syntax spells `use heather_kernel::rc::Rc;`
+  (`crate::rc::Rc` here), and the API is `Arc`'s. An unsized payload (a
+  slice, a `str`, a trait object) is a plain `Arc`, since nothing is asked
+  of one. It was `Arc` under the alias `Rc` from 2026-09-11, when the gate
+  went parallel; the serial tax of atomic counts was measured then, as the
+  control the decision turned on (`issues/kernel-arena-terms-frozen-prefix.md`).
+
+  What the pointer owes: the value is reached mutably only through
+  `Rc::make_mut` and `Rc::get_mut`, and both empty the head before they
+  hand it out, so a head describes the value beside it. The kernel has no
+  `unsafe`; the head is atomics, written last-flag-first-read so a reader
+  on another thread sees a whole answer or none.
 - **Per-node free-local-variable bounds** (2026-07-31,
   issues/subst-visits-closed-subtrees.md route B): the local-namespace
   traversals skip subtrees that provably cannot change (loose de Bruijn
   bound ≤ depth, no weakening tail `wk^k_g` in scope; the empty tail `·` is
   changed by nothing) in O(1) instead of walking
-  them. Deliberately *not* a field on the node — that would make the flag an
-  invariant of every construction site in kernel and elab. Instead
-  `src/bounds.rs` computes it as a memoized pure function of the immutable
-  subtree, keyed by `Rc` address with a keep-alive clone (sound because
-  terms are immutable and the entry pins the allocation). The one drift
-  hazard — its binder counts vs. `subst.rs`'s dep table — is covered by a
-  debug assertion at every skip site that re-runs the real traversal, under
-  the 300-seed law suite.
+  them. `src/bounds.rs` computes the summary as a pure function of the
+  immutable subtree, on first demand, and **keeps it in the node's head**
+  (2026-11-10, `issues/free-variable-bounds-in-the-node.md`). No
+  construction site in kernel or elab sets it or could get it wrong: a new
+  node's head is empty, and that is the objection to "a field on the node"
+  answered, since the field is filled by the one function that defines it.
+  The one drift hazard, its binder counts against `subst.rs`'s dep table,
+  is covered by a debug assertion at every skip site that re-runs the real
+  traversal, under the 300-seed law suite. The global namespace's bound
+  (`1 +` the largest free global variable) is kept the same way.
+
+  Until then the summaries were in direct-mapped tables keyed by node
+  address, under weak references, filled at a node's second query: one pair
+  of tables a thread for the substitutions, one for the typing memo so that
+  its questions would not settle the substitutions' markers, one for the
+  global namespace. The tables answered the first objection and cost three
+  things. A question was a hash and a probe of memory the node is not in.
+  A sixth of the walks recomputed an answer a collision had evicted, and
+  every other walk was a node's first, which no table size changes. And
+  which subtrees a traversal skipped depended on what had been asked before
+  and on which addresses collided, so the substitution counters varied from
+  run to run. In the node, a question is a read of what the caller already
+  holds, a node is walked once while it lives, and the counters are
+  functions of the input. The weak keys had also held every dead node's
+  block until its slot was reused, which was more memory than the heads are.
 
   **Kept, re-measured after the value domain** (2026-07-31). The NbE round
   predicted that conversion's 21% of the deep-path profile would *leave*
@@ -1272,9 +1296,13 @@ snapshot is an `Arc` clone that the elaborator's next append copies away from
 rather than mutates under it. Every piece of checker state is per-call or
 per-thread by construction — `Tc`, its conversion memo, the `ValueArena`,
 `GlobalCache` and the diagnostic stacks are created inside `check_term`; the
-bounds memo, the `fmt.rs` budget cells, the `checks.rs` sampling counter and
-`stats.rs` are `thread_local!`. Nothing is shared across workers but
-immutable terms behind atomic refcounts.
+`fmt.rs` budget cells, the `checks.rs` sampling counter and `stats.rs` are
+`thread_local!`. Nothing is shared across workers but immutable terms behind
+atomic refcounts, and each term node's head (`rc.rs`, §Representation): what
+`bounds.rs` has computed about that node, a pure function of the immutable
+subtree. Two workers that ask the same question of one node write the same
+words, and the flag that says an answer is there is released after them, so
+a worker reads a whole answer or computes its own.
 
 The kernel's own diff for this was two functions and one counter in `stats.rs`
 (`Snapshot::plus` and `merge`, so a joining thread can absorb a worker's

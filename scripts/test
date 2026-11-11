@@ -157,7 +157,7 @@ elif [[ "${1:-}" == --long ]]; then
   # the default samples one bounds-skip verification in sixteen). Builds in
   # its own target directory so switching lanes does not rebuild the
   # workspace twice.
-  CARGO_FLAGS=(--features heather-kernel/long-checks)
+  CARGO_FLAGS=(--features heather-kernel-lib/long-checks)
   export CARGO_TARGET_DIR=target/long
   echo "long lane: every kernel self-check runs on every occasion (target/long)"
 fi

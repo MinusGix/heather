@@ -23,7 +23,7 @@
 //! spines; it does force the *element*, which is what comparing two bits at a
 //! sum type needs regardless.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::Term;

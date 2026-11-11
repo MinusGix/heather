@@ -27,7 +27,7 @@
 //! so the tree's motive re-abstracts them and the tree is applied to both.
 
 use std::borrow::Borrow;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

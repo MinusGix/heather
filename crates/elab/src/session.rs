@@ -6,7 +6,7 @@
 //! the one rollback boundary spanning every durable registry those ordinary
 //! commits can change.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use crate::{CommittedWorld, Elaborator, R, Shared};
 
@@ -191,7 +191,7 @@ impl Elaborator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc as Rc;
+    use heather_kernel::rc::Rc;
 
     use super::*;
 

@@ -33,7 +33,7 @@
 //! a product as an atom by its spelling, meets one monomial as one atom.
 
 use std::collections::BTreeMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};

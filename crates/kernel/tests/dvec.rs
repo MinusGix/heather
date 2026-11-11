@@ -18,7 +18,7 @@
 //! the Coq formalization's `V_dnth` had to check) and at literal ones; and
 //! the neutral-tuple property `dnth(3; F; cs; inr (inl ⟨⟩)) ≡ fst (snd cs)`.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, conv_type, oracle};
 use heather_kernel::layer::Layer;

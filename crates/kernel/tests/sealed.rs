@@ -9,7 +9,7 @@
 //! positive — the same Ψ without the sealed proof, a bare application with no
 //! elimination waiting on it, and layer c.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, ConvError};
 use heather_kernel::layer::Layer;

@@ -55,7 +55,7 @@
 //! but it decides only whether to probe, never a class's verdict: the
 //! ordinary step is the fold's definition.
 
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use crate::level::Level;
 use crate::term::Type;

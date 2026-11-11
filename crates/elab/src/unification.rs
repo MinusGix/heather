@@ -1,7 +1,7 @@
 //! Implicit-application scratch state and state-free structural unification.
 
 use std::cell::{Cell, RefCell};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};

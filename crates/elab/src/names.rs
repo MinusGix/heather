@@ -18,7 +18,7 @@
 //! introduce errors, never reinterpretations.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_syntax::Decl;
 

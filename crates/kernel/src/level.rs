@@ -37,7 +37,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 /// A universe variable: de Bruijn index into the universe context `L`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
