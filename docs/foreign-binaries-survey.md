@@ -800,7 +800,7 @@ it works: Linux. The pieces are worth naming, because each is generic:
 | `linux_world`, `linux_world_co` | the **model**: an abstract state and what each call does to it, as ordinary Heather functions |
 | `CallSystem<A, R>(E)` (`call_system.hthr`), `Sim`, `RunsAs` | a program that calls out, read along a tree over the container; nothing in `CallSystem` is about Linux |
 | `LinuxIo<M>`, `LinuxRequests`, `linux_meets` | the **bridge**: how a call and its answer appear in registers and memory, and that the machine meets the model |
-| theorems over worlds and trees (`Io::Only`, the tools' specs) | **facts about the model**, proved with no machine in sight, by anyone, anywhere |
+| theorems over worlds and trees (the tools' specs; `io-footprint-facts`' proposed `Io::Only`) | **facts about the model**, proved with no machine in sight, by anyone, anywhere |
 | capabilities, `mut self` methods (`docs/effects-capabilities-design.md`) | how `rt` code holds and threads the state |
 
 The bridge is the only part that mentions the binary, and for Linux it is
