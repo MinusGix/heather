@@ -252,6 +252,12 @@ fn Ty::arrows_default(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(
     match ps { Nil => r.default(tys), Cons(_, rest) => λ _ => Ty::arrows_default(tys, rest, r) }
 }
 
+// A curried function of a signature's operands into any type: what a
+// computation over a state means (`rt_io`, `rt_file`).
+fn Ty::ArrowsTo(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Type {
+    match ps { Nil => R, Cons(p, rest) => p.sem(tys) → Ty::ArrowsTo(tys, rest, R) }
+}
+
 // ---------------------------------------------------------------------------
 // Environments: a value per variable, the most recent first.
 

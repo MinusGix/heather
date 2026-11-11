@@ -117,11 +117,6 @@ fn Effect::results(self e: Effect) → List<Ty> {
     match e { Reads(c) => [Bytes(c), Word(64)], Writes(_) => [Word(64)], Opens(_) => [Word(64)], Closes => [Word(64)] }
 }
 
-// A curried function of a signature's operands into any type.
-fn Ty::ArrowsTo(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Type {
-    match ps { Nil => R, Cons(p, rest) => p.sem(tys) → Ty::ArrowsTo(tys, rest, R) }
-}
-
 // What an effect does, as a world-threading function: the word-level call,
 // its answer as the tuple of its result codes.
 fn Effect::sem(self e: Effect, tys: Nat → RecInfo) → Io → Ty::ArrowsTo(tys, e.params(), Mutated<Io, Ty::Flats(e.results())>) {

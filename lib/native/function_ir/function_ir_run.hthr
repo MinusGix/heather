@@ -558,57 +558,100 @@ theorem loop_run_quiet(run_step: Valuation() → Buffers() → State, step: Valu
     }
 }
 
+// Whether every call a region makes is of a function `among` accepts.
+fn StructuredRegion::calls_among(self region: StructuredRegion, among: Nat → Bool) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_among(among),
+        Compose(prefix, continuation) => prefix.calls_among(among) && continuation.calls_among(among),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_among(among) && when_false.calls_among(among),
+        Call(callee, _, _) => among(callee),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_among(among),
+    }
+}
+
+fn every_function(f: Nat) → Bool { True }
+
+theorem StructuredRegion::calls_among_every(self region: StructuredRegion): region.calls_among(every_function).IsTrue() {
+    match region {
+        Dataflow(_) => trivial,
+        Sequence(_, continuation) => continuation.calls_among_every(),
+        Compose(prefix, continuation) =>
+            Bool::is_true_and_intro(prefix.calls_among(every_function), continuation.calls_among(every_function), prefix.calls_among_every(),
+                continuation.calls_among_every()),
+        Conditional(_, _, _, _, when_true, when_false) =>
+            Bool::is_true_and_intro(when_true.calls_among(every_function), when_false.calls_among(every_function),
+                when_true.calls_among_every(), when_false.calls_among_every()),
+        Call(_, _, _) => trivial,
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_among_every(),
+    }
+}
+
 // The theorem: a region that stores nothing, each call it makes over the
 // file answered with `answers`' word and the file as it was, runs as it
-// evaluates over the file, and leaves it.
-theorem StructuredRegion::run_quiet(self region: StructuredRegion, call: Writers(), answers: Answers(), buffers: Buffers(),
-    still: (f: Nat) → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers)):
-    region.quiet().IsTrue() → (values: Valuation()) →
+// evaluates over the file, and leaves it. Stillness is asked only of the
+// functions the region calls (`among`): the region of a pure term run
+// beside functions that write (`rt_file_lower`).
+theorem StructuredRegion::run_quiet_among(self region: StructuredRegion, call: Writers(), answers: Answers(), buffers: Buffers(),
+    among: Nat → Bool,
+    still: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers)):
+    region.quiet().IsTrue() → region.calls_among(among).IsTrue() → (values: Valuation()) →
     region.run(call, values, buffers) = State(region.eval_over(buffers, answers, values), buffers) {
     match region {
-        Dataflow(body) => λ quiet values => run_nodes_quiet(body.nodes, quiet, values, buffers),
-        Sequence(prefix, continuation) => λ quiet values => {
+        Dataflow(body) => λ quiet _ values => run_nodes_quiet(body.nodes, quiet, values, buffers),
+        Sequence(prefix, continuation) => λ quiet fits values => {
             let parts = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
             j(sym(run_nodes_quiet(prefix.nodes, parts.left, values, buffers)),
                 λ s _ => continuation.run(call, s.values, s.buffers) =
                     State(continuation.eval_over(buffers, answers, eval_nodes_over(buffers, prefix.nodes, values)), buffers),
-                continuation.run_quiet(call, answers, buffers, still, parts.right, eval_nodes_over(buffers, prefix.nodes, values)))
+                continuation.run_quiet_among(call, answers, buffers, among, still, parts.right, fits, eval_nodes_over(buffers, prefix.nodes, values)))
         },
-        Compose(prefix, continuation) => λ quiet values => {
+        Compose(prefix, continuation) => λ quiet fits values => {
             let parts = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
-            j(sym(prefix.run_quiet(call, answers, buffers, still, parts.left, values)),
+            let fit = Bool::is_true_and(prefix.calls_among(among), continuation.calls_among(among), fits);
+            j(sym(prefix.run_quiet_among(call, answers, buffers, among, still, parts.left, fit.left, values)),
                 λ s _ => continuation.run(call, s.values, s.buffers) =
                     State(continuation.eval_over(buffers, answers, prefix.eval_over(buffers, answers, values)), buffers),
-                continuation.run_quiet(call, answers, buffers, still, parts.right, prefix.eval_over(buffers, answers, values)))
+                continuation.run_quiet_among(call, answers, buffers, among, still, parts.right, fit.right, prefix.eval_over(buffers, answers, values)))
         },
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ quiet values => {
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ quiet fits values => {
             let parts = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            let fit = Bool::is_true_and(when_true.calls_among(among), when_false.calls_among(among), fits);
             let b = values(1, condition).head_bit();
             let whole = Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval_over(buffers, answers, values);
             let same_either: ((match b as λ _ => Buffers() { False => buffers, True => buffers }) = buffers) =
                 match b { False => refl, True => refl };
-            j(sym(when_false.run_quiet(call, answers, buffers, still, parts.right, values)), λ f _ => State(λ w id => match b {
+            j(sym(when_false.run_quiet_among(call, answers, buffers, among, still, parts.right, fit.right, values)), λ f _ => State(λ w id => match b {
                         False => f.values(w, id),
                         True => when_true.run(call, values, buffers).values(w, id),
                     }, match b { False => f.buffers, True => when_true.run(call, values, buffers).buffers }) = State(whole, buffers),
-                j(sym(when_true.run_quiet(call, answers, buffers, still, parts.left, values)), λ t _ => State(λ w id => match b {
+                j(sym(when_true.run_quiet_among(call, answers, buffers, among, still, parts.left, fit.left, values)), λ t _ => State(λ w id => match b {
                             False => when_false.eval_over(buffers, answers, values)(w, id),
                             True => t.values(w, id),
                         }, match b { False => buffers, True => t.buffers }) = State(whole, buffers),
                     cong_fn<Buffers(), State>(λ held => State(whole, held), same_either)))
         },
-        Call(callee, arguments, result) => λ _ values =>
+        Call(callee, arguments, result) => λ _ fits values =>
             cong_fn<Ending, State>(λ answer => State(Valuation::set(values, result, word_value(answer.word)), answer.buffers),
-                still(callee, words_of(values, arguments))),
-        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet values => {
+                still(callee, fits, words_of(values, arguments))),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet fits values => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, answers, pass);
             let ended = loop_run_quiet(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step, buffers,
-                λ v => body.run_quiet(call, answers, buffers, still, quiet, v), parameters, count, exit, next, values(64, bound).toNat(),
+                λ v => body.run_quiet_among(call, answers, buffers, among, still, quiet, fits, v), parameters, count, exit, next, values(64, bound).toNat(),
                 words_of(values, inputs));
             cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
                 bit_value(end.end.exhausted)), end.buffers), ended)
         },
     }
+}
+
+// With every function still, whatever the region calls.
+theorem StructuredRegion::run_quiet(self region: StructuredRegion, call: Writers(), answers: Answers(), buffers: Buffers(),
+    still: (f: Nat) → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers)):
+    region.quiet().IsTrue() → (values: Valuation()) →
+    region.run(call, values, buffers) = State(region.eval_over(buffers, answers, values), buffers) {
+    λ quiet values => region.run_quiet_among(call, answers, buffers, every_function, λ f _ words => still(f, words), quiet,
+        region.calls_among_every(), values)
 }
 
 theorem Function::run_quiet(self function: Function, call: Writers(), answers: Answers(), buffers: Buffers(),

@@ -1,0 +1,232 @@
+// Probes of `rt`'s computations over a span they write (`FTm`,
+// lib/native/runtime/rt_file.hthr; docs/native-one-compiler-design.md §2.6,
+// U4 step 4c-1). The reflections are written by hand here (the reflector is
+// step 4c-3): each is lowered by evaluation, the pin closes by conversion at
+// any span, the once-proof `FFun::lower_sound` is instantiated over any
+// file, and the lowered code is what the function compiler accepts as a
+// function that writes its first lent buffer. A store, a store under a
+// branch, a caller that reads back what its callee wrote, what the lowering
+// refuses, and a control. Tests, not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import rt;
+import rt_lower;
+import rt_file;
+import rt_file_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn abc() → List<BitVec(8)> { [b(1), b(2), b(3)] }
+
+// No pure functions and no types: the world of every probe here.
+fn bare() → World { World(RecInfo::none, [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+
+// ---------------------------------------------------------------------------
+// One store
+
+// `v`'s low byte at `i` under the length word, returning the index.
+fn poke(span: List<BitVec(8)>, length, i, v: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    Mutated(span.with_byte_within(length, i, v.truncate(8, 56)), i)
+}
+
+// Its reflection: four words, the span's place and length before the index
+// and the value. The last parameter is variable 0; under the `Let` the
+// byte is variable 0, the index 2 and the length 3. The span is not a
+// variable.
+fn poke_rt() → FFun { FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Let(Prim(Trunc(8, 56), [0]), Put(2, 3, 0, Pure(Var(2))))) }
+
+// The lowering's code, spelled: the value narrowed to its byte; the index
+// against the length word; under the test the byte widened and stored, the
+// store a leaf of its own.
+fn poke_code() → Function {
+    Function([0, 1, 2, 3],
+        Compose(nodes_region([Resize(64, 8, 4, 3)]),
+            Compose(
+                Compose(nodes_region([UnsignedLessThan(64, 5, 2, 1)]),
+                    branch(5, no_ports(), Compose(nodes_region([Resize(8, 64, 6, 4)]), nodes_region([BufferStore(7, 0, 2, 6)])), nodes_region(Nil))),
+                nodes_region(Nil))),
+        2, 1)
+}
+
+theorem poke_lowers(): poke_rt().lower(bare(), [], 0) = Some(poke_code()) { refl }
+
+// The pin: the reflection means the function at any span, by conversion.
+theorem poke_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_rt().meaning(alone(rest), span, place, length, i, v) = poke(span, length, i, v) { refl }
+
+// The once-proof, instantiated: over any file, at any four words, the code
+// answers the function's value and leaves the function's span, the rest of
+// the file as it was.
+theorem poke_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_code().run(call, [place, length, i, v], Cons(span, rest)) =
+        Ending(poke(span, length, i, v).value, Cons(poke(span, length, i, v).after, rest)) {
+    FFun::lower_sound(poke_rt(), alone(rest), 0, call, FTm::calls_agree_none(RecInfo::none, rest, call), span, place, length, i, v)
+}
+
+// On bytes: the store, a store past the length word (none), and one under
+// a length word shorter than the span (none past the word).
+theorem poke_runs(): program_run([poke_code()], [abc()], 0, [w(4096), w(3), w(1), w(263)]) = Ending(w(1), [[b(1), b(7), b(3)]]) { refl }
+theorem poke_past(): program_run([poke_code()], [abc()], 0, [w(4096), w(3), w(3), w(7)]) = Ending(w(3), [abc()]) { refl }
+theorem poke_short(): program_run([poke_code()], [abc()], 0, [w(4096), w(1), w(1), w(7)]) = Ending(w(1), [abc()]) { refl }
+theorem poke_second(): program_run([poke_code()], [abc(), abc()], 0, [w(4096), w(3), w(0), w(9)]) = Ending(w(0), [[b(9), b(2), b(3)], abc()]) { refl }
+
+// The control: it does not leave the file as it was.
+theorem poke_changes(same: program_run([poke_code()], [abc()], 0, [w(4096), w(3), w(1), w(7)]) = Ending(w(1), [abc()])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(7)), same);
+    absurd(verdict)
+}
+
+// What the function compiler takes: evaluable, at no address, storing into
+// buffer 0, lowered under its one lent buffer.
+theorem poke_evaluable(): program_evaluable([poke_code()]) = True { refl }
+theorem poke_placeless(): program_placeless([poke_code()]) = True { refl }
+theorem poke_counts(): program_counts([poke_code()]) = [1] { refl }
+theorem poke_stores(): program_stores([poke_code()], 0) = True { refl }
+theorem poke_accepted(): lower_program_lent([poke_code()], plan_program([poke_code()]), program_counts([poke_code()])).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A store under a branch
+
+// The byte stored where the value is below 128, the span as it was
+// otherwise; the value returned says which.
+fn poke_low(span: List<BitVec(8)>, length, i, v: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match v.unsigned_lt_bit(w(128)) {
+        False => Mutated(span, w(0)),
+        True => Mutated(span.with_byte_within(length, i, v.truncate(8, 56)), w(1)),
+    }
+}
+
+// Under the two `Let`s the bit is variable 0 and the value 2; the arm that
+// stores binds the byte, so the index is 4 and the length 5 there.
+fn poke_low_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Lit(Word(64), 128), Let(Prim(Ult(64), [1, 0]),
+            If(0, Let(Prim(Trunc(8, 56), [2]), Put(4, 5, 0, Pure(Lit(Word(64), 1)))), Pure(Lit(Word(64), 0))))))
+}
+
+fn code_of(lowered: Option<Function>) → Function { match lowered { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
+fn poke_low_code() → Function { code_of(poke_low_rt().lower(bare(), [], 0)) }
+
+theorem poke_low_lowers(): poke_low_rt().lower(bare(), [], 0).is_some() = True { refl }
+
+theorem poke_low_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_low_rt().meaning(alone(rest), span, place, length, i, v) = poke_low(span, length, i, v) { refl }
+
+theorem poke_low_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_low_code().run(call, [place, length, i, v], Cons(span, rest)) =
+        Ending(poke_low(span, length, i, v).value, Cons(poke_low(span, length, i, v).after, rest)) {
+    FFun::lower_sound(poke_low_rt(), alone(rest), 0, call, FTm::calls_agree_none(RecInfo::none, rest, call), span, place, length, i, v)
+}
+
+theorem poke_low_stores(): program_run([poke_low_code()], [abc()], 0, [w(4096), w(3), w(2), w(100)]) = Ending(w(1), [[b(1), b(2), b(100)]]) { refl }
+theorem poke_low_leaves(): program_run([poke_low_code()], [abc()], 0, [w(4096), w(3), w(2), w(200)]) = Ending(w(0), [abc()]) { refl }
+theorem poke_low_accepted(): lower_program_lent([poke_low_code()], plan_program([poke_low_code()]), program_counts([poke_low_code()])).is_some() = True {
+    refl
+}
+
+// ---------------------------------------------------------------------------
+// A caller that reads what its callee wrote
+
+// Two bytes stored by two calls of `poke`, then the first read back from
+// the span the calls left.
+fn poke_pair(span: List<BitVec(8)>, length, i, v: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let first = poke(span, length, i, v);
+    let second = poke(first.after, length, i.add(w(1)), v);
+    Mutated(second.after, second.after.byte_within(length, i).zero_extend(56))
+}
+
+// `poke` is computation 0 of the program. Each `Call` and `Let` binds one
+// variable: by the read the index is variable 5 and the length 6.
+fn poke_pair_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Call(0, [3, 2, 1, 0], Let(Lit(Word(64), 1), Let(Prim(Add(64), [3, 0]),
+            Call(0, [6, 5, 0, 3], Let(Byte(0, 5, 6), Pure(Prim(Zext(8, 56), [0]))))))))
+}
+
+// The program's computations: `poke`'s signature, and its meaning over the
+// rest of the file.
+fn pair_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(bare(), λ _ => trivial, [poke_rt().sig()], Pair(poke_rt().meaning(alone(rest)), trivial), rest)
+}
+
+fn poke_pair_code() → Function { code_of(poke_pair_rt().lower(bare(), [poke_rt().sig()], 0)) }
+
+// The caller above its callee: function 1 calls function 0.
+fn pair_program() → List<Function> { [poke_pair_code(), poke_code()] }
+
+theorem poke_pair_lowers(): poke_pair_rt().lower(bare(), [poke_rt().sig()], 0).is_some() = True { refl }
+
+// The pin, with the callee's meaning its own function (`poke_pinned`, by
+// conversion): no callee is unfolded past it.
+theorem poke_pair_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    poke_pair_rt().meaning(pair_world(rest), span, place, length, i, v) = poke_pair(span, length, i, v) { refl }
+
+// The callee's code answers the caller's calls: the hypothesis of the
+// once-proof, from the callee's own instance of it.
+theorem pair_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(pair_world(rest), 0, program_run([poke_code()])) {
+    ⟨λ own => Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), Writers::words(program_run([poke_code()]), Cons(own, rest))),
+        ⟨λ f among => false_elim(among),
+            λ f => match f {
+                Zero => λ _ own => FFun::lower_sound(poke_rt(), alone(rest), 0, program_run([]),
+                    FTm::calls_agree_none(RecInfo::none, rest, program_run([])), own),
+                Succ(_) => λ ok => false_elim(ok.right),
+            }⟩⟩
+}
+
+// The once-proof over the program: the caller's code, its calls answered by
+// the callee's, ends as the function does over any file.
+theorem poke_pair_compiled(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    program_run(pair_program(), Cons(span, rest), 1, [place, length, i, v]) =
+        Ending(poke_pair(span, length, i, v).value, Cons(poke_pair(span, length, i, v).after, rest)) {
+    FFun::lower_sound(poke_pair_rt(), pair_world(rest), 0, program_run([poke_code()]), pair_agrees(rest), span, place, length, i, v)
+}
+
+// On bytes: both stored, the first read back; at the span's last byte the
+// second store is past the length word.
+theorem poke_pair_runs(): program_run(pair_program(), [abc()], 1, [w(4096), w(3), w(0), w(9)]) = Ending(w(9), [[b(9), b(9), b(3)]]) { refl }
+theorem poke_pair_end(): program_run(pair_program(), [abc()], 1, [w(4096), w(3), w(2), w(9)]) = Ending(w(9), [[b(1), b(2), b(9)]]) { refl }
+theorem poke_pair_evaluable(): program_evaluable(pair_program()) = True { refl }
+theorem poke_pair_placeless(): program_placeless(pair_program()) = True { refl }
+theorem poke_pair_counts(): program_counts(pair_program()) = [1, 1] { refl }
+theorem poke_pair_accepted(): lower_program_lent(pair_program(), plan_program(pair_program()), program_counts(pair_program())).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// What the lowering refuses
+
+// A store of a word: the value is not a byte.
+theorem put_word_refused(): FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Put(1, 2, 0, Pure(Var(1)))).lower(bare(), [], 0) = None { refl }
+
+// A store at a byte: the index is not a word.
+theorem put_at_byte_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Let(Prim(Trunc(8, 56), [0]), Put(0, 3, 0, Pure(Var(2))))).lower(bare(), [], 0) = None { refl }
+
+// A call with a word too few.
+theorem short_call_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Call(0, [3, 2, 1], Pure(Var(0)))).lower(bare(), [poke_rt().sig()], 0) = None { refl }
+
+// A call of a computation the program does not have.
+theorem absent_call_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Call(1, [3, 2, 1, 0], Pure(Var(0)))).lower(bare(), [poke_rt().sig()], 0) = None { refl }
+
+// A pure term's call must be of a pure function, one below `base`: with
+// one pure function the call lowers above it, and with none below `base`
+// it is refused (function 0 is then a computation, which may write).
+fn one_pure() → World { World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => x, trivial)) }
+fn calls_pure() → FFun { FFun([Word(64), Word(64), Word(64)], Word(64), Pure(Call(0, [0]))) }
+theorem pure_call_lowers(): calls_pure().lower(one_pure(), [], 1).is_some() = True { refl }
+theorem pure_call_refused(): calls_pure().lower(one_pure(), [], 0) = None { refl }

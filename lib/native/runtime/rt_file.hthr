@@ -1,0 +1,203 @@
+// `rt` over a span it writes: computations over the file
+// (docs/native-one-compiler-design.md §2.6, U4 step 4c).
+//
+// `rt`'s terms (`Tm`) are values: total and pure, their meaning a function
+// of their words in a world, and the spans a function is lent are part of
+// that world. A store changes the world, so it is not a term. It is a
+// computation, the layer over terms that a call to Linux is (`ETm`,
+// `rt_io`):
+//
+// - `Pure(t)` returns a value and leaves the span as it is;
+// - `Let(e, body)` binds a pure value and goes on;
+// - `If(c, yes, no)` and `IfEq` branch on a `Bool` variable;
+// - `Put(i, length, v, body)` stores a byte under a length word and goes
+//   on;
+// - `Call(f, args, body)` runs a computation of the program and binds its
+//   value for the rest, which goes on from the span the callee left.
+//
+// A computation writes one span, span 0 of its file, and its meaning
+// threads that span's bytes: `List<BitVec(8)> → Mutated<List<BitVec(8)>,
+// value>`, over the rest of the file, which it only reads. Each pure term
+// is read at the world of the file as it is then, `Cons(own, rest)`.
+//
+// The span is **not a value of `rt`**: no computation can name it, so none
+// can read the bytes as they were before a store. A source that reflects
+// at all threads its span straight through, which is what makes the store
+// in place sound.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import nat_map;
+import rt;
+
+// ---------------------------------------------------------------------------
+// The write under a length word
+
+// The span with `v` at the index where the index is below the word, the
+// span as it was elsewhere: what code lent a span does to it (`FTm::Put`),
+// which tests the index against the length it was handed and stores under
+// the test. Beside `List::byte_within`, the read.
+fn List::with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → List<BitVec(8)> {
+    match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }
+}
+
+// ---------------------------------------------------------------------------
+// Computations
+
+inductive FTm {
+    // A value, the span unchanged.
+    Pure(t: Tm),
+    // A pure value bound once: `body` sees it as variable 0.
+    Let(e: Tm, body: FTm),
+    // `match` on a `Bool` variable.
+    If(c: Nat, yes: FTm, no: FTm),
+    // `match h: c` on a `Bool` variable, the equation erased (`Tm::IfEq`).
+    IfEq(c: Nat, yes: FTm, no: FTm),
+    // The byte variable `v` stored at the word variable `i` under the
+    // length word variable `length`; `body` binds nothing new.
+    Put(i: Nat, length: Nat, v: Nat, body: FTm),
+    // A computation of the program, by index, on variables: `body` sees
+    // its value as variable 0 and goes on from the span it left.
+    Call(f: Nat, args: List<Nat>, body: FTm),
+}
+
+// A computation function: `lent` spans, the first the one it writes.
+record FFun { params: List<Ty>, result: Ty, body: FTm, lent: Nat := 1 }
+
+// What a computation of a signature means: the span's bytes threaded
+// through a function of the signature's operands.
+fn FTm::Sem(tys: Nat → RecInfo, s: Sig) → Type {
+    List<BitVec(8)> → Ty::ArrowsTo(tys, s.params, Mutated<List<BitVec(8)>, s.result.sem(tys)>)
+}
+
+// The meanings of a program's computations, one per signature: what a
+// `Call` is answered with.
+fn FTm::Sems(tys: Nat → RecInfo, sigs: List<Sig>) → Type {
+    match sigs { Nil => True, Cons(s, rest) => Pair<FTm::Sem(tys, s), FTm::Sems(tys, rest)> }
+}
+
+fn FTm::get(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::Sems(tys, sigs) → (i: Nat) → FTm::Sem(tys, Sig::at(sigs, i)) {
+    match sigs {
+        Nil => λ _ i => λ own => Mutated(own, False),
+        Cons(_, rest) => λ cs i => match i { Zero => cs.fst, Succ(k) => FTm::get(tys, rest, cs.snd, k) },
+    }
+}
+
+// What a computation's meaning reads besides the term and the span it
+// writes: the types and the pure signatures (`w`, whose own callees and
+// spans are not read), the pure functions' meanings at each file, the
+// computations' signatures and meanings, and the spans after the first.
+record FWorld {
+    w: World,
+    callees: (b: List<List<BitVec(8)>>) → Sig::Sems(w.tys, w.sigs),
+    fsigs: List<Sig>,
+    writers: FTm::Sems(w.tys, fsigs),
+    rest: List<List<BitVec(8)>>,
+}
+
+// The world a pure term is read in when the written span holds `own`.
+fn FWorld::at(self fw: FWorld, own: List<BitVec(8)>) → World {
+    World(fw.w.tys, fw.w.sigs, fw.callees(Cons(own, fw.rest)), Cons(own, fw.rest))
+}
+
+// A program with no functions over a table of types: nothing to call.
+fn FWorld::alone(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>) → FWorld { FWorld(World(tys, [], trivial), λ _ => trivial, [], trivial, rest) }
+
+// A pure term's value there, at the code it has in `w`: the two codes are
+// one (`Tm::ty_static`, rt_lower), and at a closed term the cast is a
+// conversion.
+fn FTm::value(fw: FWorld, own: List<BitVec(8)>, t: Tm, g: List<Ty>, env: Env(fw.w.tys, g)) → t.ty(fw.w, g).sem(fw.w.tys) {
+    Ty::cast(fw.w.tys, t.ty(fw.at(own), g), t.ty(fw.w, g), t.sem(fw.at(own), g, env))
+}
+
+// A computation's answer read at another code.
+fn FTm::recast(tys: Nat → RecInfo, a, b: Ty, m: Mutated<List<BitVec(8)>, a.sem(tys)>) → Mutated<List<BitVec(8)>, b.sem(tys)> {
+    Mutated(m.after, Ty::cast(tys, a, b, m.value))
+}
+
+// A computation's meaning applied to variables, each cast to its operand's
+// code; where operands run out, the span as it is and `d` (refused by
+// every judgment).
+fn FTm::apply(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), R: Type, d: R, ps: List<Ty>) → Ty::ArrowsTo(tys, ps, R) → List<Nat> → R {
+    match ps {
+        Nil => λ f vs => f,
+        Cons(p, rest) => λ f vs => match vs {
+            Nil => d,
+            Cons(v, more) => FTm::apply(tys, g, env, R, d, rest, f(Ty::cast(tys, Ty::at(g, v), p, Env::get(tys, g, env, v))), more),
+        },
+    }
+}
+
+// The code a computation returns.
+fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
+    match t {
+        Pure(v) => v.ty(w, g),
+        Let(e, body) => body.ty(w, fsigs, Cons(e.ty(w, g), g)),
+        If(_, yes, _) => yes.ty(w, fsigs, g),
+        IfEq(_, yes, _) => yes.ty(w, fsigs, g),
+        Put(_, _, _, body) => body.ty(w, fsigs, g),
+        Call(f, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
+    }
+}
+
+// The span a `Put` leaves.
+fn FTm::put(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), i, length, v: Nat, own: List<BitVec(8)>) → List<BitVec(8)> {
+    own.with_byte_within(Ty::cast(tys, Ty::at(g, length), Word(64), Env::get(tys, g, env, length)),
+        Ty::cast(tys, Ty::at(g, i), Word(64), Env::get(tys, g, env, i)), Ty::cast(tys, Ty::at(g, v), Word(8), Env::get(tys, g, env, v)))
+}
+
+// What a `Call` answers: the callee at the span as it is, on the
+// variables.
+fn FTm::called(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, args: List<Nat>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)> {
+    FTm::apply(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
+        Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), Sig::at(fw.fsigs, f).params,
+        FTm::get(fw.w.tys, fw.fsigs, fw.writers, f, own), args)
+}
+
+// The meaning: a function threading the written span's bytes, at the code
+// the computation returns.
+fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
+    → Mutated<List<BitVec(8)>, t.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)> {
+    match t {
+        Pure(v) => λ g env own => Mutated(own, FTm::value(fw, own, v, g, env)),
+        Let(e, body) => λ g env own => body.sem(fw, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g env own =>
+            match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) {
+                False => FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own)),
+                True => yes.sem(fw, g, env, own),
+            },
+        IfEq(c, yes, no) => λ g env own =>
+            Tm::convoy(Mutated<List<BitVec(8)>, yes.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)>,
+                Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.sem(fw, g, env, own),
+                FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own))),
+        Put(i, length, v, body) => λ g env own => body.sem(fw, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g env own =>
+            shared(FTm::called(fw, g, env, f, args, own), λ m =>
+                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+    }
+}
+
+// A computation function's meaning: its body under its parameters,
+// curried, at its declared result.
+fn FFun::curry(tys: Nat → RecInfo, r: Ty, ps: List<Ty>)
+    → (g: List<Ty>) → Env(tys, g) → (Env(tys, Ty::bind_onto(ps, g)) → Mutated<List<BitVec(8)>, r.sem(tys)>)
+    → Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)
+{
+    match ps {
+        Nil => λ g env k => k(env),
+        Cons(p, rest) => λ g env k => λ (x: p.sem(tys)) => FFun::curry(tys, r, rest, Cons(p, g), Pair(x, env), k),
+    }
+}
+
+fn FFun::sig(self f: FFun) → Sig { Sig(f.params, f.result) }
+
+fn FFun::meaning(self f: FFun, fw: FWorld) → FTm::Sem(fw.w.tys, f.sig()) {
+    λ own => FFun::curry(fw.w.tys, f.result, f.params, Nil, trivial, λ env =>
+        FTm::recast(fw.w.tys, f.body.ty(fw.w, fw.fsigs, Ty::bind_onto(f.params, Nil)), f.result,
+            f.body.sem(fw, Ty::bind_onto(f.params, Nil), env, own)))
+}
