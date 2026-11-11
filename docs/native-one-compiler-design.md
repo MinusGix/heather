@@ -1371,7 +1371,9 @@ Each is a PR and ends with something that runs.
   `docs/native-procedures-are-functions-design.md`: 5a RSP is the frame
   (built), 5b words in the frame and the callee saves (built), 5c one
   call and one contract (built: `Target::Callable`, a function and a
-  procedure each an instance), 5d one byte lowering (step 4d above). *Runs:*
+  procedure each an instance), 5d one byte lowering (step 4d above; moved
+  by Minus on 2026-11-11 to go with buffer views,
+  `issues/source-buffers-as-views.md`). *Runs:*
   the tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
   scanner's loop linked into Rust

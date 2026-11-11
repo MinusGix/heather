@@ -1,7 +1,8 @@
 # Procedures are functions: one frame, one call, one contract
 
 Status: **proposed 2026-11-11; steps 5a, 5b and 5c built the same day**
-(§3), 5d not. The contract is built as `Target::Callable` (§2.5, "As
+(§3); 5d moves with buffer views, by Minus's choice the same day (§3).
+The contract is built as `Target::Callable` (§2.5, "As
 built"). §1 describes the code before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
 before the round. Owner: `issues/native-one-compiler.md`; it draws in
@@ -684,6 +685,16 @@ gates passing on the new code.
   the way `Layout::homes_block` loads them for a callee, and
   `native_compile_bytes`' own code goes. *Runs:* `tr` and the tools that
   index a buffer.
+
+  **Moved (Minus, 2026-11-11): done with buffer views**
+  (`issues/source-buffers-as-views.md`, which has what the step takes).
+  Scoped, it is larger than its line here: the shared leaf's theorems
+  bound a function's stores by its own 64 bytes of spill slots, which a
+  statement's frame words overlap, so they are restated over any bound
+  first; and the bridge from a statement's bound test to the leaf's known
+  comparison is longer than the two theorems it replaces. Buffer views
+  change what a statement's home is, so the bridge is written once, there.
+  The export does not need it: it goes through the function compiler.
 
 Then **E**, the export, as ordered. The three `rt` items of §2.8 are
 rounds after the unification; they are independent of E and of each
