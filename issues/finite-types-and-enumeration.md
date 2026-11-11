@@ -1,6 +1,6 @@
 ---
 title: "Finite types: a class with enumeration, instances, and quantifiers decided by evaluation"
-status: open
+status: closed
 labels: [stdlib,mathematics,finite]
 area: mathematics
 milestone: [math-finite]
@@ -51,3 +51,4 @@ literal `n` by `decide`, with no enumeration lemma of its own, and
   Elaborator change this needed: `Fin` had no carrier name, so `instance(n: Nat) C<Fin(n)>` and `fn Fin::f` were refused. `Fin` is now a constant carrier as `Nat` is (`head_name`, `names_a_type`, `carrier_of_ty`). Only the unreduced former answers: a `Fin` type already reduced to its sum has no namespace.
 
   Not built, with owners: `decide` on a bare `(a: A) → …` goal ([[decide-at-dependent-function-carrier]]); enum instances by `derive`, since a generator cannot build a `match` ([[derive-fintype-for-enums]]; a hand instance is three lines and is probed). Words are an instance at every width (`lib/std/bitvec/bitvec_fintype.hthr`, `Fintype<BitVec(n)>`, head bit outermost): a word is its head bit on its tail by the vector's η, so completeness needed no bit lemma. What remains of this issue's scope is only the enum instances, owned by the derive issue.
+- 2026-11-11: Closed: the class, the instances and the quantifiers are built (PRs #550 and the cardinality round). The one item of scope left, enum instances by `derive`, is owned by [[derive-fintype-for-enums]].

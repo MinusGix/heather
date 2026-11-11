@@ -4,7 +4,6 @@ status: open
 labels: [stdlib,mathematics,finite]
 area: mathematics
 milestone: [math-finite]
-blocked-by: [finite-types-and-enumeration]
 created: 2026-11-10
 updated: 2026-11-10
 ---
