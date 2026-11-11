@@ -785,14 +785,20 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
 // The argument and result registers, in order.
 fn call_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
 
+// Where a call's results come back: the first in RAX, as a function's
+// one, a procedure's others in the registers after it (System V's pair,
+// RAX and RDX, then our own).
+fn result_registers() → List<Gpr> { [Rax, Rdx, Rcx, Rsi, Rdi, R8] }
+
 // Procedure `index`'s label, and the shared exit of a call too deep: the
 // labels below `main`'s own (§4.2), past the functions' (function `f` is at
 // `Succ(f)`, function_ir_lower_calls).
 fn Layout::procedure_label(self layout: Layout, index: Nat) → Nat { Succ(index + layout.functions.len()) }
 fn Layout::deep_label(self layout: Layout) → Nat { Succ(layout.procedures.len() + layout.functions.len()) }
 
-// RSP down a word, through RBX, and up one.
-fn rsp_down() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8)), SubRR(Rsp, Rbx)] }
+// RSP down a word (the byte is minus eight) and up one: no other register
+// is written, so a register can be saved before anything else uses it.
+fn rsp_down() → List<Instruction> { [AddRI8(Rsp, BitVec::ofNat(256 - 8))] }
 fn rsp_up() → Instruction { AddRI8(Rsp, BitVec::ofNat(8)) }
 
 // The homes of buffers `from` on, `count` of them, into `registers` two a
@@ -853,49 +859,54 @@ fn Prog::restores(self p: Prog, registers: List<Gpr>) → Prog {
 fn frame_down(words: Nat) → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8 * words)), SubRR(Rsp, Rbx)] }
 fn frame_up(words: Nat) → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8 * words)), AddRR(Rsp, Rbx)] }
 
-// A call's way in: no room left, the shared exit; otherwise one less
-// room…
-fn Prog::call_enters(self p: Prog, layout: Layout) → Prog {
-    let room = then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))).branch_label(Rax, layout.deep_label());
-    then(then(room, Block([MovRI(Rbx, BitVec::ofNat(1)), SubRR(Rax, Rbx), MovRI(Rbx, layout.room_at())])), Store(WordStore(Rbx, Rax)))
+// The depth, counted where a procedure is entered: no room left, the
+// shared exit; otherwise one less room. RAX and R11 hold nothing here (the
+// arguments are in their registers, and RBX is not saved yet)…
+fn Prog::count_down(self p: Prog, layout: Layout) → Prog {
+    let room = then(then(p, Block([MovRI(R11, layout.room_at())])), Load(WordLoad(Rax, R11))).branch_label(Rax, layout.deep_label());
+    then(then(room, Block([MovRI(R11, BitVec::ofNat(1)), SubRR(Rax, R11), MovRI(R11, layout.room_at())])), Store(WordStore(R11, Rax)))
 }
 
-// …and out: the room as it was. RSP is the caller's frame again, the
-// callee having put it back.
-fn Prog::call_leaves(self p: Prog, layout: Layout) → Prog {
-    then(then(then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))), Block([AddRI8(Rax, BitVec::ofNat(1))])),
-        Store(WordStore(Rbx, Rax)))
+// …and where it leaves, the results already in their registers: the room
+// as it was, through RBX and R11.
+fn Prog::count_up(self p: Prog, layout: Layout) → Prog {
+    then(then(then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(R11, Rbx))), Block([AddRI8(R11, BitVec::ofNat(1))])),
+        Store(WordStore(Rbx, R11)))
 }
 
-// A call of procedure `index`, `out` live after it: in, the arguments in
-// their registers, the CALL; then out, and the results put in their homes.
-// Nothing is saved here: the caller's words in slots are in its own frame,
-// which the callee's is below, and the registers words live in the callee
-// saves (`Procedure::entry_code`).
+// A call, of a procedure or of a function
+// (docs/native-procedures-are-functions-design.md §2.3): the arguments in
+// their registers, after the homes of the buffers the callee is lent (two
+// registers a buffer, immediates: a file's buffers lie where the layout
+// says and are as long as their capacities); R10 carried in RBX across the
+// CALL, since a callee keeps RBX, RBP and R12 to R15 and may write R10; the
+// CALL; R10 back. RSP is the frame between statements, so the CALL pushes
+// below it. What the callee answers is then in RAX and the registers after
+// it.
+fn Prog::calls(self p: Prog, layout: Layout, label: Nat, lent: Nat, arguments: List<Nat>) → Prog {
+    let passed = p.words_to(layout, arguments, call_registers().drop(2 * lent));
+    then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(label)), Block([MovRR(R10, Rbx)]))
+}
+
+// A call of procedure `index`, `out` live after it: the call, and the
+// results put in their homes. Nothing is saved or counted here: the
+// caller's words in slots are in its own frame, which the callee's is
+// below, the registers words live in the callee saves, and the callee
+// counts the depth (`Procedure::entry_code`).
 fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Prog {
-    let passed = p.call_enters(layout).words_to(layout, args, call_registers());
-    then(passed, CallTo(layout.procedure_label(index))).call_leaves(layout).words_from(layout, out, results, call_registers())
+    p.calls(layout, layout.procedure_label(index), 0, args).words_from(layout, out, results, result_registers())
 }
 
 fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
 
 // A call of function `callee` (docs/native-one-compiler-design.md §2.2),
-// `out` live after it: the arguments in their registers (RSP is the frame
-// between statements, so the CALL pushes below it), R10 carried in RBX across the CALL (a function keeps RBX, RBP and R12 to
-// R15, so every register a word lives in is as it was), and RAX put in the
-// result's home.
-// A function lent buffers is passed their homes first (docs/
-// native-one-compiler-design.md §2.3): buffer `k` of the file is the `k`th
-// it is lent, its address and its capacity immediates in the block that
-// carries R10, since a file's buffers lie where the layout says and are as
-// long as their capacities. The homes take the first two registers a
-// buffer and the words the registers after them. A function lent none is
-// called as before. `call_lent` is the call at a count of lent buffers
-// computed once.
+// `out` live after it: the call, the function at label `Succ(callee)`, and
+// RAX put in the result's home. A function lent buffers is passed their
+// homes first (docs/native-one-compiler-design.md §2.3): buffer `k` of the
+// file is the `k`th it is lent. `call_lent` is the call at a count of lent
+// buffers computed once.
 fn Prog::call_lent(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat, lent: Nat) → Prog {
-    let passed = p.words_to(layout, arguments, call_registers().drop(2 * lent));
-    then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(Succ(callee))),
-        Block([MovRR(R10, Rbx)])).word_from(layout, out, result, Rax)
+    p.calls(layout, Succ(callee), lent, arguments).word_from(layout, out, result, Rax)
 }
 
 fn Prog::function_call(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat) → Prog {
@@ -1150,18 +1161,26 @@ fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
     }
 }
 
-// Its way in: the label, the registers words live in pushed (the callee
-// saves them, docs/native-procedures-are-functions-design.md step 5b), its
+// What a procedure keeps for its caller, which is what a function keeps
+// (System V's callee-saved registers): RBX, which carries R10 across every
+// call, and of RBP and R12 to R15 those a word lives in. R10 it may write,
+// as a function may.
+fn kept_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp] }
+fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => homes.uses(register))) }
+fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
+
+// Its way in: the label, the depth counted, the registers it keeps pushed
+// (docs/native-procedures-are-functions-design.md steps 5b and 5c), its
 // frame opened below them, the arguments into the parameters' homes…
 fn Procedure::entry_code(self proc: Procedure, p: Prog, layout: Layout, index: Nat) → Prog {
-    then(p.label(layout.procedure_label(index)).saves(layout.taken), Block(frame_down(layout.words)))
+    then(p.label(layout.procedure_label(index)).count_down(layout).saves(layout.kept()), Block(frame_down(layout.words)))
         .words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers())
 }
 
-// …and out, after its body: the results into their registers, the frame
-// closed, the registers popped, and RET.
+// …and out, after its body: the results into their registers, the depth
+// counted back, the frame closed, the registers popped, and RET.
 fn Procedure::exit_code(self proc: Procedure, p: Prog, layout: Layout) → Prog {
-    then(then(p.words_to(layout, proc.results, call_registers()), Block(frame_up(layout.words))).restores(layout.taken), Ret)
+    then(then(p.words_to(layout, proc.results, result_registers()).count_up(layout), Block(frame_up(layout.words))).restores(layout.kept()), Ret)
 }
 
 fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {

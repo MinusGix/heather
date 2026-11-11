@@ -207,9 +207,10 @@ fn wider_leaves_run() {
 /// Procedures compile and run (docs/native-procedures-design.md): a
 /// non-tail recursive sum called from two sites, its body emitted once;
 /// the sum of 0..20 at depth 20, whose innermost call is one too deep and
-/// exits 139 (`call_depth_status`); and a builder tool (`proc`,
-/// native_build) summing 0..n for the n bytes it reads, at most 64 calls
-/// deep.
+/// exits 139 (`call_depth_status`); a procedure of three parameters and
+/// three results, whose status tells any two out of place; and a builder
+/// tool (`proc`, native_build) summing 0..n for the n bytes it reads, at
+/// most 64 calls deep.
 #[test]
 fn procedures_run() {
     let dir = scratch("procedures");
@@ -217,6 +218,7 @@ fn procedures_run() {
     for (module, source, input, status, why) in [
         (PROBES, "summing", &b""[..], 9, "the sums of 0..2 and 0..3 add to 9"),
         (PROBES, "summing_shallow", &b""[..], 139, "a call past the depth exits 139"),
+        (PROBES, "spreading", &b""[..], 59, "three results come back each to its own word"),
         (BUILT, "summed_input", &b"hello"[..], 15, "five bytes read sum 0..5"),
         (BUILT, "summed_input", &many[..], 139, "sixty-four bytes read nest sixty-five calls, one past the depth"),
     ] {

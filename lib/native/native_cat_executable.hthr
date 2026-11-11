@@ -46,7 +46,7 @@ fn cat_file_header() → List<BitVec(8)> {
 }
 
 theorem cat_file_sends(top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
-    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), cat_file()), deep: 8 * cat(cat_capacity()).words <= depth,
+    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), cat_file()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
     tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),

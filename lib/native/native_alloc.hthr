@@ -576,9 +576,17 @@ fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fue
 // by the functions' lowering.
 fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places) }
 
-// Every procedure's body passes the check, from its results.
+// Every procedure's body passes the check, from its results, and its
+// parameters are apart from what is live as it starts: its entry writes
+// them there, and `Procedure::fits` refuses the procedure otherwise.
 fn List::bodies_check(self procs: List<Procedure>, homes: Homes) → Bool {
-    match procs { Nil => True, Cons(proc, rest) => match proc.body.checked(homes, proc.results) { None => False, Some(_) => rest.bodies_check(homes) } }
+    match procs {
+        Nil => True,
+        Cons(proc, rest) => match proc.body.checked(homes, proc.results) {
+            None => False,
+            Some(live) => homes.all_apart(proc.params, live) && rest.bodies_check(homes),
+        },
+    }
 }
 
 // `homes` when the check passes them, `main` and every procedure's body,
@@ -827,9 +835,18 @@ fn Greedy::standard() → Greedy { Greedy(7) }
 
 // Each procedure's body's interference and weights after `main`'s: the
 // words are the source's, so a body's two words that interfere get two
-// registers as `main`'s do.
+// registers as `main`'s do. A procedure's entry writes its parameters with
+// what is live as its body starts, so they interfere there: no statement
+// of the body writes a parameter it only reads, and without this two such
+// parameters got one register and the procedure was refused.
 fn List::bodies_graph(self procs: List<Procedure>, homes: Homes, of: List<List<Bool>>) → List<List<Bool>> {
-    match procs { Nil => of, Cons(proc, rest) => rest.bodies_graph(homes, proc.body.graph(homes, proc.results, of).of) }
+    match procs {
+        Nil => of,
+        Cons(proc, rest) => {
+            let body = proc.body.graph(homes, proc.results, of);
+            rest.bodies_graph(homes, body.of.all_written(proc.params, body.live))
+        },
+    }
 }
 fn List::bodies_weights(self procs: List<Procedure>, loop_weight: Nat, weights: List<Nat>) → List<Nat> {
     match procs { Nil => weights, Cons(proc, rest) => rest.bodies_weights(loop_weight, proc.body.weights(loop_weight, 1, weights)) }

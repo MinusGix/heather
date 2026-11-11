@@ -10,6 +10,8 @@ import native_compile_correct;
 import native_alloc;
 import function_ir;
 import function_ir_pass;
+import itree;
+import linux_trees;
 import linux_x86_64_image;
 import bitvec;
 import list;
@@ -302,6 +304,29 @@ theorem summing_compiles(): refused(summing()) = [] { refl }
 theorem summing_allocated(): summing().allocation_ok(summing().homes()) = True { refl }
 theorem summing_one_body(): compiled_or_start(summing()).named(1) = 1 { refl }
 theorem summing_three_calls(): compiled_or_start(summing()).calls_of(1) = 3 { refl }
+
+// Three parameters and three results: the results come back in RAX, RDX
+// and RCX, each to its own word. (20, 8, 5) goes to (12, 3, 25), and the
+// status 12 - 3 + 25 + 25 is another number with any of the three, or of
+// the arguments, in another's place. Words: 0 to 2 the arguments, 3 to 5
+// the parameters, 6 to 8 the results, 10 to 12 the caller's, 13 the status.
+fn spread() → Procedure {
+    Procedure(params := [3, 4, 5], results := [6, 7, 8], body := ops([Sub(64, 6, 3, 4), Sub(64, 7, 4, 5), Add(64, 8, 3, 5)]))
+}
+fn spreading() → Source {
+    Source(functions := [], buffers := [], words := 14,
+        main := Then(ops([Const(64, 0, 20), Const(64, 1, 8), Const(64, 2, 5)]), Then(Perform(0, [0, 1, 2], [10, 11, 12]),
+            Then(ops([Sub(64, 13, 10, 11), Add(64, 13, 13, 12), Add(64, 13, 13, 12)]), Exit(13)))),
+        procedures := [spread()], depth := 1)
+}
+theorem spreading_compiles(): refused(spreading()) = [] { refl }
+theorem spreading_allocated(): spreading().allocation_ok(spreading().homes()) = True { refl }
+// The allocator's homes keep the three parameters apart, all live as the
+// body starts and none written by it, so the procedure fits and the source
+// compiles with them.
+theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().homes())) = True { refl }
+theorem spreading_homed(): spreading().refusal(low(), spreading().homes()) = [] { refl }
+theorem spreading_exits(): ITree::next(Events::linux(), spreading().tree([], 4)) = Exits(BitVec::ofNat(59)) { refl }
 
 // A call of no procedure, and one with an argument too many, are refused
 // at the call; a procedure whose body reads a word not its parameter, at

@@ -85,9 +85,9 @@ theorem cat_bytes_fit(): 232 + cat_bytes().len() <= 65536 {
 
 // The process Linux makes of a 232-byte header and cat's bytes, at its
 // entry with any command line and a stack with room for cat's words (its
-// frame), simulates cat.
+// frame) and a word more, simulates cat.
 theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
-    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * cat(cat_capacity()).words <= depth,
+    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(cat_size(), top, depth).linux(), cat(cat_capacity()).denote(args), s) {
     cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
@@ -96,7 +96,7 @@ theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, 
 // So every run of that process that Linux can give cat's answers, along a
 // trace cat produces that exits 0, sends to stdout what it read from stdin.
 theorem cat_native_sends(header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
-    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * cat(cat_capacity()).words <= depth,
+    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
     tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
