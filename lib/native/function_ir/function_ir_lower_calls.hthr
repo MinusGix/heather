@@ -26,6 +26,7 @@
 import function_ir;
 import function_ir_lower;
 import function_ir_lower_structured;
+import function_ir_lower_reads;
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;
@@ -39,6 +40,7 @@ import x86_64_asm;
 import x86_64_asm_runs;
 import x86_64_stack_runs;
 import bitvec;
+import bitvec_nat;
 import bool;
 import list;
 import logic;
@@ -161,6 +163,66 @@ fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), ca
         site.Returns(stack, asm_labels(site.program)(Succ(f)), CalleePre<M>(callees, f, arguments, result), stack.CalleePost(result))
 }
 
+// What a program's functions are lent (docs/native-one-compiler-design.md
+// §2.3): how many buffers each function takes, by function, where each
+// buffer lies, and its bytes. The buffers are the program's, by number: a
+// call hands on buffers `0` to its callee's count under the same numbers.
+record Lending { counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers() }
+
+fn Lending::none() → Lending { Lending([], [], []) }
+
+fn lent_count(counts: List<Nat>, f: Nat) → Nat { match counts.nth(f) { None => 0, Some(count) => count } }
+
+// Every buffer is lent to a call entered at `i`: its bytes read at its
+// address, whatever the call stores below `i` (`Stack::Lends`).
+fn Stack::LentAll<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, lending: Lending,
+    memory: M) → Type {
+    (buffer: Nat) → stack.Lends(i, address_of(lending.addresses, buffer), buffer_bytes(lending.buffers, buffer), memory)
+}
+
+// Lent to a call, the buffers are lent to what it calls, after its own
+// stores.
+theorem Stack::lent_all_later<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat,
+    le: d <= i, lending: Lending, entry, memory: M, lent: stack.LentAll(i, lending, entry), wrote: stack.Wrote(i, entry, memory)):
+    stack.LentAll(d, lending, memory) {
+    λ buffer => stack.lends_deeper(i, d, le, address_of(lending.addresses, buffer), buffer_bytes(lending.buffers, buffer), memory,
+        stack.lends_after(i, address_of(lending.addresses, buffer), buffer_bytes(lending.buffers, buffer), entry, memory, lent(buffer), wrote))
+}
+
+// With no buffers there is nothing to lend.
+theorem Stack::lent_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M):
+    stack.LentAll(i, Lending::none(), memory) {
+    let low: (BitVec::zero(n := 64).toNat() + 0 <= Nat::pow(2, 47)) =
+        j(sym(BitVec::zero_toNat(64)), λ z _ => z + 0 <= Nat::pow(2, 47), Nat::leb_sound(0, Nat::pow(2, 47), trivial));
+    λ buffer after _ => ⟨low, λ k no => false_elim(no)⟩
+}
+
+// What a call lends its callee: the homes of the buffers the callee takes
+// as its first arguments, and the buffers themselves.
+fn Stack::CalleeLent<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, f: Nat,
+    arguments: List<BitVec(64)>) → Nat → MachineState<M> → Type {
+    λ i s => ArgsLent(lent_count(lending.counts, f), 0, arguments, lending.addresses, lending.buffers) ∧ stack.LentAll(i, lending, s.memory)
+}
+
+// Every function below `bound` meets its contract at its label, lent the
+// buffers.
+fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, lending: Lending) → Type {
+    (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) →
+        site.Returns(stack, asm_labels(site.program)(Succ(f)),
+            λ (i: Nat) (s: MachineState<M>) => CalleePre<M>(callees, f, arguments, result)(i, s) ∧ stack.CalleeLent(lending, f, arguments)(i, s),
+            stack.CalleePost(result))
+}
+
+// Lent nothing, the contract is the one without buffers.
+theorem Site::calls_of_lent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat,
+    calls: site.CallsLent(stack, callees, bound, Lending::none())): site.Calls(stack, callees, bound) {
+    λ f below arguments result => site.returns_weaken(stack, asm_labels(site.program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => CalleePre<M>(callees, f, arguments, result)(i, s) ∧
+            stack.CalleeLent(Lending::none(), f, arguments)(i, s),
+        CalleePre<M>(callees, f, arguments, result), stack.CalleePost(result), calls(f, below, arguments, result),
+        λ i s held => ⟨held, ⟨trivial, stack.lent_none(i, s.memory)⟩⟩)
+}
+
 // What a body keeps of where it started (`s0`, its frame at offset `d`):
 // the callee-saved registers, and memory but for stores into its own frame
 // and below.
@@ -223,9 +285,11 @@ fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 
 // The CALL, against the callee's contract.
 theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), d: Nat, s0: MachineState<M>,
+    callees: Callees(), bound: Nat, lending: Lending, calls: site.CallsLent(stack, callees, bound, lending), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory),
     room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size, prog: Prog, callee: Nat, below: Succ(callee) <= bound,
     words: List<BitVec(64)>, answer: BitVec(64), answered: callees(callee, words, answer),
+    args_lent: ArgsLent(lent_count(lending.counts, callee), 0, words, lending.addresses, lending.buffers),
     g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(Succ(callee)))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
         λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t)) {
@@ -238,12 +302,23 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
     site.moves_call(stack, site.program.laid_out_fits(laid), k, prog, 0, Succ(callee), at,
         asm_labels(site.program)(Succ(callee)),
         call_lands(asm_labels(site.program), k, site.program, prog, 0, Succ(callee), site.program.laid_out_lands(laid), at),
-        CalleePre<M>(callees, callee, words, answer), stack.CalleePost(answer), calls(callee, below, words, answer),
+        λ (i: Nat) (s: MachineState<M>) => CalleePre<M>(callees, callee, words, answer)(i, s) ∧ stack.CalleeLent(lending, callee, words)(i, s),
+        stack.CalleePost(answer), calls(callee, below, words, answer),
         λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
         λ _ => d - 8,
-        λ x held => ⟨trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d))),
-            ⟨entered, ⟨args_after_write(words, argument_registers(), x.gprs, Rsp, push_address(x.gprs), trivial, held.left),
-                ⟨answered, deep⟩⟩⟩⟩,
+        λ x held => {
+            let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((d - 8) + 8)) = trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d)));
+            let pushed: (push_address(x.gprs) = stack.at(d - 8)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, d - 8));
+            let u = call_near_after(stack.writes, displacement, x);
+            let push_wrote: stack.Wrote(d, x.memory, u.memory) =
+                j(sym(pushed), λ a _ => stack.Wrote(d, x.memory, stack.writes.store(x.memory, a, word_bytes(next_rip(x.rip, 5)))),
+                    stack.wrote_store(d, x.memory, d - 8, { omega }, next_rip(x.rip, 5)));
+            let wrote: stack.Wrote(d + 64, s0.memory, u.memory) = stack.wrote_trans(d + 64, s0.memory, x.memory, u.memory,
+                held.right.right.left, stack.wrote_deeper(d, d + 64, { omega }, x.memory, u.memory, push_wrote));
+            ⟨rsp_x, ⟨entered, ⟨⟨args_after_write(words, argument_registers(), x.gprs, Rsp, push_address(x.gprs), trivial, held.left),
+                ⟨answered, deep⟩⟩, ⟨args_lent, stack.lent_all_later(d + 64, d - 8, { omega }, lending, s0.memory, u.memory, lent, wrote)⟩⟩⟩⟩
+        },
         λ x t held rsp_t returned => {
             let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((d - 8) + 8)) = trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d)));
             let pushed: (push_address(x.gprs) = stack.at(d - 8)) =
@@ -346,7 +421,8 @@ theorem saved_fit(d, size: Nat, fits: d + 64 <= size):
 
 // From the call's start to its return: spills, argument moves, CALL.
 theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), values: Valuation(), d: Nat, s0: MachineState<M>,
+    callees: Callees(), bound: Nat, lending: Lending, calls: site.CallsLent(stack, callees, bound, lending), values: Valuation(), d: Nat,
+    s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory),
     room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size,
     prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat,
     below: Succ(callee) <= bound, moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
@@ -354,6 +430,7 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
     g0: Gprs, represents: file.Represents(values, g0), rsp_g0: read_gpr(Rsp, g0) = stack.at(d),
     answered: callees(callee, words_of(values, arguments), values(64, result)),
+    args_lent: ArgsLent(lent_count(lending.counts, callee), 0, words_of(values, arguments), lending.addresses, lending.buffers),
     within: At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee))).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog), prog_len(At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee)))),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
@@ -376,8 +453,8 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
             λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
             call_moves<M>(site, laid, stack, values, d, s0, spilled, file, arguments, moves, moves_keeps, placed, leaves, g0, represents,
                 moved_in.witness, moved_in.proof),
-            call_step<M>(site, laid, stack, callees, bound, calls, d, s0, room, fits, moved, callee, below, words, answer,
-                answered, g0, rsp_g0, within.witness, within.proof)))
+            call_step<M>(site, laid, stack, callees, bound, lending, calls, d, s0, lent, room, fits, moved, callee, below, words, answer,
+                answered, args_lent, g0, rsp_g0, within.witness, within.proof)))
 }
 
 // The reloads keep what the callee kept.
@@ -424,13 +501,16 @@ theorem call_finishes<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
 
 // The call, its argument moves found.
 theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), values: Valuation(), d: Nat, s0: MachineState<M>,
+    callees: Callees(), bound: Nat, lending: Lending, calls: site.CallsLent(stack, callees, bound, lending), values: Valuation(), d: Nat,
+    s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory),
     rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size,
     prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>, names: Nat,
     below: Succ(callee) <= bound, moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
     placed: moves.file.outputs_check(word_ports(arguments), argument_registers()).IsTrue(),
-    leaves: leaves_all(moves.code, callee_saved()).IsTrue()):
-    EmitsIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(), homes: List<Lent>,
+    lend: args_lend(homes, lent_count(lending.counts, callee), 0, arguments).IsTrue()):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file,
+        StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
         Emitted(call_prog(prog, moves.code, callee), file.write(Rax, Some(Held(result, Word))), placement, names)) {
     let called = At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee)));
     let out_prog = saved_registers().reloads(called, 0);
@@ -442,8 +522,10 @@ theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
             λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Wrote(d + 64, s0.memory, x.memory),
             λ (t: MachineState<M>) => stack.Returned(d, s0, s.gprs, values(64, result), t),
             λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
-            call_returns<M>(site, laid, stack, callees, bound, calls, values, d, s0, room, fits, prog, file, callee, arguments,
-                result, below, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, holds.left.right,
+            call_returns<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, room, fits, prog, file, callee, arguments,
+                result, below, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, holds.left.right.left,
+                args_lend_lent(values, lending.addresses, lending.buffers, homes, holds.left.right.right, lent_count(lending.counts, callee), 0,
+                    arguments, lend),
                 called.within_trans(out_prog, site.program, Prog::within_reloads(saved_registers(), called, 0), within)),
             call_finishes<M>(site, laid, stack, values, d, s0, rsp0, fits, file, result, called, s.gprs, holds.left.left, rsp_s,
                 framed.left, within),
@@ -553,8 +635,8 @@ fn File::call_moves(self file: File, arguments: List<Nat>) → List<ArgumentMove
 // The call, refused where the callee is not below `bound` or the
 // arguments do not all reach their registers.
 fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
-    names, bound: Nat) → Option<Emitted> {
-    match Succ(callee).leb(bound) {
+    names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → Option<Emitted> {
+    match Succ(callee).leb(bound) && args_lend(homes, lent_count(counts, callee), 0, arguments) {
         False => None,
         True => match file.move_outputs(ArgumentMove::ports(file.call_moves(arguments)), ArgumentMove::registers(file.call_moves(arguments))) {
             None => None,
@@ -575,6 +657,15 @@ fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Pl
             False => None,
             True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
         },
+    }
+}
+
+// A leaf: one load of a buffer the scope has a home for
+// (`function_ir_lower_reads`), or nodes that read none.
+fn emit_leaf(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → Option<Emitted> {
+    match leaf_load(nodes) {
+        None => match nodes_pure(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
+        Some(load) => file.emit_load(prog, homes, load, placement, names),
     }
 }
 
@@ -795,35 +886,41 @@ fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, co
     }
 }
 
-// Round 2's `emit` with calls of the functions below `bound`.
-fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat) →
-    Option<Emitted> {
+// Round 2's `emit` with calls of the functions below `bound`, and loads of
+// the buffers the scope has homes for: `homes` here, the ones a loop
+// carries inside it (`loop_carried`), and what a region leaves after it
+// (`StructuredRegion::lends`). The arm of a conditional taken where its bit
+// is set knows that (`Truth`), which is what admits a load there.
+fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
+    counts: List<Nat>, homes: List<Lent>) → Option<Emitted> {
     match region {
-        Dataflow(body) => emit_kept_nodes(prog, file, body.nodes, placement, names),
-        Sequence(prefix, continuation) => match emit_kept_nodes(prog, file, prefix.nodes, placement, names) {
+        Dataflow(body) => emit_leaf(prog, file, body.nodes, placement, names, homes),
+        Sequence(prefix, continuation) => match emit_leaf(prog, file, prefix.nodes, placement, names, homes) {
             None => None,
-            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, homes),
         },
-        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound) {
+        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound, counts, homes) {
             None => None,
-            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => None,
-            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+                Succ(Succ(names)), bound, counts, homes) {
                 None => None,
-                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound,
+                    counts, homes) {
                     None => None,
                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                 },
             },
         },
-        Call(callee, arguments, result) => file.emit_call(prog, callee, arguments, result, placement, names, bound),
+        Call(callee, arguments, result) => file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(inputs, limit, parameters, count, placement) {
                 None => None,
                 Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
-                    Succ(Succ(Succ(Succ(names)))), bound) {
+                    Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                     None => None,
                     Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
                 },
@@ -911,38 +1008,244 @@ theorem emit_kept_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().Is
     })(lower_nodes_keeps<M>(values, nodes, placement, file))
 }
 
-theorem when_nonzero_in(callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+// Facts that follow from the ones a body starts with.
+theorem emits_in_weaken<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts, stronger: Type, implies: stronger → facts, out: Emitted,
+    emits: EmitsIn<M>(site, stack, values, d, s0, prog, file, facts, out)):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file, stronger, out) {
+    ⟨emits.left, λ within => site.moves_weaken(stack.writes, prog_len(prog), prog_len(out.prog),
+        λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ facts) ∧ stack.Framed(d, s0, s),
+        λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+        λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ stronger) ∧ stack.Framed(d, s0, s),
+        λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+        emits.right(within), λ s held => ⟨⟨held.left.left, implies(held.left.right)⟩, held.right⟩, λ t held => held)⟩
+}
+
+theorem may_emit_in_weaken<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts, stronger: Type, implies: stronger → facts, out: Option<Emitted>):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, out) → MayEmitIn<M>(site, stack, values, d, s0, prog, file, stronger, out) {
+    match out {
+        None => λ _ => trivial,
+        Some(emitted) => λ emits => emits_in_weaken<M>(site, stack, values, d, s0, prog, file, facts, stronger, implies, emitted, emits),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A load of a lent buffer (docs/native-one-compiler-design.md §2.3)
+
+// The address formed, then the byte loaded over it: the home says where the
+// buffer lies and how long it is, the path that the index is inside, and
+// the buffer is lent to this body, so the byte read is the buffer's
+// whatever the body has stored in its own frame.
+theorem load_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, file: File,
+    home: Lent, load: Load, destination: Gpr, placement: List<Place>, names: Nat, same: home.buffer = load.buffer,
+    bounded: file.bounded(load.index, home.length).IsTrue(), address: Lowered,
+    addressed: Addressed<M>(values, file, destination, home.base, load.index, address),
+    kept: leaves_all(address.code, callee_saved()).IsTrue() ∧ destination.apart(callee_saved()).IsTrue()):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file,
+        load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
+        Emitted(At(At(prog, 0, Block(address.code)), 0, LoadByte(ByteLoad(destination, destination))),
+            address.file.write(destination, Some(Held(load.output, Word))), placement, names)) {
+    let facts = load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers);
+    let formed = At(prog, 0, Block(address.code));
+    let the_load = ByteLoad(destination, destination);
+    let loaded = At(formed, 0, LoadByte(the_load));
+    let out_file = address.file.write(destination, Some(Held(load.output, Word)));
+    let index = values(64, load.index);
+    let sum = values(64, home.base).add(index);
+    let a = address_of(lending.addresses, home.buffer);
+    let xs = buffer_bytes(lending.buffers, home.buffer);
+    let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ framed(g, m);
+    let mid = λ (g: Gprs) (m: M) => ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = sum)) ∧
+        (facts ∧ (index.toNat() < values(64, home.length).toNat()))) ∧ framed(g, m);
+    ⟨prog.within_step(formed, 0, LoadByte(the_load), prog.within_then(0, Block(address.code))),
+     λ within => {
+        let formed_in = formed.within_before(0, LoadByte(the_load), site.program, within);
+        site.moves_trans(stack.writes, prog_len(prog), prog_len(formed), prog_len(loaded),
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (s: MachineState<M>) => mid(s.gprs, s.memory),
+            λ (t: MachineState<M>) => out_file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(address.code), pre, mid,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), formed_in.witness, prog, 0, address.code, formed_in.proof,
+                    site.program.block_reads_at(laid, formed_in.witness, prog, 0, address.code, formed_in.proof),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => mid(g, memory),
+                    λ x held => ⟨⟨addressed(x, held.left.left),
+                            ⟨held.left.right, file.bounded_sound(values, x.gprs, load.index, home.length, held.left.left, bounded)⟩⟩,
+                        ⟨kept_trans(callee_saved(), s0.gprs, x.gprs, execute_block_normal(address.code, x).gprs, held.right.left,
+                            execute_block_kept<M>(address.code, x, callee_saved(), kept.left)), held.right.right⟩⟩)),
+            site.moves_load_byte(stack.writes, site.program.laid_out_fits(laid), within.witness, formed, 0, the_load, within.proof,
+                λ (s: MachineState<M>) => mid(s.gprs, s.memory),
+                λ (t: MachineState<M>) => out_file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+                λ s held => {
+                    let home_holds = held.left.right.left.right;
+                    let short: (values(64, home.length).toNat() <= xs.len()) =
+                        j(sym(home_holds.right), λ w _ => w.toNat() <= xs.len(), BitVec::toNat_ofNat_le(64, xs.len()));
+                    let inside: (index.toNat() < xs.len()) =
+                        Nat::le_trans(Succ(index.toNat()), values(64, home.length).toNat(), xs.len(), held.left.right.right, short);
+                    let reads = stack.lent_address(d + 64, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, inside);
+                    let at: (read_gpr(destination, s.gprs) = a.add(index)) =
+                        trans(held.left.left.right, cong_fn(λ (b: BitVec(64)) => b.add(index), home_holds.left));
+                    let byte = buffer_byte(lending.buffers, home.buffer, index.toNat());
+                    let written: (values(64, load.output) = byte.zero_extend(56)) =
+                        j(sym(same), λ b _ => values(64, load.output) = byte_word(buffer_byte(lending.buffers, b, index.toNat())),
+                            held.left.right.left.left);
+                    Exists(byte, ⟨j(sym(at), λ x _ => x.toNat() < Nat::pow(2, 47), reads.left),
+                        ⟨j(sym(at), λ x _ => site.data.read(s.memory, x) = Some(byte),
+                            trans(reads.right, buffer_byte_at(lending.buffers, home.buffer, index.toNat(), inside))),
+                         ⟨address.file.represents_write(values, s.gprs, destination, Some(Held(load.output, Word)), byte.zero_extend(56),
+                            held.left.left.left, written),
+                          ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, write_gpr(destination, byte.zero_extend(56), s.gprs), held.right.left,
+                            kept_write(callee_saved(), destination, byte.zero_extend(56), s.gprs, kept.right)), held.right.right⟩⟩⟩⟩)
+                }))
+     }⟩
+}
+
+theorem File::load_at_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>,
+    names: Nat, same: home.buffer = load.buffer):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+        load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
+        file.load_at(prog, home, load, destination, placement, names)) {
+    let facts = load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers);
+    match bounded: file.bounded(load.index, home.length) {
+        False => trivial,
+        True => (match file.address(destination, home.base, load.index) as λ a =>
+            a.All(λ (out: Lowered) => Addressed<M>(values, file, destination, home.base, load.index, out)) →
+            MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match a {
+                None => None,
+                Some(address) => match leaves_all(address.code, callee_saved()) && destination.apart(callee_saved()) {
+                    False => None,
+                    True => Some(Emitted(At(At(prog, 0, Block(address.code)), 0, LoadByte(ByteLoad(destination, destination))),
+                        address.file.write(destination, Some(Held(load.output, Word))), placement, names)),
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(address) => λ addressed =>
+                match kept: leaves_all(address.code, callee_saved()) && destination.apart(callee_saved()) {
+                    False => trivial,
+                    True => load_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, file, home, load, destination, placement,
+                        names, same, is_true_of_eq(file.bounded(load.index, home.length), bounded), address, addressed,
+                        Bool::is_true_and(leaves_all(address.code, callee_saved()), destination.apart(callee_saved()),
+                            is_true_of_eq(leaves_all(address.code, callee_saved()) && destination.apart(callee_saved()), kept))),
+                },
+        })(file.address_addressed<M>(values, destination, home.base, load.index)),
+    }
+}
+
+theorem File::load_from_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, load: Load, destination: Gpr, placement: List<Place>, names: Nat,
+    homes: List<Lent>):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+        load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+        file.load_from(prog, homes, load, destination, placement, names)) {
+    match homes {
+        Nil => trivial,
+        Cons(home, rest) => {
+            let all = load.Holds(values, lending.buffers) ∧ HomesHold(Cons(home, rest), values, lending.addresses, lending.buffers);
+            let later = may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file,
+                load.Holds(values, lending.buffers) ∧ HomesHold(rest, values, lending.addresses, lending.buffers), all,
+                λ held => ⟨held.left, held.right.right⟩, file.load_from(prog, rest, load, destination, placement, names),
+                file.load_from_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, load, destination, placement, names, rest));
+            match same: home.buffer.same(load.buffer) {
+                False => later,
+                True => (match file.load_at(prog, home, load, destination, placement, names) as λ e =>
+                    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                        load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers), e) →
+                    MayEmitIn<M>(site, stack, values, d, s0, prog, file, all, match e {
+                        None => file.load_from(prog, rest, load, destination, placement, names),
+                        Some(emitted) => Some(emitted),
+                    }) {
+                    None => λ _ => later,
+                    Some(emitted) => λ emits => emits_in_weaken<M>(site, stack, values, d, s0, prog, file,
+                        load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers), all,
+                        λ held => ⟨held.left, held.right.left⟩, emitted, emits),
+                })(file.load_at_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, home, load, destination, placement, names,
+                    home.buffer.same_sound(load.buffer, same))),
+            }
+        },
+    }
+}
+
+theorem emit_leaf_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory),
+    prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+        NodesHoldOver(lending.buffers, values, nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+        emit_leaf(prog, file, nodes, placement, names, homes)) {
+    let facts = NodesHoldOver(lending.buffers, values, nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
+    (match leaf_load(nodes) as λ found => leaf_load(nodes) = found →
+        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match found {
+            None => match nodes_pure(nodes) { False => None, True => emit_kept_nodes(prog, file, nodes, placement, names) },
+            Some(load) => file.emit_load(prog, homes, load, placement, names),
+        }) {
+        None => λ _ => match pure: nodes_pure(nodes) {
+            False => trivial,
+            True => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), facts,
+                λ held => nodes_hold_pure(values, lending.buffers, nodes, is_true_of_eq(nodes_pure(nodes), pure), held.left),
+                emit_kept_nodes(prog, file, nodes, placement, names),
+                emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, nodes, placement, names)),
+        },
+        Some(load) => λ found => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file,
+            load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), facts,
+            λ held => ⟨leaf_load_holds(values, lending.buffers, nodes, load, found, held.left), held.right⟩,
+            file.emit_load(prog, homes, load, placement, names),
+            match placement as λ p => MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+                file.emit_load(prog, homes, load, p, names)) {
+                Nil => trivial,
+                Cons(place, rest) => match place as λ q => MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                    load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+                    file.emit_load(prog, homes, load, Cons(q, rest), names)) {
+                    Folded => trivial,
+                    Into(destination) => file.load_from_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, load, destination, rest,
+                        names, homes),
+                },
+            }),
+    })(refl)
+}
+
+theorem when_nonzero_in(buffers: Buffers(), callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
     when_true, when_false: StructuredRegion, clear: !values(1, condition).head_bit() = False,
-    holds: StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
-    StructuredRegionHoldsIn(callees, values, when_true) {
+    holds: StructuredRegionHoldsOver(buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHoldsOver(buffers, callees, values, when_true) {
     (match values(1, condition).head_bit() as λ h => !h = False →
-        (match h { False => StructuredRegionHoldsIn(callees, values, when_false), True => StructuredRegionHoldsIn(callees, values, when_true) }) →
-        StructuredRegionHoldsIn(callees, values, when_true) {
+        (match h { False => StructuredRegionHoldsOver(buffers, callees, values, when_false), True => StructuredRegionHoldsOver(buffers, callees, values, when_true) }) →
+        StructuredRegionHoldsOver(buffers, callees, values, when_true) {
         False => λ no _ => absurd(no),
         True => λ _ held => held,
     })(clear, holds)
 }
 
-theorem when_zero_in(callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+theorem when_zero_in(buffers: Buffers(), callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
     when_true, when_false: StructuredRegion, set: !values(1, condition).head_bit() = True,
-    holds: StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
-    StructuredRegionHoldsIn(callees, values, when_false) {
+    holds: StructuredRegionHoldsOver(buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHoldsOver(buffers, callees, values, when_false) {
     (match values(1, condition).head_bit() as λ h => !h = True →
-        (match h { False => StructuredRegionHoldsIn(callees, values, when_false), True => StructuredRegionHoldsIn(callees, values, when_true) }) →
-        StructuredRegionHoldsIn(callees, values, when_false) {
+        (match h { False => StructuredRegionHoldsOver(buffers, callees, values, when_false), True => StructuredRegionHoldsOver(buffers, callees, values, when_true) }) →
+        StructuredRegionHoldsOver(buffers, callees, values, when_false) {
         False => λ _ held => held,
         True => λ no _ => absurd(no),
     })(set, holds)
 }
 
+// A bit whose negation is clear is set.
+theorem not_false(b: Bool, clear: !b = False): b = True {
+    (match b as λ c => !c = False → c = True { False => λ no => absurd(no), True => λ _ => refl })(clear)
+}
+
 theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
-    inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion,
+    buffers: Buffers(), callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion, scope: Type,
     tested: Tested(file, condition), names: Nat, yes, no: Emitted,
-    yes_emits: EmitsIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), yes),
-    no_emits: EmitsIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHoldsIn(callees, values, when_false), no)):
+    yes_emits: EmitsIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)),
+        StructuredRegionHoldsOver(buffers, callees, values, when_true) ∧ scope, yes),
+    no_emits: EmitsIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+        StructuredRegionHoldsOver(buffers, callees, values, when_false) ∧ scope, no)):
     EmitsIn<M>(site, stack, values, d, s0, prog, file,
-        StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+        StructuredRegionHoldsOver(buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)) ∧ scope,
         Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)) {
     let test = tested.test;
     let else_name = Succ(names);
@@ -954,7 +1257,8 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
         prog.within_then(0, Block([test.instruction()])));
     let to_second = prog.within_step(jumped, else_name, Block([]),
         prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
-    let holds = StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
+    let holds = StructuredRegionHoldsOver(buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)) ∧
+        scope;
     let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧ framed(g, m);
     let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file, file.known).Represents(values, g) ∧ framed(g, m);
@@ -983,43 +1287,57 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
             tested_in.witness, tested_in.proof, branched_in.witness, branched_in.proof, jumped_in.witness, jumped_in.proof,
             else_lands, join_lands, pre, post,
             site.moves_weaken(stack.writes, prog_len(branched), prog_len(yes.prog),
-                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s)) ∧ known,
+                λ (s: MachineState<M>) => ((file.know(Truth(condition)).Represents(values, s.gprs) ∧
+                    (StructuredRegionHoldsOver(buffers, callees, values, when_true) ∧ scope)) ∧ stack.Framed(d, s0, s)) ∧ known,
                 λ (t: MachineState<M>) => (yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) ∧ known,
                 λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
                 site.moves_carry(stack.writes, prog_len(branched), prog_len(yes.prog),
-                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s),
+                    λ (s: MachineState<M>) => (file.know(Truth(condition)).Represents(values, s.gprs) ∧
+                        (StructuredRegionHoldsOver(buffers, callees, values, when_true) ∧ scope)) ∧ stack.Framed(d, s0, s),
                     λ (t: MachineState<M>) => yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t), known, yes_emits.right(yes_in)),
-                λ s held => ⟨⟨⟨held.left.left.left, when_nonzero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
-                    trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
-                    held.left.left.left.right⟩,
+                λ s held => {
+                    let clear: (!values(1, condition).head_bit() = False) = trans(sym(selects(s.gprs, held.left.left.left)), held.right);
+                    ⟨⟨⟨file.represents_know(values, s.gprs, Truth(condition), held.left.left.left, not_false(values(1, condition).head_bit(), clear)),
+                        ⟨when_nonzero_in(buffers, callees, values, inputs, condition, arguments, outputs, when_true, when_false, clear,
+                            held.left.left.right.left), held.left.left.right.right⟩⟩, held.left.right⟩,
+                     held.left.left.left.right⟩
+                },
                 λ t held => ⟨yes.file.meet_left(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩),
             site.moves_weaken(stack.writes, prog_len(second), prog_len(no.prog),
-                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s)) ∧ known,
+                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧
+                    (StructuredRegionHoldsOver(buffers, callees, values, when_false) ∧ scope)) ∧ stack.Framed(d, s0, s)) ∧ known,
                 λ (t: MachineState<M>) => (no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) ∧ known,
                 λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
                 site.moves_carry(stack.writes, prog_len(second), prog_len(no.prog),
-                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s),
+                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧
+                        (StructuredRegionHoldsOver(buffers, callees, values, when_false) ∧ scope)) ∧ stack.Framed(d, s0, s),
                     λ (t: MachineState<M>) => no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t), known, no_emits.right(no_in)),
-                λ s held => ⟨⟨⟨held.left.left.left, when_zero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
-                    trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
+                λ s held => ⟨⟨⟨held.left.left.left, ⟨when_zero_in(buffers, callees, values, inputs, condition, arguments, outputs, when_true,
+                    when_false, trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right.left),
+                    held.left.left.right.right⟩⟩, held.left.right⟩,
                     held.left.left.left.right⟩,
                 λ t held => ⟨yes.file.meet_right(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩))
      }⟩
 }
 
 theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
-    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
-    fits: d + 64 <= stack.size, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>, names: Nat):
-    MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)),
-        file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
-    let facts = StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result));
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, lending: Lending,
+    calls: site.CallsLent(stack, callees, bound, lending), values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
+    fits: d + 64 <= stack.size, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>, names: Nat,
+    homes: List<Lent>):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+        StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+        file.emit_call(prog, callee, arguments, result, placement, names, bound, lending.counts, homes)) {
+    let facts = StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)) ∧
+        HomesHold(homes, values, lending.addresses, lending.buffers);
     let ports = word_ports(arguments);
     let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
-    match under: Succ(callee).leb(bound) {
+    let lends = args_lend(homes, lent_count(lending.counts, callee), 0, arguments);
+    match under: Succ(callee).leb(bound) && lends {
         False => trivial,
         True => (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
                 MayKeep<M>(values, file, True, moved) →
@@ -1039,10 +1357,10 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                                 leaves_all(moves.code, callee_saved()),
                                 is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
                                     checked));
-                            call_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, callee,
-                                arguments, result, placement, names,
-                                Succ(callee).leb_sound(bound, is_true_of_eq(Succ(callee).leb(bound), under)),
-                                moves, keeps, both.left, both.right)
+                            let allowed = Bool::is_true_and(Succ(callee).leb(bound), lends, is_true_of_eq(Succ(callee).leb(bound) && lends, under));
+                            call_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, prog, file,
+                                callee, arguments, result, placement, names, Succ(callee).leb_sound(bound, allowed.left),
+                                moves, keeps, both.left, both.right, homes, allowed.right)
                         },
                     },
             })(move_outputs_keeps<M>(values, ArgumentMove::ports(order), file, ArgumentMove::registers(order))),
@@ -1435,20 +1753,20 @@ theorem loop_marks<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
 }
 
 // A pass's body, from the head's file at the pass's valuation.
-theorem loop_body_runs<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), d: Nat, s0: MachineState<M>,
+theorem loop_body_runs<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), Pass: Valuation() → Type, d: Nat, s0: MachineState<M>,
     start: Prog, entry: LoopEntry, count: Nat, parameters: List<Nat>,
     head_ok: (pass: Valuation()) → (g: Gprs) →
         ArgsIn(words_of(pass, Cons(count, parameters)), Cons(entry.registers.counter, entry.registers.state), g) →
         entry.head.Represents(pass, g),
     body: StructuredRegion, values: Valuation(), pass: Emitted,
-    emits: EmitsIn<M>(site, stack, values, d, s0, start, entry.head, StructuredRegionHoldsIn(callees, values, body), pass),
+    emits: EmitsIn<M>(site, stack, values, d, s0, start, entry.head, Pass(values), pass),
     pass_in: pass.prog.Within(site.program), rest: Nat, counted: values(64, count) = BitVec::ofNat(Succ(rest)),
-    passed: StructuredRegionHoldsIn(callees, values, body)):
+    passed: Pass(values)):
     site.Moves(stack.writes, prog_len(start), prog_len(pass.prog),
         λ (s: MachineState<M>) => stack.LoopHead(d, s0, entry.registers, Succ(rest), words_of(values, parameters))(s.gprs, s.memory),
         λ (t: MachineState<M>) => stack.LoopPassed(d, s0, pass.file, values)(t.gprs, t.memory)) {
     site.moves_weaken(stack.writes, prog_len(start), prog_len(pass.prog),
-        λ (s: MachineState<M>) => (entry.head.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, body)) ∧
+        λ (s: MachineState<M>) => (entry.head.Represents(values, s.gprs) ∧ Pass(values)) ∧
             stack.Framed(d, s0, s),
         λ (t: MachineState<M>) => pass.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
         λ (s: MachineState<M>) => stack.LoopHead(d, s0, entry.registers, Succ(rest), words_of(values, parameters))(s.gprs, s.memory),
@@ -1614,15 +1932,15 @@ theorem loop_rounds<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
 
 // The loop: the entry's moves, the passes by induction, and the file after.
 theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    Pass: Valuation() → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
     inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
     exhausted: Nat, names: Nat, entry: LoopEntry, entry_ok: LoopEntryOk<M>(values, file, inputs, limit, parameters, count, entry),
     pass: Emitted,
     pass_emits: (v: Valuation()) →
-        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, StructuredRegionHoldsIn(callees, v, body), pass),
+        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, Pass(v), pass),
     out: LoopExit, out_ok: LoopExitOk<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted, out)):
     EmitsIn<M>(site, stack, values, d, s0, prog, file,
-        StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+        LoopHolds(Pass, values, inputs, limit, parameters, count, exit, next, outputs, exhausted),
         Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)) {
     let registers = entry.registers;
     let apart = entry_ok.right.right;
@@ -1637,7 +1955,7 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
     let grown: tested.Within(pass.prog) = pass_emits(values).left;
     let opened: prog.Within(tested) = Exists(4, refl);
     let closed: pass.prog.Within(done) = Exists(12, refl);
-    let holds = StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted));
+    let holds = LoopHolds(Pass, values, inputs, limit, parameters, count, exit, next, outputs, exhausted);
     ⟨prog.within_trans(tested, done, opened, tested.within_trans(pass.prog, done, grown, closed)),
      λ within => {
         let program = site.program;
@@ -1670,20 +1988,20 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
             x_lands, tested_in, state, prog_len(done), Done(state, True),
             loop_marks<M>(site, laid, stack, d, s0, registers, apart, again, x_name, set_in.witness, set_in.proof, state));
         let enters = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
-            (passed: StructuredRegionHoldsIn(callees, v, body)) =>
+            (passed: Pass(v)) =>
             loop_enters<M>(site, laid, stack, d, s0, head, registers, x_name, prog_len(again), x_lands, tested_in, rest, lt,
                 words_of(v, parameters), prog_len(pass.prog), Passed(v),
-                loop_body_runs<M>(site, stack, callees, d, s0, tested, entry, count, parameters, entry_ok.right.left, body, v, pass,
+                loop_body_runs<M>(site, stack, Pass, d, s0, tested, entry, count, parameters, entry_ok.right.left, body, v, pass,
                     pass_emits(v), pass_in, rest, counted, passed));
         let leave = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
-            (passed: StructuredRegionHoldsIn(callees, v, body)) (set_bit: v(1, exit).head_bit() = True) =>
+            (passed: Pass(v)) (set_bit: v(1, exit).head_bit() = True) =>
             site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(done), Head(Succ(rest), words_of(v, parameters)),
                 Passed(v), Done(words_of(v, next), False),
                 enters(rest, lt, v, counted, passed),
                 loop_leaves<M>(site, laid, stack, d, s0, registers, apart, pass.prog, pass.file, count, exit, next, outputs, exhausted, out,
                     out_ok, names, jumped_in, c_lands, prog_len(done), j_lands, v, set_bit));
         let rounds = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
-            (passed: StructuredRegionHoldsIn(callees, v, body)) (clear: v(1, exit).head_bit() = False) =>
+            (passed: Pass(v)) (clear: v(1, exit).head_bit() = False) =>
             site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(head), Head(Succ(rest), words_of(v, parameters)),
                 Passed(v), Head(rest, words_of(v, next)),
                 enters(rest, lt, v, counted, passed),
@@ -1708,7 +2026,7 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
             site.moves_weaken(stack.writes, prog_len(head), prog_len(done), Head(n, words_of(values, inputs)),
                 Done(words_of(values, outputs), values(1, exhausted).head_bit()), Head(n, words_of(values, inputs)), after,
                 site.loop_passes(stack.writes, prog_len(head), prog_len(done), Head, Done,
-                    λ (v: Valuation()) => StructuredRegionHoldsIn(callees, v, body), parameters, count, exit, next, stop, leave, rounds,
+                    Pass, parameters, count, exit, next, stop, leave, rounds,
                     n, BitVec::toNat_lt_pow(64, values(64, limit)), words_of(values, inputs), words_of(values, outputs),
                     values(1, exhausted).head_bit(), held.left.right),
                 λ x h => h,
@@ -1719,78 +2037,75 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
 }
 
 theorem loop_close_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    Pass: Valuation() → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
     inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
     exhausted: Nat, names: Nat, entry: LoopEntry, entry_ok: LoopEntryOk<M>(values, file, inputs, limit, parameters, count, entry),
     pass: Emitted,
     pass_emits: (v: Valuation()) →
-        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, StructuredRegionHoldsIn(callees, v, body), pass)):
+        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, Pass(v), pass)):
     MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-        StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+        LoopHolds(Pass, values, inputs, limit, parameters, count, exit, next, outputs, exhausted),
         pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names)) {
     (match pass.file.loop_exit(entry.registers, count, exit, next, outputs, exhausted) as λ e =>
         MayLoopExit<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted, e) →
         MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-            StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+            LoopHolds(Pass, values, inputs, limit, parameters, count, exit, next, outputs, exhausted),
             match e {
                 None => None,
                 Some(out) => Some(Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)),
             }) {
         None => λ _ => trivial,
-        Some(out) => λ out_ok => loop_emits<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, limit, parameters, count,
+        Some(out) => λ out_ok => loop_emits<M>(site, laid, stack, Pass, values, d, s0, prog, file, inputs, limit, parameters, count,
             body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits, out, out_ok),
     })(loop_exit_sound<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted))
 }
 
 // Round 2's theorem over machine runs: whatever `emit_calls` emits keeps
 // the frame and computes the region, its calls answered by the functions
-// below `bound`.
+// below `bound`, its loads by the buffers the body is lent.
 theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
-    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
-    fits: d + 64 <= stack.size): (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
-    MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, region),
-        region.emit_calls(prog, file, placement, names, bound)) {
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, lending: Lending,
+    calls: site.CallsLent(stack, callees, bound, lending), values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
+    fits: d + 64 <= stack.size): (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, region) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), region.emit_calls(prog, file, placement, names, bound, lending.counts, homes)) {
     match region {
-        Dataflow(body) => λ prog file placement names => emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, body.nodes, placement, names),
-        Sequence(prefix, continuation) => λ prog file placement names =>
-            (match emit_kept_nodes(prog, file, prefix.nodes, placement, names) as λ e =>
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, prefix.nodes), e) →
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, RegionHolds(prefix, values) ∧ StructuredRegionHoldsIn(callees, values, continuation), match e {
+        Dataflow(body) => λ homes prog file placement names =>
+            emit_leaf_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, file, body.nodes, placement, names, homes),
+        Sequence(prefix, continuation) => λ homes prog file placement names =>
+            (match emit_leaf(prog, file, prefix.nodes, placement, names, homes) as λ e =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHoldOver(lending.buffers, values, prefix.nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), e) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, (RegionHolds(prefix, values, buffers := lending.buffers) ∧ StructuredRegionHoldsOver(lending.buffers, callees, values, continuation)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), match e {
                     None => None,
-                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
                 }) {
                 None => λ _ => trivial,
-                Some(first) => λ first_emits => may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, NodesHold(values, prefix.nodes),
-                    StructuredRegionHoldsIn(callees, values, continuation), first, first_emits,
-                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
-                    continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
-            })(emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, prefix.nodes, placement, names)),
-        Compose(prefix, continuation) => λ prog file placement names =>
-            (match prefix.emit_calls(prog, file, placement, names, bound) as λ e =>
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix), e) →
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix) ∧ StructuredRegionHoldsIn(callees, values, continuation), match e {
+                Some(first) => λ first_emits => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file, (NodesHoldOver(lending.buffers, values, prefix.nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)) ∧ (StructuredRegionHoldsOver(lending.buffers, callees, values, continuation) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)), (RegionHolds(prefix, values, buffers := lending.buffers) ∧ StructuredRegionHoldsOver(lending.buffers, callees, values, continuation)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), λ held => ⟨⟨held.left.left, held.right⟩, ⟨held.left.right, held.right⟩⟩, continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, homes), may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, NodesHoldOver(lending.buffers, values, prefix.nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+                        StructuredRegionHoldsOver(lending.buffers, callees, values, continuation) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), first, first_emits, continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
+                        continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, homes, first.prog, first.file, first.placement, first.names))),
+            })(emit_leaf_emits<M>(site, laid, stack, lending, values, d, s0, lent, prog, file, prefix.nodes, placement, names, homes)),
+        Compose(prefix, continuation) => λ homes prog file placement names =>
+            (match prefix.emit_calls(prog, file, placement, names, bound, lending.counts, homes) as λ e =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, prefix) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), e) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, (StructuredRegionHoldsOver(lending.buffers, callees, values, prefix) ∧ StructuredRegionHoldsOver(lending.buffers, callees, values, continuation)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), match e {
                     None => None,
-                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, prefix.lends(homes)),
                 }) {
                 None => λ _ => trivial,
-                Some(first) => λ first_emits => may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix),
-                    StructuredRegionHoldsIn(callees, values, continuation), first, first_emits,
-                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
-                    continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
-            })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, placement, names)),
+                Some(first) => λ first_emits => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file, (StructuredRegionHoldsOver(lending.buffers, callees, values, prefix) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)) ∧ (StructuredRegionHoldsOver(lending.buffers, callees, values, continuation) ∧ HomesHold(prefix.lends(homes), values, lending.addresses, lending.buffers)), (StructuredRegionHoldsOver(lending.buffers, callees, values, prefix) ∧ StructuredRegionHoldsOver(lending.buffers, callees, values, continuation)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), λ held => ⟨⟨held.left.left, held.right⟩, ⟨held.left.right, prefix.lends_hold(values, lending.addresses, lending.buffers, callees, homes, held.right, held.left.left)⟩⟩, continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, prefix.lends(homes)), may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, prefix) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+                        StructuredRegionHoldsOver(lending.buffers, callees, values, continuation) ∧ HomesHold(prefix.lends(homes), values, lending.addresses, lending.buffers), first, first_emits, continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound, lending.counts, prefix.lends(homes)),
+                        continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, prefix.lends(homes), first.prog, first.file, first.placement, first.names))),
+            })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, homes, prog, file, placement, names)),
         // The motive is written out: read off the goal it is past the
         // budget a stuck head is spelled within, the file's slots being a
         // reduction further down than a function's application was.
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ homes prog file placement names =>
             match file.branch_test(condition) as λ t =>
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-                    match t {
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), match t {
                         None => None,
-                        Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                        Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, lending.counts, homes) {
                             None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) {
                                 None => None,
                                 Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
@@ -1798,66 +2113,58 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
                     }) {
                 None => trivial,
                 Some(tested) =>
-                    (match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
-                        MayEmitIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), y) →
-                        MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-                            StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-                            match y {
+                    (match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, lending.counts, homes) as λ y =>
+                        MayEmitIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), StructuredRegionHoldsOver(lending.buffers, callees, values, when_true) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), y) →
+                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), match y {
                                 None => None,
-                                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) {
                                     None => None,
                                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 },
                             }) {
                         None => λ _ => trivial,
                         Some(yes) => λ yes_emits =>
-                            (match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) as λ n =>
-                                MayEmitIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
-                                    StructuredRegionHoldsIn(callees, values, when_false), n) →
-                                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-                                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-                                    match n {
+                            (match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) as λ n =>
+                                MayEmitIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHoldsOver(lending.buffers, callees, values, when_false) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), n) →
+                                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsOver(lending.buffers, callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), match n {
                                         None => None,
                                         Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                     }) {
                                 None => λ _ => trivial,
-                                Some(no) => λ no_emits => branch_emits_in<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, condition, arguments, outputs,
-                                    when_true, when_false, tested, names, yes, no, yes_emits, no_emits),
-                            })(when_false.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
-                                yes.placement, yes.names)),
-                    })(when_true.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog.branched(tested.test, Succ(names)), file, placement,
-                        Succ(Succ(names)))),
+                                Some(no) => λ no_emits => branch_emits_in<M>(site, laid, stack, lending.buffers, callees, values, d, s0, prog, file, inputs,
+                                    condition, arguments, outputs, when_true, when_false, HomesHold(homes, values, lending.addresses, lending.buffers), tested, names, yes, no, yes_emits, no_emits),
+                            })(when_false.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names)),
+                    })(when_true.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)))),
             },
-        Call(callee, arguments, result) => λ prog file placement names =>
-            file.emit_call_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, callee, arguments,
-                result, placement, names),
-        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names => {
-            let holds = StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted));
+        Call(callee, arguments, result) => λ homes prog file placement names =>
+            file.emit_call_emits<M>(site, laid, stack, callees, bound, lending, calls, values, d, s0, lent, rsp0, room, fits, prog, callee,
+                arguments, result, placement, names, homes),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes prog file placement names => {
+            let facts = StructuredRegionHoldsOver(lending.buffers, callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
+            let holds = LoopHolds(λ (v: Valuation()) => StructuredRegionHoldsOver(lending.buffers, callees, v, body) ∧ HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, lending.addresses, lending.buffers), values, inputs, limit, parameters, count, exit, next, outputs, exhausted);
             (match file.loop_entry(inputs, limit, parameters, count, placement) as λ e =>
                 MayLoopEntry<M>(values, file, inputs, limit, parameters, count, e) →
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, holds, match e {
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match e {
                     None => None,
-                    Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
-                        Succ(Succ(Succ(Succ(names)))), bound) {
+                    Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                         None => None,
                         Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
                     },
                 }) {
                 None => λ _ => trivial,
                 Some(entry) => λ entry_ok =>
-                    (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))),
-                        bound) as λ b =>
-                        ((v: Valuation()) → MayEmitIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head,
-                            StructuredRegionHoldsIn(callees, v, body), b)) →
-                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, holds, match b {
+                    (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) as λ b =>
+                        ((v: Valuation()) → MayEmitIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, StructuredRegionHoldsOver(lending.buffers, callees, v, body) ∧ HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, lending.addresses, lending.buffers), b)) →
+                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match b {
                             None => None,
                             Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
                         }) {
                         None => λ _ => trivial,
-                        Some(pass) => λ pass_emits => loop_close_emits<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, limit,
-                            parameters, count, body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits),
-                    })(λ v => body.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, v, d, s0, rsp0, room, fits,
-                        loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))))),
+                        Some(pass) => λ pass_emits => may_emit_in_weaken<M>(site, stack, values, d, s0, prog, file, holds, facts, λ held => loop_carries(λ (v: Valuation()) => StructuredRegionHoldsOver(lending.buffers, callees, v, body), values, lending.addresses, lending.buffers, homes, held.right,
+                                inputs, parameters, count, exit, next, values(64, limit).toNat(), words_of(values, outputs), values(1, exhausted).head_bit(),
+                                held.left).left, pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names), loop_close_emits<M>(site, laid, stack, λ (v: Valuation()) => StructuredRegionHoldsOver(lending.buffers, callees, v, body) ∧ HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, lending.addresses, lending.buffers), values, d, s0, prog, file, inputs, limit,
+                                parameters, count, body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits)),
+                    })(λ v => body.emit_calls_emits<M>(site, laid, stack, callees, bound, lending, calls, v, d, s0, lent, rsp0, room, fits, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))))),
             })(loop_entry_sound<M>(values, file, inputs, limit, parameters, count, placement))
         },
     }
