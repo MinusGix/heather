@@ -93,6 +93,29 @@ theorem nodes_run_quiet(values: Valuation(), file: Buffers(), nodes: List<Node>)
     }
 }
 
+// And only so: it leaves the file, and holds over it.
+theorem Node::runs_still(self node: Node, values: Valuation(), before, after: Buffers()):
+    (!node.stores()).IsTrue() → node.Runs(values, before, after) → (after = before) ∧ NodeHolds(values, node, buffers := before) {
+    match node {
+        BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        _ => λ _ ran => ⟨ran.right, ran.left⟩,
+    }
+}
+
+theorem nodes_run_still(values: Valuation(), nodes: List<Node>): (before, after: Buffers()) → nodes_quiet(nodes).IsTrue() →
+    NodesRun(nodes, values, before, after) → (after = before) ∧ NodesHoldOver(before, values, nodes) {
+    match nodes {
+        Nil => λ before after _ ran => ⟨ran, trivial⟩,
+        Cons(node, rest) => λ before after quiet ran => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            let mid = ran.witness;
+            let here = node.runs_still(values, before, mid, both.left, ran.proof.left);
+            let later = nodes_run_still(values, rest, mid, after, both.right, ran.proof.right);
+            ⟨trans(later.left, here.left), ⟨here.right, j(here.left, λ m _ => NodesHoldOver(m, values, rest), later.right)⟩⟩
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loops
 

@@ -92,7 +92,7 @@ is a `runtime fn`, compiled once and called.
 - *One `Prog`.* The program's code stays first, so its entry is offset
   zero; the functions follow (`emit_functions_after`). The function
   compiler's theorem is already about any site its code lies within
-  (`MayCall`), so nothing is proved twice. Function `f` keeps the label
+  (`MayCallOver`), so nothing is proved twice. Function `f` keeps the label
   `Succ(f)`; the program names its procedures, its deep exit and `main`'s
   labels past the functions' (`Layout.functions`), and the functions'
   inner labels start where the program's end.
@@ -175,12 +175,15 @@ buffers as well as words. Then:
 - *The contract.* What a program lends is a `Lending`: how many buffers
   each function takes, where each lies, and its bytes. A function is
   entered with the homes of the buffers it takes as its first arguments
-  and every buffer lent (`Stack::CalleeLent`: `Stack::Lends`, the bytes
-  read at the address whatever the call stores below where it is entered).
-  `Site::CallsLent` is every function meeting that. The contract without
-  buffers is its instance at `Lending::none()` (`Site::calls_of_lent`), so
-  every program that lends nothing is as it was, bytes included, and the
-  old entry points are the new ones at an empty table.
+  and every buffer lent. As first built that was `Stack::Lends` (the
+  bytes read at the address whatever the call stores below where it is
+  entered); since U4's step 4a-3 it is the lending's laws and the bytes in
+  memory when the call is entered (`Stack::LentOver`, §2.6), and
+  `Site::CallsOver` is every function meeting that. The contract without
+  buffers is its instance at `Lending::none()` (`lower_program_correct`,
+  its statement unchanged), so every program that lends nothing is as it
+  was, bytes included, and the old entry points are the new ones at an
+  empty table.
 - *The theorems.* `lower_program_lent_correct`, and what a caller cites,
   `compiled_returns_lent`: with the buffers lent the code returns what the
   program evaluates the function to over them.
@@ -270,16 +273,17 @@ returns its address, with its two different answers).
   (`program_counts`). A function lent nothing is called by the code it
   was.
 - *The proof* (`native_compile_function.hthr`). The function's contract
-  (`Site::CallsLent`, at every address and over every buffers) is cited at
-  the placed homes over the buffers lent, and `program_eval_placeless`
-  turns its answer into the stated one (`Target::answers_of`; the joints
-  are `homes_apart`, `args_lent_placed` and `program_counts_lent`,
-  `function_ir_lend.hthr`). `Lends` comes from the claim between
-  statements, which places every buffer's bytes in the data region
-  (`Target::buffer_readable`) and which stores below the running frame
-  keep (`held_wrote`): so the buffers are lent to the call as they are
-  when it is entered (`Target::lent_all`), with no fact about where the
-  region lies beyond what `Target` already holds. A buffer of a source is
+  (`Site::CallsOver`, at every address, over every buffers and under any
+  lending whose laws hold) is cited at the placed homes over the buffers
+  lent, and `program_eval_placeless` turns its answer into the stated one
+  (`Target::answers_of`; the joints are `homes_apart`, `args_lent_placed`
+  and `program_counts_lent`, `function_ir_lend.hthr`). The claim between
+  statements places every buffer's bytes in the data region
+  (`Target::buffer_readable`), so the buffers are in memory as they are
+  when the call is entered (`Target::in_memory`), and the laws hold
+  because the data region lies below the process stack, whose stores
+  therefore miss it (`Target::loan`, with the whole stack as the caller's
+  side). A buffer of a source is
   always as long as its capacity, which is why the capacity is the length.
 
 What a function over a count needs: a read fills a prefix of the buffer,
@@ -670,8 +674,10 @@ its caller does not, by how the written set is computed, so a caller
 lends on what it was lent (`Loan::narrow`).
 
 **Inside the function compiler** the file is no longer a constant of the
-proof. What emitting proves (`EmitsIn`) gains the file before and after
-and, beside the frame, that every lent span reads the file as it is now.
+proof. What emitting proves (`EmitsOver`) carries the file before and
+after and, beside the frame, that every lent span reads the file as it
+is now (`Stack::Trail`: `WroteIn` from the function's entry, and
+`Stack::InMemory` of the file now).
 Code that stores only in its own frame keeps that by the first law, so a
 load reads through it at the memory it runs in, with no trip back to
 entry. A store is a leaf of its own, like a load: the address formed
@@ -778,9 +784,22 @@ Each is a PR and ends with something that runs.
     after a store reading the byte stored, and a caller's file being the
     one its callee leaves
     (`lib/_tests/native/function_ir/function_ir_writes_tests.hthr`).
-  - *Step 4a-3:* the function compiler's contract over the laws with the
-    file threaded, no store yet; `Source` supplies the laws. *Runs:*
-    everything that runs today, its bytes unchanged.
+  - *Step 4a-3, built 2026-11-11:* the function compiler's contract over
+    the laws with the file threaded (`function_ir_lower_calls.hthr`): a
+    `Lending` says which spans may be written, a call is entered over
+    the file now (`Stack::CalledOver`) and answers with `WroteIn` and
+    the file its meaning leaves in memory (`Stack::AnsweredOver`), and
+    `lower_program_lent_correct` is `Site::CallsOver` against
+    `program_effects` under any `Loan`. A leaf with a store is still
+    refused, so every lowered program is quiet
+    (`lower_program_lent_quiet`) and the fixed-file statements follow:
+    `lower_program_correct` keeps its statement, at a loan of nothing
+    (`Stack::loan_nothing`), and `compiled_returns_lent` now holds over
+    any file as long as the one lent. `Source` supplies the laws
+    (`Target::loan`). *Runs:* everything that runs today, its bytes
+    unchanged; the probes add a function answering over a file other
+    than the one its lending was made over, and the store's refusal
+    (`function_ir_lower_reads_tests.hthr`).
   - *Step 4a-4:* the store leaf, its refusals, and the contract for a
     function that writes. *Runs:* a byte map over a span, by evaluation
     and accepted by the function compiler.

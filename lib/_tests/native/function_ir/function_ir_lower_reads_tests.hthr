@@ -4,9 +4,12 @@
 // call that hands its buffer on, and what is refused. Each program's code
 // is computed by evaluation, and its claim is the one theorem
 // (`lower_program_lent_correct`) instantiated, whatever the buffers hold
-// and wherever they lie.
+// and wherever the lending laws let them lie (`Loan`, x86_64_lending): the
+// file is threaded, so a function is called over the file as it is then
+// (docs/native-one-compiler-design.md §2.6).
 import function_ir;
 import function_ir_eval;
+import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_reads;
@@ -18,6 +21,7 @@ import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_stack;
+import x86_64_lending;
 import x86_64_asm;
 import x86_64_asm_runs;
 import x86_64_stack_runs;
@@ -79,13 +83,15 @@ theorem byte_at_planned(): plan_program([byte_at()]) = [Folded, Into(Rax), Into(
 theorem byte_at_lowers(): lower_program_lent([byte_at()], plan_program([byte_at()]), [1]) = Some(byte_at_program()) { refl }
 
 // Called with the buffer lent, its address and length the first two
-// arguments, the function returns what its meaning says over the buffers.
+// arguments, the function returns what its meaning says over the file and
+// leaves the file its meaning says in memory.
 theorem byte_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers()):
-    Site<M>(fetch, data, byte_at_program(), last, origin).CallsLent(stack, program_callees_over(buffers, [byte_at()]), 1,
-        Lending([1], addresses, buffers)) {
-    lower_program_lent_correct<M>([byte_at()], plan_program([byte_at()]), Lending([1], addresses, buffers), byte_at_program(),
-        byte_at_lowers(), fetch, data, last, origin, stack)
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, byte_at_program(), last, origin).CallsOver(stack, program_effects([byte_at()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([byte_at()], plan_program([byte_at()]), Lending::reading([1], addresses, buffers), byte_at_program(),
+        byte_at_lowers(), fetch, data, last, origin, stack, top, loan)
 }
 
 // ---------------------------------------------------------------------------
@@ -134,23 +140,41 @@ theorem sum_lowers(): lower_program_lent([sum()], plan_program([sum()]), [1]) = 
 }
 
 theorem sum_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers()):
-    Site<M>(fetch, data, sum_program(), last, origin).CallsLent(stack, program_callees_over(buffers, [sum()]), 1,
-        Lending([1], addresses, buffers)) {
-    lower_program_lent_correct<M>([sum()], plan_program([sum()]), Lending([1], addresses, buffers), sum_program(), sum_lowers(),
-        fetch, data, last, origin, stack)
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, sum_program(), last, origin).CallsOver(stack, program_effects([sum()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, buffers), sum_program(), sum_lowers(),
+        fetch, data, last, origin, stack, top, loan)
 }
 
 // What a caller cites (`compiled_returns_lent`): over a buffer that holds
-// "abc", lent wherever it lies, the code returns 294.
+// "abc", lent wherever the laws let it lie, the code returns 294 and
+// leaves "abc" in memory.
 theorem sum_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64)):
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, abc()).spans())):
     Site<M>(fetch, data, sum_program(), last, origin).Returns(stack, asm_labels(sum_program())(1),
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
-            stack.CalleeLent(Lending([1], addresses, abc()), 0, [a, w(3)])(i, s),
-        stack.CalleePost(w(294))) {
-    compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending([1], addresses, abc()), sum_program(), sum_lowers(), sum_evaluable(),
-        fetch, data, last, origin, stack, 0, trivial, [a, w(3)], trivial, w(294), refl)
+            stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], abc())(i, s),
+        stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(294), abc())) {
+    compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
+        sum_evaluable(), fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, abc(), w(294), refl)
+}
+
+// The file is the one in memory at the call, not the one the lending was
+// made over: the lending fixes each buffer's length and nothing else. Over
+// "abc" lent and "ABC" there now, the code returns the sum of "ABC".
+fn upper() → Buffers() { [[b(65), b(66), b(67)]] }
+theorem sum_of_now<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, abc()).spans())):
+    Site<M>(fetch, data, sum_program(), last, origin).Returns(stack, asm_labels(sum_program())(1),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+            stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], upper())(i, s),
+        stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(198), upper())) {
+    compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
+        sum_evaluable(), fetch, data, last, origin, stack, top, loan, 0, trivial, [a, w(3)], trivial, upper(), w(198), refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -180,15 +204,26 @@ theorem firsts_lowers(): lower_program_lent(firsts(), plan_program(firsts()), [1
 }
 
 theorem firsts_call<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers()):
-    Site<M>(fetch, data, firsts_program(), last, origin).CallsLent(stack, program_callees_over(buffers, firsts()), 2,
-        Lending([1, 1], addresses, buffers)) {
-    lower_program_lent_correct<M>(firsts(), plan_program(firsts()), Lending([1, 1], addresses, buffers), firsts_program(),
-        firsts_lowers(), fetch, data, last, origin, stack)
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1, 1], addresses, buffers).spans())):
+    Site<M>(fetch, data, firsts_program(), last, origin).CallsOver(stack, program_effects(firsts()), 2,
+        Lending::reading([1, 1], addresses, buffers), top) {
+    lower_program_lent_correct<M>(firsts(), plan_program(firsts()), Lending::reading([1, 1], addresses, buffers), firsts_program(),
+        firsts_lowers(), fetch, data, last, origin, stack, top, loan)
 }
 
 // ---------------------------------------------------------------------------
 // What is refused
+
+// A store: the meaning has it (function_ir_writes), the lowering not yet
+// (docs/native-one-compiler-design.md §3, U4 step 4a-4).
+fn storing() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [BufferStore(output := 3, buffer := 0, index := 2, value := 2)], outputs := Ports([word(3)]))),
+        result := 3)
+}
+theorem storing_refused(): lower_program_lent([storing()], [Into(Rax)], [1]) = None { refl }
 
 // A load no comparison bounds.
 fn unguarded() → Function {

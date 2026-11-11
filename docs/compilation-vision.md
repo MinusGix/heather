@@ -237,7 +237,9 @@ optimization that uses it is proved once under it as a hypothesis.
   §2.6): the file is state the meaning threads, and a caller lends a
   span by laws that say what a store into it leaves, which are what
   Rust's `&` and `&mut` give. The memory half is built
-  (`x86_64_lending.hthr`); the compiler's is next.
+  (`x86_64_lending.hthr`), and the function compiler's contract is
+  stated under those laws with the file threaded
+  (`Site::CallsOver`); the store itself is next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -260,8 +262,10 @@ memory:
   it may make (`Wrote`). What a caller wants kept, its frame, the code, the
   spans it lent, follows from that one relation, so exports, calls between
   compiled functions and `Proved` items share one footprint.
-- **What a caller promises is a premise, stated semantically** (`Lends`: no
-  store the call may make changes what the span reads). Geometry, two
+- **What a caller promises is a premise, stated semantically** (first
+  `Lends`: no store the call may make changes what the span reads; with
+  writes, the laws of a `Loan`, which say what each store leaves).
+  Geometry, two
   spans sharing no address, proves the premise where addresses are
   numbers and is decided there, never inside the compiler's proof.
 - **An access the machine may refuse is guarded by a comparison the path

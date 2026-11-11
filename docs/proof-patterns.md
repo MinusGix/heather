@@ -200,7 +200,7 @@ property of Heather.
   written in the goal, the elaborator spells the goal's stuck head to find
   it, under a small step budget, and falls back to the goal as it stands
   without saying so. A scrutinee that reads through a few projections is
-  enough (`emit_calls_emits`'s `Conditional` arm, once the register file
+  enough (`StructuredRegion::emit_calls_runs`'s `Conditional` arm, once the register file
   was a record of slots). Write the motive with `as`
   ([[match-motive-stuck-spelling-budget]]).
 - **Don't match on a large theorem call's result.** `match lemma(..) as

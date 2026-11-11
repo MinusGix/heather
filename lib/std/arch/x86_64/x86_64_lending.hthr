@@ -272,6 +272,28 @@ theorem Loan::resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {s
 }
 
 // ---------------------------------------------------------------------------
+// Lending nothing
+
+// Spans of no bytes, none of them to write, are lent under any stack: there
+// is no byte to keep apart from a store. A program that reads no buffer
+// meets the laws this way.
+theorem Stack::loan_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    room: top <= stack.size, spans: Spans, empty: (b: Nat) → spans.size(b) = 0,
+    canonical: (b: Nat) → spans.at(b).toNat() <= Nat::pow(2, 47), none: (b: Nat) → spans.written(b) = False):
+    Loan<M>(fetch, data, stack, top, spans) {
+    Loan(
+        room := room,
+        canonical := λ b => omega(empty(b), canonical(b)),
+        under := λ memory k below word b j inside => false_elim(omega(inside, empty(b))),
+        writable := λ memory b k written inside => absurd(trans(sym(written), none(b))),
+        stored := λ memory b k written inside byte => absurd(trans(sym(written), none(b))),
+        apart := λ memory b k written inside byte c j short other => absurd(trans(sym(written), none(b))),
+        keeps := λ memory b k written inside byte j below => absurd(trans(sym(written), none(b))),
+        keeps_code := λ memory b k written inside byte bytes at resident => absurd(trans(sym(written), none(b))),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Lending on
 
 // Spans lent to write may be lent on to read: a callee that writes fewer

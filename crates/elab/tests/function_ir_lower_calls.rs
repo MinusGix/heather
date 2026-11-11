@@ -19,6 +19,10 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
         ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
         ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+        // The state a function's meaning threads and its runs over a file
+        // (`function_ir_writes`), which the reads and the calls are stated over.
+        ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
+        ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
         // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
         ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
@@ -27,6 +31,8 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
         // The reads of a lent span, which the calls module lowers through.
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
+        // The lending laws the calls module's contract is stated under.
+        ("x86_64_lending", include_str!("../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ]);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_calls_examples", EXAMPLES) {

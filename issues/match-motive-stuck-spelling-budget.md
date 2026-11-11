@@ -19,7 +19,7 @@ So a change that makes a goal's stuck head *more expensive to spell*,
 with nothing else different, turns a proof that checked into one that
 fails, and the error is at the arms (`trivial` proves `True`, but the
 whole unrefined goal is expected), nowhere near the cause. Met when the
-register file became data (`File::branch_test` in `emit_calls_emits`,
+register file became data (`File::branch_test` in `StructuredRegion::emit_calls_runs`,
 `function_ir_lower_calls.hthr`): reading a slot is four projections
 where it was one application, the spelling passed 64 steps, and one
 `Conditional` arm lost its motive, with nine cascading errors after it.

@@ -211,7 +211,7 @@ costs a refusal, never a wrong program.
      it, at any origin and with any stack meeting the `Stack` laws. It is
      proved per function (`Function::emit_returns`, given the earlier
      functions' contracts) and by induction over the list
-     (`emit_functions_calls`).
+     (`emit_functions_calls`; `emit_functions_after_lent_calls` since the functions follow a program and take lent buffers).
    - The fixture (`fixtures/function_ir_lower_calls_examples.hthr`, checked
      by `function_ir_lower_calls.rs`) lowers `double`, `add_double` (a
      value live across a call) and `pick` (a call in a conditional's arm)

@@ -16,6 +16,7 @@
 
 import function_ir;
 import function_ir_eval;
+import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_structured;
 import x86_64;
@@ -64,6 +65,19 @@ theorem homes_hold_append(values: Valuation(), addresses: List<BitVec(64)>, buff
         Nil => λ second _ later => later,
         Cons(_, rest) => λ second here later =>
             ⟨here.left, homes_hold_append(values, addresses, buffers, rest, second, here.right, later)⟩,
+    }
+}
+
+// A home says where its buffer lies and how long it is, and nothing else
+// of the file: homes hold over any file as long, buffer for buffer.
+theorem homes_hold_shaped(values: Valuation(), addresses: List<BitVec(64)>, from, to: Buffers(),
+    same: (b: Nat) → buffer_bytes(from, b).len() = buffer_bytes(to, b).len(), homes: List<Lent>):
+    HomesHold(homes, values, addresses, from) → HomesHold(homes, values, addresses, to) {
+    match homes {
+        Nil => λ _ => trivial,
+        Cons(home, rest) => λ held =>
+            ⟨⟨held.left.left, trans(held.left.right, cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), same(home.buffer)))⟩,
+             homes_hold_shaped(values, addresses, from, to, same, rest, held.right)⟩,
     }
 }
 
@@ -679,57 +693,64 @@ theorem loop_carried_sound(homes: List<Lent>, inputs, parameters, next: List<Nat
 }
 
 // A loop whose passes keep `invariant` of their state: every pass starts
-// with it, and the final state has it.
-theorem loop_runs_keeping(pass: Valuation() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+// with it, and the final state has it. The file goes from pass to pass
+// (`LoopRunsOver`); the invariant is of the words.
+theorem loop_runs_over_keeping(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
     invariant: List<BitVec(64)> → Type,
     step: (values: Valuation()) → invariant(words_of(values, parameters)) → invariant(words_of(values, next)), remaining: Nat):
-    (state, final: List<BitVec(64)>) → (exhausted: Bool) → invariant(state) →
-    LoopRuns(pass, parameters, count, exit, next, remaining, state, final, exhausted) →
-    LoopRuns(λ (values: Valuation()) => pass(values) ∧ invariant(words_of(values, parameters)), parameters, count, exit, next, remaining,
-        state, final, exhausted) ∧ invariant(final) {
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) → invariant(state) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(λ (values: Valuation()) (from: Buffers()) (to: Buffers()) => pass(values, from, to) ∧ invariant(words_of(values, parameters)),
+        parameters, count, exit, next, remaining, state, final, exhausted, before, after) ∧ invariant(final) {
     match remaining {
-        Zero => λ state final exhausted held ran => ⟨ran, j(sym(ran.left), λ st _ => invariant(st), held)⟩,
-        Succ(rest) => λ state final exhausted held ran => {
+        Zero => λ state final exhausted before after held ran => ⟨ran, j(sym(ran.left), λ st _ => invariant(st), held)⟩,
+        Succ(rest) => λ state final exhausted before after held ran => {
             let values = ran.witness;
-            let here: invariant(words_of(values, parameters)) = j(sym(ran.proof.left), λ st _ => invariant(st), held);
+            let mid = ran.proof.witness;
+            let got = ran.proof.proof;
+            let here: invariant(words_of(values, parameters)) = j(sym(got.left), λ st _ => invariant(st), held);
             let later = (match values(1, exit).head_bit() as λ b =>
                 (match b {
-                    False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
-                    True => (final = words_of(values, next)) ∧ (exhausted = False),
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
                 }) →
                 (match b {
-                    False => LoopRuns(λ (v: Valuation()) => pass(v) ∧ invariant(words_of(v, parameters)), parameters, count, exit, next, rest,
-                        words_of(values, next), final, exhausted),
-                    True => (final = words_of(values, next)) ∧ (exhausted = False),
+                    False => LoopRunsOver(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ invariant(words_of(v, parameters)),
+                        parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
                 }) ∧ invariant(final) {
-                False => λ more => loop_runs_keeping(pass, parameters, count, exit, next, invariant, step, rest, words_of(values, next), final,
-                    exhausted, step(values, here), more),
+                False => λ more => loop_runs_over_keeping(pass, parameters, count, exit, next, invariant, step, rest, words_of(values, next), final,
+                    exhausted, mid, after, step(values, here), more),
                 True => λ done => ⟨done, j(sym(done.left), λ st _ => invariant(st), step(values, here))⟩,
-            })(ran.proof.right.right.right);
-            ⟨Exists(values, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨⟨ran.proof.right.right.left, here⟩, later.left⟩⟩⟩), later.right⟩
+            })(got.right.right.right);
+            ⟨Exists(values, Exists(mid, ⟨got.left, ⟨got.right.left, ⟨⟨got.right.right.left, here⟩, later.left⟩⟩⟩)), later.right⟩
         },
     }
 }
 
 // A loop entered from a scope with `homes`: every pass has the carried
-// homes, and the final state has them at their positions.
-theorem loop_carries(pass: Valuation() → Type, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
-    held: HomesHold(homes, values, addresses, buffers), inputs, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat,
-    final: List<BitVec(64)>, exhausted: Bool,
-    ran: LoopRuns(pass, parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted)):
-    LoopRuns(λ (v: Valuation()) => pass(v) ∧ HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, addresses, buffers),
-        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted) ∧
+// homes, and the final state has them at their positions. A home is of the
+// lengths `buffers` says, which no pass changes.
+theorem loop_carries(pass: Valuation() → Buffers() → Buffers() → Type, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    homes: List<Lent>, held: HomesHold(homes, values, addresses, buffers), inputs, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat, final: List<BitVec(64)>, exhausted: Bool, before, after: Buffers(),
+    ran: LoopRunsOver(pass, parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after)):
+    LoopRunsOver(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧
+            HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, addresses, buffers),
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after) ∧
     CarriedAt(loop_carried(homes, inputs, parameters, next), final, addresses, buffers) {
     let carried = loop_carried(homes, inputs, parameters, next);
     let sound = loop_carried_sound(homes, inputs, parameters, next);
-    let kept = loop_runs_keeping(pass, parameters, count, exit, next, λ (state: List<BitVec(64)>) => CarriedAt(carried, state, addresses, buffers),
+    let kept = loop_runs_over_keeping(pass, parameters, count, exit, next,
+        λ (state: List<BitVec(64)>) => CarriedAt(carried, state, addresses, buffers),
         λ v at => carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, at).right, remaining,
-        words_of(values, inputs), final, exhausted,
+        words_of(values, inputs), final, exhausted, before, after,
         carried_enter(values, addresses, buffers, homes, inputs, parameters, next, held, carried, sound), ran);
-    ⟨loop_runs_weaken(λ (v: Valuation()) => pass(v) ∧ CarriedAt(carried, words_of(v, parameters), addresses, buffers),
-        λ (v: Valuation()) => pass(v) ∧ HomesHold(carried_homes(carried), v, addresses, buffers),
-        λ v both => ⟨both.left, carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, both.right).left⟩,
-        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, kept.left), kept.right⟩
+    ⟨loop_runs_over_weaken(
+        λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ CarriedAt(carried, words_of(v, parameters), addresses, buffers),
+        λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ HomesHold(carried_homes(carried), v, addresses, buffers),
+        λ v from to both => ⟨both.left, carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, both.right).left⟩,
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after, kept.left), kept.right⟩
 }
 
 // The homes of the scope after a region: a loop leaves the ones it carried
@@ -747,23 +768,23 @@ fn StructuredRegion::lends(self region: StructuredRegion, homes: List<Lent>) →
 }
 
 theorem StructuredRegion::lends_hold(self region: StructuredRegion, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
-    callees: Callees()): (homes: List<Lent>) → HomesHold(homes, values, addresses, buffers) →
-    StructuredRegionHoldsOver(buffers, callees, values, region) → HomesHold(region.lends(homes), values, addresses, buffers) {
+    effects: Effects()): (homes: List<Lent>) → (before, after: Buffers()) → HomesHold(homes, values, addresses, buffers) →
+    StructuredRegionRunsOver(effects, values, region, before, after) → HomesHold(region.lends(homes), values, addresses, buffers) {
     match region {
-        Dataflow(_) => λ homes held _ => held,
-        Sequence(_, continuation) => λ homes held holds =>
-            continuation.lends_hold(values, addresses, buffers, callees, homes, held, holds.right),
-        Compose(prefix, continuation) => λ homes held holds =>
-            continuation.lends_hold(values, addresses, buffers, callees, prefix.lends(homes),
-                prefix.lends_hold(values, addresses, buffers, callees, homes, held, holds.left), holds.right),
-        Conditional(_, _, _, _, _, _) => λ homes held _ => held,
-        Call(_, _, _) => λ homes held _ => held,
-        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes held holds =>
+        Dataflow(_) => λ homes before after held _ => held,
+        Sequence(_, continuation) => λ homes before after held ran =>
+            continuation.lends_hold(values, addresses, buffers, effects, homes, ran.witness, after, held, ran.proof.right),
+        Compose(prefix, continuation) => λ homes before after held ran =>
+            continuation.lends_hold(values, addresses, buffers, effects, prefix.lends(homes), ran.witness, after,
+                prefix.lends_hold(values, addresses, buffers, effects, homes, before, ran.witness, held, ran.proof.left), ran.proof.right),
+        Conditional(_, _, _, _, _, _) => λ homes before after held _ => held,
+        Call(_, _, _) => λ homes before after held _ => held,
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes before after held ran =>
             homes_hold_append(values, addresses, buffers, carried_out(loop_carried(homes, inputs, parameters, next), outputs), homes,
                 carried_leave(values, addresses, buffers, outputs, loop_carried(homes, inputs, parameters, next),
-                    loop_carries(λ (v: Valuation()) => StructuredRegionHoldsOver(buffers, callees, v, body), values, addresses, buffers, homes,
-                        held, inputs, parameters, count, exit, next, values(64, limit).toNat(), words_of(values, outputs),
-                        values(1, exhausted).head_bit(), holds).right),
+                    loop_carries(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to),
+                        values, addresses, buffers, homes, held, inputs, parameters, count, exit, next, values(64, limit).toNat(),
+                        words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran).right),
                 held),
     }
 }

@@ -153,5 +153,5 @@ memory is attributed.
   lost its synthesized motive: the goal's stuck head now takes more than
   `STUCK_SPELLING_STEPS` to spell, and the fallback is the unabstracted
   goal, so the error is a `trivial` mismatch far from the cause. The motive
-  is written out there (`emit_calls_emits`, the `Conditional` arm);
+  is written out there (`StructuredRegion::emit_calls_runs`, the `Conditional` arm);
   [[match-motive-stuck-spelling-budget]].
