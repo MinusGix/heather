@@ -12,6 +12,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
+import function_ir_run;
 import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_reads;
@@ -277,16 +278,13 @@ theorem put_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
         put_at_lowers(), fetch, data, last, origin, stack, top, loan, put_at_allowed(writing([1], addresses, buffers), refl))
 }
 
-// The meaning, by hand until a storing program's is computed (step 4a-5):
-// over "abc", 'X' put at 1 returns 'X' and leaves "aXc".
+// What it returns and leaves is computed (`program_run`,
+// function_ir_run): over "abc", 'X' put at 1 returns 'X' and leaves "aXc",
+// and past the end it returns 256 and leaves the file.
 fn axc() → Buffers() { [[b(97), b(88), b(99)]] }
-fn put_values(a: BitVec(64)) → Valuation() {
-    Valuation::set(Valuation::set(Valuation::bind(Valuation::zero(), [0, 1, 2, 5])([a, w(3), w(1), w(88)]), 3, word_value(w(1))), 4,
-        word_value(w(88)))
-}
-theorem put_at_runs(a: BitVec(64)): program_effects([put_at()])(abc(), 0, [a, w(3), w(1), w(88)], w(88), axc()) {
-    Exists(put_values(a), ⟨refl, ⟨Exists(abc(), ⟨Exists(abc(), ⟨⟨refl, refl⟩, refl⟩), Exists(axc(), ⟨⟨refl, refl⟩, refl⟩)⟩), refl⟩⟩)
-}
+theorem put_at_evaluable(): program_evaluable([put_at()]).IsTrue() { trivial }
+theorem put_at_runs(a: BitVec(64)): program_run([put_at()])(abc(), 0, [a, w(3), w(1), w(88)]) = Answer(w(88), axc()) { refl }
+theorem put_at_past(a: BitVec(64)): program_run([put_at()])(abc(), 0, [a, w(3), w(3), w(88)]) = Answer(w(256), abc()) { refl }
 
 // So the code, over "abc" lent to be written wherever the laws let it lie:
 // it returns 'X', and "aXc" is the file in memory.
@@ -297,9 +295,9 @@ theorem put_at_x<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<B
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), w(1), w(88)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
             stack.LentOver(writing([1], addresses, abc()), top, 0, [a, w(3), w(1), w(88)], abc())(i, s),
         stack.AnsweredOver(writing([1], addresses, abc()), w(88), axc())) {
-    compiled_returns_over<M>([put_at()], plan_program([put_at()]), writing([1], addresses, abc()), put_at_program(), put_at_lowers(),
-        put_at_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
-        [a, w(3), w(1), w(88)], w(88), abc(), axc(), put_at_runs(a))
+    compiled_returns_run<M>([put_at()], plan_program([put_at()]), writing([1], addresses, abc()), put_at_program(), put_at_lowers(),
+        put_at_evaluable(), put_at_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
+        [a, w(3), w(1), w(88)], trivial, abc(), Answer(w(88), axc()), put_at_runs(a))
 }
 
 // A lending to read does not let it be called: the theorem asks that the
@@ -373,6 +371,25 @@ theorem bump_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
         writing([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([bump()], plan_program([bump()]), writing([1], addresses, buffers), bump_program(),
         bump_lowers(), fetch, data, last, origin, stack, top, loan, bump_allowed(writing([1], addresses, buffers), refl))
+}
+
+// By evaluation it turns "abc" into "bcd" and returns 3, and so does the
+// code, over "abc" lent to be written.
+fn bcd() → Buffers() { [[b(98), b(99), b(100)]] }
+theorem bump_evaluable(): program_evaluable([bump()]).IsTrue() { trivial }
+theorem bump_runs(a: BitVec(64)): program_run([bump()])(abc(), 0, [a, w(3)]) = Answer(w(3), bcd()) { refl }
+theorem bump_of_none(a: BitVec(64)): program_run([bump()])([[]], 0, [a, w(0)]) = Answer(w(0), [[]]) { refl }
+
+theorem bump_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, abc()).spans())):
+    Site<M>(fetch, data, bump_program(), last, origin).Returns(stack, asm_labels(bump_program())(1),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+            stack.LentOver(writing([1], addresses, abc()), top, 0, [a, w(3)], abc())(i, s),
+        stack.AnsweredOver(writing([1], addresses, abc()), w(3), bcd())) {
+    compiled_returns_run<M>([bump()], plan_program([bump()]), writing([1], addresses, abc()), bump_program(), bump_lowers(),
+        bump_evaluable(), bump_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
+        [a, w(3)], trivial, abc(), Answer(w(3), bcd()), bump_runs(a))
 }
 
 // ---------------------------------------------------------------------------

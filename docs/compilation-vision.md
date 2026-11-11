@@ -240,8 +240,9 @@ optimization that uses it is proved once under it as a hypothesis.
   (`x86_64_lending.hthr`), the function compiler's contract is stated
   under those laws with the file threaded (`Site::CallsOver`), and it
   compiles a store under the bound a load asks, into a span the lending
-  lets be written. A program calling such a function, and `rt`'s write,
-  are next.
+  lets be written; what such a function returns and leaves is stated by
+  evaluation (`program_run`). A program calling such a function, and
+  `rt`'s write, are next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

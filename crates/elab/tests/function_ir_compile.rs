@@ -25,6 +25,9 @@ fn checker() -> heather_elab::Elaborator {
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
         ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
+        // The evaluator that threads the file through stores and calls, which
+        // `compiled_returns_run` states a writing function's answer by.
+        ("function_ir_run", include_str!("../../../lib/native/function_ir/function_ir_run.hthr")),
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
         // The reads of a lent span, which the calls module lowers through.
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),

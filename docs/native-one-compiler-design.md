@@ -702,11 +702,22 @@ under one. A store lowers only through a home, so the door without
 buffers (`lower_program`) accepts no store and keeps its statement
 (`lower_program_quiet`: lowered with no home, a program is quiet).
 
+The relation is what the compiler is proved against, and it is computed
+as well (`function_ir_run.hthr`): `program_run` answers a call with the
+word and the file, a callee's run shared between whoever reads the one
+or the other, and for an evaluable program that answer is one the
+relation allows (`program_run_effects`). So a function that writes is
+stated by evaluation, as one that reads is, and `compiled_returns_run`
+is what its caller cites. `StructuredRegion::run` (`function_ir_state`),
+which a program's statements are evaluated by, answers a call with a
+word and leaves the file; `run_writing` is it with the callee's file
+threaded, and takes its place in step 4b.
+
 **A program's call** (`Source`) then answers with the file as well:
-`Readers` gives a word and the buffers left, the statement after the
-call starts from them, and the claim between statements is rebuilt from
-the contract's post, the buffers being the layout's cells. `tr`'s byte
-map is the first customer.
+its callees are `Writers` (`program_run` of the source's functions), the
+statement after the call starts from the file the callee left, and the
+claim between statements is rebuilt from the contract's post, the
+buffers being the layout's cells. `tr`'s byte map is the first customer.
 
 **`rt` and the class.** A `runtime fn` takes a span it may write as a
 `mut` parameter, and its Heather type returns the new bytes beside its
@@ -827,11 +838,20 @@ Each is a PR and ends with something that runs.
     contract, and refuse a store with no bound, no home, no register for
     its output or its value, or through the door without buffers
     (`function_ir_lower_reads_tests.hthr`).
-  - *Step 4a-5:* a storing program's meaning computed: an evaluator that
-    threads the file through stores and calls, proved to give
-    `program_effects`, so what a writing function returns and leaves is
-    stated by evaluation as a reading one's is. *Runs:* a byte map over a
-    span, by evaluation.
+  - *Step 4a-5, built 2026-11-11:* a storing program's meaning computed
+    (`lib/native/function_ir/function_ir_run.hthr`): `program_run`
+    answers a call with its word and the file it leaves (`Answer`), a
+    region's calls answered by callees that may write (`Writers`,
+    `StructuredRegion::run_writing`), over `function_ir_state`'s nodes
+    and loop. `program_run_effects` proves the answer one
+    `program_effects` allows for an evaluable program, by the route
+    `program_eval_reads` takes with the file threaded, and
+    `compiled_returns_run` states the code's answer by it. *Runs:* a loop
+    that rewrites a span ("abc" to "bcd", returning 3) and a byte stored
+    under its bound, by evaluation, with the code's answer over the file
+    in memory (`function_ir_lower_reads_tests.hthr`); a caller reading
+    what its callee stored, which evaluation over a fixed file does not
+    (`function_ir_run_tests.hthr`).
   - *Step 4b:* a program's call of a function that writes. *Runs:* `tr`
     with its byte map as a called function over the buffer, beside GNU's.
   - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
