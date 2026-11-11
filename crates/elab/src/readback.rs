@@ -226,7 +226,7 @@ impl<'v, 'g> Readback<'v, 'g> {
     /// `Γ, k binders`.
     fn ty(&mut self, c: &'v TyClo<'v>, k: u32) -> Option<Rc<Type>> {
         match c {
-            TyClo::Syn { env, body } => {
+            TyClo::Syn { env, body, .. } => {
                 let used = local_bound_ty(body).saturating_sub(k);
                 let sigma = self.subst(env, used)?;
                 let body = shifted_ty(body, env);
@@ -235,9 +235,9 @@ impl<'v, 'g> Readback<'v, 'g> {
                 }
                 Some(Rc::new(under_ty(&body, k, &sigma)))
             }
-            TyClo::El { level, tm } => Some(Rc::new(Type::El { level: (*level).clone(), tm: self.tm(tm, k)? })),
+            TyClo::El { level, tm, .. } => Some(Rc::new(Type::El { level: (*level).clone(), tm: self.tm(tm, k)? })),
             TyClo::Val(v) if k == 0 => Some(Rc::new(self.head(v)?)),
-            TyClo::Vec { level, elem, len } if k == 0 => Some(Rc::new(Type::Vec {
+            TyClo::Vec { level, elem, len, .. } if k == 0 => Some(Rc::new(Type::Vec {
                 level: (*level).clone(),
                 elem: self.ty(elem, 0)?,
                 len: self.tm(len, 0)?,
@@ -249,7 +249,7 @@ impl<'v, 'g> Readback<'v, 'g> {
     /// A term closure under `k` pending local binders.
     fn tm(&mut self, c: &'v TmClo<'v>, k: u32) -> Option<Rc<Term>> {
         match c {
-            TmClo::Syn { env, body } => {
+            TmClo::Syn { env, body, .. } => {
                 let used = local_bound(body).saturating_sub(k);
                 let sigma = self.subst(env, used)?;
                 let body = shifted_tm(body, env);
@@ -259,7 +259,7 @@ impl<'v, 'g> Readback<'v, 'g> {
                 Some(Rc::new(under_tm(&body, k, &sigma)))
             }
             TmClo::Val(v) if k == 0 => Some(Rc::new(self.val(v)?)),
-            TmClo::Elim { head, elim } if k == 0 => {
+            TmClo::Elim { head, elim, .. } if k == 0 => {
                 let head = self.tm(head, 0)?;
                 Some(Rc::new(self.elim(head, elim)?))
             }
@@ -276,6 +276,20 @@ impl<'v, 'g> Readback<'v, 'g> {
         let out = self.tm(c, 0)?;
         self.entries.insert(key, Rc::clone(&out));
         Some(out)
+    }
+
+    /// Entry `p` of an environment, counted from its outer end, given as
+    /// [`Env::held`] gives it: one of the identity prefix is the variable
+    /// at level `p`, read as [`Self::val`] reads it, and the rest are the
+    /// closures the environment holds.
+    fn entry_at(&mut self, identity: u32, held: &[&'v TmClo<'v>], p: usize) -> Option<Rc<Term>> {
+        match p.checked_sub(identity as usize) {
+            Some(q) => self.entry(held[q]),
+            None => {
+                let level = p as u32;
+                (level < self.len).then(|| Rc::new(Term::Var(LocalVar(self.len - 1 - level))))
+            }
+        }
     }
 
     /// A value the machine computed rather than captured: a local of Γ (the
@@ -530,7 +544,7 @@ impl<'v, 'g> Readback<'v, 'g> {
         let Elim::ElimWf { level, motive_level, step: step_clo, .. } = e else {
             return None;
         };
-        let TmClo::Syn { env, body: step } = step_clo else {
+        let TmClo::Syn { env, body: step, .. } = step_clo else {
             return None;
         };
         let var = env.binding()?;
@@ -539,11 +553,11 @@ impl<'v, 'g> Readback<'v, 'g> {
             return None;
         }
         let (layout, _) = Layout::of_body(stored)?;
-        let entries = env.to_vec();
-        let first = entries.len().checked_sub(layout.params())?;
+        let (identity, held) = env.held();
+        let first = (env.len() as usize).checked_sub(layout.params())?;
         let mut args = Vec::with_capacity(layout.params());
         for p in 0..layout.params() {
-            args.push(if layout.fixed(p) { self.entry(entries[first + p])? } else { Rc::new(Term::Zero) });
+            args.push(if layout.fixed(p) { self.entry_at(identity, &held, first + p)? } else { Rc::new(Term::Zero) });
         }
         let subst = LocalSubst {
             tail: SubstTail::Empty,
@@ -599,13 +613,13 @@ impl<'v, 'g> Readback<'v, 'g> {
     /// and the rest hold a placeholder the substitution never inserts: an
     /// outer entry can be a closure over most of the evaluation so far.
     fn subst(&mut self, env: &Env<'v>, used: u32) -> Option<LocalSubst> {
-        let entries = env.to_vec();
-        let len = entries.len();
+        let (identity, held) = env.held();
+        let len = env.len() as usize;
         let unused = Rc::new(Term::Zero);
         let mut terms = Vec::with_capacity(len);
-        for (p, entry) in entries.into_iter().enumerate() {
+        for p in 0..len {
             let index = (len - 1 - p) as u32;
-            terms.push(if index < used { self.entry(entry)? } else { Rc::clone(&unused) });
+            terms.push(if index < used { self.entry_at(identity, &held, p)? } else { Rc::clone(&unused) });
         }
         Some(LocalSubst { tail: LocalSubst::id(self.gamma).tail, terms })
     }

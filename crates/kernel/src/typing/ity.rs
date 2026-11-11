@@ -105,6 +105,14 @@ pub(crate) enum ITy {
     /// value domain, so the length is all that is needed and no weakening is
     /// ever paid.
     Sel { of: Rc<ITy>, sel: Sel, at_depth: u32 },
+    /// Syntax scoped in a **prefix** of Γ, the one of length `depth`: a
+    /// context entry's type as the entry holds it. Spelling it in the
+    /// ambient scope is a shift of the whole type, and the value domain
+    /// needs none (levels again), so the head of a projection spine that is
+    /// a variable is described this way and never shifted
+    /// (`issues/projection-description-quadratic.md`). Formed only as the
+    /// `of` of a selection, by `Tc::projection_at_spine`.
+    At { ty: Rc<Type>, depth: u32 },
 }
 
 impl ITy {
@@ -115,12 +123,12 @@ impl ITy {
         match self {
             ITy::Owned(t) => Some(t),
             ITy::Syn(t) => Some(t),
-            ITy::Sel { .. } => None,
+            ITy::Sel { .. } | ITy::At { .. } => None,
         }
     }
 
     pub(crate) fn is_syn(&self) -> bool {
-        !matches!(self, ITy::Sel { .. })
+        !matches!(self, ITy::Sel { .. } | ITy::At { .. })
     }
 
     /// This description, borrowed — the currency the *checking* direction
@@ -144,7 +152,12 @@ impl PartialEq for ITy {
                 ITy::Sel { of: a, sel: s, at_depth: d },
                 ITy::Sel { of: b, sel: t, at_depth: e },
             ) => d == e && s == t && (Rc::ptr_eq(a, b) || a == b),
-            (ITy::Sel { .. }, _) | (_, ITy::Sel { .. }) => false,
+            (ITy::At { ty: a, depth: d }, ITy::At { ty: b, depth: e }) => {
+                d == e && (Rc::ptr_eq(a, b) || a == b)
+            }
+            // A shortcut may say no: syntax in a prefix against syntax in
+            // the ambient scope is left to conversion.
+            (ITy::Sel { .. } | ITy::At { .. }, _) | (_, ITy::Sel { .. } | ITy::At { .. }) => false,
             _ => match (self.as_syn(), other.as_syn()) {
                 (Some(a), Some(b)) => std::ptr::eq(a, b) || a == b,
                 _ => false,

@@ -484,6 +484,105 @@ fn long_projection_spines_agree_with_the_eager_checker() {
     }
 }
 
+/// Describing the type of a record's `k`-th field costs `k` eliminations,
+/// not `k²` (`issues/projection-description-quadratic.md`). Each selection
+/// down a Σ telescope is instantiated at `fst@` of the receiver so far, and
+/// those receivers are one spine: evaluating each instantiation by itself
+/// walked the spine from its head every time, on every query that looked at
+/// the type. The tail here mentions the field above it, so the last
+/// instantiation is forced, through every receiver below it.
+#[test]
+fn a_projection_spines_description_is_linear_in_its_length() {
+    use heather_kernel::term::LocalVar;
+    let psi = GlobalCtx::new(vec![]);
+    let z = Level::Zero;
+    let nat = || Rc::new(Type::Nat);
+    let drives = |depth: usize| {
+        // Σ(x₁:Nat). … Σ(x_d:Nat). Σ(y:Nat). x_d = y
+        let mut ty = Type::Sigma {
+            fst_level: z.clone(), snd_level: z.clone(), fst: nat(),
+            snd: Rc::new(Type::Id {
+                level: z.clone(), ty: nat(),
+                lhs: Rc::new(Term::Var(LocalVar(1))), rhs: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        };
+        for _ in 0..depth {
+            ty = Type::Sigma { fst_level: z.clone(), snd_level: z.clone(), fst: nat(), snd: Rc::new(ty) };
+        }
+        let gamma = LocalCtx::nil().extended(Rc::new(ty), z.clone());
+        let mut above = Rc::new(Term::Var(LocalVar(0)));
+        for _ in 1..depth {
+            above = Rc::new(Term::SndAt { pair: above });
+        }
+        let tail = Rc::new(Term::SndAt { pair: Rc::clone(&above) });
+        let proof = Term::SndAt { pair: Rc::clone(&tail) };
+        let expected = Type::Id {
+            level: z.clone(), ty: nat(),
+            lhs: Rc::new(Term::FstAt { pair: above }), rhs: Rc::new(Term::FstAt { pair: tail }),
+        };
+        let before = heather_kernel::stats::snapshot();
+        assert_eq!(check_term(&psi, 0, Layer::Prog, &gamma, &proof, &expected, &z, FUEL), Ok(()));
+        // The control: the same proof at the type with its sides swapped,
+        // which no reduction makes this one.
+        let Type::Id { lhs, rhs, .. } = &expected else { unreachable!() };
+        let swapped = Type::Id { level: z.clone(), ty: nat(), lhs: Rc::clone(rhs), rhs: Rc::clone(lhs) };
+        assert!(check_term(&psi, 0, Layer::Prog, &gamma, &proof, &swapped, &z, FUEL).is_err());
+        heather_kernel::stats::snapshot().since(&before).eval_drives
+    };
+    let (short, long) = (drives(32), drives(128));
+    assert!(short > 0, "no evaluation was counted, so the comparison below says nothing");
+    // Four times the fields: linear is 4×, quadratic 16×.
+    assert!(
+        long < 6 * short,
+        "a spine four times as long cost {long} drives against {short}",
+    );
+}
+
+/// The head of a projection spine that is a variable is described in the
+/// scope its entry was formed in, never shifted into this one
+/// (`ITy::At`). So the receiver here is neither the innermost entry nor of a
+/// closed type: Γ = `n : Nat, p : Σ(x:Nat). x = n, z : Nat`, and `snd@(p)`
+/// proves `fst@(p) = n`. The controls name the entry on either side of `n`
+/// instead, which is what a description read one scope off would accept.
+#[test]
+fn a_projected_variables_type_is_read_in_its_own_scope() {
+    use heather_kernel::term::LocalVar;
+    let psi = GlobalCtx::new(vec![]);
+    let z = Level::Zero;
+    let nat = || Rc::new(Type::Nat);
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+    // In (n): Σ(x:Nat). x = n.
+    let record = Type::Sigma {
+        fst_level: z.clone(), snd_level: z.clone(), fst: nat(),
+        snd: Rc::new(Type::Id { level: z.clone(), ty: nat(), lhs: var(0), rhs: var(1) }),
+    };
+    for extra in [0u32, 1, 3] {
+        // n, p, then `extra` more entries: p is `Var(extra)`, n `Var(extra + 1)`.
+        let mut gamma = LocalCtx::nil().extended(nat(), z.clone()).extended(Rc::new(record.clone()), z.clone());
+        for _ in 0..extra {
+            gamma = gamma.extended(nat(), z.clone());
+        }
+        let p = var(extra);
+        let proof = Term::SndAt { pair: Rc::clone(&p) };
+        let first = Rc::new(Term::FstAt { pair: p });
+        let claim = |rhs: Rc<Term>| Type::Id { level: z.clone(), ty: nat(), lhs: Rc::clone(&first), rhs };
+        let seed = u64::from(extra);
+        for layer in [Layer::Prog, Layer::Meta] {
+            let expected = claim(var(extra + 1));
+            assert_eq!(check_term(&psi, 0, layer, &gamma, &proof, &expected, &z, FUEL), Ok(()));
+            check_tm(seed, "a projected variable", &psi, 0, layer, &gamma, &proof, &expected, &z, FUEL);
+            infer_tm(seed, "a projected variable", &psi, 0, layer, &gamma, &proof, FUEL);
+            // One entry inward of `n` is `p` itself, at the wrong type; with
+            // entries after `p`, the one before it is a `Nat` that is not `n`.
+            for wrong in [extra, extra.saturating_sub(1)] {
+                let wrong = claim(var(wrong));
+                assert!(check_term(&psi, 0, layer, &gamma, &proof, &wrong, &z, FUEL).is_err());
+                check_tm(seed, "a projected variable at a neighbour", &psi, 0, layer, &gamma, &proof, &wrong, &z, FUEL);
+            }
+        }
+    }
+}
+
 /// `app@` spines over a head whose Π needs reduction
 /// (`docs/app-by-head-type-design.md` §3.2): a two-argument function stored
 /// as a record field, `fst@(pair@^{T}(λx. λy. x; 0))` with

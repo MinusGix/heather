@@ -331,6 +331,17 @@ wrap the body's inferred type (see §3.5). So on every declaration without an
 `@` form the checker's behaviour is byte-identical to today's, which is the
 stage 1b gate's "counts unchanged to the unit".
 
+**A third form, for one place** (2026-11-10,
+`issues/projection-description-quadratic.md`): `At { ty: Rc<Type>, depth }`
+is syntax scoped in the *prefix* of Γ of that length, which is how a context
+entry holds its type. `Tc::projection_at_spine` forms it for a spine whose
+head is a variable, as the `of` of the spine's first selection, in place of
+the `var` rule's answer: that answer is the entry's type shifted into the
+ambient scope, a walk of the whole type per spine, and the selections only
+ever evaluate it, where a prefix costs nothing. It is not syntax to the
+rules (`as_syn` is `None`), its reflexivity shortcut is identity of the entry
+and the depth, and `Tc::materialize` shifts it on the path that spells.
+
 ### 3.3 Two consumers, and the rule about the rewriter
 
 An `ITy` is consumed by exactly two operations, both of which already exist
@@ -386,8 +397,9 @@ unannotated intro ⇒: NotInferable
 outer `pair@` a `Sel`, for a branch body the motive instance, for an
 argument the `app`'s domain annotation — in every case a description or a
 linear spelling, never a reduct. The `Snd(a)` argument is the *term* `a`,
-evaluated per query in the identity environment, so the description stays
-arena-free.
+so the description stays arena-free; a query that evaluates the selection
+hands the codomain `a`'s closure in the identity environment, unevaluated,
+and one closure per term node (`ValueArena::subject`).
 
 Contiguous `fst@` / `snd@` chains use `Tc::projection_at_spine`: infer the
 non-projection head once, then view and select each receiver in one arena
@@ -442,7 +454,15 @@ slip into stage 2. The per-query arena is kept because stage 1b measured
 what abandoning it costs. A contiguous projection chain is one such query:
 its intermediate views reuse the preceding value instead of replaying the
 selection prefix at each link. This removes quadratic prefix replay without
-retaining an arena across independent typing or conversion queries. A
+retaining an arena across independent typing or conversion queries. The
+same replay hid one level down until 2026-11-10: the `j`-th selection of a
+spine is instantiated at `fst@(snd@ʲ⁻¹(p))`, and evaluating each such term
+eagerly and by itself pushed `j` eliminations onto `p`, in every query that
+evaluated the chain. A selection's term is now a closure, forced only if the
+codomain reads it, and a checked projection's closure is the pending
+elimination of its receiver's, so the spine's receivers are shared and each
+instantiation is one elimination
+(`issues/projection-description-quadratic.md`). A
 contiguous chain of unannotated injections is the same shape on the intro
 side — a constructor value `k` summands deep is `inr@ᵏ` of its tuple, and
 per node layer `j` viewed a selection `j` deep — so `Tc::injection_at_spine`

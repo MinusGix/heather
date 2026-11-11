@@ -862,10 +862,10 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// enough — and a record's Σ must not be mistaken for one.
     fn vec_view(&mut self, ty: &'v TyClo<'v>) -> Res<Option<VecAt<'v>>> {
         let found = match ty {
-            TyClo::Vec { level, elem, len } => {
+            TyClo::Vec { level, elem, len, .. } => {
                 Some(((*level).clone(), *elem as &'v TyClo<'v>, *len))
             }
-            TyClo::Syn { env, body } => match &**body {
+            TyClo::Syn { env, body, .. } => match &**body {
                 Type::Vec { level, elem, len } => Some((
                     level.clone(),
                     self.arena.ty(TyClo::new(*env, Rc::clone(elem))),
@@ -879,7 +879,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
                 _ => None,
             },
-            TyClo::El { level, tm } => {
+            TyClo::El { level, tm, .. } => {
                 let v = self.force(tm)?;
                 let v = self.delta_whnf(v)?;
                 match &*v {
@@ -920,7 +920,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         // unforced `Vec` closure `Eval::vec_ty` built, over the same
         // element type. Recognizing it here is what keeps a vector reached
         // through an already-forced annotation from being read as a record.
-        if let TyClo::Vec { level: l, elem, len: pred } = snd {
+        if let TyClo::Vec { level: l, elem, len: pred, .. } = snd {
             if std::ptr::eq(*elem, fst) {
                 let len = self.vclo(self.arena.val(Val::Succ(pred)));
                 return Ok(Some(VecAt {

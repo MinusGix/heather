@@ -1158,12 +1158,12 @@ struct Tc {
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
-    conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
+    conv_memo: RefCell<PtrMap<ConvMemoBucket, Vec<ConvMemo>>>,
     conv_memo_entries: Cell<usize>,
     /// Successful conversions of two [`closed_side`]s, kept apart from Γ
     /// (module docs, §The typing memo): the same pair met under another
     /// binder is the same judgment.
-    closed_convs: RefCell<HashMap<ClosedConvBucket, Vec<(Type, Type, Level)>>>,
+    closed_convs: RefCell<PtrMap<ClosedConvBucket, Vec<(Type, Type, Level)>>>,
     /// The typing memo (module docs, §The typing memo): per node and scope,
     /// for this gate.
     judged: RefCell<PtrMap<Scope, Judged>>,
@@ -1183,7 +1183,7 @@ struct Tc {
     /// from the outermost of the `k` (§The typing memo): `(parent id, entry
     /// type's address)` to the entry's level, its keep-alive and the
     /// extended telescope's id. Id 0 is the empty telescope.
-    teles: RefCell<HashMap<(usize, usize), Vec<(Level, Rc<Type>, usize)>>>,
+    teles: RefCell<PtrMap<(usize, usize), Vec<(Level, Rc<Type>, usize)>>>,
     /// The last telescope id handed out.
     tele_ids: Cell<usize>,
     /// The closed-type memo (module docs, §The typing memo): per shared
@@ -1192,6 +1192,13 @@ struct Tc {
     /// The locally closed `IWf` signatures judged well-formed, by identity
     /// and scope less Γ, with their keep-alives.
     closed_sigs: RefCell<PtrMap<SigScope, (Rc<IWfSig>, Rc<()>)>>,
+    /// The `var` rule's answers: an entry's type weakened past the entries
+    /// after it, by the type's node and how many there are, with the node
+    /// kept so that the address stays its. A variable is read many times
+    /// under one scope, and each reading walked and allocated the type
+    /// again; kept, the readings also share one node, which is what the
+    /// memos keyed by a type's address and the reflexivity shortcut want.
+    weakened: RefCell<PtrMap<(usize, u32), (Rc<Type>, Rc<Type>)>>,
     /// The miss sampler's *site* columns (issues/perf-profile-build-target.md):
     /// the variant names of the terms on the checker's own stack, innermost
     /// last, and the innermost term whose type is being compared. Both are
@@ -1652,16 +1659,17 @@ impl Tc {
         Tc {
             fuel,
             mode,
-            conv_memo: RefCell::new(HashMap::new()),
+            conv_memo: RefCell::new(PtrMap::default()),
             conv_memo_entries: Cell::new(0),
-            closed_convs: RefCell::new(HashMap::new()),
+            closed_convs: RefCell::new(PtrMap::default()),
             judged: RefCell::new(PtrMap::default()),
             check_depth: Cell::new(0),
             deferred: RefCell::new(PremiseQueue::new()),
-            teles: RefCell::new(HashMap::new()),
+            teles: RefCell::new(PtrMap::default()),
             tele_ids: Cell::new(0),
             closed_tys: RefCell::new(PtrMap::default()),
             closed_sigs: RefCell::new(PtrMap::default()),
+            weakened: RefCell::new(PtrMap::default()),
             #[cfg(feature = "value-metrics")]
             diag_stack: RefCell::new(Vec::new()),
             #[cfg(feature = "value-metrics")]
@@ -2085,13 +2093,26 @@ impl Tc {
     /// input is scoped in — the prefix `Sel::of_depth` names — rather than
     /// in the ambient one.
     fn materialize(&self, env: &Env, t: &ITy) -> R<Rc<Type>> {
+        self.materialize_in(env, t, env.gamma.entries.len() as u32)
+    }
+
+    /// [`Tc::materialize`] of a description denoting in the Γ of length
+    /// `depth`, as syntax scoped there.
+    fn materialize_in(&self, env: &Env, t: &ITy, depth: u32) -> R<Rc<Type>> {
         match t {
             ITy::Syn(t) => Ok(Rc::clone(t)),
             ITy::Owned(t) => Ok(Rc::new(t.clone())),
+            ITy::At { ty, depth: at } if *at == depth => Ok(Rc::clone(ty)),
+            ITy::At { ty, depth: at } => {
+                // A description is formed in a scope and read in that scope
+                // or a longer one.
+                let Some(by) = depth.checked_sub(*at) else { return Err(TypeError::HeadMismatch) };
+                Ok(Rc::new(ty.shift_local(by)))
+            }
             ITy::Sel { of, sel, at_depth } => {
                 crate::stats::ity_materialized(1);
                 let of_depth = sel.of_depth(*at_depth);
-                let base = self.materialize(env, of)?;
+                let base = self.materialize_in(env, of, of_depth)?;
                 let gamma = if of_depth == env.gamma.entries.len() as u32 {
                     env.gamma.clone()
                 } else {
@@ -2251,7 +2272,7 @@ impl Tc {
         let syn = |t: &ITy| match t {
             ITy::Syn(t) => Some(Rc::clone(t)),
             ITy::Owned(t) => Some(Rc::new(t.clone())),
-            ITy::Sel { .. } => None,
+            ITy::Sel { .. } | ITy::At { .. } => None,
         };
         let spelled = match form {
             TyForm::Sigma { fst_level, snd_level, fst, snd: SndOf::Syn(snd) } => {
@@ -3188,8 +3209,26 @@ impl Tc {
         ) {
             return self.tm_infer_at(env, t);
         }
+        if let Term::Var(x) = &**t {
+            let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+                return Err(TypeError::UnboundLocalVar(x.0));
+            };
+            return Ok((ITy::Syn(self.weakened(&e.ty, x.0 + 1)), e.level.clone()));
+        }
         let (ty, l) = self.tm_infer_inner(env, t)?;
         Ok((ITy::Owned(ty), l))
+    }
+
+    /// `ty` weakened by `by` entries, once per node and distance
+    /// ([`Tc::weakened`], the field).
+    fn weakened(&self, ty: &Rc<Type>, by: u32) -> Rc<Type> {
+        let key = (Rc::as_ptr(ty) as usize, by);
+        if let Some((_, weak)) = self.weakened.borrow().get(&key) {
+            return Rc::clone(weak);
+        }
+        let weak = Rc::new(ty.shift_local(by));
+        self.weakened.borrow_mut().insert(key, (Rc::clone(ty), Rc::clone(&weak)));
+        weak
     }
 
     /// [`Tc::tm_infer`] with the inferred type **spelled**: the four λ
@@ -3358,7 +3397,20 @@ impl Tc {
             }
         }
         selections.reverse();
-        let (mut ty, mut level) = self.tm_infer(env, head)?;
+        let depth = env.gamma.entries.len() as u32;
+        let (mut ty, mut level) = match &**head {
+            // A variable's type is its entry's, scoped in the entries before
+            // it. The selections below are evaluated, where that scope costs
+            // nothing; the `var` rule's answer is the same type shifted into
+            // this one, node by node, once per spine.
+            Term::Var(x) => {
+                let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+                    return Err(TypeError::UnboundLocalVar(x.0));
+                };
+                (ITy::At { ty: Rc::clone(&e.ty), depth: depth - (x.0 + 1) }, e.level.clone())
+            }
+            _ => self.tm_infer(env, head)?,
+        };
         let levels = projection_heads_cached(
             &env.psi, &env.gamma, env.layer.type_layer(), &ty, &selections, self.fuel,
             #[cfg(feature = "value-metrics")]
@@ -3366,7 +3418,6 @@ impl Tc {
             Rc::clone(&env.cache),
         )?;
         let levels = levels.ok_or(TypeError::HeadMismatch)?;
-        let depth = env.gamma.entries.len() as u32;
         for (sel, (fst_level, snd_level)) in selections.into_iter().zip(levels) {
             level = match &sel { Sel::Fst => fst_level, _ => snd_level };
             ty = ITy::Sel { of: Rc::new(ty), sel, at_depth: depth };
@@ -3462,7 +3513,7 @@ impl Tc {
             ITy::Owned(cod) => ITy::Owned(
                 cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
             ),
-            ITy::Sel { .. } => ITy::Sel {
+            ITy::Sel { .. } | ITy::At { .. } => ITy::Sel {
                 of: Rc::new(fun_ty),
                 sel: Sel::App(Rc::clone(arg)),
                 at_depth: env.gamma.entries.len() as u32,

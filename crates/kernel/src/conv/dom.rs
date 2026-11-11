@@ -779,7 +779,7 @@ pub(super) trait Dom<'v>: Sized {
     /// Scoped pointer identity of two term sub-structures, for the general
     /// reflexivity shortcut. It must imply that the two carriers denote the
     /// same term in their present scope.
-    fn tm_identity_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
+    fn tm_identity_fast(env: &Env<'v>, a: &Self::TmC, b: &Self::TmC) -> bool;
     /// If both weak heads expose compressed repetitions of the same unary
     /// constructor context, cancel their equal outer prefix and return the
     /// residual sub-structures. `None` means only that this domain has no
@@ -1970,7 +1970,7 @@ impl<'v> Dom<'v> for Syn {
     }
 
     #[inline]
-    fn tm_identity_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
+    fn tm_identity_fast(_env: &Env<'v>, a: &Rc<Term>, b: &Rc<Term>) -> bool {
         Rc::ptr_eq(a, b)
     }
 

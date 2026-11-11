@@ -10,6 +10,7 @@ mod bounds;
 pub mod checks;
 pub mod conv;
 pub mod eval;
+mod few_map;
 pub mod fmt;
 pub mod layer;
 pub mod level;

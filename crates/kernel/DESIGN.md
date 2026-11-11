@@ -877,12 +877,15 @@ paper too).
   shared values, but values point back into the arena rather than owning the
   next closure, so they no longer form the recursive destruction chain. This
   also removes the evaluator's former thread-local destruction worklist.
-  Successful thunk results live in caches owned by the arena, keyed by
-  closure, and **kept for the whole query** (2026-10-22). Each key is a
-  closure of the arena, which the arena keeps until the query ends with its
-  environment cells, so one `Rc` value per forced closure is a constant factor
-  over what the query already holds — the order of its work, which fuel
-  bounds. A bound below the query's live set is not a constant factor of
+  Successful thunk results are **kept for the whole query** (2026-10-22),
+  and since 2026-11-10 in the closure itself: one word of a `TmClo`/`TyClo`
+  (`value::Memo`), written once
+  (`issues/value-domain-allocation-constant.md`). Until then they lived in
+  tables owned by the arena and keyed by the closure's address, which hashed
+  at every force and grew by rehashing in every query. The arena keeps a
+  closure until the query ends with its environment cells, so one value per
+  forced closure is a constant factor over what the query already holds —
+  the order of its work, which fuel bounds. A bound below the query's live set is not a constant factor of
   anything: what it evicts and the query reads again is forced again, and so
   are the evicted cells that force reads, back through the computation.
   History: the caches were bounded FIFOs (16K entries, then 64K from
@@ -922,7 +925,65 @@ paper too).
   Universe levels on the uncommon synthesized `Vec`/`El` type closures live
   in the same arena rather than determining the size of every closure. On
   64-bit targets direct tests pin `Env`/`EnvNode` at 16 bytes and both term and
-  type closures at 32 bytes.
+  type closures at 40 bytes: four words of closure and the memo word.
+- **A selection's term is a closure, one per node** (2026-11-10,
+  `issues/projection-description-quadratic.md`). A description of a Σ's
+  second component (`Sel::Snd(a)`, `docs/intro-by-type-design.md` §3.2)
+  holds the term the codomain is instantiated at, and every query that reads
+  the description evaluates the chain again. Evaluating `a` eagerly made the
+  type of a record's `k`-th field `k²` eliminations per query: the terms are
+  `fst@(p)`, `fst@(snd@(p))`, … and each walked its spine from `p`. So the
+  codomain is handed `a`'s closure in the identity environment
+  (`ValueArena::subject`), one per term node for the query, and the closure
+  of a checked projection is the pending elimination of its receiver's
+  closure. The receivers of one spine are shared nodes, so each field is one
+  elimination, and a field no later type mentions is never computed. A
+  variable at the head of such a spine is described in its entry's own scope
+  (`ITy::At`) and never shifted into the ambient one.
+- **An identity environment is a length** (2026-11-10,
+  `issues/conversion-query-identity-environment.md`). A conversion starts in
+  the identity environment of Γ, and reads one for a prefix of Γ wherever it
+  opens a variable's type or a description that denotes at another depth.
+  Built as a list it was four allocations a variable, per query and per
+  such read, and two builds of one environment were different objects to
+  every identity check. So an environment's list may stop short of its
+  length: the entries it does not hold are the outermost ones, each the
+  neutral variable at its own level, as the arena's one closure of that
+  variable (`ValueArena::var`). `Env::identity(n)` allocates nothing, and
+  pushing a variable's closure onto the identity environment of its level
+  gives the next identity environment, never a cell, so each has one
+  spelling. The conversion scope therefore carries no value environment
+  (`conv::Env::rho()` is Γ's length), and a binder is opened with the same
+  closure whoever opens it. More sharing is more reflexivity hits and
+  nothing else: two closures of one variable denote one value.
+- **A variable's type is weakened once per distance** (2026-11-10,
+  `issues/binder-types-weakened-per-use.md`). Γ holds a binder's type in the
+  scope it was bound in and a use reads it some binders later, so the
+  variable rule used to copy every open node of the type per use. The
+  checker keeps the weakened node by the entry's node and the distance
+  (`Tc::weakened`, holding the entry so the address stays its node's) and
+  returns it as a deferred syntactic type. Two uses of one binder at one
+  distance then hand conversion one node, which its identity shortcut
+  answers. A projected variable's type is not weakened at all (`ITy::At`,
+  above).
+- **Abstraction is one traversal that skips what it cannot change**
+  (2026-11-10, `issues/abstraction-walks-the-type-twice.md`). Abstracting a
+  pattern out of a type makes room for the new variable and replaces the
+  occurrences. It weakened the subject first and searched the copy; now the
+  search weakens as it walks, against patterns weakened once, and returns a
+  subtree with no variable at or above its depth as it is. That skip needs
+  every pattern to be open, since a closed pattern can occur in a closed
+  subtree, so a closed pattern turns it off. `tests/subst_laws.rs` holds
+  the result to the two-pass meaning, maximality included.
+- **Tables keyed by the kernel's own addresses use one multiply hasher**
+  (`value::PtrHasher`; 2026-11-10, `issues/conversion-memo-hash-cost.md`):
+  the arena's caches, the verdict memo, the closed-pair table and the
+  checker's conversion and typing memos. The keys are this process's
+  allocations and small integers, never input someone chose, so SipHash
+  bought nothing and was a twentieth of the kernel's instructions on the
+  showcase. The hasher rotates its product before returning it: a product's
+  low bits depend only on its factors' low bits, an aligned address has four
+  that are zero, and the table picks a bucket by the hash's low bits.
 - **Value-machine instrumentation is explicit and observational.** A caller
   may lend a `ValueMetrics` collector to arenas directly, or use the profiled
   typing entry points to aggregate the many conversion arenas created by one

@@ -4,7 +4,7 @@ status: open
 labels: [kernel,conversion,performance]
 area: kernel
 created: 2026-07-31
-updated: 2026-10-30
+updated: 2026-11-10
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -224,3 +224,24 @@ and should re-read this at the same time — conversion no longer calls
   What is left of this file's list, unchanged in rank: (2) `Clo1`, (3) one frame stack across `Dom` operations, (4) `TmC::value`'s re-wrap. Two more come out of this round. First, `Work::Elim` carries its `Elim` by value, so a frame's region cell is cloned out at every return (`Eval::step_return`), and several fire paths (`step_fire`, `fire_elim_w` and others) clone the elimination again into a cell for the ih. Carrying `&'v Elim` through `Work` would remove both clones. Second, the word-keyed conversion memo that [[kernel-native-bitvector-values]] assigned the closed issue now sits here.
 
   Measurement note for whoever takes the next slice. On the cloud box, `scripts/bench --check` of master against a fresh master baseline moved ±30–40% per case, on a quiet box, so its seconds cannot resolve a constant of this size. The box has no hardware performance counters (`perf_event_open` gives ENOENT), and valgrind cannot read the mold-linked binary's debug info, so DHAT stacks come back unsymbolized. `scripts/perf ab`'s interleaved `kernel_gate` column on real files did separate cleanly; use that.
+- 2026-11-10: A closure holds what it forced to. The arena's `term_cache` and
+  `type_cache` (tables keyed by a closure's address, kept for the query) are
+  gone, and `TmClo::{Syn, Elim}` and `TyClo::{Syn, Vec, El}` carry one word,
+  `Memo<&'v Val>` or `Memo<&'v VTy>`, written once on a successful force. The
+  table hashed at every force, grew by rehashing in every query (its capacity
+  is the query's, so a pooled one would have paid [[per-call-memos-pay-table-capacity]]'s
+  price instead), and put a forced value a cache miss away from the closure
+  that was just read. Closures go from 32 to 40 bytes, which undoes a quarter
+  of the 2026-09-02 entry's saving; the table held 24 bytes a forced closure
+  plus its load factor, so a query that forces most of what it builds holds
+  less, and one that forces little holds more.
+
+  Measured on a cold `docs/showcase/calc_parser.hthr` at width one, callgrind
+  inside the kernel gate: 18,169.2 M instructions before, 17,365.6 M after
+  (−4.4%), every count column identical. `scripts/perf ab`, five interleaved
+  samples: the gate's median moved −1.7%, inside the spread, so no seconds
+  are claimed. Peak resident memory did not move.
+
+  Still on this file's list: (2) `Clo1`, (3) one frame stack across `Dom`
+  operations, (4) `TmC::value`'s re-wrap, and `Work::Elim` carrying its
+  elimination by value.
