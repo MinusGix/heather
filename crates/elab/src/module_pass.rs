@@ -35,7 +35,7 @@ impl std::ops::DerefMut for ModulePassMut<'_> {
 }
 
 impl ModulePassMut<'_> {
-    /// [`Self::elab_source`] into a named module. The elaborator does no file
+    /// [`Elaborator::elab_source`] into a named module. The elaborator does no file
     /// IO: an `import m;` here requires that `m` has *already* been elaborated
     /// into this same accumulator, which is exactly what the CLI's topological
     /// walk guarantees (docs/modules-design.md §3.2).
@@ -400,7 +400,7 @@ impl ModulePassMut<'_> {
         Ok(())
     }
 
-    /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
+    /// [`NameLookup::check_declarable`] then [`Elaborator::add_name`], for the sites that
     /// register in one step.
     pub(crate) fn declare_name(&mut self, name: &str, kind: NameKind, span: Span) -> R<()> {
         NameLookup(self).check_declarable(name, span)?;

@@ -85,7 +85,7 @@ pub(crate) struct ModulePass {
     /// customer and takes `&self` throughout, exactly as `goals` and
     /// `pending_derived` do.
     ///
-    /// Drained by [`Self::take_warnings`], never by the elaborator: a warning
+    /// Drained by [`Elaborator::take_warnings`](crate::Elaborator::take_warnings), never by the elaborator: a warning
     /// belongs to whoever has the source text to render it against, and that
     /// is the caller (§3).
     pub(crate) warnings: RefCell<Vec<Warning>>,
@@ -103,7 +103,7 @@ pub(crate) struct ModulePass {
     /// keeps the whole mechanism free.
     ///
     /// The last slot is an **open** derivation's value
-    /// ([`Elaborator::record_open`]): the type is then a Π over the context
+    /// ([`Resolution::record_open`](crate::resolve::Resolution::record_open)): the type is then a Π over the context
     /// prefix the answer lived in, and the mint abstracts this term over the
     /// same binders instead of re-running the search.
     pub(crate) pending_derived: RefCell<Vec<PendingDerived>>,
@@ -112,7 +112,7 @@ pub(crate) struct ModulePass {
     /// the body shape that stopped the walk rather than an unknown name.
     pub(crate) unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
     /// Every theorem's proof, by absolute Ψ index, when an exporter asked
-    /// for them ([`Self::keep_proofs_for_export`]); `None` otherwise. Kept
+    /// for them ([`Elaborator::keep_proofs_for_export`](crate::Elaborator::keep_proofs_for_export)); `None` otherwise. Kept
     /// beside Ψ and never sealed: sealing would let conversion unseal the
     /// proof at a stuck elimination and could change verdicts, while export
     /// only reads it (`issues/export-keeps-proofs.md`). Each entry carries
@@ -294,7 +294,7 @@ impl Clone for ModulePass {
 pub(crate) struct DynamicScope {
     /// The owner of the declaration being elaborated (`List` while checking
     /// `List::append`), whose other members a bare name may name
-    /// ([`Self::owner_member`]).
+    /// ([`NameLookup::owner_member`](crate::name_lookup::NameLookup::owner_member)).
     pub(crate) member_owner: Option<String>,
     /// The declaration being elaborated, if its recursion plan is
     /// [`recursion::RecursionPlan::Misplaced`]: its recursion name, the
@@ -304,7 +304,7 @@ pub(crate) struct DynamicScope {
     /// While a declaration is lowered by recursion at the top
     /// (docs/recursion-at-the-top-design.md §3, slice 1): the parameter it
     /// recurses on and the span of the `match` on it that
-    /// [`Elaborator::recursion_at_top_body`] wrapped the body in. That
+    /// [`Declarations::recursion_at_top_body`](crate::declarations::Declarations::recursion_at_top_body) wrapped the body in. That
     /// `match` is the guard, and a `Nat` `match` on a constructor term
     /// inside it takes its arm. The flag: every other explicit parameter is
     /// generalized (a fallback attempt), or only those the calls vary (the
@@ -405,7 +405,7 @@ pub(crate) struct DynamicScope {
     /// that `statements::elaborate_mut_call` is inferring: there a dot call
     /// may resolve to a `mut self` method, since the statement threads its
     /// receiver. A dot call of one anywhere else is refused
-    /// ([`Elaborator::refuse_unthreaded_mut_call`],
+    /// ([`Members::refuse_unthreaded_mut_call`](crate::dispatch::Members::refuse_unthreaded_mut_call),
     /// docs/effects-capabilities-design.md §2.2). `None` everywhere else.
     pub(crate) mut_call_site: Cell<Option<Span>>,
 }
@@ -537,7 +537,7 @@ pub(crate) struct Policy {
     /// elaboration pays one `Option` branch per declaration.
     pub(crate) emission_findings: Option<Rc<RefCell<Vec<EmissionFinding>>>>,
     /// Test-time only: inferred arguments owe no check note
-    /// ([`Self::forget_owed_argument_checks`]).
+    /// ([`Elaborator::forget_owed_argument_checks`](crate::Elaborator::forget_owed_argument_checks)).
     pub(crate) owed_checks_forgotten: bool,
     /// Test-time only: the structural recursion planner (`recursion::plan`)
     /// is not consulted, so a `fn` it would refuse or lower by measure is
@@ -573,7 +573,7 @@ impl Policy {
 #[derive(Clone, Default)]
 pub(crate) struct Memos {
     /// Memo for the telescope walk in
-    /// [`Elaborator::call_defers_for_result_only`], keyed by the global's absolute
+    /// [`Callables::call_defers_for_result_only`](crate::application::Callables::call_defers_for_result_only), keyed by the global's absolute
     /// Ψ position. That test is asked at **every explicit argument of every
     /// call**, and its answer depends only on the callee's declared type,
     /// which never changes once the global is committed — so it is computed
@@ -581,13 +581,13 @@ pub(crate) struct Memos {
     /// semantic: dropping the memo changes only how long elaboration takes.
     pub(crate) result_only_memo: RefCell<HashMap<u32, bool>>,
     /// Bare named types from finished modules, lowered once
-    /// ([`Elaborator::lower_named`]); keyed by the declaration's address and
+    /// ([`Inductives::lower_named`](crate::inductive::Inductives::lower_named)); keyed by the declaration's address and
     /// whether names are read as generated, holding the Ψ length the type
     /// was lowered at (a hit is weakened past the globals committed since).
     /// Nothing here is semantic.
     pub(crate) named_type_memo: RefCell<HashMap<(usize, bool), (Rc<Inductive>, usize, (Type, Level))>>,
     /// The last shape and index type an `IWf` family's signature was built
-    /// with, by tag ([`Elaborator::share_iwf_part`]), so equal ones are one
+    /// with, by tag ([`IwfFamily::share_iwf_part`](crate::iwf_family::IwfFamily::share_iwf_part)), so equal ones are one
     /// allocation. Nothing here is semantic.
     pub(crate) iwf_part_memo: RefCell<HashMap<(u32, bool), Rc<Type>>>,
     /// The type names the program has written (`u8`, `i(n)`, its own `def
@@ -597,7 +597,7 @@ pub(crate) struct Memos {
     /// (issues/type-name-display-respelling.md). Nothing here is semantic.
     pub(crate) type_names: RefCell<Vec<display::TypeName>>,
     /// A tactic's reading of a class carrier, by the scope it was read in
-    /// ([`Elaborator::scope_memo`]): `linarith`'s ordered field and `ring`'s
+    /// ([`Resolution::scope_memo`](crate::resolve::Resolution::scope_memo)): `linarith`'s ordered field and `ring`'s
     /// ring, each elaborated from generated source, which a run reads at
     /// every fact and every `ring` step it checks. Keyed by the Ψ length, the
     /// goal padding, Γ and the carrier, and by the very `let` and dictionary

@@ -35,9 +35,9 @@ impl MismatchNotes<'_> {
     /// no types, as a bare `NotConvertible`.
     ///
     /// The kernel stays the judge, and this method does not even raise an error:
-    /// it records a candidate in [`DeclAttempt::check_notes`], which only the
+    /// it records a candidate in [`DeclAttempt::check_notes`](crate::attempt::DeclAttempt::check_notes), which only the
     /// gate reads and only when the gate itself rejects. `Layer::Prog` against
-    /// [`Self::goal_psi`] is [[auto-refl-empty-block]]'s gate, for its reason
+    /// [`Elaborator::goal_psi`] is [[auto-refl-empty-block]]'s gate, for its reason
     /// (a type mentioning an outstanding goal must still be well-scoped).
     ///
     /// **One outcome is silence rather than an error**, and it is the
@@ -272,7 +272,7 @@ impl MismatchNotes<'_> {
     /// after it are never run — and that on a declaration the gate accepts,
     /// none of them is. A located note does not stop the search: it used to be
     /// silence, and a later site that names both types (or a `refl` note,
-    /// which [`Self::kernel_error`] tries before it) says more.
+    /// which [`Refusals::kernel_error`](crate::refusals::Refusals::kernel_error) tries before it) says more.
     pub(crate) fn pending_mismatch(&self) -> Option<(MismatchNote, Span)> {
         let notes = self.attempt.check_notes.borrow();
         let mut located = None;
@@ -441,7 +441,7 @@ impl MismatchNotes<'_> {
     /// A side qualifies when its whnf is stuck eliminating
     /// ([`oracle::SemanticOracle::eliminated_global`]) a named, body-less
     /// global with no sealed proof: an `axiom`, or a `theorem` whose
-    /// statement [`sealing::carries_data`] did not accept. A theorem whose
+    /// statement [`sealing::carries_data`](crate::sealing::carries_data) did not accept. A theorem whose
     /// statement carries data is opened by the elimination, so meeting one
     /// here means the budget ran out first, and nothing is claimed. Only on a
     /// refusal the probe already decided, so it costs an evaluation of each

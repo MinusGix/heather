@@ -107,7 +107,7 @@ impl SpecView {
 /// printer (~25 `ExprKind` variants to keep in sync forever, to reproduce text
 /// that is immediately re-parsed) but to put the user's own `Expr` back after
 /// parsing: the skeleton is generated with a placeholder name, and
-/// [`Elaborator::elab_generated`] replaces it before `elab_decl` ever sees the
+/// [`DataReprMut::elab_generated`] replaces it before `elab_decl` ever sees the
 /// declaration.
 ///
 /// A placeholder only ever occupies the **whole body** of a generated

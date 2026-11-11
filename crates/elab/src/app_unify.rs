@@ -223,7 +223,7 @@ impl AppUnify<'_> {
     /// Is `e` a form the elaborator can only *check*, never infer — the
     /// deferral trigger's syntactic half (docs/unifier-completeness-design.md
     /// §4.1)? The set is closed and enumerated by the refusing arms of
-    /// [`Self::elab_infer_at`]/[`Self::elab_infer`]; deferring exactly these
+    /// [`Inference::elab_infer_at`](crate::inference::Inference::elab_infer_at)/[`Elaborator::elab_infer`]; deferring exactly these
     /// forms loses no solving power, because in inference mode they *error*
     /// rather than contribute a solution. Each variant, tied to its arm:
     ///
@@ -240,7 +240,7 @@ impl AppUnify<'_> {
     ///   guards — "needs an expected `Fin` type".
     /// - `absurd(p)`, when not shadowed — "needs an expected type".
     /// - a bare reference to a global with a leading implicit prefix
-    ///   ([`Self::bare_implicit_prefix`]). This one *can* infer — but only at
+    ///   ([`Callables::bare_implicit_prefix`]). This one *can* infer — but only at
     ///   its uninstantiated polymorphic Π, which against a meta-bearing
     ///   domain can just mis-teach (`El ?B ≟ Ty 0` "solves" `?B := ⌜Type 0⌝`
     ///   and the kernel rejects a term nobody meant). Checking position is
@@ -248,7 +248,7 @@ impl AppUnify<'_> {
     ///   meta-bearing domain it waits, then the obligation retry may infer
     ///   its instance from the domain's already solved parts.
     /// - a **bare operator symbol** that no binder named and that some
-    ///   designation covers ([`Self::symbol_needs_a_carrier`]). The same
+    ///   designation covers ([`Operators::symbol_needs_a_carrier`]). The same
     ///   sentence as the entry above, at the notation layer: `+` infers to
     ///   `add`, whose type would pin a `Bool` call's carrier to `Nat`, so at a
     ///   meta-bearing domain it waits for the carrier a later argument

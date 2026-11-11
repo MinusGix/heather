@@ -99,7 +99,7 @@ impl Dictionaries<'_> {
     /// Answers the goal's type arguments too, because a class whose carrier
     /// is declared at a universe (`class Frame<A: Type<1>>`) takes that
     /// carrier as its record's leading *value* parameter, the way a kinded
-    /// carrier is taken ([`Self::elab_class`]). There the carrier, a type at
+    /// carrier is taken ([`ClassesMut::elab_class`](crate::traits::ClassesMut::elab_class)). There the carrier, a type at
     /// the declared universe, is passed as its code and the goal has no type
     /// arguments (docs/frame-locale-design.md §3).
     pub(crate) fn index_vargs(

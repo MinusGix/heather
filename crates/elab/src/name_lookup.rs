@@ -28,7 +28,7 @@ impl std::ops::Deref for NameLookup<'_> {
 }
 
 impl NameLookup<'_> {
-    /// [`Self::resolve_name`] without the surface refusal: what the *tables*
+    /// [`Elaborator::resolve_name`] without the surface refusal: what the *tables*
     /// say. The alias's target is looked up through this — a designed path
     /// resolves to a declaration whose own name is not spellable, which is the
     /// whole point of the alias (design §5).
@@ -131,8 +131,8 @@ impl NameLookup<'_> {
         })
     }
 
-    /// [`Self::key_of`] with the candidate set restricted by declaration kind.
-    /// See [`Self::lookup_inductive`] for the one restricted caller and why
+    /// [`Elaborator::key_of`] with the candidate set restricted by declaration kind.
+    /// See [`Elaborator::lookup_inductive`] for the one restricted caller and why
     /// the restriction is licensed there and nowhere else.
     pub(crate) fn key_of_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
         if self.access_refusal(name).is_some() {
@@ -266,7 +266,7 @@ impl NameLookup<'_> {
     /// a cross-member call still passes the `requires` binders — layer 1 has
     /// no resolution to fill them with.
     ///
-    /// Consulted only from [`Self::lookup_global`], so locals, aliases,
+    /// Consulted only from [`Elaborator::lookup_global`], so locals, aliases,
     /// constructors and the self-reference all shadow it exactly as they
     /// shadow any global.
     pub(crate) fn instance_alias<'a>(&'a self, name: &'a str) -> &'a str {
@@ -482,7 +482,7 @@ impl NameLookup<'_> {
     }
 
     /// The canonical qualified spelling of a global. Generated modules use
-    /// this rather than [`Self::global_name_at`]'s deliberately presentation-
+    /// this rather than [`Elaborator::global_name_at`]'s deliberately presentation-
     /// oriented base name when they refer across a module boundary.
     pub(crate) fn global_qualified_name_at(&self, abs: usize) -> Option<String> {
         Some(self.names.global_name_at(abs as u32)?.to_string())
@@ -499,7 +499,7 @@ impl NameLookup<'_> {
     }
 
     /// The parameter table of the binding at absolute Ψ index `abs`, empty for
-    /// a binding that has none. The by-index companion of [`Self::params_of`].
+    /// a binding that has none. The by-index companion of [`Callables::params_of`](crate::application::Callables::params_of).
     pub(crate) fn params_at(&self, abs: usize) -> Rc<Vec<ParamMeta>> {
         self.names
             .params_at(abs as u32)

@@ -108,7 +108,7 @@ impl Elaborator {
     /// instance embeds it into, over the literal as local `0`, scoped where
     /// the display reads (docs/carrier-directed-numerals-design.md): the
     /// body of the instance's `ofNat` field, which is what
-    /// [`Self::reduced_embedding`] leaves of a literal at that carrier —
+    /// [`Literals::reduced_embedding`](crate::literals::Literals::reduced_embedding) leaves of a literal at that carrier —
     /// `Rat::ofInt(OfNat(n))` at `Rat`, and at `Int`, whose field is the
     /// constructor `OfNat`, that constructor's value. Read off the
     /// definitions; nothing is reduced. A parameterized instance (`BitVec(n)`)
@@ -995,7 +995,7 @@ impl Speller<'_> {
     /// A lowered constructor value as `C(f₁, …)` — the shape a `match` arm's
     /// motive is instantiated at, so it is what a goal statement inside an arm
     /// shows. This is the *canonical* half of
-    /// [`Elaborator::read_ctor`](crate::Elaborator::read_ctor): an injection
+    /// [`Elaborator::read_ctor`](Inductives::read_ctor): an injection
     /// path over a `Pair`, whose payload fields sit in the label's Σ spine and
     /// whose plain children sit in the tuple. Deliberately not a call to that
     /// method — it takes a constructor spine, can elaborate projections, and
@@ -1246,7 +1246,7 @@ impl Speller<'_> {
     /// (issues/omega-record-projection-atoms.md).
     ///
     /// The receiver's type decides it: read off the receiver's spine
-    /// ([`Elaborator::spine_type`]) when its head is a variable, a global or
+    /// ([`AppUnify::spine_type`]) when its head is a variable, a global or
     /// another field read — the receivers a written `.name` leaves — and only
     /// at the context's own scope, since a binder the walk descended under has
     /// no type in `cx.gamma`. Re-elaborating the spelling walks the same

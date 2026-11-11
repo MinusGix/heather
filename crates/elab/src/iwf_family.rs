@@ -6,7 +6,7 @@
 //! recomputed from the child, so `match` needs no `transp` and β fires on
 //! open data, and the fording fragment's F1–F3 are gone. A `match` at a
 //! specific index inverts or abstracts it in the motive (§8.3,
-//! [`Elaborator::iwf_match_motive`]). The doctrine is the
+//! [`IwfFamily::iwf_match_motive`]). The doctrine is the
 //! tiers' (`inductive.rs`): the lowering is untrusted, the kernel re-checks
 //! every emitted term, and annotations are read off the type being
 //! eliminated wherever one exists.
@@ -232,7 +232,7 @@ impl IwfFamily<'_> {
     /// (`issues/iwf-shape-spine-comb-depth.md`). The guard is a structural
     /// `==`, the order of the lowering itself, so a hit is the same type in
     /// the same scope and which copy stands is a matter of sharing only, as
-    /// for [`Self::share_registered_lowering`]. A miss (other arguments,
+    /// for [`GeneratedDefs::share_registered_lowering`]. A miss (other arguments,
     /// other globals) replaces the entry.
     fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
         let mut memo = self.memos.iwf_part_memo.borrow_mut();
@@ -391,7 +391,7 @@ impl IwfFamilyMut<'_> {
     // -- the named signature (docs/iwf-named-signature-design.md) -----------
 
     /// `D#iarity`, `D#iout` and `D#ichild` at declaration time: the inline
-    /// signature [`Self::iwf_sig`] builds over [`Self::tycode_fn_telescope`]'s
+    /// signature [`IwfFamily::iwf_sig`] builds over [`GeneratedDefs::tycode_fn_telescope`]'s
     /// all-`Ty 0` telescope, its three index functions abstracted over the
     /// telescope and their own binders. From then on every instance at that
     /// profile is spelled with them (§2). Best-effort like every generated
@@ -692,7 +692,7 @@ impl IwfFamily<'_> {
 
     /// The written result index at a constructor's *arguments* — what the
     /// constructor's index check compares against the expected family's
-    /// index, and what [`Elaborator::infer_ctor`] needs to build the family at
+    /// index, and what [`Constructors::infer_ctor`](crate::constructor::Constructors::infer_ctor) needs to build the family at
     /// all.
     pub(crate) fn iwf_ctor_index<A: Borrow<Expr>>(
         &self,
@@ -1767,7 +1767,7 @@ impl ArmEnv<'_> {
     }
 }
 
-/// The fixed part of one inverted motive ([`Elaborator::iwf_inverted_motive`]).
+/// The fixed part of one inverted motive ([`IwfFamily::iwf_inverted_motive`]).
 struct Inversion<'a> {
     /// `cx.names.len()` of the ambient context, Γ.
     base: usize,

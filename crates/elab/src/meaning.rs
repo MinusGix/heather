@@ -297,7 +297,7 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
     }
 }
 
-/// How deep [`Elaborator::recursion_meaning`] splits before it believes a
+/// How deep [`MeaningMut::recursion_meaning`] splits before it believes a
 /// refusal: depth one is plain structural recursion, and each further level
 /// is one more predecessor a course-of-values window reads.
 const MAX_SPLIT_DEPTH: usize = 5;

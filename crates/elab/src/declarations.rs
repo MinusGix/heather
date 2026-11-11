@@ -320,7 +320,7 @@ impl Declarations<'_> {
     /// match z { Zero => { let z = Zero; body }, Succ(z#pred) => { let z = Succ(z#pred); body } }
     /// ```
     ///
-    /// Elaborated under [`DynamicScope::recursion_at_top`], this `match` is
+    /// Elaborated under [`DynamicScope::recursion_at_top`](crate::lifetimes::DynamicScope::recursion_at_top), this `match` is
     /// the recursion and every other explicit parameter is generalized, so
     /// the body recomputes at each level with this level's values: a read of
     /// `z` is this level's `z`, and a `match z` inside takes its arm, whose
@@ -524,7 +524,7 @@ impl DeclarationsMut<'_> {
 
     /// A declaration whose body holds `for` loops: each loop's step and
     /// state, then the declaration over folds (crates/elab/src/loops.rs).
-    /// Each part goes through [`Self::elab_decl`], so a step with loops of
+    /// Each part goes through [`Elaborator::elab_decl`], so a step with loops of
     /// its own is lowered the same way.
     fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
         let family = loops::lower(decl, self.0)?;
@@ -550,7 +550,7 @@ impl DeclarationsMut<'_> {
 
     /// A `partial fn`: `f#body`, then `f` over `CoTree::rec`, then
     /// `f_unfold` (crates/elab/src/partial.rs). Each part goes through
-    /// [`Self::elab_decl`], so a body with loops is lowered as any is.
+    /// [`Elaborator::elab_decl`], so a body with loops is lowered as any is.
     fn elab_partial_decl(&mut self, decl: &Decl) -> R<()> {
         let family = partial::lower(decl)?;
         for part in &family.parts {
@@ -829,7 +829,7 @@ impl DeclarationsMut<'_> {
 impl Declarations<'_> {
     /// The binders a declaration's *measure* is written against: its type
     /// parameters, then its value parameters. This is the prefix of
-    /// [`Self::check_decl`]'s telescope builder, as `instance_head_cx` is —
+    /// [`DeclarationsMut::check_decl`]'s telescope builder, as `instance_head_cx` is —
     /// used only for the `decreases` preflight, where the constraint slots and
     /// notation installations a body needs are not yet in play.
     pub(crate) fn decl_head_cx(&self, decl: &Decl) -> R<Cx> {
@@ -915,7 +915,7 @@ impl Declarations<'_> {
     /// endpoints' type and use its resolved declaration as their registry key
     /// (issues/decidable-equation-carrier.md).
     ///
-    /// This is the prefix of [`Self::check_decl`]'s telescope builder:
+    /// This is the prefix of [`DeclarationsMut::check_decl`]'s telescope builder:
     /// type parameters, then value parameters. `requires` dictionaries do not
     /// occur in an instance head and therefore deliberately are not in scope.
     pub(crate) fn instance_head_cx(&self, decl: &InstanceDecl) -> R<Cx> {
@@ -1708,7 +1708,7 @@ impl DeclarationsMut<'_> {
 
 impl Declarations<'_> {
     /// `cx` with every binder's type in the emission spelling
-    /// ([`Self::annotation_type`]), the context a lifted proof or a named
+    /// ([`Elaborator::annotation_type`]), the context a lifted proof or a named
     /// value is committed in. The kernel types the body's binders by the
     /// spellings the declaration emitted (its statement's `Π` domains, its
     /// `λ` annotations), and a slot reference `u^{id}` checks each of those

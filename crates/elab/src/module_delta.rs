@@ -151,7 +151,7 @@ impl ModuleDelta {
     }
 
     /// The sealed proofs of the extension range `range`, re-indexed from its
-    /// start, as [`Elaborator::recheck_extension`] takes them.
+    /// start, as [`DeltasMut::recheck_extension`] takes them.
     pub(crate) fn sealed_in(&self, range: std::ops::Range<usize>) -> Vec<(usize, Rc<SealedProof>)> {
         self.sealed
             .iter()
@@ -895,7 +895,7 @@ impl Deltas<'_> {
 }
 
 impl DeltasMut<'_> {
-    /// Close the slice an item opened with [`Self::slice_begin`], after
+    /// Close the slice an item opened with [`Deltas::slice_begin`], after
     /// everything the item contributes (its derived instances included) has
     /// landed, and keep the plan's `exact` flag honest: it means the prefix
     /// through the items completed so far equals the previous delta's, so

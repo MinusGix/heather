@@ -566,7 +566,7 @@ impl Operators<'_> {
     }
 
     /// A **bare** operator symbol whose meaning only a carrier can settle —
-    /// the gate on [`Self::is_checking_only`]'s new arm
+    /// the gate on [`AppUnify::is_checking_only`]'s new arm
     /// (docs/bare-symbol-checking-carrier-design.md §4.3).
     ///
     /// Two conjuncts, both load-bearing.

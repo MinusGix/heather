@@ -654,7 +654,7 @@ impl Literals<'_> {
 }
 
 /// How many elements of a long literal's spine
-/// [`Elaborator::collection_literal_spine`] builds out.
+/// [`Literals::collection_literal_spine`] builds out.
 const LONG_SPINE: usize = 64;
 
 /// One constructor value of a collection literal's spine, opened: the node

@@ -51,7 +51,7 @@ impl Refusals<'_> {
     /// (`docs/parallel-kernel-gate-design.md` §5.1) — so the candidates are
     /// always in hand, at every width.
     ///
-    /// A written `refl`'s note ([`Self::note_refl_mismatch`]) travels a third
+    /// A written `refl`'s note ([`MismatchNotes::note_refl_mismatch`]) travels a third
     /// way: it neither replaces the report nor merely annotates the
     /// declaration. The verdict stays the kernel's, and the *span* becomes the
     /// `refl` that stands for it — the one expression in the body that claimed
@@ -246,7 +246,7 @@ impl Refusals<'_> {
     }
 
     /// The located refusal, said: the term and the two types, each where it
-    /// spells in full ([`Self::spell_term_clean`], [`Self::display_type_clean`]:
+    /// spells in full ([`Elaborator::spell_term_clean`], [`Elaborator::display_type_clean`]:
     /// a claim about a type the reader cannot check is worse than none).
     fn refused_site_note(&self, found: &typing::RefusedSite) -> String {
         let cx = self.refused_site_cx(found);
@@ -423,7 +423,7 @@ impl Refusals<'_> {
     }
 
     /// After a `NotConvertible` at the gate: the first `trivial` left unread
-    /// ([`expr::UnitCheckingElab`]) whose expected type, reduced now under
+    /// ([`expr::UnitCheckingElab`](crate::expr::UnitCheckingElab)) whose expected type, reduced now under
     /// the gate's own budget, is not `True`. [`Self::refused_decide`]'s
     /// counterpart: the reduction runs only on the failure path, and an
     /// inconclusive one stays silent.

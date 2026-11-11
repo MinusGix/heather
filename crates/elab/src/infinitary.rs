@@ -12,7 +12,7 @@
 //! annotation discipline. The shape's spine is tier 0's, read through
 //! [`Elaborator::spine`], and the case trees over it are tier 0 §6.1's
 //! right-nested `Case` with the motive composed with the injection at each
-//! depth ([`Elaborator::w_case_tree`]).
+//! depth ([`Infinitary::w_case_tree`]).
 //!
 //! Scoping convention, used by every [`WParts`] helper: `k` counts the
 //! binders pushed since the context `⟦D⟧` was read back in (`g`), and every
@@ -525,7 +525,7 @@ impl Elaborator {
     /// `D#canon := λ(A₁ : Ty 0)…(v_m : T_m). λ(t : W₀). canon t`, at
     /// declaration time ([`GenDef::WCanon`]). The telescope is
     /// [`GenDef::TyCodeFn`]'s, at the same all-`Ty 0` profile, and the body is
-    /// the inline predicate [`Self::lower_instance_w`] builds there — inline
+    /// the inline predicate [`Infinitary::lower_instance_w`] builds there — inline
     /// because the key is not registered yet. Best-effort like every
     /// generated definition: no registration leaves every instance inline.
     pub(crate) fn register_w_canon(&mut self, ind: &Rc<Inductive>, span: Span) {

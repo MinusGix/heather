@@ -1,0 +1,28 @@
+#!/bin/sh
+# rustc for this workspace's crates (`build.rustc-workspace-wrapper` in
+# .cargo/config.toml): the elaborator's incremental builds skip rustc's
+# cross-unit optimisation pass. Everything else is passed through untouched.
+#
+# An optimised build of a crate in several codegen units ends with "thin-local
+# LTO": each unit inlines from the others, and after an edit the pass is redone
+# for every unit that inlines from a changed one. In the elaborator that is
+# nearly every unit after nearly every edit. All of the crate's `Vec<T>` code is
+# one unit (generic instances are grouped by the generic's own module, so are
+# the iterator adapters and the drop glue), every unit inlines from it, and it
+# changes whenever an edit moves the spans of a closure it instantiates, which
+# adding a line does. One edited line then re-optimised the whole crate
+# (issues/elaborator-crate-compile-per-edit.md; `scripts/codegen-units` shows
+# the units).
+#
+# Cargo's `lto` is a profile-wide setting and the kernel must keep the pass:
+# its hot paths cross its modules, and its own edits stay cheap. So the flag is
+# given here, to the two crates compiled from crates/elab/src, and only when
+# the build is incremental, which a release build is not.
+rustc="$1"
+shift
+case " $* " in
+*" --crate-name heather_elab "*" -C incremental="* | *" --crate-name heather_elab_unit "*" -C incremental="*)
+    exec "$rustc" "$@" -C lto=off
+    ;;
+esac
+exec "$rustc" "$@"

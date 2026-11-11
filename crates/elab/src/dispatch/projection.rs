@@ -423,7 +423,7 @@ impl Projections<'_> {
     /// dictionary at the type `G`, resolved rather than looked up
     /// (docs/traits-type-projection-design.md §5).
     ///
-    /// Reached only from [`Self::resolve`]'s last stop, so it fires exactly
+    /// Reached only from [`Elaborator::resolve`]'s last stop, so it fires exactly
     /// where the answer would otherwise have been "unbound name". At a
     /// concrete carrier the qualified name is a registered global and never
     /// gets here, which is why `Nat::AddCommMonoid.plus` — the spelling the

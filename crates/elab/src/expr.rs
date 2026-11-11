@@ -165,7 +165,7 @@ pub(crate) trait EqualityCheckingElab: ExpectedTypeElab {
     /// That is the design, and it is not changed here — what is changed is
     /// what the reader is told when the judgement goes against them. Left to
     /// itself the gate says `NotConvertible` at the whole declaration, with
-    /// neither side shown; this note, like [`crate::Elaborator::note_check_mismatch`]'s,
+    /// neither side shown; this note, like [`MismatchNotes::note_check_mismatch`](crate::mismatch_notes::MismatchNotes::note_check_mismatch)'s,
     /// is read only when the gate itself rejects.
     ///
     /// The structural view has no oracle to ask, so it notes nothing.

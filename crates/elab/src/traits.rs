@@ -44,7 +44,7 @@ pub(crate) struct ClassInfo {
     /// (`class Bind<M: Type → Type>`, issues/higher-kinded-classes.md), `None`
     /// for an ordinary type parameter. A kinded parameter is a term, so the
     /// class's record takes it as a leading value parameter, before
-    /// [`Self::valparams`]; [`Elaborator::kinded_class_ty`] moves a written
+    /// [`Self::valparams`]; [`Classes::kinded_class_ty`] moves a written
     /// head's argument there.
     pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the declared **value indices**
@@ -135,7 +135,7 @@ pub(crate) struct DesignationInfo {
 pub(crate) type DesigKey = (OpFixity, String, String);
 
 /// `head_key` is the carrier head **resolved** — [`Elaborator::carrier_key`]
-/// at a declaration, [`Elaborator::carrier_of_ty`] at a lowered operand —
+/// at a declaration, [`Carriers::carrier_of_ty`] at a lowered operand —
 /// never a written head's raw string.
 pub(crate) fn designation_key(fixity: OpFixity, sym: &str, head_key: &str) -> DesigKey {
     (fixity, sym.to_string(), head_key.to_string())
@@ -193,7 +193,7 @@ pub(crate) struct Traits {
     class_members: HashSet<String>,
     /// The unqualified names of the classes with a kinded parameter
     /// (`class Bind<M: Type → Type>`): the cheap prefilter that keeps
-    /// [`Elaborator::kinded_class_ty`] off every other named type.
+    /// [`Classes::kinded_class_ty`] off every other named type.
     kinded: HashSet<String>,
     classes: HashMap<String, Rc<ClassInfo>>,
     instances: HashMap<InstKey, InstanceInfo>,
@@ -849,7 +849,7 @@ fn var(name: &str, span: Span) -> Expr {
     span_expr(ExprKind::Var(name.to_string()), span)
 }
 
-/// What [`Elaborator::expand_constraints`] produces: the rewritten parameter
+/// What [`Classes::expand_constraints`] produces: the rewritten parameter
 /// telescope, plus the two per-declaration facts the desugaring is the only
 /// thing that knows.
 pub(crate) struct Expanded {
@@ -1844,7 +1844,7 @@ impl Elaborator {
     /// names, qualified (`docs/instance-resolved-key-design.md` §3).
     ///
     /// The fallback is the bare name, and it is reached by exactly the three
-    /// names [`Elaborator::names_a_type`] claims with no declaration behind
+    /// names [`Carriers::names_a_type`] claims with no declaration behind
     /// them — `Nat`, `Type`, `True`. Those are the language's own and cannot be
     /// declared twice, so a bare key for them is a *constant*, not a spelling
     /// that might mean two things.
@@ -2331,7 +2331,7 @@ impl Classes<'_> {
     /// ```
     ///
     /// A kinded parameter is a term, so the class's record takes it as a
-    /// leading value parameter ([`Self::elab_class`]); the angle-bracket
+    /// leading value parameter ([`ClassesMut::elab_class`]); the angle-bracket
     /// spelling stays the class's interface, which every reader of a
     /// [`ClassRef`] (registry keys, canonical names, `requires`) keeps
     /// seeing. The argument becomes an expression: a bare generic name is
@@ -2444,7 +2444,7 @@ impl ClassesMut<'_> {
     /// `CommRingOfInt+OrderedField`, whose `extends` flattens the shared
     /// ancestor once, is what the writer meant: both classes are reached from
     /// it by upcast, through one `CommRing`. A concrete carrier assembles it
-    /// from its two instances at resolution ([`Elaborator::join_parents`]),
+    /// from its two instances at resolution ([`Resolution::join_parents`](crate::resolve::Resolution::join_parents)),
     /// which is sound there because the carrier's canonical instances already
     /// share their ancestors by reference.
     ///
@@ -2452,7 +2452,7 @@ impl ClassesMut<'_> {
     /// asks for it and found by name after that. Its parents are sorted by
     /// name, so the constraint's written order does not make a second class.
     /// Only anonymous constraints whose every index slot is a symbol merge;
-    /// anything else is left to [`Self::expand_constraints`] unchanged.
+    /// anything else is left to [`Classes::expand_constraints`] unchanged.
     pub(crate) fn merge_linked_constraints(&mut self, decl: &Decl) -> R<Option<Decl>> {
         // Each candidate: (position, its class reference, the class, the
         // carrier as written).
@@ -3122,7 +3122,7 @@ impl Elaborator {
     /// whole of the designation table's read side.
     ///
     /// `head_key` is **resolved**, never a written head: every caller reaches
-    /// this through [`Elaborator::carrier_of_ty`] (a lowered operand) or
+    /// this through [`Carriers::carrier_of_ty`] (a lowered operand) or
     /// [`Elaborator::carrier_key`] (a name the writer spelled), so that a
     /// lookup lands on the key the declaration registered even where two
     /// modules declare the head's name.
@@ -3137,7 +3137,7 @@ impl Classes<'_> {
     /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
     /// symbol — what a value-slot refusal lists so that the reader is told
     /// which binder would have worked (§6, §7). `head_key` is resolved, as
-    /// [`Self::designated`]'s is.
+    /// [`Elaborator::designated`]'s is.
     pub(crate) fn designations_at(&self, head_key: &str) -> Vec<(String, String)> {
         self.traits.designations_at(head_key)
     }

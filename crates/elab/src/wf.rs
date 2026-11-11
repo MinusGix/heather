@@ -59,7 +59,7 @@ pub(crate) struct Tel<'a> {
     pub gamma0: &'a LocalCtx,
     /// `⟦D⟧` **inline** — the `Type::Wf` itself, scoped in `gamma0`. This is
     /// the structural-read copy: `spine` reads the sum-of-Σs out of it and
-    /// [`Elaborator::motive_head`] pushes it as a context entry. Never use it
+    /// [`Wf::motive_head`] pushes it as a context entry. Never use it
     /// for an emitted annotation; that is [`Tel::emitted`].
     pub structural: StructuralWf<'a>,
     /// `⟦D⟧` as it is **written into emitted terms**, selected by
@@ -173,10 +173,10 @@ pub(crate) struct WfConvoy {
     generalized: Option<Rc<Vec<usize>>>,
     /// [`WfCov::peel`], at this `match`'s context: the window's own, shifted
     /// here, and then whatever `λ`s stand between the guard and this `match`
-    /// ([`Elaborator::convoy_peel`]).
+    /// ([`Wf::convoy_peel`]).
     peel: Vec<Rc<Term>>,
     /// How many binders stand between the guard's arm and this `match`: the
-    /// candidates [`Elaborator::convoy_peel`] may take, outermost first.
+    /// candidates [`Wf::convoy_peel`] may take, outermost first.
     between: u32,
 }
 

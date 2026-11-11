@@ -9,3 +9,10 @@
 # `(ulimit -v 4194304; cargo test …)` fails with "cannot reserve … bytes".
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# The elaborator's incremental builds skip rustc's cross-unit optimisation
+# pass; the script says why and passes every other crate through untouched
+# (issues/elaborator-crate-compile-per-edit.md). Cargo has no per-package
+# `lto`, and a profile-wide `lto = "off"` slows the kernel by a fifth.
+[build]
+rustc-workspace-wrapper = "scripts/rustc-wrapper"

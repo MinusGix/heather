@@ -12,7 +12,7 @@
 //! ```
 //!
 //! and each member is a **view** of the family at its index constructor,
-//! resolved where a type is named ([`Elaborator::lower_member`]). What this
+//! resolved where a type is named ([`MutualFamily::lower_member`]). What this
 //! module owns is the surface: forming the group (§1), the member-level
 //! refusals, each in the member's terms rather than the generated family's,
 //! and the rewrite. The doctrine is the tiers': the rewrite is untrusted, the

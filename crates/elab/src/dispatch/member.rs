@@ -33,7 +33,7 @@ enum ReceiverCarrier {
     Vector,
 }
 
-/// The walk behind [`Elaborator::subject_excludes`]: the definitions whose
+/// The walk behind [`Members::subject_excludes`]: the definitions whose
 /// reducts are already being read, and a budget on the types it visits.
 /// `recursive` holds the context positions bound to an eliminator's
 /// recursive result while its step is read.

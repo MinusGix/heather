@@ -21,7 +21,7 @@ use crate::inductive::Inductives;
 use crate::declarations::Declarations;
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
-/// chain's end needs it — see [`Elaborator::chain_convoy`], which builds one,
+/// chain's end needs it — see [`Routes::chain_convoy`], which builds one,
 /// and `docs/course-of-values-recursion-design.md` §5 for why passing it
 /// through the `match` is what makes the deeper values usable.
 struct Convoy {

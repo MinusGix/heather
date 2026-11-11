@@ -31,7 +31,7 @@ pub(crate) struct OtherReading {
     pub(crate) fix: String,
     /// The callee the desugared call is to — never for a builtin. Resolved
     /// only once a dispatch has succeeded beside it, to the committed global
-    /// [`Elaborator::field_is_global`] compares the dispatched field against
+    /// [`Receivers::field_is_global`] compares the dispatched field against
     /// (issues/receiver-dispatch-coinciding-readings.md). Resolving it only
     /// there keeps every other method call at its old price.
     pub(crate) callee: Option<String>,

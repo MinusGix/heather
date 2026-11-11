@@ -25,7 +25,7 @@
 //! **Quoting.** While a tactic expression is elaborated, a position that
 //! expects a `tactic::Expr` but is given some other term of the goal's
 //! context (`by exact(h)`) takes a handle to that term instead
-//! ([`Elaborator::quote_for_by`]). The quoted term is replaced by a closed
+//! ([`Host::quote_for_by`]). The quoted term is replaced by a closed
 //! `host_quote(n)`, so the tactic value stays closed. A term that infers no
 //! type (an unannotated `λ`) is quoted as written ([`Quoted::Surface`]) and
 //! checked where the tactic's result places it (design §26).
@@ -521,7 +521,7 @@ pub trait NativeTactic {
     fn resume(&mut self, answer: Answer) -> Result<Step, String>;
 }
 
-/// The protocol from the host's side: the loop in [`Elaborator::run_tactic`]
+/// The protocol from the host's side: the loop in [`Host::run_tactic`]
 /// drives every tactic through this.
 trait Speaker {
     fn start(&mut self) -> Result<Step, String>;
@@ -1193,7 +1193,7 @@ pub(crate) enum Leaves {
     /// given.
     Fill(Vec<(Term, usize)>),
     /// A generated declaration's parameter types, statement and body
-    /// ([`Elaborator::elab_generate`]), in a context of the length given.
+    /// ([`HostMut::elab_generate`]), in a context of the length given.
     /// They were built in a world of `psi` globals, and the declarations
     /// published since are shifted past.
     Member { fills: Vec<(Held, usize)>, psi: usize },
@@ -1575,7 +1575,7 @@ struct Reified {
 pub(crate) enum Quoted {
     Held(Held),
     /// A term that infers no type of its own (an unannotated `λ`), checked
-    /// where the result places it ([`Elaborator::check_surface`]).
+    /// where the result places it ([`Host::check_surface`]).
     Surface(Expr),
 }
 

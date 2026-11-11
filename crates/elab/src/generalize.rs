@@ -12,7 +12,7 @@
 //!
 //! Two invariants carry over from the rest of the recursion machinery:
 //!
-//! - **The scan is a sizing decision only.** [`Elaborator::varying_params`]
+//! - **The scan is a sizing decision only.** [`Generalize::varying_params`]
 //!   works on names, so shadowing can mislead it in either direction — and
 //!   neither direction produces a wrong term. A missed parameter meets the
 //!   by-binder refusal that stood before this existed; a parameter generalized

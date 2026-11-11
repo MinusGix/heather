@@ -34,7 +34,7 @@ One four-core cloud box, release binary at #553 plus the name-record fix.
 
 ## Ranked, with the issue that owns each
 
-1. The elaborator crate's compile: [[elaborator-crate-compile-per-edit]].
+1. The elaborator crate's compile: [[elaborator-crate-compile-per-edit]] (done the same day: 123 s to 14 to 31 s). What it left: [[elaborator-edit-recompiles-shared-vec-unit]] and the kernel's own edit, [[kernel-edit-rebuild-cost]].
 2. The cold library's total work:
    - one proof, 33 s and 1.3 GB: [[perform-call-heaviest-declaration]];
    - instance resolution on the reals: [[instance-resolution-on-the-reals]];

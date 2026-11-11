@@ -12,7 +12,7 @@
 //! can spell (§9.6).
 //!
 //! A default is also checked once where it is written, as far as the
-//! declaration decides it (§9.7): [`Elaborator::check_default_at_declaration`].
+//! declaration decides it (§9.7): [`Defaults::check_default_at_declaration`].
 
 use heather_kernel::rc::Rc;
 

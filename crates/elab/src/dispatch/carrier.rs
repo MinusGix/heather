@@ -157,7 +157,7 @@ impl Carriers<'_> {
     /// answer "ambiguous" about a type there is nothing ambiguous about.
     ///
     /// `Nat` has no declaration and answers for itself, which agrees with
-    /// [`Self::carrier_key`]'s fallback: the three names `names_a_type` claims
+    /// [`Elaborator::carrier_key`]'s fallback: the three names `names_a_type` claims
     /// with nothing behind them are the language's own, so a bare key for them
     /// is a constant rather than a spelling.
     pub(crate) fn carrier_of_ty(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Carrier> {

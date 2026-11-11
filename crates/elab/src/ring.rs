@@ -200,7 +200,7 @@ fn same_dictionary_read(elab: &Elaborator, tm: &Term, want: &Term) -> bool {
 }
 
 /// `tm`, a projection chain, with the open derivation at its base unfolded
-/// ([`Elaborator::unfold_open_app`]); `None` when its base is none.
+/// ([`Resolution::unfold_open_app`]); `None` when its base is none.
 fn unfold_open_base(elab: &Elaborator, tm: &Term) -> Option<Term> {
     let Some((_, pair)) = crate::spelling::proj_of(tm) else {
         return Resolution(elab).unfold_open_app(tm);
@@ -237,7 +237,7 @@ const CLASS_INTS: &str = "__ring_ints";
 
 impl ClassInts {
     /// `cx` with these integers in scope for a certificate at `carrier`:
-    /// [`Elaborator::class_dictionary_scope`] for `ring`'s lemmas.
+    /// [`Ring::class_dictionary_scope`] for `ring`'s lemmas.
     fn scope(&self, elab: &Elaborator, cx: &Cx, carrier: &str) -> Option<Cx> {
         Ring(elab).class_dictionary_scope(cx, carrier, CLASS_INTS, (&self.ints, &self.ty, &self.level), "semiring::CommRingOfInt", "semiring::CommRing")
     }
@@ -1705,7 +1705,7 @@ impl Reifier<'_> {
     /// A field read off a value that computes to a constructor is read as the
     /// field: `Rat::add(x, y).num` is the numerator `add` builds, whether the
     /// read is the inline walk or a named projection
-    /// ([`Elaborator::named_field_read`]). Anything else is an atom.
+    /// ([`GeneratedDefs::named_field_read`]). Anything else is an atom.
     fn projection_or_atom(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
         if let Some(step) = self.range_step(tm, depth)? {
             return Ok(step);

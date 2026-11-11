@@ -1110,7 +1110,7 @@ impl Patterns<'_> {
     }
 
     /// §4: the scrutinee type's constructors and their arities, in declaration
-    /// order. Mirrors [`Elaborator::elab_match`]'s dispatch, and deliberately
+    /// order. Mirrors [`Routes::elab_match`](crate::matching::Routes::elab_match)'s dispatch, and deliberately
     /// so: a `_` must expand to exactly the arms that dispatch will demand.
     fn ctors_at(&self, cx: &Cx, scrut_ty: &Type, span: Span) -> Option<Vec<(String, usize)>> {
         let named = |ind: &crate::inductive::Inductive| {

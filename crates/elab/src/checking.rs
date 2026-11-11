@@ -56,7 +56,7 @@ impl std::ops::Deref for Checking<'_> {
 }
 
 impl Checking<'_> {
-    /// [`Self::elab_check`] plus, where the caller knows it, the `(callee,
+    /// [`Elaborator::elab_check`] plus, where the caller knows it, the `(callee,
     /// parameter)` this expression is an argument for — the provenance and
     /// default name of any goal raised inside it.
     pub(crate) fn elab_check_hinted(
@@ -1448,7 +1448,7 @@ impl Checking<'_> {
     /// expected (`issues/prop-in-bool-position-reaches-kernel.md`).
     ///
     /// The kernel refuses these as a bare `LevelMismatch` (the inferred type
-    /// lives a level above the expected one), and [`Self::kernel_error`] reads
+    /// lives a level above the expected one), and [`Refusals::kernel_error`] reads
     /// the deferred checking notes only for `NotConvertible`, so the author
     /// of `fn z(n: Nat) → Bool { n = 0 }` was told neither type. The refusal
     /// is made here, at the expression, and only on a *decided* answer: the

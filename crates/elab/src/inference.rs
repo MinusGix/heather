@@ -124,7 +124,7 @@ impl Inference<'_> {
         ))
     }
 
-    /// [`Self::elab_infer`] plus, when the caller is in **checking** position
+    /// [`Elaborator::elab_infer`] plus, when the caller is in **checking** position
     /// and inference is the fallback, the expected type it would otherwise
     /// discard (already whnf'd).
     ///
@@ -1676,7 +1676,7 @@ impl Inference<'_> {
     /// (docs/match-equation-split-design.md §3.3).
     ///
     /// Three mechanical steps over the *unconvoyed* elaboration, and nothing
-    /// below [`Self::elab_match`] learns that any of them happened:
+    /// below [`Routes::elab_match`] learns that any of them happened:
     ///
     /// 1. the motive `M` over `Γ, z` becomes `M' = Π (e = z). M`, so every arm
     ///    is checked at `Π fields. (e = C(fields)) -> M[C(fields)/z]`;

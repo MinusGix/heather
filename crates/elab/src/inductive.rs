@@ -1050,7 +1050,7 @@ impl Elaborator {
 }
 
 impl InductivesMut<'_> {
-    /// [`Self::elab_inductive`] for a mutual group's family, which carries
+    /// [`Elaborator::elab_inductive`] for a mutual group's family, which carries
     /// its members (docs/mutual-inductive-design.md §2). Empty `members` is
     /// an ordinary declaration.
     pub(crate) fn elab_inductive_members(
@@ -2021,7 +2021,7 @@ impl Inductives<'_> {
     /// parameters (docs/surface-value-parameters.md §3), which is what makes it
     /// a predicate. The parser's applied-type-is-never-called backtracking
     /// delivers it as a [`TyKind::OfExpr`], the same road
-    /// [`Self::try_indexed_ty`] travels; this recognizes the record case before
+    /// [`IndexedFamilies::try_indexed_ty`] travels; this recognizes the record case before
     /// `OfExpr`'s generic infer-and-decode path would try to *call* `D`.
     ///
     /// `None` — not an error — for anything that is not a declared record with
@@ -2528,7 +2528,7 @@ impl Inductives<'_> {
     /// `A -> Type` and `A := Nat` falls out of the domains.
     ///
     /// **Deliberately first-order and one-sided**, on the doctrine
-    /// [`Elaborator::infer_ctor`] already states for constructors: the
+    /// [`Constructors::infer_ctor`] already states for constructors: the
     /// declared side is a *skeleton* with the parameter names as holes, the
     /// actual side is inspected only where the skeleton has structure, and
     /// anything deeper is unification
@@ -2579,12 +2579,12 @@ impl Elaborator {
     /// mention parameters `0..j`, so it is elaborated in a context carrying the
     /// earlier arguments as aliases — all bound at the *ambient* depth, so no
     /// shifting happens here. The shifting that matters happens later, in
-    /// [`Self::lower_ctor`], where the field spine pushes binders on top.
+    /// [`Inductives::lower_ctor`], where the field spine pushes binders on top.
     ///
     /// The declared type may also mention the declaration's **type**
     /// parameters — `class Monoid<A>(op: A -> A -> A)` is the case that made
     /// this true (docs/operation-indexed-classes-design.md §3) — so they are
-    /// bound here at the instantiation, exactly as [`Self::lower_ctor`] binds
+    /// bound here at the instantiation, exactly as [`Inductives::lower_ctor`] binds
     /// them for the field types. `record R(p: Prog, env: Val)`, whose value
     /// parameters' types are closed, is unaffected.
     pub(crate) fn valparam_args(
@@ -2600,7 +2600,7 @@ impl Elaborator {
 }
 
 impl Inductives<'_> {
-    /// [`Self::valparam_args`] after `given`, the leading value arguments
+    /// [`Elaborator::valparam_args`] after `given`, the leading value arguments
     /// already elaborated (a universe-declared class carrier, passed as its
     /// code: `crate::dispatch::dictionary`'s `universe_carrier`).
     pub(crate) fn valparam_args_after(
@@ -2997,7 +2997,7 @@ impl Inductives<'_> {
     /// (docs/named-arguments-design.md §9.7), by the rule a parameter's
     /// default is: a discharge is left to each construction, a value is
     /// elaborated and kernel-checked in the field telescope
-    /// ([`Elaborator::check_default_at_declaration`]).
+    /// ([`Defaults::check_default_at_declaration`]).
     ///
     /// The telescope is the declaration at its own parameters: each type
     /// parameter a binder at `Type` (level 0), each value parameter a binder
@@ -3240,7 +3240,7 @@ impl Elaborator {
 }
 
 impl Inductives<'_> {
-    /// [`Self::spine`] of a type scoped in `cx`, a named codata signature
+    /// [`Elaborator::spine`] of a type scoped in `cx`, a named codata signature
     /// unfolded first (docs/codata-named-signature-design.md §3): the readers
     /// that take a codata equation apart (`inj`, `absurd`) arrive with one.
     pub(crate) fn spine_in(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
@@ -3467,7 +3467,7 @@ impl Inductives<'_> {
     }
 
     /// The surface field types of a constructor, for the narrow type-argument
-    /// inference in [`Elaborator::infer_ctor`].
+    /// inference in [`Constructors::infer_ctor`].
     pub(crate) fn ctor_fields(&self, ind: &Inductive, i: usize) -> Vec<Ty> {
         ind.ctors[i].fields.iter().map(|(_, t)| t.clone()).collect()
     }
@@ -3484,7 +3484,7 @@ impl Inductives<'_> {
 
     /// A constructor in checking position, saturated **or not**
     /// (`docs/constructor-function-values.md` §2). With every field supplied
-    /// this is [`Self::build_ctor`]; with fields missing and a `Π` expected it
+    /// this is [`Elaborator::build_ctor`]; with fields missing and a `Π` expected it
     /// is the η-expansion
     ///
     /// ```text
@@ -3903,7 +3903,7 @@ impl Elaborator {
 }
 
 impl Inductives<'_> {
-    /// [`Self::build_fields`] plus, aligned positionally with `args`, each
+    /// [`Elaborator::build_fields`] plus, aligned positionally with `args`, each
     /// field's implicitness skeleton derived from its *stored surface* type
     /// (docs/implicit-binders-design.md §6.1's third site) — what lets a
     /// record literal's field be an implicit lambda. Empty for every caller
@@ -4399,7 +4399,7 @@ impl Inductives<'_> {
 
 impl Elaborator {
     /// Project field `idx` out of a record value (docs/surface-records.md
-    /// §4.3). This is [`Self::elab_arm`]'s walk with the aliasing removed:
+    /// §4.3). This is [`Inductives::elab_arm`]'s walk with the aliasing removed:
     /// step down the Σ spine, skipping the nominal tag, and stop at the
     /// wanted field. `π_j = fst(snd^j(value))`, with the *j*-th `snd` carrying
     /// the earlier projections substituted into the tail — which is what makes
@@ -4671,7 +4671,7 @@ impl Inductives<'_> {
 }
 
 impl Elaborator {
-    /// [`Self::record_of`] with a reduction step behind it, for a receiver
+    /// [`Inductives::record_of`] with a reduction step behind it, for a receiver
     /// whose type arrived through a **`Val -> Type` value** rather than through
     /// a type annotation: `dom(env)` with `dom := λ e => NatEnv(e)` is `El` of
     /// a β-redex, and [`decoded`] is deliberately context-free — it strips `El`
@@ -6364,7 +6364,7 @@ impl Elaborator {
 }
 
 impl Inductives<'_> {
-    /// One branch of [`Self::const_case_tree`], for constructor `j`, with
+    /// One branch of [`Elaborator::const_case_tree`], for constructor `j`, with
     /// `value : ⟦c_j⟧` scoped in `cx`.
     #[allow(clippy::too_many_arguments)]
     fn const_body(
@@ -6482,11 +6482,11 @@ impl Elaborator {
 }
 
 impl Inductives<'_> {
-    /// [`Self::projection`] in the checked spelling, `fst@(snd@^{k+1} value)`,
+    /// [`Elaborator::projection`] in the checked spelling, `fst@(snd@^{k+1} value)`,
     /// where the caller's receiver infers (a case binder): no component
     /// annotations, so a field's term does not carry every earlier field's
     /// projection inside its types. The returned type stays inline, as
-    /// [`Self::projection`]'s does.
+    /// [`Elaborator::projection`]'s does.
     pub(crate) fn projection_at(
         &self,
         cx: &Cx,

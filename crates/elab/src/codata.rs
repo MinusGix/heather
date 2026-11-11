@@ -19,7 +19,7 @@
 //! itself is compiled into one `corec` whose carrier is the tuple of its
 //! varying parameters (§5): its body is elaborated against the *step type*,
 //! and the two positions the step type has — a node and a child — are
-//! recognized by [`Elaborator::corec_check`], which every checking-mode
+//! recognized by [`Codata::corec_check`], which every checking-mode
 //! elaboration passes through while a corecursive body is open.
 //!
 //! Scoping convention, as `infinitary.rs`'s: `k` counts the binders pushed
@@ -447,7 +447,7 @@ impl MParts {
 
     /// The code `P(label)` decodes from at a constructor's label, with the
     /// case on the label's injection taken (`infinitary.rs`'s `pos_shown`):
-    /// `π₀ + (π₁ + …)` as written by [`Elaborator::lower_instance_m`].
+    /// `π₀ + (π₁ + …)` as written by [`Codata::lower_instance_m`].
     /// `gamma` is the context `label` is scoped in.
     fn pos_code(&self, el: &Elaborator, k: u32, gamma: &LocalCtx, label: Rc<Term>) -> Rc<Term> {
         let inline = self.inline(el).expect("the spine was read, so the signature unfolds");
@@ -651,7 +651,7 @@ impl Carrier {
     }
 }
 
-/// A corecursive definition in progress (§5): what [`Elaborator::corec_check`]
+/// A corecursive definition in progress (§5): what [`Codata::corec_check`]
 /// recognizes and what a corecursive call's seed is built against. Every type
 /// is scoped at `depth`, the body's own context (the declaration's whole
 /// telescope).
@@ -980,8 +980,8 @@ impl CodataMut<'_> {
     // -- the named signature (docs/codata-named-signature-design.md) -----------
 
     /// `D#mshape`, `D#mpos` and (indexed) `D#mnext` at declaration time: the
-    /// inline signature [`Self::lower_instance_m`] builds over
-    /// [`Self::tycode_fn_telescope`]'s all-`Ty 0` telescope, abstracted over
+    /// inline signature [`Codata::lower_instance_m`] builds over
+    /// [`GeneratedDefs::tycode_fn_telescope`]'s all-`Ty 0` telescope, abstracted over
     /// it and the index binder. From then on every instance at that profile
     /// is spelled with them (§2). Best-effort like every generated
     /// definition: a refusal leaves the declaration inline.

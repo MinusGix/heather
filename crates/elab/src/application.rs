@@ -288,7 +288,7 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     /// of type `expected` (both in the committed world) with nothing in the
     /// elaborator having compared the two: the gate compares them, and this is
     /// the site its refusal is reported at. Recording, not probing — the
-    /// checking forms' [`crate::Elaborator::note_check_mismatch`]. `clash` is
+    /// checking forms' [`MismatchNotes::note_check_mismatch`](crate::mismatch_notes::MismatchNotes::note_check_mismatch). `clash` is
     /// an implicit this argument's type disagreed about, said beside the
     /// mismatch if there is one.
     #[allow(clippy::too_many_arguments)]

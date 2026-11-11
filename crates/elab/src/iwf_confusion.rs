@@ -53,7 +53,7 @@ impl IwfConfusion<'_> {
     /// A constant-motive function of a family value, inside a `J` motive:
     /// `mcx` is the ambient context plus the motive's two binders, `fam`,
     /// `spine` and `body`'s payloads are scoped in the ambient context, and
-    /// `motive` and `scrut` in `mcx` ([`Self::const_predicate`]'s contract).
+    /// `motive` and `scrut` in `mcx` ([`Inductives::const_predicate`](crate::inductive::Inductives::const_predicate)'s contract).
     #[allow(clippy::too_many_arguments)]
     fn fam_const(
         &self,

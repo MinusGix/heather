@@ -402,7 +402,7 @@ fn visible(cx: &Cx, p: usize) -> bool {
 /// A `match` arm binds its fields as aliases of `fst(sndʲ(v))` for the arm's
 /// value `v` (`elab_arm`, `wf.rs`), and the arm's goal and hypotheses mention
 /// `v` whole. So `subst` finds no local in `t = []`, and `rewrite` along it
-/// finds no `t` in a goal that displays one. [`Elaborator::split_projection`]
+/// finds no `t` in a goal that displays one. [`LocalSubsts::split_projection`]
 /// answers both by the move Lean's `cases` makes for a structure: a context
 /// in which `v`'s components are binders `c₀ … c_L`, every later local that
 /// mentions `v` is bound again at `v := (c₀, …, c_L)`, the goal likewise,

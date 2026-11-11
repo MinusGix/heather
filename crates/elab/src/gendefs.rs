@@ -22,7 +22,7 @@
 //!   `inductive.rs`'s own rule (a parameterized index is rejected at the
 //!   declaration), so its code is closed for every family that can exist. A
 //!   declaration's own devices are closed exactly when it has no type
-//!   parameters — see [`Elaborator::register_ty_code`]'s boundary note.
+//!   parameters — see [`GeneratedDefsMut::register_ty_code`]'s boundary note.
 //! - **Registration is best-effort.** If any piece fails to build or fails
 //!   the kernel gate here, nothing is pushed and the emission site falls back
 //!   to writing the term out inline, exactly as before. A definition is a
@@ -69,7 +69,7 @@ pub(crate) enum GenDef {
     /// or not (a sum-of-Σs) — both are Θ(n²) and both are copied Θ(arms)
     /// times by the two `match` lowerings.
     ///
-    /// See [`Elaborator::register_ty_code`] for the boundary.
+    /// See [`GeneratedDefsMut::register_ty_code`] for the boundary.
     TyCode(u32),
     /// `D#tycode_fn : Π(A₁ : Ty l₁)…(v_m : T_m). Ty l :=
     /// λ(A₁ : Ty l₁)…(v_m : T_m). ⌜⟦D<El A₁,…>(v̄)⟧⌝` — a **parameterized or
@@ -257,7 +257,7 @@ impl GenDef {
     }
 }
 
-/// [`Elaborator::register_ty_code_fn`]'s definition at one level profile:
+/// [`GeneratedDefsMut::register_ty_code_fn`]'s definition at one level profile:
 /// the open template and its level, the type arguments it was lowered at,
 /// and the closed statement, its level and body.
 struct CodeFnAt {
@@ -327,7 +327,7 @@ pub(crate) struct TyCodeFn {
 struct Holes<'a> {
     /// The registry, for [`Holes::see_through`], and the scratch anchor the
     /// references inside the subject are numbered at
-    /// ([`Elaborator::unspell_here_in`]). The anchor is carried rather than
+    /// ([`GeneratedDefs::unspell_here_in`]). The anchor is carried rather than
     /// assumed because a reference read at the wrong one names a *different*
     /// definition rather than none.
     el: &'a Elaborator,
@@ -350,7 +350,7 @@ struct Holes<'a> {
     /// another declaration's spine spells it as), and `Nat` and `El ⌜Nat⌝`
     /// disagree syntactically. Recovering the code makes the two slots one by
     /// construction; the *type* the emission of the argument needs is
-    /// `decode_deep (El l c)` and is derived once, in [`Elaborator::instance_match`].
+    /// `decode_deep (El l c)` and is derived once, in [`GeneratedDefs::instance_match`].
     types: Vec<Option<Rc<Term>>>,
     values: Vec<Option<Rc<Term>>>,
     /// The **first** shape the walk stopped on, as a `template/subject` former
@@ -429,7 +429,7 @@ impl Holes<'_> {
     }
 
     /// [`Self::see_through`] at a **code**: the inline copy a code reference
-    /// names, quoted again. [`Elaborator::unspell_here_in`] reads the `El`'s
+    /// names, quoted again. [`GeneratedDefs::unspell_here_in`] reads the `El`'s
     /// code and never its level, so the level here is scaffolding for that
     /// call and not a claim about the code's sort.
     fn see_through_code(&self, t: &Term) -> Option<Term> {
@@ -646,7 +646,7 @@ impl Holes<'_> {
     /// exactly.
     ///
     /// The matcher may be as incomplete as convenient and can never be wrong
-    /// — [`Elaborator::instance_match`]'s step 2 requires the template *at the
+    /// — [`GeneratedDefs::instance_match`]'s step 2 requires the template *at the
     /// recovered arguments* to be the subject syntactically — so each arm
     /// below is a decline turned into a match and never an answer that has to
     /// be argued for. What is *not* free is leaving one out: the decline is
@@ -879,7 +879,7 @@ fn drop_innermost(base: CtxBase, m: u32, d: u32) -> LocalSubst {
 }
 
 /// The identity substitution of `cx` extended by `d` binders — the
-/// β-substitution [`Elaborator::gen_spine`] needs to walk a dependent
+/// β-substitution [`GeneratedDefs::gen_spine`] needs to walk a dependent
 /// telescope at the depth the subject sits at.
 fn id_subst_at(cx: &Cx, d: u32) -> LocalSubst {
     let m = cx.gamma.entries.len() as u32 + d;
@@ -1067,7 +1067,7 @@ pub(crate) struct SpineCodes {
 }
 
 /// Per component, whether `spine`'s is structurally the registered one —
-/// [`Elaborator::spine_refs_by_position`]'s guard, at the cost of the
+/// [`GeneratedDefs::spine_refs_by_position`]'s guard, at the cost of the
 /// payloads rather than of the sums.
 ///
 /// [`Elaborator::spine`] reads each `+` node's two sides off it without
@@ -1148,7 +1148,7 @@ struct GenDefLayer {
     /// **inline** `⟦D⟧` the code was minted from and its level.
     ///
     /// The inline copy is not a convenience: it is the use-site *guard*.
-    /// [`Elaborator::closed_type_ref`] hands out the reference only when the type
+    /// [`GeneratedDefs::closed_type_ref`] hands out the reference only when the type
     /// in front of it is structurally that exact lowering, so a reference can
     /// never stand for a type it does not decode to — the tag alone would be
     /// a nominal claim about a type the emission site read from somewhere
@@ -1168,7 +1168,7 @@ struct GenDefLayer {
     /// from and the declaration's level.
     ///
     /// The pair is the use-site guard, exactly as [`GenDefs::ty_code`]'s copy
-    /// is: [`Elaborator::wf_slot_refs`] hands out the references only when the
+    /// is: [`GeneratedDefs::wf_slot_refs`] hands out the references only when the
     /// slots in front of it are structurally *those* slots, so a reference can
     /// never stand for a shape it does not decode to. Both entries are written
     /// together or not at all — a spelled shape with an inline arity would be
@@ -1177,7 +1177,7 @@ struct GenDefLayer {
     wf_slots: HashMap<u32, WfSlots>,
     /// Per declaration tag whose whole spine registered (a recursive one's:
     /// its shape's)
-    /// ([`Elaborator::register_spine_codes`]), the inline spine the codes
+    /// ([`GeneratedDefsMut::register_spine_codes`]), the inline spine the codes
     /// were minted from — the use-site guard, written all-or-nothing.
     spine_codes: HashMap<u32, SpineCodes>,
 }
@@ -1218,7 +1218,7 @@ pub(crate) fn names_global(t: &Term) -> bool {
 
 /// The registry: immutable image layers plus one suffix delta. The two
 /// directions remain in the same layer and are kept in step by
-/// [`Elaborator::push_gen_def`].
+/// [`GeneratedDefsMut::push_gen_def`].
 #[derive(Clone, Default)]
 pub(crate) struct GenDefs {
     tables: Layered<GenDefLayer>,
@@ -1671,7 +1671,7 @@ impl GeneratedDefs<'_> {
     /// nothing but `Γ`'s length and base.
     ///
     /// **Only the domains.** `tycode_fn_telescope`'s own `cx`, `targs` and
-    /// `vargs` stay structural: they are what [`Self::lower_instance`] builds
+    /// `vargs` stay structural: they are what [`Elaborator::lower_instance`] builds
     /// the **template** from, and the template is the inline identity §4's
     /// inverse re-lowers against (`register_ty_code_fn` quotes the emitted
     /// copy for the *body* and stores the inline one).
@@ -1814,7 +1814,7 @@ impl GeneratedDefsMut<'_> {
     /// no reference is ever handed out.
     ///
     /// Each payload's body is the emission spelling
-    /// ([`Self::respell_ty_deep`] of the inline payload): its embedded field
+    /// ([`GeneratedDefs::respell_ty_deep`] of the inline payload): its embedded field
     /// types are `El (F#tycode^δ)` where `F` has a code, so the definition is
     /// small and decodes to what a respelled field tuple is annotated with.
     /// The suffixes reference the payloads and each other, never a literal,
@@ -1920,7 +1920,7 @@ impl GeneratedDefsMut<'_> {
     /// syntactically. That needs the code function, so a declaration whose
     /// `register_ty_code_fn` declined keeps the inline walk.
     ///
-    /// The **dependency** gate ([`Elaborator::record_spine_is_dependent`])
+    /// The **dependency** gate ([`GeneratedDefs::record_spine_is_dependent`])
     /// applies to a *closed* record only. There it is the whole precondition:
     /// the inline walk's exponent comes from substituting a payload into the
     /// tails, so a non-dependent spine is linear already and the definitions
@@ -2320,7 +2320,7 @@ impl GeneratedDefsMut<'_> {
     /// Push one `Π(v : ⟦D⟧). cod` definition whose body is `λ(v : ⟦D⟧). node`,
     /// and answer with `key^δ v` — the reference that stands for `node` in
     /// everything built afterwards. `None` if the gate refused it, which is
-    /// [`Elaborator::register_rec_projs`]'s cue to stop and leave the rest
+    /// [`GeneratedDefsMut::register_rec_projs`]'s cue to stop and leave the rest
     /// inline.
     ///
     /// Everything handed in is scoped in `·, v` (or, for `dom`, in `·`) and in
@@ -2388,7 +2388,7 @@ impl GeneratedDefs<'_> {
     /// The tail family is the discriminator and is the only one there is: the
     /// simple telescoped device writes its tails out and registers no
     /// [`GenDef::RecFam`], so one Ψ lookup separates the two cells without a
-    /// second record of what [`Self::register_rec_projs`] decided.
+    /// second record of what [`GeneratedDefsMut::register_rec_projs`] decided.
     /// [`crate::inductive::project_field`]'s receiver gate asks, because the
     /// dependent device is exempt from it at every receiver exactly as the
     /// closed one is (`docs/telescoped-record-projections-design.md` §4).
@@ -2630,7 +2630,7 @@ impl GeneratedDefs<'_> {
 
     /// Closed-registration lookup, not the default API for annotations.
     /// Parameterized declarations have a TyCodeFn and deliberately decline
-    /// here; emission callers should use [`Self::annotation_type`].
+    /// here; emission callers should use [`Elaborator::annotation_type`].
     ///
     /// `El l (D#tycode^δ)` for `inline`, if and only if `inline` **is** the
     /// lowering `D#tycode` was minted from (design §1.3 + the guard note on
@@ -2654,7 +2654,7 @@ impl GeneratedDefs<'_> {
     }
 
     /// `lowered` spelled with the **registered** lowering's own nodes when it
-    /// is that lowering ([`Self::register_ty_code`]'s guard copy), else as it
+    /// is that lowering ([`GeneratedDefsMut::register_ty_code`]'s guard copy), else as it
     /// came.
     ///
     /// Every guard that decides whether a reference may stand for a
@@ -2966,7 +2966,7 @@ impl GeneratedDefs<'_> {
     }
 
     /// The Ψ length a reference minted `g` scratch globals deep counts from —
-    /// [`Self::gen_ref`]'s own numbering, goal arena and `meta fn` padding
+    /// [`Elaborator::gen_ref`]'s own numbering, goal arena and `meta fn` padding
     /// included.
     fn gen_ref_len(&self, g: u32) -> u32 {
         self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset() + g
@@ -3270,8 +3270,8 @@ impl GeneratedDefs<'_> {
         self.gen_type_ref(GenDef::SuffixCode(tag, j.checked_sub(1)?), l)
     }
 
-    /// [`Self::spine_type_ref`] **by position**, for the emission copy of a
-    /// spine ([`Elaborator::respell_spine`]): component `k` of `spine` takes
+    /// [`GeneratedDefs::spine_type_ref`] **by position**, for the emission copy of a
+    /// spine ([`Inductives::respell_spine`]): component `k` of `spine` takes
     /// its reference when it is structurally the registered component `k`,
     /// so the guard is one comparison per component rather than a scan, and
     /// two constructors with identical payloads keep their own names. `None`
@@ -3316,7 +3316,7 @@ impl GeneratedDefs<'_> {
     /// The `Wf` slot **pair** in the emission spelling: the two components
     /// respelled together or not at all.
     ///
-    /// Not [`Self::emit_ty`] of the former they reconstitute: a slot holds the
+    /// Not [`Elaborator::emit_ty`] of the former they reconstitute: a slot holds the
     /// *component*, and since
     /// `docs/per-instantiation-type-codes-design.md` a monomorphized `Wf` has
     /// a name for the whole — which is exactly what may not stand here
@@ -3340,7 +3340,7 @@ impl Elaborator {
     /// (`docs/annotation-component-respell-design.md` §2.5): the inline form
     /// where the decode handed back a code literal
     /// ([`crate::inductive::decode_deep`]), with registered sub-lowerings then
-    /// respelled as references ([`Self::respell_ty_deep`]). `None` when both
+    /// respelled as references ([`GeneratedDefs::respell_ty_deep`]). `None` when both
     /// leave it alone, so the caller keeps its original and its sharing.
     ///
     /// Every constructor of a `Term`/`Type` **annotation** slot in the
@@ -3361,14 +3361,14 @@ impl Elaborator {
     ///
     /// `depth` counts binders beyond `cx`, exactly as in [`Self::emit_ty`].
     /// This is for annotations only: structural readers keep their original
-    /// type, and Wf shape/arity slots use [`Self::emit_wf_slots`] together.
+    /// type, and Wf shape/arity slots use [`GeneratedDefs::emit_wf_slots`] together.
     pub(crate) fn annotation_type(&self, cx: &Cx, ty: &Type, depth: u32) -> Type {
         self.emit_ty(cx, ty, depth).unwrap_or_else(|| ty.clone())
     }
 }
 
 impl GeneratedDefs<'_> {
-    /// [`Self::emit_ty`] for a slot living in an application's **scratch
+    /// [`Elaborator::emit_ty`] for a slot living in an application's **scratch
     /// world** ([`Self::respell_ty_deep_in`]'s `scratch`).
     pub(crate) fn emit_ty_in(&self, cx: &Cx, ty: &Type, depth: u32, scratch: u32) -> Option<Type> {
         match crate::inductive::decode_deep(ty) {
@@ -3660,7 +3660,7 @@ impl GeneratedDefs<'_> {
 impl Elaborator {
     /// `El (D#tycode^δ)` back to the registry's inline `⟦D⟧`, at the head only
     /// and in the **current** Ψ world (goal and meta padding included, which is
-    /// what [`Self::gen_def_of`] knows and [`Self::unspell_ty_deep`]'s explicit
+    /// what [`Self::gen_def_of`] knows and [`GeneratedDefs::unspell_ty_deep`]'s explicit
     /// anchor deliberately does not assume).
     ///
     /// This is the elaborator's `whnf` of a reference
@@ -3675,13 +3675,13 @@ impl Elaborator {
 }
 
 impl GeneratedDefs<'_> {
-    /// [`Self::unspell_here`] for a type living in an application's **scratch
+    /// [`Elaborator::unspell_here`] for a type living in an application's **scratch
     /// world** ([`Self::respell_ty_deep_in`]'s `scratch`), where `g`
     /// metavariables sit below the committed globals. The recognizer runs
     /// there too ([`Holes::see_through`]), and reading a reference at the
     /// wrong anchor would name a *different* definition rather than none, so
     /// the anchor is carried instead of assumed. At `g = 0` this is
-    /// [`Self::gen_def_of`]'s own numbering, unchanged.
+    /// [`Elaborator::gen_def_of`]'s own numbering, unchanged.
     pub(crate) fn unspell_here_in(&self, ty: &Type, g: u32) -> Option<Type> {
         let gdefs = self.types.gdefs();
         if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
@@ -3742,13 +3742,13 @@ impl GeneratedDefs<'_> {
 
     /// Which definition a `GlobalVar` denotes in a type whose globals count
     /// from `len_at` — [`Self::unspell_ty_deep`]'s explicit anchor, which
-    /// deliberately does not go through [`Self::gen_def_of`]'s padding.
+    /// deliberately does not go through [`Elaborator::gen_def_of`]'s padding.
     fn code_key_at(&self, len_at: u32, var: GlobalVar) -> Option<GenDef> {
         let abs = var.position(len_at as usize)? as u32;
         self.types.gdefs().key_for_abs(&abs).copied()
     }
 
-    /// [`Self::gen_app_of`] at [`Self::unspell_ty_deep`]'s anchor.
+    /// [`Elaborator::gen_app_of`] at [`Self::unspell_ty_deep`]'s anchor.
     fn gen_app_of_at(&self, len_at: u32, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
         let mut args = Vec::new();
         let mut cur = t;
@@ -3782,7 +3782,7 @@ impl GeneratedDefs<'_> {
         }
     }
 
-    /// [`Self::unspell_here`] one level down a **sum**: the kernel's whnf of
+    /// [`Elaborator::unspell_here`] one level down a **sum**: the kernel's whnf of
     /// `El (D#tycode^δ)` for a flat declaration — or of any code that
     /// computes to one — stops at `Sum(El (D#payload₀^δ), El (D#suffix₀^δ))`,
     /// whose components are `El` of *neutral* codes that `decoded` rightly
@@ -3849,7 +3849,7 @@ impl GeneratedDefs<'_> {
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive
-    /// declaration. This is the shape-slot counterpart of [`Self::unspell_here`]
+    /// declaration. This is the shape-slot counterpart of [`Elaborator::unspell_here`]
     /// and exists for display only: a `Wf` annotation may carry the generated
     /// reference even though the nominal tag and constructor spine live in the
     /// inline shape (issues/display-inductive-type-arguments.md).
@@ -3871,7 +3871,7 @@ impl GeneratedDefs<'_> {
     }
 
     /// [`Self::unspell_ty_deep`] anchored at the **current** world — goal and
-    /// meta padding included, as [`Self::gen_def_of`] counts it — plus
+    /// meta padding included, as [`Elaborator::gen_def_of`] counts it — plus
     /// `scratch` metavariables.
     ///
     /// The spelling a structural reader that is *not* the `whnf` choke point
@@ -3912,7 +3912,7 @@ impl GeneratedDefs<'_> {
     /// `shift_global` (`fn_type_code`), the binding's own `abs` for a raw
     /// prefix-scoped statement (`sig_peel` over `global_body`). Goal and
     /// meta padding never applies to either, which is why this does not go
-    /// through [`Self::gen_def_of`].
+    /// through [`Elaborator::gen_def_of`].
     pub(crate) fn unspell_ty_deep(&self, len_at: u32, ty: &Type) -> Option<Type> {
         let gdefs = self.types.gdefs();
         if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
@@ -4073,7 +4073,7 @@ impl GeneratedDefs<'_> {
 impl GeneratedDefsMut<'_> {
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
     /// Only an **unparameterized** declaration gets one, for
-    /// [`Elaborator::register_ty_code`]'s reason: the family's branches mention the
+    /// [`GeneratedDefsMut::register_ty_code`]'s reason: the family's branches mention the
     /// argument types, which are monomorphized per instantiation.
     fn register_fam(&mut self, ind: &Rc<Inductive>, span: Span) {
         if !ind.params.is_empty() || !ind.valparams.is_empty() {
@@ -4265,7 +4265,7 @@ impl Elaborator {
 impl GeneratedDefs<'_> {
     /// `El (code^δ)` — the **type** occurrence of a registered code
     /// definition (`docs/family-type-code-defs-design.md` §1.3): composition
-    /// of the existing `Type::El` former with [`Self::gen_ref`]. `level` is
+    /// of the existing `Type::El` former with [`Elaborator::gen_ref`]. `level` is
     /// the coded type's own level (`El l ν` with `ν : Ty l`). `None` when the
     /// definition was not registered — every emission site's cue to inline.
     pub(crate) fn gen_type_ref(&self, key: GenDef, level: &Level) -> Option<Type> {
@@ -4346,7 +4346,7 @@ impl GeneratedDefs<'_> {
 impl Elaborator {
     /// The definition and arguments of an application spine `u^δ ā`, when its
     /// head is a registered definition — the application-aware sibling of
-    /// [`Self::is_gen_ref`]/[`Self::gen_def_of`]
+    /// [`GeneratedDefs::is_gen_ref`]/[`Self::gen_def_of`]
     /// (`docs/per-instantiation-type-codes-design.md` §4.2). `None` for
     /// anything whose head is not a registered global, the bare reference
     /// included (that is [`Self::gen_def_of`]'s business, and this returning
@@ -4396,7 +4396,7 @@ impl GeneratedDefs<'_> {
     /// `D#fam = λ(i : I). elim(…; i) : Π(i : I). Ty l`, its statement, its
     /// level, and the two levels an occurrence needs (design §6).
     ///
-    /// The two passes are [`Elaborator::lower_indexed_instance`]'s: the family
+    /// The two passes are [`IndexedFamilies::lower_indexed_instance`]'s: the family
     /// is built once at a placeholder level to *read* `l` off its branches,
     /// then rebuilt at `l`. Both passes run at a closed placeholder index,
     /// because the λ's binder replaces the scrutinee afterwards.

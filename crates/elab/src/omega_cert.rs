@@ -1802,7 +1802,7 @@ fn convertible_atom(
 }
 
 /// Is `tm` a field read: an inline projection, or a named one
-/// ([`Elaborator::named_field_read`])?
+/// ([`GeneratedDefs::named_field_read`])?
 fn is_field_read(elab: &Elaborator, tm: &Rc<Term>) -> bool {
     crate::spelling::proj_of(tm).is_some() || GeneratedDefs(elab).named_field_read(tm).is_some()
 }

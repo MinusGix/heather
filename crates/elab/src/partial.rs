@@ -46,8 +46,8 @@
 //! A call used where `B` is expected (`fn g(n: Nat) → Nat { f(n) }`) is
 //! refused by the gate as a mismatch between `Partial(B)` and `B`; the
 //! elaborator records the call's head, and when the gate refuses and the
-//! head is a partial function ([`Elaborator::is_partial_fn`]) the refusal
-//! names it ([`Elaborator::partial_use_note`], §4.2's refusal).
+//! head is a partial function ([`Partial::is_partial_fn`]) the refusal
+//! names it ([`Partial::partial_use_note`], §4.2's refusal).
 
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, LamBinder, Param, ParamOrigin, Span, Stmt, Ty, TyKind};
 

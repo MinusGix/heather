@@ -55,6 +55,48 @@
 //! `crates/elab/tests/determinism.rs` enforces both halves: repeated fresh
 //! elaborations must agree, and the Nat suite's elaborated Ψ must hash to a
 //! stored golden value.
+//!
+//! # Methods live on their area's view, not on `Elaborator`
+//!
+//! [`Elaborator`] holds the session's state, the entry points a driver
+//! calls and the few helpers every area shares. What elaborates is written
+//! on *views*: each area's module defines a type that borrows the
+//! elaborator and dereferences to it, one for its `&self` methods and, where
+//! it has them, one for its `&mut self` methods:
+//!
+//! ```ignore
+//! pub(crate) struct Classes<'e>(pub(crate) &'e Elaborator);
+//! pub(crate) struct ClassesMut<'e>(pub(crate) &'e mut Elaborator);
+//! ```
+//!
+//! Another area calls `Classes(self).class_ref_of_ty(goal)`. Inside a view,
+//! `self.field` and `self.method()` reach the elaborator through the
+//! dereference, so a body reads as it would on `Elaborator`.
+//!
+//! The split is by area for the reader, and it is also what keeps an edit
+//! cheap to compile. rustc compiles all the methods of one `Self` type as one
+//! codegen unit, placed with the module that defines the type, whatever
+//! files the `impl` blocks are written in. While every method was an
+//! `impl Elaborator`, one unit held the whole elaborator and every edit
+//! recompiled it (issues/elaborator-crate-compile-per-edit.md;
+//! `scripts/codegen-units` lists a build's units by size). So a new method
+//! goes on the view of the area it belongs to, and a new area gets a view in
+//! its own module.
+//!
+//! What differs from writing on `Elaborator` directly:
+//! - `self.clone()` clones the view. A copy of the elaborator is
+//!   `self.0.clone()`. Views derive neither `Clone` nor `Copy`, so the
+//!   mistake does not compile where the copy is used as an elaborator.
+//! - A `Mut` view reaches the elaborator through `DerefMut`, which borrows
+//!   all of it: two fields borrowed at once are written `self.0.a` and
+//!   `self.0.b`.
+//! - A view is a temporary, so nothing a method returns may borrow from it:
+//!   a method that hands back a guard or a reference into the elaborator
+//!   stays on `Elaborator`.
+//! - A method call on a view falls through the dereference when the view's
+//!   own method is private and out of sight. A view method that shares its
+//!   name with a trait method of `Elaborator` is called by path
+//!   (`MismatchNotes::note_refl_mismatch(&MismatchNotes(self), ..)`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -553,7 +595,7 @@ const BUILTIN_METHODS: [&str; 8] = [
 ];
 
 /// Where a resolved dictionary came from, when it came by **upcast**: the
-/// *child* dictionary and its class type ([`Elaborator::resolve_goal_from`],
+/// *child* dictionary and its class type ([`Resolution::resolve_goal_from`](crate::resolve::Resolution::resolve_goal_from),
 /// `docs/traits-named-upcast-design.md` §2.1). `None` for every other answer,
 /// which is every answer already at the goal's own class.
 type Upcast = Option<(Term, Type)>;
@@ -710,7 +752,7 @@ impl DerefMut for Elaborator {
 }
 
 /// A recorded site that a kernel-located refusal turned out to be
-/// ([`Elaborator::kernel_refusal`]): reported as its own probe would have
+/// ([`Refusals::kernel_refusal`](crate::refusals::Refusals::kernel_refusal)): reported as its own probe would have
 /// reported it, had the probe's budget reached the verdict.
 enum RecordedSite {
     /// A written `refl`, with its two sides when both spell.
@@ -718,7 +760,7 @@ enum RecordedSite {
     /// A checking site, with its two types when both spell and differ.
     Check { span: Span, types: Option<(String, String)> },
     /// A checking site with a message of its own: a `partial fn`'s call
-    /// where its result is expected ([`Elaborator::partial_use_note`]).
+    /// where its result is expected ([`Partial::partial_use_note`](crate::partial::Partial::partial_use_note)).
     Named { span: Span, msg: String },
 }
 
@@ -756,7 +798,7 @@ impl RecordedSite {
 }
 
 /// What a probed checking mismatch can say
-/// ([`Elaborator::probed_check_note`]).
+/// ([`MismatchNotes::probed_check_note`]).
 enum MismatchNote {
     /// Both types, in surface: the message replaces the kernel's report.
     Spelled(String),
@@ -1797,7 +1839,7 @@ fn self_name_refusal(selfref: &SelfRef, name: &str) -> String {
 /// Append to a refusal of a member's self-reference, written by its bare
 /// base name, the global that name would otherwise have meant
 /// (issues/self-reference-hides-same-named-global.md). `note` is
-/// [`Elaborator::self_shadow_note`]'s; errors other than a surface refusal
+/// [`NameLookup::self_shadow_note`]'s; errors other than a surface refusal
 /// pass through unchanged.
 fn with_self_shadow_note(e: ElabError, note: Option<&str>) -> ElabError {
     match (e, note) {
@@ -2592,7 +2634,7 @@ impl Elaborator {
 
     /// The **open** derivations minted so far, in mint order: an upcast or a
     /// merged class's assembly at a class carrier, abstracted over the
-    /// context prefix it was found in ([`Self::record_open`]).
+    /// context prefix it was found in ([`Resolution::record_open`](crate::resolve::Resolution::record_open)).
     pub fn open_derivations(&self) -> Vec<&str> {
         self.traits
             .derived()
@@ -3201,7 +3243,7 @@ impl Elaborator {
     /// (issues/merged-call-through-upcast-panics.md).
     ///
     /// Of the inline respellings only the reference's has a scratch-world
-    /// reading ([`Self::unspell_here_in`]); the sum and `Wf` ones read their
+    /// reading ([`GeneratedDefs::unspell_here_in`]); the sum and `Wf` ones read their
     /// head at committed indices, so they are not asked here. A probe that
     /// meets a sum or a `Wf` wanted a `Π` and refuses either way.
     pub(crate) fn whnf_in(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type> {
@@ -3483,7 +3525,7 @@ enum GroupKind {
 /// machinery's; a certificate may spell it, a user does not write it.
 pub(crate) const MATCH_EQ: &str = "__match_eq";
 
-/// An indexed family as [`Elaborator::elab_convoy_packed`] reads it: its index
+/// An indexed family as [`Inference::elab_convoy_packed`] reads it: its index
 /// type, its levels, the family at an index, and its own eliminator at a
 /// two-binder motive.
 struct PackedFamily<'a> {
@@ -3497,7 +3539,7 @@ struct PackedFamily<'a> {
 }
 
 
-/// Why [`Elaborator::try_recursion_at_top`] runs: as the lowering of an
+/// Why [`DeclarationsMut::try_recursion_at_top`] runs: as the lowering of an
 /// ordinary Nat recursion, or in place of a refusal or the measure route.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TopAttempt {

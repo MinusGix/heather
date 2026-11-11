@@ -256,7 +256,7 @@ fn classes(ind: &Inductive, n_idx: usize) -> Vec<Vec<usize>> {
     out
 }
 
-/// The body of one branch of [`Elaborator::idx_case_tree`], called as
+/// The body of one branch of [`IndexedFamilies::idx_case_tree`], called as
 /// `(cx, j, value, d, obligation)`.
 pub(crate) type CaseBody<'a> = dyn Fn(&Cx, usize, &Rc<Term>, u32, &Type) -> R<Term> + 'a;
 
@@ -448,7 +448,7 @@ impl IndexedFamilies<'_> {
     /// success. A redex above the family node is peeled; the node itself is
     /// never reached, because the read succeeds the moment it surfaces.
     ///
-    /// As with [`Self::record_of_at`], the structural read comes first and
+    /// As with [`Elaborator::record_of_at`], the structural read comes first and
     /// unchanged, so nothing that resolved before pays anything new.
     pub(crate) fn indexed_of_at(&self, cx: &Cx, ty: &Type) -> Option<(Rc<Inductive>, IndexedFam)> {
         if let Some(r) = self.indexed_of(ty) {
@@ -2209,8 +2209,8 @@ inductive Bal : (s: Shape) -> Type {
 }
 
 /// One `Case` per `+` of `spine`'s layout below `at`, the motive composed
-/// with the injection at each depth: the walk [`Elaborator::idx_case_tree`]
-/// and [`Elaborator::indexed_case_tree`] share, with what goes at a payload
+/// with the injection at each depth: the walk [`IndexedFamilies::idx_case_tree`]
+/// and [`IndexedFamilies::indexed_case_tree`] share, with what goes at a payload
 /// (`leaf(cx, k, value, d, expected)`) and how to split a nested `+`
 /// (`rec(cx, at, motive, d)`, its scrutinee the binder just pushed) theirs.
 ///
