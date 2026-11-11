@@ -2,7 +2,7 @@
 // (docs/native-one-compiler-design.md §2.3): the homes of the buffers the
 // function is lent, each an address then a length, before its words.
 //
-// A program states its call with no address (`program_readers`,
+// A program states its call with no address (`program_writers`,
 // function_ir_placeless: the answer at address zero), and its code passes
 // the addresses its buffers lie at. The lemmas here are what joins the two:
 // the placed homes agree with the stated ones everywhere but the address

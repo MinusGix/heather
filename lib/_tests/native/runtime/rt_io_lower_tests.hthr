@@ -71,7 +71,7 @@ fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
 fn piped() → Io { Io::of(World::piped([[b(104), b(105)]])) }
 fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [buf], []) }
 
-fn no_calls() → Readers() { λ held f ws => BitVec::ofNat(0) }
+fn no_calls() → Writers() { λ held f ws => Ending(BitVec::ofNat(0), held) }
 
 // Run at a piped world: "hi" comes back out, and the result word holds the
 // write's count.
@@ -93,7 +93,7 @@ fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
         λ io => CRet(Io::echo_lowered(io, buf)))
 {
     echo_body().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        no_calls(), λ held => Tm::calls_agree_none(RecInfo::none, no_calls()(held)), perform, start(buf), Pair(buf, trivial),
+        no_calls(), λ held f ws => refl, λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(no_calls(), held)), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 

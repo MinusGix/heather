@@ -708,10 +708,11 @@ word and the file, a callee's run shared between whoever reads the one
 or the other, and for an evaluable program that answer is one the
 relation allows (`program_run_effects`). So a function that writes is
 stated by evaluation, as one that reads is, and `compiled_returns_run`
-is what its caller cites. `StructuredRegion::run` (`function_ir_state`),
-which a program's statements are evaluated by, answers a call with a
-word and leaves the file; `run_writing` is it with the callee's file
-threaded, and takes its place in step 4b.
+is what its caller cites. There is one evaluator: `StructuredRegion::run`
+(`function_ir_state`), which a program's statements are evaluated by,
+answers a call with the callee's word and the file the callee leaves
+(`Ending`, `Writers`), and `program_run` is it over a program's own
+functions.
 
 **A program's call** (`Source`) then answers with the file as well:
 its callees are `Writers` (`program_run` of the source's functions), the
@@ -840,10 +841,9 @@ Each is a PR and ends with something that runs.
     (`function_ir_lower_reads_tests.hthr`).
   - *Step 4a-5, built 2026-11-11:* a storing program's meaning computed
     (`lib/native/function_ir/function_ir_run.hthr`): `program_run`
-    answers a call with its word and the file it leaves (`Answer`), a
-    region's calls answered by callees that may write (`Writers`,
-    `StructuredRegion::run_writing`), over `function_ir_state`'s nodes
-    and loop. `program_run_effects` proves the answer one
+    answers a call with its word and the file it leaves (`Ending`), a
+    region's calls answered by callees that may write (`Writers`), over
+    `function_ir_state`'s nodes and loop. `program_run_effects` proves the answer one
     `program_effects` allows for an evaluable program, by the route
     `program_eval_reads` takes with the file threaded, and
     `compiled_returns_run` states the code's answer by it. *Runs:* a loop
@@ -867,12 +867,22 @@ Each is a PR and ends with something that runs.
       address, a caller of it, and refused: an address stored as a byte,
       a store at an address, with the two files that differ shown
       (`function_ir_placeless_tests.hthr`).
-    - *4b-2:* one evaluator. `StructuredRegion::run` answers a call with
-      the callee's word and file; a source's calls are its functions run
-      with the buffers they are lent, the file they leave put back in
-      the source's (`program_writers`), and a quiet program's call is
-      its word and the file as it was, so the tools keep their
-      statements.
+    - *4b-2, built 2026-11-11:* one evaluator. `StructuredRegion::run`
+      (`function_ir_state`) answers a call with the callee's word and
+      file (`Ending`, `Writers`; `run_writing` is gone). A source's calls
+      are `program_writers(src.functions)`: the function run over the
+      buffers it is lent, on their stated homes and the call's words,
+      and the caller's file with those buffers as the function left
+      them (`relent`). A program that stores nothing answers with the
+      word it did and the file as it was (`program_run_quiet`,
+      `program_writers_quiet`), so the tools' statements are what they
+      were, and the compile's proofs take that as a side condition
+      (`Writers::Quiet`) until step 4b-3 proves the call without it.
+      The run's ending is named `Ending` (`Answer` is the tactic
+      library's). *Runs:* a program's call of a storing function stated
+      with its words alone, its second buffer left as it was
+      (`function_ir_placeless_tests.hthr`); `count_newlines` in a tool's
+      meaning (`native_tool_spans_tests.hthr`).
     - *4b-3:* the program compiler lends written spans (`Target::loan`
       over `DataRegion::loan`), reads the caller's buffers back out of
       the memory a callee leaves, and `Prog::links` no longer asks

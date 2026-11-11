@@ -29,6 +29,7 @@ import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
 import function_ir_run;
+import nat_map;
 import bitvec;
 import bool;
 import list;
@@ -708,13 +709,13 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
         call(file, f, others) = call(file, f, words)):
     (hidden: List<Nat>) → region.placeless(lent, hidden).IsTrue() → (values, other: Valuation()) → (buffers: Buffers()) →
     Valuation::Apart(hidden, values, other) →
-    State::Apart(region.taints(hidden), region.run_writing(call, values, buffers), region.run_writing(call, other, buffers)) {
+    State::Apart(region.taints(hidden), region.run(call, values, buffers), region.run(call, other, buffers)) {
     match region {
         Dataflow(body) => λ hidden ok values other buffers apart => run_nodes_apart(body.nodes, hidden, ok, values, other, buffers, apart),
         Sequence(prefix, continuation) => λ hidden ok values other buffers apart => {
             let parts = Bool::is_true_and(nodes_clear(prefix.nodes, hidden), continuation.placeless(lent, hidden), ok);
             State::then_apart(hidden, continuation.taints(hidden),
-                λ (v: Valuation()) (file: Buffers()) => continuation.run_writing(call, v, file),
+                λ (v: Valuation()) (file: Buffers()) => continuation.run(call, v, file),
                 λ v o file a => continuation.run_apart(call, lent, answers, hidden, parts.right, v, o, file, a),
                 run_nodes(prefix.nodes, values, buffers), run_nodes(prefix.nodes, other, buffers),
                 run_nodes_apart(prefix.nodes, hidden, parts.left, values, other, buffers, apart))
@@ -722,9 +723,9 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
         Compose(prefix, continuation) => λ hidden ok values other buffers apart => {
             let parts = Bool::is_true_and(prefix.placeless(lent, hidden), continuation.placeless(lent, prefix.taints(hidden)), ok);
             State::then_apart(prefix.taints(hidden), continuation.taints(prefix.taints(hidden)),
-                λ (v: Valuation()) (file: Buffers()) => continuation.run_writing(call, v, file),
+                λ (v: Valuation()) (file: Buffers()) => continuation.run(call, v, file),
                 λ v o file a => continuation.run_apart(call, lent, answers, prefix.taints(hidden), parts.right, v, o, file, a),
-                prefix.run_writing(call, values, buffers), prefix.run_writing(call, other, buffers),
+                prefix.run(call, values, buffers), prefix.run(call, other, buffers),
                 prefix.run_apart(call, lent, answers, hidden, parts.left, values, other, buffers, apart))
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ hidden ok values other buffers apart => {
@@ -738,17 +739,17 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
             let aligned = match values(1, condition).head_bit() as λ b =>
                 ((w: Nat) → (id: Nat) → absent(id, when_true.taints(hidden) ++ when_false.taints(hidden)).IsTrue() →
                     (match b {
-                        False => when_false.run_writing(call, other, buffers).values(w, id),
-                        True => when_true.run_writing(call, other, buffers).values(w, id),
+                        False => when_false.run(call, other, buffers).values(w, id),
+                        True => when_true.run(call, other, buffers).values(w, id),
                     }) = (match b {
-                        False => when_false.run_writing(call, values, buffers).values(w, id),
-                        True => when_true.run_writing(call, values, buffers).values(w, id),
+                        False => when_false.run(call, values, buffers).values(w, id),
+                        True => when_true.run(call, values, buffers).values(w, id),
                     })) ∧ ((match b {
-                        False => when_false.run_writing(call, other, buffers).buffers,
-                        True => when_true.run_writing(call, other, buffers).buffers,
+                        False => when_false.run(call, other, buffers).buffers,
+                        True => when_true.run(call, other, buffers).buffers,
                     }) = (match b {
-                        False => when_false.run_writing(call, values, buffers).buffers,
-                        True => when_true.run_writing(call, values, buffers).buffers,
+                        False => when_false.run(call, values, buffers).buffers,
+                        True => when_true.run(call, values, buffers).buffers,
                     })) {
                 False => ⟨λ w id clear => no.left(w, id,
                     absent_append(id, when_true.taints(hidden), when_false.taints(hidden), clear).right), no.right⟩,
@@ -757,17 +758,17 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
             };
             j(bit, λ b _ => ((w: Nat) → (id: Nat) → absent(id, when_true.taints(hidden) ++ when_false.taints(hidden)).IsTrue() →
                     (match b {
-                        False => when_false.run_writing(call, other, buffers).values(w, id),
-                        True => when_true.run_writing(call, other, buffers).values(w, id),
+                        False => when_false.run(call, other, buffers).values(w, id),
+                        True => when_true.run(call, other, buffers).values(w, id),
                     }) = (match values(1, condition).head_bit() {
-                        False => when_false.run_writing(call, values, buffers).values(w, id),
-                        True => when_true.run_writing(call, values, buffers).values(w, id),
+                        False => when_false.run(call, values, buffers).values(w, id),
+                        True => when_true.run(call, values, buffers).values(w, id),
                     })) ∧ ((match b {
-                        False => when_false.run_writing(call, other, buffers).buffers,
-                        True => when_true.run_writing(call, other, buffers).buffers,
+                        False => when_false.run(call, other, buffers).buffers,
+                        True => when_true.run(call, other, buffers).buffers,
                     }) = (match values(1, condition).head_bit() {
-                        False => when_false.run_writing(call, values, buffers).buffers,
-                        True => when_true.run_writing(call, values, buffers).buffers,
+                        False => when_false.run(call, values, buffers).buffers,
+                        True => when_true.run(call, values, buffers).buffers,
                     })), aligned)
         },
         Call(callee, arguments, result) => λ hidden ok values other buffers apart => {
@@ -777,8 +778,8 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
                 mask_of(arguments, hidden), ok, words, others, words_of_apart(arguments, hidden, values, other, apart));
             let same: (call(buffers, callee, others) = call(buffers, callee, words)) = answers(buffers, callee, words, others, read);
             ⟨Valuation::set_apart(hidden, values, other, apart, result, word_value(call(buffers, callee, words).word),
-                word_value(call(buffers, callee, others).word), λ w => cong_fn(λ (answer: Answer) => word_value(answer.word, w), same)),
-                cong_fn(λ (answer: Answer) => answer.buffers, same)⟩
+                word_value(call(buffers, callee, others).word), λ w => cong_fn(λ (answer: Ending) => word_value(answer.word, w), same)),
+                cong_fn(λ (answer: Ending) => answer.buffers, same)⟩
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ hidden ok values other buffers apart => {
             let mask = mask_of(inputs, hidden);
@@ -789,7 +790,7 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
             let second = Bool::is_true_and(body.placeless(lent, entered), absent(exit, ended) && mask_covers(mask_of(next, ended), mask),
                 first.right);
             let third = Bool::is_true_and(absent(exit, ended), mask_covers(mask_of(next, ended), mask), second.right);
-            let step = λ (pass: Valuation()) (held: Buffers()) => body.run_writing(call, pass, held);
+            let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
             let n = values(64, bound).toNat();
             let passes: (other(64, bound).toNat() = n) = cong_fn(λ (x: BitVec(64)) => x.toNat(), apart(64, bound, first.left));
             let end = loop_run(step, parameters, count, exit, next, n, words_of(values, inputs), buffers);
@@ -825,7 +826,7 @@ theorem Function::run_apart(self function: Function, call: Writers(), lent: Nat 
     let ran = StructuredRegion::run_apart(function.body, call, lent, answers, function.addresses(), parts.left,
         Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others),
         buffers, bound);
-    eq2(λ (word: BitVec(64)) (file: Buffers()) => Answer(word, file), ran.left(64, function.result, parts.right), ran.right)
+    eq2(λ (word: BitVec(64)) (file: Buffers()) => Ending(word, file), ran.left(64, function.result, parts.right), ran.right)
 }
 
 // The theorem for programs, the file threaded: a placeless program's
@@ -841,8 +842,8 @@ theorem program_run_placeless(functions: List<Function>): program_placeless(func
             let below = program_run(earlier);
             match f.eq_dec(earlier.len()) as λ d =>
                 ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
-                (match d as λ _ => Answer { Inl(_) => last.run(below, others, buffers), Inr(_) => below(buffers, f, others) }) =
-                (match d as λ _ => Answer { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) {
+                (match d as λ _ => Ending { Inl(_) => last.run(below, others, buffers), Inr(_) => below(buffers, f, others) }) =
+                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) {
                 Inl(_) => λ h => last.run_apart(below, program_lent(earlier), ih, parts.left, words, others, buffers, h),
                 Inr(_) => λ h => ih(buffers, f, words, others, h),
             }
@@ -873,14 +874,66 @@ fn stated_homes(from, count: Nat, held: Buffers()) → List<BitVec(64)> {
     }
 }
 
-// How a program answers a call from a region that has buffers and no
-// addresses (a `Source`'s, `function_ir_state`'s `run`): the function over
-// the buffers it is lent, as they are at the call, on their homes and then
-// the call's words. A function lent nothing is `program_eval`'s on the
-// words, by evaluation.
+// The word a program answers a call with, from a caller that has buffers
+// and no addresses: the function evaluated over the buffers it is lent, as
+// they are at the call, on their homes and then the call's words. A
+// function lent nothing is `program_eval`'s on the words, by evaluation.
+// It is what `program_writers` answers when the program stores nothing
+// (`program_writers_quiet`).
 fn program_readers(functions: List<Function>) → Readers() {
     λ held f words => program_eval_over(lent_buffers(program_lent(functions, f), held), functions)(f,
         stated_homes(0, program_lent(functions, f), held) ++ words)
+}
+
+// The file a caller holds after a call lent its first `count` buffers,
+// which the callee left as `after`: those, then the rest as they were.
+fn relent(count: Nat, after, held: Buffers()) → Buffers() {
+    match count {
+        Zero => held,
+        Succ(k) => match held {
+            Nil => Nil,
+            Cons(bytes, rest) => match after { Nil => Cons(bytes, rest), Cons(left, more) => Cons(left, relent(k, more, rest)) },
+        },
+    }
+}
+
+// Lent and left as they were, the file is as it was.
+theorem relent_same(count: Nat): (held: Buffers()) → relent(count, lent_buffers(count, held), held) = held {
+    match count {
+        Zero => λ held => refl,
+        Succ(k) => λ held => match held {
+            Nil => refl,
+            Cons(bytes, rest) => cong_fn(λ (tail: Buffers()) => Cons(bytes, tail), relent_same(k, rest)),
+        },
+    }
+}
+
+// How a program answers a call from a region that has buffers and no
+// addresses, the file threaded (`function_ir_state`'s `run`, a
+// `Source`'s): the function run over the buffers it is lent, as they are
+// at the call, on their homes and then the call's words, and the caller's
+// file with those buffers as the function left them. The function is run
+// once.
+fn program_writers(functions: List<Function>) → Writers() {
+    λ held f words => shared(program_run(functions, lent_buffers(program_lent(functions, f), held), f,
+            stated_homes(0, program_lent(functions, f), held) ++ words),
+        λ (answer: Ending) => Ending(answer.word, relent(program_lent(functions, f), answer.buffers, held)))
+}
+
+// A program whose functions store nothing answers a call with the word its
+// readers do, and the file as it was.
+theorem program_writers_quiet(functions: List<Function>, quiet: program_quiet(functions).IsTrue(), held: Buffers(), f: Nat,
+    words: List<BitVec(64)>): program_writers(functions)(held, f, words) = Ending(program_readers(functions)(held, f, words), held) {
+    let k = program_lent(functions, f);
+    let lent = lent_buffers(k, held);
+    let stated = stated_homes(0, k, held) ++ words;
+    trans(cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(k, answer.buffers, held)),
+            program_run_quiet(functions, quiet, lent, f, stated)),
+        cong_fn<Buffers(), Ending>(λ file => Ending(program_eval_over(lent, functions)(f, stated), file), relent_same(k, held)))
+}
+
+theorem program_writers_still(functions: List<Function>, quiet: program_quiet(functions).IsTrue()): Writers::Quiet(program_writers(functions)) {
+    λ held f words => cong_fn<Ending, Buffers()>(λ answer => answer.buffers, program_writers_quiet(functions, quiet, held, f, words))
 }
 
 // No function of the program is lent a buffer.

@@ -2,7 +2,8 @@
 // are placeless, the theorem gives their answer at every address word, and
 // each way an address could reach an answer is refused by the check. The
 // same of functions that write the span: the word they return and the file
-// they leave (`program_run_placeless`).
+// they leave (`program_run_placeless`), and a program's call of one
+// (`program_writers`).
 
 import function_ir;
 import function_ir_eval;
@@ -249,7 +250,7 @@ theorem put_anywhere(file: Buffers(), address, length, i, v: BitVec(64)):
 // So what it does at a literal file is one evaluation, whatever the
 // address: 'X' at 1 of "abc".
 theorem put_runs(address: BitVec(64)):
-    program_run([put()], [[b(97), b(98), b(99)]], 0, [address, w(3), w(1), w(88)]) = Answer(w(88), [[b(97), b(88), b(99)]]) {
+    program_run([put()], [[b(97), b(98), b(99)]], 0, [address, w(3), w(1), w(88)]) = Ending(w(88), [[b(97), b(88), b(99)]]) {
     trans(put_anywhere([[b(97), b(98), b(99)]], address, w(3), w(1), w(88)), refl)
 }
 
@@ -268,9 +269,35 @@ fn puts() → List<Function> { [put_first(), put()] }
 theorem puts_placeless(): program_placeless(puts()) = True { refl }
 
 theorem put_first_runs(address: BitVec(64)):
-    program_run(puts(), [[b(97), b(98), b(99)]], 1, [address, w(3), w(88)]) = Answer(w(88), [[b(88), b(98), b(99)]]) {
+    program_run(puts(), [[b(97), b(98), b(99)]], 1, [address, w(3), w(88)]) = Ending(w(88), [[b(88), b(98), b(99)]]) {
     trans(program_run_placeless(puts(), trivial, [[b(97), b(98), b(99)]], 1, [BitVec::zero(), w(3), w(88)], [address, w(3), w(88)],
         ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩), refl)
+}
+
+// A program's call of it (`program_writers`), stated with the words alone:
+// the program holds two buffers and lends `put` the first, and the call
+// answers with the first as the store left it and the second as it was.
+theorem put_called(): program_writers([put()])([[b(97), b(98), b(99)], [b(1)]], 0, [w(1), w(88)]) = Ending(w(88), [[b(97), b(88), b(99)], [b(1)]]) {
+    refl
+}
+
+// Past the buffer's end nothing is stored.
+theorem put_called_past(): program_writers([put()])([[b(97)], [b(1)]], 0, [w(4), w(88)]) = Ending(w(256), [[b(97)], [b(1)]]) { refl }
+
+// A program with no buffer lends none: the function sees an empty one,
+// and no buffer is made.
+theorem put_called_none(): program_writers([put()])([], 0, [w(0), w(88)]) = Ending(w(256), []) { refl }
+
+// The caller's call of the callee, from the program: the home handed on.
+theorem put_first_called(): program_writers(puts())([[b(97), b(98), b(99)]], 1, [w(88)]) = Ending(w(88), [[b(88), b(98), b(99)]]) { refl }
+
+// The control: the call does not leave the buffers as they were, so it is
+// not a quiet one (`Writers::Quiet`).
+theorem put_not_quiet(quiet: Writers::Quiet(program_writers([put()]))): False {
+    let kept: (program_writers([put()])([[b(97), b(98), b(99)]], 0, [w(1), w(88)]).buffers = [[b(97), b(98), b(99)]]) =
+        quiet([[b(97), b(98), b(99)]], 0, [w(1), w(88)]);
+    let verdict: (True = False) = cong_fn<Buffers(), Bool>(λ file => buffer_byte(file, 0, 1).eq_bit(b(88)), kept);
+    absurd(verdict)
 }
 
 // Refused: the address stored. The file it leaves is the address word's.
@@ -289,8 +316,8 @@ fn stores_address() → Function {
 }
 
 theorem stores_address_refused(): program_placeless([stores_address()]) = False { refl }
-theorem stores_address_at_one(): program_run([stores_address()], [[b(97)]], 0, [w(1), w(1), w(0)]) = Answer(w(0), [[b(1)]]) { refl }
-theorem stores_address_at_two(): program_run([stores_address()], [[b(97)]], 0, [w(2), w(1), w(0)]) = Answer(w(0), [[b(2)]]) { refl }
+theorem stores_address_at_one(): program_run([stores_address()], [[b(97)]], 0, [w(1), w(1), w(0)]) = Ending(w(0), [[b(1)]]) { refl }
+theorem stores_address_at_two(): program_run([stores_address()], [[b(97)]], 0, [w(2), w(1), w(0)]) = Ending(w(0), [[b(2)]]) { refl }
 
 // Refused: a store at the address as an index.
 fn stores_at_address() → Function {

@@ -283,8 +283,8 @@ theorem put_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
 // and past the end it returns 256 and leaves the file.
 fn axc() → Buffers() { [[b(97), b(88), b(99)]] }
 theorem put_at_evaluable(): program_evaluable([put_at()]).IsTrue() { trivial }
-theorem put_at_runs(a: BitVec(64)): program_run([put_at()], abc(), 0, [a, w(3), w(1), w(88)]) = Answer(w(88), axc()) { refl }
-theorem put_at_past(a: BitVec(64)): program_run([put_at()], abc(), 0, [a, w(3), w(3), w(88)]) = Answer(w(256), abc()) { refl }
+theorem put_at_runs(a: BitVec(64)): program_run([put_at()], abc(), 0, [a, w(3), w(1), w(88)]) = Ending(w(88), axc()) { refl }
+theorem put_at_past(a: BitVec(64)): program_run([put_at()], abc(), 0, [a, w(3), w(3), w(88)]) = Ending(w(256), abc()) { refl }
 
 // So the code, over "abc" lent to be written wherever the laws let it lie:
 // it returns 'X', and "aXc" is the file in memory.
@@ -297,7 +297,7 @@ theorem put_at_x<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<B
         stack.AnsweredOver(writing([1], addresses, abc()), w(88), axc())) {
     compiled_returns_run<M>([put_at()], plan_program([put_at()]), writing([1], addresses, abc()), put_at_program(), put_at_lowers(),
         put_at_evaluable(), put_at_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
-        [a, w(3), w(1), w(88)], trivial, abc(), Answer(w(88), axc()), put_at_runs(a))
+        [a, w(3), w(1), w(88)], trivial, abc(), Ending(w(88), axc()), put_at_runs(a))
 }
 
 // A lending to read does not let it be called: the theorem asks that the
@@ -377,8 +377,8 @@ theorem bump_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
 // code, over "abc" lent to be written.
 fn bcd() → Buffers() { [[b(98), b(99), b(100)]] }
 theorem bump_evaluable(): program_evaluable([bump()]).IsTrue() { trivial }
-theorem bump_runs(a: BitVec(64)): program_run([bump()], abc(), 0, [a, w(3)]) = Answer(w(3), bcd()) { refl }
-theorem bump_of_none(a: BitVec(64)): program_run([bump()], [[]], 0, [a, w(0)]) = Answer(w(0), [[]]) { refl }
+theorem bump_runs(a: BitVec(64)): program_run([bump()], abc(), 0, [a, w(3)]) = Ending(w(3), bcd()) { refl }
+theorem bump_of_none(a: BitVec(64)): program_run([bump()], [[]], 0, [a, w(0)]) = Ending(w(0), [[]]) { refl }
 
 theorem bump_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
@@ -389,7 +389,7 @@ theorem bump_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Lis
         stack.AnsweredOver(writing([1], addresses, abc()), w(3), bcd())) {
     compiled_returns_run<M>([bump()], plan_program([bump()]), writing([1], addresses, abc()), bump_program(), bump_lowers(),
         bump_evaluable(), bump_allowed(writing([1], addresses, abc()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
-        [a, w(3)], trivial, abc(), Answer(w(3), bcd()), bump_runs(a))
+        [a, w(3)], trivial, abc(), Ending(w(3), bcd()), bump_runs(a))
 }
 
 // ---------------------------------------------------------------------------

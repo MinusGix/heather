@@ -1168,7 +1168,7 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
 // The functions the regions call, after the program's own code `p`, their
 // values where `places` proposes; their inner labels from `names`. Checked
 // evaluable first, and placeless: a call's answer is then the one the
-// program states with no address (`program_readers`), wherever its buffers
+// program states with no address (`program_writers`), wherever its buffers
 // lie. And checked to store into no buffer (`program_quiet`): the function
 // compiler lowers a store, and a program's statements lend their buffers
 // to read until the meaning of a call is over the file it leaves

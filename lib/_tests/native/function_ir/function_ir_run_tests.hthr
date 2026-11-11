@@ -32,14 +32,14 @@ fn storer() → Function {
 }
 
 theorem storer_evaluable(): program_evaluable([storer()]).IsTrue() { trivial }
-theorem storer_runs(): program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Answer(w(7), [[b(1), b(7)]]) { refl }
+theorem storer_runs(): program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
 
 // Past the buffer's end a store is no store, and the byte there is zero.
-theorem storer_past(): program_run([storer()], [[b(1)]], 0, [w(1), w(7)]) = Answer(w(0), [[b(1)]]) { refl }
+theorem storer_past(): program_run([storer()], [[b(1)]], 0, [w(1), w(7)]) = Ending(w(0), [[b(1)]]) { refl }
 
 // The control: it does not leave the file as it was.
-theorem storer_changes(same: program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Answer(w(7), [[b(1), b(2)]])): False {
-    let verdict: (True = False) = cong_fn<Answer, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(7)), same);
+theorem storer_changes(same: program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(2)]])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(7)), same);
     absurd(verdict)
 }
 
@@ -64,7 +64,7 @@ fn put_get() → Function {
         body := leaf([BufferStore(output := 2, buffer := 0, index := 0, value := 1), BufferLoad(output := 3, buffer := 0, index := 0)]),
         result := 3)
 }
-theorem put_get_runs(): program_run([put_get()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Answer(w(7), [[b(1), b(7)]]) { refl }
+theorem put_get_runs(): program_run([put_get()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
 
 // reads_back(i, v): calls `storer`, then loads the byte it stored into.
 fn reads_back() → Function {
@@ -77,7 +77,7 @@ theorem calling_evaluable(): program_evaluable(calling()).IsTrue() { trivial }
 
 // The caller's load reads the file its callee left: 7, and the file has
 // it.
-theorem reads_back_runs(): program_run(calling(), [[b(1), b(2)]], 1, [w(1), w(7)]) = Answer(w(7), [[b(1), b(7)]]) { refl }
+theorem reads_back_runs(): program_run(calling(), [[b(1), b(2)]], 1, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
 
 // Evaluation over a fixed file reads the old byte: this is what threading
 // the file adds.
@@ -102,11 +102,11 @@ fn peek() → Function {
 fn abc() → Buffers() { [[b(97), b(98), b(99)]] }
 
 // It leaves the file and answers as it evaluates over it.
-theorem peek_runs(): program_run([peek()], abc(), 0, [w(4096), w(3), w(1)]) = Answer(w(98), abc()) { refl }
+theorem peek_runs(): program_run([peek()], abc(), 0, [w(4096), w(3), w(1)]) = Ending(w(98), abc()) { refl }
 theorem peek_as_eval(): program_run([peek()], abc(), 0, [w(4096), w(3), w(1)]).word = program_eval_over(abc(), [peek()], 0, [w(4096), w(3), w(1)]) {
     refl
 }
-theorem peek_past(): program_run([peek()], abc(), 0, [w(4096), w(3), w(5)]) = Answer(w(256), abc()) { refl }
+theorem peek_past(): program_run([peek()], abc(), 0, [w(4096), w(3), w(5)]) = Ending(w(256), abc()) { refl }
 
 // ---------------------------------------------------------------------------
 // What the theorem does not speak of

@@ -4,7 +4,8 @@
 // may be called by a tool (evaluable, placeless, lowered by the function
 // compiler under its count of lent buffers), and what a tool's call of it
 // answers with no address stated (`program_readers`,
-// `count_newlines_called`).
+// `count_newlines_answers`), and what the call is in the tool's meaning
+// (`program_writers`, `count_newlines_called`).
 import native_tool_spans;
 import rt;
 import runtime;
@@ -71,10 +72,18 @@ theorem call_answers(): program_readers(count_newlines_program())(lines(), count
 theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], count_newlines_entry(), [w(2)]) = w(2) { refl }
 theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], count_newlines_entry(), [w(2)]) = w(1) { refl }
 
-// The same call at any buffers and any count, with no evaluation: the
-// Heather function at the tool's first buffer and its size.
+// The same call's word at any buffers and any count, with no evaluation:
+// the Heather function at the tool's first buffer and its size.
 theorem call_is_function(held: Buffers(), count: BitVec(64)):
     program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
         = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
-    count_newlines_called(held, count)
+    count_newlines_answers(held, count)
+}
+
+// In a tool's meaning the call is that word and the tool's buffers as they
+// were (`program_writers`): at literal buffers by running, and at any.
+theorem call_runs(): program_writers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = Ending(w(3), lines()) { refl }
+theorem call_keeps(held: Buffers(), count: BitVec(64)):
+    program_writers(count_newlines_program())(held, count_newlines_entry(), [count]).buffers = held {
+    cong_fn<Ending, Buffers()>(λ answer => answer.buffers, count_newlines_called(held, count))
 }

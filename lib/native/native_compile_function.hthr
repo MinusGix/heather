@@ -20,9 +20,10 @@
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
-// address (`program_readers`), and the function is placeless, so its
+// address (`program_writers`), and the function is placeless, so its
 // answer at the placed homes is the stated one (`Target::answers_of`, by
-// `program_eval_placeless`). What the function reads through a home is the
+// `program_eval_placeless`; a program that stores nothing answers with
+// its word and the buffers as they were, `program_writers_quiet`). What the function reads through a home is the
 // buffer's bytes as they are when it is called (`Target::in_memory`): the
 // claim between statements places them in the data region, which lies
 // below the stack, so the lending laws hold of them under it
@@ -215,15 +216,15 @@ theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
 // Every function of the target, called at its label so (`CalledWith`) with
 // as many words as it takes after its homes, returns `call`'s answer over
 // the buffers and meets the callee's contract.
-fn Target::Answered(self t: Target, call: Readers()) → Type {
+fn Target::Answered(self t: Target, call: Writers()) → Type {
     (held: Buffers()) → (f: Nat) → Succ(f) <= t.functions.len() → (words: List<BitVec(64)>) →
         arity_fits(program_arity(t.functions, f), 2 * program_lent(t.functions, f) + words.len()).IsTrue() →
-        t.site().Returns(t.stack, asm_labels(t.program, Succ(f)), t.CalledWith(held, f, words), t.stack.CalleePost(call(held, f, words)))
+        t.site().Returns(t.stack, asm_labels(t.program, Succ(f)), t.CalledWith(held, f, words), t.stack.CalleePost(call(held, f, words).word))
 }
 
 // What emitting the functions proves (`Site::CallsOver`, at every address,
 // over every buffers and under every loan of them) answers calls as the
-// program's readers do (`program_readers`), the functions evaluable,
+// program states them (`program_writers`), the functions evaluable,
 // placeless and storing into no buffer: the function returns its value at
 // the placed homes over the buffers it is lent (`program_eval_reads`,
 // `program_effects_quiet`), which is its value at the stated ones, and
@@ -235,7 +236,7 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
         Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, top,
             Lending(program_counts(t.functions), addresses, buffers, written).spans()) →
         t.site().CallsOver(t.stack, program_effects(t.functions), t.functions.len(),
-            Lending(program_counts(t.functions), addresses, buffers, written), top)): t.Answered(program_readers(t.functions)) {
+            Lending(program_counts(t.functions), addresses, buffers, written), top)): t.Answered(program_writers(t.functions)) {
     λ held f below words fits s0 at0 resident i0 rsp room called0 ret saved => {
         let sized = called0.right.right.right;
         let in_memory = called0.right.right.left;
@@ -247,9 +248,10 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
         let passed = t.passed_homes(k) ++ words;
         let stated = stated_homes(0, k, held) ++ words;
         let answer = program_eval_over(lent, t.functions)(f, passed);
-        let same: (answer = program_readers(t.functions)(held, f, words)) =
-            program_eval_placeless(lent, t.functions, placeless, f, stated, passed,
-                homes_apart(at, size, held, words, k, 0, λ b _ high => sized(b, omega(high))));
+        let same: (answer = program_writers(t.functions)(held, f, words).word) =
+            trans(program_eval_placeless(lent, t.functions, placeless, f, stated, passed,
+                    homes_apart(at, size, held, words, k, 0, λ b _ high => sized(b, omega(high)))),
+                sym(cong_fn<Ending, BitVec(64)>(λ answered => answered.word, program_writers_quiet(t.functions, quiet, held, f, words))));
         let fit: arity_fits(program_arity(t.functions, f), passed.len()).IsTrue() =
             j(sym(placed_words_len(at, size, k, words)), λ n _ => arity_fits(program_arity(t.functions, f), n).IsTrue(), fits);
         let args: ArgsLent(lent_count(program_counts(t.functions), f), 0, passed, placed_addresses(at, 0, k), lent) =
@@ -270,7 +272,7 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
 }
 
 // With no functions there is no call to answer.
-theorem Target::answers_none(self t: Target, none: t.functions = Nil, call: Readers()): t.Answered(call) {
+theorem Target::answers_none(self t: Target, none: t.functions = Nil, call: Writers()): t.Answered(call) {
     λ held f below words fits => false_elim(nothing_below_zero(f, j(none, λ fs _ => Succ(f) <= fs.len(), below)))
 }
 
@@ -604,21 +606,25 @@ theorem Env::words_of_valuation(self env: Env, ids: List<Nat>): words_of(env.val
     }
 }
 
-// A call sets its result's word to the answer at its arguments' words.
-theorem Env::call_meaning(self env: Env, call: Readers(), callee: Nat, arguments: List<Nat>, result: Nat):
-    Call(callee, arguments, result).meaning(call, env) = env.set_word(result, call(env.buffers, callee, env.words_at(arguments))) {
+// A call sets its result's word to the answer at its arguments' words, and
+// leaves the file its callee left.
+theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments: List<Nat>, result: Nat):
+    Call(callee, arguments, result).meaning(call, env) =
+        Env(env.words, call(env.buffers, callee, env.words_at(arguments)).buffers, env.args).set_word(result,
+            call(env.buffers, callee, env.words_at(arguments)).word) {
     let answer = call(env.buffers, callee, words_of(env.valuation(), arguments));
-    trans(cong_fn<BitVec(64), Env>(λ x => Env(env.words.put(result, x.toNat(), 0), env.buffers, env.args),
-            Valuation::set_here(env.valuation(), result, word_value(answer), 64)),
-        cong_fn<List<BitVec(64)>, Env>(λ ws => env.set_word(result, call(env.buffers, callee, ws)), env.words_of_valuation(arguments)))
+    trans(cong_fn<BitVec(64), Env>(λ x => Env(env.words.put(result, x.toNat(), 0), answer.buffers, env.args),
+            Valuation::set_here(env.valuation(), result, word_value(answer.word), 64)),
+        cong_fn<List<BitVec(64)>, Env>(λ ws => Env(env.words, call(env.buffers, callee, ws).buffers, env.args).set_word(result,
+            call(env.buffers, callee, ws).word), env.words_of_valuation(arguments)))
 }
 
 // ---------------------------------------------------------------------------
 // The call
 
 // Every call of a function the compile emits runs as the call's meaning,
-// the functions meeting their contracts.
-theorem Target::functions_run(self t: Target, call: Readers(), answers: t.Answered(call)): t.Functions(call) {
+// the functions meeting their contracts and leaving the file.
+theorem Target::functions_run(self t: Target, call: Writers(), quiet: Writers::Quiet(call), answers: t.Answered(call)): t.Functions(call) {
     let layout = t.layout();
     λ p out callee arguments result fit within apart env tree next => {
         let region = Call(callee, arguments, result);
@@ -638,14 +644,15 @@ theorem Target::functions_run(self t: Target, call: Readers(), answers: t.Answer
         let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f4.left, m);
         let words = env.words_at(arguments);
         let passed = t.passed_homes(k) ++ words;
-        let answer = call(env.buffers, callee, words);
+        let answer = call(env.buffers, callee, words).word;
         let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
         let passed_len: (passed.len() = 2 * k + words.len()) =
             placed_words_len(λ (b: Nat) => layout.buffer_at(b), λ (b: Nat) => layout.capacity(b), k, words);
         let short: (passed.len() <= 6) = omega(passed_len, words_len, few);
         let arity: arity_fits(program_arity(t.functions, callee), 2 * k + words.len()).IsTrue() =
             j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
-        let mean_eq: (region.meaning(call, env) = env.set_word(result, answer)) = env.call_meaning(call, callee, arguments, result);
+        let mean_eq: (region.meaning(call, env) = env.set_word(result, answer)) = trans(env.call_meaning(call, callee, arguments, result),
+            cong_fn<Buffers(), Env>(λ file => Env(env.words, file, env.args).set_word(result, answer), quiet(env.buffers, callee, words)));
         // The room below the frame: the CALL's word, then the function's.
         let big: (80 * t.functions.len() <= t.index) = omega(t.roomy);
         let i0 = t.index - 8;
