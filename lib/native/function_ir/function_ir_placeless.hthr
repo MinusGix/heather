@@ -1,0 +1,563 @@
+// Placeless functions: what a function returns does not depend on where
+// the buffers lent to it lie.
+//
+// A function that reads a lent span takes the span's address as a word:
+// buffer k's home is parameters 2k (address) and 2k+1 (length)
+// (`function_ir_lower_reads`). Its meaning reads the buffer as a value
+// (`program_eval_over`), so the address word is the lowering's alone. A
+// caller that states the function with no address in hand (a program's
+// tree, which has none) needs more than that the meaning *should* not read
+// it: it needs evaluation to give the same answer at every address word.
+//
+// That is a fact about the function's text, checked here once: an address
+// id reaches a call's address place or a loop's carried place and nothing
+// else, so no node reads it, no branch tests it, no loop counts by it, and
+// the result is not it. `placeless` is the check, linear in the region but
+// for a loop nested in loops, whose taints its enclosing loops recompute;
+// `program_eval_placeless` is the theorem
+// (docs/native-one-compiler-design.md §2.3).
+
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Valuations agreeing off a set of ids
+
+// `other` agrees with `values` at every width, at every id not `hidden`.
+fn Valuation::Apart(hidden: List<Nat>, values, other: Valuation()) → Type {
+    (w: Nat) → (id: Nat) → absent(id, hidden).IsTrue() → other(w, id) = values(w, id)
+}
+
+theorem Valuation::apart_refl(hidden: List<Nat>, values: Valuation()): Valuation::Apart(hidden, values, values) {
+    λ w id _ => refl
+}
+
+// Setting an id to values that agree keeps the agreement.
+theorem Valuation::set_apart(hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other), id: Nat,
+    value, value2: (w: Nat) → BitVec(w), at: (w: Nat) → value2(w) = value(w)):
+    Valuation::Apart(hidden, Valuation::set(values, id, value), Valuation::set(other, id, value2)) {
+    λ w query clear => match query.eq_dec(id) {
+        Inl(_) => at(w),
+        Inr(_) => apart(w, query, clear),
+    }
+}
+
+// Setting an id to anything at all hides it.
+theorem Valuation::set_hidden(hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other), id: Nat,
+    value, value2: (w: Nat) → BitVec(w)):
+    Valuation::Apart(Cons(id, hidden), Valuation::set(values, id, value), Valuation::set(other, id, value2)) {
+    λ w query clear => {
+        let parts = Bool::is_true_and(query.differs(id), absent(query, hidden), clear);
+        let ne = query.differs_ne(id, parts.left);
+        trans(Valuation::set_other(other, id, value2, w, query, ne),
+            trans(apart(w, query, parts.right), sym(Valuation::set_other(values, id, value, w, query, ne))))
+    }
+}
+
+theorem Valuation::bind_apart_same(ids: List<Nat>, hidden: List<Nat>, values, other: Valuation(),
+    apart: Valuation::Apart(hidden, values, other)):
+    (words: List<BitVec(64)>) → Valuation::Apart(hidden, Valuation::bind(values, ids, words), Valuation::bind(other, ids, words)) {
+    match ids {
+        Nil => λ words => apart,
+        Cons(id, rest) => λ words => match words {
+            Nil => apart,
+            Cons(word, more) => Valuation::set_apart(hidden, Valuation::bind(values, rest, more), Valuation::bind(other, rest, more),
+                Valuation::bind_apart_same(rest, hidden, values, other, apart, more), id, word_value(word), word_value(word), λ w => refl),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lists of words agreeing where a mask says so
+
+// Which of `ids` are not hidden: the places whose words must agree.
+fn mask_of(ids: List<Nat>, hidden: List<Nat>) → List<Bool> {
+    match ids { Nil => [], Cons(id, rest) => Cons(absent(id, hidden), mask_of(rest, hidden)) }
+}
+
+// `ys` is `xs` at every place the mask marks, and past the mask's end;
+// they are as long as each other.
+fn ListsApart(mask: List<Bool>, xs, ys: List<BitVec(64)>) → Type {
+    match mask {
+        Nil => ys = xs,
+        Cons(clear, rest) => match xs {
+            Nil => ys = xs,
+            Cons(x, more) => match ys {
+                Nil => False,
+                Cons(y, others) => (clear.IsTrue() → y = x) ∧ ListsApart(rest, more, others),
+            },
+        },
+    }
+}
+
+theorem lists_apart_refl(mask: List<Bool>): (xs: List<BitVec(64)>) → ListsApart(mask, xs, xs) {
+    match mask {
+        Nil => λ xs => refl,
+        Cons(clear, rest) => λ xs => match xs {
+            Nil => refl,
+            Cons(x, more) => ⟨λ _ => refl, lists_apart_refl(rest, more)⟩,
+        },
+    }
+}
+
+fn all_clear(mask: List<Bool>) → Bool { match mask { Nil => True, Cons(clear, rest) => clear && all_clear(rest) } }
+
+theorem lists_apart_all(mask: List<Bool>): all_clear(mask).IsTrue() → (xs, ys: List<BitVec(64)>) → ListsApart(mask, xs, ys) → ys = xs {
+    match mask {
+        Nil => λ _ xs ys h => h,
+        Cons(clear, rest) => λ ok xs => match xs {
+            Nil => λ ys h => h,
+            Cons(x, more) => λ ys => match ys {
+                Nil => λ never => false_elim(never),
+                Cons(y, others) => λ h => {
+                    let parts = Bool::is_true_and(clear, all_clear(rest), ok);
+                    eq2(λ (w: BitVec(64)) (ws: List<BitVec(64)>) => Cons(w, ws), h.left(parts.left),
+                        lists_apart_all(rest, parts.right, more, others, h.right))
+                },
+            },
+        },
+    }
+}
+
+fn covers_bit(strong, weak: Bool) → Bool { match weak { False => True, True => strong } }
+
+theorem covers_bit_clear(strong, weak: Bool): covers_bit(strong, weak).IsTrue() → weak.IsTrue() → strong.IsTrue() {
+    match weak { False => λ _ never => false_elim(never), True => λ h _ => h }
+}
+
+// `strong` marks every place `weak` marks; where `weak` ends, everything
+// past must agree, so `strong` marks all it has left.
+fn mask_covers(strong, weak: List<Bool>) → Bool {
+    match weak {
+        Nil => all_clear(strong),
+        Cons(w, rest) => match strong {
+            Nil => True,
+            Cons(s, more) => covers_bit(s, w) && mask_covers(more, rest),
+        },
+    }
+}
+
+theorem lists_apart_weaken(weak: List<Bool>): (strong: List<Bool>) → mask_covers(strong, weak).IsTrue() →
+    (xs, ys: List<BitVec(64)>) → ListsApart(strong, xs, ys) → ListsApart(weak, xs, ys) {
+    match weak {
+        Nil => λ strong ok xs ys h => lists_apart_all(strong, ok, xs, ys, h),
+        Cons(w, rest) => λ strong => match strong {
+            Nil => λ _ xs ys h => j(sym(h), λ v _ => ListsApart(Cons(w, rest), xs, v), lists_apart_refl(Cons(w, rest), xs)),
+            Cons(s, more) => λ ok xs => match xs {
+                Nil => λ ys h => h,
+                Cons(x, tail) => λ ys => match ys {
+                    Nil => λ never => false_elim(never),
+                    Cons(y, others) => λ h => {
+                        let parts = Bool::is_true_and(covers_bit(s, w), mask_covers(more, rest), ok);
+                        ⟨λ clear => h.left(covers_bit_clear(s, w, parts.left, clear)),
+                            lists_apart_weaken(rest, more, parts.right, tail, others, h.right)⟩
+                    },
+                },
+            },
+        },
+    }
+}
+
+// Words read off valuations that agree off `hidden` agree where the ids
+// read are not hidden.
+theorem words_of_apart(ids: List<Nat>, hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other)):
+    ListsApart(mask_of(ids, hidden), words_of(values, ids), words_of(other, ids)) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => ⟨λ clear => apart(64, id, clear), words_of_apart(rest, hidden, values, other, apart)⟩,
+    }
+}
+
+// `hidden`, and every id of `ids` at a place the mask does not mark: what
+// is hidden once words agreeing only at the mask are bound at `ids`.
+fn taint_onto(ids: List<Nat>, mask: List<Bool>, hidden: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => hidden,
+        Cons(id, rest) => match mask {
+            Nil => hidden,
+            Cons(clear, more) => match clear {
+                False => Cons(id, taint_onto(rest, more, hidden)),
+                True => taint_onto(rest, more, hidden),
+            },
+        },
+    }
+}
+
+theorem taint_onto_keeps(ids: List<Nat>, hidden: List<Nat>, id: Nat): (mask: List<Bool>) →
+    absent(id, taint_onto(ids, mask, hidden)).IsTrue() → absent(id, hidden).IsTrue() {
+    match ids {
+        Nil => λ mask h => h,
+        Cons(x, rest) => λ mask => match mask {
+            Nil => λ h => h,
+            Cons(clear, more) => match clear {
+                False => λ h => taint_onto_keeps(rest, hidden, id, more,
+                    Bool::is_true_and(id.differs(x), absent(id, taint_onto(rest, more, hidden)), h).right),
+                True => λ h => taint_onto_keeps(rest, hidden, id, more, h),
+            },
+        },
+    }
+}
+
+// Binding words that agree at a mask, over valuations that agree off
+// `hidden`: the valuations agree off what the binding hides.
+theorem Valuation::bind_apart(ids: List<Nat>, hidden: List<Nat>, values, other: Valuation(),
+    apart: Valuation::Apart(hidden, values, other)):
+    (mask: List<Bool>) → (xs, ys: List<BitVec(64)>) → ListsApart(mask, xs, ys) →
+    Valuation::Apart(taint_onto(ids, mask, hidden), Valuation::bind(values, ids, xs), Valuation::bind(other, ids, ys)) {
+    match ids {
+        Nil => λ mask xs ys _ => apart,
+        Cons(id, rest) => λ mask => match mask {
+            Nil => λ xs ys h => j(sym(h),
+                λ v _ => Valuation::Apart(hidden, Valuation::bind(values, Cons(id, rest), xs), Valuation::bind(other, Cons(id, rest), v)),
+                Valuation::bind_apart_same(Cons(id, rest), hidden, values, other, apart, xs)),
+            Cons(clear, more) => λ xs => match xs {
+                Nil => λ ys h => j(sym(h),
+                    λ v _ => Valuation::Apart(taint_onto(Cons(id, rest), Cons(clear, more), hidden), values,
+                        Valuation::bind(other, Cons(id, rest), v)),
+                    λ w query c => apart(w, query, taint_onto_keeps(Cons(id, rest), hidden, query, Cons(clear, more), c))),
+                Cons(x, tail) => λ ys => match ys {
+                    Nil => λ never => false_elim(never),
+                    Cons(y, others) => match clear {
+                        False => λ h => Valuation::set_hidden(taint_onto(rest, more, hidden), Valuation::bind(values, rest, tail),
+                            Valuation::bind(other, rest, others),
+                            Valuation::bind_apart(rest, hidden, values, other, apart, more, tail, others, h.right), id, word_value(x),
+                            word_value(y)),
+                        True => λ h => Valuation::set_apart(taint_onto(rest, more, hidden), Valuation::bind(values, rest, tail),
+                            Valuation::bind(other, rest, others),
+                            Valuation::bind_apart(rest, hidden, values, other, apart, more, tail, others, h.right), id, word_value(x),
+                            word_value(y), λ w => cong_fn(λ (v: BitVec(64)) => word_value(v, w), h.left(trivial))),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+// A node's value is a function of what it reads.
+theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Valuation()):
+    ((w: Nat) → (id: Nat) → Mem(id, node.reads()) → other(w, id) = values(w, id)) →
+    (w: Nat) → node.value(other, buffers := buffers)(w) = node.value(values, buffers := buffers)(w) {
+    match node {
+        Const(_, _, _) => λ agree w => refl,
+        Move(_, _, source) => λ agree w => agree(w, source, Inl(refl)),
+        Add(_, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.add(y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
+        Sub(_, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.sub(y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
+        BitAnd(_, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.band(y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
+        BitOr(_, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bor(y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
+        BitXor(_, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bxor(y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
+        ShiftLeft(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), agree(w, value, Inl(refl))),
+        LogicalShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount),
+            agree(w, value, Inl(refl))),
+        ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount),
+            agree(w, value, Inl(refl))),
+        UnsignedLessThan(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), agree(width, left, Inl(refl)),
+                agree(width, right, Inr(Inl(refl))))),
+        SignedLessThan(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.signed_lt_bit(y), agree(width, left, Inl(refl)),
+                agree(width, right, Inr(Inl(refl))))),
+        Equal(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y), agree(width, left, Inl(refl)),
+                agree(width, right, Inr(Inl(refl))))),
+        BufferLoad(_, buffer, index) => λ agree w => cong_fn(
+            λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(buffers, buffer, x.toNat())), w), agree(64, index, Inl(refl))),
+        BufferStore(_, buffer, index, _) => λ agree w => cong_fn(
+            λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(buffers, buffer, x.toNat())), w), agree(64, index, Inl(refl))),
+        Resize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := w),
+            agree(from, source, Inl(refl))),
+        SignResize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), agree(from, source, Inl(refl))),
+    }
+}
+
+// No node reads a hidden id.
+fn nodes_clear(nodes: List<Node>, hidden: List<Nat>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => disjoint(hidden, node.reads()) && nodes_clear(rest, hidden) }
+}
+
+theorem eval_nodes_apart(nodes: List<Node>, buffers: Buffers(), hidden: List<Nat>): nodes_clear(nodes, hidden).IsTrue() →
+    (values, other: Valuation()) → Valuation::Apart(hidden, values, other) →
+    Valuation::Apart(hidden, eval_nodes_over(buffers, nodes, values), eval_nodes_over(buffers, nodes, other)) {
+    match nodes {
+        Nil => λ _ values other apart => apart,
+        Cons(node, rest) => λ ok values other apart => {
+            let parts = Bool::is_true_and(disjoint(hidden, node.reads()), nodes_clear(rest, hidden), ok);
+            eval_nodes_apart(rest, buffers, hidden, parts.right, node.step(values, buffers := buffers), node.step(other, buffers := buffers),
+                Valuation::set_apart(hidden, values, other, apart, node_output(node).id, node.value(values, buffers := buffers),
+                    node.value(other, buffers := buffers), node.value_reads(buffers, values, other,
+                        λ w id m => apart(w, id, disjoint_mem(hidden, node.reads(), parts.left, id, m)))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// Passes that keep agreement off `ended`, from states agreeing at `mask`:
+// the loops end alike, their states agreeing at `mask`, when the exit bit
+// is not hidden and each marked place's next word is not either.
+theorem loop_eval_apart(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, mask: List<Bool>,
+    ended: List<Nat>,
+    passes: (v, o: Valuation()) → Valuation::Apart(taint_onto(parameters, mask, []), v, o) → Valuation::Apart(ended, step(v), step(o)),
+    exit_clear: absent(exit, ended).IsTrue(), next_clear: mask_covers(mask_of(next, ended), mask).IsTrue(), remaining: Nat):
+    (state, other: List<BitVec(64)>) → ListsApart(mask, state, other) →
+    (loop_eval(step, parameters, count, exit, next, remaining, other).exhausted =
+        loop_eval(step, parameters, count, exit, next, remaining, state).exhausted) ∧
+    ListsApart(mask, loop_eval(step, parameters, count, exit, next, remaining, state).state,
+        loop_eval(step, parameters, count, exit, next, remaining, other).state) {
+    match remaining {
+        Zero => λ state other h => ⟨refl, h⟩,
+        Succ(rest) => λ state other h => {
+            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
+            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let entry2 = pass_valuation(parameters, count, Succ(rest), other);
+            let entered: Valuation::Apart(taint_onto(parameters, mask, []), entry, entry2) =
+                Valuation::bind_apart(parameters, [], base, base, Valuation::apart_refl([], base), mask, state, other, h);
+            let after = step(entry);
+            let after2 = step(entry2);
+            let ran = passes(entry, entry2, entered);
+            let bit: (after2(1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), ran(1, exit, exit_clear));
+            let words: ListsApart(mask, words_of(after, next), words_of(after2, next)) =
+                lists_apart_weaken(mask, mask_of(next, ended), next_clear, words_of(after, next), words_of(after2, next),
+                    words_of_apart(next, ended, after, after2, ran));
+            let aligned = match after(1, exit).head_bit() as λ b =>
+                ((match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after2, next)),
+                    True => LoopEnd(words_of(after2, next), False),
+                }).exhausted = (match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }).exhausted) ∧ ListsApart(mask, (match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }).state, (match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after2, next)),
+                    True => LoopEnd(words_of(after2, next), False),
+                }).state) {
+                False => loop_eval_apart(step, parameters, count, exit, next, mask, ended, passes, exit_clear, next_clear, rest,
+                    words_of(after, next), words_of(after2, next), words),
+                True => ⟨refl, words⟩,
+            };
+            j(sym(bit), λ b _ => ((match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after2, next)),
+                    True => LoopEnd(words_of(after2, next), False),
+                }).exhausted = (match after(1, exit).head_bit() {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }).exhausted) ∧ ListsApart(mask, (match after(1, exit).head_bit() {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }).state, (match b {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after2, next)),
+                    True => LoopEnd(words_of(after2, next), False),
+                }).state), aligned)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regions
+
+// A lent buffer's address place is free; every other word of a call must
+// agree: `count` buffers' homes, then the rest.
+fn base_mask(count: Nat) → List<Bool> {
+    match count { Zero => [], Succ(k) => Cons(False, Cons(True, base_mask(k))) }
+}
+
+// What is hidden after the region, from what was before it. A node's
+// output is never hidden (`placeless` lets no node read a hidden id); a
+// loop's output is, where its input was.
+fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(_) => hidden,
+        Sequence(_, continuation) => continuation.taints(hidden),
+        Compose(prefix, continuation) => continuation.taints(prefix.taints(hidden)),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.taints(hidden) ++ when_false.taints(hidden),
+        Call(_, _, _) => hidden,
+        Loop(inputs, _, _, _, _, _, _, outputs, _) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
+    }
+}
+
+// The check. A hidden id is read by no node and tested by no branch; a
+// call passes one only at a lent buffer's address place (`lent` says how
+// many buffers each callee is lent); a loop does not count by one, carries
+// one only where it came in hidden, and does not leave by one.
+fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat, hidden: List<Nat>) → Bool {
+    match region {
+        Dataflow(body) => nodes_clear(body.nodes, hidden),
+        Sequence(prefix, continuation) => nodes_clear(prefix.nodes, hidden) && continuation.placeless(lent, hidden),
+        Compose(prefix, continuation) => prefix.placeless(lent, hidden) && continuation.placeless(lent, prefix.taints(hidden)),
+        Conditional(_, condition, _, _, when_true, when_false) => absent(condition, hidden)
+            && (when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden)),
+        Call(callee, arguments, _) => mask_covers(mask_of(arguments, hidden), base_mask(lent(callee))),
+        Loop(inputs, bound, parameters, _, body, exit, next, _, _) => absent(bound, hidden)
+            && (body.placeless(lent, taint_onto(parameters, mask_of(inputs, hidden), []))
+            && (absent(exit, body.taints(taint_onto(parameters, mask_of(inputs, hidden), [])))
+            && mask_covers(mask_of(next, body.taints(taint_onto(parameters, mask_of(inputs, hidden), []))), mask_of(inputs, hidden)))),
+    }
+}
+
+// The theorem for regions: a placeless region, its calls answered alike at
+// every address word, evaluates alike off what it hides, from valuations
+// alike off what was hidden.
+theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buffers(), call: Answers(), lent: Nat → Nat,
+    answers: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → call(f, others) = call(f, words)):
+    (hidden: List<Nat>) → region.placeless(lent, hidden).IsTrue() → (values, other: Valuation()) →
+    Valuation::Apart(hidden, values, other) →
+    Valuation::Apart(region.taints(hidden), region.eval_over(buffers, call, values), region.eval_over(buffers, call, other)) {
+    match region {
+        Dataflow(body) => λ hidden ok values other apart => eval_nodes_apart(body.nodes, buffers, hidden, ok, values, other, apart),
+        Sequence(prefix, continuation) => λ hidden ok values other apart => {
+            let parts = Bool::is_true_and(nodes_clear(prefix.nodes, hidden), continuation.placeless(lent, hidden), ok);
+            continuation.eval_apart(buffers, call, lent, answers, hidden, parts.right, prefix.eval(values, buffers := buffers),
+                prefix.eval(other, buffers := buffers), eval_nodes_apart(prefix.nodes, buffers, hidden, parts.left, values, other, apart))
+        },
+        Compose(prefix, continuation) => λ hidden ok values other apart => {
+            let parts = Bool::is_true_and(prefix.placeless(lent, hidden), continuation.placeless(lent, prefix.taints(hidden)), ok);
+            continuation.eval_apart(buffers, call, lent, answers, prefix.taints(hidden), parts.right,
+                prefix.eval_over(buffers, call, values), prefix.eval_over(buffers, call, other),
+                prefix.eval_apart(buffers, call, lent, answers, hidden, parts.left, values, other, apart))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ hidden ok values other apart => λ w id clear => {
+            let parts = Bool::is_true_and(absent(condition, hidden),
+                when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden), ok);
+            let arms = Bool::is_true_and(when_true.placeless(lent, hidden), when_false.placeless(lent, hidden), parts.right);
+            let both = absent_append(id, when_true.taints(hidden), when_false.taints(hidden), clear);
+            let bit: (values(1, condition).head_bit() = other(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), apart(1, condition, parts.left)));
+            let aligned = match values(1, condition).head_bit() as λ b =>
+                (match b {
+                    False => when_false.eval_over(buffers, call, other)(w, id),
+                    True => when_true.eval_over(buffers, call, other)(w, id),
+                }) = (match b {
+                    False => when_false.eval_over(buffers, call, values)(w, id),
+                    True => when_true.eval_over(buffers, call, values)(w, id),
+                }) {
+                False => when_false.eval_apart(buffers, call, lent, answers, hidden, arms.right, values, other, apart, w, id, both.right),
+                True => when_true.eval_apart(buffers, call, lent, answers, hidden, arms.left, values, other, apart, w, id, both.left),
+            };
+            j(bit, λ b _ => (match b {
+                    False => when_false.eval_over(buffers, call, other)(w, id),
+                    True => when_true.eval_over(buffers, call, other)(w, id),
+                }) = (match values(1, condition).head_bit() {
+                    False => when_false.eval_over(buffers, call, values)(w, id),
+                    True => when_true.eval_over(buffers, call, values)(w, id),
+                }), aligned)
+        },
+        Call(callee, arguments, result) => λ hidden ok values other apart => {
+            let words = words_of(values, arguments);
+            let others = words_of(other, arguments);
+            let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
+                mask_of(arguments, hidden), ok, words, others, words_of_apart(arguments, hidden, values, other, apart));
+            Valuation::set_apart(hidden, values, other, apart, result, word_value(call(callee, words)), word_value(call(callee, others)),
+                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answers(callee, words, others, read)))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ hidden ok values other apart => {
+            let mask = mask_of(inputs, hidden);
+            let entered = taint_onto(parameters, mask, []);
+            let ended = body.taints(entered);
+            let first = Bool::is_true_and(absent(bound, hidden),
+                body.placeless(lent, entered) && (absent(exit, ended) && mask_covers(mask_of(next, ended), mask)), ok);
+            let second = Bool::is_true_and(body.placeless(lent, entered), absent(exit, ended) && mask_covers(mask_of(next, ended), mask),
+                first.right);
+            let third = Bool::is_true_and(absent(exit, ended), mask_covers(mask_of(next, ended), mask), second.right);
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
+            let n = values(64, bound).toNat();
+            let passes: (other(64, bound).toNat() = n) = cong_fn(λ (x: BitVec(64)) => x.toNat(), apart(64, bound, first.left));
+            let end = loop_eval(step, parameters, count, exit, next, n, words_of(values, inputs));
+            let end2 = loop_eval(step, parameters, count, exit, next, n, words_of(other, inputs));
+            let ran = loop_eval_apart(step, parameters, count, exit, next, mask, ended,
+                λ v o a => body.eval_apart(buffers, call, lent, answers, entered, second.left, v, o, a), third.left, third.right, n,
+                words_of(values, inputs), words_of(other, inputs), words_of_apart(inputs, hidden, values, other, apart));
+            let core: Valuation::Apart(taint_onto(outputs, mask, hidden),
+                Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)),
+                Valuation::set(Valuation::bind(other, outputs, end2.state), exhausted, bit_value(end2.exhausted))) =
+                Valuation::set_apart(taint_onto(outputs, mask, hidden), Valuation::bind(values, outputs, end.state),
+                    Valuation::bind(other, outputs, end2.state),
+                    Valuation::bind_apart(outputs, hidden, values, other, apart, mask, end.state, end2.state, ran.right), exhausted,
+                    bit_value(end.exhausted), bit_value(end2.exhausted), λ w => cong_fn(λ (b: Bool) => bit_value(b, w), ran.left));
+            j(sym(passes), λ m _ => Valuation::Apart(taint_onto(outputs, mask, hidden),
+                    Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)),
+                    Valuation::set(Valuation::bind(other, outputs,
+                            loop_eval(step, parameters, count, exit, next, m, words_of(other, inputs)).state), exhausted,
+                        bit_value(loop_eval(step, parameters, count, exit, next, m, words_of(other, inputs)).exhausted))), core)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// The ids a function holds its lent buffers' addresses at.
+fn Function::addresses(self function: Function) → List<Nat> { taint_onto(function.parameters, base_mask(function.lent), []) }
+
+// The body is placeless from the address parameters, and the result is
+// not one of them or of what a loop carried one into.
+fn Function::placeless(self function: Function, lent: Nat → Nat) → Bool {
+    function.body.placeless(lent, function.addresses()) && absent(function.result, function.body.taints(function.addresses()))
+}
+
+theorem Function::eval_apart(self function: Function, buffers: Buffers(), call: Answers(), lent: Nat → Nat,
+    answers: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → call(f, others) = call(f, words),
+    ok: function.placeless(lent).IsTrue(), words, others: List<BitVec(64)>, apart: ListsApart(base_mask(function.lent), words, others)):
+    function.eval(call, others, buffers := buffers) = function.eval(call, words, buffers := buffers) {
+    let parts = Bool::is_true_and(function.body.placeless(lent, function.addresses()),
+        absent(function.result, function.body.taints(function.addresses())), ok);
+    let bound = Valuation::bind_apart(function.parameters, [], Valuation::zero(), Valuation::zero(),
+        Valuation::apart_refl([], Valuation::zero()), base_mask(function.lent), words, others, apart);
+    StructuredRegion::eval_apart(function.body, buffers, call, lent, answers, function.addresses(), parts.left,
+        Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others),
+        bound, 64, function.result, parts.right)
+}
+
+// How many buffers each function of a program is lent, by the number
+// `program_eval_over` answers it at.
+fn program_lent(functions: List<Function>) → Nat → Nat {
+    match functions {
+        Nil => λ _ => 0,
+        Cons(last, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.lent,
+            Inr(_) => program_lent(earlier, f),
+        },
+    }
+}
+
+fn program_placeless(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.placeless(program_lent(earlier)) && program_placeless(earlier) }
+}
+
+// The theorem for programs: a placeless program's functions answer alike
+// at every address word, over any buffers.
+theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>): program_placeless(functions).IsTrue() → (f: Nat) →
+    (words, others: List<BitVec(64)>) → ListsApart(base_mask(program_lent(functions, f)), words, others) →
+    program_eval_over(buffers, functions)(f, others) = program_eval_over(buffers, functions)(f, words) {
+    match functions {
+        Nil => λ _ f words others _ => refl,
+        Cons(last, earlier) => λ ok f words others => {
+            let parts = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
+            let ih = program_eval_placeless(buffers, earlier, parts.right);
+            let below = program_eval_over(buffers, earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
+                (match d { Inl(_) => last.eval(below, others, buffers := buffers), Inr(_) => below(f, others) }) =
+                (match d { Inl(_) => last.eval(below, words, buffers := buffers), Inr(_) => below(f, words) }) {
+                Inl(_) => λ h => last.eval_apart(buffers, below, program_lent(earlier), ih, parts.left, words, others, h),
+                Inr(_) => λ h => ih(f, words, others, h),
+            }
+        },
+    }
+}

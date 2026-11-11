@@ -25,6 +25,8 @@ fn checker() -> heather_elab::Elaborator {
         // `shared`, which the placement planner binds its plans with.
         ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
+        // The reads of a lent span, which the calls module lowers through.
+        ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ])
 }

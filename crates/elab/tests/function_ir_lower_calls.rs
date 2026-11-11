@@ -18,12 +18,15 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
         ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
         ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
+        ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
         // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
         ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
         ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
+        // The reads of a lent span, which the calls module lowers through.
+        ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ]);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_calls_examples", EXAMPLES) {

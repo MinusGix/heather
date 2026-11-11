@@ -1,8 +1,8 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. U1, U2 and the function compiler's half of
-U3 are built (§3). Owner:
+export"); this note scopes it. U1, U2, the function compiler's half of
+U3 and the placeless theorem a program's call needs are built (§3). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -223,6 +223,29 @@ words the region names. Two things follow.
   equations, puts a proof in every certificate that the generator can
   give once.
 
+**Placeless, built** (`function_ir_placeless.hthr`). The check threads the
+set of *hidden* ids, starting from a function's address parameters
+(`Function::addresses`). `StructuredRegion::placeless(lent, hidden)`
+holds when no node reads a hidden id, no branch tests one, a call passes
+one only at a lent buffer's address place (`lent` gives each callee's
+count), and a loop does not count by one, does not leave by one, and
+carries one only at a place that came in hidden. `taints` says what is
+hidden after a region: a node's output never is, and a loop's output is
+where its input was. A function is placeless when its body is and its
+result is not hidden. The theorem is `program_eval_placeless`: over any
+buffers, a placeless program's function answers the same at word lists
+that agree everywhere but the address places (`ListsApart` at
+`base_mask`). It is proved once, by the evaluator's own recursion
+(`Valuation::Apart`, `eval_nodes_apart`, `loop_eval_apart`,
+`StructuredRegion::eval_apart`), and a program's compile cites it with one
+`refl` of the check. The check is linear in the region except that a loop
+nested in loops has its taints recomputed by each enclosing loop. It is
+stricter than it must be in one way a lowered function never meets: a
+value computed from an address and then discarded is refused. Probes:
+`function_ir_placeless_tests` (the guarded load, the summing loop, the
+call handing a home on; eight refusals, among them the function that
+returns its address, with its two different answers).
+
 ### 2.4 A procedure is a function whose body has effects
 
 The last joint, and the largest. `Stmt` becomes the body language of a
@@ -280,11 +303,11 @@ Each is a PR and ends with something that runs.
     lending (`function_ir_lower_reads.hthr`, `function_ir_lower_calls.hthr`),
     `lower_program_lent_correct` and `compiled_returns_lent`. *Runs:* the
     probes' code by evaluation; no process yet, which is U3b's.
-  - **U3b. A program's `Call` passes buffers.** `run` answers a call over
-    its buffers; placeless functions; the call's code supplies the static
-    homes, and `Lends` is discharged from the data region lying below the
-    stack. *Runs:* a tool that reads its input into a buffer and calls a
-    compiled loop over it.
+  - **U3b. A program's `Call` passes buffers.** Placeless functions
+    (*built 2026-11-11*, §2.3); then `run` answers a call over its
+    buffers, the call's code supplies the static homes, and `Lends` is
+    discharged from the data region lying below the stack. *Runs:* a tool
+    that reads its input into a buffer and calls a compiled loop over it.
   - **U3c. `rt` lowers `Get` and `Len`**, so the loop is a `runtime fn`;
     the scanner's loop is the customer.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;
