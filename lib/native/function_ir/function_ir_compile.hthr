@@ -365,36 +365,41 @@ theorem Emitted::emits_as(self e: Emitted, prog: Prog, rest: List<Place>, names:
     ⟨cong_fn(λ (x: Emission) => x.prog, same), ⟨cong_fn(λ (x: Emission) => x.placement, same), cong_fn(λ (x: Emission) => x.names, same)⟩⟩
 }
 
-theorem emit_functions_start(placement: List<Place>, names: Nat): EmitsAs(emit_functions([], placement, names), Start, placement, names) {
+// A program that lends buffers is emitted under the count each function
+// takes (`counts`, docs/native-one-compiler-design.md §2.3); one that lends
+// none is the same statements at no counts.
+theorem emit_functions_lent_start(placement: List<Place>, names: Nat, counts: List<Nat>):
+    EmitsAs(emit_functions_after_lent(Start, [], placement, names, counts), Start, placement, names) {
     refl
 }
 
-theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, prog: Prog, rest: List<Place>,
-    labels: Nat, before: EmitsAs(emit_functions(earlier, placement, names), prog, rest, labels), next_prog: Prog, next_rest: List<Place>,
-    next_labels: Nat, emitted: EmitsAs(last.emit(prog, earlier.len(), rest, labels), next_prog, next_rest, next_labels)):
-    EmitsAs(emit_functions(Cons(last, earlier), placement, names), next_prog, next_rest, next_labels) {
-    (match emit_functions(earlier, placement, names) as λ out =>
+theorem emit_functions_lent_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, counts: List<Nat>, prog: Prog,
+    rest: List<Place>, labels: Nat, before: EmitsAs(emit_functions_after_lent(Start, earlier, placement, names, counts), prog, rest, labels),
+    next_prog: Prog, next_rest: List<Place>, next_labels: Nat,
+    emitted: EmitsAs(last.emit_lent(prog, earlier.len(), rest, labels, counts), next_prog, next_rest, next_labels)):
+    EmitsAs(emit_functions_after_lent(Start, Cons(last, earlier), placement, names, counts), next_prog, next_rest, next_labels) {
+    (match emit_functions_after_lent(Start, earlier, placement, names, counts) as λ out =>
         EmitsAs(out, prog, rest, labels) →
-        EmitsAs(match out { None => None, Some(b) => last.emit(b.prog, earlier.len(), b.placement, b.names) },
+        EmitsAs(match out { None => None, Some(b) => last.emit_lent(b.prog, earlier.len(), b.placement, b.names, counts) },
             next_prog, next_rest, next_labels) {
         None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held,
             EmitsAs(None, next_prog, next_rest, next_labels)),
         Some(b) => λ held => j(sym(b.emits_as(prog, rest, labels, held).left),
-            λ x _ => EmitsAs(last.emit(x, earlier.len(), b.placement, b.names), next_prog, next_rest, next_labels),
+            λ x _ => EmitsAs(last.emit_lent(x, earlier.len(), b.placement, b.names, counts), next_prog, next_rest, next_labels),
             j(sym(b.emits_as(prog, rest, labels, held).right.left),
-                λ y _ => EmitsAs(last.emit(prog, earlier.len(), y, b.names), next_prog, next_rest, next_labels),
+                λ y _ => EmitsAs(last.emit_lent(prog, earlier.len(), y, b.names, counts), next_prog, next_rest, next_labels),
                 j(sym(b.emits_as(prog, rest, labels, held).right.right),
-                    λ z _ => EmitsAs(last.emit(prog, earlier.len(), rest, z), next_prog, next_rest, next_labels), emitted))),
+                    λ z _ => EmitsAs(last.emit_lent(prog, earlier.len(), rest, z, counts), next_prog, next_rest, next_labels), emitted))),
     })(before)
 }
 
-theorem lower_program_emitted(functions: List<Function>, placement: List<Place>, prog: Prog, rest: List<Place>, labels: Nat,
-    emitted: EmitsAs(emit_functions(functions, placement, functions.len()), prog, rest, labels), laid: prog.laid_out().IsTrue()):
-    lower_program(functions, placement) = Some(prog) {
+theorem lower_program_lent_emitted(functions: List<Function>, placement: List<Place>, counts: List<Nat>, prog: Prog, rest: List<Place>,
+    labels: Nat, emitted: EmitsAs(emit_functions_after_lent(Start, functions, placement, functions.len(), counts), prog, rest, labels),
+    laid: prog.laid_out().IsTrue()): lower_program_lent(functions, placement, counts) = Some(prog) {
     let decided: ((match prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog)) =
         j(sym(eq_true_of_is_true(prog.laid_out(), laid)), λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog),
             refl);
-    (match emit_functions(functions, placement, functions.len()) as λ out =>
+    (match emit_functions_after_lent(Start, functions, placement, functions.len(), counts) as λ out =>
         EmitsAs(out, prog, rest, labels) →
         (match out as λ _ => Option<Prog> {
             None => None,
@@ -404,6 +409,23 @@ theorem lower_program_emitted(functions: List<Function>, placement: List<Place>,
         Some(o) => λ held => j(sym(o.emits_as(prog, rest, labels, held).left),
             λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(prog), decided),
     })(emitted)
+}
+
+theorem emit_functions_start(placement: List<Place>, names: Nat): EmitsAs(emit_functions([], placement, names), Start, placement, names) {
+    emit_functions_lent_start(placement, names, [])
+}
+
+theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, prog: Prog, rest: List<Place>,
+    labels: Nat, before: EmitsAs(emit_functions(earlier, placement, names), prog, rest, labels), next_prog: Prog, next_rest: List<Place>,
+    next_labels: Nat, emitted: EmitsAs(last.emit(prog, earlier.len(), rest, labels), next_prog, next_rest, next_labels)):
+    EmitsAs(emit_functions(Cons(last, earlier), placement, names), next_prog, next_rest, next_labels) {
+    emit_functions_lent_next(last, earlier, placement, names, [], prog, rest, labels, before, next_prog, next_rest, next_labels, emitted)
+}
+
+theorem lower_program_emitted(functions: List<Function>, placement: List<Place>, prog: Prog, rest: List<Place>, labels: Nat,
+    emitted: EmitsAs(emit_functions(functions, placement, functions.len()), prog, rest, labels), laid: prog.laid_out().IsTrue()):
+    lower_program(functions, placement) = Some(prog) {
+    lower_program_lent_emitted(functions, placement, [], prog, rest, labels, emitted, laid)
 }
 
 // ---------------------------------------------------------------------------

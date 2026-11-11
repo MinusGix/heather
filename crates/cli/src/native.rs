@@ -393,8 +393,16 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // included (§16.11). The Rust reflector stays only for what the default
     // setup does not compile yet, tests through `Bool` helpers; anything
     // else unmarked is refused, naming the marker.
-    let shape = if elab.qualified_global(&format!("{source_name}::compile")).is_some() {
-        verified::runtime_shape(&elab, &prefix, &root_name, &source_name)?
+    let published = |member: &str| elab.qualified_global(&format!("{source_name}::{member}")).is_some();
+    let shape = if published("runs_over") {
+        // A function that stores into its span has a contract with one more
+        // clause (what the span holds after, and that nothing else is
+        // touched): its export is the write half's round
+        // (docs/native-library-exports-design.md §6).
+        return Err(format!("`{symbol}` stores into its span: compile-x86 exports a runtime fn of words, or one that reads its spans"));
+    } else if published("compile") {
+        // One that reads spans publishes its agreement at every file.
+        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, published("agrees_over"))?
     } else {
         let program = verified::reflect(&elab, &source_name)?;
         if !program.functions.iter().any(|function| function.helped) {
