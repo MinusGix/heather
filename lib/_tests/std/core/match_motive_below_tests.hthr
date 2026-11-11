@@ -1,0 +1,86 @@
+// Probes of the motive synthesis' last rung
+// (docs/goal-motive-synthesis-design.md §4.5,
+// issues/case-split-on-a-definitions-tests.md): `match h: test` in a proof
+// reaches a test its goal is stuck on below binders, under a defined
+// proposition or an `↔`, so a function that branches
+// on a test of its arguments is proved by cases on that test with no copy
+// that takes the test as a parameter. Tests, not library: nothing imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list;
+
+fn pick(n: Nat, a, b: Nat) → Nat { match n.leb(3) { True => a, False => b } }
+
+// A defined proposition that is a Π over calls: the test sits in the
+// codomain's hypothesis.
+fn Above(x, y: Nat) → Type { (k: Nat) → x.leb(k) = True → y.leb(k) = True }
+
+theorem pick_above(n, a: Nat): Above(pick(n, a, a), a) {
+    match h: n.leb(3) { True => λ k p => p, False => λ k p => p }
+}
+
+// An `↔`, whose two directions are components of a pair type.
+theorem pick_iff(n, a, k: Nat): pick(n, a, a).leb(k) = True ↔ a.leb(k) = True {
+    match h: n.leb(3) { True => iff_refl(), False => iff_refl() }
+}
+
+// The arms differ.
+theorem pick_either(n, a, b: Nat): (k: Nat) → pick(n, a, b) = k → a = k ∨ b = k {
+    match h: n.leb(3) { True => λ k e => Inl(e), False => λ k e => Inr(e) }
+}
+
+// The limit of the ladder's order: a goal that also *writes* the test is
+// specialised where it is written (§4.1 finds it first) and not below the
+// call, so the arms see half. State such a goal without the written test
+// and use the arm's equation `h`.
+// expect-error: is expected here
+theorem pick_written(n, a, b: Nat): (k: Nat) → pick(n, a, b) = k → (n.leb(3) = True → a = k) {
+    match h: n.leb(3) { True => λ k e _ => e, False => λ k e t => absurd(t) }
+}
+
+// An open element type.
+fn pick_any<A>(n: Nat, a, b: A) → A { match n.leb(3) { True => a, False => b } }
+
+theorem pick_any_same<A>(n: Nat, a: A): (x: A) → pick_any(n, a, a) = x → a = x {
+    match h: n.leb(3) { True => λ x p => p, False => λ x p => p }
+}
+
+// The limit: a call that is the argument of a variable predicate is not a
+// position the goal is stuck on (`P(…)` is already a weak head normal
+// form), so it is not read and the arms keep the goal as written.
+// expect-error: is expected here
+theorem pick_any_holds<A>(P: A → Type, n: Nat, a: A): (x: A) → P(pick_any(n, a, a)) → P(a) {
+    match h: n.leb(3) { True => λ x p => p, False => λ x p => p }
+}
+
+// Two tests, the second met only in the first's `False` arm.
+fn pick2(n, m: Nat, a, b: Nat) → Nat {
+    match n.leb(3) { True => a, False => match m.leb(3) { True => a, False => b } }
+}
+
+theorem pick2_above(n, m, a: Nat): Above(pick2(n, m, a, a), a) {
+    match h: n.leb(3) {
+        True => λ k p => p,
+        False => match g: m.leb(3) { True => λ k p => p, False => λ k p => p },
+    }
+}
+
+// A closed test computes and needs no split.
+theorem pick_closed(a, b: Nat): Above(pick(2, a, b), a) { λ k p => p }
+
+// A test that mentions the binder it sits under is not the scrutinee of a
+// `match` outside it: the arms keep the goal as written, and a proof that
+// needs the split is refused.
+fn Every(a: Nat) → Type { (n: Nat) → Above(pick(n, a, a), a) }
+
+// expect-error: is expected here
+theorem pick_every(a, m: Nat): Every(a) {
+    match h: m.leb(3) { True => λ n k p => p, False => λ n k p => p }
+}
+
+// It is proved by splitting where the binder is in scope.
+theorem pick_every_inside(a: Nat): Every(a) { λ n => pick_above(n, a) }
+
+// A split on a test the goal is not stuck on changes nothing.
+theorem pick_other(n, m, a: Nat): Above(pick(n, a, a), a) {
+    match h: m.leb(3) { True => pick_above(n, a), False => pick_above(n, a) }
+}

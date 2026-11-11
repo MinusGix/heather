@@ -2072,7 +2072,7 @@ theorem Nat::le_ones_width_fuel(self fuel: Nat): (n: Nat) → n <= fuel → n <=
 theorem Nat::le_ones_width(self n: Nat): n <= n.width().ones() { n.le_ones_width_fuel(n, n.le_refl()) }
 
 theorem Nat::ldiv_bit_parts(self n: Nat): (n.half() + n.half()) + Nat::ldiv_bit(n, n.half()) = n ∧ Nat::ldiv_bit(n, n.half()) <= 1 {
-    match Succ(n.half() + n.half()).le_dec(n) as λ c => (n.half() + n.half()) + (match c { Inl(_) => 1, Inr(_) => 0 }) = n ∧ Nat::Le(match c { Inl(_) => 1, Inr(_) => 0 }, 1) {
+    match Succ(n.half() + n.half()).le_dec(n) {
         Inl(le) => And(Succ(n.half() + n.half()).le_antisym(n, le, n.le_succ_half_add()), trivial),
         Inr(nle) => And((n.half() + n.half()).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(n.half() + n.half()), nle)), trivial),
     }

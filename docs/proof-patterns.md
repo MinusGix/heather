@@ -228,6 +228,14 @@ property of Heather.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.
 
+- **A function that branches on tests of its arguments is proved by
+  `match h: test` on the same tests, in the same order.** The goal may
+  mention the test only under the function's call, below binders, under a
+  defined relation or an `↔` (`Regex::alt_same`): the motive synthesis
+  reads the reduced goal there (`docs/goal-motive-synthesis-design.md`
+  §4.5). No second definition with the tests as parameters. Do not also
+  write the test in the statement; take it from `h`.
+
 ## 5. Names and syntax
 
 Diagnosed by the elaborator and by design: `let p: (a = b) = …` needs the
