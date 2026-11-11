@@ -109,26 +109,8 @@ theorem Site::moves_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fil
     }
 }
 
-// A byte loaded at a label, zero-extended, from a canonical address that
-// reads one.
-theorem Site::moves_load_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
-    before: Prog, name: Nat, load: ByteLoad, at: asm_back(site.program, k) = At(before, name, LoadByte(load)),
-    pre, post: MachineState<M> → Type,
-    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(8)>(λ byte =>
-        (read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47)) ∧
-        ((site.data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte)) ∧ post(byte_load_after(load, byte, s))))):
-    site.Moves(writes, prog_len(before), prog_len(before) + byte_load_bytes(load).len(), pre, post) {
-    λ s here resident holds => {
-        let found = step(s, holds);
-        let after = byte_load_after(load, found.witness, s);
-        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitLoad(load),
-            ⟨site.item_fetched(fits, s, resident, k, before, name, LoadByte(load), at, here),
-             Exists(found.witness, ByteLoadStep(canonical := BitVec::drop_low_zero_of_lt(47, 17, read_gpr(load.base, s.gprs), found.proof.left),
-                present := found.proof.right.left, execution := refl))⟩);
-        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
-            ⟨site.rip_after(s, prog_len(before), byte_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
-    }
-}
+// (A byte loaded at a label is `Site::moves_load_byte`, x86_64_stack_runs:
+// the function compiler reads through it too.)
 
 // A word stored at a label, through a plain base, to a writable span that
 // keeps the code.

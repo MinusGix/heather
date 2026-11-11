@@ -605,7 +605,32 @@ record CheckedRegion {
 // depends only on graph edges, not on the stored schedule.
 fn Valuation() → Type { (width: Nat) → Nat → BitVec(width) }
 
-fn NodeHolds(values: Valuation(), node: Node) → Type {
+// The buffers a region reads: lists of bytes, named by number. A meaning
+// reads a buffer as a value and never as an address
+// (docs/native-library-exports-design.md §3); where its bytes are is the
+// lowering's to say.
+fn Buffers() → Type { List<List<BitVec(8)>> }
+
+// Buffer `buffer`: empty where there is none.
+fn buffer_bytes(buffers: Buffers(), buffer: Nat) → List<BitVec(8)> {
+    match buffers.nth(buffer) { None => [], Some(bytes) => bytes }
+}
+
+// Byte `index` of buffer `buffer`: zero past the end of either.
+fn buffer_byte(buffers: Buffers(), buffer, index: Nat) → BitVec(8) {
+    match buffers.nth(buffer) {
+        None => BitVec::zero(),
+        Some(bytes) => match bytes.nth(index) { None => BitVec::zero(), Some(byte) => byte },
+    }
+}
+
+// A byte as a word, zero-extended, as a load leaves it in a register.
+fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
+
+// A node's equation. A load reads `buffers`, which no node of a region
+// changes: a store's equation is the state evaluation's
+// (`function_ir_state`), and it constrains nothing here.
+fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Type {
     match node {
         Const(width, output, value) =>
             values(width, output) = BitVec::ofNat(value),
@@ -646,7 +671,8 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
         Equal(width, output, left, right) =>
             values(1, output) = BitVec::ofBool(
                 values(width, left).eq_bit(values(width, right))),
-        BufferLoad(_, _, _) => True,
+        BufferLoad(output, buffer, index) =>
+            values(64, output) = byte_word(buffer_byte(buffers, buffer, values(64, index).toNat())),
         BufferStore(_, _, _, _) => True,
         Resize(from, to, output, source) =>
             values(to, output) = BitVec::ofNat(values(from, source).toNat()),
@@ -655,16 +681,22 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
     }
 }
 
-fn NodesHold(values: Valuation(), nodes: List<Node>) → Type {
+// (A recursive call takes positional arguments only, so each recursive
+// meaning has a positional form, `…Over`, with the buffers first, and the
+// form with the buffers by name, over none where they are not given, is
+// its abbreviation.)
+fn NodesHoldOver(buffers: Buffers(), values: Valuation(), nodes: List<Node>) → Type {
     match nodes {
         Nil => True,
         Cons(node, rest) =>
-            NodeHolds(values, node) ∧ NodesHold(values, rest),
+            NodeHolds(values, node, buffers := buffers) ∧ NodesHoldOver(buffers, values, rest),
     }
 }
 
-fn RegionHolds(region: Region, values: Valuation()) → Type {
-    NodesHold(values, region.nodes)
+fn NodesHold(values: Valuation(), nodes: List<Node>, buffers: Buffers() := Nil) → Type { NodesHoldOver(buffers, values, nodes) }
+
+fn RegionHolds(region: Region, values: Valuation(), buffers: Buffers() := Nil) → Type {
+    NodesHold(values, region.nodes, buffers := buffers)
 }
 
 // ---------------------------------------------------------------------------
@@ -973,25 +1005,29 @@ fn no_callees() → Callees() { λ _ _ _ => False }
 
 // A structured region's equations where its calls are answered by
 // `callees`.
-fn StructuredRegionHoldsIn(callees: Callees(), values: Valuation(), region: StructuredRegion) → Type {
+fn StructuredRegionHoldsOver(buffers: Buffers(), callees: Callees(), values: Valuation(), region: StructuredRegion) → Type {
     match region {
-        Dataflow(body) => RegionHolds(body, values),
+        Dataflow(body) => RegionHolds(body, values, buffers := buffers),
         Sequence(prefix, continuation) =>
-            RegionHolds(prefix, values) ∧
-            StructuredRegionHoldsIn(callees, values, continuation),
+            RegionHolds(prefix, values, buffers := buffers) ∧
+            StructuredRegionHoldsOver(buffers, callees, values, continuation),
         Compose(prefix, continuation) =>
-            StructuredRegionHoldsIn(callees, values, prefix) ∧
-            StructuredRegionHoldsIn(callees, values, continuation),
+            StructuredRegionHoldsOver(buffers, callees, values, prefix) ∧
+            StructuredRegionHoldsOver(buffers, callees, values, continuation),
         Conditional(_, condition, _, _, when_true, when_false) =>
             match values(1, condition).head_bit() {
-                False => StructuredRegionHoldsIn(callees, values, when_false),
-                True => StructuredRegionHoldsIn(callees, values, when_true),
+                False => StructuredRegionHoldsOver(buffers, callees, values, when_false),
+                True => StructuredRegionHoldsOver(buffers, callees, values, when_true),
             },
         Call(callee, arguments, result) => callees(callee, words_of(values, arguments), values(64, result)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
-            LoopHolds(λ (pass: Valuation()) => StructuredRegionHoldsIn(callees, pass, body), values, inputs, bound, parameters, count,
-                exit, next, outputs, exhausted),
+            LoopHolds(λ (pass: Valuation()) => StructuredRegionHoldsOver(buffers, callees, pass, body), values, inputs, bound,
+                parameters, count, exit, next, outputs, exhausted),
     }
+}
+
+fn StructuredRegionHoldsIn(callees: Callees(), values: Valuation(), region: StructuredRegion, buffers: Buffers() := Nil) → Type {
+    StructuredRegionHoldsOver(buffers, callees, values, region)
 }
 
 // A region that calls nothing holds whatever its calls would be answered by.
@@ -1019,30 +1055,40 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
 }
 
 // A function of a program: its parameters, 64-bit words, its body, and the
-// 64-bit word it returns.
-record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat }
+// 64-bit word it returns. Its first `lent` buffers are lent to it by its
+// caller, each as two parameters, the base address and then the length,
+// before every other: buffer `k` is parameters `2k` and `2k + 1`
+// (docs/native-one-compiler-design.md §2.3). The meaning reads neither
+// word as an address: a buffer is the list of bytes it is called over.
+record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0 }
 
-// Called on `arguments`, the function may return `result`: some valuation
-// binds its parameters to the arguments, satisfies its body, and gives its
-// result that value.
-fn Function::Computes(self function: Function, callees: Callees(), arguments: List<BitVec(64)>, result: BitVec(64)) → Type {
+// Called on `arguments` over `buffers`, the function may return `result`:
+// some valuation binds its parameters to the arguments, satisfies its
+// body, and gives its result that value.
+fn Function::Computes(self function: Function, callees: Callees(), arguments: List<BitVec(64)>, result: BitVec(64),
+    buffers: Buffers() := Nil) → Type {
     Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧
-        (StructuredRegionHoldsIn(callees, values, function.body) ∧ values(64, function.result) = result))
+        (StructuredRegionHoldsIn(callees, values, function.body, buffers := buffers) ∧ values(64, function.result) = result))
 }
 
 // A program lists its functions last first: function `f` is the one with
 // `f` functions after it, and calls only those, so a program cannot
 // recurse. What its functions return, each answering its calls by the
-// functions after it.
-fn program_callees(functions: List<Function>) → Callees() {
+// functions after it. Every function of a program reads the same buffers,
+// named by the same numbers.
+fn program_callees_over(buffers: Buffers(), functions: List<Function>) → Callees() {
     match functions {
         Nil => no_callees(),
         Cons(last, earlier) => λ f arguments result => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.Computes(program_callees(earlier), arguments, result),
-            Inr(_) => program_callees(earlier)(f, arguments, result),
+            Inl(_) => last.Computes(program_callees_over(buffers, earlier), arguments, result, buffers := buffers),
+            Inr(_) => program_callees_over(buffers, earlier)(f, arguments, result),
         },
     }
 }
+
+// Over no buffers. (Its result is applied where it is written, so it takes
+// no argument by name: `program_callees_over` is the form with buffers.)
+fn program_callees(functions: List<Function>) → Callees() { program_callees_over(Nil, functions) }
 
 // The first block-argument graph is a four-block diamond: a producer prefix,
 // two selected arms, and one shared continuation.  Keeping this initial core
