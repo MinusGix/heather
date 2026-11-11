@@ -851,6 +851,118 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
     None
 }
 
+/// A call of a structurally recursive definition at a constructor
+/// (`simp(Seq(a, b))`): the arm its match selects, with the recursive calls
+/// spelled as calls of the definition (`seq(simp(a), simp(b))`), which the
+/// reduct walk's refolded firing gives and the kernel's own ι-step does not
+/// (issues/split-all-through-recursive-definitions.md). `None` when the arm
+/// is itself stuck on a match, or the source cannot spell it.
+fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Term> {
+    let (head, _) = crate::spelling::app_spine(call);
+    if !matches!(head, Term::GlobalTm { .. }) || word_operation(elab, call) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let mut fired = false;
+    for reduct in oracle.unfold(&cx.gamma, call, Unfold::RecursiveArm) {
+        if eliminator_headed(&reduct) {
+            if !fired {
+                // The kernel's own answer says whether an arm is selected
+                // at all: a match stuck on a neutral leaves the call.
+                let selected = oracle.bounded(512).whnf_term_opaque(&cx.gamma, &reduct).ok()?;
+                if selected == reduct || eliminator_headed(&selected) {
+                    return None;
+                }
+            }
+            fired = true;
+            continue;
+        }
+        if !fired {
+            continue;
+        }
+        if matches!(crate::spelling::app_spine(&reduct).0, Term::Lam { .. }) {
+            continue;
+        }
+        let arm = contracted(elab, cx, &oracle, &reduct, &mut 256);
+        elab.spell_term_source(cx, &arm)?;
+        return Some(arm);
+    }
+    None
+}
+
+/// `t` with the β-redexes and projections of pairs a selected arm leaves
+/// below its head contracted (`(λ i. g(nth(cs; i)))(0)` is `g(a)`), and no
+/// definition unfolded.
+fn contracted(elab: &Elaborator, cx: &Cx, oracle: &crate::oracle::SemanticOracle, t: &Term, budget: &mut u32) -> Term {
+    let gamma = &cx.gamma;
+    if *budget == 0 {
+        return t.clone();
+    }
+    *budget -= 1;
+    let reduced = match t {
+        Term::App { .. } | Term::AppAt { .. }
+            if !matches!(crate::spelling::app_spine(t).0, Term::GlobalTm { .. } | Term::Var(_)) =>
+        {
+            oracle.bounded(64).whnf_term_opaque(gamma, t).ok()
+        }
+        Term::Fst { .. } | Term::FstAt { .. } | Term::Snd { .. } | Term::SndAt { .. } | Term::Case { .. } | Term::ElimNat { .. } => {
+            oracle.bounded(64).whnf_term_opaque(gamma, t).ok()
+        }
+        _ => None,
+    };
+    if let Some(reduced) = reduced
+        && reduced != *t
+    {
+        return contracted(elab, cx, oracle, &reduced, budget);
+    }
+    // The child a refolded hypothesis reads, `nth(cs; i)`: a recursion on
+    // the constructor's arity, which only δ computes. Taken when it reaches
+    // a child, and left when it is a match of the arm's own.
+    if eliminator_headed(t)
+        && let Ok(reduced) = oracle.bounded(64).whnf_term(gamma, t)
+        && !eliminator_headed(&reduced)
+    {
+        return pattern_name(elab, cx, &reduced).unwrap_or(reduced);
+    }
+    // A child the definition's own arm read directly (`Star(s)` rebuilt).
+    if matches!(t, Term::Fst { .. } | Term::FstAt { .. })
+        && let Some(named) = pattern_name(elab, cx, t)
+    {
+        return named;
+    }
+    let mut output = t.clone();
+    match &mut output {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+            *fun = Rc::new(contracted(elab, cx, oracle, fun, budget));
+            *arg = Rc::new(contracted(elab, cx, oracle, arg, budget));
+        }
+        Term::Succ(inner) => *inner = Rc::new(contracted(elab, cx, oracle, inner, budget)),
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
+            *fst = Rc::new(contracted(elab, cx, oracle, fst, budget));
+            *snd = Rc::new(contracted(elab, cx, oracle, snd, budget));
+        }
+        Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
+            *val = Rc::new(contracted(elab, cx, oracle, val, budget));
+        }
+        Term::Supf { children, .. } => *children = Rc::new(contracted(elab, cx, oracle, children, budget)),
+        _ => {}
+    }
+    output
+}
+
+/// The pattern variable of `cx` that is `child`: a pattern's variable is
+/// an alias of the scrutinee's child under its own spelling (the match's
+/// `nth`, over the declared type), so an arm computed another way reads as
+/// the pattern's names only where a child is replaced by the alias that
+/// converts with it.
+fn pattern_name(elab: &Elaborator, cx: &Cx, child: &Term) -> Option<Term> {
+    cx.aliases.iter().rev().find_map(|alias| {
+        let by = cx.gamma.len().checked_sub(alias.depth)? as u32;
+        (eliminator_headed(&alias.term) && crate::rewrite::Rewrites(elab).terms_convert(cx, &alias.at(by).0, child))
+            .then(|| alias.splice(by).0)
+    })
+}
+
 /// A term whose head, below applications and projections, is an
 /// eliminator: a match, a recursor, or `J`.
 fn eliminator_headed(term: &Term) -> bool {
@@ -869,11 +981,19 @@ fn eliminator_headed(term: &Term) -> bool {
 /// Compute the constructor cases left by a previous split, including below
 /// applications, while keeping library calls spelled as library calls.
 pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type {
-    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut u32) -> Term {
-        if *budget == 0 {
+    simplify_goal_with(elab, cx, expected, false)
+}
+
+/// [`simplify_goal`], and with `recursive` a structurally recursive
+/// definition at a constructor computes too, its recursive calls spelled as
+/// calls ([`recursion_at_constructor`]): what `simp_only` matches laws
+/// against.
+pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool) -> Type {
+    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool)) -> Term {
+        if budget.0 == 0 {
             return input.clone();
         }
-        *budget -= 1;
+        budget.0 -= 1;
         let mut output = input.clone();
         // Every occurrence alike: a split abstracts the goal's term
         // syntactically, so an occurrence left unsimplified inside a
@@ -891,6 +1011,11 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
                     return term(elab, cx, &reduced, budget);
                 }
                 if let Some(reduced) = matched_at_constructor(elab, cx, &output) {
+                    return term(elab, cx, &reduced, budget);
+                }
+                if budget.1
+                    && let Some(reduced) = recursion_at_constructor(elab, cx, &output)
+                {
                     return term(elab, cx, &reduced, budget);
                 }
             }
@@ -979,7 +1104,7 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
         output
     }
     let mut output = expected.clone();
-    let mut budget = 512;
+    let mut budget = (512, recursive);
     match &mut output {
         Type::Id { lhs, rhs, .. } => {
             *lhs = Rc::new(term(elab, cx, lhs, &mut budget));
@@ -993,7 +1118,7 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
     }
     // A goal that is not an application (a match on a split comparison)
     // simplifies whole.
-    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut u32) -> Term {
+    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool)) -> Term {
         let mut output = input.clone();
         match &mut output {
             Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {

@@ -1,0 +1,144 @@
+// Probes of `simp_only` and `simp_show` (docs/simp-design.md,
+// issues/simp-tactic.md): a goal normalised by a pinned list of laws along
+// `=` and along a designated relation, side conditions, what is left
+// (`then :=`, `using :=`), calls at constructors computing first, and every
+// refusal with the route it took. Tests, not library: nothing imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
+import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
+
+// ---------------------------------------------------------------------------
+// Equations: both sides normalised, the goal closed where they meet.
+
+theorem len_three<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = xs.len() + (ys.len() + zs.len()) {
+    simp_only(List::len_append, Nat::add_assoc)
+}
+
+// A hypothesis is a law like any other.
+theorem by_hypothesis(a, b, c: Nat, h: a = b): a + c = b + c { simp_only(h) }
+
+// A law that would rewrite for ever stops where the two sides are one term.
+theorem commuted(a, b: Nat): a + b = b + a { simp_only(Nat::add_comm) }
+
+// One step of a calc.
+theorem in_a_calc<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = (ys.len() + zs.len()) + xs.len() {
+    calc {
+        ((xs ++ ys) ++ zs).len()
+            = xs.len() + (ys.len() + zs.len()) := simp_only(List::len_append, Nat::add_assoc),
+            = (ys.len() + zs.len()) + xs.len() := Nat::add_comm(xs.len(), ys.len() + zs.len()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Side conditions: a hypothesis in scope, a `let`, or `discharge :=`.
+
+theorem condition_in_scope(n, m, k: Nat, h: n <= m): ((m - n) + n) + k = m + k {
+    simp_only(Nat::sub_add_cancel)
+}
+
+theorem condition_by_let(n, m, k: Nat, h0: n <= m ∧ True): ((m - n) + n) + k = m + k {
+    let h: (n <= m) = h0.left;
+    simp_only(Nat::sub_add_cancel)
+}
+
+theorem condition_discharged(n, m, k: Nat, h0: n <= m ∧ True): ((m - n) + n) + k = m + k {
+    simp_only(Nat::sub_add_cancel, discharge := h0.left)
+}
+
+// expect-error: its side condition `n <= m` is not a hypothesis here, and nothing discharged it
+theorem condition_blocked(n, m, k: Nat): ((m - n) + n) + k = m + k {
+    simp_only(Nat::sub_add_cancel)
+}
+
+// ---------------------------------------------------------------------------
+// What is left: proved by `then :=`, or closed from a fact by `using :=`.
+
+theorem then_proves_the_rest<A>(xs, ys: List<A>, P: Nat → Type, h: P(xs.len() + ys.len())): P((xs ++ ys).len()) {
+    simp_only(List::len_append, then := h)
+}
+
+theorem using_a_fact<A>(xs, ys, zs: List<A>, P: Nat → Type, h: P((xs ++ ys).len() + zs.len())): P(((xs ++ ys) ++ zs).len()) {
+    simp_only(List::len_append, using := h)
+}
+
+// expect-error: the goal and the fact given by `using :=` do not simplify to the same statement
+theorem using_another_fact<A>(xs, ys: List<A>, P: Nat → Type, h: P(ys.len() + xs.len())): P((xs ++ ys).len()) {
+    simp_only(List::len_append, using := h)
+}
+
+// ---------------------------------------------------------------------------
+// A designated relation: laws along `≈`, under constructors and calls.
+
+theorem smart_constructors(a, b: Regex): Regex::alt(Regex::seq(a, b), b) ≈ Alt(Seq(a, b), b) {
+    simp_only(Regex::alt_same, Regex::seq_same)
+}
+
+theorem laws_with_arguments(a, b: Regex): Regex::seq(a.simp(), b.simp()) ≈ Seq(a, b) {
+    simp_only(Regex::seq_same, Regex::simp_same)
+}
+
+// A hypothesis along the relation, at two fields of constructor values.
+theorem under_constructors(a, a2, b: Regex, h: a ≈ a2): Alt(Seq(a, b), a) ≈ Alt(Seq(a2, b), a2) { simp_only(h) }
+
+// A call at a constructor computes before the laws are matched, its
+// recursive calls kept as calls: no equation of `simp` is listed.
+theorem computes_first(a, b: Regex, ha: a.simp() ≈ a, hb: b.simp() ≈ b): Seq(a, Star(b)).simp() ≈ Seq(a, Star(b)) {
+    simp_only(Regex::seq_same, ha, hb)
+}
+
+// ---------------------------------------------------------------------------
+// Refusals, each with its route.
+
+// expect-error: the two sides do not meet
+theorem sides_apart<A>(xs, ys: List<A>): (xs ++ ys).len() = ys.len() + xs.len() {
+    simp_only(List::len_append)
+}
+
+// expect-error: 1. `List::len_append`: `len(xs ++ ys)` ⟶ `len(xs) + len(ys)`
+theorem route_is_shown<A>(xs, ys: List<A>): (xs ++ ys).len() = ys.len() + xs.len() {
+    simp_only(List::len_append)
+}
+
+// Two laws that undo each other: found at the first repeat, not at the
+// budget.
+// expect-error: these laws loop: step 2 returns to the goal as written
+theorem laws_loop<A>(xs, ys: List<A>, P: Nat → Type, h: P(0)): P((xs ++ ys).len()) {
+    simp_only(List::len_append, prelude::sym(List::len_append(xs, ys)), then := h)
+}
+
+// expect-error: `simp_show` never closes a goal
+theorem shown<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = xs.len() + (ys.len() + zs.len()) {
+    simp_show(List::len_append)
+}
+
+// expect-error: the goal simplifies to
+theorem shown_result<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = xs.len() + (ys.len() + zs.len()) {
+    simp_show(List::len_append)
+}
+
+// expect-error: and not `unfold :=`
+theorem unknown_named(a: Nat): a = a { simp_only(Nat::add_comm, unfold := a) }
+
+// expect-error: takes the laws to simplify with
+theorem no_laws(a: Nat): a + 0 = a { simp_only() }
+
+// expect-error: `a` is not a law
+theorem not_a_law(a: Nat): a + 0 = a { simp_only(a) }
+
+// A law between statements is not rewritten yet (issues/simp-iff-laws.md).
+// expect-error: a law `P ↔ Q` between statements is not rewritten yet
+theorem iff_law(P, Q: Type, h: P ↔ Q, q: Q): P { simp_only(h, then := q) }
+
+// An instance under a binder is not reached by an equation
+// (issues/simp-under-binders.md): the route says no law fired.
+// expect-error: route: no law fired
+theorem under_a_binder<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) ++ Nil).len()) = xs.map(λ x => f(x).len()) {
+    simp_only(List::append_nil)
+}
+
+// A statement that is not a relation application gives the relation no
+// context to cross.
+// expect-error: so nothing says how it respects the relation `Same`
+theorem no_context(a, b: Regex, w: List<Nat>, h: Regex::Seq(a, b).Denotes(w)): Regex::seq(a, b).Denotes(w) {
+    simp_only(Regex::seq_same, using := h)
+}

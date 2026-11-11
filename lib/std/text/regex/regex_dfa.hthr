@@ -379,19 +379,15 @@ theorem Regex::deriv_simp_same(self r: Regex, c: Nat): r.deriv_simp(c) ≈ r.der
         Seq(a, b) => match ha: a.nullable() {
             True => calc {
                 Regex::alt(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c))
-                    ≈ Alt(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c)) := Regex::alt_same(Regex::seq(a.deriv_simp(c), b), b.deriv_simp(c)),
-                    ≈ Alt(Seq(a.deriv(c), b), b.deriv_simp(c)) := rel_cong(Regex::seq_left(b, a.deriv_simp_same(c))),
-                    ≈ Alt(Seq(a.deriv(c), b), b.deriv(c)) := rel_cong(b.deriv_simp_same(c)),
+                    ≈ Alt(Seq(a.deriv(c), b), b.deriv(c))
+                    := simp_only(Regex::alt_same, Regex::seq_same, a.deriv_simp_same(c), b.deriv_simp_same(c)),
             },
-            False => Regex::seq_left(b, a.deriv_simp_same(c)),
+            False => calc {
+                Regex::seq(a.deriv_simp(c), b) ≈ Seq(a.deriv(c), b) := simp_only(Regex::seq_same, a.deriv_simp_same(c)),
+            },
         },
-        Alt(a, b) => calc {
-            Regex::alt(a.deriv_simp(c), b.deriv_simp(c))
-                ≈ Alt(a.deriv_simp(c), b.deriv_simp(c)) := Regex::alt_same(a.deriv_simp(c), b.deriv_simp(c)),
-                ≈ Alt(a.deriv(c), b.deriv_simp(c)) := rel_cong(a.deriv_simp_same(c)),
-                ≈ Alt(a.deriv(c), b.deriv(c)) := rel_cong(b.deriv_simp_same(c)),
-        },
-        Star(s) => Regex::seq_left(Star(s), s.deriv_simp_same(c)),
+        Alt(a, b) => simp_only(Regex::alt_same, a.deriv_simp_same(c), b.deriv_simp_same(c)),
+        Star(s) => simp_only(Regex::seq_same, s.deriv_simp_same(c)),
         _ => λ w => iff_refl(),
     }
 }
@@ -408,19 +404,9 @@ fn Regex::simp(self r: Regex) → Regex {
 
 theorem Regex::simp_same(self r: Regex): r.simp() ≈ r {
     match r {
-        Seq(a, b) => calc {
-            Regex::seq(a.simp(), b.simp())
-                ≈ Seq(a.simp(), b.simp()) := Regex::seq_same(a.simp(), b.simp()),
-                ≈ Seq(a, b.simp()) := rel_cong(a.simp_same()),
-                ≈ Seq(a, b) := rel_cong(b.simp_same()),
-        },
-        Alt(a, b) => calc {
-            Regex::alt(a.simp(), b.simp())
-                ≈ Alt(a.simp(), b.simp()) := Regex::alt_same(a.simp(), b.simp()),
-                ≈ Alt(a, b.simp()) := rel_cong(a.simp_same()),
-                ≈ Alt(a, b) := rel_cong(b.simp_same()),
-        },
-        Star(s) => calc { Star(s.simp()) ≈ Star(s) := rel_cong(s.simp_same()), },
+        Seq(a, b) => simp_only(Regex::seq_same, a.simp_same(), b.simp_same()),
+        Alt(a, b) => simp_only(Regex::alt_same, a.simp_same(), b.simp_same()),
+        Star(s) => simp_only(s.simp_same()),
         _ => λ w => iff_refl(),
     }
 }

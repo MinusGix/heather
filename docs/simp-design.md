@@ -18,6 +18,16 @@ moves cost from *maintenance and diagnosis* to *what is written down*.
 
 ## 0. The decisions
 
+**Decided, Minus, 2026-11-11.** Agreed in general. (2) is amended: there
+*is* a default, and it is by type. A type may associate a default set with
+itself, and a call's default search includes the sets of the types its
+expression mentions (`Nat`, `Int`, `List` show up everywhere, and "this
+fails, no idea what we need" is the failure to avoid); §3.1. (4) as
+recommended: host engine, Heather policy, and the engine moves into
+Heather once tactics compile to runtime code. The failure report is
+wanted, and the route a run took must be easy to see; §6.1. Build it for
+relations as well, not `=` only.
+
 1. **A non-closing `simp` states its result** (§2). The committed form of
    "simplify, then continue" names the simplified goal, and `simp` proves
    the two join. A bare residue exists for exploration and prints the
@@ -165,7 +175,25 @@ A registration is a module event already, so it is in the interface digest
 and dependents re-elaborate when a set changes. That is the property the
 PR lane lacked for the motive rung; here it comes from the mechanism.
 
-There is deliberately no "all sets" set. `issues/lemma-selection-and-search.md`'s
+### 3.1 Default sets belong to types
+
+A set registered with `default_for := name_of(T)` is `T`'s default.
+`by simp()` with no set named uses the union of the defaults of every
+type whose values occur in the goal: the types of the subterms the walk
+visits, read from the heads' result types, not the whole import closure.
+A goal about `List<Nat>` lengths gets `List`'s and `Nat`'s defaults and
+nothing of `Regex`'s, wherever it is written. Naming sets adds to the
+defaults; `only := […]` replaces them.
+
+This keeps what the ambient set is good for (the common carriers work
+without knowing their lemma names) and drops what makes it fragile: the
+set a call uses is a function of the goal's types, a type's default is one
+declaration in the type's module, and a module that tags a lemma about its
+own type cannot change a proof that does not mention that type. A report
+names the defaults that were included and why ("`List::shape`: `xs ++ ys`
+has type `List<A>`").
+
+Apart from the per-type defaults there is no "all sets" set. `issues/lemma-selection-and-search.md`'s
 selection language can *propose* sets for a goal by the heads it mentions
 (`heather search --simp-sets-for <goal>`), which is exploration.
 
@@ -274,6 +302,17 @@ matters most to a program writing proofs: every failure names its next
 action, which is one of *prove this premise*, *add this lemma*, *state the
 other normal form*, *this is not a consequence of the set*.
 
+### 6.1 The route
+
+Every run can show the route it took: the sequence of steps, each with its
+position in the term, the rule or procedure, the instance, and the term
+before and after, in the order the engine took them, ending with the
+normal form. `simp_show` prints it; a failed closing or stated call prints
+the route of each side up to the first position where the sides differ,
+which is usually short. The route is also the `calc` chain the run stands
+for, so it can be pasted as an explicit proof where a pinned call is still
+not explicit enough.
+
 `--log-used` appends (goal heads, set, lemmas used) per successful run:
 the premise-selection corpus `issues/lemma-selection-and-search.md` asks
 for, which cannot be reconstructed later.
@@ -325,7 +364,10 @@ library will call, so any change to its engine re-elaborates the library.
 
 Each leaves something usable.
 
-1. **Engine, pinned lists, closing and stated forms, `=` only.**
+(Minus, 2026-11-11: build it more fully than `=` only; rounds 1 and 4
+are taken together.)
+
+1. **Engine, pinned lists, closing and stated forms.**
    `Normalise` over `rewrite`'s walk with a list of unconditional laws and
    unfolding; `simp(only := […])`; the report's items 1 and 5. Closes
    `issues/rewrite-every-instance.md`. Done when a `len`/`append` chain
@@ -370,3 +412,44 @@ small addition; §2 argues the library should rarely want it.
   relation walk's binder rules (§10 of the rewrite design) apply where
   the pointwise relation has evidence; elsewhere a rule does not fire
   under a λ and the report says so.
+
+## 10. What is built
+
+Round 1, with relations (2026-11-11). `simp_only(r₁, …, rₙ)` and
+`simp_show(…)` are term forms beside `rewrite`
+(`crates/elab/src/rewrite/simp.rs`); probes are
+`lib/_tests/std/tactic/simp_tests.hthr`.
+
+- **Laws.** A proof of `a = b` or of `R(a, b)` for a designated relation,
+  under any hypotheses: a named lemma, a lemma applied to some arguments, a
+  hypothesis. The first law in the list with an instance fires, at every
+  occurrence of that instance; then the list is tried again from its start.
+- **Computation.** Before each match, a call at a constructor computes
+  (`xs.len()` at `Cons`, `r.simp()` at `Seq(a, b)`), a structural recursion
+  with its recursive calls kept as calls. A definition's own equations are
+  not laws to list.
+- **Closing.** With no named argument the call closes the goal: both sides
+  are normalised and compared, and the run stops as soon as they are one
+  term, so a commuting law that would move both for ever does not.
+  `then := e` proves the normal form; `using := h` normalises `h`'s
+  statement and requires the two normal forms to convert.
+- **Side conditions.** A law's non-dependent hypothesis is found among the
+  hypotheses in scope (parameters and `let`s), or proved by
+  `discharge := e`. A law whose condition is unmet is reported as blocked,
+  with the condition.
+- **Relations.** The relation walk crosses calls with registered
+  `PreservesRelation`/`Respects2` evidence, and now inductive constructor
+  values of one or two fields, with evidence at `T::C`.
+- **The report** (§6, §6.1). Each refusal carries the route, one line per
+  step, `law: lhs ⟶ rhs`; the laws blocked at the normal form; a loop
+  at its first repeat (the goal after step *n* is the goal after step *k*),
+  and the 256-step budget only behind that.
+
+Not built: named sets and per-type defaults (§3), registration checks (§4),
+the `by simp(…)` policy layer in Heather (§7), unfolding by name, the
+`--json` report. Known gaps: a law between statements, `P ↔ Q`
+(`issues/simp-iff-laws.md`); an equation's instance under a binder
+(`issues/simp-under-binders.md`); a goal a named case split left unfolded
+past its relation, which is restated in a one-step `calc`
+(`issues/case-split-unfolds-the-goals-relation.md`). Each step is one walk
+of the goal (`issues/rewrite-every-instance.md`).

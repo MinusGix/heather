@@ -1,6 +1,6 @@
 ---
 title: rel_cong and relation rewrite under a constructor with a registered congruence
-status: open
+status: closed
 labels: [setoids,relations,tactics,proofs]
 area: tactics
 milestone: [tac-general]
@@ -36,3 +36,4 @@ or `rewrite` and cite no `same_seq`/`same_alt` by name.
 ## Log
 
 - 2026-11-11: Built for `rel_cong` (and `rel_derive`'s walk): two sides that are one constructor with one or two carrier fields are a context, with evidence registered at the constructor's qualified name (`Respects2<T, T, T>(R, R, R, T::C)`, `PreservesRelation(R, R, T::C)`); fields are placed up to conversion, since a lowered field is spelled by where it sits (`Builder::under_constructor`, `Builder::field` in `crates/elab/src/relational_context/proof.rs`; `docs/equation-rewrite-design.md` §10.7). `regex_dfa.hthr` registers `Seq`, `Alt` and `Star` and its chains use `rel_cong`; probes in `regex_dfa_tests.hthr` and, for a parametric type, `algebra_rel_tests.hthr`. Remaining: `rewrite` along a relation still refuses a constructor ("a form that is no application or λ"), because its walk rebuilds the term; and constructors of three or more fields have no registration form.
+- 2026-11-11: The relation walk of `rewrite` crosses inductive constructor values too (`RelationRewrite::inductive`, `GoalNodes` reading a lowered value's fields): one or two fields, evidence at `T::C` as `rel_cong` reads it. `Regex::simp_same` and `Regex::deriv_simp_same` now cite no `same_seq`/`same_alt`: their steps are `simp_only` over `seq_same`, `alt_same` and the induction hypotheses. Closing.

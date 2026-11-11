@@ -31,7 +31,9 @@ use crate::matching::MotiveSynthesisElab;
 use crate::{Cx, ElabError, Elaborator, R};
 
 mod relation;
+mod simp;
 pub(crate) use relation::Relations;
+pub(crate) use simp::Simps;
 
 use relation::Polarity;
 use crate::subst_local::LocalSubsts;
@@ -359,6 +361,22 @@ impl Rewrites<'_> {
         goal: &Type,
         what: &str,
     ) -> R<(Term, Equation)> {
+        self.rewrite_instance_or(cx, h, proof, proof_ty, goal, None).map_err(|miss| miss.into_error(self, cx, goal, what, "equation", h.span))
+    }
+
+    /// [`Self::rewrite_instance`], with the ways an unapplied equation fails
+    /// to become an instance told apart ([`Miss`]), and `premise` asked for
+    /// an argument matching left open that nothing after it depends on: a
+    /// conditional law's side condition (`docs/simp-design.md` §6).
+    fn rewrite_instance_or(
+        &self,
+        cx: &Cx,
+        h: &Expr,
+        proof: Term,
+        proof_ty: &Type,
+        goal: &Type,
+        premise: Option<Premise<'_>>,
+    ) -> Result<(Term, Equation), Miss> {
         let not_an_equation = |ty: &Type| ElabError::Elab {
             msg: format!(
                 "`rewrite` rewrites along an equation `a = b` or a relation `R(a, b)`, and \
@@ -382,7 +400,7 @@ impl Rewrites<'_> {
                     k += 1;
                     cur = self.whnf(&pcx, &cod, h.span)?;
                 }
-                _ => return Err(not_an_equation(proof_ty)),
+                _ => return Err(not_an_equation(proof_ty).into()),
             }
         };
         if k == 0 {
@@ -394,7 +412,8 @@ impl Rewrites<'_> {
                       would match every subterm; apply it to that argument"
                     .into(),
                 span: h.span,
-            });
+            }
+            .into());
         }
         let found = goal_terms(goal, |t| same_key(&lhs, t, k), || crate::matching::expose(self.0, cx, goal, h.span))
             .into_iter()
@@ -404,42 +423,32 @@ impl Rewrites<'_> {
                 self.match_pattern(cx, &lhs, &t, k, &mut binds, &telescope, h.span).then_some(binds)
             });
         let Some(binds) = found else {
-            return Err(ElabError::Elab {
-                msg: format!(
-                    "`rewrite`: no subterm of {what} `{}` is an instance of this equation's \
-                     left side\n  note: an instance has the left side's head, and its other \
-                     parts convert",
-                    self.display_type(cx, goal)
-                ),
-                span: h.span,
-            });
+            return Err(Miss::NoInstance);
         };
         // Binder `j` (outermost first) is `Var(k - 1 - j)` in `pcx`.
-        let mut args = Vec::with_capacity(k as usize);
-        for j in 0..k {
-            let Some(arg) = binds[(k - 1 - j) as usize].clone() else {
-                return Err(ElabError::Elab {
-                    msg: format!(
-                        "`rewrite`: matching the left side does not determine this equation's \
-                         argument {}, which only its right side mentions; give it explicitly",
-                        j + 1
-                    ),
-                    span: h.span,
-                });
-            };
-            args.push(arg);
-        }
         let mut term = proof;
         let mut ty_now = proof_ty.clone();
-        for arg in args {
+        for j in 0..k {
             let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty_now, h.span)? else {
-                return Err(not_an_equation(proof_ty));
+                return Err(not_an_equation(proof_ty).into());
+            };
+            let arg = match binds[(k - 1 - j) as usize].clone() {
+                Some(arg) => arg,
+                None => {
+                    let side = crate::strengthen_ty(&cx.gamma, &cod, 1).is_some();
+                    match premise.filter(|_| side).and_then(|p| p(cx, &dom, &dom_level)) {
+                        Some(found) => Rc::new(found),
+                        None => {
+                            return Err(Miss::Unbound { index: j + 1, premise: side.then(|| ((*dom).clone(), dom_level.clone())) });
+                        }
+                    }
+                }
             };
             ty_now = cod.inst_top(0, &arg);
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
         let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &ty_now, h.span)? else {
-            return Err(not_an_equation(proof_ty));
+            return Err(not_an_equation(proof_ty).into());
         };
         Ok((term, Equation { level, ty, lhs, rhs }))
     }
@@ -720,7 +729,7 @@ impl Rewrites<'_> {
     }
 
     /// Do two terms scoped in `cx` convert, at the first one's type?
-    fn terms_convert(&self, cx: &Cx, a: &Term, b: &Term) -> bool {
+    pub(crate) fn terms_convert(&self, cx: &Cx, a: &Term, b: &Term) -> bool {
         let oracle = self.goal_oracle();
         let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.policy.fuel) else {
             return false;
@@ -797,6 +806,54 @@ struct Equation {
     ty: Rc<Type>,
     lhs: Rc<Term>,
     rhs: Rc<Term>,
+}
+
+/// A side condition's discharger: a proof of the type, scoped in the
+/// context given, or `None`.
+pub(crate) type Premise<'p> = &'p dyn Fn(&Cx, &Type, &Level) -> Option<Term>;
+
+/// Why an unapplied law did not become an instance at a goal.
+pub(crate) enum Miss {
+    /// No subterm of the goal is an instance of the left side.
+    NoInstance,
+    /// Matching the left side left argument `index` (from 1) open. `premise`
+    /// is its type when nothing after it depends on it: a side condition
+    /// nothing discharged.
+    Unbound { index: u32, premise: Option<(Type, Level)> },
+    /// Anything else: the law is not one, or reading it failed.
+    Hard(ElabError),
+}
+
+impl From<ElabError> for Miss {
+    fn from(e: ElabError) -> Miss {
+        Miss::Hard(e)
+    }
+}
+
+impl Miss {
+    /// The error `rewrite` reports for this miss; `kind` is `equation` or
+    /// `relation`.
+    fn into_error(self, e: &Elaborator, cx: &Cx, goal: &Type, what: &str, kind: &str, span: Span) -> ElabError {
+        match self {
+            Miss::Hard(e) => e,
+            Miss::NoInstance => ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: no subterm of {what} `{}` is an instance of this {kind}'s \
+                     left side\n  note: an instance has the left side's head, and its other \
+                     parts convert",
+                    e.display_type(cx, goal)
+                ),
+                span,
+            },
+            Miss::Unbound { index, .. } => ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: matching the left side does not determine this {kind}'s \
+                     argument {index}, which only its right side mentions; give it explicitly"
+                ),
+                span,
+            },
+        }
+    }
 }
 
 /// What a rewrite step's errors call the type it rewrites.
