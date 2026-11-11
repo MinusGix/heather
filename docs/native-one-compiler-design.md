@@ -1,8 +1,8 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. U1, U2 and a program's call of a function over a
-buffer (U3a, U3b) are built (§3). Owner:
+export"); this note scopes it. U1 to U4 are built (§3), and U5 is designed
+in `docs/native-procedures-are-functions-design.md`. Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -594,9 +594,14 @@ Recursion keeps a depth in the meaning, for the reason
 `docs/native-procedures-design.md` §2 gives: a finite stack can meet a
 depth exactly and cannot meet fuel.
 
-This joint gets its own design note when U1 to U4 are in, since it
-re-bases `Target::Held` and the homes on frames. Its cost is the size of
-the program compiler's storage proofs, not of anything new.
+This joint has its own design note,
+`docs/native-procedures-are-functions-design.md`, written when U1 to U4
+were in. It re-bases `Target::Held` and the homes on frames; its cost is
+the size of the program compiler's storage proofs, not of anything new.
+It refines one sentence above: `Perform` and `Call` become one construct
+in the code (one call sequence, one contract) and stay two in the
+meaning, since a region is a total function and what it calls must
+answer with a value (that note's §2.1).
 
 ### 2.5 A program and an export
 
@@ -961,14 +966,17 @@ What its theorems ask of the program's functions is that the ones a
 pure term can call leave the file (`Writers::Still`), which a linked
 program's marks decide (`program_writers_stills`); a function that
 writes may sit beside them. A computation over `Io` that calls such a
-function is the one thing the two layers cannot say apart, and it is
-said when they are one.
+function is one node the layer over Linux does not have yet.
 
-After U5 the two computation layers are one. `ETm` lowers to a
-`Source`'s statements because that is where a call to Linux and a
-program's buffer live today; when a program's statements are functions,
-`Invoke` is one more computation over a state that has the world beside
-the file.
+The two computation layers nest and do not merge
+(`docs/native-procedures-are-functions-design.md` §2.8, which corrects
+what this section said before it). `ETm` lowers to a `Source`'s
+statements and the layer over the file to a region, and a statement is
+over regions, not beside them: one computation type with `Invoke`
+beside `Put` would still need the region lowering for every function
+without `Invoke`, the exports among them. So `ETm` gains the call of a
+function, a writer included, as one node lowered to a `Compute` of a
+region `Call`.
 
 ## 3. The rounds
 
@@ -1339,10 +1347,11 @@ Each is a PR and ends with something that runs.
       calls answered by `tr`'s program, where `raise_span` writes
       (`lib/_tests/native/runtime/rt_io_among_tests.hthr`).
       *Not here:* a computation over `Io` that itself calls a function
-      that writes. That is a node of the computation language, and U5
-      makes the layer over Linux a layer of the file's (`Invoke` beside
-      `Put` and `Call`), where the call already exists; adding it to
-      `ETm` first would build it twice.
+      that writes. That is a node of the computation language. This
+      entry first said U5 would merge the two layers and the node would
+      otherwise be built twice; the U5 note finds they nest instead
+      (its §2.8), so the node is built once, in its own round
+      (`issues/rt-io-calls-functions.md`), and does not wait on U5.
   - *Step 4d, with U5:* `write-elf`'s own byte nodes move to the shared
     lowering. A program's own region reaches its buffers by the data
     region's addresses, as immediates; the shared lowering reads a home
@@ -1351,8 +1360,11 @@ Each is a PR and ends with something that runs.
     and its static buffers are homes `main` is lent (§2.5), which is
     U5's frame change. Done before it, the step would re-prove the
     program compiler's byte nodes over global homes that U5 removes.
-- **U5. Procedures are functions** (§2.4), after its own note. *Runs:* the
-  tools with procedures (`grep -F`) rebuilt on it.
+- **U5. Procedures are functions** (§2.4), designed in
+  `docs/native-procedures-are-functions-design.md`: 5a RSP is the frame,
+  5b words in the frame and the callee saves, 5c one call and one
+  contract, 5d one byte lowering (step 4d above). *Runs:* the tools with
+  procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
   scanner's loop linked into Rust
   (`docs/native-library-exports-design.md` §6, §10 R3).
@@ -1369,7 +1381,8 @@ it can move up without changing any other round.
   function meeting a call contract. The first becomes an instance of the
   second at `main`.
 - **`rt`'s two lowerings** (pure to FunctionIR, effectful to `Source`)
-  merge only as far as U5 merges their targets.
+  stay two, as their targets do: U5 makes the targets one in the machine
+  and leaves a region and a statement two kinds of meaning.
 
 ## 5. What this does to the exports note and the issues
 

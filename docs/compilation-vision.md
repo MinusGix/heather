@@ -267,7 +267,15 @@ optimization that uses it is proved once under it as a hypothesis.
   generator is `runtime fn`'s own, told by the type: a function whose
   type ends in `Mutated` gets a `CompileSpan` instance, a linked
   program and its run stated at every file (`f::runs_over`), with
-  nothing proved for the function in particular.
+  nothing proved for the function in particular. The third joint is
+  designed (`docs/native-procedures-are-functions-design.md`): a
+  statement's words move to a frame of its activation, the callee saves
+  what it uses, and one contract says a callee runs as its tree, a
+  function's proved return being the tree that is a value. Calls keep
+  two levels in the meaning, because a region is a total function and a
+  statement is a tree: what a region calls answers with a value, what a
+  statement calls may ask, run out of depth or exit, and recursion
+  lives there.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

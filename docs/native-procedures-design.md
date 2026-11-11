@@ -10,6 +10,13 @@ of `docs/compiler-milestones-proposal.md`). It draws in
 `issues/native-register-moves-and-convention.md` where they are needed to
 make a call compile, and leaves the rest of them open (§8).
 
+`docs/native-procedures-are-functions-design.md` (proposed 2026-11-11,
+round U5 of `docs/native-one-compiler-design.md`) keeps §1 and §2 of this
+note, what a procedure is and what a call means, and proposes to replace
+the convention, the compile and its proof (§3 to §5): words in a frame
+of the activation, the callee saving, one contract with the function
+compiler's. Until that round is built this note describes the code.
+
 Today a native tool is a closed `Source` (`lib/native/native_source.hthr`)
 whose procedures are Heather functions returning an `Act`, inlined where
 they are called (`lib/native/native_build.hthr`). That has two walls: code
