@@ -126,7 +126,6 @@ theorem no_laws(a: Nat): a + 0 = a { simp_only() }
 // expect-error: `a` is not a law
 theorem not_a_law(a: Nat): a + 0 = a { simp_only(a) }
 
-
 // An instance under a binder is not reached by an equation
 // (issues/simp-under-binders.md): the route says no law fired.
 // expect-error: route: no law fired
