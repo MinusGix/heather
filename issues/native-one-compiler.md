@@ -105,3 +105,14 @@ case and the same premise, and `Source` has one kind of call.
     - Rust: `emission.rs` reads four start-up items.
 
     Next is 5b: words in the frame and the callee saves, where the pushes and their two inductions go.
+- 2026-11-11: U5 step 5b built: words in the frame, and the callee saves (docs/native-procedures-are-functions-design.md §3, "What it settled").
+
+    - Code: a word without a register is the stack word at RSP plus eight times its id (`Prog::word_to`, `Prog::word_store` through RBX). The start-up opens `main`'s frame and zeroes the words live as `main` starts (`Prog::frames_main`, `Prog::zeroes`). A procedure's entry saves the pool registers the homes use (`Prog::saves`), opens its frame (`frame_down`) and takes its parameters; its exit gives the results, closes the frame, restores and returns. A call is `call_enters`, the arguments, CALL, `call_leaves`, the results: the pushes, the pops and `Layout::call_fits`' bound on words live across a call are gone.
+    - Proof: the invariant reads a frame's words at ghost cells past the canonical boundary (`Layout::frame_cell`, `Target::Slots`), so region stores keep them by the old lemmas. Between a CALL and its RET the claim is `Target::Bare`; a callee's frame is claimed over whatever the stack held (`Target::held_fresh`), and the caller's is found as it was (`Target::bare_caller`). `native_compile_perform.hthr` is rewritten on these and `perform_call` (`native_compile_correct.hthr`) joins them; `goes_pushes`, `goes_pops` and `held_moved` are deleted.
+    - Statement: `native_compile_correct`'s `deep` is `(depth * (8 * (words + 7)) + 80 * functions) + 8 * words <= stack`: a call takes its return address, at most six saved registers and a frame, and `main` takes a frame. cat's theorems carry `8 * words <= depth`.
+    - No assumption about the stack's contents at entry was added.
+    - Rust: `emission.rs` states the entry over the set live before `main` (`Source::entry_of`, `Source::entry_at`, the check's `{p}_ck_0` now stated before the entry).
+    - Filed: [[native-gprs-writes-not-canonical]] (RBX written twice by a slot access); [[x86-stack-wide-displacement]] has its payoff logged.
+    - Not taken from the design: dropping `homes.slotted(live)`. That condition on words live at `main`'s entry stays (the start-up's zeroing is proved for slots only).
+
+    Next is 5c: one call and one contract.

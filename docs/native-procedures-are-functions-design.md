@@ -1,7 +1,7 @@
 # Procedures are functions: one frame, one call, one contract
 
-Status: **proposed 2026-11-11; step 5a built the same day** (§3), the
-rest not. §1 describes the code before 5a. Round U5 of
+Status: **proposed 2026-11-11; steps 5a and 5b built the same day** (§3),
+5c and 5d not. §1 describes the code before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
 before the round. Owner: `issues/native-one-compiler.md`; it draws in
 `issues/native-procedure-contracts.md`,
@@ -164,7 +164,8 @@ stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
   instruction in all (the model's `StackStore` and `StackLoad` take a
   byte displacement, which is too short for a file of words). That form is
   an optimisation with its own issue, and the function compiler's future
-  spill slots want it too.
+  spill slots want it too. *As built (5b):* `MovRI(Rbx, 8·id)`,
+  `AddRR(Rbx, Rsp)`, forms the model already had.
 - **RSP is the frame, in the invariant.** `Target::Held` gains
   `read_gpr(Rsp, g) = t.frame()`. The static frame slot
   (`Layout::frame_at`), its store at every entry and its load before every
@@ -174,6 +175,11 @@ stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
   them), then make room for the words (`AddRI32(Rsp, …)`). RBX is saved
   first, since everything after uses it for addresses. Then the depth
   (§2.6), then each parameter from its argument register to its home.
+  *As built (5b):* each register is saved by lowering RSP a word and a
+  `Spill` at displacement zero (`Prog::saves`), then `MovRI(Rbx, 8·W)`,
+  `SubRR(Rsp, Rbx)` (`frame_down`); RBX is scratch between statements
+  and is not saved, which an export changes when it needs System V's
+  set. The depth stays at the call site until 5c.
 - **Exit.** Each result from its home to its register, the words' room
   given back, the saved registers reloaded, their room given back, RET.
 - **What is saved.** RBX, and each register of the home pool that some
@@ -185,6 +191,10 @@ stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
   at `main`'s entry to zero in its home. Today such words must be slotted
   because static slots start zero (`homes.slotted(live)` in
   `Source::allocation_ok`); that condition goes. There are usually none.
+  *As built (5b):* the start-up zeroes them (`Prog::zeroes`), and the
+  condition stays for now: `Target::goes_zeroes` proves the store to a
+  slot only, so a word live at `main`'s entry is still slotted. No
+  allocator gives such a word a register.
 - **The data region shrinks** to the buffers, the scratch range, the saved
   entry RSP and the room count.
 
@@ -425,15 +435,77 @@ gates passing on the new code.
   - *What 5b replaces of it.* `goes_pushes` and `goes_pops` go with the
     pushes. `held_moved`, RSP in `Agreeing` and the entry and return
     stated in the callee's activation stay.
-- **5b. Words in the frame, and the callee saves.** Slot words on the
-  stack; `main`'s frame made by the start-up and a procedure's by its
-  entry, which saves what it must keep; pushes and pops go. The two land
-  together because a push moves RSP under the slots it would be read
-  from: keeping pushes over a frame would mean proving a biased
-  addressing that the next step deletes. This is the step that re-proves
-  the storage lemmas and rewrites `native_compile_perform`. *Runs:* every
-  tool; a probe that recurses to its depth and one past it, on a stack
-  the theorem's `deep` premise sizes.
+- **5b. Words in the frame, and the callee saves** (built 2026-11-11).
+  Slot words on the stack; `main`'s frame made by the start-up and a
+  procedure's by its entry, which saves what it must keep; pushes and
+  pops go. The two land together because a push moves RSP under the
+  slots it would be read from: keeping pushes over a frame would mean
+  proving a biased addressing that the next step deletes. This is the
+  step that re-proves the storage lemmas and rewrites
+  `native_compile_perform`. *Runs:* every tool; a probe that recurses to
+  its depth and one past it (`summing`, `summing_shallow`,
+  `summed_input`), on a stack the theorem's `deep` premise sizes.
+
+  What it settled:
+  - *The invariant keeps its shape.* `Target::Placed` still has one
+    function from offsets to bytes; a frame's words are read from it at
+    ghost cells past the canonical boundary (`Layout::frame_cell`), where
+    no region offset is, and a separate clause (`Target::Slots`) says the
+    stack word at RSP plus eight times `i` reads as cell `i`. A store to
+    the region or to another stack word keeps a frame by the lemmas that
+    kept the region (`keeps_agree` takes "below the scratch range or past
+    the layout", so a ghost cell is untouched by every region store). The
+    statement proofs above `native_compile_segments` did not change.
+  - *A frame is claimed over whatever the stack held.* `Stack.readable`
+    gives every stack word a value, so a callee's frame needs no
+    initialising: `Target::held_fresh` builds the claim at the lower RSP
+    from the bytes found there, for a body with nothing live in a slot at
+    its entry but its parameters, which the entry then stores. `main`
+    reads its words before writing them (a word starts as zero), so the
+    start-up zeroes the words live as `main` starts and no others
+    (`Prog::zeroes`, `Target::goes_zeroes`). No assumption about the
+    stack's contents at process entry was added.
+  - *The caller's frame on return.* Between a CALL and its RET the claim
+    is `Target::Bare`: the region's part of the invariant, the words above
+    some stack offset as a list, and RSP. The callee's entry, body and
+    exit store only below the caller's frame, so on return that list is
+    the one the CALL left, and `Target::bare_caller` rebuilds the
+    caller's claim from the witness it had before the call, the region's
+    bytes taken from the callee's (`splice`). The registers the program's
+    homes use are back because the callee saved and restored each
+    (`goes_saves`, `goes_restores`); it saves all of them, since homes are
+    still the program's and not the procedure's
+    (`native-register-moves-and-convention`).
+  - *A call's stack.* A return address, at most six saved registers and
+    a frame: `8 * (words + 7)` bytes a level. `native_compile_correct`'s
+    `deep` adds `8 * words` for `main`'s frame, so a program with no
+    calls now asks for that much stack (cat's theorems carry it).
+    `Layout::call_fits` no longer bounds the words live across a call,
+    and `Refusal` 14's count went with the pushes.
+  - *RBX is written twice by a slot access* (`MovRI(Rbx, 8 * id)`,
+    `AddRR(Rbx, Rsp)`, then the word's load or store), and `Gprs` is a
+    function, so two writes of one register are the one write only
+    pointwise. The register file after an access is named
+    (`Target::slot_gprs`, `rbx_gprs`, `rbx_known_gprs`,
+    native_compile_segments) with its read lemmas and a case split for
+    the sites that state it. Filed as `native-gprs-writes-not-canonical`;
+    `x86-stack-wide-displacement` would remove the access's RBX
+    altogether.
+  - *The proofs of an activation again.* The callee's activation is built
+    inside the CALL's continuation, where its frames (the saved values of
+    the registers as the CALL found them, the return address, the
+    caller's cells) are known; its bounds come from `Gprs::saved_len` and
+    `Homes::registers_few` by `omega`. Nothing needed bounds as evaluated
+    verdicts.
+  - *`write-elf`.* The entry is stated over the set live before `main`,
+    which the allocation's check already spells (`{p}_ck_0`,
+    `Source::entry_of`, `Source::entry_at`), so the certificate does not
+    work the set out again; the frame's items are counted back from the
+    initial bytes' stores.
+  - *What 5c takes from it.* `goes_callee_entry` and `goes_callee_return`
+    are stated over `Bare` and a register file `g0` the callee must give
+    back, which is the shape of the one contract; the count's move into
+    the entry changes who runs `call_enters`, not these.
 - **5c. One call, one contract.** The count moves into the entry, results
   move to RAX and on, `Perform` and `Call` emit through one function;
   `Target::Performs` is stated, a procedure and a function each an

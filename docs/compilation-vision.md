@@ -268,9 +268,10 @@ optimization that uses it is proved once under it as a hypothesis.
   type ends in `Mutated` gets a `CompileSpan` instance, a linked
   program and its run stated at every file (`f::runs_over`), with
   nothing proved for the function in particular. The third joint is
-  designed (`docs/native-procedures-are-functions-design.md`): a
-  statement's words move to a frame of its activation, the callee saves
-  what it uses, and one contract says a callee runs as its tree, a
+  designed (`docs/native-procedures-are-functions-design.md`) and half
+  built: a statement's words are in a frame of its activation and the
+  callee saves what the program's homes use (its steps 5a and 5b); still
+  to come, one contract says a callee runs as its tree, a
   function's proved return being the tree that is a value. Calls keep
   two levels in the meaning, because a region is a total function and a
   statement is a tree: what a region calls answers with a value, what a

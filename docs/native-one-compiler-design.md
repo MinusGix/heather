@@ -2,7 +2,8 @@
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
 export"); this note scopes it. U1 to U4 are built (§3), and U5 is designed
-in `docs/native-procedures-are-functions-design.md`. Owner:
+in `docs/native-procedures-are-functions-design.md`, its steps 5a and 5b
+built. Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -1361,10 +1362,10 @@ Each is a PR and ends with something that runs.
     U5's frame change. Done before it, the step would re-prove the
     program compiler's byte nodes over global homes that U5 removes.
 - **U5. Procedures are functions** (§2.4), designed in
-  `docs/native-procedures-are-functions-design.md`: 5a RSP is the frame,
-  5b words in the frame and the callee saves, 5c one call and one
-  contract, 5d one byte lowering (step 4d above). *Runs:* the tools with
-  procedures (`grep -F`) rebuilt on it.
+  `docs/native-procedures-are-functions-design.md`: 5a RSP is the frame
+  (built), 5b words in the frame and the callee saves (built), 5c one
+  call and one contract, 5d one byte lowering (step 4d above). *Runs:*
+  the tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
   scanner's loop linked into Rust
   (`docs/native-library-exports-design.md` §6, §10 R3).

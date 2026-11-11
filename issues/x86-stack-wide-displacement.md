@@ -14,8 +14,9 @@ The stack model's word forms take a byte displacement
 function compiler's frame and too short for a frame that holds a
 statement's file of words
 (`docs/native-procedures-are-functions-design.md` §2.2), so U5 reaches a
-slot through RBX: `MovRR(Rbx, Rsp)`, `AddRI32(Rbx, …)`, then the word
-`Load` or `Store`. One instruction would do.
+slot through RBX: `MovRI(Rbx, 8 * id)`, `AddRR(Rbx, Rsp)`, then the word
+`Load` or `Store` (`Prog::word_to`, `Prog::word_store`, step 5b). One
+instruction would do.
 
 ## Scope
 
@@ -38,3 +39,7 @@ slot through RBX: `MovRR(Rbx, Rsp)`, `AddRI32(Rbx, …)`, then the word
 A statement's slot read and write are one instruction each, the tools
 pass their GNU gates on it, and a probe reads and writes a slot past the
 byte displacement's reach.
+
+## Log
+
+- 2026-11-11: U5's step 5b built the frame, so this now has a measured payoff: every slot read and write is three instructions (two to form the address in RBX), and because RBX is written twice the proofs name the register file after an access instead of computing it ([[native-gprs-writes-not-canonical]]). With a `[rsp + disp32]` form a slot access writes no scratch register, `Target::rbx_gprs` and its lemmas go, and the start-up's zeroing and the argument moves shrink by two items a word.

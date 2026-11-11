@@ -135,7 +135,7 @@ fuel per call. With a depth, the question disappears: the handler is
   only RAX and RBX beside them.
 - **Homes are global.** A word has one home for the whole program, in a
   register or its slot, as now.
-- **Caller saves.** At a call the caller pushes each word live after it but
+- **Caller saves** (until U5's step 5b; see §4's note). At a call the caller pushes each word live after it but
   for the results (`out − results`, the set it needs back) from its home,
   and after the return pops each back into its home. The callee saves
   nothing, and its code may write any home.
@@ -153,11 +153,16 @@ fuel per call. With a depth, the question disappears: the handler is
 
 ## 4. The code
 
-*Since 2026-11-11 (U5's step 5a,
+*Since 2026-11-11 (U5's steps 5a and 5b,
 `docs/native-procedures-are-functions-design.md` §3) there is no `frame`
-slot: RSP is the frame, held in the claim between statements, and nothing
-reloads it. What follows describes the code before that step; the `room`
-slot, the pushes and the depth test are as written.*
+slot and the caller saves nothing: RSP is the frame, held in the claim
+between statements; a word without a register lives in its activation's
+frame there; and the callee saves the registers the program's homes use
+and opens its own frame. §3's "why not callee-saves" was about static
+slots, where a callee's code could write a caller's word; a frame above
+the callee's RSP is out of its reach by the memory clause. What follows
+describes the code before those steps; the `room` slot and the depth
+test are as written.*
 
 ### 4.1 Layout
 
