@@ -288,8 +288,8 @@ against the length home too. That test is the path-known bound; it costs
 one comparison a pass that an optimizer could fold when the count is
 known below the capacity (not built).
 
-**A `runtime fn` reads a span: the design of U3c (2026-11-11; step 1
-built).** The joint so far ends at FunctionIR written by hand. What is
+**A `runtime fn` reads a span: the design of U3c (2026-11-11; steps 1
+and 2 built).** The joint so far ends at FunctionIR written by hand. What is
 left is the front end: `rt`, its lowering and its loop theorems
 (`rt.hthr`, `rt_lower.hthr`, `rt_loop.hthr`), the `Compile` class and the
 generator (`runtime.hthr`). Read against them, five things are decided.
@@ -358,14 +358,24 @@ that neither is needed, and what follows is the form that was built.
 - *A loop carries the homes in place.* A pass sees only the loop's
   state, and the function compiler carries a home across a pass when
   the pass's `next` for its two places is the pass's own parameter
-  (`carry_slot`). The home words are state like the rest, so the loops
-  `rt_loop` builds are asked for one thing more: the self-call passes
-  each home word as the variable it came in as. Then the loop's code is
-  `lent` what the function is, and after it both the loop's outputs and
-  the ids before it are homes (`StructuredRegion::lends`). What a pass
-  computes (`Tm::tail_sound`) and the two loop theorems are restated
-  over the file and otherwise as they were (built, for loops that read
-  nothing); the carrying is step 2.
+  (`carry_slot`). So a measured loop's words are two lists: the kept
+  ones, which the pass hands on as its own parameters and never writes,
+  and the moved ones, which it computes at fresh ids as before
+  (`Fun::lower_measured(ks, w0, wrest, …)`; the loop's `next` is the
+  kept parameters and then the fresh ids). The body is asked for one
+  thing more than it was: a self-call passes each kept word as the
+  variable it came in as (`Tm::split_kept`), and a body that does not
+  is not lowered. What a pass leaves (`Tm::leave`) is then the
+  recursion at the kept words as they stand and the moved ones as
+  computed, the loop theorem is the one it was at the joined list
+  (`Fun::measured_sound`, generic in which words are kept), and a
+  function lent nothing keeps nothing and gets the code it had. A
+  function with `lent > 0` that calls itself keeps its first `2·lent`
+  words (`Fun::shape_params`). The loop's code is `lent` what the
+  function is, and after it both the loop's outputs and the ids before
+  it are homes (`StructuredRegion::lends`). Fuel loops keep nothing: a
+  fuel recursion's count sits before its words, and none reads a span
+  yet.
 
 - *The class is about a function at a file.* `Compile<F>(f)` states that
   the code answers as `f` does. With spans, `f` takes them first as
@@ -380,6 +390,26 @@ that neither is needed, and what follows is the form that was built.
   its statement and an instance is made only at a world without spans
   (`World::spanless`, a premise of `Setup::compile` and its two loop
   forms).
+
+  A loop needs more than the pin, and step 2 found where: a measured
+  function is proved from its own `f::ext`, and `decreases` takes every
+  parameter into its recursor, the span among them, so `ext` asks the
+  two recursions it compares to agree at every span
+  (issues/decreases-generalizes-fixed-parameters.md). The loop's
+  `again` at one file knows nothing of another. So what such a function
+  proves is `Guarded` at every world of a family at once
+  (`Fun::GuardedAt`, the index being the span): `again` answers at every
+  index and agrees with the function below the measure at every index,
+  which is exactly what `ext` can use. `Fun::guarded_at` brings it back
+  to `Guarded` at one world, by answering with the function wherever
+  the hypothesis speaks and with that world's `again` elsewhere; the
+  body's meaning reads its recursion only at the calls it makes
+  (`Tm::tail_sem_ext`). The loop theorem itself does not change, and
+  `Fun::measured_sound_at` is it at each index. The family is the class
+  at every file seen from one function, so step 3's generator proves
+  `GuardedAt` as it proves `Guarded` today, with the span a binder of
+  each ih. If `decreases` comes to leave fixed parameters outside its
+  recursor, the family is no longer needed and can go.
 
   The reflector decides what is a span: a parameter of type
   `List<BitVec(8)>` of a pure `runtime fn`, numbered in order, becomes
@@ -399,6 +429,27 @@ evaluation over a short buffer, and accepted by the function compiler
 lent one buffer (`lower_program_lent`). A value region reads no bytes,
 so the effectful layer cites the old statement through
 `StructuredRegion::eval_byte_free`.
+
+What step 2 built (`lib/_tests/native/runtime/rt_span_loops_tests.hthr`):
+kept words in the measured loop and its theorem, the family form of
+`Guarded`, and a function that counts a span's newlines from an index,
+`count_from`, written in Heather with `decreases`. Its reflection is
+lowered by evaluation to one code whatever the file, the code is
+placeless and accepted by the function compiler lent one buffer, it
+runs by evaluation, and at every span, place and length word it
+computes `count_from` (`count_compiled`), `GuardedAt` proved from
+`count_from::ext` and `count_from::irrel` as the generator will. A
+self-call that moves a home is not lowered; a loop that keeps nothing,
+or is lent nothing, is lowered and not accepted. The generator makes no
+instance for such a loop yet (it says so), since the class is still at
+a world without spans.
+
+One limit of the source language showed while writing it: a `decreases`
+body that branches under its `match h:` arm with a self-call below the
+branch has no `ext`, so a loop with two ways round has no Heather
+function beside it today, though it lowers and runs (`count_split_body`;
+issues/decreases-no-companions-nested-match-calls.md). The form with one
+self-call and the branch in its arguments is the one proved.
 
 What it leaves open, on purpose: a span that is written. A write makes
 the buffer a result as well as an input, so U4 decides whether the file
@@ -476,7 +527,10 @@ Each is a PR and ends with something that runs.
       its theorem, for a function without a loop, and every statement of
       the lowering over the world's file. *Runs:* probes by evaluation,
       and the lowered code accepted by the function compiler.
-    - *Step 2:* loops carrying the homes.
+    - *Step 2, built 2026-11-11:* measured loops keep the home words in
+      place, and `Guarded` is stated at every file at once
+      (`Fun::GuardedAt`). *Runs:* a newline count over a span, by
+      evaluation, proved to compute its Heather function at every span.
     - *Step 3:* the class, the reflector and linking over a file.
       *Runs:* `wc -l` with `count_newlines` a `runtime fn`.
 - **U4. Buffers written.** Stores, `Wrote` over lent spans, `Unique`;

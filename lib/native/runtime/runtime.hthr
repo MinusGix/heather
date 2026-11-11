@@ -194,7 +194,7 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
                     _ => Refused("a fuel recursion's body is its fuel's `match`"),
                 },
             },
-            Measured(w0, wrest, body) => match Ty::all_one_word(Cons(w0, wrest), w.tys) {
+            Measured(ks, w0, wrest, body) => match Ty::all_one_word(ks ++ Cons(w0, wrest), w.tys) {
                 False => Refused(Fun::loop_words_reason()),
                 True => body.judge_tail(w.sigs, w.tys),
             },
@@ -397,7 +397,7 @@ fn Setup::measured_fun(w0: Ty, wrest: List<Ty>, res: Ty, body: Tm) → Fun { Fun
 
 fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, w: World,
     typed: Itself(F) = Itself(Ty::Arrows(w.tys, Cons(w0, wrest), res)),
-    shaped: Setup::measured_fun(w0, wrest, res, body).shape() = Measured(w0, wrest, body),
+    shaped: Setup::measured_fun(w0, wrest, res, body).shape() = Measured(Nil, w0, wrest, body),
     m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(Cons(w0, wrest), m),
     guarded: Fun::Guarded(Cons(w0, wrest), res, body, w, retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f), m),
     ok: s.checked(Setup::measured_fun(w0, wrest, res, body), w).IsTrue(), closed: w.spanless().IsTrue()) → Compile<F>(f)
@@ -407,7 +407,7 @@ fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, 
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
         j(w.spanless_nil(closed), λ b _ => Ty::Answers(w.tys, Cons(w0, wrest), res, h, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
             Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
-                Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree)),
+                Setup::holds_at(s, rt, w, Measured(Nil, w0, wrest, body), shaped, h, m, bounded, guarded), call, agree)),
         Setup::checked_fits(s, rt, w, ok))
 }
 
@@ -1202,7 +1202,7 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let list = λ (ys: List<LocalRef>) => RtQ::seq(word_list, runtime_embs(reprs, ws, runtime_locals(ys)));
     let at_codes = λ (xs: List<LocalRef>) => runtime_args(count, reprs, ws, runtime_locals(xs));
     let typed_params = runtime_param_types(ts.word, reprs, ws);
-    let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 2), [Ty::quote(w0, q), Ty::quotes(wrest, q), body_e])]);
+    let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 2), [Ty::quotes(Nil, q), Ty::quote(w0, q), Ty::quotes(wrest, q), body_e])]);
     // The measure, as a function of the words.
     let zs <- runtime_params(ts.word, ws, None, 0);
     let mu_z <- runtime_measure_at(rec, at_codes(zs));
@@ -1264,7 +1264,14 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
             _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),
         },
-        Measured(w0, wrest, body) => runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, body),
+        Measured(ks, w0, wrest, body) => match ks {
+            Nil => runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, typed, count, reprs, w0, wrest, rfun.result, body),
+            // A loop that keeps the homes of lent spans: the lowering and its
+            // theorem are there (`Fun::measured_sound`); the instance waits
+            // for the class over a file (docs/native-one-compiler-design.md
+            // §2.3, U3c step 3).
+            Cons(_, _) => runtime_fail("a loop over a lent span has no instance yet"),
+        },
     }
 }
 

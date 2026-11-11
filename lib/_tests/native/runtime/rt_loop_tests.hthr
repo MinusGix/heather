@@ -81,7 +81,7 @@ fn count_down_world() → World { World(RecInfo::none, [Sig([Word(64), Word(64)]
 
 fn count_down_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
 
-theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world())) = True { refl }
+theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0)) = True { refl }
 
 // The body with its recursion answered by `again` is the recursor's step
 // with an ih that drops its proof.
@@ -105,7 +105,7 @@ theorem count_down_bounded(): Fun::Bounded([Word(64), Word(64)], count_down_meas
 }
 
 theorem count_down_loops(): Fun::MeasuredHolds([Word(64), Word(64)], Word(64), count_down_world(), count_down,
-    Fun::lower_measured(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world())) {
-    Fun::measured_sound(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), count_down, count_down_measure,
+    Fun::lower_measured([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0)) {
+    Fun::measured_sound([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0, count_down, count_down_measure,
         count_down_bounded(), count_down_guarded())
 }
