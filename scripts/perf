@@ -108,15 +108,15 @@ CORPUS = {
         ("lib/std/bitvec/bitvec.hthr", []),
         ("lib/std/algebra/algebra.hthr", []),
         showcase("calc_parser"),
-        ("lib/certgen/ir_v1.hthr", ["lib/std"]),
         ("lib/native/function_ir/function_ir.hthr", ["lib/std"]),
         ("lib/std/arch/x86_64/x86_64.hthr", ["lib/std"]),
+        # The two heaviest subjects of the library gate on 2026-11-11: the
+        # native compiler's correctness proof and the reals. (`lib/certgen`
+        # was here until the folder left the library; a snapshot of the full
+        # corpus failed on its missing file.)
+        ("lib/native/native_compile_correct.hthr", []),
+        ("lib/std/analysis/closed_interval.hthr", []),
         X86_CERTIFICATE,
-        # lib/certgen/certgen_code.hthr is not in the corpus: it has no imports and
-        # elaborates only after a test-only support prelude and ir_v1 in
-        # process (crates/elab/tests/certgen_cert.rs), so the CLI refuses it
-        # with 83 errors on any machine (2026-09-17). Its cost is the
-        # certgen_* rows of the suite section.
     ],
 }
 
