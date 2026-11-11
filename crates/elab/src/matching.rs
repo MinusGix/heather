@@ -677,7 +677,107 @@ pub(crate) fn synthesize_motive(
     if let Some(motive) = abstract_scrut(&exposed, scrutinee, &rewrap) {
         return motive;
     }
+    if let Some(motive) = abstract_below(elab, cx, expected, scrutinee, scrutinee_type, scrutinee_level, span) {
+        return motive;
+    }
     expected.shift_local(1)
+}
+
+/// How many type formers the last rung reads below: `Π w. (P → Q) × (Q → P)`
+/// over stuck `P`, `Q` is four.
+const BELOW_DEPTH: u32 = 6;
+
+/// The last rung (`docs/goal-motive-synthesis-design.md` §4.5): the goal
+/// read below its binders. A goal that is a relation or an `↔` over a call
+/// (`alt(a, b) ≈ Alt(a, b)`) is, reduced, a `Π` or `Σ` whose stuck positions
+/// sit in codomains and components, where §4.3's one layer does not look.
+/// Each former is reduced in its own context, the positions it is stuck on
+/// are brought back to `Γ` (one that mentions a binder it sits under is no
+/// candidate), and those that convert to the scrutinee are abstracted in the
+/// reduced goal. Reached only where every other rung found nothing, so no
+/// motive they find changes.
+fn abstract_below(
+    elab: &impl MotiveSynthesisElab,
+    cx: &Cx,
+    expected: &Type,
+    scrutinee: &Term,
+    scrutinee_type: &Type,
+    scrutinee_level: &Level,
+    span: Span,
+) -> Option<Type> {
+    let mut candidates = Vec::new();
+    let mut budget = STUCK_CANDIDATES;
+    let below = expose_below(elab, cx, expected, span, BELOW_DEPTH, 0, &mut candidates, &mut budget);
+    candidates.dedup();
+    let hits: Vec<Term> = candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate == scrutinee
+                || elab.motive_candidate_converts(cx, candidate, scrutinee, scrutinee_type, scrutinee_level)
+        })
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+    below.abstract_local_any(&hits)
+}
+
+/// `ty` with its term positions reduced, below `Π` codomains and `Σ`
+/// components to `depth` formers; `under` counts the binders passed, and a
+/// stuck position found below them is recorded as it reads in the outer
+/// context. A position that does not reduce is left as written.
+#[allow(clippy::too_many_arguments)]
+fn expose_below(
+    elab: &impl MotiveSynthesisElab,
+    cx: &Cx,
+    ty: &Type,
+    span: Span,
+    depth: u32,
+    under: u32,
+    out: &mut Vec<Term>,
+    budget: &mut u32,
+) -> Type {
+    let Some(head) = elab.read_motive_type(cx, ty, span) else {
+        return ty.clone();
+    };
+    let mut note = |term: &Term, budget: &mut u32| {
+        let mut found = Vec::new();
+        stuck_scrutinees(term, &mut found, budget);
+        for candidate in found {
+            if let Some(outer) = crate::unification::strengthen_tm(&cx.gamma, &candidate, under) {
+                out.push(outer);
+            }
+        }
+    };
+    match head {
+        Type::Id { level, ty, lhs, rhs } => {
+            let lhs = elab.read_motive_term(cx, &lhs, span).unwrap_or(lhs);
+            let rhs = elab.read_motive_term(cx, &rhs, span).unwrap_or(rhs);
+            note(&lhs, budget);
+            note(&rhs, budget);
+            Type::Id { level, ty, lhs, rhs }
+        }
+        Type::El { level, tm } => {
+            let tm = elab.read_motive_term(cx, &tm, span).unwrap_or(tm);
+            note(&tm, budget);
+            Type::El { level, tm }
+        }
+        Type::Pi { dom_level, cod_level, dom, cod } if depth > 0 => {
+            let mut inner = cx.clone();
+            inner.push(format!("__below_{under}"), (*dom).clone(), dom_level.clone());
+            let new_dom = expose_below(elab, cx, &dom, span, depth - 1, under, out, budget);
+            let new_cod = expose_below(elab, &inner, &cod, span, depth - 1, under + 1, out, budget);
+            Type::Pi { dom_level, cod_level, dom: Rc::new(new_dom), cod: Rc::new(new_cod) }
+        }
+        Type::Sigma { fst_level, snd_level, fst, snd } if depth > 0 => {
+            let mut inner = cx.clone();
+            inner.push(format!("__below_{under}"), (*fst).clone(), fst_level.clone());
+            let new_fst = expose_below(elab, cx, &fst, span, depth - 1, under, out, budget);
+            let new_snd = expose_below(elab, &inner, &snd, span, depth - 1, under + 1, out, budget);
+            Type::Sigma { fst_level, snd_level, fst: Rc::new(new_fst), snd: Rc::new(new_snd) }
+        }
+        head => head,
+    }
 }
 
 fn abstract_stuck(

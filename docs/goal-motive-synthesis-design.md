@@ -151,6 +151,45 @@ candidate affordable. It is also the *right* set: what a `match` is splitting
 on is what its goal is blocked on. Everything that converts is abstracted in
 one pass (`abstract_local_any`), so every spelling becomes the same `z`.
 
+### 4.5 The goal read below its binders
+
+`issues/case-split-on-a-definitions-tests.md`, 2026-11-11. §4.3 reads one
+layer and no codomain, which is right for an equation and leaves out the
+goals a relation or an `↔` unfolds to. `Regex::alt(a, b) ≈ Alt(a, b)` is,
+reduced, `Π w. (alt(a, b).Denotes(w) → …) × (… → alt(a, b).Denotes(w))`:
+every position stuck on `a.is_no_match()` is in a codomain or a component.
+With no rung reaching them, `match h: a.is_no_match()` left the arms the
+goal as written, and each such definition was written twice, once with its
+tests as parameters (`alt_at`), so that a theorem could take them apart as
+variables.
+
+The last rung, tried only when every rung above found nothing
+(`abstract_below`): each former is reduced in its own context, through `Π`
+codomains and `Σ` components to a fixed depth; the positions each reduced
+term is stuck on are collected as §4.4 collects them and brought back to
+`Γ` by strengthening, so one that mentions a binder it sits under is no
+candidate; those that convert to the scrutinee are abstracted, all at once,
+in the reduced goal. The motive's instance at the scrutinee is the goal
+reduced, which converts to the goal, and the kernel is asked as for every
+other rung.
+
+§4.3's objection to codomains was scope: a scrutinee scoped in `Γ` does not
+occur under a binder unshifted. The abstraction shifts its patterns as it
+descends, so the objection is to the *candidates*, and strengthening
+answers it.
+
+What it does not reach, each pinned as a refusal in
+`lib/_tests/std/core/match_motive_below_tests.hthr`:
+
+- a test that mentions a binder of the goal (split where the binder is in
+  scope);
+- a call that is the argument of a variable head, `P(pick(n, a, a))`:
+  that is a weak head normal form, and nothing is stuck;
+- a goal that also writes the test. §4.1 finds the written occurrence and
+  returns, so the call beside it is not specialised. Making the rungs
+  cumulative would change motives that are found today, which this round
+  does not do.
+
 ## 5. Mechanism B: rebuilding the value around `z`
 
 `field_rewrap` reads a scrutinee as a constructor field and says what
