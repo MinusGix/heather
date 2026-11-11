@@ -30,6 +30,31 @@ theorem in_a_calc<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = (ys.len() 
     }
 }
 
+// A call at a constructor computes to its arm with the recursive call
+// written as a call, so a law over that call matches it: a tail call on an
+// accumulator (`foldl`), and a recursion on `Nat`.
+theorem computed_tail_call<A, B>(t: List<A>, a: A, f, g: B → A → B, z: B,
+    e: (w: B) → t.foldl(f, w) = t.foldl(g, w), h: f(z, a) = g(z, a)): Cons(a, t).foldl(f, z) = Cons(a, t).foldl(g, z)
+{
+    simp_only(h, e)
+}
+
+fn sum_below(n: Nat, f: Nat → Nat) → Nat { match n { Zero => 0, Succ(m) => sum_below(m, f) + f(m) } }
+
+theorem computed_nat_recursion(m: Nat, f, g: Nat → Nat, e: sum_below(m, f) = sum_below(m, g), h: f(m) = g(m)):
+    sum_below(Succ(m), f) = sum_below(Succ(m), g)
+{
+    simp_only(e, h)
+}
+
+// What is left is spelled as the calls it holds.
+// expect-error: foldl(t, f, g(z, a))
+theorem computed_left_spelled<A, B>(t: List<A>, a: A, f, g: B → A → B, z: B, h: f(z, a) = g(z, a)):
+    Cons(a, t).foldl(f, z) = Cons(a, t).foldl(g, z)
+{
+    simp_only(h)
+}
+
 // ---------------------------------------------------------------------------
 // Side conditions: a hypothesis in scope, a `let`, or `discharge :=`.
 

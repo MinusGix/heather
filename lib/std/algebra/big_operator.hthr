@@ -71,7 +71,7 @@ theorem MonoidRel::range_cong(n: Nat, f, g: Nat → A):
 theorem MonoidRel::range_ext(n: Nat, f, g: Nat → A, h: (k: Nat) → f(k) = g(k)): MonoidRel::range(op, n, f) = MonoidRel::range(op, n, g) {
     match n {
         Zero => refl,
-        Succ(m) => simp_only(h(m), then := j(MonoidRel::range_ext(op, m, f, g, h), λ w _ => MonoidRel::range(op, m, f) ∙ g(m) = w ∙ g(m), refl)),
+        Succ(m) => simp_only(MonoidRel::range_ext(op, m, f, g, h), h(m)),
     }
 }
 

@@ -866,7 +866,12 @@ fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<T
     let mut fired = false;
     for reduct in oracle.unfold(&cx.gamma, call, Unfold::RecursiveArm) {
         if eliminator_headed(&reduct) {
-            if !fired {
+            // The recursion firing on a constructor selects an arm. Its
+            // reduct may itself be the recursion, as a tail call on an
+            // accumulator is (`foldl`'s arm is `t.foldl(f, f(z, a))`), so
+            // that is read off the eliminator and not off the whnf.
+            let fires = matches!(crate::spelling::app_spine(&reduct).0, Term::ElimWf { scrut, .. } if matches!(&**scrut, Term::Supf { .. }));
+            if !fired && !fires {
                 // The kernel's own answer says whether an arm is selected
                 // at all: a match stuck on a neutral leaves the call.
                 let selected = oracle.bounded(512).whnf_term_opaque(&cx.gamma, &reduct).ok()?;
