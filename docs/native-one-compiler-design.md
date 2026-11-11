@@ -1,7 +1,7 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. U1 is built (§3). Owner:
+export"); this note scopes it. U1 and U2 are built (§3). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -106,14 +106,27 @@ is a `runtime fn`, compiled once and called.
   the program holds between statements (`Target::Held`) is kept by a
   word stored below its frame (`held_stack_store`), so it is kept by
   `Wrote` (`Star::invariant`): this is where U1 is used.
-- *Room.* Each activation keeps `72 * functions + 8` bytes below what
-  its procedure calls need; the theorem's stack premise grows by that
-  (`Source::stack_need`).
+- *Room.* A function's own frame and its calls of other functions need
+  stack below the activation that calls it, a fixed amount per function
+  of the program. The theorem's stack premise grows by that: the depth of
+  procedure calls times a frame, plus the functions' term
+  (`Target.roomy`, and `deep` of `native_compile_correct`).
 - *Checks.* The compile checks the functions evaluable
   (`program_evaluable`), each call's callee and arity, and that the
   result is apart from what is live after it; a region with a call is
   scoped like one with a node that reads the arguments and writes the
   result.
+- *Placement.* Where a function's values go is the function compiler's
+  proposal (`plan_program`), and it travels with the words' homes
+  (`Homes.places`, `Homes::placed`): untrusted like them, checked by the
+  functions' lowering (`Prog::links`). With none proposed the functions
+  do not link, and the refusal says so.
+- *`write-elf`.* The source's literal spells its functions; the
+  heuristic runs once, on the fork, and the certificate states the
+  linking of the functions onto the program as one equation, so today a
+  function is as large as one declaration's fuel lowers
+  (issues/native-function-emission-in-parts.md is the same limit on the
+  other door, and its remedy serves both).
 
 ### 2.3 A buffer has one home, whoever lends it
 
@@ -170,9 +183,14 @@ Each is a PR and ends with something that runs.
   residency are its corollaries (`wrote_unchanged`, `wrote_resident`), and
   the earlier theorem is `compiled_returns_keeps`. Nothing emitted moved:
   every linked export recertifies with its bytes unchanged.
-- **U2. Programs call functions.** `Source`'s `Call` compiled as §2.2.
-  *Runs:* a `write-elf` tool that calls a `runtime fn`, tested as the tools
-  are.
+- **U2. Programs call functions.** *Built 2026-11-11.* `Source`'s `Call`
+  compiled as §2.2: `Prog::function_call` and `Prog::links`
+  (`native_compile.hthr`), the call's run from the function's contract
+  (`Target::functions_run`, `native_compile_function.hthr`), and
+  `native_compile_correct` over a source with functions, with or without
+  procedures. *Runs:* tr with each byte through a called function, beside
+  GNU's; a tool calling a `runtime fn` that calls another; a procedure and
+  a function in one file (`crates/cli/tests/native_tools.rs`).
 - **U3. Buffers read through one home.** The function compiler reads a
   lent span under a path-known comparison; `Call` passes buffers; `rt`
   lowers `Get` and `Len`. *Runs:* a tool that reads its input into a buffer

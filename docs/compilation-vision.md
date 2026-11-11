@@ -217,7 +217,9 @@ optimization that uses it is proved once under it as a hypothesis.
   `compile-x86` share FunctionIR and the region lowering and grew apart
   above it. The direction is one compiler of functions: a frame, System V
   registers, buffers lent, a body that may have effects. A pure function,
-  a program's `main` and an export are its cases.
+  a program's `main` and an export are its cases. The first joint is
+  built: a program's call of a `runtime fn` is a CALL of the function
+  compiler's code in the same file, proved from that function's contract.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

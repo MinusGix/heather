@@ -548,4 +548,7 @@ The read half's design is written (`docs/native-library-exports-design.md`).
 Minus's answer (2026-11-11) was "unify first and then export": the program
 compiler and the function compiler are joined first, in the rounds of
 `docs/native-one-compiler-design.md`, and the export is the last of them.
+Its first two rounds are built (2026-11-11): a function's contract states
+the stores it may make, and a `write-elf` program calls functions compiled
+into the same file.
 
