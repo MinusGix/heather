@@ -30,8 +30,9 @@
 //!   `Arc` handle held elsewhere makes an unshared node look shared, which
 //!   costs a table entry and nothing else.
 //!
-//! The table is allocated on the first shared pair, so a comparison of
-//! unshared syntax (most of them) costs the derived walk and no more. Debug
+//! The memo is a [`FewMap`]: a comparison of unshared syntax (most of them)
+//! costs the derived walk and no more, and one that meets a few shared pairs
+//! (most of the rest) records them without allocating. Debug
 //! builds compare one level again behind a sample of hits, as `subst.rs`
 //! does for its own memo.
 //!
@@ -43,7 +44,7 @@ use std::sync::Arc as Rc;
 
 use crate::level::Level;
 use crate::term::*;
-use crate::value::PtrMap;
+use crate::few_map::FewMap;
 
 /// Equality threading one comparison's [`PairMemo`].
 pub(crate) trait SharedEq {
@@ -54,7 +55,7 @@ pub(crate) trait SharedEq {
 /// did, for [`crate::stats`].
 #[derive(Default)]
 pub(crate) struct PairMemo {
-    equal: PtrMap<(usize, usize), ()>,
+    equal: FewMap<(usize, usize), ()>,
     nodes: u64,
     hits: u64,
 }

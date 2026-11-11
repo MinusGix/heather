@@ -81,7 +81,7 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::typing::ity::ITy;
-use crate::value::{self, shift::Outer, TmClo, TyClo, ValueArena, VTy};
+use crate::value::{self, shift::Outer, TyClo, ValueArena, VTy};
 #[cfg(feature = "value-metrics")]
 use crate::value::ValueMetrics;
 
@@ -186,7 +186,7 @@ pub(crate) struct ClosedPairs {
     /// to ([`GlobalCtx::withheld`]), and a pair convertible by unfolding a
     /// definition is not one where that definition is withheld.
     withheld: Option<Rc<crate::term::Withheld>>,
-    pairs: HashMap<ClosedKey, (Kept, Kept), std::hash::BuildHasherDefault<PairHasher>>,
+    pairs: crate::value::PtrMap<ClosedKey, (Kept, Kept)>,
 }
 
 /// What a [`ClosedPairs`] verdict is a verdict of: the two nodes
@@ -228,41 +228,6 @@ impl ClosedPairs {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b) || a == b,
             _ => false,
         }
-    }
-}
-
-/// Address pairs are this process's own allocations, not chosen input: a
-/// multiply mix, folded so the table's low index bits see the high ones
-/// (an aligned address has none of its own).
-#[derive(Default)]
-pub(crate) struct PairHasher(u64);
-
-impl std::hash::Hasher for PairHasher {
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0.rotate_left(26)
-    }
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.write_usize(usize::from(b));
-        }
-    }
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.0 = (self.0.rotate_left(5) ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    }
-    #[inline]
-    fn write_u8(&mut self, n: u8) {
-        self.write_usize(usize::from(n));
-    }
-    #[inline]
-    fn write_u32(&mut self, n: u32) {
-        self.write_usize(n as usize);
-    }
-    #[inline]
-    fn write_u64(&mut self, n: u64) {
-        self.write_usize(n as usize);
     }
 }
 
@@ -907,10 +872,6 @@ struct Env<'v> {
     /// `lib/certgen/ir_v1.hthr` check (issues/context-representation-clones.md).
     gamma: LocalCtx,
     layer: Layer,
-    /// The local environment of the value domain: entry `j` from the outer
-    /// end is the neutral variable at level `j`, so pushing a binder assigns
-    /// the level `gamma.entries.len()` and never renumbers anything.
-    rho: value::Env<'v>,
     /// The entry types of the binders **conversion itself pushed**, as domain
     /// objects, innermost first: those are the ones with no syntax in
     /// `gamma`. Everything older than `vbase` is still syntax there and is
@@ -973,16 +934,6 @@ impl<'v> TyEnv<'v> {
     }
 }
 
-/// The value-domain reading of a syntactic Γ: the identity environment of
-/// its variables, and each entry's type as a closure over the *prefix* it is
-/// scoped in.
-fn value_scope<'v>(arena: &'v ValueArena<'v>, gamma: &LocalCtx) -> (value::Env<'v>, TyEnv<'v>) {
-    (
-        value::Env::identity(arena, gamma.entries.len() as u32),
-        TyEnv::empty(),
-    )
-}
-
 impl<'v> Env<'v> {
     fn new(
         arena: &'v ValueArena<'v>,
@@ -1002,18 +953,25 @@ impl<'v> Env<'v> {
         layer: Layer,
         cache: Rc<GlobalCache>,
     ) -> Env<'v> {
-        let (rho, vtys) = value_scope(arena, gamma);
         Env {
             arena,
             psi: Rc::new(psi.clone()),
             cache,
             gamma: gamma.clone(),
             layer,
-            rho,
-            vtys,
+            vtys: TyEnv::empty(),
             vbase: gamma.entries.len() as u32,
             tele: (0, 0, 0),
         }
+    }
+
+    /// The local environment of the value domain: the identity environment
+    /// of Γ, entry `j` from the outer end the neutral variable at level `j`.
+    /// It is a length ([`value::Env::identity`]), so the scope does not
+    /// carry it: pushing a binder is pushing Γ, and no outer shift moves a
+    /// variable.
+    fn rho(&self) -> value::Env<'v> {
+        value::Env::identity(self.gamma.entries.len() as u32)
     }
 
     fn with_layer(&self, layer: Layer) -> Env<'v> {
@@ -1025,9 +983,8 @@ impl<'v> Env<'v> {
     /// scope is rebuilt from scratch: a different Γ is a different set of
     /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env<'v> {
-        let (rho, vtys) = value_scope(self.arena, &gamma);
         let vbase = gamma.entries.len() as u32;
-        Env { gamma, layer, rho, vtys, vbase, tele: (0, 0, 0), ..self.clone() }
+        Env { gamma, layer, vtys: TyEnv::empty(), vbase, tele: (0, 0, 0), ..self.clone() }
     }
 
     /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
@@ -1038,16 +995,12 @@ impl<'v> Env<'v> {
     /// (only [`Env<'v>::in_ctx`] and [`Env<'v>::new`] do): nothing reads it but the
     /// length and the base.
     fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env<'v> {
-        let vty = self.arena.ty(TyClo::new(self.rho, Rc::clone(&ty)));
+        let vty = self.arena.ty(TyClo::new(self.rho(), Rc::clone(&ty)));
         self.push_entry(ty, vty, level)
     }
 
     fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
-        let var = e.arena.tm(TmClo::val(e.arena.val(value::Val::var(e.arena,
-            self.gamma.entries.len() as u32,
-        ))));
-        e.rho = e.rho.push(e.arena, var);
         e.vtys = e.vtys.push(vty, level.clone());
         e.gamma.entries.push(CtxEntry { ty, level });
         e
@@ -1074,7 +1027,6 @@ impl<'v> Env<'v> {
             cache,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
-            rho: value::shift::env(&self.rho, o),
             vtys,
             vbase: self.vbase,
             tele: (tu, tg, 0),
@@ -2058,7 +2010,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// compare type-directed.
     fn tm(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
         self.spend()?;
-        if D::tm_identity_fast(a, b) {
+        if D::tm_identity_fast(env, a, b) {
             return Ok(());
         }
         let key = D::tm_memo_key(env, a, b);
@@ -2373,7 +2325,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         let result = (|| {
             loop {
                 self.spend()?;
-                if D::tm_identity_fast(&a, &b) {
+                if D::tm_identity_fast(env, &a, &b) {
                     return Ok(());
                 }
                 let key = D::tm_memo_key(env, &a, &b);

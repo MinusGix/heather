@@ -9559,11 +9559,17 @@ impl Elaborator {
     pub(crate) fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
         let idx = (cx.names.len() - 1 - pos) as u32;
         let entry = &cx.gamma.entries[pos];
-        (
-            Term::Var(LocalVar(idx)),
-            entry.ty.shift_local(idx + 1),
-            entry.level.clone(),
-        )
+        let key = (Rc::as_ptr(&entry.ty) as usize, idx + 1);
+        let known = self.attempt.weakened_entries.borrow().get(&key).map(|(_, ty)| Type::clone(ty));
+        let ty = known.unwrap_or_else(|| {
+            let ty = entry.ty.shift_local(idx + 1);
+            self.attempt
+                .weakened_entries
+                .borrow_mut()
+                .insert(key, (Rc::clone(&entry.ty), Rc::new(ty.clone())));
+            ty
+        });
+        (Term::Var(LocalVar(idx)), ty, entry.level.clone())
     }
 
     fn operator_fallback_note(&self) -> Option<String> {

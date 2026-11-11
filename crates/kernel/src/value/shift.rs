@@ -152,8 +152,10 @@ pub fn env<'v>(e: &Env<'v>, o: Outer<'v>) -> Env<'v> {
     if o.is_none() {
         return *e;
     }
-    let mut out = Env::at(e.gshift());
-    for c in e.to_vec() {
+    // The identity prefix is variables, which no outer shift moves.
+    let (identity, held) = e.held();
+    let mut out = Env::identity(identity).with_gshift(e.gshift());
+    for c in held {
         out = out.push(o.arena, tm_clo(c, o));
     }
     out

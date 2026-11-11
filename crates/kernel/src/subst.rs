@@ -155,7 +155,7 @@
 use std::sync::Arc as Rc;
 
 use crate::bounds;
-use crate::value::PtrMap;
+use crate::few_map::FewMap;
 use crate::level::Level;
 use crate::term::{
     Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
@@ -225,94 +225,16 @@ impl GlobalSubst {
 /// rebuilds exactly as it would have). The first `Rc` of each entry is the
 /// keep-alive for the address in its key.
 ///
-/// The tables come from a per-thread pool ([`MEMO_POOL`]) and go back to it,
-/// emptied with their capacity kept, when the call ends: a traversal that
-/// memoizes anything otherwise grew both from empty, rehash by rehash, on
-/// every call (`issues/subst-per-call-allocations.md`). Emptying drops the
-/// keep-alives exactly when dropping the memo did, so no address outlives
-/// its call in a pooled table.
+/// Most calls record one or two nodes and a few record thousands, so each
+/// table is a [`FewMap`]: a call that stays small allocates nothing and is
+/// dropped by dropping its entries. (The tables were hash tables kept in a
+/// per-thread pool; emptying one cost its capacity, which was the largest
+/// call's, on every call that recorded anything:
+/// `issues/per-call-memos-pay-table-capacity.md`.)
+#[derive(Default)]
 struct NodeMemo {
-    terms: TermMemo,
-    types: TypeMemo,
-}
-
-type TermMemo = PtrMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>;
-type TypeMemo = PtrMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>;
-
-/// Tables kept per thread: enough for the nesting a traversal reaches (a
-/// payload lifted inside a substitution starts its own shifts), not one per
-/// call ever made.
-const MEMO_POOL_TABLES: usize = 8;
-
-/// The largest table the pool keeps. Emptying a table costs its capacity,
-/// not its length, so one huge call's table would tax every small call
-/// after it; past this it is freed, as before the pool.
-const MEMO_POOL_MAX_CAPACITY: usize = 1 << 12;
-
-thread_local! {
-    static MEMO_POOL: std::cell::RefCell<(Vec<TermMemo>, Vec<TypeMemo>)> =
-        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
-}
-
-impl Default for NodeMemo {
-    fn default() -> NodeMemo {
-        // `try_with`: a traversal run from another thread-local's destructor
-        // gets fresh tables rather than a panic.
-        MEMO_POOL
-            .try_with(|pool| {
-                let mut pool = pool.borrow_mut();
-                NodeMemo {
-                    terms: pool.0.pop().unwrap_or_default(),
-                    types: pool.1.pop().unwrap_or_default(),
-                }
-            })
-            .unwrap_or_else(|_| NodeMemo { terms: PtrMap::default(), types: PtrMap::default() })
-    }
-}
-
-impl Drop for NodeMemo {
-    fn drop(&mut self) {
-        // Emptied before the pool is borrowed: dropping the keep-alives runs
-        // arbitrary `Drop`s, none of which may find the pool borrowed.
-        fn keep<K, V>(table: &mut PtrMap<K, V>) -> bool {
-            let cap = table.capacity();
-            if cap == 0 || cap > MEMO_POOL_MAX_CAPACITY {
-                return false;
-            }
-            // `clear` on an empty table still sweeps its control bytes.
-            if !table.is_empty() {
-                table.clear();
-            }
-            true
-        }
-        let keep_terms = keep(&mut self.terms);
-        let keep_types = keep(&mut self.types);
-        if !keep_terms && !keep_types {
-            return;
-        }
-        // Only emptied tables are moved in; a table the pool has no room for
-        // is handed back out and freed after the borrow ends.
-        let terms = keep_terms.then(|| std::mem::take(&mut self.terms));
-        let types = keep_types.then(|| std::mem::take(&mut self.types));
-        let _spare = MEMO_POOL.try_with(|pool| {
-            let mut pool = pool.borrow_mut();
-            let terms = match terms {
-                Some(t) if pool.0.len() < MEMO_POOL_TABLES => {
-                    pool.0.push(t);
-                    None
-                }
-                t => t,
-            };
-            let types = match types {
-                Some(t) if pool.1.len() < MEMO_POOL_TABLES => {
-                    pool.1.push(t);
-                    None
-                }
-                t => t,
-            };
-            (terms, types)
-        });
-    }
+    terms: FewMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>,
+    types: FewMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1837,8 +1759,8 @@ struct SubstLocal<'a> {
     /// that occurs many times under the same binders (a readback's
     /// environment entry, `issues/elab-whnf-family-transport-cost.md`)
     /// shares one lifted copy instead of rewalking the payload per
-    /// occurrence. Allocated at the first occurrence under a binder.
-    lifted: Option<std::collections::HashMap<(usize, Depths), Term>>,
+    /// occurrence.
+    lifted: FewMap<(usize, Depths), Term>,
     memo: NodeMemo,
 }
 
@@ -1867,14 +1789,14 @@ impl Mapper for SubstLocal<'_> {
         let payload = &self.delta.terms[n - 1 - i];
         let out = if at == Depths::default() {
             (**payload).clone()
-        } else if let Some(hit) = self.lifted.as_ref().and_then(|m| m.get(&(i, at))) {
+        } else if let Some(hit) = self.lifted.get(&(i, at)) {
             hit.clone()
         } else {
             let out = payload
                 .shift_local(at.local)
                 .shift_global(at.global)
                 .shift_univ(at.univ);
-            self.lifted.get_or_insert_with(Default::default).insert((i, at), out.clone());
+            self.lifted.insert((i, at), out.clone());
             out
         };
         // An *identity* substitution sends this variable to itself, and that
@@ -2009,10 +1931,10 @@ struct AbstractLocal<'a> {
     /// goal spells two ways, and catching only one of them is worse than
     /// catching neither.
     pats: &'a [(Term, Term)],
-    /// `witness[k]` is `pats` weakened past `k` further local binders — each
-    /// `pat` by `k + 1` (it is scoped in `Γ`, and `z` is one more), each
-    /// `rep` by `k` (it already lives under `z`). Memoized: the walk asks at
-    /// every node.
+    /// `witness[k]` is `pats` weakened past `k` further local binders, `pat`
+    /// and `rep` alike: the walk reads the goal as it stands, scoped in `Γ`,
+    /// where `pat` is scoped, and what it builds is scoped in `Γ, z`, where
+    /// `rep` is. Memoized: the walk asks at every node.
     witness: Vec<Vec<(Term, Term)>>,
     /// The same below binders of the global or universe context too (a code
     /// eliminator's branches, `letbox`'s body, a context abstraction), keyed
@@ -2036,6 +1958,31 @@ struct AbstractLocal<'a> {
     /// (`docs/mengine-survey.md` §4.2). A selection numbers occurrences by
     /// path, so it walks the tree.
     memo: Option<NodeMemo>,
+    /// Whether every pattern mentions a variable of `Γ`. An occurrence under
+    /// `k` binders then mentions a variable past them, so a subtree that
+    /// mentions none ([`bounds::skip_type`]) holds no occurrence, and making
+    /// room for `z` does not change it either: it is returned as it is.
+    open_pats: bool,
+}
+
+impl<'a> AbstractLocal<'a> {
+    fn new(pats: &'a [(Term, Term)], select: Option<&'a [u32]>) -> AbstractLocal<'a> {
+        let open_pats = pats
+            .iter()
+            .all(|(pat, _)| bounds::term_local_use(&Rc::new(pat.clone())).bound > 0);
+        AbstractLocal {
+            pats,
+            witness: Vec::new(),
+            witness_under: Vec::new(),
+            hits: 0,
+            select,
+            seen: 0,
+            changes: 0,
+            // A selection numbers occurrences by path, so it walks the tree.
+            memo: select.is_none().then(NodeMemo::default),
+            open_pats,
+        }
+    }
 }
 
 impl Mapper for AbstractLocal<'_> {
@@ -2050,6 +1997,34 @@ impl Mapper for AbstractLocal<'_> {
         self.memo.as_mut()
     }
 
+    // The walk makes room for `z` as it goes ([`ShiftLocal`] by one), where
+    // it used to walk a weakened copy of the goal: one traversal and one
+    // result, and nothing built for the parts it can skip.
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+        if v.0 < at.local {
+            return Term::Var(v);
+        }
+        self.note();
+        Term::Var(LocalVar(v.0 + 1))
+    }
+
+    fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        match tail {
+            SubstTail::Empty => (tail, Vec::new()),
+            SubstTail::Wk { len, ctx_var } => {
+                self.note();
+                (SubstTail::Wk { len: len + 1, ctx_var }, Vec::new())
+            }
+        }
+    }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        self.open_pats && bounds::skip_type(t, at.local)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        self.open_pats && bounds::skip_term(t, at.local)
+    }
+
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
         let row = if at.global == 0 && at.univ == 0 {
             while self.witness.len() as u32 <= at.local {
@@ -2057,7 +2032,7 @@ impl Mapper for AbstractLocal<'_> {
                 let row = self
                     .pats
                     .iter()
-                    .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
+                    .map(|(p, r)| (p.shift_local(i), r.shift_local(i)))
                     .collect();
                 self.witness.push(row);
             }
@@ -2072,7 +2047,7 @@ impl Mapper for AbstractLocal<'_> {
                     let row = self
                         .pats
                         .iter()
-                        .map(|(p, r)| (under(p, at.local + 1), under(r, at.local)))
+                        .map(|(p, r)| (under(p, at.local), under(r, at.local)))
                         .collect();
                     self.witness_under.push((at, row));
                     self.witness_under.len() - 1
@@ -2300,7 +2275,7 @@ macro_rules! ops {
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
             pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
-                $map(self, &mut SubstLocal { delta, changes: 0, lifted: None, memo: NodeMemo::default() }, Depths::default())
+                $map(self, &mut SubstLocal { delta, changes: 0, lifted: FewMap::default(), memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Apply a global substitution `σ`.
@@ -2478,11 +2453,8 @@ impl Type {
     pub fn abstract_local_at(&self, pats: &[Term], at: &[u32]) -> (Option<Type>, u32) {
         let z = Term::Var(LocalVar(0));
         let pats: Vec<(Term, Term)> = pats.iter().map(|p| (p.clone(), z.clone())).collect();
-        let mut m = AbstractLocal {
-            pats: &pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: Some(at), seen: 0, changes: 0,
-            memo: None,
-        };
-        let out = map_type(&self.shift_local(1), &mut m, Depths::default());
+        let mut m = AbstractLocal::new(&pats, Some(at));
+        let out = map_type(self, &mut m, Depths::default());
         ((m.hits > 0).then_some(out), m.seen)
     }
 
@@ -2498,11 +2470,8 @@ impl Type {
     }
 
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
-        let mut m = AbstractLocal {
-            pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: None, seen: 0, changes: 0,
-            memo: Some(NodeMemo::default()),
-        };
-        let out = map_type(&self.shift_local(1), &mut m, Depths::default());
+        let mut m = AbstractLocal::new(pats, None);
+        let out = map_type(self, &mut m, Depths::default());
         (m.hits > 0).then_some(out)
     }
 }
@@ -2564,7 +2533,7 @@ impl LocalSubst {
 
     /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
     pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: None, memo: NodeMemo::default() }, Depths::default())
+        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: FewMap::default(), memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {

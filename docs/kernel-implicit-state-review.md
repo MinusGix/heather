@@ -38,8 +38,8 @@ below is a kernel change on a hot path, so each issue asks for
 
 ## 1. The value memo does not record the mode a value was forced in
 
-**Where.** `ValueArena` (`value.rs` ~295) memoizes forced closures by address
-(`term_cache`), closed closures by body identity (`closed_values`,
+**Where.** `ValueArena` (`value.rs` ~295) memoizes forced closures (in the closure's own
+`memo` word since 2026-11-10, a table `term_cache` by address before), closed closures by body identity (`closed_values`,
 `ValueArena::memo_closed`), and several per-closure classifications
 (`fold_classes`, `transducers`, `bit_types`). `Eval` (`eval.rs` ~255) carries
 the mode the forcing happens in: `transparent: bool` (~279), set by
@@ -90,7 +90,7 @@ assume determinism (`issues/elaboration-determinism.md`).
   becomes an `arena.extend(defs')` that asserts the new Ψ extends the old.
   Mechanical, and it fixes only the `Defs` half.
 - (b) **Record the mode per memo entry.** Store a mode bit beside each
-  `term_cache`/`closed_values` value. A transparent reader treats an opaque
+  closure memo and `closed_values` value. A transparent reader treats an opaque
   entry as a miss (or resumes it with one transparent step). It costs one
   bit per entry and a branch per hit, on the kernel's hottest lookup.
 - (c) **Make forcing an unfolding mode-independent.** Always force `n.unfold`
