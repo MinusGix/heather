@@ -435,6 +435,8 @@ fn Bool::eq_dec(self a, b: Bool) → a = b ∨ a ≠ b {
 
 instance(a, b: Bool) Decide<a = b> { dec := a.eq_dec(b), bit := or_bit(a.eq_dec(b)), reflects := or_bit_reflects(a.eq_dec(b)) }
 
+instance DecEq<Bool> { eq_dec := Bool::eq_dec }
+
 fn Bool::leb(self a: Bool) → Bool → Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }

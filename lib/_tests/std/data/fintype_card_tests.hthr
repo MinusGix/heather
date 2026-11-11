@@ -1,0 +1,77 @@
+// Probes of `lib/std/data/fintype_card.hthr` and the list lemmas under it:
+// cardinalities compared along maps, pigeonhole and its computed points, and
+// the chain bound, at closed and open types. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import perm; import sorting; import fin; import fintype; import fintype_card;
+
+// The cardinality does not depend on the enumeration: another order of the
+// same elements has the instance's length and is a rearrangement of it.
+theorem bool_other_order(): List::len<Bool>([True, False]) = Fintype::card<Bool>() {
+    Fintype::card_unique<Bool>([True, False],
+        And(λ m => match m { Inl(e) => absurd(e), Inr(n) => n }, And(λ m => m, trivial)),
+        λ b => match b { False => Inr(Inl(refl)), True => Inl(refl) })
+}
+
+theorem bool_rearranged(): Perm<Bool>([True, False], [False, True]) {
+    Fintype::enumeration_perm<Bool>([True, False],
+        And(λ m => match m { Inl(e) => absurd(e), Inr(n) => n }, And(λ m => m, trivial)),
+        λ b => match b { False => Inr(Inl(refl)), True => Inl(refl) })
+}
+
+// At open finite types: the instances' counts, and comparison along maps.
+theorem option_count<A: Fintype>(): Fintype::card<Option<A>>() = Succ(Fintype::card<A>()) { Fintype::card_option<A>() }
+theorem pair_count<A: Fintype, B: Fintype>(): Fintype::card<Pair<A, B>>() = Fintype::card<A>() * Fintype::card<B>() { Fintype::card_pair<A, B>() }
+theorem sum_count<A: Fintype, B: Fintype>(): Fintype::card<Or<A, B>>() = Fintype::card<A>() + Fintype::card<B>() { Fintype::card_or<A, B>() }
+
+theorem some_embeds<A: Fintype>(): Fintype::card<A>() <= Fintype::card<Option<A>>() {
+    Fintype::card_le_of_injective<A, Option<A>>(λ a => Some(a), λ x y e => Option::some_inj(x, y, e))
+}
+
+theorem swap_counts<A: Fintype, B: Fintype>(): Fintype::card<Pair<A, B>>() = Fintype::card<Pair<B, A>>() {
+    Fintype::card_eq_of_bijective<Pair<A, B>, Pair<B, A>>(λ q => q.swap(),
+        λ x y e => cong_fn(λ (q: Pair<B, A>) => q.swap(), e),
+        λ q => Exists(q.swap(), refl))
+}
+
+// Negative control: no injection from three points into two. The refutation
+// is the comparison itself, read at closed cardinalities.
+theorem no_injection(f: Fin(3) → Bool, inj: (x, y: Fin(3)) → f(x) = f(y) → x = y): False {
+    Fintype::card_le_of_injective<Fin(3), Bool>(f, inj)
+}
+
+// expect-error(mismatch)
+theorem no_injection_wrong(f: Fin(2) → Bool, inj: (x, y: Fin(2)) → f(x) = f(y) → x = y): False {
+    Fintype::card_le_of_injective<Fin(2), Bool>(f, inj)
+}
+
+// Pigeonhole at an open map, and the two points by evaluation at a closed one.
+theorem three_into_two(f: Fin(3) → Bool): Exists(λ (q: Pair<Fin(3), Fin(3)>) => ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd)) {
+    Fintype::pigeonhole<Fin(3), Bool>(f, trivial)
+}
+
+theorem collide(): Fintype::collision<Fin(3), Bool>(λ i => match i { FZ => True, FS(_) => False }) = Some(Pair(FS(FZ), FS(FS(FZ)))) { refl }
+theorem no_collision(): Fintype::collision<Bool, Bool>(λ b => !b) = None { refl }
+
+// expect-error(kernel)
+theorem collide_wrong(): Fintype::collision<Bool, Bool>(λ b => !b) = Some(Pair(False, True)) { refl }
+
+// A map into a type that is not smaller has no pigeonhole.
+// expect-error(mismatch)
+theorem two_into_two(f: Bool → Bool): Exists(λ (q: Pair<Bool, Bool>) => ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd)) {
+    Fintype::pigeonhole<Bool, Bool>(f, trivial)
+}
+
+// The chain bound: a strictly ascending list of Booleans has at most two
+// elements, whatever it is.
+fn below(a, b: Bool) → Type { a = False ∧ b = True }
+
+theorem bool_chain(xs: List<Bool>, s: xs.Sorted(below)): xs.len() <= 2 {
+    Fintype::chain_len_le<Bool>(below, λ a h => absurd(trans(sym(h.left), h.right)), λ a b c h k => And(h.left, k.right), xs, s)
+}
+
+// Repeats decide at a carrier with equality, and equality of indices decides.
+theorem has_repeat(): List::Dup<Nat>([1, 2, 1]) { Inl(Inr(Inl(refl))) }
+theorem repeat_found(): or_bit(List::nodup_dec<Nat>([1, 2, 1])) = False { refl }
+theorem no_repeat_found(): or_bit(List::nodup_dec<Nat>([1, 2, 3])) = True { refl }
+theorem index_eq(): or_bit(Fin::eq_dec(3, FS(FZ), FS(FZ))) = True { refl }
+theorem index_ne(): or_bit(Fin::eq_dec(3, FS(FZ), FZ)) = False { refl }

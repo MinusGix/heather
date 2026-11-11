@@ -507,3 +507,71 @@ theorem List::perm_iff_occurrences<A: DecEq>(self xs, ys: List<A>):
     Iff(mp := λ (p: Perm(xs, ys)) => λ (a: A) => xs.perm_occurrences(a, ys, p),
         mpr := xs.perm_of_occurrences(ys))
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate-free lists: counting without deciding equality. What a finite
+// type's cardinality stands on (lib/std/data/fintype_card.hthr).
+
+// A duplicate-free list whose members all lie in another is no longer than it.
+theorem List::nodup_sub_len<A>(self xs: List<A>): (ys: List<A>) → xs.NoDup() →
+    ((a: A) → Mem(a, xs) → Mem(a, ys)) → xs.len() <= ys.len()
+{
+    match xs {
+        Nil => λ ys d sub => trivial,
+        Cons(h, t) => λ ys d sub => match ys.picks_of_mem(h, sub(h, Inl(refl))) {
+            Exists(rest, pk) => rewrite(ys.picks_len(h, rest, pk),
+                t.nodup_sub_len(rest, d.right, λ a m => match ys.picks_mem_split(h, a, rest, pk, sub(a, Inr(m))) {
+                    Inl(e) => false_elim(d.left(rewrite(sym(e), m))),
+                    Inr(mr) => mr,
+                })),
+        },
+    }
+}
+
+// Removing one occurrence of an element keeps a list duplicate-free, and the
+// element is not among the rest.
+theorem List::picks_nodup<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) → ys.NoDup() → ¬Mem(x, rest) ∧ rest.NoDup() {
+    match ys {
+        Nil => λ rest pk d => false_elim(pk),
+        Cons(y, t) => λ rest pk d => match pk {
+            Inl(here) => rewrite(sym(here.right), rewrite(here.left, d)),
+            Inr(later) => (match rest as λ r => (match r as λ _ => Type { Nil => False, Cons(r1, rs) => y = r1 ∧ Picks(x, t, rs) }) → ¬Mem(x, r) ∧ r.NoDup() {
+                Nil => λ l => false_elim(l),
+                Cons(r1, rs) => λ l => {
+                    let ih = t.picks_nodup(x, rs, l.right, d.right);
+                    And(λ m => match m {
+                            Inl(e) => d.left(rewrite(l.left, rewrite(sym(e), t.picks_mem(x, rs, l.right)))),
+                            Inr(m2) => ih.left(m2),
+                        },
+                        And(λ m => d.left(rewrite(l.left, t.picks_mem_rest(x, r1, rs, l.right, m))), ih.right))
+                },
+            })(later),
+        },
+    }
+}
+
+// Two duplicate-free lists with the same members are rearrangements of each other.
+theorem List::nodup_perm<A>(self xs: List<A>): (ys: List<A>) → xs.NoDup() → ys.NoDup() →
+    ((a: A) → Mem(a, xs) → Mem(a, ys)) → ((a: A) → Mem(a, ys) → Mem(a, xs)) → Perm(xs, ys)
+{
+    match xs {
+        Nil => λ ys dx dy sub => match ys {
+            Nil => λ sup => trivial,
+            Cons(y, _) => λ sup => sup(y, Inl(refl)),
+        },
+        Cons(h, t) => λ ys dx dy sub sup => match ys.picks_of_mem(h, sub(h, Inl(refl))) {
+            Exists(rest, pk) => {
+                let rd = ys.picks_nodup(h, rest, pk, dy);
+                Exists(rest, And(pk, t.nodup_perm(rest, dx.right, rd.right,
+                    λ a m => match ys.picks_mem_split(h, a, rest, pk, sub(a, Inr(m))) {
+                        Inl(e) => false_elim(dx.left(rewrite(sym(e), m))),
+                        Inr(mr) => mr,
+                    },
+                    λ a m => match sup(a, ys.picks_mem_rest(h, a, rest, pk, m)) {
+                        Inl(e) => false_elim(rd.left(j(e, λ c q => Mem(c, rest), m))),
+                        Inr(mt) => mt,
+                    })))
+            },
+        },
+    }
+}

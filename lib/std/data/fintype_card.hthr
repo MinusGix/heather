@@ -1,0 +1,109 @@
+// Cardinality of finite types (issues/finite-cardinality-and-pigeonhole.md).
+//
+// `Fintype::card<A>()` is the length of the instance's enumeration. It does
+// not depend on the enumeration: every duplicate-free complete list has that
+// length and is a rearrangement of it. Injections, surjections and bijections
+// compare cardinalities, and none of this decides equality, because a
+// duplicate-free list inside another is no longer than it
+// (`List::nodup_sub_len`, by removing one element at a time).
+//
+// Pigeonhole needs equality decided at the codomain, to find the repeat. Its
+// theorem is opaque like every theorem; `Fintype::collision(f)` is the
+// function that evaluates to the two points.
+//
+// `Fintype::chain_len_le` is the bound iteration arguments use: a strictly
+// ascending chain in a finite type is no longer than the type.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import perm;
+import sorting;
+import fin;
+import fintype;
+
+// A duplicate-free list of a finite type's elements is no longer than the type.
+theorem Fintype::nodup_len_le<A: Fintype>(xs: List<A>, d: xs.NoDup()): xs.len() <= Fintype::card<A>() {
+    xs.nodup_sub_len(A.elems, d, λ a m => A.complete(a))
+}
+
+// The cardinality is the length of every duplicate-free complete list.
+theorem Fintype::card_unique<A: Fintype>(xs: List<A>, d: xs.NoDup(), all: (a: A) → Mem(a, xs)): xs.len() = Fintype::card<A>() {
+    Nat::le_antisym(xs.len(), Fintype::card<A>(), Fintype::nodup_len_le(xs, d), A.elems.nodup_sub_len(xs, A.nodup, λ a m => all(a)))
+}
+
+// ... and is a rearrangement of the instance's own.
+theorem Fintype::enumeration_perm<A: Fintype>(xs: List<A>, d: xs.NoDup(), all: (a: A) → Mem(a, xs)): Perm(xs, Fintype::enumerate<A>()) {
+    xs.nodup_perm(A.elems, d, A.nodup, λ a m => A.complete(a), λ a m => all(a))
+}
+
+// ---------------------------------------------------------------------------
+// Maps between finite types. Surjectivity is stated with its preimage.
+
+theorem Fintype::card_le_of_injective<A: Fintype, B: Fintype>(f: A → B, inj: (x, y: A) → f(x) = f(y) → x = y):
+    Fintype::card<A>() <= Fintype::card<B>()
+{
+    j(A.elems.len_map(f), λ n q => n <= Fintype::card<B>(), Fintype::nodup_len_le<B>(A.elems.map(f), A.elems.nodup_map(f, inj, A.nodup)))
+}
+
+theorem Fintype::card_le_of_surjective<A: Fintype, B: Fintype>(f: A → B, sur: (b: B) → Exists(λ (a: A) => f(a) = b)):
+    Fintype::card<B>() <= Fintype::card<A>()
+{
+    j(A.elems.len_map(f), λ n q => Fintype::card<B>() <= n, B.elems.nodup_sub_len(A.elems.map(f), B.nodup,
+        λ b m => match sur(b) { Exists(a, e) => j(e, λ c q => Mem(c, A.elems.map(f)), A.elems.mem_map(a, f, A.complete(a))) }))
+}
+
+theorem Fintype::card_eq_of_bijective<A: Fintype, B: Fintype>(f: A → B, inj: (x, y: A) → f(x) = f(y) → x = y,
+    sur: (b: B) → Exists(λ (a: A) => f(a) = b)): Fintype::card<A>() = Fintype::card<B>()
+{
+    Nat::le_antisym(Fintype::card<A>(), Fintype::card<B>(), Fintype::card_le_of_injective(f, inj), Fintype::card_le_of_surjective(f, sur))
+}
+
+// Pigeonhole: a map into a smaller finite type sends two different points to one.
+theorem Fintype::pigeonhole<A: Fintype, B: Fintype + DecEq>(f: A → B, small: Fintype::card<B>() < Fintype::card<A>()):
+    Exists(λ (q: Pair<A, A>) => ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd))
+{
+    match A.elems.map(f).nodup_dec() {
+        Inl(d) => false_elim(Nat::lt_irrefl(Fintype::card<B>(),
+            Nat::le_trans(Succ(Fintype::card<B>()), Fintype::card<A>(), Fintype::card<B>(), small,
+                j(A.elems.len_map(f), λ n q => n <= Fintype::card<B>(), Fintype::nodup_len_le<B>(A.elems.map(f), d))))),
+        Inr(u) => A.elems.dup_map(f, A.nodup, u),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The instances' cardinalities.
+
+theorem Fintype::card_option<A: Fintype>(): Fintype::card<Option<A>>() = Succ(Fintype::card<A>()) {
+    cong_fn(λ (n: Nat) => Succ(n), A.elems.len_map(λ (a: A) => Some(a)))
+}
+
+theorem Fintype::card_pair<A: Fintype, B: Fintype>(): Fintype::card<Pair<A, B>>() = Fintype::card<A>() * Fintype::card<B>() {
+    A.elems.len_product(B.elems)
+}
+
+theorem Fintype::card_or<A: Fintype, B: Fintype>(): Fintype::card<Or<A, B>>() = Fintype::card<A>() + Fintype::card<B>() {
+    trans((A.elems.map(λ (a: A) => Inl<A, B>(a))).len_append(B.elems.map(λ (b: B) => Inr<A, B>(b))),
+        rewrite(A.elems.len_map(λ (a: A) => Inl<A, B>(a)), rewrite(B.elems.len_map(λ (b: B) => Inr<A, B>(b)), refl)))
+}
+
+theorem Fintype::card_fin(n: Nat): Fintype::card<Fin(n)>() = n { Fin::len_all(n) }
+
+// A strictly ascending chain in a finite type is no longer than the type.
+theorem Fintype::chain_len_le<A: Fintype>(R: A → A → Type, irr: (a: A) → ¬R(a, a), tr: (a, b, c: A) → R(a, b) → R(b, c) → R(a, c),
+    xs: List<A>, s: xs.Sorted(R)): xs.len() <= Fintype::card<A>()
+{
+    Fintype::nodup_len_le(xs, xs.sorted_nodup(R, irr, tr, s))
+}
+
+// The two points, by evaluation.
+fn Fintype::collision<A: Fintype, B: DecEq>(f: A → B) → Option<Pair<A, A>> { A.elems.collision(f) }
+
+theorem Fintype::collision_sound<A: Fintype, B: DecEq>(f: A → B, q: Pair<A, A>, e: Fintype::collision<A, B>(f) = Some(q)):
+    ¬(q.fst = q.snd) ∧ f(q.fst) = f(q.snd)
+{
+    A.elems.collision_sound(f, q, A.nodup, e)
+}

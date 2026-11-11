@@ -413,3 +413,29 @@ instance<A: LinearOrder(R) + DecidableRel(R)>(R: A → A → Type) LinearOrder<L
     rel_antisym := λ xs ys h1 h2 => xs.lex_antisym(R, ys, h1, h2),
     rel_total := λ xs ys => xs.lex_total(R, ys),
 }
+
+// ---------------------------------------------------------------------------
+// Strict chains. `Sorted` at an irreflexive, transitive relation is a strictly
+// ascending chain; the two laws are arguments, so no order class is needed.
+
+// A list ascending along an irreflexive, transitive relation repeats nothing.
+theorem List::sorted_below<A>(R: A → A → Type, tr: (a, b, c: A) → R(a, b) → R(b, c) → R(a, c), h: A, self t: List<A>):
+    Cons(h, t).Sorted(R) → (b: A) → Mem(b, t) → R(h, b)
+{
+    match t {
+        Nil => λ s b m => false_elim(m),
+        Cons(h2, t2) => λ s b m => match m {
+            Inl(e) => j(sym(e), λ c q => R(h, c), s.left),
+            Inr(m2) => tr(h, h2, b, s.left, t2.sorted_below(R, tr, h2, s.right, b, m2)),
+        },
+    }
+}
+
+theorem List::sorted_nodup<A>(R: A → A → Type, irr: (a: A) → ¬R(a, a), tr: (a, b, c: A) → R(a, b) → R(b, c) → R(a, c), self xs: List<A>):
+    xs.Sorted(R) → xs.NoDup()
+{
+    match xs {
+        Nil => λ s => trivial,
+        Cons(h, t) => λ s => And(λ m => irr(h, t.sorted_below(R, tr, h, s, h, m)), t.sorted_nodup(R, irr, tr, s.right)),
+    }
+}
