@@ -492,6 +492,10 @@ fn name_suffix(index: &str) -> String {
 fn head_name(t: &Ty) -> Option<&str> {
     match &t.kind {
         TyKind::Nat => Some("Nat"),
+        // `Fin(n)` is a kernel former with no declaration, as `Nat` is a
+        // kernel type with none: its instances are `Fin::C`
+        // (issues/finite-types-and-enumeration.md).
+        TyKind::Fin(_) => Some("Fin"),
         TyKind::Named { name, .. } => Some(name),
         // An **applied type former** — `Le(n, m)`, `Not(P)` — whose head is the
         // former's own name (widened 2026-08-17, docs/decide-class-design.md §2).

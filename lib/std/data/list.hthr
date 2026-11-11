@@ -1139,3 +1139,206 @@ fn List::at<A>(self xs: List<A>, i: Fin(xs.len())) → A {
         Cons(head, tail) => match i { FZ => head, FS(k) => tail.at(k) },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Membership through `map`, duplicate-freedom, Bool quantifiers and products:
+// what an enumeration of a finite type is made of (lib/std/data/fintype.hthr).
+
+// A value of a mapped list is the image of a member.
+theorem List::mem_map_inv<A, B>(self xs: List<A>, f: A → B, b: B):
+    Mem(b, xs.map(f)) → Exists(λ (a: A) => Mem(a, xs) ∧ f(a) = b)
+{
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m => match m {
+            Inl(e) => Exists(h, And(Inl(refl), sym(e))),
+            Inr(m2) => match t.mem_map_inv(f, b, m2) {
+                Exists(a, w) => Exists(a, And(Inr(w.left), w.right)),
+            },
+        },
+    }
+}
+
+// No element occurs twice. Stated by recursion, as `Mem` is, so a closed list's
+// evidence is a tuple of refuted equations.
+fn List::NoDup<A>(self xs: List<A>) → Type {
+    match xs { Nil => True, Cons(h, t) => ¬Mem(h, t) ∧ t.NoDup() }
+}
+
+// An injective map keeps a list duplicate-free.
+theorem List::nodup_map<A, B>(self xs: List<A>, f: A → B,
+    inj: (a, b: A) → f(a) = f(b) → a = b): xs.NoDup() → xs.map(f).NoDup()
+{
+    match xs {
+        Nil => λ d => trivial,
+        Cons(h, t) => λ d => And(
+            λ (m: Mem(f(h), t.map(f))) => match t.mem_map_inv(f, f(h), m) {
+                Exists(a, w) => d.left(rewrite(sym(inj(a, h, w.right)), w.left)),
+            },
+            t.nodup_map(f, inj, d.right)),
+    }
+}
+
+// Two duplicate-free lists with no common member append to one.
+theorem List::nodup_append<A>(self xs, ys: List<A>,
+    apart: (a: A) → Mem(a, xs) → Mem(a, ys) → False): xs.NoDup() → ys.NoDup() → (xs ++ ys).NoDup()
+{
+    match xs {
+        Nil => λ dx dy => dy,
+        Cons(h, t) => λ dx dy => And(
+            λ (m: Mem(h, t ++ ys)) => match t.mem_append(ys, h, m) {
+                Inl(mt) => dx.left(mt),
+                Inr(my) => apart(h, Inl(refl), my),
+            },
+            t.nodup_append(ys, λ a ma mb => apart(a, Inr(ma), mb), dx.right, dy)),
+    }
+}
+
+// A Bool predicate over every element, and over some element, as one Bool: a
+// closed claim about a list's elements is `xs.all_bit(p) = True` by `refl`
+// (docs/proof-patterns.md, closed verdicts). The refuting directions compute
+// their witness.
+fn List::all_bit<A>(self xs: List<A>, p: A → Bool) → Bool {
+    match xs { Nil => True, Cons(h, t) => p(h) && t.all_bit(p) }
+}
+
+fn List::any_bit<A>(self xs: List<A>, p: A → Bool) → Bool {
+    match xs { Nil => False, Cons(h, t) => p(h) || t.any_bit(p) }
+}
+
+theorem List::all_bit_sound<A>(self xs: List<A>, p: A → Bool):
+    xs.all_bit(p) = True → (a: A) → Mem(a, xs) → p(a) = True
+{
+    match xs {
+        Nil => λ e a m => false_elim(m),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e a m => match m {
+                Inl(q) => trans(cong_fn(p, q), hd),
+                Inr(m2) => t.all_bit_sound(p, e, a, m2),
+            },
+            False => λ e a m => absurd(e),
+        }),
+    }
+}
+
+theorem List::all_bit_refute<A>(self xs: List<A>, p: A → Bool):
+    xs.all_bit(p) = False → Exists(λ (a: A) => Mem(a, xs) ∧ p(a) = False)
+{
+    match xs {
+        Nil => λ e => absurd(e),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e => match t.all_bit_refute(p, e) {
+                Exists(a, w) => Exists(a, And(Inr(w.left), w.right)),
+            },
+            False => λ e => Exists(h, And(Inl(refl), hd)),
+        }),
+    }
+}
+
+theorem List::any_bit_sound<A>(self xs: List<A>, p: A → Bool):
+    xs.any_bit(p) = True → Exists(λ (a: A) => Mem(a, xs) ∧ p(a) = True)
+{
+    match xs {
+        Nil => λ e => absurd(e),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e => Exists(h, And(Inl(refl), hd)),
+            False => λ e => match t.any_bit_sound(p, e) {
+                Exists(a, w) => Exists(a, And(Inr(w.left), w.right)),
+            },
+        }),
+    }
+}
+
+theorem List::any_bit_refute<A>(self xs: List<A>, p: A → Bool):
+    xs.any_bit(p) = False → (a: A) → Mem(a, xs) → p(a) = False
+{
+    match xs {
+        Nil => λ e a m => false_elim(m),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e a m => absurd(e),
+            False => λ e a m => match m {
+                Inl(q) => trans(cong_fn(p, q), hd),
+                Inr(m2) => t.any_bit_refute(p, e, a, m2),
+            },
+        }),
+    }
+}
+
+// The first element a predicate holds of. A function, so the witness of a
+// closed search evaluates.
+fn List::find<A>(self xs: List<A>, p: A → Bool) → Option<A> {
+    match xs { Nil => None, Cons(h, t) => match p(h) { True => Some(h), False => t.find(p) } }
+}
+
+theorem List::find_sound<A>(self xs: List<A>, p: A → Bool, a: A):
+    xs.find(p) = Some(a) → Mem(a, xs) ∧ p(a) = True
+{
+    match xs {
+        Nil => λ e => Option::none_ne_some(a, e, Mem(a, Nil<A>) ∧ p(a) = True),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e => And(Inl(sym(Option::some_inj(h, a, e))), rewrite(sym(Option::some_inj(h, a, e)), hd)),
+            False => λ e => { let r = t.find_sound(p, a, e); And(Inr(r.left), r.right) },
+        }),
+    }
+}
+
+theorem List::find_none<A>(self xs: List<A>, p: A → Bool):
+    xs.find(p) = None → (a: A) → Mem(a, xs) → p(a) = False
+{
+    match xs {
+        Nil => λ e a m => false_elim(m),
+        Cons(h, t) => (match hd: p(h) {
+            True => λ e a m => Option::none_ne_some(h, sym(e), p(a) = False),
+            False => λ e a m => match m {
+                Inl(q) => trans(cong_fn(p, q), hd),
+                Inr(m2) => t.find_none(p, e, a, m2),
+            },
+        }),
+    }
+}
+
+// Every pair of one element from each list, the first list's order outermost.
+fn List::product<A, B>(self xs: List<A>, ys: List<B>) → List<Pair<A, B>> {
+    match xs { Nil => Nil, Cons(h, t) => ys.map(λ (b: B) => Pair(h, b)) ++ t.product(ys) }
+}
+
+theorem List::mem_product<A, B>(self xs: List<A>, ys: List<B>, a: A, b: B):
+    Mem(a, xs) → Mem(b, ys) → Mem(Pair(a, b), xs.product(ys))
+{
+    match xs {
+        Nil => λ ma mb => false_elim(ma),
+        Cons(h, t) => λ ma mb => match ma {
+            Inl(e) => (ys.map(λ (b: B) => Pair(h, b))).mem_append_l(t.product(ys), Pair(a, b),
+                rewrite(e, ys.mem_map(b, λ (b: B) => Pair(h, b), mb))),
+            Inr(m2) => (ys.map(λ (b: B) => Pair(h, b))).mem_append_r(t.product(ys), Pair(a, b), t.mem_product(ys, a, b, m2, mb)),
+        },
+    }
+}
+
+theorem List::mem_product_fst<A, B>(self xs: List<A>, ys: List<B>, q: Pair<A, B>):
+    Mem(q, xs.product(ys)) → Mem(q.fst, xs)
+{
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m => match (ys.map(λ (b: B) => Pair(h, b))).mem_append(t.product(ys), q, m) {
+            Inl(mh) => match ys.mem_map_inv(λ (b: B) => Pair(h, b), q, mh) {
+                Exists(_, w) => Inl(rewrite(sym(w.right), refl)),
+            },
+            Inr(mt) => Inr(t.mem_product_fst(ys, q, mt)),
+        },
+    }
+}
+
+theorem List::nodup_product<A, B>(self xs: List<A>, ys: List<B>):
+    xs.NoDup() → ys.NoDup() → xs.product(ys).NoDup()
+{
+    match xs {
+        Nil => λ dx dy => trivial,
+        Cons(h, t) => λ dx dy => (ys.map(λ (b: B) => Pair(h, b))).nodup_append(t.product(ys),
+            λ q mh mt => match ys.mem_map_inv(λ (b: B) => Pair(h, b), q, mh) {
+                Exists(_, w) => dx.left(rewrite(cong_fn(λ (r: Pair<A, B>) => r.fst, w.right), t.mem_product_fst(ys, q, mt))),
+            },
+            ys.nodup_map(λ (b: B) => Pair(h, b), λ b1 b2 e => cong_fn(λ (q: Pair<A, B>) => q.snd, e), dy),
+            t.nodup_product(ys, dx.right, dy)),
+    }
+}
