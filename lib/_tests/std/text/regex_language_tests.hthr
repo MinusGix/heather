@@ -1,0 +1,51 @@
+// Probes of `lib/std/text/regex_language.hthr`
+// (issues/regular-languages-by-derivatives.md): membership in a regular
+// expression's language at closed words by `decide`, a `regex def`'s Boolean
+// read as membership, and laws of the language at open expressions, carried
+// back to the matcher. Tests, not library: nothing imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
+import regex; import regex_language;
+
+// `(a|b)*` over the codes 97 and 98.
+fn ab_star() → Regex { Star(Alt(Range(97, 97), Range(98, 98))) }
+
+theorem aba_in(): ab_star().Denotes([97, 98, 97]) { decide }
+theorem empty_in(): ab_star().Denotes([]) { decide }
+theorem abc_out(): ¬ab_star().Denotes([97, 98, 99]) { decide }
+
+// expect-error(kernel)
+theorem abc_in_wrong(): ab_star().Denotes([97, 98, 99]) { decide }
+
+// The matcher's verdict as a membership proof, and a refusal as its negation.
+theorem from_matcher(): Seq(Range(48, 57), Star(Range(48, 57))).Denotes([52, 50]) {
+    Regex::matches_sound([52, 50], Seq(Range(48, 57), Star(Range(48, 57))), refl)
+}
+theorem from_refusal(): ¬Seq(Range(48, 57), Star(Range(48, 57))).Denotes([]) {
+    Seq(Range(48, 57), Star(Range(48, 57))).matches_refutes([], refl)
+}
+
+// A generated definition's Boolean is membership in its term's language.
+regex def is_hex = "[0-9a-f]+";
+theorem hex_member(): is_hex::term.Denotes([102, 102]) { (is_hex::term.accepts_iff("ff")).mp(refl) }
+
+// Laws of the language at open expressions.
+theorem alt_comm(a, b: Regex, w: List<Nat>): Alt(a, b).Denotes(w) → Alt(b, a).Denotes(w) {
+    λ d => match d { Inl(x) => Inr(x), Inr(y) => Inl(y) }
+}
+theorem eps_seq(r: Regex, w: List<Nat>): r.Denotes(w) → Seq(Eps, r).Denotes(w) {
+    λ d => Exists(Nil, Exists(w, And(refl, And(refl, d))))
+}
+theorem star_unfold(s: Regex, u, v: List<Nat>, du: s.Denotes(u), dv: Star(s).Denotes(v)): Star(s).Denotes(u ++ v) {
+    Exists(Cons(u, dv.witness), And(cong_fn(λ (t: List<Nat>) => u ++ t, dv.proof.left), And(du, dv.proof.right)))
+}
+
+// ... carried back to the matcher: it cannot tell the two alternations apart.
+theorem matcher_alt_comm(a, b: Regex, w: List<Nat>, h: Alt(a, b).matches(w) = True): Alt(b, a).matches(w) = True {
+    (Alt(b, a).matches_iff(w)).mpr(alt_comm(a, b, w, (Alt(a, b).matches_iff(w)).mp(h)))
+}
+
+// The derivative by a word denotes the rest of the words that start with it.
+theorem after_prefix(r: Regex, w: List<Nat>, d: r.Denotes(Cons(97, Cons(98, w)))): r.deriv(97).deriv(98).Denotes(w) {
+    (Regex::deriv_word_denotes([97, 98], r, w)).mpr(d)
+}

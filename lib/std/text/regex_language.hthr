@@ -1,0 +1,230 @@
+// The language a regular expression denotes, and the derivative matcher
+// proved against it (issues/regular-languages-by-derivatives.md).
+//
+// `regex.hthr` gives a `Regex` its meaning by computation: `r.matches(w)`
+// folds Brzozowski's derivative over `w` and asks whether what is left
+// accepts the empty word. This module says what that computes. `r.Denotes(w)`
+// is the textbook language, by recursion on `r`: nothing, the empty word,
+// one character in a range, a word split in two, either side, and a word
+// cut into pieces of the starred expression (`Regex::Starred`). The matcher
+// is correct against it in one theorem (`matches_iff`), from the two facts
+// the derivative is for: `nullable` decides the empty word, and the
+// derivative by `c` denotes the words `w` with `c :: w` in the language.
+// So `r.Denotes(w)` decides (`Decide`, by running the matcher), and a
+// `regex def`'s Boolean is the membership test of its term's language.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import regex;
+
+// Every word of `ws` is in the language `P`.
+fn Regex::Each(P: List<Nat> → Type, ws: List<List<Nat>>) → Type {
+    match ws { Nil => True, Cons(p, t) => P(p) ∧ Regex::Each(P, t) }
+}
+
+// `w` is words of `P`, one after another: the star of a language.
+fn Regex::Starred(P: List<Nat> → Type, w: List<Nat>) → Type {
+    Exists<List<List<Nat>>>(λ ws => w = ws.concat() ∧ Regex::Each(P, ws))
+}
+
+fn Regex::Denotes(self r: Regex, w: List<Nat>) → Type {
+    match r {
+        NoMatch => False,
+        Eps => w = Nil,
+        Range(lo, hi) => Exists<Nat>(λ c => w = [c] ∧ (lo.leb(c) && c.leb(hi)) = True),
+        Seq(a, b) => Exists<List<Nat>>(λ u => Exists<List<Nat>>(λ v => w = u ++ v ∧ (a.Denotes(u) ∧ b.Denotes(v)))),
+        Alt(a, b) => a.Denotes(w) ∨ b.Denotes(w),
+        Star(s) => Regex::Starred(λ u => s.Denotes(u), w),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `nullable` decides the empty word.
+
+theorem Regex::nullable_sound(self r: Regex): r.nullable() = True → r.Denotes(Nil) {
+    match r {
+        NoMatch => λ h => absurd(h),
+        Eps => λ h => refl,
+        Range(_, _) => λ h => absurd(h),
+        Seq(a, b) => match ha: a.nullable() {
+            True => λ h => Exists(Nil, Exists(Nil, And(refl, And(a.nullable_sound(ha), b.nullable_sound(h))))),
+            False => λ h => absurd(h),
+        },
+        Alt(a, b) => match ha: a.nullable() {
+            True => λ h => Inl(a.nullable_sound(ha)),
+            False => λ h => Inr(b.nullable_sound(h)),
+        },
+        Star(_) => λ h => Exists(Nil, And(refl, trivial)),
+    }
+}
+
+theorem Regex::or_true_r(a: Bool): (a || True) = True { match a { True => refl, False => refl } }
+
+theorem Regex::nullable_complete(self r: Regex): r.Denotes(Nil) → r.nullable() = True {
+    match r {
+        NoMatch => λ d => false_elim(d),
+        Eps => λ d => refl,
+        Range(_, _) => λ d => false_elim(List::nil_ne_cons(Nil, d.witness, d.proof.left)),
+        Seq(a, b) => λ d => match d { Exists(u, d2) => match d2 { Exists(v, p) => match u.append_nil_parts(v, sym(p.left)) {
+            And(un, vn) => trans(
+                cong_fn(λ (x: Bool) => x && b.nullable(), a.nullable_complete(j(un, λ x _ => a.Denotes(x), p.right.left))),
+                b.nullable_complete(j(vn, λ x _ => b.Denotes(x), p.right.right))),
+        } } },
+        Alt(a, b) => λ d => match d {
+            Inl(da) => cong_fn(λ (x: Bool) => x || b.nullable(), a.nullable_complete(da)),
+            Inr(db) => trans(cong_fn(λ (x: Bool) => a.nullable() || x, b.nullable_complete(db)), Regex::or_true_r(a.nullable())),
+        },
+        Star(_) => λ d => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The derivative by `c` denotes the words `w` with `c :: w` in the language.
+
+theorem Regex::deriv_sound(self r: Regex, c: Nat): (w: List<Nat>) → r.deriv(c).Denotes(w) → r.Denotes(Cons(c, w)) {
+    match r {
+        NoMatch => λ w d => false_elim(d),
+        Eps => λ w d => false_elim(d),
+        Range(lo, hi) => λ w => match hb: lo.leb(c) && c.leb(hi) {
+            True => λ d => Exists(c, And(cong_fn(λ (t: List<Nat>) => Cons(c, t), d), hb)),
+            False => λ d => false_elim(d),
+        },
+        Seq(a, b) => λ w => match hn: a.nullable() {
+            True => λ d => match d {
+                Inl(l) => match l { Exists(u, l2) => match l2 { Exists(v, p) =>
+                    Exists(Cons(c, u), Exists(v, And(cong_fn(λ (t: List<Nat>) => Cons(c, t), p.left),
+                        And(a.deriv_sound(c, u, p.right.left), p.right.right)))) } },
+                Inr(rb) => Exists(Nil, Exists(Cons(c, w), And(refl, And(a.nullable_sound(hn), b.deriv_sound(c, w, rb))))),
+            },
+            False => λ d => match d { Exists(u, l2) => match l2 { Exists(v, p) =>
+                Exists(Cons(c, u), Exists(v, And(cong_fn(λ (t: List<Nat>) => Cons(c, t), p.left),
+                    And(a.deriv_sound(c, u, p.right.left), p.right.right)))) } },
+        },
+        Alt(a, b) => λ w d => match d {
+            Inl(x) => Inl(a.deriv_sound(c, w, x)),
+            Inr(y) => Inr(b.deriv_sound(c, w, y)),
+        },
+        Star(s) => λ w d => match d { Exists(u, l2) => match l2 { Exists(_, p) => match p.right.right { Exists(ws, q) =>
+            Exists(Cons(Cons(c, u), ws), And(
+                trans(cong_fn(λ (t: List<Nat>) => Cons(c, t), p.left), cong_fn(λ (t: List<Nat>) => Cons(c, u ++ t), q.left)),
+                And(s.deriv_sound(c, u, p.right.left), q.right))) } } },
+    }
+}
+
+// A word of the star that starts with `c` is a piece that starts with `c`
+// and then a word of the star: the pieces before it are empty.
+theorem Regex::star_step(s: Regex, c: Nat, step: (x: List<Nat>) → s.Denotes(Cons(c, x)) → s.deriv(c).Denotes(x),
+    ws: List<List<Nat>>): (w: List<Nat>) → Cons(c, w) = ws.concat() → Regex::Each(λ u => s.Denotes(u), ws) →
+    Seq(s.deriv(c), Star(s)).Denotes(w)
+{
+    match ws {
+        Nil => λ w e each => false_elim(w.cons_ne_nil(c, e)),
+        Cons(p, rest) => match p as λ x => (w: List<Nat>) → Cons(c, w) = x ++ rest.concat() →
+            (s.Denotes(x) ∧ Regex::Each(λ u => s.Denotes(u), rest)) → Seq(s.deriv(c), Star(s)).Denotes(w)
+        {
+            Nil => λ w e each => Regex::star_step(s, c, step, rest, w, e, each.right),
+            Cons(_, u2) => λ w e each => Exists(u2, Exists(rest.concat(), And(List::cong_tail(e),
+                And(step(u2, j(sym(List::cong_head(c, e)), λ x _ => s.Denotes(Cons(x, u2)), each.left)),
+                    Exists(rest, And(refl, each.right)))))),
+        },
+    }
+}
+
+theorem Regex::deriv_complete(self r: Regex, c: Nat): (w: List<Nat>) → r.Denotes(Cons(c, w)) → r.deriv(c).Denotes(w) {
+    match r {
+        NoMatch => λ w d => false_elim(d),
+        Eps => λ w d => false_elim(w.cons_ne_nil(c, d)),
+        Range(lo, hi) => λ w d => j(
+            sym(j(sym(List::cong_head(c, d.proof.left)), λ x _ => (lo.leb(x) && x.leb(hi)) = True, d.proof.right)),
+            λ x _ => (match x { True => Eps, False => NoMatch }).Denotes(w),
+            List::cong_tail(d.proof.left)),
+        Seq(a, b) => λ w d => match d { Exists(u, d2) => match d2 { Exists(v, p) =>
+            (match u as λ x => (Cons(c, w) = x ++ v) → a.Denotes(x) →
+                (match a.nullable() { True => Alt(Seq(a.deriv(c), b), b.deriv(c)), False => Seq(a.deriv(c), b) }).Denotes(w)
+            {
+                Nil => λ e da => j(sym(a.nullable_complete(da)),
+                    λ x _ => (match x { True => Alt(Seq(a.deriv(c), b), b.deriv(c)), False => Seq(a.deriv(c), b) }).Denotes(w),
+                    Inr(b.deriv_complete(c, w, j(sym(e), λ x _ => b.Denotes(x), p.right.right)))),
+                Cons(_, u2) => λ e da => match a.nullable() as λ x =>
+                    (match x { True => Alt(Seq(a.deriv(c), b), b.deriv(c)), False => Seq(a.deriv(c), b) }).Denotes(w)
+                {
+                    True => Inl(Exists(u2, Exists(v, And(List::cong_tail(e),
+                        And(a.deriv_complete(c, u2, j(sym(List::cong_head(c, e)), λ x _ => a.Denotes(Cons(x, u2)), da)), p.right.right))))),
+                    False => Exists(u2, Exists(v, And(List::cong_tail(e),
+                        And(a.deriv_complete(c, u2, j(sym(List::cong_head(c, e)), λ x _ => a.Denotes(Cons(x, u2)), da)), p.right.right)))),
+                },
+            })(p.left, p.right.left) } },
+        Alt(a, b) => λ w d => match d {
+            Inl(x) => Inl(a.deriv_complete(c, w, x)),
+            Inr(y) => Inr(b.deriv_complete(c, w, y)),
+        },
+        Star(s) => λ w d => Regex::star_step(s, c, λ x dx => s.deriv_complete(c, x, dx), d.witness, w, d.proof.left, d.proof.right),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The matcher: one theorem.
+
+theorem Regex::matches_sound(w: List<Nat>): (r: Regex) → r.matches(w) = True → r.Denotes(w) {
+    match w {
+        Nil => λ r h => r.nullable_sound(h),
+        Cons(c, t) => λ r h => r.deriv_sound(c, t, Regex::matches_sound(t, r.deriv(c), h)),
+    }
+}
+
+theorem Regex::matches_complete(w: List<Nat>): (r: Regex) → r.Denotes(w) → r.matches(w) = True {
+    match w {
+        Nil => λ r d => r.nullable_complete(d),
+        Cons(c, t) => λ r d => Regex::matches_complete(t, r.deriv(c), r.deriv_complete(c, t, d)),
+    }
+}
+
+// The derivative matcher accepts exactly the words of the language.
+theorem Regex::matches_iff(self r: Regex, w: List<Nat>): r.matches(w) = True ↔ r.Denotes(w) {
+    Iff(mp := λ (h: r.matches(w) = True) => Regex::matches_sound(w, r, h), mpr := λ (d: r.Denotes(w)) => Regex::matches_complete(w, r, d))
+}
+
+// A word the matcher refuses is not in the language.
+theorem Regex::matches_refutes(self r: Regex, w: List<Nat>, h: r.matches(w) = False): ¬r.Denotes(w) {
+    λ d => absurd(trans(sym(Regex::matches_complete(w, r, d)), h))
+}
+
+// Membership decides, by running the matcher.
+fn Regex::denotes_dec(self r: Regex, w: List<Nat>) → r.Denotes(w) ∨ ¬r.Denotes(w) {
+    match h: r.matches(w) {
+        True => Inl(Regex::matches_sound(w, r, h)),
+        False => Inr(r.matches_refutes(w, h)),
+    }
+}
+
+instance(r: Regex, w: List<Nat>) Decide<Regex::Denotes(r, w)> {
+    dec := r.denotes_dec(w),
+    bit := r.matches(w),
+    reflects := And(λ e => Regex::matches_sound(w, r, e), λ e => r.matches_refutes(w, e)),
+}
+
+// At a string: a `regex def`'s Boolean is membership of the string's scalar
+// values in its term's language.
+theorem Regex::accepts_iff(self r: Regex, s: String): r.accepts(s) = True ↔ r.Denotes(s.chars.map(λ c => c.code)) {
+    r.matches_iff(s.chars.map(λ c => c.code))
+}
+
+// ---------------------------------------------------------------------------
+// The derivative of a word, and the matcher restated over it.
+
+fn Regex::deriv_word(self r: Regex, w: List<Nat>) → Regex { w.foldl(λ q c => q.deriv(c), r) }
+
+theorem Regex::deriv_word_denotes(u: List<Nat>): (r: Regex) → (w: List<Nat>) → (r.deriv_word(u).Denotes(w) ↔ r.Denotes(u ++ w)) {
+    match u {
+        Nil => λ r w => iff_refl(),
+        Cons(c, t) => λ r w => Iff(
+            mp := λ (d: r.deriv(c).deriv_word(t).Denotes(w)) => r.deriv_sound(c, t ++ w, Regex::deriv_word_denotes(t, r.deriv(c), w).mp(d)),
+            mpr := λ (d: r.Denotes(Cons(c, t ++ w))) => Regex::deriv_word_denotes(t, r.deriv(c), w).mpr(r.deriv_complete(c, t ++ w, d))),
+    }
+}
