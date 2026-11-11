@@ -254,6 +254,14 @@ theorem Nat::leb_refl(self n: Nat): n.leb(n) = True {
 }
 
 // truncated subtraction; both arguments descend together, `n` generalized
+// `n <= m` fails exactly when `m < n` holds, as Booleans.
+theorem Nat::leb_flip(self n: Nat): (m: Nat) → n.leb(m) = !Succ(m).leb(n) {
+    match n {
+        Zero => λ m => refl,
+        Succ(k) => λ m => match m { Zero => refl, Succ(l) => k.leb_flip(l) },
+    }
+}
+
 // Equality as a `Bool`.
 fn Nat::same(self n, m: Nat) → Bool {
     match n {

@@ -28,6 +28,25 @@ theorem pick_either(n, a, b: Nat): (k: Nat) → pick(n, a, b) = k → a = k ∨ 
     match h: n.leb(3) { True => λ k e => Inl(e), False => λ k e => Inr(e) }
 }
 
+// The limit: the summands of a disjunction are not read (§4.5 says why).
+// expect-error(kernel)
+theorem pick_sum(n, a, b, k: Nat): pick(n, a, b).leb(k) = a.leb(k) ∨ pick(n, a, b).leb(k) = b.leb(k) {
+    match h: n.leb(3) { True => Inl(refl), False => Inr(refl) }
+}
+
+// The limit: a call that is an argument the reduction is not waiting on.
+// `k.leb(…)` is stuck on `k`, so nothing is stuck on `pick`'s test
+// (issues/case-split-reaches-arguments-of-stuck-calls.md).
+// expect-error: is expected here
+theorem pick_arg(n, a, k: Nat): k.leb(pick(n, a, a)) = True → k.leb(a) = True {
+    match h: n.leb(3) { True => λ p => p, False => λ p => p }
+}
+
+// Stated at a name, the call is one side of an equation and is reached.
+theorem pick_arg_named(n, a, k: Nat): (p: Nat) → p = pick(n, a, a) → k.leb(p) = True → k.leb(a) = True {
+    match h: n.leb(3) { True => λ p e q => subst(e, q), False => λ p e q => subst(e, q) }
+}
+
 // The limit of the ladder's order: a goal that also *writes* the test is
 // specialised where it is written (§4.1 finds it first) and not below the
 // call, so the arms see half. State such a goal without the written test

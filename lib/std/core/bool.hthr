@@ -304,6 +304,15 @@ theorem eq_true_of_is_true(b: Bool, p: b.IsTrue()): b = True {
     }(p)
 }
 
+// A conjunction's verdict and its parts' verdicts.
+theorem Bool::and_true_parts(self a, b: Bool): (a && b) = True → a = True ∧ b = True {
+    match a { True => λ h => ⟨refl, h⟩, False => λ h => absurd(h) }
+}
+
+theorem Bool::and_true_of(self a, b: Bool): a = True → b = True → (a && b) = True {
+    match a { True => λ ha hb => hb, False => λ ha hb => absurd(ha) }
+}
+
 theorem is_true_dec_yes(b: Bool, p: b.IsTrue()): b.is_true_dec() = Inl(p) {
     match b as λ x => (u: x.IsTrue()) → x.is_true_dec() = Inl(u) {
         False => λ u => false_elim(u),

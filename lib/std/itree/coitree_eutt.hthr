@@ -774,19 +774,19 @@ theorem Bisim::after<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>
         Succ(m) => match h0: CoTree::obs(E, u) {
             ORet(r) => λ o h => {
                 let w: (CoTree::obs(E, v) = ORet(r)) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
-                let e: (o = ORet(r)) = prelude::trans(prelude::sym(h), CoTree::after_settled(E, Succ(m), u, ORet(r), h0, trivial));
+                let e: (o = ORet(r)) = prelude::sym(h);
                 j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), CoTree::after_settled(E, Succ(m), v, ORet(r), w, trivial))
             },
             OTau(u2) => λ o h => {
                 let w: TauTo<R>(E, u2, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
                 j(prelude::sym(CoTree::after_succ(E, m, v, w.v2, w.at)), λ y q => Obs::BisimAt(E, o, y),
-                    Bisim::after(E, u2, w.v2, w.next, m, o, prelude::trans(prelude::sym(CoTree::after_succ(E, m, u, u2, h0)), h)))
+                    Bisim::after(E, u2, w.v2, w.next, m, o, h))
             },
             OVis(c, k) => λ o h => {
                 let w: VisTo<R>(E, c, k, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
                 let p: VisAt<R>(E, c, k, CoTree::after(E, Succ(m), v)) =
                     VisAt(w.k2, CoTree::after_settled(E, Succ(m), v, OVis(c, w.k2), w.at, trivial), w.next);
-                let e: (o = OVis(c, k)) = prelude::trans(prelude::sym(h), CoTree::after_settled(E, Succ(m), u, OVis(c, k), h0, trivial));
+                let e: (o = OVis(c, k)) = prelude::sym(h);
                 j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), p)
             },
         },

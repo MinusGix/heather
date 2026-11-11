@@ -1,0 +1,63 @@
+// Probes of `lib/std/text/regex/regex_table.hthr`
+// (issues/regular-languages-by-derivatives.md): tables built and checked at
+// closed expressions, the every-word theorem from one evaluated check, a
+// search out of fuel refused, classes and Boolean equality. Tests, not
+// library: nothing imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
+import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa; import regex_table;
+
+// `[0-9a-f]+`: hexadecimal digits, at least one.
+fn hex() → Regex { Seq(Alt(Range(48, 57), Range(97, 102)), Star(Alt(Range(48, 57), Range(97, 102)))) }
+fn hex_table() → Table { hex().table(8) }
+
+theorem hex_states(): hex_table().rows.len() = 3 { refl }
+theorem hex_cuts(): hex_table().cuts.len() = 4 { refl }
+theorem hex_ok(): hex_table().check(hex()) = True { refl }
+
+// One evaluated check, every word.
+theorem hex_language(w: List<Nat>): hex_table().dfa().run(w) = True ↔ hex().Denotes(w) { hex_table().check_accepts(hex(), hex_ok(), w) }
+theorem hex_matcher(w: List<Nat>): hex_table().dfa().run(w) = hex().matches(w) { hex_table().check_matches(hex(), hex_ok(), w) }
+
+theorem hex_in(): hex_table().dfa().run([49, 97, 102]) = True { refl }
+theorem hex_out(): hex_table().dfa().run([49, 103]) = False { refl }
+theorem hex_empty(): hex_table().dfa().run(Nil) = False { refl }
+
+// A search that stops early leaves an entry pointing past the table.
+theorem hex_starved(): hex().table(0).check(hex()) = False { refl }
+
+// expect-error(kernel)
+theorem hex_starved_ok(): hex().table(0).check(hex()) = True { refl }
+
+// A table for another expression is refused.
+theorem hex_not_star(): hex_table().check(Star(Range(48, 57))) = False { refl }
+
+// An identifier: `[a-z_][a-z0-9_]*`.
+fn ident() → Regex {
+    Seq(Alt(Range(97, 122), Range(95, 95)), Star(Alt(Alt(Range(97, 122), Range(48, 57)), Range(95, 95))))
+}
+theorem ident_ok(): ident().table(8).check(ident()) = True { refl }
+theorem ident_language(w: List<Nat>): ident().table(8).dfa().run(w) = True ↔ ident().Denotes(w) {
+    ident().table(8).check_accepts(ident(), ident_ok(), w)
+}
+
+// `a*a*`: the derivative would add `a*` again at every step; the
+// alternation that drops an operand it already has closes the table.
+fn stars() → Regex { Seq(Star(Range(97, 97)), Star(Range(97, 97))) }
+theorem stars_ok(): stars().table(8).check(stars()) = True { refl }
+theorem stars_small(): stars().table(8).rows.len() = 3 { refl }
+theorem alt_again(): Regex::alt(Alt(Eps, stars()), stars()) = Alt(Eps, stars()) { refl }
+theorem alt_again_inner(): Regex::alt(Alt(Alt(stars(), Eps), hex()), stars()) = Alt(Alt(stars(), Eps), hex()) { refl }
+
+// Classes: breakpoints at 48, 58, 97, 103.
+theorem class_below(): Regex::class([48, 58, 97, 103], 10) = 0 { refl }
+theorem class_digit(): Regex::class([48, 58, 97, 103], 53) = 1 { refl }
+theorem class_between(): Regex::class([48, 58, 97, 103], 64) = 2 { refl }
+theorem rep_digit(): Regex::rep([48, 58, 97, 103], 53) = 48 { refl }
+theorem same_class_same_step(c, d: Nat, side: Regex::SameSide(hex_table().cuts, c, d)): hex().deriv_simp(c) = hex().deriv_simp(d) {
+    hex().deriv_simp_class(hex_table().cuts, c, d, side, refl)
+}
+
+// Boolean equality.
+theorem eqb_yes(): hex().eqb(hex()) = True { refl }
+theorem eqb_no(): hex().eqb(ident()) = False { refl }
+theorem eqb_open(r: Regex): Star(r).eqb(Star(r)) = True { Star(r).eqb_refl() }
