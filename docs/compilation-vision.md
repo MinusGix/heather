@@ -423,6 +423,7 @@ decides.
 | representations | v1 built | `docs/datarepr-design.md` |
 | specialization (`CallCtx`) | sketched | `docs/sketches/surface-v3.md` §1, §3 |
 | contracts across calls | direction issue | `issues/proof-carrying-function-analysis.md` |
+| foreign code as an instance | surveyed, not scheduled | `docs/foreign-binaries-survey.md`, `issues/foreign-binary-contracts.md` |
 
 ---
 
