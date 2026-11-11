@@ -260,8 +260,11 @@ optimization that uses it is proved once under it as a hypothesis.
   type span to `Mutated`, a `mut self` method or a function returning
   the record, and its reflection is read from its elaborated body by
   the chain of stores and calls that makes each end's span
-  (`rt_file_reflect.hthr`). Linking over the run and the generator are
-  next.
+  (`rt_file_reflect.hthr`). Its class states the run
+  (`CompileSpan<F>(f)`, `runtime_file.hthr`), and a program is linked
+  from instances of both classes over the files with a span first, a
+  function at a time (`program_spanned`, `function_ir_link.hthr`). The
+  generator is next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an

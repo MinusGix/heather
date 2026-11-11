@@ -849,15 +849,67 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   measure that may read the span as well as the words.
 
 - *The class states the run.* `Compile<F>(f)` says the code evaluated
-  over a file answers as `f` at that file's spans. For a function that
-  writes, the statement is of the run: over `b`, the code ends with
-  `f`'s word and with `b` whose span 0 is the bytes `f` returns
-  (`Ending`, `StructuredRegion::run`), at every file that has a span
-  0. A function that writes nothing
-  satisfies the same statement with the file unchanged, from its
-  instance as it is and the fact that its code has no store. So linking
-  sees one shape, a table of `Writers`, and a program of both kinds is
-  proved at every file: `f::runs_over`, beside `f::agrees_over`.
+  over a file answers as `f` at that file's spans. A function that
+  writes has a class of its own, `CompileSpan<F>(f)`
+  (`runtime_file.hthr`), whose statement is of the run: over any file
+  `Cons(own, rest)`, with its calls answered by the program, the code
+  ends with `f`'s word and leaves `f`'s span over `rest`. `f` is the
+  function as written, of the span, its length word and its other
+  words; the code takes the span's place first, which `f` does not
+  read (`FTm::of_source`). An instance is the once-proved lowering read
+  at a reflection: `FFun::lower_sound` pinned to `f` by conversion
+  where the body has no recursion (`FFun::compile`), and
+  `FFun::measured_sound` from `f`'s own recursor where it calls itself
+  last (`FFun::compile_measured`).
+
+  The table of such a function is the functions it calls that only
+  read, by index, then the ones that write. A loop is not in its own
+  table: its recursion is the loop's next pass and never a call.
+
+- *Linking is over the run, a function at a time, over the files a
+  writer is known at.* A function is put into a program with its calls
+  renamed, and run it ends as it did with each call answered at its new
+  name (`Function::relabel_run`, `function_ir_link.hthr`): an equation
+  between states at every file, where the evaluation's theorem is
+  pointwise.
+
+  The linking theorem over evaluation states each function at the
+  program's sources and carries the statement to the program by a
+  theorem that functions answered alike evaluate alike. Over the run
+  that second theorem would have to follow the file through every
+  store, and the statement of a function that writes holds only at
+  files with its span first and the rest as it was. So a program is
+  proved over a family of files, `emb(s)` for every `s`
+  (`program_spanned`): each function, its calls answered by anything
+  that answers the functions before it as the sources say over the
+  family, ends as the sources say. That is the shape an instance's
+  statement already has (`FTm::CallsAgree` quantifies the calls), so
+  nothing is carried, and the program's run is its sources over the
+  family by induction along the program (`program_spanned_sources`).
+
+  Two things are said of what answers the calls (`Writers::Sourced`):
+  a call of as many words as the function takes ends as its source
+  does, and a function marked still leaves the file whatever it is
+  called on. The second is what a pure term's region beside functions
+  that write asks of the pure functions it calls
+  (`StructuredRegion::run_quiet_among`), at every call and not only
+  the fitting ones.
+
+  A function that only reads is linked from its `Compile` instance as
+  it is and the fact that its code stores nothing: it runs as it
+  evaluates with its calls answered by the words its callees return
+  over the file, and leaves the file (`Function::run_still`,
+  `Compile::spanned`). So linking sees one shape, a table of `Writers`,
+  and a program of both kinds is proved at every file with a span
+  first. What a link checks per function is what `Compile::part`
+  checks: that each name is answered by the meaning the function's own
+  table has for it, by conversion, and that it takes as many words,
+  two short lists. A reading function's links are checked against the
+  arities of the functions marked still alone (`still_arity`), which
+  gives both facts in the one check. That a reading function's code
+  stores nothing is read off the code once per link today; it belongs
+  in the instance, or in a theorem of the pure lowering
+  (issues/rt-pure-regions-are-quiet.md).
 
 After U5 the two computation layers are one. `ETm` lowers to a
 `Source`'s statements because that is where a call to Linux and a
@@ -1176,12 +1228,23 @@ Each is a PR and ends with something that runs.
       Each reflection is pinned to its function by `refl`, the loop's
       to its recursor's step; four bodies are refused with their reasons
       (`lib/_tests/native/runtime/rt_file_reflect_tests.hthr`).
-    - *4c-3b:* linking over the run. A computation's code numbers its
-      callees in its own table; a linked program renumbers them
-      (`Function::relabel`) and the theory that says a relabelled
-      function among its callees answers as it did alone is over `eval`
-      today (`function_ir_eval.hthr`). The same theory over `run`, with
-      a table of `Writers`, and where a loop sits in its own table.
+    - *4c-3b (built 2026-11-11):* linking over the run
+      (`function_ir_link.hthr`) and the class (`runtime_file.hthr`);
+      §2.6 has the design. `Function::relabel_run`;
+      `program_spanned` and `program_spanned_sources` over a family of
+      files; `Function::run_still`; `CompileSpan<F>(f)` with
+      `FFun::compile` and `FFun::compile_measured`;
+      `CompileSpan::spanned` and `Compile::spanned`, one conjunct of
+      `program_spanned` each. *Runs:* the loop that raises every byte
+      of its span, a `CompileSpan` instance from its reflection and its
+      recursor, linked by hand with two `runtime fn`s, `raise` (which
+      it calls, and which the program numbers otherwise than the loop's
+      table does) and `twice` (which it does not). The program runs on
+      bytes, is accepted by the function compiler, and its run is the
+      loop at every file with a span first (`linked_raises`) and
+      `raise` with the file left (`linked_raise`), from the instances
+      alone; a link that names the wrong function is refused by the
+      kernel (`lib/_tests/native/runtime/runtime_file_tests.hthr`).
     - *4c-3c:* the class's statement of the run, the generator
       (`runtime fn` on a function whose result is `Mutated` over a
       span: reflect, lower, the instance by `refl` or from the

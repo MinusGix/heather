@@ -85,3 +85,12 @@ case and the same premise, and `Source` has one kind of call.
   - Refused and filed: a byte read before a store and used after it ([[rt-file-read-before-store]]). Refused by design for now: a span that branches and joins, a store under a word that is not the length parameter, another computation called last directly.
 
   Next is 4c-3b, linking over the run, then 4c-3c (class, generator, `raise_span` as a `runtime fn`). Design note §2.6 and §3 are updated. `scripts/test --pr`: 3112 passed and one failure, `compiled_yes_takes_its_line_as_gnu_yes`, which is a race in the image store after the merge re-imaged the library ([[image-sweep-removes-planned-image]]) and passes when run again.
+- 2026-11-11: U4 step 4c-3b: linking over the run, and the class of a function that writes.
+
+  - `lib/native/function_ir/function_ir_link.hthr`: `Function::relabel_run` (a renamed function runs as it did with its calls answered at the new names, an equation between states); `program_spanned` and `program_spanned_sources` (a program proved a function at a time over a family of files, each function's calls answered by anything that answers as the sources say); `Function::run_still` (a function that stores nothing runs as it evaluates among callees that leave the file).
+  - `lib/native/runtime/runtime_file.hthr`: class `CompileSpan<F>(f)`, its instances from a reflection (`FFun::compile`, `FFun::compile_measured`), and the two link steps `CompileSpan::spanned` and `Compile::spanned`.
+  - The table of a function that writes is its reading callees by index, then its writing ones; a loop is not in its own table.
+  - Probe (`lib/_tests/native/runtime/runtime_file_tests.hthr`): the raise loop linked by hand with two `runtime fn`s under a numbering that is not its own; the program's run is the loop at every file with a span first, from the instances alone; a misnamed link is refused.
+  - A reading function's code is read once per link for the fact that it stores nothing; [[rt-pure-regions-are-quiet]] would make that a theorem.
+
+  Next is 4c-3c: the generator writes this link, and `raise_span` becomes a `runtime fn`.
