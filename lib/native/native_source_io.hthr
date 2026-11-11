@@ -57,7 +57,7 @@ fn Stmt::straight(self s: Stmt) → Bool {
 // A loop-free statement as world threading: each call put to the world, its
 // answer decoded into the environment. A loop or a procedure call (which
 // `straight` refuses) does nothing.
-fn Stmt::thread(self s: Stmt, call: Answers(), env: Env, io: Io) → Mutated<Io, Flow> {
+fn Stmt::thread(self s: Stmt, call: Readers(), env: Env, io: Io) → Mutated<Io, Flow> {
     match s {
         Compute(region) => Mutated(io, Onward(env.compute(call, region))),
         Invoke(shape) => Mutated(Io::call(io, shape.cmd(env)).after, Onward(shape.answer(env, Io::call(io, shape.cmd(env)).value))),
@@ -80,7 +80,7 @@ fn Stmt::thread(self s: Stmt, call: Answers(), env: Env, io: Io) → Mutated<Io,
 }
 
 // The rest of a `Then`, from where the first statement left the world.
-fn Stmt::then_thread(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>) → Mutated<Io, Flow> {
+fn Stmt::then_thread(rest: Stmt, call: Readers(), m: Mutated<Io, Flow>) → Mutated<Io, Flow> {
     match m.value {
         Onward(next) => Stmt::thread(rest, call, next, m.after),
         Exited(status) => Mutated(m.after, Exited(status)),
@@ -88,14 +88,14 @@ fn Stmt::then_thread(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>) → Muta
 }
 
 // The continuation `Then` binds, read as world threading in `Partial`.
-fn Stmt::then_co(rest: Stmt, call: Answers(), flow: Flow, io: Io) → Partial(Mutated<Io, Flow>) {
+fn Stmt::then_co(rest: Stmt, call: Readers(), flow: Flow, io: Io) → Partial(Mutated<Io, Flow>) {
     match flow {
         Onward(next) => CRet(Stmt::thread(rest, call, next, io)),
         Exited(status) => CRet(Mutated(io, Exited(status))),
     }
 }
 
-theorem Stmt::then_co_ret(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>):
+theorem Stmt::then_co_ret(rest: Stmt, call: Readers(), m: Mutated<Io, Flow>):
     Stmt::then_co(rest, call, m.value, m.after) = CRet(Stmt::then_thread(rest, call, m)) {
     match m.value as λ f => (match f as λ _ => Partial(Mutated<Io, Flow>) {
             Onward(next) => CRet(Stmt::thread(rest, call, next, m.after)),
@@ -108,7 +108,7 @@ theorem Stmt::then_co_ret(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>):
 
 // The theorem: a loop-free statement's tree, read against any world, is its
 // threading, up to the silent steps the reading takes for calls.
-fn Stmt::reads_thread(self s: Stmt, call: Answers(), perform: PerformsCo()) →
+fn Stmt::reads_thread(self s: Stmt, call: Readers(), perform: PerformsCo()) →
     s.straight().IsTrue() → (env: Env) → Io::Reads(s.denote_co(call, perform)(env), λ io => CRet(Stmt::thread(s, call, env, io)))
 {
     match s {
@@ -272,21 +272,21 @@ fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
     }
 }
 
-theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Answers()): region.byte_free().IsTrue() →
-    (values: Valuation()) → (buffers: Buffers()) → region.run(call, values, buffers) = State(region.eval(call, values), buffers) {
+theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Readers()): region.byte_free().IsTrue() →
+    (values: Valuation()) → (buffers: Buffers()) → region.run(call, values, buffers) = State(region.eval(call(buffers), values), buffers) {
     match region {
         Dataflow(body) => λ free values buffers => run_nodes_pure(body.nodes, free, values, buffers),
         Sequence(prefix, continuation) => λ free values buffers => {
             let parts = Bool::is_true_and(nodes_pure(prefix.nodes), continuation.byte_free(), free);
             j(sym(run_nodes_pure(prefix.nodes, parts.left, values, buffers)),
-                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, eval_nodes(prefix.nodes, values)), buffers),
+                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call(buffers), eval_nodes(prefix.nodes, values)), buffers),
                 continuation.run_byte_free(call, parts.right, eval_nodes(prefix.nodes, values), buffers))
         },
         Compose(prefix, continuation) => λ free values buffers => {
             let parts = Bool::is_true_and(prefix.byte_free(), continuation.byte_free(), free);
             j(sym(prefix.run_byte_free(call, parts.left, values, buffers)),
-                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, prefix.eval(call, values)), buffers),
-                continuation.run_byte_free(call, parts.right, prefix.eval(call, values), buffers))
+                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call(buffers), prefix.eval(call(buffers), values)), buffers),
+                continuation.run_byte_free(call, parts.right, prefix.eval(call(buffers), values), buffers))
         },
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ free values buffers => {
             let parts = Bool::is_true_and(when_true.byte_free(), when_false.byte_free(), free);
@@ -297,13 +297,13 @@ theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Ans
                         False => f.values(w, id),
                         True => when_true.run(call, values, buffers).values(w, id),
                     }, match b { False => f.buffers, True => when_true.run(call, values, buffers).buffers }) =
-                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), buffers),
+                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(buffers), values), buffers),
                 j(sym(when_true.run_byte_free(call, parts.left, values, buffers)), λ t _ => State(λ w id => match b {
-                            False => when_false.eval(call, values)(w, id),
+                            False => when_false.eval(call(buffers), values)(w, id),
                             True => t.values(w, id),
                         }, match b { False => buffers, True => t.buffers }) =
-                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), buffers),
-                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
+                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(buffers), values), buffers),
+                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(buffers), values), held),
                         same_either)))
         },
         Call(_, _, _) => λ _ values buffers => refl,
@@ -326,7 +326,7 @@ theorem word_port_ids(ids: List<Nat>): Port::ids(word_ports(ids)) = ids {
 }
 
 // What a run writes is among what the region names as written.
-theorem StructuredRegion::written_within(self region: StructuredRegion, call: Answers()): (values: Valuation()) → (buffers: Buffers()) →
+theorem StructuredRegion::written_within(self region: StructuredRegion, call: Readers()): (values: Valuation()) → (buffers: Buffers()) →
     (id: Nat) → absent(id, region.writes()).IsTrue() → absent(id, Port::ids(region.written(call, values, buffers))).IsTrue() {
     match region {
         Dataflow(body) => λ values buffers id h => j(sym(nodes_write_ids(body.nodes)), λ l _ => absent(id, l).IsTrue(), h),
@@ -370,7 +370,7 @@ theorem StructuredRegion::written_within(self region: StructuredRegion, call: An
 }
 
 // A byte-free region keeps the buffers.
-theorem Env::compute_buffers(self env: Env, call: Answers(), region: StructuredRegion, free: region.byte_free().IsTrue()):
+theorem Env::compute_buffers(self env: Env, call: Readers(), region: StructuredRegion, free: region.byte_free().IsTrue()):
     env.compute(call, region).buffers = env.buffers {
     let after = region.run(call, env.valuation(), env.buffers);
     trans(Env::settle_buffers(after.values, region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
@@ -378,7 +378,7 @@ theorem Env::compute_buffers(self env: Env, call: Answers(), region: StructuredR
 }
 
 // A word the region does not name as written keeps its number.
-theorem Env::compute_other(self env: Env, call: Answers(), region: StructuredRegion, id: Nat, h: absent(id, region.writes()).IsTrue()):
+theorem Env::compute_other(self env: Env, call: Readers(), region: StructuredRegion, id: Nat, h: absent(id, region.writes()).IsTrue()):
     env.compute(call, region).number(id) = env.number(id) {
     let after = region.run(call, env.valuation(), env.buffers);
     Env::settle_other(after.values, id, region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args),
@@ -387,9 +387,9 @@ theorem Env::compute_other(self env: Env, call: Answers(), region: StructuredReg
 
 // A byte-free region followed by a move to `out`: `out` holds the moved
 // port's value, at the move's width.
-theorem Env::compute_moved(self env: Env, call: Answers(), region: StructuredRegion, free: region.byte_free().IsTrue(), width, out, src: Nat):
+theorem Env::compute_moved(self env: Env, call: Readers(), region: StructuredRegion, free: region.byte_free().IsTrue(), width, out, src: Nat):
     env.compute(call, Compose(region, Dataflow(Region(Ports(Nil), [Move(width, out, src)], Ports(Nil))))).number(out) =
-        region.eval(call, env.valuation())(width, src).toNat() {
+        region.eval(call(env.buffers), env.valuation())(width, src).toNat() {
     let after = region.run(call, env.valuation(), env.buffers);
     let moved = Valuation::set(after.values, out, λ wd => after.values(wd, src));
     trans(Env::settle_last(moved, Port(out, width), region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
@@ -419,7 +419,7 @@ fn Stmt::then_run(rest: Io → Env → Partial(Mutated<Io, Flow>), m: Mutated<Io
 // (docs/effects-capabilities-design.md §4); a procedure call is its tree
 // read against the world. A function of the environment and the world, so
 // that the recursion is on the statement.
-fn Stmt::run(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env → Io → Partial(Mutated<Io, Flow>) {
+fn Stmt::run(self s: Stmt, call: Readers(), perform: PerformsCo()) → Env → Io → Partial(Mutated<Io, Flow>) {
     match s {
         Compute(region) => λ env io => CRet(Mutated(io, Onward(env.compute(call, region)))),
         Invoke(shape) => λ env io => CRet(Stmt::thread(Invoke(shape), call, env, io)),
@@ -440,7 +440,7 @@ fn Stmt::run(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env → I
 // The theorem: every statement's tree, read against any world, is its
 // threading, up to silent steps. A loop is the loop lemma (`Io::reads_iter`)
 // at the pass's reading.
-fn Stmt::reads_run(self s: Stmt, call: Answers(), perform: PerformsCo()) →
+fn Stmt::reads_run(self s: Stmt, call: Readers(), perform: PerformsCo()) →
     (env: Env) → Io::Reads(s.denote_co(call, perform)(env), λ io => s.run(call, perform)(env, io))
 {
     match s {
@@ -487,7 +487,7 @@ fn Stmt::reads_run(self s: Stmt, call: Answers(), perform: PerformsCo()) →
 
 // A loop-free statement's threading in `Partial` is its plain threading,
 // returned.
-fn Stmt::run_straight(self s: Stmt, call: Answers(), perform: PerformsCo()) → s.straight().IsTrue() → (env: Env) → (io: Io) →
+fn Stmt::run_straight(self s: Stmt, call: Readers(), perform: PerformsCo()) → s.straight().IsTrue() → (env: Env) → (io: Io) →
     Eutt<Mutated<Io, Flow>>(Events::none(), s.run(call, perform)(env, io), CRet(Stmt::thread(s, call, env, io)))
 {
     match s {

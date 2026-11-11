@@ -199,7 +199,7 @@ theorem Env::steps_args(nodes: List<Node>): (env: Env) → env.steps(nodes).args
 
 // A region's meaning writes only the words it touches, and keeps the
 // command line.
-theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Answers()): (env: Env) → (x: Nat) →
+theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Readers()): (env: Env) → (x: Nat) →
     absent(x, region.touches()).IsTrue() → region.meaning(call, env).number(x) = env.number(x) {
     match region {
         Dataflow(body) => λ env x h => Env::steps_frame(body.nodes, env, x, h),
@@ -848,14 +848,14 @@ theorem clear_of(x, count, exhausted: Nat, parameters, touched: List<Nat>, h: ab
 
 // The code from `p` to `q` runs as the region's meaning, from what it needs
 // live to what is live after it.
-fn Target::Computes(self t: Target, region: StructuredRegion, call: Answers(), live, out: List<Nat>, p, q: Prog) → Type {
+fn Target::Computes(self t: Target, region: StructuredRegion, call: Readers(), live, out: List<Nat>, p, q: Prog) → Type {
     (env: Env) → (tree: ITree<BitVec(64)>(Events::linux())) → t.At(prog_len(q), out, tree, region.meaning(call, env)) → t.At(prog_len(p), live, tree, env)
 }
 
 // Every call of a function the compile emits runs as the call's meaning:
 // the hypothesis a region's claim takes for its `Call`s, proved from the
 // functions' contracts (`Target::functions_run`, native_compile_function).
-fn Target::Functions(self t: Target, call: Answers()) → Type {
+fn Target::Functions(self t: Target, call: Readers()) → Type {
     (p: Prog) → (out: List<Nat>) → (callee: Nat) → (arguments: List<Nat>) → (result: Nat) →
         t.layout().function_fits(callee, arguments, result).IsTrue() →
         p.function_call(t.layout(), out, callee, arguments, result).Within(t.program) → t.homes.apart(result, out).IsTrue() →
@@ -865,7 +865,7 @@ fn Target::Functions(self t: Target, call: Answers()) → Type {
 
 // At the loop's head with `m` passes left in its count, the parameters
 // holding the pass's state: the code runs on to where the passes end.
-theorem Target::loop_head(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+theorem Target::loop_head(self t: Target, call: Readers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
     exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, set, done, stop, down, after, live: List<Nat>,
     k: LoopCode(p, t.layout(), out, names, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, c),
     h: LoopChecked(t.homes, out, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, live),
@@ -1047,7 +1047,7 @@ theorem Target::loop_head(self t: Target, call: Answers(), inputs: List<Nat>, bo
 // A loop's code runs as its meaning: the entry sets the count and the
 // parameters, the head runs the passes, and the exit's moves leave the
 // outputs, the bit and every word the loop never writes as the meaning does.
-theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+theorem Target::loop_goes(self t: Target, call: Readers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
     exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
     emitted: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).code(p, t.layout(), out, names) = Some(c),
     within: c.prog.Within(t.program),
@@ -1176,7 +1176,7 @@ theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bo
 // ---------------------------------------------------------------------------
 // Every region compiled runs as its meaning
 
-theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Answers(), fns: t.Functions(call)): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
+theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Readers(), fns: t.Functions(call)): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
     (c: Compiled) → region.code(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → (live: List<Nat>) →
     t.homes.region_checked(region, out) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
     let layout = t.layout();

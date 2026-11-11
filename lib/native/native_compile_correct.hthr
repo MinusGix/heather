@@ -38,6 +38,8 @@ import native_structured_meaning;
 import native_alloc;
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
 import function_ir_lower;
 import linux_trees;
 import linux_x86_64_io;
@@ -287,7 +289,7 @@ fn Target::Exiting(self t: Target, k: Flow → ITree<BitVec(64)>(Events::linux()
 // The code from `p` to `q` runs as the statement, then `k`: wherever `k`
 // goes on from `q`, `out` live, with every environment the statement may
 // finish in. The statement starts with what it needs live (`live_in`).
-fn Target::Runs(self t: Target, s: Stmt, call: Answers(), perform: Performs(), out: List<Nat>, p, q: Prog) → Type {
+fn Target::Runs(self t: Target, s: Stmt, call: Readers(), perform: Performs(), out: List<Nat>, p, q: Prog) → Type {
     (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → t.Exiting(k) →
         ((after: Env) → t.At(prog_len(q), out, k(Onward(after)), after)) →
         t.At(prog_len(p), s.live_in(t.homes, out), ITree::bind(Events::linux(), s.denote(call, perform, n, env), k), env)
@@ -296,14 +298,14 @@ fn Target::Runs(self t: Target, s: Stmt, call: Answers(), perform: Performs(), o
 // Every call the compile emits runs as the call: the hypothesis a
 // statement's claim takes for its `Perform`s, proved for a source's own
 // procedures by induction on the depth (`Target::calls`).
-fn Target::Calls(self t: Target, call: Answers(), perform: Performs()) → Type {
+fn Target::Calls(self t: Target, call: Readers(), perform: Performs()) → Type {
     (p: Prog) → (out: List<Nat>) → (index: Nat) → (args, results: List<Nat>) → t.layout().call_fits(out, index, args, results).IsTrue() →
         p.performs(t.layout(), out, index, args, results).Within(t.program) → t.homes.all_apart(results, out).IsTrue() →
         t.Runs(Perform(index, args, results), call, perform, out, p, p.performs(t.layout(), out, index, args, results))
 }
 
 // With no procedures no call fits.
-theorem Target::calls_bare(self t: Target, bare: t.procedures = Nil, call: Answers(), perform: Performs()): t.Calls(call, perform) {
+theorem Target::calls_bare(self t: Target, bare: t.procedures = Nil, call: Readers(), perform: Performs()): t.Calls(call, perform) {
     λ p out index args results fit => false_elim(j(bare, λ ps _ => Bool::IsTrue(match ps.nth(index) {
         None => False,
         Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
@@ -314,7 +316,7 @@ theorem Target::calls_bare(self t: Target, bare: t.procedures = Nil, call: Answe
 
 // The same where the words `known` holds are known as the statement starts:
 // from every environment that has them, needing only `live_head` live.
-fn Target::RunsK(self t: Target, s: Stmt, known: List<Fact>, call: Answers(), perform: Performs(), out: List<Nat>, p, q: Prog) → Type {
+fn Target::RunsK(self t: Target, s: Stmt, known: List<Fact>, call: Readers(), perform: Performs(), out: List<Nat>, p, q: Prog) → Type {
     (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(known) → t.Exiting(k) →
         ((after: Env) → t.At(prog_len(q), out, k(Onward(after)), after)) →
         t.At(prog_len(p), s.live_head(t.homes, known, out), ITree::bind(Events::linux(), s.denote(call, perform, n, env), k), env)
@@ -354,7 +356,7 @@ theorem Stmt::live_head_nil(self s: Stmt, homes: Homes, out: List<Nat>): s.live_
     }
 }
 
-theorem Target::runs_of(self t: Target, s: Stmt, call: Answers(), perform: Performs(), out: List<Nat>, p, q: Prog,
+theorem Target::runs_of(self t: Target, s: Stmt, call: Readers(), perform: Performs(), out: List<Nat>, p, q: Prog,
     runs: t.RunsK(s, Nil, call, perform, out, p, q)): t.Runs(s, call, perform, out, p, q) {
     λ n env k exits next => j(s.live_head_nil(t.homes, out), λ l _ => t.At(prog_len(p), l, ITree::bind(Events::linux(), s.denote(call, perform, n, env), k), env),
         runs(n, env, k, trivial, exits, next))
@@ -427,7 +429,7 @@ theorem Target::at_similar(self t: Target, at: Nat, live: List<Nat>, tree, other
 // bit is set, and out past the loop's label when it is clear. The body
 // runs with the bit, the set and what is live after the loop live after
 // it (`loop_after`), and needs no more than the set before it (`closed`).
-theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answers(), perform: Performs(), n: Nat, p: Prog, names: Nat, b: Prog, out, set: List<Nat>,
+theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Readers(), perform: Performs(), n: Nat, p: Prog, names: Nat, b: Prog, out, set: List<Nat>,
     inside: again < t.words,
     within: then(b.tests(t.layout(), again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))).Within(t.program),
     head_within: p.label(Succ(names)).Within(t.program),
@@ -482,7 +484,7 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answer
 // A structured region compiled runs as its run settled: its code runs as
 // its meaning (`StructuredRegion::code_runs`), which is the run settled
 // where the region is scoped from every word (`compute_same`).
-theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, call: Answers(), fns: t.Functions(call), p: Prog, out: List<Nat>, names: Nat, c: Compiled,
+theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, call: Readers(), fns: t.Functions(call), p: Prog, out: List<Nat>, names: Nat, c: Compiled,
     emitted: (match region.scopes() { False => None, True => region.code(p, t.layout(), out, names) }) = Some(c), within: c.prog.Within(t.program),
     checked: Bool::IsTrue(match t.homes.region_checked(region, out) { None => False, Some(_) => True })):
     (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → t.Exiting(k) →
@@ -519,14 +521,14 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
 
 // What `emits_runs` proves of a statement: every emission of it, whatever
 // is known as it starts, runs as it.
-fn Target::EmitsRun(self t: Target, s: Stmt, call: Answers(), perform: Performs()) → Type {
+fn Target::EmitsRun(self t: Target, s: Stmt, call: Readers(), perform: Performs()) → Type {
     (p: Prog) → (out: List<Nat>) → (known: List<Fact>) → (names: Nat) → (c: Compiled) →
         s.emits(p, t.layout(), out, known, names) = Some(c) → c.prog.Within(t.program) → s.checks(t.homes, out).IsTrue() → t.RunsK(s, known, call, perform, out, p, c.prog)
 }
 
 // A `Then` whose parts run with nothing known: the first part, then the
 // rest.
-theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Answers(), perform: Performs(),
+theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Readers(), perform: Performs(),
     ih_first: t.EmitsRun(first, call, perform), ih_rest: t.EmitsRun(rest, call, perform), p: Prog, out: List<Nat>, names: Nat, c: Compiled,
     emitted: (match first.emits(p, t.layout(), rest.live_in(t.homes, out), Nil, names) as λ _ => Option<Compiled> {
         None => None,
@@ -562,7 +564,7 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Answers(), per
 
 // A `Then` whose first part is a call or an exit: that part starts with
 // what the sequence knows, the rest with nothing.
-theorem Target::then_known(self t: Target, first, rest: Stmt, call: Answers(), perform: Performs(),
+theorem Target::then_known(self t: Target, first, rest: Stmt, call: Readers(), perform: Performs(),
     ih_first: t.EmitsRun(first, call, perform), ih_rest: t.EmitsRun(rest, call, perform), p: Prog, out: List<Nat>, known: List<Fact>, names: Nat, c: Compiled,
     emitted: (match first.emits(p, t.layout(), rest.live_in(t.homes, out), known, names) as λ _ => Option<Compiled> {
         None => None,
@@ -604,7 +606,7 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Answers(), p
 // compiled with only what that then needs live, the rest with the words
 // known. The leaf's run leaves the facts (`Env::computes_knows`), and the
 // check `pair_known` made puts what the leaf needs within what it needed.
-theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Answers(), perform: Performs(),
+theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Readers(), perform: Performs(),
     ih_rest: t.EmitsRun(rest, call, perform), p: Prog, out: List<Nat>, names: Nat, c: Compiled, f: Fact, fs: List<Fact>,
     carried: Compute(Dataflow(body)).pair_known(rest, t.homes, out) = Cons(f, fs),
     emitted: (match p.computes_best(t.layout(), rest.live_head(t.homes, Cons(f, fs), out), body.nodes, names) as λ _ => Option<Compiled> {
@@ -650,7 +652,7 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Answer
     })(refl, emitted)
 }
 
-theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)):
+theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Readers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)):
     t.EmitsRun(s, call, perform) {
     let layout = t.layout();
     match s {
@@ -913,7 +915,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Answers(), perform: Perf
 }
 
 // Nothing known as the statement starts.
-theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
+theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Readers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
     s.emit(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → s.checks(t.homes, out).IsTrue() → t.Runs(s, call, perform, out, p, c.prog) {
     λ p out names c emitted within checked => t.runs_of(s, call, perform, out, p, c.prog, s.emits_runs(t, call, perform, calls, fns, p, out, Nil, names, c, emitted, within, checked))
 }
@@ -1404,7 +1406,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) + 80 * src.functions.len() <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
-    let call = program_eval(src.functions);
+    let call = program_readers(src.functions);
     let layout = src.layout(r.low, homes);
     let entry = src.entry(r.low, homes);
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
@@ -1680,7 +1682,7 @@ theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.f
 }
 
 // A call's tree, its procedure found.
-theorem Source::performs_found(self src: Source, call: Answers(), n, d, index: Nat, proc: Procedure, found: src.procedures.nth(index) = Some(proc),
+theorem Source::performs_found(self src: Source, call: Readers(), n, d, index: Nat, proc: Procedure, found: src.procedures.nth(index) = Some(proc),
     args, results: List<Nat>, env: Env):
     src.performs(call, n, Succ(d))(index, args, results, env) =
         ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow)) {
@@ -1734,7 +1736,7 @@ theorem Gprs::holding_scratch(self g: Gprs, g2: Gprs, keeps: g2.KeepsScratch(g),
 // Every call runs as the call
 
 // No room: the shared exit, as the source's call past the depth.
-theorem Target::perform_deep(self t: Target, src: Source, call: Answers(), n: Nat, room: t.room = 0, hosts: t.Hosts()):
+theorem Target::perform_deep(self t: Target, src: Source, call: Readers(), n: Nat, room: t.room = 0, hosts: t.Hosts()):
     t.Calls(call, src.performs(call, n, 0)) {
     let layout = t.layout();
     λ p out index args results fit within apart n2 env k exits next => {
@@ -1767,7 +1769,7 @@ theorem Target::perform_deep(self t: Target, src: Source, call: Answers(), n: Na
 // Room for one more: the frame entered, the words saved, the arguments
 // passed, the call, the callee's body by the depth below, the return, the
 // words restored, the frame left, and the results taken.
-theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d: Nat, room: t.room = Succ(d), tp: t.procedures = src.procedures,
+theorem Target::perform_call(self t: Target, src: Source, call: Readers(), n, d: Nat, room: t.room = Succ(d), tp: t.procedures = src.procedures,
     hosts: t.Hosts(), answers: t.Answered(call),
     ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
     t.Calls(call, src.performs(call, n, Succ(d))) {
@@ -1985,7 +1987,7 @@ theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d:
 }
 
 // Every call at depth `d` runs as the call, by induction on the depth.
-theorem Source::calls_at(self src: Source, call: Answers(), n: Nat, d: Nat):
+theorem Source::calls_at(self src: Source, call: Readers(), n: Nat, d: Nat):
     (t: Target) → t.procedures = src.procedures → t.Hosts() → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
     match d {
         Zero => λ t tp hosts _ room => t.perform_deep(src, call, n, room, hosts),
@@ -2005,7 +2007,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) + 80 * src.functions.len() <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
-    let call = program_eval(src.functions);
+    let call = program_readers(src.functions);
     let layout = src.layout(r.low, homes);
     let entry = src.entry(r.low, homes);
     let ok = src.allocation_sound(homes, allocated);
@@ -2021,7 +2023,8 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let linked = built.proof.right.right.right.right.right;
     let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, linked.proof.proof);
-    let answers: t.Answered(call) = t.answers_of(meets.left, meets.right);
+    let linking = Bool::is_true_and(program_evaluable(src.functions), program_unlent(src.functions), meets.left);
+    let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
     let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());

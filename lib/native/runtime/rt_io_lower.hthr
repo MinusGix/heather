@@ -287,7 +287,7 @@ theorem locs_hold_same(tys: Nat → RecInfo, env, env2: Env, g: List<Ty>): (locs
 
 // A region that keeps the buffers and names none of the variables' words as
 // written keeps every variable.
-theorem Loc::same_compute(env: Env, call: Answers(), region: StructuredRegion, keeps: env.compute(call, region).buffers = env.buffers,
+theorem Loc::same_compute(env: Env, call: Readers(), region: StructuredRegion, keeps: env.compute(call, region).buffers = env.buffers,
     locs: List<Loc>): Loc::clear(locs, region.writes()).IsTrue() → Loc::AllSame(locs, env, env.compute(call, region)) {
     match locs {
         Nil => λ _ => trivial,
@@ -737,7 +737,7 @@ fn ETm::lower_value(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat
 fn ETm::ValueHolds(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<Lowered>) → Type {
     match r {
         None => True,
-        Some(c) => (c.next = Succ(c.result)) ∧ ((call: Answers()) → Tm::CallsAgree(w, call) → (env: Env) → (vals: rt::Env(w.tys, g)) →
+        Some(c) => (c.next = Succ(c.result)) ∧ ((call: Readers()) → ((held: Buffers()) → Tm::CallsAgree(w, call(held))) → (env: Env) → (vals: rt::Env(w.tys, g)) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             (next <= c.result) ∧ LocsHold(w.tys, env.compute(call, c.region), Cons(Tm::ty(v, w, g), g), Cons(InWord(c.result), locs),
                 Pair(Tm::sem(v, w, g, vals), vals))),
@@ -757,7 +757,7 @@ theorem ETm::value_sound(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next
         λ _ => Some(Lowered(ETm::moved(t, l), l.next, Succ(l.next))), λ clear _ =>
         ⟨refl, λ call agree env vals held below pos => {
             let lowered = j(e_l, λ r _ => Tm::LowerHolds(v, w, g, Loc::ports(locs), next, r), Tm::lower_sound(v, w, g, Loc::ports(locs), next));
-            let ran = lowered(call, agree, env.valuation(), vals, locs_env_holds(w.tys, env, g, locs, vals, held),
+            let ran = lowered(call(env.buffers), agree(env.buffers), env.valuation(), vals, locs_env_holds(w.tys, env, g, locs, vals, held),
                 locs_below(w.tys, env, g, next, pos, locs, vals, held, below));
             let region = ETm::moved(t, l);
             let free2: region.byte_free().IsTrue() = Bool::is_true_and_intro(l.region.byte_free(),
@@ -766,7 +766,7 @@ theorem ETm::value_sound(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next
             let clear2 = Loc::clear_join(locs, l.region.writes(), l.next, clear, locs_below_mono(locs, next, l.next, ran.left, below));
             let same = Loc::same_compute(env, call, region, keeps, locs, clear2);
             let number = env.compute_moved(call, l.region, free, t.width(), l.next, l.result);
-            ⟨ran.left, ⟨t.kept_moved(w.tys, env.compute(call, region), l.next, l.region.eval(call, env.valuation()), l.result, one,
+            ⟨ran.left, ⟨t.kept_moved(w.tys, env.compute(call, region), l.next, l.region.eval(call(env.buffers), env.valuation()), l.result, one,
                     Tm::sem(v, w, g, vals), ran.right.right.right, number),
                 locs_hold_same(w.tys, env, env.compute(call, region), g, locs, vals, same, held)⟩⟩
         }⟩))))
@@ -1037,7 +1037,7 @@ fn ETm::EndHolds(self t: ETm, w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g)
 fn ETm::LowerHolds(self t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<ELowered>) → Type {
     match r {
         None => True,
-        Some(l) => l.stmt.straight().IsTrue() ∧ ((call: Answers()) → Tm::CallsAgree(w, call) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
+        Some(l) => l.stmt.straight().IsTrue() ∧ ((call: Readers()) → ((held: Buffers()) → Tm::CallsAgree(w, call(held))) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             ETm::Lands(t.ty(w, g), w.tys, l.result, Stmt::thread(l.stmt, call, env, io), t.sem(w, g, vals, io))
                 ∧ t.EndHolds(w, g, vals, io, next, l, Stmt::thread(l.stmt, call, env, io))),
@@ -1156,7 +1156,7 @@ theorem Flow::read_back_keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: 
 // an effectful function (docs/runtime-fn-setups-design.md §6.1), from an
 // environment that holds the variables.
 fn ETm::lower_reads(self t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: t.lower(w, g, locs, next) = Some(l),
-    call: Answers(), agree: Tm::CallsAgree(w, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
+    call: Readers(), agree: (held: Buffers()) → Tm::CallsAgree(w, call(held)), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
     held: LocsHold(w.tys, env, g, locs, vals), below: LocsBelow(locs, next), pos: 0 < next) →
     Io::Reads<t.ty(w, g).sem(w.tys)>(CoTree::map(Events::linux(), l.stmt.denote_co(call, perform)(env), λ flow => flow.read_back(t.ty(w, g), w.tys, l.result)),
         λ io => CRet(t.sem(w, g, vals, io)))

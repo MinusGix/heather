@@ -19,6 +19,7 @@
 
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
 import bitvec;
 import bool;
 import list;
@@ -560,4 +561,64 @@ theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>): p
             }
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// A caller that has no addresses
+
+// The buffers a function lent `count` of them sees: the caller's first
+// `count`, by number, and no others.
+fn lent_buffers(count: Nat, held: Buffers()) → Buffers() {
+    match count {
+        Zero => Nil,
+        Succ(k) => match held { Nil => Nil, Cons(bytes, rest) => Cons(bytes, lent_buffers(k, rest)) },
+    }
+}
+
+// The words a caller with no addresses states for the buffers it lends,
+// buffer `from` first: each home's address stated as zero, which no
+// placeless function's answer reads (`program_eval_placeless`), and its
+// length the buffer's.
+fn stated_homes(from, count: Nat, held: Buffers()) → List<BitVec(64)> {
+    match count {
+        Zero => [],
+        Succ(k) => Cons(BitVec::zero(), Cons(BitVec::ofNat(buffer_bytes(held, from).len()), stated_homes(Succ(from), k, held))),
+    }
+}
+
+// How a program answers a call from a region that has buffers and no
+// addresses (a `Source`'s, `function_ir_state`'s `run`): the function over
+// the buffers it is lent, as they are at the call, on their homes and then
+// the call's words. A function lent nothing is `program_eval`'s on the
+// words, by evaluation.
+fn program_readers(functions: List<Function>) → Readers() {
+    λ held f words => program_eval_over(lent_buffers(program_lent(functions, f), held), functions)(f,
+        stated_homes(0, program_lent(functions, f), held) ++ words)
+}
+
+// No function of the program is lent a buffer.
+fn program_unlent(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.lent.matches(0) && program_unlent(earlier) }
+}
+
+theorem program_unlent_lent(functions: List<Function>): program_unlent(functions).IsTrue() → (f: Nat) → program_lent(functions, f) = 0 {
+    match functions {
+        Nil => λ _ f => refl,
+        Cons(last, earlier) => λ ok f => {
+            let parts = Bool::is_true_and(last.lent.matches(0), program_unlent(earlier), ok);
+            match f.eq_dec(earlier.len()) as λ d => (match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }) = 0 {
+                Inl(_) => last.lent.matches_eq(0, parts.left),
+                Inr(_) => program_unlent_lent(earlier, parts.right, f),
+            }
+        },
+    }
+}
+
+// Such a program answers every call as `program_eval` does, whatever the
+// buffers.
+theorem program_readers_unlent(functions: List<Function>, ok: program_unlent(functions).IsTrue(), held: Buffers(), f: Nat,
+    words: List<BitVec(64)>): program_readers(functions)(held, f, words) = program_eval(functions)(f, words) {
+    j(sym(program_unlent_lent(functions, ok, f)),
+        λ k _ => program_eval_over(lent_buffers(k, held), functions)(f, stated_homes(0, k, held) ++ words) = program_eval(functions)(f, words),
+        refl)
 }

@@ -43,7 +43,7 @@ import set_tactic;
 // ---------------------------------------------------------------------------
 // The meaning
 
-fn StructuredRegion::meaning(self region: StructuredRegion, call: Answers(), env: Env) → Env {
+fn StructuredRegion::meaning(self region: StructuredRegion, call: Readers(), env: Env) → Env {
     match region {
         Dataflow(body) => env.steps(body.nodes),
         Sequence(prefix, continuation) => continuation.meaning(call, env.steps(prefix.nodes)),
@@ -464,7 +464,7 @@ theorem Nat::matches_false(self a: Nat, b: Nat, ne: a ≠ b): a.matches(b) = Fal
 theorem List::holds_false_absent(self ids: List<Nat>, x: Nat, h: ids.holds(x) = False): absent(x, ids).IsTrue() { by sets() }
 
 // A run leaves every id it wrote no port of as it was.
-theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Answers()): (values: Valuation()) → (buffers: Buffers()) → (w, x: Nat) →
+theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Readers()): (values: Valuation()) → (buffers: Buffers()) → (w, x: Nat) →
     absent(x, port_ids(region.written(call, values, buffers))).IsTrue() → region.run(call, values, buffers).values(w, x) = values(w, x) {
     match region {
         Dataflow(body) => λ values buffers w x h =>
@@ -494,7 +494,7 @@ theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Answers
             },
         Call(callee, arguments, result) => λ values buffers w x h => {
             let parts = Bool::is_true_and(x.differs(result), True, h);
-            Valuation::set_other(values, result, word_value(call(callee, words_of(values, arguments))), w, x, x.differs_ne(result, parts.left))
+            Valuation::set_other(values, result, word_value(call(buffers, callee, words_of(values, arguments))), w, x, x.differs_ne(result, parts.left))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values buffers w x h => {
             let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
@@ -643,7 +643,7 @@ fn Settles(run: State, written: List<Port>, meaning: Env, env: Env, t: Scope) �
     (run.buffers = meaning.buffers) ∧ (Env(env.words, run.buffers, env.args).settle(run.values, written).Same(meaning) ∧ Valuation::Agrees(run.values, meaning, t))
 }
 
-fn StructuredRegion::Faithful(self region: StructuredRegion, call: Answers(), s: Scope, t: Scope) → Type {
+fn StructuredRegion::Faithful(self region: StructuredRegion, call: Readers(), s: Scope, t: Scope) → Type {
     (values: Valuation()) → (env: Env) → Valuation::Agrees(values, env, s) →
         Settles(region.run(call, values, env.buffers), region.written(call, values, env.buffers), region.meaning(call, env), env, t)
 }
@@ -855,7 +855,7 @@ theorem StructuredRegion::loop_shaped(inputs: List<Nat>, bound: Nat, parameters:
 }
 
 // The theorem: a scoped region's run settles as its meaning.
-theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers()): (s, t: Scope) → region.scoped(s) = Some(t) → region.Faithful(call, s, t) {
+theorem StructuredRegion::faithful(self region: StructuredRegion, call: Readers()): (s, t: Scope) → region.scoped(s) = Some(t) → region.Faithful(call, s, t) {
     match region {
         Dataflow(body) => λ s t scoped values env agrees => {
             let r = run_nodes(body.nodes, values, env.buffers);
@@ -943,12 +943,12 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers(
                     let args_eq: (words_of(values, arguments) = words_of(env.valuation(), arguments)) =
                         words_agree(arguments, env.valuation(), values, λ id m => agrees(id, s.all_defined_mem(arguments, reads, id, m)).left);
                     let m0 = Env(env.words, env.buffers, env.args).settle(
-                        Valuation::set(env.valuation(), result, word_value(call(callee, words_of(env.valuation(), arguments)))), [Port(result, 64)]);
-                    j(t_is, λ u _ => Settles(State(Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))), env.buffers),
+                        Valuation::set(env.valuation(), result, word_value(call(env.buffers, callee, words_of(env.valuation(), arguments)))), [Port(result, 64)]);
+                    j(t_is, λ u _ => Settles(State(Valuation::set(values, result, word_value(call(env.buffers, callee, words_of(values, arguments)))), env.buffers),
                             [Port(result, 64)], m0, env, u),
-                        j(sym(args_eq), λ ws _ => Settles(State(Valuation::set(values, result, word_value(call(callee, ws))), env.buffers),
+                        j(sym(args_eq), λ ws _ => Settles(State(Valuation::set(values, result, word_value(call(env.buffers, callee, ws))), env.buffers),
                                 [Port(result, 64)], m0, env, s.put(result, True)),
-                            StructuredRegion::call_settles(env, values, s, agrees, result, call(callee, words_of(env.valuation(), arguments)))))
+                            StructuredRegion::call_settles(env, values, s, agrees, result, call(env.buffers, callee, words_of(env.valuation(), arguments)))))
                 },
             }),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
@@ -1001,7 +1001,7 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers(
 }
 
 // From every word, a scoped region's run settles to its meaning's numbers.
-theorem StructuredRegion::compute_same(self region: StructuredRegion, call: Answers(), t: Scope, scoped: region.scoped(Scope::all()) = Some(t), env: Env):
+theorem StructuredRegion::compute_same(self region: StructuredRegion, call: Readers(), t: Scope, scoped: region.scoped(Scope::all()) = Some(t), env: Env):
     env.compute(call, region).Same(region.meaning(call, env)) {
     region.faithful(call, Scope::all(), t, scoped, env.valuation(), env, env.agrees_all()).right.left
 }

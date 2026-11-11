@@ -29,6 +29,8 @@ import native_compile_structured;
 import native_compile_perform;
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
 import function_ir_lower;
 import function_ir_lower_calls;
 import native_alloc;
@@ -97,28 +99,35 @@ theorem Target::call_pushed(self t: Target, s: MachineState<X86Memory(t.r.profil
 // Every function of the target, called at its label with as many words as
 // it takes in the argument registers and its room on the stack, returns
 // `call`'s answer and meets the callee's contract.
-fn Target::Answered(self t: Target, call: Answers()) → Type {
-    (f: Nat) → Succ(f) <= t.functions.len() → (words: List<BitVec(64)>) → arity_fits(program_arity(t.functions, f), words.len()).IsTrue() →
+fn Target::Answered(self t: Target, call: Readers()) → Type {
+    (held: Buffers()) → (f: Nat) → Succ(f) <= t.functions.len() → (words: List<BitVec(64)>) →
+        arity_fits(program_arity(t.functions, f), words.len()).IsTrue() →
         t.site().Returns(t.stack, asm_labels(t.program, Succ(f)),
             λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
-            t.stack.CalleePost(call(f, words)))
+            t.stack.CalleePost(call(held, f, words)))
 }
 
-// What emitting the functions proves (`Site::Calls`) answers calls as
-// `program_eval` does, the functions evaluable.
-theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functions).IsTrue(),
-    calls: t.site().Calls(t.stack, program_callees(t.functions), t.functions.len())): t.Answered(program_eval(t.functions)) {
-    λ f below words fits => t.site().returns_weaken(t.stack, asm_labels(t.program, Succ(f)),
-        CalleePre<X86Memory(t.r.profile)>(program_callees(t.functions), f, words, program_eval(t.functions, f, words)),
-        λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
-        t.stack.CalleePost(program_eval(t.functions, f, words)),
-        calls(f, below, words, program_eval(t.functions, f, words)),
-        λ i s held => ⟨held.left, ⟨program_eval_computes(t.functions, evaluable, f, words, fits), held.right⟩⟩)
+// What emitting the functions proves (`Site::Calls`) answers calls as the
+// program's readers do (`program_readers`), the functions evaluable and
+// lent no buffer: each is then `program_eval`'s on the words, whatever the
+// buffers hold.
+theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functions).IsTrue(), unlent: program_unlent(t.functions).IsTrue(),
+    calls: t.site().Calls(t.stack, program_callees(t.functions), t.functions.len())): t.Answered(program_readers(t.functions)) {
+    λ held f below words fits => j(sym(program_readers_unlent(t.functions, unlent, held, f, words)),
+        λ answer _ => t.site().Returns(t.stack, asm_labels(t.program, Succ(f)),
+            λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+            t.stack.CalleePost(answer)),
+        t.site().returns_weaken(t.stack, asm_labels(t.program, Succ(f)),
+            CalleePre<X86Memory(t.r.profile)>(program_callees(t.functions), f, words, program_eval(t.functions, f, words)),
+            λ (i: Nat) (s: MachineState<X86Memory(t.r.profile)>) => ArgsIn(words, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+            t.stack.CalleePost(program_eval(t.functions, f, words)),
+            calls(f, below, words, program_eval(t.functions, f, words)),
+            λ i s held => ⟨held.left, ⟨program_eval_computes(t.functions, evaluable, f, words, fits), held.right⟩⟩))
 }
 
 // With no functions there is no call to answer.
-theorem Target::answers_none(self t: Target, none: t.functions = Nil, call: Answers()): t.Answered(call) {
-    λ f below words fits => false_elim(nothing_below_zero(f, j(none, λ fs _ => Succ(f) <= fs.len(), below)))
+theorem Target::answers_none(self t: Target, none: t.functions = Nil, call: Readers()): t.Answered(call) {
+    λ held f below words fits => false_elim(nothing_below_zero(f, j(none, λ fs _ => Succ(f) <= fs.len(), below)))
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +138,7 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
     base.links(functions, places, names) = Some(program) → base.Within(program) {
     match functions {
         Nil => λ same => j(Option::some_inj(base, program, same), λ x _ => base.Within(x), base.within_self()),
-        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) as λ b => (match b as λ _ => Option<Prog> {
+        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) && program_unlent(Cons(last, earlier)) as λ b => (match b as λ _ => Option<Prog> {
                 False => None,
                 True => match emit_functions_after(base, Cons(last, earlier), places, names) { None => None, Some(out) => Some(out.prog) },
             }) = Some(program) → base.Within(program) {
@@ -143,24 +152,27 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
     }
 }
 
-// Linked, the functions are evaluable, and wherever the program is
-// resident each meets its contract at its label.
+// Linked, the functions are evaluable and lent nothing, and wherever the
+// program is resident each meets its contract at its label.
 theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, program: Prog, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), within: program.Within(site.program), functions: List<Function>):
     base.links(functions, places, names) = Some(program) →
-    program_evaluable(functions).IsTrue() ∧ site.Calls(stack, program_callees(functions), functions.len()) {
+    (program_evaluable(functions) && program_unlent(functions)).IsTrue() ∧ site.Calls(stack, program_callees(functions), functions.len()) {
     match functions {
         Nil => λ _ => ⟨trivial, λ f below words result => false_elim(nothing_below_zero(f, below))⟩,
-        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) as λ b => program_evaluable(Cons(last, earlier)) = b →
+        Cons(last, earlier) => (match program_evaluable(Cons(last, earlier)) && program_unlent(Cons(last, earlier)) as λ b =>
+                program_evaluable(Cons(last, earlier)) && program_unlent(Cons(last, earlier)) = b →
                 (match b as λ _ => Option<Prog> {
                     False => None,
                     True => match emit_functions_after(base, Cons(last, earlier), places, names) { None => None, Some(out) => Some(out.prog) },
                 }) = Some(program) →
-                program_evaluable(Cons(last, earlier)).IsTrue() ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
+                (program_evaluable(Cons(last, earlier)) && program_unlent(Cons(last, earlier))).IsTrue()
+                    ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
             False => λ _ none => absurd(none),
             True => λ evaluable => (match emit_functions_after(base, Cons(last, earlier), places, names) as λ o => MayCall<M>(site, stack, Cons(last, earlier), o) →
                     (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) →
-                    program_evaluable(Cons(last, earlier)).IsTrue() ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
+                    (program_evaluable(Cons(last, earlier)) && program_unlent(Cons(last, earlier))).IsTrue()
+                        ∧ site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
                 None => λ _ none => absurd(none),
                 Some(out) => λ may same => ⟨j(sym(evaluable), λ b _ => b.IsTrue(), trivial),
                     may(j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩,
@@ -246,12 +258,12 @@ theorem Env::words_of_valuation(self env: Env, ids: List<Nat>): words_of(env.val
 }
 
 // A call sets its result's word to the answer at its arguments' words.
-theorem Env::call_meaning(self env: Env, call: Answers(), callee: Nat, arguments: List<Nat>, result: Nat):
-    Call(callee, arguments, result).meaning(call, env) = env.set_word(result, call(callee, env.words_at(arguments))) {
-    let answer = call(callee, words_of(env.valuation(), arguments));
+theorem Env::call_meaning(self env: Env, call: Readers(), callee: Nat, arguments: List<Nat>, result: Nat):
+    Call(callee, arguments, result).meaning(call, env) = env.set_word(result, call(env.buffers, callee, env.words_at(arguments))) {
+    let answer = call(env.buffers, callee, words_of(env.valuation(), arguments));
     trans(cong_fn<BitVec(64), Env>(λ x => Env(env.words.put(result, x.toNat(), 0), env.buffers, env.args),
             Valuation::set_here(env.valuation(), result, word_value(answer), 64)),
-        cong_fn<List<BitVec(64)>, Env>(λ ws => env.set_word(result, call(callee, ws)), env.words_of_valuation(arguments)))
+        cong_fn<List<BitVec(64)>, Env>(λ ws => env.set_word(result, call(env.buffers, callee, ws)), env.words_of_valuation(arguments)))
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +271,7 @@ theorem Env::call_meaning(self env: Env, call: Answers(), callee: Nat, arguments
 
 // Every call of a function the compile emits runs as the call's meaning,
 // the functions meeting their contracts.
-theorem Target::functions_run(self t: Target, call: Answers(), answers: t.Answered(call)): t.Functions(call) {
+theorem Target::functions_run(self t: Target, call: Readers(), answers: t.Answered(call)): t.Functions(call) {
     let layout = t.layout();
     let regs = call_registers();
     λ p out callee arguments result fit within apart env tree next => {
@@ -274,12 +286,12 @@ theorem Target::functions_run(self t: Target, call: Answers(), answers: t.Answer
         let few: (arguments.len() <= 6) = Nat::leb_sound(arguments.len(), 6, f3.left);
         let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f3.right, m);
         let words = env.words_at(arguments);
-        let answer = call(callee, words);
+        let answer = call(env.buffers, callee, words);
         let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
         let short: (words.len() <= 6) = omega(words_len, few);
         let arity: arity_fits(program_arity(t.functions, callee), words.len()).IsTrue() =
             j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), n).IsTrue(), f2.left);
-        let returns = answers(callee, below, words, arity);
+        let returns = answers(env.buffers, callee, below, words, arity);
         let mean_eq: (region.meaning(call, env) = env.set_word(result, answer)) = env.call_meaning(call, callee, arguments, result);
         // The room below the frame: the CALL's word, then the function's.
         let big: (80 * t.functions.len() <= t.index) = omega(t.roomy);

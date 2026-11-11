@@ -76,6 +76,7 @@ import function_ir_eval;
 import function_ir_lower;
 import function_ir_lower_calls;
 import function_ir_state;
+import function_ir_placeless;
 import function_ir_pass;
 import x86_64;
 import x86_64_block;
@@ -1127,11 +1128,12 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
 
 // The functions the regions call, after the program's own code `p`, their
 // values where `places` proposes; their inner labels from `names`. Checked
-// evaluable first: a call's answer is `program_eval`'s only then.
+// evaluable first, and lent no buffer: a call's answer is `program_eval`'s
+// only then.
 fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
-        Cons(_, _) => match program_evaluable(functions) {
+        Cons(_, _) => match program_evaluable(functions) && program_unlent(functions) {
             False => None,
             True => match emit_functions_after(p, functions, places, names) { None => None, Some(out) => Some(out.prog) },
         },

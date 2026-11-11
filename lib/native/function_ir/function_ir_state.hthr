@@ -7,8 +7,10 @@
 // schedule order: for byte nodes on one buffer the schedule is an order,
 // not only a validation aid. Every other node, and every call, leaves the
 // file as it was; a conditional runs the arm its bit picks, and a loop
-// carries the file from pass to pass. A function a region calls sees no
-// buffers: a callee is `eval`ed on words.
+// carries the file from pass to pass. A call is answered over the file as
+// it is when the call is made (`Readers`): which of its buffers a callee
+// sees is the caller's to say, and `Readers::blind` is the callee that sees
+// none.
 //
 // `eval` stays the word evaluator S4's lowering and compile-x86's
 // certificates are stated over, and it is `run` from no buffers, where a
@@ -195,7 +197,14 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
 // ---------------------------------------------------------------------------
 // Structured regions
 
-fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → State {
+// What a call is answered with, over the buffers as they are when it is
+// made.
+fn Readers() → Type { Buffers() → Answers() }
+
+// Callees that see no buffers: each `eval`ed on its words alone.
+fn Readers::blind(call: Answers()) → Readers() { λ _ => call }
+
+fn StructuredRegion::run(self region: StructuredRegion, call: Readers(), values: Valuation(), buffers: Buffers()) → State {
     match region {
         Dataflow(body) => run_nodes(body.nodes, values, buffers),
         Sequence(prefix, continuation) => {
@@ -214,7 +223,8 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values:
                 False => when_false.run(call, values, buffers).buffers,
                 True => when_true.run(call, values, buffers).buffers,
             }),
-        Call(callee, arguments, result) => State(Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))), buffers),
+        Call(callee, arguments, result) => State(
+            Valuation::set(values, result, word_value(call(buffers, callee, words_of(values, arguments)))), buffers),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers);
@@ -223,17 +233,18 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values:
     }
 }
 
-// The theorem: from no buffers a region runs as it evaluates.
-theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Answers()): (values: Valuation()) →
-    region.run(call, values, Nil) = State(region.eval(call, values), Nil) {
+// The theorem: from no buffers a region runs as it evaluates, its calls
+// answered as they are over none.
+theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Readers()): (values: Valuation()) →
+    region.run(call, values, Nil) = State(region.eval(call(Nil), values), Nil) {
     match region {
         Dataflow(body) => λ values => run_nodes_empty(body.nodes, values),
         Sequence(prefix, continuation) => λ values => j(sym(run_nodes_empty(prefix.nodes, values)),
-            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, eval_nodes(prefix.nodes, values)), Nil),
+            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call(Nil), eval_nodes(prefix.nodes, values)), Nil),
             continuation.run_empty(call, eval_nodes(prefix.nodes, values))),
         Compose(prefix, continuation) => λ values => j(sym(prefix.run_empty(call, values)),
-            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, prefix.eval(call, values)), Nil),
-            continuation.run_empty(call, prefix.eval(call, values))),
+            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call(Nil), prefix.eval(call(Nil), values)), Nil),
+            continuation.run_empty(call, prefix.eval(call(Nil), values))),
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ values => {
             let b = values(1, condition).head_bit();
             let nil_either: ((match b as λ _ => Buffers() { False => Nil, True => Nil }) = Nil) =
@@ -242,18 +253,18 @@ theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Answers
                         False => f.values(w, id),
                         True => when_true.run(call, values, Nil).values(w, id),
                     }, match b { False => f.buffers, True => when_true.run(call, values, Nil).buffers }) =
-                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
+                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(Nil), values), Nil),
                 j(sym(when_true.run_empty(call, values)), λ t _ => State(λ w id => match b {
-                            False => when_false.eval(call, values)(w, id),
+                            False => when_false.eval(call(Nil), values)(w, id),
                             True => t.values(w, id),
                         }, match b { False => Nil, True => t.buffers }) =
-                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
-                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
+                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(Nil), values), Nil),
+                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call(Nil), values), held),
                         nil_either)))
         },
         Call(_, _, _) => λ values => refl,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values => {
-            let step = λ (pass: Valuation()) => body.eval(call, pass);
+            let step = λ (pass: Valuation()) => body.eval(call(Nil), pass);
             let ended = loop_run_empty(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step,
                 λ v => body.run_empty(call, v), parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
             cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
