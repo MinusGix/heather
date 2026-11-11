@@ -51,7 +51,7 @@ use crate::value::{
 
 use crate::typing::ity::{ITy, Sel};
 
-use super::super::{Conv, Env, R, NC};
+use super::super::{Conv, Env, Spelled, R, NC};
 use super::{Dom, IWfSigC, MSigC, TmView, TyView};
 
 /// The value domain: `Conv<'v, Values>` is the kernel's conversion checker.
@@ -1129,6 +1129,10 @@ impl<'v> Dom<'v> for Values {
         TyC::here(env, env.arena.ty(TyClo::new(env.rho, t)))
     }
 
+    fn embed_tm(env: &Env<'v>, t: Rc<Term>) -> TmC<'v> {
+        TmC::here(env, env.arena.tm(TmClo::syn(env.rho, t)))
+    }
+
     /// Raw syntax scoped in Γ-plus-telescope, read in the recursor's own
     /// environment: the stored environment is carried across the telescope
     /// [`Dom::push_spec`] just pushed — weakened in the outer namespaces,
@@ -1522,6 +1526,30 @@ impl<'v> Dom<'v> for Values {
                     }
                     _ => false,
                 })
+    }
+
+    const SPELLED: bool = true;
+
+    fn closed_spellings(a: &TyC<'v>, b: &TyC<'v>) -> Option<(Rc<Type>, Rc<Type>)> {
+        let ((e1, b1), (e2, b2)) = (a.clo.as_syn()?, b.clo.as_syn()?);
+        // A closed body is read as ambient syntax, so at global offset 0
+        // only.
+        if e1.gshift() != 0 || e2.gshift() != 0 {
+            return None;
+        }
+        (Spelled::of(b1).closed() && Spelled::of(b2).closed()).then(|| (Rc::clone(b1), Rc::clone(b2)))
+    }
+
+    fn closed_codes(a: &TmC<'v>, b: &TmC<'v>) -> Option<(Rc<Term>, Rc<Term>)> {
+        let ((e1, b1), (e2, b2)) = (a.clo.as_syn()?, b.clo.as_syn()?);
+        if e1.gshift() != 0 || e2.gshift() != 0 {
+            return None;
+        }
+        let closed = |c: &Rc<Term>| {
+            let u = crate::bounds::term_local_use(c);
+            u.bound == 0 && !u.has_wk
+        };
+        (closed(b1) && closed(b2)).then(|| (Rc::clone(b1), Rc::clone(b2)))
     }
 
     /// Scoped identity for terms, including bounded congruence of suspended

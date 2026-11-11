@@ -147,12 +147,19 @@ pub struct GlobalCache {
     psi: Rc<()>,
     bodies: std::cell::RefCell<Vec<Option<Rc<Term>>>>,
     sigs: std::cell::RefCell<Vec<Option<Rc<Sig>>>>,
+    /// Closed spellings conversion found convertible under this Ψ.
+    pub(crate) closed: std::cell::RefCell<crate::conv::ClosedPairs>,
 }
 
 impl GlobalCache {
     /// An empty cache for `psi`.
     pub fn for_psi(psi: &GlobalCtx) -> GlobalCache {
-        GlobalCache { psi: psi.bindings.identity(), bodies: Default::default(), sigs: Default::default() }
+        GlobalCache {
+            psi: psi.bindings.identity(),
+            bodies: Default::default(),
+            sigs: Default::default(),
+            closed: std::cell::RefCell::new(crate::conv::ClosedPairs::for_psi(psi)),
+        }
     }
 
     /// Whether this cache was built for `psi`.

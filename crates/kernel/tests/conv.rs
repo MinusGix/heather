@@ -356,14 +356,32 @@ fn syntactically_equal_root_type_spends_one_fuel_unit() {
     assert_eq!(conv_type(&psi, &g, Layer::Prog, &ty, &ty, &c(0), 1), Ok(()));
     assert_eq!(conv_type(&psi, &g, Layer::Prog, &ty, &nat_to_nat(), &c(0), 1), Ok(()));
 
-    // Conversion remains broader than the shortcut: `El TmNat` and `Nat`
-    // are convertible but not syntactically equal, and need real budget.
+    // So does a code against the type it spells: `El TmNat` and `Nat` are
+    // one former, read off both without reducing (`Conv::lockstep`).
     let el_nat = Type::El { level: Level::Zero, tm: rt(Term::TmNat) };
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), 1), Ok(()));
+
+    // Conversion remains broader than both: `El ((λ_. TmNat) 0)` and `Nat`
+    // are convertible only by reducing, which needs real budget.
+    let redex = Term::App {
+        fun: rt(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: c(1),
+            dom: rty(Type::Nat),
+            body: rt(Term::TmNat),
+        }),
+        dom_level: Level::Zero,
+        cod_level: c(1),
+        dom: rty(Type::Nat),
+        cod: rty(Type::Ty(Level::Zero)),
+        arg: rt(Term::Zero),
+    };
+    let el_redex = Type::El { level: Level::Zero, tm: rt(redex) };
     assert_eq!(
-        conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), 1),
+        conv_type(&psi, &g, Layer::Prog, &el_redex, &Type::Nat, &c(0), 1),
         Err(ConvError::OutOfFuel)
     );
-    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), FUEL), Ok(()));
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_redex, &Type::Nat, &c(0), FUEL), Ok(()));
 }
 
 #[test]

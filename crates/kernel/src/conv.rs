@@ -67,6 +67,7 @@
 //! rules, the fuel accounting, the left-biased inference and the layer
 //! discipline are the same either way.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc as Rc;
 
@@ -145,6 +146,340 @@ impl<T: Clone> Passed<T> {
 
 }
 
+
+/// A type as it is **spelled**: a type, or the decoding `El^l c` of a code.
+/// [`Conv::lockstep`] reads both through [`Spelled::former`], so a type
+/// written out and the code that decodes to it are one spelling to it.
+#[derive(Clone, Copy)]
+pub(crate) enum Spelled<'a> {
+    Ty(&'a Rc<Type>),
+    El(&'a Level, &'a Rc<Term>),
+}
+
+/// A node a [`ClosedPairs`] key names, owned so that the address stays its.
+enum Kept {
+    Ty(#[allow(dead_code)] Rc<Type>),
+    Tm(#[allow(dead_code)] Rc<Term>),
+}
+
+/// Pairs of **closed** spellings found convertible, for one Ψ: kept in that
+/// Ψ's [`GlobalCache`], so for one gate and every query of it.
+///
+/// A closed spelling reads no local variable, so under one Ψ (which fixes
+/// the definitions, the global and the universe variables) it denotes one
+/// type whatever Γ and whatever environment it is met in, and a verdict for
+/// two of them is a fact about the two nodes. Only `convertible` is kept:
+/// exhaustion is not a verdict, and a refusal is not worth a table. The key
+/// ([`ClosedKey`]) is the two nodes' addresses with the level, the layer
+/// and which judgment it was (two types, or two codes at a universe: `El`
+/// is not injective, so the second implies the first and not the reverse).
+/// Every keyed node is owned by its entry, so an address cannot come to
+/// name another node, and one node is one syntax.
+///
+/// What it is for: an elaborated type is a dag, and a comparison of two
+/// spellings of one large type meets the same pair of sub-dags from many
+/// parents, in one query and again in the next (`issues/
+/// conversion-closed-pair-memo.md`).
+pub(crate) struct ClosedPairs {
+    /// The interface boundary of the Ψ the table was made for. It is not
+    /// part of a binding, so not of the identity a [`GlobalCache`] is held
+    /// to ([`GlobalCtx::withheld`]), and a pair convertible by unfolding a
+    /// definition is not one where that definition is withheld.
+    withheld: Option<Rc<crate::term::Withheld>>,
+    pairs: HashMap<ClosedKey, (Kept, Kept), std::hash::BuildHasherDefault<PairHasher>>,
+}
+
+/// What a [`ClosedPairs`] verdict is a verdict of: the two nodes
+/// ([`Spelled::key`]), the judgment (two types, or two codes at a
+/// universe), and its level and layer.
+#[derive(PartialEq, Eq, Hash)]
+struct ClosedKey {
+    a: usize,
+    b: usize,
+    codes: bool,
+    level: Level,
+    layer: Layer,
+}
+
+impl ClosedKey {
+    fn new<'v>(env: &Env<'v>, a: Spelled<'_>, b: Spelled<'_>, l: &Level, codes: bool) -> ClosedKey {
+        ClosedKey { a: a.key(), b: b.key(), codes, level: l.clone(), layer: env.layer }
+    }
+}
+
+/// Entries a [`ClosedPairs`] keeps. Past it nothing is added: a gate of
+/// all-distinct pairs is bounded, nothing is evicted, and so a judgment
+/// never costs more later in a gate than it did earlier.
+const CLOSED_PAIRS_CAP: usize = 1 << 16;
+
+/// The fuel a judgment has to have spent to be worth an entry: a pair of
+/// leaves is judged again for less than the table charges to keep it.
+const CLOSED_PAIR_WORTH: u64 = 8;
+
+impl ClosedPairs {
+    pub(crate) fn for_psi(psi: &GlobalCtx) -> ClosedPairs {
+        ClosedPairs { withheld: psi.withheld.clone(), pairs: HashMap::default() }
+    }
+
+    /// Is `psi`'s interface boundary the one the table was made under?
+    fn serves(&self, psi: &GlobalCtx) -> bool {
+        match (&self.withheld, &psi.withheld) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b) || a == b,
+            _ => false,
+        }
+    }
+}
+
+/// Address pairs are this process's own allocations, not chosen input: a
+/// multiply mix, folded so the table's low index bits see the high ones
+/// (an aligned address has none of its own).
+#[derive(Default)]
+pub(crate) struct PairHasher(u64);
+
+impl std::hash::Hasher for PairHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0.rotate_left(26)
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_usize(usize::from(b));
+        }
+    }
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0.rotate_left(5) ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    #[inline]
+    fn write_u8(&mut self, n: u8) {
+        self.write_usize(usize::from(n));
+    }
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.write_usize(n as usize);
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.write_usize(n as usize);
+    }
+}
+
+/// Which binding former a [`Former::Binder`] is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Binder {
+    Pi,
+    Sigma,
+    W,
+}
+
+/// The former a spelling shows **without reducing**, with its components
+/// as spellings. Each is weak head normal as a type, and the `El` of the
+/// code of each decodes in one step to the same former over the `El`s of
+/// its components (`reduce.rs`, `step_type_frame`; `Eval::decode`), which
+/// is what [`Former::of_code`] reads off.
+pub(crate) enum Former<'a> {
+    Nat,
+    Univ(&'a Level),
+    Unit(&'a Level),
+    Empty(&'a Level),
+    SEmpty(&'a Level),
+    Squash(&'a Level, Spelled<'a>),
+    /// The second component is under the first's binder.
+    Binder(Binder, &'a Level, &'a Level, Spelled<'a>, Spelled<'a>),
+    Sum(&'a Level, &'a Level, Spelled<'a>, Spelled<'a>),
+    /// `Id` or, with `strict`, `sEq`: the type and the two endpoints.
+    Eq { strict: bool, level: &'a Level, ty: Spelled<'a>, lhs: &'a Rc<Term>, rhs: &'a Rc<Term> },
+}
+
+impl<'a> Spelled<'a> {
+    /// A type's spelling: an `El` is read as the code under it.
+    pub(crate) fn of(t: &'a Rc<Type>) -> Spelled<'a> {
+        match &**t {
+            Type::El { level, tm } => Spelled::El(level, tm),
+            _ => Spelled::Ty(t),
+        }
+    }
+
+    pub(crate) fn former(self) -> Option<Former<'a>> {
+        match self {
+            Spelled::Ty(t) => Former::of_type(t),
+            Spelled::El(_, c) => Former::of_code(c),
+        }
+    }
+
+    /// The same syntax: one node, or equal ones.
+    fn same(self, other: Spelled<'a>) -> bool {
+        match (self, other) {
+            (Spelled::Ty(a), Spelled::Ty(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Spelled::El(l1, a), Spelled::El(l2, b)) => l1 == l2 && (Rc::ptr_eq(a, b) || a == b),
+            _ => false,
+        }
+    }
+
+    fn to_type(self) -> Rc<Type> {
+        match self {
+            Spelled::Ty(t) => Rc::clone(t),
+            Spelled::El(level, tm) => Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) }),
+        }
+    }
+
+    /// Does the spelling read no local variable, and no weakening of Γ's
+    /// base? Then it means one thing under every Γ of its Ψ. A decoded
+    /// code's `El` node is allocated afresh at every decode
+    /// (`Eval::decode`), so the footprint is asked of the code under it,
+    /// which the bounds table has met.
+    pub(crate) fn closed(self) -> bool {
+        let u = match self {
+            Spelled::Ty(t) => crate::bounds::type_local_use(t),
+            Spelled::El(_, c) => crate::bounds::term_local_use(c),
+        };
+        u.bound == 0 && !u.has_wk
+    }
+
+    /// The node the spelling is: the type's, or the code's under the `El`
+    /// (never the `El`'s own, which is not kept).
+    fn key(self) -> usize {
+        match self {
+            Spelled::Ty(t) => Rc::as_ptr(t) as usize,
+            Spelled::El(_, c) => Rc::as_ptr(c) as usize | 1,
+        }
+    }
+
+    fn kept(self) -> Kept {
+        match self {
+            Spelled::Ty(t) => Kept::Ty(Rc::clone(t)),
+            Spelled::El(_, c) => Kept::Tm(Rc::clone(c)),
+        }
+    }
+}
+
+impl<'a> Former<'a> {
+    pub(crate) fn of_type(t: &'a Type) -> Option<Former<'a>> {
+        Some(match t {
+            Type::Nat => Former::Nat,
+            Type::Ty(l) => Former::Univ(l),
+            Type::Unit { level } => Former::Unit(level),
+            Type::Empty { level } => Former::Empty(level),
+            Type::SEmpty { level } => Former::SEmpty(level),
+            Type::Squash { level, ty } => Former::Squash(level, Spelled::of(ty)),
+            Type::Pi { dom_level, cod_level, dom, cod } => {
+                Former::Binder(Binder::Pi, dom_level, cod_level, Spelled::of(dom), Spelled::of(cod))
+            }
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                Former::Binder(Binder::Sigma, fst_level, snd_level, Spelled::of(fst), Spelled::of(snd))
+            }
+            Type::W { shape_level, pos_level, shape, pos } => {
+                Former::Binder(Binder::W, shape_level, pos_level, Spelled::of(shape), Spelled::of(pos))
+            }
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                Former::Sum(lhs_level, rhs_level, Spelled::of(lhs), Spelled::of(rhs))
+            }
+            Type::Id { level, ty, lhs, rhs } => {
+                Former::Eq { strict: false, level, ty: Spelled::of(ty), lhs, rhs }
+            }
+            Type::SEq { level, ty, lhs, rhs } => {
+                Former::Eq { strict: true, level, ty: Spelled::of(ty), lhs, rhs }
+            }
+            Type::El { tm, .. } => return Former::of_code(tm),
+            _ => return None,
+        })
+    }
+
+    /// The former `El c` decodes to, when `c` is the code of one of these.
+    pub(crate) fn of_code(c: &'a Term) -> Option<Former<'a>> {
+        Some(match c {
+            Term::TmNat => Former::Nat,
+            Term::TmTy(l) => Former::Univ(l),
+            Term::TmUnit { level } => Former::Unit(level),
+            Term::TmEmpty { level } => Former::Empty(level),
+            Term::TmSEmpty { level } => Former::SEmpty(level),
+            Term::TmSquash { level, ty } => Former::Squash(level, Spelled::El(level, ty)),
+            Term::TmPi { dom_level, cod_level, dom, cod } => Former::Binder(
+                Binder::Pi,
+                dom_level,
+                cod_level,
+                Spelled::El(dom_level, dom),
+                Spelled::El(cod_level, cod),
+            ),
+            Term::TmSigma { fst_level, snd_level, fst, snd } => Former::Binder(
+                Binder::Sigma,
+                fst_level,
+                snd_level,
+                Spelled::El(fst_level, fst),
+                Spelled::El(snd_level, snd),
+            ),
+            Term::TmW { shape_level, pos_level, shape, pos } => Former::Binder(
+                Binder::W,
+                shape_level,
+                pos_level,
+                Spelled::El(shape_level, shape),
+                Spelled::El(pos_level, pos),
+            ),
+            Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
+                Former::Sum(lhs_level, rhs_level, Spelled::El(lhs_level, lhs), Spelled::El(rhs_level, rhs))
+            }
+            Term::TmId { level, ty, lhs, rhs } => {
+                Former::Eq { strict: false, level, ty: Spelled::El(level, ty), lhs, rhs }
+            }
+            Term::TmSEq { level, ty, lhs, rhs } => {
+                Former::Eq { strict: true, level, ty: Spelled::El(level, ty), lhs, rhs }
+            }
+            _ => return None,
+        })
+    }
+
+    /// Whether two formers are the same one, whatever their components:
+    /// the pairs [`Conv::lockstep`] compares.
+    pub(crate) fn same_former(&self, other: &Former<'_>) -> bool {
+        match (self, other) {
+            (Former::Binder(k1, ..), Former::Binder(k2, ..)) => k1 == k2,
+            (Former::Eq { strict: s1, .. }, Former::Eq { strict: s2, .. }) => s1 == s2,
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
+}
+
+/// The binders a lockstep walk ([`Conv::lockstep`]) is under, pushed onto
+/// its scope only when a pair below them has to be judged by the domain:
+/// two spellings that agree need no scope at all.
+struct Under<'e, 'v> {
+    base: &'e Env<'v>,
+    /// Is what the walk started from closed ([`Spelled::closed`])? Then so
+    /// is every pair it meets under no binder.
+    closed: bool,
+    /// The binders passed, outermost first.
+    binders: Vec<(Rc<Type>, Level)>,
+    /// `base` extended by a prefix of `binders`.
+    scopes: Vec<Env<'v>>,
+}
+
+impl<'e, 'v> Under<'e, 'v> {
+    fn new(base: &'e Env<'v>, closed: bool) -> Under<'e, 'v> {
+        Under { base, closed, binders: Vec::new(), scopes: Vec::new() }
+    }
+
+    fn push(&mut self, ty: Rc<Type>, level: &Level) {
+        self.binders.push((ty, level.clone()));
+    }
+
+    fn pop(&mut self) {
+        self.binders.pop();
+        self.scopes.truncate(self.binders.len());
+    }
+
+    /// `base` under every binder passed.
+    fn env(&mut self) -> &Env<'v> {
+        while self.scopes.len() < self.binders.len() {
+            let (ty, level) = &self.binders[self.scopes.len()];
+            let outer = self.scopes.last().unwrap_or(self.base);
+            let inner = outer.push_entry_syn(Rc::clone(ty), level.clone());
+            self.scopes.push(inner);
+        }
+        self.scopes.last().unwrap_or(self.base)
+    }
+}
 
 /// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 /// Syntactic equality **modulo level equivalence** — the quotient DeLaM
@@ -872,6 +1207,9 @@ struct Conv<'v, D: Dom<'v>> {
     /// attempt's — leaves with a queued premise unjudged. A memo `true` made
     /// while premises are queued is provisional ([`VerdictMemo`]).
     deferred: PremiseQueue<(Env<'v>, D::TmC, D::TmC, D::TyC, Level)>,
+    /// A debug build's second judgment of a [`ClosedPairs`] hit: it neither
+    /// reads nor writes the table it is checking.
+    rejudging: bool,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -881,7 +1219,15 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: VerdictMemo::new(), depth: 0, deferred: PremiseQueue::new(), _dom: PhantomData }
+        Conv {
+            fuel,
+            has_defs,
+            memo: VerdictMemo::new(),
+            depth: 0,
+            deferred: PremiseQueue::new(),
+            rejudging: false,
+            _dom: PhantomData,
+        }
     }
 
     fn spend(&mut self) -> R {
@@ -1020,17 +1366,177 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
         self.descend()?;
         let out = (|| {
-            if let (Some((l1, e1, k1)), Some((l2, e2, k2))) =
-                (D::vec_former(self, env, a), D::vec_former(self, env, b))
-            {
-                return self.vec_ty(env, &l1, &e1, &k1, &l2, &e2, &k2);
+            let Some((x, y)) = D::closed_spellings(a, b) else {
+                return self.ty_reduced(env, a, b, l);
+            };
+            let (x, y) = (Spelled::of(&x), Spelled::of(&y));
+            if self.closed_known(env, x, y, l, false) {
+                return Ok(());
             }
-            let mut wa = D::whnf_ty_opaque(self, env, a)?;
-            let mut wb = D::whnf_ty_opaque(self, env, b)?;
-            self.ty_w(env, &mut wa, &mut wb, l)
+            let had = self.fuel;
+            let walked = match (x.former(), y.former()) {
+                (Some(fa), Some(fb)) => self.lockstep(&mut Under::new(env, true), fa, fb, false)?,
+                _ => false,
+            };
+            if !walked {
+                self.ty_reduced(env, a, b, l)?;
+            }
+            self.closed_learn(env, x, y, l, false, had);
+            Ok(())
         })();
         self.depth -= 1;
         self.settle_at_top(out)
+    }
+
+    /// [`Conv::ty`] past its shortcuts: reduce both sides and compare.
+    fn ty_reduced(&mut self, env: &Env<'v>, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
+        if let (Some((l1, e1, k1)), Some((l2, e2, k2))) =
+            (D::vec_former(self, env, a), D::vec_former(self, env, b))
+        {
+            return self.vec_ty(env, &l1, &e1, &k1, &l2, &e2, &k2);
+        }
+        let mut wa = D::whnf_ty_opaque(self, env, a)?;
+        let mut wb = D::whnf_ty_opaque(self, env, b)?;
+        self.ty_w(env, &mut wa, &mut wb, l)
+    }
+
+    /// Two spellings under **one former**, compared on the syntax:
+    /// `Ok(true)` when `a` and `b` are the same former ([`Former`]) and
+    /// their components are convertible, `Ok(false)` when they are not the
+    /// same former, in which case nothing was compared.
+    ///
+    /// The verdict is the one reducing both sides reaches. Each of these
+    /// formers is weak head normal, a code's `El` decodes to it in one step
+    /// with the `El`s of the code's components as its own, and
+    /// [`Conv::ty_nf`] compares exactly those components, in the scopes
+    /// used here; a refused component refuses the pair, as it does there.
+    /// What is skipped is the domain's copy of each node. Two large
+    /// spellings of one type that differ in a few places (a definition
+    /// named on one side and written out on the other) cost a walk of the
+    /// syntax and the domain's work at those places, where every node of
+    /// both used to be evaluated, allocated and viewed to be found the same
+    /// former.
+    fn lockstep(&mut self, under: &mut Under<'_, 'v>, a: Former<'_>, b: Former<'_>, codes: bool) -> R<bool> {
+        match (a, b) {
+            (Former::Nat, Former::Nat) => {}
+            (Former::Univ(x), Former::Univ(y))
+            | (Former::Unit(x), Former::Unit(y))
+            | (Former::Empty(x), Former::Empty(y))
+            | (Former::SEmpty(x), Former::SEmpty(y)) => self.lev_eq(x, y)?,
+            (Former::Squash(l1, t1), Former::Squash(l2, t2)) => {
+                self.lev_eq(l1, l2)?;
+                self.ty_spelled(under, t1, t2, l1, codes)?;
+            }
+            (Former::Binder(k1, dl1, cl1, s1, t1), Former::Binder(k2, dl2, cl2, s2, t2)) if k1 == k2 => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty_spelled(under, s1, s2, dl1, codes)?;
+                under.push(s1.to_type(), dl1);
+                let below = self.ty_spelled(under, t1, t2, cl1, codes);
+                under.pop();
+                below?;
+            }
+            (Former::Sum(dl1, cl1, s1, t1), Former::Sum(dl2, cl2, s2, t2)) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty_spelled(under, s1, s2, dl1, codes)?;
+                self.ty_spelled(under, t1, t2, cl1, codes)?;
+            }
+            (
+                Former::Eq { strict: k1, level: l1, ty: s1, lhs: t1, rhs: u1 },
+                Former::Eq { strict: k2, level: l2, ty: s2, lhs: t2, rhs: u2 },
+            ) if k1 == k2 => {
+                self.lev_eq(l1, l2)?;
+                self.ty_spelled(under, s1, s2, l1, codes)?;
+                self.tm_spelled(under, t1, t2, s1, l1)?;
+                self.tm_spelled(under, u1, u2, s1, l1)?;
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// [`Conv::ty`] for a component [`Conv::lockstep`] reached, or with
+    /// `codes` [`Conv::tm_at_univ`] for the two codes under the `El`s: the
+    /// same fuel and depth, the same reflexivity test, and the domain only
+    /// for a pair that is not one former.
+    fn ty_spelled(
+        &mut self,
+        under: &mut Under<'_, 'v>,
+        a: Spelled<'_>,
+        b: Spelled<'_>,
+        l: &Level,
+        codes: bool,
+    ) -> R {
+        self.spend()?;
+        if a.same(b) {
+            return Ok(());
+        }
+        // A code is a term, and a term met too deep is queued, not
+        // descended into ([`Conv::deferred`]): `Conv::tm` does that.
+        if codes && self.deferred.should_defer(self.depth) {
+            return self.codes_reduced(under, a, b, l);
+        }
+        self.descend()?;
+        let out = (|| {
+            if let (Some(fa), Some(fb)) = (a.former(), b.former())
+                && self.lockstep(under, fa, fb, codes)?
+            {
+                return Ok(());
+            }
+            // The walk hands this pair to the domain. Under no binder it
+            // is closed if what the walk started from was.
+            let closed = (under.closed && under.binders.is_empty()) || (a.closed() && b.closed());
+            if closed && self.closed_known(under.base, a, b, l, codes) {
+                return Ok(());
+            }
+            let had = self.fuel;
+            if codes {
+                self.codes_reduced(under, a, b, l)?;
+            } else {
+                let env = under.env();
+                let (x, y) = (D::embed_ty(env, a.to_type()), D::embed_ty(env, b.to_type()));
+                self.ty_reduced(env, &x, &y, l)?;
+            }
+            if closed {
+                self.closed_learn(under.base, a, b, l, codes, had);
+            }
+            Ok(())
+        })();
+        self.depth -= 1;
+        self.settle_at_top(out)
+    }
+
+    /// The two codes under a pair of `El` spellings, compared by the domain
+    /// at their universe. (`El` is not injective: a vector's code at a
+    /// canonical length and the code of its `Σ` chain decode to one type.
+    /// So two codes are never compared through their decodings.)
+    fn codes_reduced(&mut self, under: &mut Under<'_, 'v>, a: Spelled<'_>, b: Spelled<'_>, l: &Level) -> R {
+        let (Spelled::El(_, x), Spelled::El(_, y)) = (a, b) else {
+            // A code's components are codes ([`Former::of_code`]).
+            return Err(NC);
+        };
+        let env = under.env();
+        let univ = D::univ(env, l);
+        self.tm(env, &D::embed_tm(env, Rc::clone(x)), &D::embed_tm(env, Rc::clone(y)), &univ, &Level::succ(l.clone()))
+    }
+
+    /// [`Conv::tm`] for the endpoints of an equality [`Conv::lockstep`]
+    /// reached: equal syntax is one term, and anything else is the domain's.
+    fn tm_spelled(
+        &mut self,
+        under: &mut Under<'_, 'v>,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        ty: Spelled<'_>,
+        l: &Level,
+    ) -> R {
+        if Rc::ptr_eq(a, b) || a == b {
+            return self.spend();
+        }
+        let env = under.env();
+        let ty = D::embed_ty(env, ty.to_type());
+        self.tm(env, &D::embed_tm(env, Rc::clone(a)), &D::embed_tm(env, Rc::clone(b)), &ty, l)
     }
 
     /// `Γ ⊢ Vec^l(T; k) ≈ Vec^l'(T'; k')` decided on the spelling, before
@@ -1144,6 +1650,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     fn ty_root(&mut self, env: &Env<'v>, a: &Type, b: &Type, l: &Level) -> R {
         self.spend()?;
         if std::ptr::eq(a, b) || a == b {
+            return Ok(());
+        }
+        if D::SPELLED
+            && let (Some(fa), Some(fb)) = (Former::of_type(a), Former::of_type(b))
+            && self.lockstep(&mut Under::new(env, false), fa, fb, false)?
+        {
             return Ok(());
         }
         let mut wa = D::whnf_ty_root(self, env, a)?;
@@ -1744,8 +2256,99 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     /// `Γ ⊢ s ≈ s' : Ty l @ l+1` — two type *encodings*.
     fn tm_at_univ(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, l: &Level) -> R {
+        if !self.deferred.should_defer(self.depth)
+            && let Some((x, y)) = D::closed_codes(a, b)
+        {
+            let (x, y) = (Spelled::El(l, &x), Spelled::El(l, &y));
+            if self.closed_known(env, x, y, l, true) {
+                return Ok(());
+            }
+            let had = self.fuel;
+            match (x.former(), y.former()) {
+                (Some(fa), Some(fb)) if fa.same_former(&fb) => {
+                    self.ty_spelled(&mut Under::new(env, true), x, y, l, true)?
+                }
+                _ => {
+                    let univ = D::univ(env, l);
+                    self.tm(env, a, b, &univ, &Level::succ(l.clone()))?
+                }
+            }
+            self.closed_learn(env, x, y, l, true, had);
+            return Ok(());
+        }
         let univ = D::univ(env, l);
         self.tm(env, a, b, &univ, &Level::succ(l.clone()))
+    }
+
+    /// Is this pair of closed spellings already known convertible in
+    /// `env`'s Ψ ([`ClosedPairs`])?
+    fn closed_known(&self, env: &Env<'v>, a: Spelled<'_>, b: Spelled<'_>, l: &Level, codes: bool) -> bool {
+        if self.rejudging || !env.cache.belongs_to(&env.psi) {
+            return false;
+        }
+        let known = {
+            let closed = env.cache.closed.borrow();
+            closed.serves(&env.psi) && closed.pairs.contains_key(&ClosedKey::new(env, a, b, l, codes))
+        };
+        #[cfg(debug_assertions)]
+        if known && crate::checks::verify_this_skip() {
+            // Judge the pair again without the table. Exhaustion is not a
+            // verdict: the first judgment had the table's help below it.
+            let again = crate::stats::unobserved(|| {
+                let mut cv = Conv::<D>::new(crate::typing::DEFAULT_FUEL, &env.psi);
+                cv.rejudging = true;
+                cv.depth = self.depth;
+                cv.closed_again(env, a, b, l, codes)
+            });
+            assert!(
+                !matches!(again, Err(ConvError::NotConvertible)),
+                "the closed-pair table kept a pair that converting again rejects \
+                 (term output suppressed: see CLAUDE.md)"
+            );
+        }
+        known
+    }
+
+    /// The judgment a [`ClosedPairs`] entry records, made by the domain.
+    #[cfg(debug_assertions)]
+    fn closed_again(&mut self, env: &Env<'v>, a: Spelled<'_>, b: Spelled<'_>, l: &Level, codes: bool) -> R {
+        match (a, b, codes) {
+            (Spelled::El(_, x), Spelled::El(_, y), true) => {
+                let (x, y) = (D::embed_tm(env, Rc::clone(x)), D::embed_tm(env, Rc::clone(y)));
+                let univ = D::univ(env, l);
+                self.tm(env, &x, &y, &univ, &Level::succ(l.clone()))
+            }
+            (_, _, true) => Err(NC),
+            (_, _, false) => {
+                let (x, y) = (D::embed_ty(env, a.to_type()), D::embed_ty(env, b.to_type()));
+                self.ty_reduced(env, &x, &y, l)
+            }
+        }
+    }
+
+    /// Keep a pair of closed spellings just found convertible, when judging
+    /// it took the budget from `had` down by enough to be worth keeping
+    /// ([`CLOSED_PAIR_WORTH`]), and unless the verdict still waits on a
+    /// queued premise ([`Conv::deferred`]) or may stand on a provisional
+    /// one ([`VerdictMemo`]).
+    fn closed_learn(&mut self, env: &Env<'v>, a: Spelled<'_>, b: Spelled<'_>, l: &Level, codes: bool, had: u64) {
+        if had - self.fuel < CLOSED_PAIR_WORTH {
+            return;
+        }
+        if self.rejudging
+            || !self.deferred.is_empty()
+            || self.memo.has_provisional()
+            || !env.cache.belongs_to(&env.psi)
+        {
+            return;
+        }
+        let mut closed = env.cache.closed.borrow_mut();
+        if !closed.serves(&env.psi) {
+            return;
+        }
+        if closed.pairs.len() < CLOSED_PAIRS_CAP {
+            closed.pairs.insert(ClosedKey::new(env, a, b, l, codes), (a.kept(), b.kept()));
+        }
     }
 
     /// `Γ, x : El^l s` — the binder every dependent encoding pushes.
@@ -3458,9 +4061,21 @@ impl<'v> Conv<'v, Values> {
     /// weak head normal form and `ty_w` decides when to unfold.
     fn ity_root(&mut self, env: &Env<'v>, a: &ITy, b: &ITy, l: &Level) -> R {
         self.spend()?;
+        // Two spellings are walked as `ty_root` walks them, so that the one
+        // judgment costs the same budget at either entry (the checker's
+        // memos judge a kept pair again through this one).
+        if let (ITy::Syn(x), ITy::Syn(y)) = (a, b)
+            && let (Some(fa), Some(fb)) = (Former::of_type(x), Former::of_type(y))
+            && self.lockstep(&mut Under::new(env, false), fa, fb, false)?
+        {
+            return Ok(());
+        }
         let d = env.gamma.entries.len() as u32;
         let mut wa = dom::values::eval_ity(self, env, a, d, false)?;
         let mut wb = dom::values::eval_ity(self, env, b, d, false)?;
         self.ty_w(env, &mut wa, &mut wb, l)
     }
 }
+
+#[cfg(test)]
+mod spelled_tests;
