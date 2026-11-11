@@ -1,0 +1,58 @@
+// A `write-elf` tool that calls a `runtime fn`
+// (docs/native-one-compiler-design.md §2.2): the generator's program of the
+// function is the tool's program, compiled by the function compiler into
+// the same file as the tool and called. Tests, not library: nothing imports
+// this module; `crates/cli/tests/native_tools.rs` writes `raised_sum` and
+// runs it.
+
+import native_build;
+import native_source;
+import native_alloc;
+import native_compile;
+import linux_x86_64_image;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower_calls;
+import itree;
+import linux_trees;
+import list;
+import bitvec;
+import bool;
+import rt;
+import rt_lower;
+import runtime;
+
+// A byte raised to upper case where it is a lower-case ASCII letter, and
+// the sum of two: a runtime fn that calls another, so the program has two
+// functions and the second calls the first.
+runtime fn raise(c: BitVec(64)) → BitVec(64) {
+    match c.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { True => c.sub(BitVec::ofNat(32)), False => c }
+}
+
+runtime fn raise_sum(a: BitVec(64), b: BitVec(64)) → BitVec(64) { raise(a).add(raise(b)) }
+
+theorem raise_sum_program(): raise_sum::program.len() = 2 { refl }
+
+// 'a' and 'b' raised and summed, as the exit status.
+fn raised_sum() → Tool {
+    program(raise_sum::program, run(local(num(0), λ r => compute(call(1, [num(97), num(98)], r)) ++ exit(r.get()))))
+}
+
+// The tool's status is the Heather function's value: the call is answered
+// by `program_eval`, which is `raise_sum` by the generator's agreement.
+theorem raised_sum_tree(): raised_sum().source().tree([], 0)
+    = Ret(program_eval(raise_sum::program, 1, [BitVec::ofNat(97), BitVec::ofNat(98)])) { refl }
+
+fn exits_with(status: BitVec(64)) → ITree<BitVec(64)>(Events::linux()) { Ret(status) }
+
+theorem raised_sum_runs(): raised_sum().source().tree([], 0) = Ret(raise_sum(BitVec::ofNat(97), BitVec::ofNat(98))) {
+    trans(raised_sum_tree(), cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exits_with,
+        raise_sum::agrees(BitVec::ofNat(97), BitVec::ofNat(98))))
+}
+
+theorem raised_sum_status(): raise_sum(BitVec::ofNat(97), BitVec::ofNat(98)) = BitVec::ofNat(131) { refl }
+
+// It compiles, the functions' values placed by the function compiler's
+// heuristic.
+theorem raised_sum_compiles(): raised_sum().source().refusal(io_data_low(),
+    Homes::slots(raised_sum().source()).placed(plan_program(raised_sum().source().functions))) = [] { refl }

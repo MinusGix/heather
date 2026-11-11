@@ -167,6 +167,21 @@ fn a_procedure_and_a_function_compile_into_one_file() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A tool that calls a `runtime fn` (`raise_sum`, which calls another): the
+/// generator's program of it is compiled into the tool's file and called,
+/// and the status is the function's value (`raised_sum_runs`,
+/// `raised_sum_status`, lib/_tests/native/runtime/runtime_tool_tests.hthr).
+#[test]
+fn a_tool_calls_a_runtime_fn() {
+    let dir = scratch("raised-sum");
+    let binary = dir.join("raised");
+    write_program("lib/_tests/native/runtime/runtime_tool_tests.hthr", "raised_sum", &binary, true);
+    let (code, out) = run(&mut Command::new(&binary), b"", Stdio::piped());
+    assert_eq!(code, Some(131));
+    assert!(out.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The first `n` bytes a process writes, then the process killed.
 fn first_bytes(program: &mut Command, n: usize) -> Vec<u8> {
     let mut child = program.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
