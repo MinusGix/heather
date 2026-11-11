@@ -180,7 +180,7 @@ written in source as `{ field := name.field, … }`, so its key, coherence and
 index spelling are the ordinary checks. The type arguments are `Expr`s read
 as types; a function type is spelled as an arrow, so it is keyed as one.
 
-## 4. The customer: `regex` (`lib/std/text/regex.hthr`)
+## 4. The customer: `regex` (`lib/std/text/regex/regex.hthr`)
 
 ```heather
 inductive Regex { NoMatch, Eps, Range(lo: Nat, hi: Nat), Seq(a, b: Regex), Alt(a, b: Regex), Star(r: Regex) }

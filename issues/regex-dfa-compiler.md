@@ -8,7 +8,7 @@ area: heather-in-heather
 milestone: [nh-front]
 ---
 
-The `regex` language (`lib/std/text/regex.hthr`, docs/value-definitions-design.md §4) has its term type, its meaning (`Regex::accepts`, Brzozowski derivatives), a parser and its `regex def` frontend; it has no compiler. This issue is the compiler half of `docs/compilation-vision.md` §3.3.
+The `regex` language (`lib/std/text/regex/regex.hthr`, docs/value-definitions-design.md §4) has its term type, its meaning (`Regex::accepts`, Brzozowski derivatives), a parser and its `regex def` frontend; it has no compiler. This issue is the compiler half of `docs/compilation-vision.md` §3.3.
 
 ## Scope
 

@@ -2,7 +2,7 @@
 //! (docs/value-definitions-design.md). The library's probes
 //! (`lib/_tests/std/core/value_definition_tests.hthr`,
 //! `lib/_tests/std/tactic/prefix_generator_tests.hthr`,
-//! `lib/_tests/std/text/regex_tests.hthr`) pin what Heather can state. These
+//! `lib/_tests/std/text/regex/regex_tests.hthr`) pin what Heather can state. These
 //! are what it cannot: the parser's refusals, and a value and a generated
 //! group crossing a module boundary.
 
@@ -20,7 +20,7 @@ const MODULES: &[(&str, &str)] = &[
     ("char", include_str!("../../../lib/std/text/char.hthr")),
     ("string", include_str!("../../../lib/std/text/string.hthr")),
     ("tactic", include_str!("../../../lib/std/tactic/tactic.hthr")),
-    ("regex", include_str!("../../../lib/std/text/regex.hthr")),
+    ("regex", include_str!("../../../lib/std/text/regex/regex.hthr")),
 ];
 
 fn elaborator() -> Elaborator {
