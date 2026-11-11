@@ -703,8 +703,10 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     // The same declaration, accepted: answered from the open question.
     cache.accepted(&psi, &item(body_a), &[]);
     assert_eq!(cache.counts().hashed, 1, "accepted must not render again");
+    // A theorem's verdict is two entries: its check key, and its statement's
+    // (the same for both bodies here, which share a statement).
     let key_a = cache.keys();
-    assert_eq!(key_a.len(), 1);
+    assert_eq!(key_a.len(), 2);
 
     // A second declaration with the same name at the same position — refused
     // before it could land, then a different one asks.
@@ -716,8 +718,9 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert_eq!(cache.counts().hashed, 2, "after abandon the new declaration is rendered afresh");
     cache.accepted(&psi, &item(body_b), &[]);
     let key_b = cache.keys();
-    assert_eq!(key_b.len(), 1);
+    assert_eq!(key_b.len(), 2);
     assert_ne!(key_a, key_b, "the two bodies must not share a check key");
+    assert_eq!(key_a.iter().filter(|k| key_b.contains(k)).count(), 1, "and they share the statement's");
 
     // Without abandon, the belt: a second Ψ-landing question at one length
     // kills the first, since only one declaration can be waiting to land at
@@ -960,6 +963,160 @@ theorem two_two(): 2 = 2 { refl }
             );
         }
     }
+}
+
+/// Elaborate `src` over `cache` at kernel width `workers`, as the build that
+/// writes a module's image does, and hand back the suffix it would store.
+fn gated_delta(cache: &Arc<Cache>, src: &str, workers: usize) -> heather_elab::ModuleDelta {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.set_kernel_workers(workers);
+    cache.begin_run();
+    e.set_gate(Arc::clone(cache) as Arc<dyn heather_elab::gate::KernelGate>);
+    e.elab_module_delta("m", src, heather_elab::ModuleDependencyIdentity::default())
+        .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(src)))
+}
+
+fn bodied(delta: &heather_elab::ModuleDelta) -> usize {
+    use heather_kernel::term::GlobalBinding;
+    delta.extension().iter().filter(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. })).count()
+}
+
+/// Two use sites of `Mag<Pair<Nat, Nat>>`: the derivation is minted as a
+/// global of its own between `use1` and `use2`, by the resolver and not by a
+/// declaration (`traits_resolution.rs`,
+/// `a_derived_instance_is_minted_once_and_reused`). No two bindings have the
+/// same content, so no verdict here answers for two of them (which is why
+/// the carrier is `Nat` and not an enumeration declared here: the summands
+/// of two nullary constructors are one definition written twice).
+const DERIVING: &str = "class Mag<A> { op: A -> A -> A }
+record Pair<A, B> { fst: A, snd: B }
+instance Mag<Nat> { fn op(x: Nat, y: Nat) -> Nat { y } }
+instance<A, B> Mag<Pair<A, B>> requires ma: Mag<A>, mb: Mag<B> {
+  fn op(x: Pair<A, B>, y: Pair<A, B>) -> Pair<A, B> {
+    Pair { fst: ma.op(x.fst, y.fst), snd: mb.op(x.snd, y.snd) }
+  }
+}
+fn combine<A> requires m: Mag<A> (x: A, y: A) -> A { m.op(x, y) }
+fn use1(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>) -> Pair<Nat, Nat> { combine(p, q) }
+fn use2(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>) -> Pair<Nat, Nat> { combine(q, p) }
+theorem same(p: Pair<Nat, Nat>, q: Pair<Nat, Nat>): use1(p, q) = use2(q, p) { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+
+/// The first replay of an image asks the kernel nothing its build asked.
+/// The build's gate checked every theorem's statement on the way to its
+/// proof and every minted derivation before it landed, and each is a
+/// verdict the store keeps: about the statement alone, which is what a
+/// theorem stored without its proof asks at replay, and about the mint,
+/// which used to face the kernel without the store being told
+/// (`issues/first-replay-rechecks-what-the-build-checked.md`).
+///
+/// The control is the same replay over a store the build did not write to:
+/// every binding is checked, the mint among them.
+#[test]
+fn the_first_replay_of_a_build_asks_the_kernel_nothing_the_build_asked() {
+    let mut plain = Elaborator::with_prelude().expect("prelude");
+    plain
+        .elab_module_delta("m", DERIVING, heather_elab::ModuleDependencyIdentity::default())
+        .unwrap_or_else(|e| panic!("the fixture must check: {}", e.render(DERIVING)));
+    assert_eq!(plain.derived_instances().len(), 1, "the fixture mints one derivation");
+    for workers in [1usize, 4] {
+        let built = Arc::new(Cache::over(Store::empty("unused".into())));
+        let delta = gated_delta(&built, DERIVING, workers);
+        let (bodies, statements) = (bodied(&delta), bodiless(&delta));
+        assert!(statements >= 2, "`same` and `two_two` are stored without their proofs");
+        let c = replay_counts(&built, &delta, workers);
+        assert_eq!((c.checked, c.hits), (0, bodies), "width {workers}: every body is one the build's gate passed");
+        assert_eq!(
+            (c.statements_checked, c.statement_hits),
+            (0, statements),
+            "width {workers}: every statement is one the build's gate passed"
+        );
+        let elsewhere = Arc::new(Cache::over(Store::empty("unused".into())));
+        let c = replay_counts(&elsewhere, &delta, workers);
+        assert_eq!((c.checked, c.hits), (bodies, 0), "width {workers}: another store vouches for no body");
+        assert_eq!((c.statements_checked, c.statement_hits), (statements, 0), "width {workers}: nor for a statement");
+    }
+}
+
+/// A build keeps no statement verdict for a theorem whose check opened a
+/// sealed proof, as it keeps none about the theorem
+/// (`a_statement_that_opened_a_sealed_proof_keeps_no_verdict` is the same
+/// rule at replay): `uses`' statement is well-typed only because `wit().n`
+/// computes to `2`. The first replay checks that one statement and no other.
+#[test]
+fn a_build_keeps_no_statement_verdict_that_opened_a_sealed_proof() {
+    let src = "record Wit { n: Nat, ok: n = 2 }
+theorem wit(): Wit { Wit(n := 2, ok := refl) }
+fn need(n: Nat, p: n = 2) -> Nat { n }
+theorem uses(): need(wit().n, refl) = 2 { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+    for workers in [1usize, 4] {
+        let built = Arc::new(Cache::over(Store::empty("unused".into())));
+        let delta = gated_delta(&built, src, workers);
+        let n = bodiless(&delta);
+        let c = replay_counts(&built, &delta, workers);
+        assert_eq!(
+            (c.statements_checked, c.statement_hits),
+            (1, n - 1),
+            "width {workers}: only `uses`, which opened `wit`, is checked at the first replay"
+        );
+    }
+}
+
+/// A question that died describes nothing that lands after it. `refused` is
+/// asked about at the end of an empty Ψ and abandoned; another binding then
+/// lands there without asking, as an inductive's or a prelude's does, and a
+/// definition that refers to it is keyed by what landed. Before, the dead
+/// question's interface hash was still waiting for whatever landed at its
+/// index, and the dependent's key named the refused declaration.
+#[test]
+fn an_abandoned_question_does_not_describe_what_lands_in_its_place() {
+    use heather_elab::gate::{GateItem, KernelGate};
+    use heather_kernel::layer::Layer;
+    use heather_kernel::level::Level;
+    use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
+
+    let empty = LocalCtx::nil();
+    let level = Level::constant(0);
+    let nothing = GlobalCtx::new(Vec::new());
+    let landed = GlobalCtx::new(vec![GlobalBinding::Tm {
+        ctx: LocalCtx::nil(),
+        layer: Layer::Code,
+        ty: heather_kernel::rc::Rc::new(Type::Nat),
+        level: Level::constant(0),
+        body: Some(heather_kernel::rc::Rc::new(Term::TmUnit { level: Level::constant(0) })),
+    }])
+    .with_consts(1);
+    let refused = Term::TmNat;
+    let reads = Term::GlobalTm { var: GlobalVar::constant(0), subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] } };
+    let item = |name: &'static str, body: &'static Term| GateItem {
+        name,
+        ctx: &empty,
+        ty: &Type::Nat,
+        level: &level,
+        body,
+        opaque: false,
+        layer: Layer::Code,
+        lands_in_psi: true,
+    };
+    let refused: &'static Term = Box::leak(Box::new(refused));
+    let reads: &'static Term = Box::leak(Box::new(reads));
+    let dependent_key = |a_question_died_first: bool| {
+        let cache = Cache::over(Store::empty("unused".into()));
+        cache.begin_run();
+        if a_question_died_first {
+            assert!(!cache.admits(&nothing, &item("refused", refused)));
+            cache.abandon(&nothing);
+        }
+        assert!(!cache.admits(&landed, &item("dependent", reads)));
+        cache.accepted(&landed, &item("dependent", reads), &[]);
+        let keys = cache.keys();
+        assert_eq!(keys.len(), 1);
+        keys
+    };
+    assert_eq!(dependent_key(true), dependent_key(false), "the dependent is keyed by the binding that landed");
 }
 
 /// An elaborator and its forks share one gate and ask about different Ψs in

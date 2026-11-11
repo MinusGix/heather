@@ -1585,13 +1585,8 @@ impl Elaborator {
         {
             return;
         }
-        if !self.type_is_closed(ty, lvl) {
-            return;
-        }
-        let ok = stats::time_kernel(|| {
-            typing::check_term(&self.psi, 0, Layer::Code, &LocalCtx::nil(), body, ty, lvl, self.policy.fuel).is_ok()
-        });
-        if !ok {
+        let name = format!("#open{}", self.traits.derived().len());
+        if !self.mint_passes(&name, ty, lvl, body) {
             return;
         }
         let abs = self.psi.bindings.len() as u32;
@@ -1605,7 +1600,7 @@ impl Elaborator {
             body: Some(Rc::new(body.clone())),
         });
         let derived = DerivedInst {
-            name: format!("#open{}", self.traits.derived().len()),
+            name,
             abs,
             ty: ty.clone(),
             level: lvl.clone(),
@@ -1687,6 +1682,49 @@ impl Elaborator {
         })
     }
 
+    /// May `body : ty` be minted at the end of Ψ? The gate's pair, a closed
+    /// statement in the empty context and the body against it, asked through
+    /// the gate's oracle as every other bodied binding's is (`gate.rs`). So a
+    /// verdict about a mint is kept as any other is: a later elaboration of
+    /// the module, or a replay of its image, finds it and does not ask the
+    /// kernel again (`issues/first-replay-rechecks-what-the-build-checked.md`).
+    ///
+    /// A derivation that reached into a scope is not closed, and the kernel
+    /// is what says so. A refusal mints nothing and is no error; the oracle
+    /// is told the question is dead.
+    fn mint_passes(&mut self, name: &str, ty: &Type, lvl: &Level, body: &Term) -> bool {
+        let empty = LocalCtx::nil();
+        let item = crate::gate::GateItem {
+            name,
+            ctx: &empty,
+            ty,
+            level: lvl,
+            body,
+            opaque: false,
+            layer: Layer::Code,
+            lands_in_psi: true,
+        };
+        let gate = self.policy.gate.clone();
+        if gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+            return true;
+        }
+        // Whatever sealed proofs the statement or the body open are part of
+        // what the verdict is about (`KernelGate::accepted`).
+        let recording = heather_kernel::unseal::Recording::start();
+        let passes = stats::time_kernel(|| {
+            typing::check_type(&self.psi, 0, Layer::Prog, &empty, ty, lvl, self.policy.fuel).is_ok()
+                && typing::check_term(&self.psi, 0, Layer::Code, &empty, body, ty, lvl, self.policy.fuel).is_ok()
+        });
+        let unsealed = recording.finish();
+        if let Some(g) = &gate {
+            match passes {
+                true => g.accepted(&self.psi, &item, &unsealed),
+                false => g.abandon(&self.psi),
+            }
+        }
+        passes
+    }
+
     /// Drain the pending queue, minting one Ψ global per derivation
     /// (design §8). Called **between items**, where Ψ may grow.
     ///
@@ -1741,26 +1779,10 @@ impl Elaborator {
         // A derivation that reached into a scope is not a global; a goal that
         // is not closed has no statement. Both are asked of the kernel rather
         // than tracked, and a failure costs sharing, never correctness.
-        if !self.type_is_closed(goal, lvl) {
-            return;
-        }
-        let ok = stats::time_kernel(|| {
-            typing::check_term(
-                &self.psi,
-                0,
-                Layer::Code,
-                &LocalCtx::nil(),
-                &term,
-                goal,
-                lvl,
-                self.policy.fuel,
-            )
-            .is_ok()
-        });
-        if !ok {
-            return;
-        }
         let name = format!("#derived{}", self.traits.derived().len());
+        if !self.mint_passes(&name, goal, lvl, &term) {
+            return;
+        }
         let abs = self.psi.bindings.len() as u32;
         self.psi.commit(GlobalBinding::Tm {
             ctx: LocalCtx::nil(),

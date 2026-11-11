@@ -2,14 +2,19 @@
 //! (`issues/parallel-checking-and-caching.md`, `docs/cache-v1-design.md` §1).
 //!
 //! Every finished definition or theorem passes one `typing::check_type` +
-//! `typing::check_term` pair before it is committed, at exactly three sites:
+//! `typing::check_term` pair before it is committed, at four sites:
 //! [`crate::Elaborator::elab_decl_inner`] (user `fn`/`theorem`),
-//! `gendefs::push_gen_def` (the generated definitions) — both of which push
-//! the checked binding to Ψ — and `quote.rs`'s `elab_meta_decl_inner` (a
-//! `meta fn`, checked at `Layer::Meta` and registered in the meta-def table
-//! rather than pushed; `lands_in_psi` is how an oracle tells the two apart).
+//! `gendefs::push_gen_def` (the generated definitions) and `resolve.rs`'s
+//! `mint_passes` (a closed class derivation the resolver commits as a global
+//! of its own between declarations) — all of which push the checked binding
+//! to Ψ — and `quote.rs`'s `elab_meta_decl_inner` (a `meta fn`, checked at
+//! `Layer::Meta` and registered in the meta-def table rather than pushed;
+//! `lands_in_psi` is how an oracle tells the two apart).
 //! This module is the seam that lets something outside the elaborator watch
-//! those sites and, if it can vouch for the declaration, say so. Explicit
+//! those sites and, if it can vouch for the declaration, say so. A bodied
+//! binding that reaches Ψ past this seam is one no verdict is kept about,
+//! and a replay of the module's image checks it again on its first load
+//! (`issues/first-replay-rechecks-what-the-build-checked.md`). Explicit
 //! axioms have no term gate; [`KernelGate::assumption`] announces their
 //! separately checked statement so caches retain the trust distinction.
 //!

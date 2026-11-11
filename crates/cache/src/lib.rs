@@ -551,6 +551,21 @@ impl KernelGate for Cache {
         if unsealed.is_empty() {
             if let Some((iface, key)) = inner.identify(psi, item) {
                 inner.store.insert(key, iface, item.name);
+                // A theorem lands without its proof, and a replay of the
+                // module's image asks about that binding's statement alone
+                // (`admits_statement`). The gate just checked it, as the
+                // first half of this verdict, and its key is one hash of the
+                // interface hash in hand: kept here, the first replay of an
+                // image finds what the build that wrote it knew
+                // (`issues/first-replay-rechecks-what-the-build-checked.md`).
+                // Only where this check is the replay's: an empty context
+                // (the gate does not check a context), nothing withheld
+                // (a replay withholds nothing), a binding that lands.
+                if item.opaque && item.lands_in_psi && item.ctx.len() == 0 && psi.withheld.is_none() {
+                    if let Some(statement) = merkle::statement_key(&inner.prefix, &iface) {
+                        inner.store.insert(statement, iface, STATEMENT_ENTRY);
+                    }
+                }
             }
         } else {
             // `identify` still runs: the binding's interface hash is pending
@@ -561,7 +576,16 @@ impl KernelGate for Cache {
     }
 
     fn abandon(&self, psi: &GlobalCtx) {
-        self.inner.borrow_mut().open.split_off(&psi.bindings.len());
+        let mut inner = self.inner.borrow_mut();
+        let at = psi.bindings.len();
+        inner.open.split_off(&at);
+        // The interface hash a dead question left for `sync` goes with it:
+        // what lands at its index next is some other binding, and one that
+        // lands without asking (an inductive's, a prelude's) would be
+        // described to every dependent by this hash.
+        if inner.pending.as_ref().is_some_and(|(index, _)| *index >= at) {
+            inner.pending = None;
+        }
     }
 
     /// A statement verdict is "the kernel accepted this binding's statement
