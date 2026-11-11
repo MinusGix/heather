@@ -272,7 +272,9 @@ fn toy_stack() → Stack<Toy>(toy_fetch(), toy_data()) {
         λ m i fits => trivial,
         λ m i fits w => toy_stored(m, i, fits, w),
         λ m i k fits k_fits apart w => toy_apart(m, i, k, fits, k_fits, apart, w),
-        λ m i fits w bytes at resident => toy_code(m, next_rip(BitVec::zero(), i), word_bytes(w), bytes, at, resident))
+        λ m i fits w bytes at resident => toy_code(m, next_rip(BitVec::zero(), i), word_bytes(w), bytes, at, resident),
+        λ m i fits => Exists(immediate_from_bytes(m.bytes(i), m.bytes(i + 1), m.bytes(i + 2), m.bytes(i + 3), m.bytes(i + 4), m.bytes(i + 5),
+            m.bytes(i + 6), m.bytes(i + 7)), toy_word(m, i, fits)))
 }
 
 // The caller's theorem at the toy memory.

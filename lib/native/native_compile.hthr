@@ -156,11 +156,15 @@ fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 16 }
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
 
+// A word's slot is in the running frame, which RSP points at between
+// statements (docs/native-procedures-are-functions-design.md §3, step 5b):
+// slot `id` is the word at RSP + 8·id.
+//
 // The word in `register`: loaded from its slot, RBX the slot's address, or
 // moved from its home register through RBX, so RBX is written either way.
 fn Prog::word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
     match layout.homes.home(id) {
-        InSlot => then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))),
+        InSlot => then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Load(WordLoad(register, Rbx))),
         InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
     }
 }
@@ -216,7 +220,7 @@ fn Prog::bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
 
 // `register` stored to the word's slot.
 fn Prog::word_store(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
-    then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Store(WordStore(Rbx, register)))
+    then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Store(WordStore(Rbx, register)))
 }
 
 // `register` put in the word's home, where the word is live after (`out`).
@@ -540,9 +544,9 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 // The command line
 
 // RSP as the process starts, saved to the slot past the scratch range: the
-// command line is above it (`ArgvAt`). It is `main`'s frame too, and stays
-// in RSP; `depth` calls are room left (docs/native-procedures-design.md
-// §4.1).
+// command line is above it (`ArgvAt`). `main`'s frame is opened below it
+// (`Prog::frames_main`); `depth` calls are room left
+// (docs/native-procedures-design.md §4.1).
 fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
     let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
     then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
@@ -828,29 +832,26 @@ fn Prog::words_from(self p: Prog, layout: Layout, out: List<Nat>, ids: List<Nat>
     }
 }
 
-// `register` put in the word's home, whether or not it is live.
-fn Prog::word_home(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
-    match layout.homes.home(id) {
-        InSlot => p.word_store(layout, id, register),
-        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+// Each register pushed, the first lowest in the list highest on the
+// stack…
+fn Prog::saves(self p: Prog, registers: List<Gpr>) → Prog {
+    match registers {
+        Nil => p,
+        Cons(register, rest) => then(then(p, Block(rsp_down())), Spill(StackStore(register, BitVec::ofNat(0)))).saves(rest),
     }
 }
 
-// Each word pushed from its home, through RAX…
-fn Prog::pushes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
-    match ids {
+// …and each popped back, the last pushed first.
+fn Prog::restores(self p: Prog, registers: List<Gpr>) → Prog {
+    match registers {
         Nil => p,
-        Cons(id, rest) => then(then(p.word_to(layout, id, Rax), Block(rsp_down())), Spill(StackStore(Rax, BitVec::ofNat(0)))).pushes(layout, rest),
+        Cons(register, rest) => then(then(p.restores(rest), Reload(StackLoad(register, BitVec::ofNat(0)))), Block([rsp_up()])),
     }
 }
 
-// …and each popped back into its home, the last pushed first.
-fn Prog::pops(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
-    match ids {
-        Nil => p,
-        Cons(id, rest) => then(then(p, Reload(StackLoad(Rax, BitVec::ofNat(0)))), Block([rsp_up()])).word_home(layout, id, Rax).pops(layout, rest),
-    }
-}
+// RSP down a frame of `words` words, through RBX, and up one.
+fn frame_down(words: Nat) → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8 * words)), SubRR(Rsp, Rbx)] }
+fn frame_up(words: Nat) → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8 * words)), AddRR(Rsp, Rbx)] }
 
 // A call's way in: no room left, the shared exit; otherwise one less
 // room…
@@ -859,20 +860,21 @@ fn Prog::call_enters(self p: Prog, layout: Layout) → Prog {
     then(then(room, Block([MovRI(Rbx, BitVec::ofNat(1)), SubRR(Rax, Rbx), MovRI(Rbx, layout.room_at())])), Store(WordStore(Rbx, Rax)))
 }
 
-// …and out: the room as it was. RSP is the frame again once the saved
-// words are popped.
+// …and out: the room as it was. RSP is the caller's frame again, the
+// callee having put it back.
 fn Prog::call_leaves(self p: Prog, layout: Layout) → Prog {
     then(then(then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))), Block([AddRI8(Rax, BitVec::ofNat(1))])),
         Store(WordStore(Rbx, Rax)))
 }
 
-// A call of procedure `index`, `out` live after it: in, the words needed
-// after it pushed, the arguments in their registers, the CALL; then the
-// saved words popped, out, and the results put in their homes.
+// A call of procedure `index`, `out` live after it: in, the arguments in
+// their registers, the CALL; then out, and the results put in their homes.
+// Nothing is saved here: the caller's words in slots are in its own frame,
+// which the callee's is below, and the registers words live in the callee
+// saves (`Procedure::entry_code`).
 fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Prog {
-    let saved = out.minus(results);
-    let passed = p.call_enters(layout).pushes(layout, saved).words_to(layout, args, call_registers());
-    then(passed, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout).words_from(layout, out, results, call_registers())
+    let passed = p.call_enters(layout).words_to(layout, args, call_registers());
+    then(passed, CallTo(layout.procedure_label(index))).call_leaves(layout).words_from(layout, out, results, call_registers())
 }
 
 fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
@@ -919,14 +921,14 @@ fn Homes::moves_apart(self homes: Homes, out, ids: List<Nat>) → Bool {
 }
 
 // What a call needs to be emitted: its procedure, as many arguments and
-// results as it takes, at most six of each, and every word it names and
-// saves in the file, at most a word per word of the file saved.
+// results as it takes, at most six of each, every word it names and needs
+// after it in the file, and each result apart from what is live after it.
 fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Bool {
     match layout.procedures.nth(index) {
         None => False,
         Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
             (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-            (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)))))),
+            layout.homes.moves_apart(out, results))))),
     }
 }
 
@@ -1102,8 +1104,27 @@ fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout {
     Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures).with_functions(src.functions)
 }
 
+// A word of the frame set to RAX, where the file has the word: a word past
+// the slots has none, and a statement naming it is refused where it is
+// named (reason 4).
+fn Prog::zeroes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => (match layout.word_fits(id) { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest),
+    }
+}
+
+// `main`'s frame, below RSP as the process starts: a word a word of the
+// file, and zero in each word `main` reads before it writes it (`live`).
+// The rest hold what the stack held, and nothing reads them: the process's
+// stack is not assumed zero.
+fn Prog::frames_main(self p: Prog, layout: Layout, live: List<Nat>) → Prog {
+    then(p, Block(frame_down(layout.words) ++ [MovRI(Rax, BitVec::ofNat(0))])).zeroes(layout, live)
+}
+
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes), src.depth).inits(src.layout(low, homes), src.buffers, 0)
+    Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), src.main.live_in(homes, []))
+        .inits(src.layout(low, homes), src.buffers, 0)
 }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
@@ -1114,10 +1135,12 @@ fn Prog::finish(self p: Prog) → Option<Prog> {
 // Procedure `index` (docs/native-procedures-design.md §4.2), checked
 // first (§4.3): its body's homes with its results live after it, its body
 // reading only its parameters, each parameter apart from what is live after
-// it, and every word it names in the file. At its label RSP, at the return
-// address, is its frame, and no statement moves it; the arguments go to its
-// parameters' homes, the body runs, the results go to their registers, and
-// it returns.
+// it, and every word it names in the file. At its label RSP is at the
+// return address; it pushes the registers words live in and opens its
+// frame below them, RSP the frame from there on and no statement moving
+// it; the arguments go to its parameters' homes, the body runs, the results
+// go to their registers, the frame and the registers are put back, and it
+// returns.
 fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
     let entry = proc.body.live_in(layout.homes, proc.results);
     match proc.body.checked(layout.homes, proc.results) {
@@ -1127,14 +1150,18 @@ fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
     }
 }
 
-// Its way in: the label, the arguments into the parameters' homes…
+// Its way in: the label, the registers words live in pushed (the callee
+// saves them, docs/native-procedures-are-functions-design.md step 5b), its
+// frame opened below them, the arguments into the parameters' homes…
 fn Procedure::entry_code(self proc: Procedure, p: Prog, layout: Layout, index: Nat) → Prog {
-    p.label(layout.procedure_label(index)).words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers())
+    then(p.label(layout.procedure_label(index)).saves(layout.taken), Block(frame_down(layout.words)))
+        .words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers())
 }
 
-// …and out, after its body: the results into their registers, and RET.
+// …and out, after its body: the results into their registers, the frame
+// closed, the registers popped, and RET.
 fn Procedure::exit_code(self proc: Procedure, p: Prog, layout: Layout) → Prog {
-    then(p.words_to(layout, proc.results, call_registers()), Ret)
+    then(then(p.words_to(layout, proc.results, call_registers()), Block(frame_up(layout.words))).restores(layout.taken), Ret)
 }
 
 fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
@@ -1252,8 +1279,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //      or whose leaves do not compile
 //  14  a call that does not fit (`Layout::call_fits`: no such procedure,
 //      other counts of arguments or results than it takes, more than six,
-//      a word past the slots, more saved words than slots, or a result
-//      not apart from what is live after it) (the procedure)
+//      a word past the slots, or a result not apart from what is live
+//      after it) (the procedure)
 //  15  a procedure that does not compile (`Procedure::code`) (its index)
 //  16  a call of a function that does not fit (`Layout::function_fits`: no
 //      such function, another count of arguments than it takes after the

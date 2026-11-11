@@ -291,6 +291,16 @@ fn DataRegion::stack(self r: DataRegion) → Stack<X86Memory(r.profile)>(r.profi
         },
         keeps_code := λ m i fits word bytes at resident =>
             r.profile.store_keeps_code(m, next_rip(r.low, i), word_bytes(word), r.not_executed(m, i, 8, fits), bytes, at, resident),
+        readable := λ m i fits => {
+            let a = next_rip(r.low, i);
+            let o = λ (t: Nat) => r.profile.read(m, next_rip(a, t));
+            let c = λ (t: Nat) => m.cells(next_rip(a, t));
+            let b = λ (t: Nat) (short: t < 8) => r.profile.read_at(m, next_rip(a, t),
+                cong_fn<Perm, Bool>(λ q => q.read, r.perm_from(m, i, t, omega(short, fits))));
+            Exists(immediate_from_bytes(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7)),
+                word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7), c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7),
+                    b(0, trivial), b(1, trivial), b(2, trivial), b(3, trivial), b(4, trivial), b(5, trivial), b(6, trivial), b(7, trivial)))
+        },
     )
 }
 

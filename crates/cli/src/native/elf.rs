@@ -344,7 +344,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
     let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
-        Some(emission::Checks { src: &src, homes: &homes, sets: &live_sets }))?;
+        emission::Checks { src: &src, homes: &homes, sets: &live_sets })?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
@@ -493,14 +493,14 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
-// bytes of stack below RSP, enough for the source's calls of procedures
-// and of functions, and the command
+// bytes of stack below RSP, enough for the source's words (`main`'s
+// frame) and its calls of procedures and of functions, and the command
 // line `args` on the stack above,
 // simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().depth * (8 * ({src}().words + 1)) + 80 * {src}().functions.len() <= depth, args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + 80 * {src}().functions.len()) + 8 * {src}().words <= depth, args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}

@@ -104,13 +104,13 @@ theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits
 
 // The registers after a port is loaded, by its kind.
 fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs) → Gprs {
-    let a = t.layout().rbx_word(env, id);
+    let ga = t.rbx_gprs(env, id, g);
     match kind {
         None => g,
         Some(k) => match k {
-            Word => write_gpr(register, env.word(id), write_gpr(Rbx, a, g)),
+            Word => write_gpr(register, env.word(id), ga),
             Bit => {
-                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)));
+                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), ga));
                 write_gpr(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded)
             },
             // No port is at a narrow kind (`Kind::of_width`), so none loads.
@@ -275,18 +275,18 @@ theorem Prog::within_leaf(self p: Prog, layout: Layout, out: List<Nat>, nodes: L
 theorem Target::held_kind(self t: Target, live: List<Nat>, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), unused: t.homes.uses(register) = False, apart: register.same(Rsp) = False):
     t.Held(live, env, t.kind_gprs(env, kind, id, register, g), m) {
-    let a = t.layout().rbx_word(env, id);
+    let ga = t.rbx_gprs(env, id, g);
     let rbx: (t.homes.uses(Rbx) = False) = t.homes.unused(Rbx, trivial);
     match kind {
         None => held,
         Some(k) => match k {
-            Word => t.held_unused(live, env, write_gpr(Rbx, a, g), m, t.held_unused(live, env, g, m, held, Rbx, a, rbx, refl), register, env.word(id), unused, apart),
+            Word => t.held_unused(live, env, ga, m, t.held_rbx(live, env, g, m, held, env, id), register, env.word(id), unused, apart),
             Bit => {
-                let inner = write_gpr(register, env.word(id), write_gpr(Rbx, a, g));
+                let inner = write_gpr(register, env.word(id), ga);
                 let loaded = write_gpr(Rbx, BitVec::ofNat(1), inner);
                 t.held_unused(live, env, loaded, m,
                     t.held_unused(live, env, inner, m,
-                        t.held_unused(live, env, write_gpr(Rbx, a, g), m, t.held_unused(live, env, g, m, held, Rbx, a, rbx, refl), register, env.word(id), unused, apart),
+                        t.held_unused(live, env, ga, m, t.held_rbx(live, env, g, m, held, env, id), register, env.word(id), unused, apart),
                         Rbx, BitVec::ofNat(1), rbx, refl),
                     register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), unused, apart)
             },
@@ -348,16 +348,16 @@ theorem Target::goes_ports_to(self t: Target, live: List<Nat>, env: Env, tree: I
 theorem Target::kind_gprs_frame(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs, query: Gpr,
     apart: register.same(query) = False, from_rbx: Rbx.same(query) = False):
     read_gpr(query, t.kind_gprs(env, kind, id, register, g)) = read_gpr(query, g) {
-    let a = t.layout().rbx_word(env, id);
+    let ga = t.rbx_gprs(env, id, g);
     match kind {
         None => refl,
         Some(k) => match k {
-            Word => trans(read_gpr_other(register, query, env.word(id), write_gpr(Rbx, a, g), apart), read_gpr_other(Rbx, query, a, g, from_rbx)),
+            Word => trans(read_gpr_other(register, query, env.word(id), ga, apart), t.rbx_gprs_other(env, id, g, query, from_rbx)),
             Bit => {
-                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)));
+                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), ga));
                 trans(read_gpr_other(register, query, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded, apart),
-                    trans(read_gpr_other(Rbx, query, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)), from_rbx),
-                        trans(read_gpr_other(register, query, env.word(id), write_gpr(Rbx, a, g), apart), read_gpr_other(Rbx, query, a, g, from_rbx))))
+                    trans(read_gpr_other(Rbx, query, BitVec::ofNat(1), write_gpr(register, env.word(id), ga), from_rbx),
+                        trans(read_gpr_other(register, query, env.word(id), ga, apart), t.rbx_gprs_other(env, id, g, query, from_rbx))))
             },
             Narrow(_) => refl,
             Low(_) => refl,
@@ -385,15 +385,15 @@ theorem Target::kind_rep(self t: Target, env: Env, values: Valuation(), id: Nat,
     plain: kind.plain() = True,
     apart: Rbx.same(register) = False, agree: (w: Nat) → values(w, id) = BitVec::ofNat(env.number(id))):
     KindRep(values, id, Some(kind), read_gpr(register, t.kind_gprs(env, Some(kind), id, register, g))) {
-    let a = t.layout().rbx_word(env, id);
+    let ga = t.rbx_gprs(env, id, g);
     match kind {
-        Word => trans(agree(64), sym(read_gpr_after_write(register, env.word(id), write_gpr(Rbx, a, g)))),
+        Word => trans(agree(64), sym(read_gpr_after_write(register, env.word(id), ga))),
         Bit => {
-            let inner = write_gpr(register, env.word(id), write_gpr(Rbx, a, g));
+            let inner = write_gpr(register, env.word(id), ga);
             let loaded = write_gpr(Rbx, BitVec::ofNat(1), inner);
             let masked: (read_gpr(register, loaded).band(read_gpr(Rbx, loaded)) = env.word(id).band(BitVec::ofNat(1))) =
                 eq2(λ (x: BitVec(64)) (y: BitVec(64)) => x.band(y),
-                    trans(read_gpr_other(Rbx, register, BitVec::ofNat(1), inner, apart), read_gpr_after_write(register, env.word(id), write_gpr(Rbx, a, g))),
+                    trans(read_gpr_other(Rbx, register, BitVec::ofNat(1), inner, apart), read_gpr_after_write(register, env.word(id), ga)),
                     read_gpr_after_write(Rbx, BitVec::ofNat(1), inner));
             trans(cong_fn<BitVec(1), BitVec(64)>(λ x => x.zero_extend(63), agree(1)),
                 trans(sym(mask_low_bit(env.number(id))), sym(trans(read_gpr_after_write(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded), masked))))

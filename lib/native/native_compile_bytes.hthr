@@ -108,8 +108,11 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
             Inr(past)
         },
     });
-    let words = λ (k: Nat) (inside: k < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * k, λ t short =>
-        r.cells_outside(v, q, [c], 8 * k + t, Inl(omega(layout.word_below_buffers(k, t, inside, short), layout.buffers_after_words(buf)))))),
+    let words = λ (k: Nat) (inside: k < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, layout.frame_cell(k), λ t short =>
+        r.cells_outside(v, q, [c], layout.frame_cell(k) + t, {
+            let past: (q + 1 <= layout.frame_cell(k) + t) = omega(below, ends, layout.scratch_below_size(), layout.frame_cell_at(k));
+            Inr(past)
+        }))),
         keeps.left(k, inside));
     ⟨words, λ b cb found_b => match b.eq_dec(buf) {
         Inl(here) => {
@@ -305,7 +308,7 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rcx, g) = w) ∧ then_q(m)),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right.left, ⟨refl, ⟨cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right.left), held.right.right⟩⟩⟩⟩));
-    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨held.left, ⟨refl, held.right⟩⟩⟩)
+    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨t.held_rbx(live, env, s.gprs, s.memory, held.left, env, index), ⟨refl, held.right⟩⟩⟩)
 }
 
 theorem Prog::loads_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat, program: Prog,
@@ -433,14 +436,14 @@ theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Pro
             let yes: (w.borrow_sub_bit(BitVec::ofNat(cap)) = True) = trans(sym(hp.right.right), cf);
             let lt: (i < BitVec::ofNat(cap, n := 64).toNat()) = BitVec::borrow_sub_of_bit_true(64, w, BitVec::ofNat(cap), yes);
             let below: (i < cap) = omega(lt, cap_is);
-            valued(u, here, resident, ⟨hp.left, ⟨hp.left, ⟨hp.right.left, ⟨refl, below⟩⟩⟩⟩)
+            valued(u, here, resident, ⟨hp.left, ⟨t.held_rbx(live, env, u.gprs, u.memory, hp.left, env, value), ⟨trans(t.rbx_gprs_other(env, value, u.gprs, Rcx, refl), hp.right.left), ⟨refl, below⟩⟩⟩⟩)
         });
     let compared = t.goes_block_jcc(w0, 0, set, w_cmp, tree, AE, pre, jumped, λ _ => refl);
     let indexed = t.goes_word_to(live, env, p, index, Rcx, inside_index, holds_index, w_w0, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g) = w),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right, cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right)⟩⟩));
-    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨held, refl⟩⟩)
+    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨t.held_rbx(live, env, s.gprs, s.memory, held, env, index), refl⟩⟩)
 }
 
 theorem Prog::stores_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat, program: Prog,

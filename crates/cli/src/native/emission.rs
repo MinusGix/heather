@@ -304,8 +304,10 @@ pub(super) struct Span { program: String, pub start: usize, pub count: usize, pu
 pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [(u64, usize)] }
 
 /// `readings` are `plan`'s reads, read. With `inits`, the entry is stated
-/// from its parts (`Inits::state`); without, by one `refl`.
-pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Option<Checks<'_>>) -> Result<Stated, String> {
+/// from its parts (`Inits::state`); without, by one `refl` over the set
+/// live as `main` starts, which the allocation's check found
+/// (`Source::entry_at`): the entry zeroes those words of `main`'s frame.
+pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Checks<'_>) -> Result<Stated, String> {
     if readings.len() != plan.reads.len() { return Err(out_of_order()); }
     let mut starts = Vec::with_capacity(readings.len());
     let (mut items, mut lens) = (Vec::new(), Vec::new());
@@ -318,9 +320,15 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_")) || line.starts_with(&format!("fn {p}_o_")) || line.starts_with(&format!("fn {p}_kn_")))
         .map(|line| format!("{line}\n")).collect();
     let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts };
+    // The allocation's check first: the entry reads the set it found
+    // before `main` (`{p}_ck_0`).
+    let (checked, live) = checks.state(p, &plan.root)?;
+    writer.theorems.push_str(&checked);
     match inits {
-        Some(inits) => inits.state(&mut writer, entered)?,
-        None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered))),
+        Some(inits) => inits.state(&mut writer, entered, &live)?,
+        None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{\n    \
+            {src}().entry_at({LOW}, {homes}, {live}, {}, {p}_ck_0(), refl)\n}}\n", writer.program(entered), writer.program(entered),
+            src = checks.src, homes = checks.homes, LOW = super::elf::LOW)),
     }
     let (start, end, names) = writer.part(&plan.root)?;
     if start != entered || end != main { return Err(out_of_order()); }
@@ -368,7 +376,6 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
             Some(CallsStated { main: writer.program(main), names, procedures: end, after: last })
         }
     };
-    if let Some(checks) = checks { writer.theorems.push_str(&checks.state(p, &plan.root)?); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
     let spans = plan.programs.into_iter().zip(&readings).zip(&starts)
         .map(|((program, reading), &start)| Span { program, start, count: reading.items.len(), bytes: reading.bytes.clone() }).collect();
@@ -473,8 +480,9 @@ pub(super) struct Checks<'a> { pub src: &'a str, pub homes: &'a str, pub sets: &
 
 impl Checks<'_> {
     /// `{p}_ck_{id}` for each part, and `{p}_allocation_is`, that the
-    /// compile's check of the homes passes.
-    fn state(&self, p: &str, root: &Part) -> Result<String, String> {
+    /// compile's check of the homes passes; and the set live before the
+    /// root, spelled.
+    fn state(&self, p: &str, root: &Part) -> Result<(String, String), String> {
         let bad = || "the allocation's sets did not read back".to_string();
         // A set at `at`, after its length, and where the next starts.
         let set = |at: usize| -> Result<(String, usize), String> {
@@ -493,9 +501,10 @@ impl Checks<'_> {
         let mut text = String::new();
         self.part(p, root, &sets, &mut text)?;
         let (src, homes) = (self.src, self.homes);
+        let live = sets.first().ok_or_else(bad)?.1.clone();
         text.push_str(&format!("theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{\n    \
-            {src}().allocation_of({homes}, {}, refl, {p}_ck_0(), refl)\n}}\n", sets.first().ok_or_else(bad)?.1));
-        Ok(text)
+            {src}().allocation_of({homes}, {live}, refl, {p}_ck_0(), refl)\n}}\n"));
+        Ok((text, live))
     }
 
     fn part(&self, p: &str, part: &Part, sets: &[(String, String)], text: &mut String) -> Result<(), String> {
@@ -525,19 +534,25 @@ impl Checks<'_> {
 }
 
 impl Inits<'_> {
-    /// The entry, `Source::entry`: RSP saved (`{p}_entry_saved`), then
-    /// each buffer's initial bytes stored (`{p}_in_{j}`), a definition of
-    /// them at a time (`{p}_ib_{j}_{k}_is`, joined by
-    /// `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The literal is
-    /// cut where each starts and ends.
-    fn state(&self, writer: &mut Writer<'_>, entered: usize) -> Result<(), String> {
+    /// The entry, `Source::entry`: RSP saved and `main`'s frame opened,
+    /// the words of it in `live` (the set live as `main` starts) zeroed
+    /// (`{p}_entry_saved`), then each buffer's initial bytes stored
+    /// (`{p}_in_{j}`), a definition of them at a time (`{p}_ib_{j}_{k}_is`,
+    /// joined by `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The
+    /// literal is cut where each starts and ends.
+    fn state(&self, writer: &mut Writer<'_>, entered: usize, live: &str) -> Result<(), String> {
         let (p, layout) = (writer.p, writer.layout);
         let chunk = lowered::CHUNK as u64;
-        // Four items save RSP and the depth (`Prog::saves_rsp`), and two
-        // store each byte while there is room.
+        // Two items store each initial byte while there is room, and the
+        // entry's items before them save RSP and the depth
+        // (`Prog::saves_rsp`, four), open the frame (`Prog::frames_main`,
+        // one) and zero each live word of it (two a word).
         const SAVED: usize = 4;
-        let mut at = SAVED;
-        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth) = {} {{ refl }}\n", self.src, writer.program(at));
+        let stores: usize = self.shapes.iter().map(|&(capacity, len)| 2 * (len as u64).min(capacity) as usize).sum();
+        let framed = entered.checked_sub(stores).filter(|&framed| framed > SAVED && (framed - SAVED) % 2 == 1)
+            .ok_or_else(|| format!("the entry's initial bytes are {stores} items, and the entry read {entered}"))?;
+        let mut at = framed;
+        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth).frames_main({layout}, {live}) = {} {{ refl }}\n", self.src, writer.program(at));
         let mut starts = Vec::with_capacity(self.shapes.len());
         for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
             starts.push(at);
@@ -576,10 +591,10 @@ impl Inits<'_> {
                 Prog::inits_of({layout}, Buffer({capacity}, {p}_it_{j}_0()), {p}_bl_{}(), {j}, {from}, {to}, {end}, {p}_it_{j}_0_is(), {p}_in_{}_is())\n}}\n",
                 j + 1, j + 1));
         }
-        let start = writer.program(SAVED);
+        let start = writer.program(framed);
         text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}) = {end} {{\n    \
-            {src}().entry_of({LOW}, {homes}, {start}, {end}, {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
-        writer.cuts.insert(SAVED);
+            {src}().entry_of({LOW}, {homes}, {live}, {start}, {end}, {p}_ck_0(), {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
+        writer.cuts.insert(framed);
         writer.theorems.push_str(&text);
         Ok(())
     }

@@ -256,7 +256,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         λ s held => held(s.flags, s.rip));
     let at_w4 = t.goes_known_to(live, env, w4, known, fd, Rdi, in_fd, m_fd, w_w5, Vis(c, tree), q5, at_w5);
     let post4 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q5(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_known(known, env, fd), u.gprs)), u.memory);
+        q5(write_gpr(Rdi, env.word(fd), t.rbx_known_gprs(known, env, fd, u.gprs)), u.memory);
     let at_room0 = t.goes_block(room, 0, asking, w_w4, Vis(c, tree), post4, at_w4);
     // At the request: the offset and the count clamped.
     let q_room = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
@@ -266,14 +266,24 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
             let kept = held.left;
             let asked = t.writes_request(env.with_words(kept.witness), s.memory, kept.proof.left, buf, cap, found, env.number(from), env.number(len),
                 read_gpr(R8, s.gprs), read_gpr(Rdx, s.gprs), held.right.left, held.right.right);
-            ⟨kept, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
+            ⟨kept, t.rbx_known_cases(known, env, fd, execute_block_normal(asking, s).gprs,
+                λ (g1: Gprs) => q5(write_gpr(Rdi, env.word(fd), g1), s.memory),
+                λ _ _ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
                 λ resident a => match a {
                     Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
                             word_of_nat_eq_ofNat(64, count))⟩⟩⟩,
                     WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
-                }⟩⟩
+                }⟩,
+                λ _ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
+                λ resident a => match a {
+                    Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
+                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
+                            word_of_nat_eq_ofNat(64, count))⟩⟩⟩,
+                    WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
+                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
+                }⟩)⟩
         });
     // The count clamped to what is left past the offset.
     let room_pre = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
@@ -283,15 +293,21 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
     let q_w2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap - clamped));
     let at_w2 = t.goes_weaken(prog_len(w2), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            room_pre(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_known(known, env, len), s.gprs)), s.memory),
+            room_pre(write_gpr(Rdx, env.word(len), t.rbx_known_gprs(known, env, len, s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_w2(s.gprs, s.memory),
         t.goes_known_to(live, env, w2, known, len, Rdx, in_len, m_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
             let word = env.word(len);
-            let r9 = read_gpr(R9, s.gprs);
+            let g1 = t.rbx_known_gprs(known, env, len, s.gprs);
+            let held1: t.Held(live, env, g1, s.memory) = t.held_rbx_known(live, env, s.gprs, s.memory, held.left, known, env, len);
+            let r8_is: (read_gpr(R8, g1).toNat() = clamped) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+                t.rbx_known_other(known, env, len, s.gprs, R8, refl)), held.right.left);
+            let r9 = read_gpr(R9, g1);
+            let r9_is: (r9.toNat() = cap - clamped) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+                t.rbx_known_other(known, env, len, s.gprs, R9, refl)), held.right.right);
             let both: (word.toNat().min(r9.toNat()) = env.number(len).min(cap - clamped)) =
-                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.reads_number(live, env, s.gprs, s.memory, held.left, known, len, m_len, in_len), held.right.right);
-            ⟨held.left, ⟨λ kept => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_kept(word, r9, kept)), both)⟩⟩,
-                λ bound => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_bound(word, r9, bound)), both)⟩⟩⟩⟩
+                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.reads_number(live, env, s.gprs, s.memory, held.left, known, len, m_len, in_len), r9_is);
+            ⟨held.left, ⟨λ kept => ⟨held1, ⟨r8_is, trans(sym(BitVec::clamp_kept(word, r9, kept)), both)⟩⟩,
+                λ bound => ⟨held1, ⟨r8_is, trans(sym(BitVec::clamp_bound(word, r9, bound)), both)⟩⟩⟩⟩
         });
     // What is left of the buffer past the offset.
     let q_start = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
@@ -330,10 +346,11 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_w0(write_gpr(R8, env.word(from), write_gpr(Rbx, layout.rbx_known(known, env, from), s.gprs)), s.memory),
+            q_w0(write_gpr(R8, env.word(from), t.rbx_known_gprs(known, env, from, s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
         t.goes_known_to(live, env, p, known, from, R8, in_from, m_from, w_w0, Vis(c, tree), q_w0, at_w0),
-        λ s held => ⟨held, ⟨held, t.reads_number(live, env, s.gprs, s.memory, held, known, from, m_from, in_from)⟩⟩)
+        λ s held => ⟨held, ⟨t.held_rbx_known(live, env, s.gprs, s.memory, held, known, env, from),
+            t.reads_number(live, env, s.gprs, s.memory, held, known, from, m_from, in_from)⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +684,10 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
     j(sym(t.scratch_rip()), λ x _ => t.Landed(env, bytes, t.r.profile.store(m, x, bytes)),
         Exists(t.r.buffer(v).set_span(so, bytes.to_vector()).cells, ⟨t.r.store_holds(v, m, placed.proof.left, so, bytes, fits),
             ⟨t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.proof.right.left,
-                λ q under => t.r.cells_outside(v, so, bytes, q, Inl(under))),
+                λ q away => t.r.cells_outside(v, so, bytes, q, match away {
+                    Inl(under) => Inl(under),
+                    Inr(over) => Inr(omega(over, below, t.layout().stack_below_size())),
+                })),
              ⟨t.stacked_store(env, v, m, so, bytes, below, placed.proof.right.right),
               λ k c got => t.r.cells_inside(v, so, bytes, k, c, got)⟩⟩⟩))
 }
@@ -905,7 +925,7 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         λ s held => held(s.flags, s.rip));
     let at_r2 = t.goes_known_to(live, env, r2, known, fd, Rdi, in_fd, m_fd, w_r3, Vis(c, tree), q3, at_r3);
     let post2 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q3(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_known(known, env, fd), u.gprs)), u.memory);
+        q3(write_gpr(Rdi, env.word(fd), t.rbx_known_gprs(known, env, fd, u.gprs)), u.memory);
     let at_clamped0 = t.goes_block(clamped, 0, asking, w_r2, Vis(c, tree), post2, at_r2);
     // At the request: the count clamped.
     let q_cl = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap));
@@ -921,7 +941,9 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
             let at = sym(t.scratch_rip());
             let resides = λ (bytes: List<BitVec(8)>) (fits: so + bytes.len() <= t.r.size) (resident: t.site().Resident(m)) =>
                 j(at, λ x _ => t.site().Resident(t.r.profile.store(m, x, bytes)), t.store_resident(m, so, bytes, fits, resident));
-            ⟨kept, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
+            ⟨kept, t.rbx_known_cases(known, env, fd, execute_block_normal(asking, s).gprs,
+                λ (g1: Gprs) => q3(write_gpr(Rdi, env.word(fd), g1), s.memory),
+                λ _ _ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
                     j(at, λ x _ => t.io().writable(m, x, most),
                         t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap))))⟩,
                 λ resident a => match a {
@@ -936,7 +958,23 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                             ⟨answers, ⟨Exists(words, ⟨t.landed_placed(env.with_words(words), junk, t.r.profile.store(m, layout.scratch_at(), junk),
                                 t.landed_store(env.with_words(words), m, placed, junk, short)), kept.proof.right⟩), refl⟩⟩⟩
                     },
-                }⟩⟩
+                }⟩,
+                λ _ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
+                    j(at, λ x _ => t.io().writable(m, x, most),
+                        t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap))))⟩,
+                λ resident a => match a {
+                    ReadBytes(bytes) => λ answers junk leaves rcx r11 => {
+                        let short = t.under_largest(buf, cap, found, bytes.len(), most, answers, most_cap);
+                        ⟨resides(bytes, t.scratch_inside(bytes.len(), short), resident),
+                            ⟨answers, ⟨Exists(words, ⟨t.landed_store(env.with_words(words), m, placed, bytes, short), kept.proof.right⟩), refl⟩⟩⟩
+                    },
+                    ReadFailed(_) => λ answers junk leaves rcx r11 => {
+                        let short = t.under_largest(buf, cap, found, junk.len(), most, leaves, most_cap);
+                        ⟨resides(junk, t.scratch_inside(junk.len(), short), resident),
+                            ⟨answers, ⟨Exists(words, ⟨t.landed_placed(env.with_words(words), junk, t.r.profile.store(m, layout.scratch_at(), junk),
+                                t.landed_store(env.with_words(words), m, placed, junk, short)), kept.proof.right⟩), refl⟩⟩⟩
+                    },
+                }⟩)⟩
         });
     // The count clamped to the capacity.
     let at_r1 = t.goes_clamp(r1, Rdx, R9, names, w_clamped, Vis(c, tree), q_cl, at_clamped);
@@ -960,8 +998,9 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_r0(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_known(known, env, len), s.gprs)), s.memory),
+            q_r0(write_gpr(Rdx, env.word(len), t.rbx_known_gprs(known, env, len, s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
         t.goes_known_to(live, env, p, known, len, Rdx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
-        λ s held => ⟨held, ⟨held, t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
+        λ s held => ⟨held, ⟨t.held_rbx_known(live, env, s.gprs, s.memory, held, known, env, len),
+            t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
 }

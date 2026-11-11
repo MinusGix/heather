@@ -9,8 +9,8 @@
 //
 // What a process gives (`Stack`): `size` bytes from `low` up, writable in
 // every memory, below the canonical boundary, whose word reads see the stores
-// made into them and nothing else, and into which a store leaves code where
-// it was. These are a profile's laws, proved once for its memory; a proof
+// made into them and nothing else, into which a store leaves code where
+// it was, and every word of which reads as some word. These are a profile's laws, proved once for its memory; a proof
 // that runs over the stack names its addresses by their offsets from `low`
 // (`next_rip(low, i)`), so it never does arithmetic on an open address.
 import x86_64;
@@ -241,6 +241,9 @@ record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
     // Code is never on the stack.
     keeps_code: (memory: M) → (i: Nat) → i + 8 <= size → (word: BitVec(64)) → (bytes: List<BitVec(8)>) → (at: BitVec(64)) →
         CodeResident(fetch, memory, bytes, at) → CodeResident(fetch, writes.store(memory, next_rip(low, i), word_bytes(word)), bytes, at),
+    // Every word of it reads as some word, whatever was stored there: what
+    // a frame not yet written holds.
+    readable: (memory: M) → (i: Nat) → i + 8 <= size → Exists<BitVec(64)>(λ word => read_word(data, memory, next_rip(low, i)) = Some(word)),
 }
 
 fn Stack::at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat) → BitVec(64) {
