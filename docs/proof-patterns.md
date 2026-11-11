@@ -234,7 +234,11 @@ property of Heather.
   defined relation or an `↔` (`Regex::alt_same`): the motive synthesis
   reads the reduced goal there (`docs/goal-motive-synthesis-design.md`
   §4.5). No second definition with the tests as parameters. Do not also
-  write the test in the statement; take it from `h`.
+  write the test in the statement; take it from `h`. A call that is only
+  an argument of another stuck call (`k.leb(f(n))`, `Mem(f(n), xs)`) is
+  not reached: state the theorem at a name, `(p: Nat) → p = f(n) → …`,
+  and give the corollary at the call
+  (`issues/case-split-reaches-arguments-of-stuck-calls.md`).
 
 ## 5. Names and syntax
 

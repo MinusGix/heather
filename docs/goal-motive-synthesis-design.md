@@ -165,7 +165,8 @@ variables.
 
 The last rung, tried only when every rung above found nothing
 (`abstract_below`): each former is reduced in its own context, through `Π`
-codomains and `Σ` components to a fixed depth; the positions each reduced
+codomains, `Σ` components and the summands of a disjunction to a fixed
+depth; the positions each reduced
 term is stuck on are collected as §4.4 collects them and brought back to
 `Γ` by strengthening, so one that mentions a binder it sits under is no
 candidate; those that convert to the scrutinee are abstracted, all at once,
@@ -185,6 +186,13 @@ What it does not reach, each pinned as a refusal in
   scope);
 - a call that is the argument of a variable head, `P(pick(n, a, a))`:
   that is a weak head normal form, and nothing is stuck;
+- a call that is an argument the reduction is not waiting on:
+  `k.leb(pick(n, a, a))` is stuck on `k`, so `pick`'s test is not a
+  position anything is stuck on. Reading it would mean normalising the
+  arguments of every neutral term in the goal
+  (`issues/case-split-reaches-arguments-of-stuck-calls.md`). Until then
+  the theorem is stated at a name, `(p: Nat) → p = pick(n, a, a) → …`,
+  where the equation is a position of its own;
 - a goal that also writes the test. §4.1 finds the written occurrence and
   returns, so the call beside it is not specialised. Making the rungs
   cumulative would change motives that are found today, which this round

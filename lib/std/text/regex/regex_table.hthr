@@ -1,0 +1,388 @@
+// A regular expression's automaton as a finite table, checked
+// (issues/regular-languages-by-derivatives.md).
+//
+// `regex_dfa.hthr`'s automaton has expressions as states and every code as
+// a letter. A table has numbers for both: its states are row numbers, and
+// its letters are the classes a list of breakpoints cuts the codes into
+// (`Regex::class`). Each row keeps the expression its state stands for;
+// that column is the witness, not something a run reads.
+//
+// The table is built by an untrusted search (`Regex::table`) and accepted
+// by a check that computes (`Table::check`): every row's accepting bit is
+// its expression's `nullable`, every range of its expression ends on
+// breakpoints, and from every class's representative the row's entry is
+// the row of the simplified derivative. One theorem then says a table that
+// passes accepts the expression's language (`Table::check_accepts`), by
+// `Dfa::residual` with the kept expressions as labels. No finiteness
+// theorem is needed: a search that runs out of fuel returns a table the
+// check refuses.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import relation;
+import relation_props;
+import algebra_rel;
+import algebra;
+import regex;
+import regex_language;
+import regex_dfa;
+
+// ---------------------------------------------------------------------------
+// Classes of codes.
+
+// `c` and `d` are on the same side of every breakpoint.
+fn Regex::SameSide(bs: List<Nat>, c, d: Nat) → Type { (b: Nat) → Mem(b, bs) → b.leb(c) = b.leb(d) }
+
+// The class of `c`: how many breakpoints are at or below it.
+fn Regex::class(bs: List<Nat>, c: Nat) → Nat { bs.filter(λ b => b.leb(c)).len() }
+
+theorem Regex::class_same(bs: List<Nat>, c, d: Nat, same: Regex::SameSide(bs, c, d)): Regex::class(bs, c) = Regex::class(bs, d) {
+    cong_fn(λ (xs: List<Nat>) => xs.len(), bs.filter_cong_mem(λ b => b.leb(c), λ b => b.leb(d), same))
+}
+
+// A class's representative: the largest breakpoint at or below `c`, or 0.
+fn Regex::rep(bs: List<Nat>, c: Nat) → Nat {
+    match bs {
+        Nil => 0,
+        Cons(b, t) => match b.leb(c) && Regex::rep(t, c).leb(b) { True => b, False => Regex::rep(t, c) },
+    }
+}
+
+theorem Regex::rep_first(b, p, c: Nat, h: (b.leb(c) && p.leb(b)).IsTrue()): b <= c ∧ p <= b { ⟨omega(h), omega(h)⟩ }
+
+theorem Regex::rep_here(x, b, p: Nat, q: x = b, e: p = b): x <= p { omega(q, e) }
+
+theorem Regex::rep_before(x, r, b, p: Nat, xr: x <= r, rb: r <= b, e: p = b): x <= p { omega(xr, rb, e) }
+
+theorem Regex::rep_later(x, b, r, p, c: Nat, q: x = b, e: p = r, h: ¬(b.leb(c) && r.leb(b)).IsTrue(), xc: x <= c): x <= p { omega(q, e, h, xc) }
+
+theorem Regex::rep_le(bs: List<Nat>, c: Nat): Regex::rep(bs, c) <= c {
+    match bs {
+        Nil => omega(),
+        Cons(b, t) => match h: b.leb(c) && Regex::rep(t, c).leb(b) {
+            True => Regex::rep_first(b, Regex::rep(t, c), c, Bool::is_true_of_eq(h)).left,
+            False => Regex::rep_le(t, c),
+        },
+    }
+}
+
+// Stated at a name for the representative, so that the split on the test
+// meets it in one place (an argument of `<=` is not a position the goal is
+// stuck on).
+theorem Regex::rep_max_at(bs: List<Nat>, c: Nat): (p: Nat) → p = Regex::rep(bs, c) → (x: Nat) → Mem(x, bs) → x <= c → x <= p {
+    match bs {
+        Nil => λ p e x m xc => false_elim(m),
+        Cons(b, t) => match h: b.leb(c) && Regex::rep(t, c).leb(b) {
+            True => λ p e x m xc => match m {
+                Inl(q) => Regex::rep_here(x, b, p, q, e),
+                Inr(m2) => Regex::rep_before(x, Regex::rep(t, c), b, p, Regex::rep_max_at(t, c, Regex::rep(t, c), refl, x, m2, xc),
+                    Regex::rep_first(b, Regex::rep(t, c), c, Bool::is_true_of_eq(h)).right, e),
+            },
+            False => λ p e x m xc => match m {
+                Inl(q) => Regex::rep_later(x, b, Regex::rep(t, c), p, c, q, e,
+                    λ y => absurd(trans(sym(eq_true_of_is_true(b.leb(c) && Regex::rep(t, c).leb(b), y)), h)), xc),
+                Inr(m2) => Regex::rep_max_at(t, c, p, e, x, m2, xc),
+            },
+        },
+    }
+}
+
+theorem Regex::rep_max(bs: List<Nat>, c: Nat, x: Nat, m: Mem(x, bs), xc: x <= c): x <= Regex::rep(bs, c) {
+    Regex::rep_max_at(bs, c, Regex::rep(bs, c), refl, x, m, xc)
+}
+
+// The representative is 0 or a breakpoint.
+theorem Regex::rep_mem_at(bs: List<Nat>, c: Nat): (p: Nat) → p = Regex::rep(bs, c) → Mem(p, Cons(0, bs)) {
+    match bs {
+        Nil => λ p e => Inl(e),
+        Cons(b, t) => match h: b.leb(c) && Regex::rep(t, c).leb(b) {
+            True => λ p e => Inr(Inl(e)),
+            False => λ p e => match Regex::rep_mem_at(t, c, p, e) { Inl(z) => Inl(z), Inr(m) => Inr(Inr(m)) },
+        },
+    }
+}
+
+theorem Regex::rep_mem(bs: List<Nat>, c: Nat): Mem(Regex::rep(bs, c), Cons(0, bs)) { Regex::rep_mem_at(bs, c, Regex::rep(bs, c), refl) }
+
+// The representative is in its code's class.
+theorem Regex::rep_side(bs: List<Nat>, c: Nat): Regex::SameSide(bs, Regex::rep(bs, c), c) {
+    λ b m => Bool::eq_of_is_true_iff(b.leb(Regex::rep(bs, c)), b.leb(c),
+        λ h => b.leb_complete(c, b.le_trans(Regex::rep(bs, c), c, b.leb_sound(Regex::rep(bs, c), h), Regex::rep_le(bs, c))),
+        λ h => b.leb_complete(Regex::rep(bs, c), Regex::rep_max(bs, c, b, m, b.leb_sound(c, h))))
+}
+
+// Every range of `r` starts on a breakpoint and ends just before one.
+fn Regex::cut_by(self r: Regex, bs: List<Nat>) → Bool {
+    match r {
+        Range(lo, hi) => bs.any_bit(λ b => b.same(lo)) && bs.any_bit(λ b => b.same(Succ(hi))),
+        Seq(a, b) => a.cut_by(bs) && b.cut_by(bs),
+        Alt(a, b) => a.cut_by(bs) && b.cut_by(bs),
+        Star(s) => s.cut_by(bs),
+        _ => True,
+    }
+}
+
+theorem Regex::any_same_mem(bs: List<Nat>, x: Nat): bs.any_bit(λ b => b.same(x)) = True → Mem(x, bs) {
+    match bs {
+        Nil => λ h => absurd(h),
+        Cons(b, t) => match e: b.same(x) {
+            True => λ h => Inl(sym(b.same_sound(x, e))),
+            False => λ h => Inr(Regex::any_same_mem(t, x, h)),
+        },
+    }
+}
+
+// Codes on the same side of a range's two breakpoints are in or out of it
+// together.
+theorem Regex::range_same(lo, hi, c, d: Nat, low: lo.leb(c) = lo.leb(d), high: Succ(hi).leb(c) = Succ(hi).leb(d)):
+    (lo.leb(c) && c.leb(hi)) = (lo.leb(d) && d.leb(hi))
+{
+    trans(cong_fn(λ (x: Bool) => lo.leb(c) && x, c.leb_flip(hi)),
+        trans(cong_fn(λ (x: Bool) => x && !Succ(hi).leb(c), low),
+            trans(cong_fn(λ (x: Bool) => lo.leb(d) && !x, high),
+                sym(cong_fn(λ (x: Bool) => lo.leb(d) && x, d.leb_flip(hi))))))
+}
+
+// Codes of one class have one derivative.
+theorem Regex::deriv_simp_class(self r: Regex, bs: List<Nat>, c, d: Nat, side: Regex::SameSide(bs, c, d)):
+    r.cut_by(bs) = True → r.deriv_simp(c) = r.deriv_simp(d)
+{
+    match r {
+        Range(lo, hi) => λ cut => {
+            let parts = bs.any_bit(λ b => b.same(lo)).and_true_parts(bs.any_bit(λ b => b.same(Succ(hi))), cut);
+            cong_fn(λ (x: Bool) => match x { True => Eps, False => NoMatch },
+                Regex::range_same(lo, hi, c, d, side(lo, Regex::any_same_mem(bs, lo, parts.left)),
+                    side(Succ(hi), Regex::any_same_mem(bs, Succ(hi), parts.right))))
+        },
+        Seq(a, b) => λ cut => {
+            let parts = a.cut_by(bs).and_true_parts(b.cut_by(bs), cut);
+            let ea: (a.deriv_simp(c) = a.deriv_simp(d)) = a.deriv_simp_class(bs, c, d, side, parts.left);
+            let eb: (b.deriv_simp(c) = b.deriv_simp(d)) = b.deriv_simp_class(bs, c, d, side, parts.right);
+            trans(cong_fn(λ (x: Regex) => match a.nullable() { True => Regex::alt(Regex::seq(x, b), b.deriv_simp(c)), False => Regex::seq(x, b) }, ea),
+                cong_fn(λ (y: Regex) => match a.nullable() { True => Regex::alt(Regex::seq(a.deriv_simp(d), b), y), False => Regex::seq(a.deriv_simp(d), b) }, eb))
+        },
+        Alt(a, b) => λ cut => {
+            let parts = a.cut_by(bs).and_true_parts(b.cut_by(bs), cut);
+            trans(cong_fn(λ (x: Regex) => Regex::alt(x, b.deriv_simp(c)), a.deriv_simp_class(bs, c, d, side, parts.left)),
+                cong_fn(λ (y: Regex) => Regex::alt(a.deriv_simp(d), y), b.deriv_simp_class(bs, c, d, side, parts.right)))
+        },
+        Star(s) => λ cut => cong_fn(λ (x: Regex) => Regex::seq(x, Star(s)), s.deriv_simp_class(bs, c, d, side, cut)),
+        _ => λ cut => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The table.
+
+fn Option::holds<A>(self o: Option<A>, f: A → Bool) → Bool { match o { None => False, Some(a) => f(a) } }
+
+theorem Option::holds_sound<A>(self o: Option<A>, f: A → Bool): o.holds(f) = True → Exists<A>(λ a => o = Some(a) ∧ f(a) = True) {
+    match o { None => λ h => absurd(h), Some(a) => λ h => ⟨a, ⟨refl, h⟩⟩ }
+}
+
+fn Regex::bit_same(a, b: Bool) → Bool { match a { True => b, False => !b } }
+
+theorem Regex::bit_same_sound(a, b: Bool): Regex::bit_same(a, b) = True → a = b {
+    match a {
+        True => λ h => sym(h),
+        False => match b { True => λ h => absurd(h), False => λ h => refl },
+    }
+}
+
+// A state: the expression it stands for, whether it accepts, and the state
+// each class of codes leads to.
+record Row { expr: Regex, accept: Bool, next: List<Nat> }
+
+record Table { cuts: List<Nat>, rows: List<Row> }
+
+// A state past the last row accepts nothing and stays where it is.
+fn Table::next(self T: Table, s: Nat, c: Nat) → Nat {
+    match T.rows.nth(s) { None => s, Some(row) => row.next.nth(Regex::class(T.cuts, c)).unwrap_or(s) }
+}
+
+fn Table::accepting(self T: Table, s: Nat) → Bool { match T.rows.nth(s) { None => False, Some(row) => row.accept } }
+
+fn Table::dfa(self T: Table) → Dfa<Nat> { Dfa(0, λ s c => T.next(s, c), λ s => T.accepting(s)) }
+
+// The language a state stands for: its row's expression's.
+fn Table::Label(self T: Table, s: Nat, w: List<Nat>) → Type {
+    match T.rows.nth(s) { None => False, Some(row) => row.expr.Denotes(w) }
+}
+
+// The check. From the representative `p` of a class, the row's entry is a
+// row whose expression is the derivative by `p`.
+fn Table::entry_ok(self T: Table, row: Row, p: Nat) → Bool {
+    row.next.nth(Regex::class(T.cuts, p)).holds(λ t => T.rows.nth(t).holds(λ target => target.expr.eqb(row.expr.deriv_simp(p))))
+}
+
+fn Table::row_ok(self T: Table, row: Row) → Bool {
+    Regex::bit_same(row.accept, row.expr.nullable())
+        && (row.expr.cut_by(T.cuts) && Cons(0, T.cuts).all_bit(λ p => T.entry_ok(row, p)))
+}
+
+fn Table::check(self T: Table, r: Regex) → Bool {
+    T.rows.nth(0).holds(λ row => row.expr.eqb(r.simp())) && T.rows.all_bit(λ row => T.row_ok(row))
+}
+
+// What a row number says about its state, by the row found there.
+theorem Table::label_some(self T: Table, s: Nat, w: List<Nat>, row: Row, e: T.rows.nth(s) = Some(row)): T.Label(s, w) ↔ row.expr.Denotes(w) {
+    j(sym(e), λ o _ => (match o as λ _ => Type { None => False, Some(x) => x.expr.Denotes(w) }) ↔ row.expr.Denotes(w), iff_refl())
+}
+
+theorem Table::label_none(self T: Table, s: Nat, w: List<Nat>, e: T.rows.nth(s) = None): T.Label(s, w) → False {
+    j(sym(e), λ o _ => (match o as λ _ => Type { None => False, Some(x) => x.expr.Denotes(w) }) → False, λ d => d)
+}
+
+theorem Regex::denotes_eq(r, q: Regex, w: List<Nat>, e: r = q): r.Denotes(w) ↔ q.Denotes(w) {
+    j(e, λ x _ => r.Denotes(w) ↔ x.Denotes(w), iff_refl())
+}
+
+// The accepting test and the step respect the labels, at a row found
+// (`o` is the row at `s`, named so that the cases do not disturb the goal).
+theorem Table::accept_label(self T: Table, ok: T.rows.all_bit(λ row => T.row_ok(row)) = True, s: Nat, o: Option<Row>):
+    T.rows.nth(s) = o → (T.accepting(s) = True ↔ T.Label(s, Nil))
+{
+    match o {
+        None => λ e => Iff(
+            mp := λ h => absurd(trans(sym(cong_fn(λ (x: Option<Row>) => match x { None => False, Some(row) => row.accept }, e)), h)),
+            mpr := λ d => false_elim(T.label_none(s, Nil, e, d))),
+        Some(row) => λ e => {
+            let good: (T.row_ok(row) = True) = T.rows.all_bit_sound(λ x => T.row_ok(x), ok, row, T.rows.nth_mem(s, row, e));
+            let acc: (row.accept = row.expr.nullable()) = Regex::bit_same_sound(row.accept, row.expr.nullable(),
+                Regex::bit_same(row.accept, row.expr.nullable()).and_true_parts(row.expr.cut_by(T.cuts) && Cons(0, T.cuts).all_bit(λ p => T.entry_ok(row, p)), good).left);
+            let at: (T.accepting(s) = row.accept) = cong_fn(λ (x: Option<Row>) => match x { None => False, Some(y) => y.accept }, e);
+            Iff(
+                mp := λ h => T.label_some(s, Nil, row, e).mpr(row.expr.nullable_sound(trans(sym(acc), trans(sym(at), h)))),
+                mpr := λ d => trans(at, trans(acc, row.expr.nullable_complete(T.label_some(s, Nil, row, e).mp(d)))))
+        },
+    }
+}
+
+theorem Table::step_label(self T: Table, ok: T.rows.all_bit(λ row => T.row_ok(row)) = True, s: Nat, c: Nat, w: List<Nat>, o: Option<Row>):
+    T.rows.nth(s) = o → (T.Label(T.next(s, c), w) ↔ T.Label(s, Cons(c, w)))
+{
+    match o {
+        None => λ e => {
+            let stay: (T.next(s, c) = s) = cong_fn(λ (x: Option<Row>) => match x { None => s, Some(row) => row.next.nth(Regex::class(T.cuts, c)).unwrap_or(s) }, e);
+            Iff(
+                mp := λ d => false_elim(T.label_none(s, w, e, j(stay, λ x _ => T.Label(x, w), d))),
+                mpr := λ d => false_elim(T.label_none(s, Cons(c, w), e, d)))
+        },
+        Some(row) => λ e => {
+            let good: (T.row_ok(row) = True) = T.rows.all_bit_sound(λ x => T.row_ok(x), ok, row, T.rows.nth_mem(s, row, e));
+            let rest = Regex::bit_same(row.accept, row.expr.nullable()).and_true_parts(row.expr.cut_by(T.cuts) && Cons(0, T.cuts).all_bit(λ p => T.entry_ok(row, p)), good).right;
+            let parts = row.expr.cut_by(T.cuts).and_true_parts(Cons(0, T.cuts).all_bit(λ p => T.entry_ok(row, p)), rest);
+            let p = Regex::rep(T.cuts, c);
+            let entry: (T.entry_ok(row, p) = True) = Cons(0, T.cuts).all_bit_sound(λ x => T.entry_ok(row, x), parts.right, p, Regex::rep_mem(T.cuts, c));
+            match row.next.nth(Regex::class(T.cuts, p)).holds_sound(λ t => T.rows.nth(t).holds(λ target => target.expr.eqb(row.expr.deriv_simp(p))), entry) {
+                ⟨t, ⟨e1, h2⟩⟩ => match T.rows.nth(t).holds_sound(λ target => target.expr.eqb(row.expr.deriv_simp(p)), h2) {
+                    ⟨target, ⟨e2, h3⟩⟩ => {
+                        let side = Regex::rep_side(T.cuts, c);
+                        let lands: (T.next(s, c) = t) = trans(
+                            cong_fn(λ (x: Option<Row>) => match x { None => s, Some(y) => y.next.nth(Regex::class(T.cuts, c)).unwrap_or(s) }, e),
+                            cong_fn(λ (x: Option<Nat>) => x.unwrap_or(s),
+                                trans(cong_fn(λ (k: Nat) => row.next.nth(k), sym(Regex::class_same(T.cuts, p, c, side))), e1)));
+                        let at_t: (T.Label(t, w) ↔ T.Label(s, Cons(c, w))) = iff_trans(T.label_some(t, w, target, e2),
+                            iff_trans(Regex::denotes_eq(target.expr, row.expr.deriv_simp(p), w, target.expr.eqb_sound(row.expr.deriv_simp(p), h3)),
+                                iff_trans(Regex::denotes_eq(row.expr.deriv_simp(p), row.expr.deriv_simp(c), w, row.expr.deriv_simp_class(T.cuts, p, c, side, parts.left)),
+                                    iff_trans(row.expr.deriv_simp_same(c)(w),
+                                        iff_trans(Iff(mp := λ d => row.expr.deriv_sound(c, w, d), mpr := λ d => row.expr.deriv_complete(c, w, d)),
+                                            iff_sym(T.label_some(s, Cons(c, w), row, e)))))));
+                        j(sym(lands), λ x _ => T.Label(x, w) ↔ T.Label(s, Cons(c, w)), at_t)
+                    },
+                },
+            }
+        },
+    }
+}
+
+// A table that passes the check accepts the expression's language.
+theorem Table::check_accepts(self T: Table, r: Regex, ok: T.check(r) = True, w: List<Nat>): T.dfa().run(w) = True ↔ r.Denotes(w) {
+    let parts = T.rows.nth(0).holds(λ row => row.expr.eqb(r.simp())).and_true_parts(T.rows.all_bit(λ row => T.row_ok(row)), ok);
+    match T.rows.nth(0).holds_sound(λ row => row.expr.eqb(r.simp()), parts.left) {
+        ⟨row, ⟨e0, h0⟩⟩ => iff_trans(
+            T.dfa().residual(λ s u => T.Label(s, u),
+                λ s => T.accept_label(parts.right, s, T.rows.nth(s), refl),
+                λ s c u => T.step_label(parts.right, s, c, u, T.rows.nth(s), refl),
+                w, 0),
+            iff_trans(T.label_some(0, w, row, e0),
+                iff_trans(Regex::denotes_eq(row.expr, r.simp(), w, row.expr.eqb_sound(r.simp(), h0)), r.simp_same()(w)))),
+    }
+}
+
+// Its run is the matcher's Boolean.
+theorem Table::check_matches(self T: Table, r: Regex, ok: T.check(r) = True, w: List<Nat>): T.dfa().run(w) = r.matches(w) {
+    Regex::bool_eq_of_iff(T.dfa().run(w), r.matches(w), Iff(
+        mp := λ h => (r.matches_iff(w)).mpr((T.check_accepts(r, ok, w)).mp(h)),
+        mpr := λ h => (T.check_accepts(r, ok, w)).mpr((r.matches_iff(w)).mp(h))))
+}
+
+// ---------------------------------------------------------------------------
+// The search. Nothing is proved about it: `Table::check` judges its answer.
+
+fn Regex::add_cut(bs: List<Nat>, b: Nat) → List<Nat> {
+    match bs.any_bit(λ x => x.same(b)) { True => bs, False => Cons(b, bs) }
+}
+
+// Where the ranges of `r` start, and one past where they end.
+fn Regex::cuts(self r: Regex, acc: List<Nat>) → List<Nat> {
+    match r {
+        Range(lo, hi) => Regex::add_cut(Regex::add_cut(acc, lo), Succ(hi)),
+        Seq(a, b) => b.cuts(a.cuts(acc)),
+        Alt(a, b) => b.cuts(a.cuts(acc)),
+        Star(s) => s.cuts(acc),
+        _ => acc,
+    }
+}
+
+fn Regex::index_in(states: List<Regex>, r: Regex) → Option<Nat> {
+    match states {
+        Nil => None,
+        Cons(q, t) => match q.eqb(r) {
+            True => Some(0),
+            False => match Regex::index_in(t, r) { None => None, Some(i) => Some(Succ(i)) },
+        },
+    }
+}
+
+fn Regex::add_state(states: List<Regex>, q: Regex) → List<Regex> {
+    match Regex::index_in(states, q) { Some(_) => states, None => states ++ [q] }
+}
+
+// The states reached from those listed, in the order found: state `i`'s
+// derivatives by every representative join the list, then state `i + 1`'s.
+fn Regex::explore(fuel: Nat, reps: List<Nat>, states: List<Regex>, i: Nat) → List<Regex> {
+    match fuel {
+        Zero => states,
+        Succ(k) => match states.nth(i) {
+            None => states,
+            Some(q) => Regex::explore(k, reps, reps.foldl(λ acc p => Regex::add_state(acc, q.deriv_simp(p)), states), Succ(i)),
+        },
+    }
+}
+
+// A code in class `k`.
+fn Regex::class_rep(bs: List<Nat>, k: Nat) → Nat {
+    Cons(0, bs).find(λ p => Regex::class(bs, p).same(k)).unwrap_or(0)
+}
+
+// A derivative the search did not reach gets a row number past the table,
+// which the check refuses.
+fn Regex::row_of(bs: List<Nat>, states: List<Regex>, q: Regex) → Row {
+    Row(q, q.nullable(), List::range(Succ(bs.len())).map(λ k =>
+        Regex::index_in(states, q.deriv_simp(Regex::class_rep(bs, k))).unwrap_or(states.len())))
+}
+
+// The table of `r`, exploring at most `fuel` states.
+fn Regex::table(self r: Regex, fuel: Nat) → Table {
+    let bs = r.cuts(Nil);
+    let states = Regex::explore(fuel, Cons(0, bs), [r.simp()], 0);
+    Table(bs, states.map(λ q => Regex::row_of(bs, states, q)))
+}
