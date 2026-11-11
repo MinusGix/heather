@@ -1,0 +1,158 @@
+// Controls of the contract a compiled function is exported under
+// (function_ir_compile's `compiled_returns` and `compiled_returns_lent`;
+// docs/native-library-exports-design.md §6, the clauses by number). Each
+// clause of the contract is a part of those theorems' statements; a control
+// shows the clause has teeth, that something which would break it is
+// refused or is provably not what the statement allows. The controls that
+// need a running process are `crates/linked/tests/spans.rs`, and the
+// compiler's own refusals `crates/cli/tests/native_linked.rs`.
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+// sum(a, b) = a + b: a function of words, with one value to place.
+fn sum() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+theorem sum_planned(): plan_program([sum()]) = [Into(Rax)] { refl }
+theorem sum_lowers(): lower_program([sum()], plan_program([sum()])).is_some().IsTrue() { trivial }
+
+// ---------------------------------------------------------------------------
+// Clause 3: RBX, RBP, R12 to R15 are kept, and RSP
+//
+// The placement is untrusted: the lowering checks the code it wrote
+// against the registers a callee keeps (`leaves_all`), so a placement that
+// puts the function's value in one of them has no code, whichever it is.
+// The same function with the planner's placement lowers (`sum_lowers`).
+
+theorem into_rbx_refused(): lower_program([sum()], [Into(Rbx)]) = None { refl }
+theorem into_rbp_refused(): lower_program([sum()], [Into(Rbp)]) = None { refl }
+theorem into_rsp_refused(): lower_program([sum()], [Into(Rsp)]) = None { refl }
+theorem into_r12_refused(): lower_program([sum()], [Into(R12)]) = None { refl }
+theorem into_r13_refused(): lower_program([sum()], [Into(R13)]) = None { refl }
+theorem into_r14_refused(): lower_program([sum()], [Into(R14)]) = None { refl }
+theorem into_r15_refused(): lower_program([sum()], [Into(R15)]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Clause 4: the callee stores only into its own room below the return
+// address
+//
+// The post says memory is as it was but for stores below the offset the
+// call was entered at (`Stack::Wrote`), from which the caller has that
+// every word at or above it reads as before (`Stack::Unchanged`,
+// `Stack::wrote_unchanged`). A store of a differing word at or above that
+// offset is not such a memory: no code that made one could meet the post.
+theorem store_above_is_not_unchanged<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), from, k: Nat,
+    above: from <= k, fits: k + 8 <= stack.size, memory: M, word: BitVec(64),
+    differs: read_word(data, memory, stack.at(k)) ≠ Some(word)):
+    ¬stack.Unchanged(from, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    λ unchanged => differs(trans(sym(unchanged(k, above, fits)), stack.stored(memory, k, fits, word)))
+}
+
+// And the same store below it is one the post allows: the bound is the
+// offset, not the store.
+theorem store_below_is_wrote<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), i, k: Nat,
+    below: k + 8 <= i, memory: M, word: BitVec(64)):
+    stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_store(i, memory, k, below, word)
+}
+
+// ---------------------------------------------------------------------------
+// Clause 5: the callee reads only its frame and the spans lent
+//
+// A load lowers only where a comparison of its index with its span's own
+// length is known true: `function_ir_lower_reads_tests` has the refusals
+// (`unguarded_refused`, `wrong_bound_refused`, `wrong_arm_refused`,
+// `other_buffer_refused`, `unlent_refused`). Here, the count: a function
+// that reads a span (the byte at an index, under the span's length) is
+// refused under a table that lends it none, or more than it takes, so a
+// certificate's `counts` cannot misstate what its code is lent.
+fn first_byte() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), Port(id := 3, width := 1)])),
+            Conditional(Ports([word(0), word(1), word(2), Port(id := 3, width := 1)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [BufferLoad(output := 4, buffer := 0, index := 2)],
+                    outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+theorem first_byte_lowers(): lower_program_lent([first_byte()], plan_program([first_byte()]), [1]).is_some().IsTrue() { trivial }
+theorem first_byte_unlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [0]) = None { refl }
+theorem first_byte_overlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [2]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Clause 9: the direction flag, x87, SSE and MXCSR are untouched
+//
+// Not modelled: the machine state has no such part. It holds because no
+// instruction the model has writes one, which is an inventory. This is it:
+// every instruction by name, with what it writes besides memory it is
+// given. A match has no default arm, so an instruction added to the model
+// does not check here until it is classed, and one that writes the
+// direction flag or a vector register has no class to take: adding it
+// means modelling that state first, and restating the clause.
+inductive Written {
+    // A general register, and nothing else.
+    Register,
+    // The status flags (CF, PF, AF, ZF, SF, OF), and nothing else.
+    Status,
+    // A general register and the status flags.
+    RegisterAndStatus,
+}
+
+fn Instruction::written(self instruction: Instruction) → Written {
+    match instruction {
+        MovRR(_, _) => Register,
+        MovRI(_, _) => Register,
+        AddRR(_, _) => RegisterAndStatus,
+        SubRR(_, _) => RegisterAndStatus,
+        AndRR(_, _) => RegisterAndStatus,
+        OrRR(_, _) => RegisterAndStatus,
+        XorRR(_, _) => RegisterAndStatus,
+        CmpRR(_, _) => Status,
+        SetBelow(_) => Register,
+        SetLess(_) => Register,
+        SetEqual(_) => Register,
+        TestRR(_, _) => Status,
+        AddRI8(_, _) => RegisterAndStatus,
+        AddRI32(_, _) => RegisterAndStatus,
+        ShiftOne(_, _) => RegisterAndStatus,
+        ShiftImm(_, _, _) => RegisterAndStatus,
+    }
+}
+
+// The count the inventory was taken at, so the list above is read again
+// when it moves.
+fn every_instruction() → List<Instruction> {
+    [MovRR(Rax, Rax), MovRI(Rax, BitVec::ofNat(0)), AddRR(Rax, Rax), SubRR(Rax, Rax), AndRR(Rax, Rax), OrRR(Rax, Rax), XorRR(Rax, Rax),
+        CmpRR(Rax, Rax), SetBelow(Al), SetLess(Al), SetEqual(Al), TestRR(Rax, Rax), AddRI8(Rax, BitVec::ofNat(0)),
+        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0))]
+}
+theorem inventory_size(): every_instruction().len() = 16 { refl }

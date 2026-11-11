@@ -3,7 +3,10 @@
 Status: **direction set by Minus 2026-11-11** ("unify first and then
 export"); this note scopes it. U1 to U4 are built (§3), and U5 is designed
 in `docs/native-procedures-are-functions-design.md`, its steps 5a to 5c
-built (one frame, one call, one contract). Owner:
+built (one frame, one call, one contract). E has begun: a function
+that reads a span is exported, its declaration generated and its
+contract's controls in place (`docs/native-library-exports-design.md`
+§6.1); the scanner's loop is next. Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -1372,7 +1375,9 @@ Each is a PR and ends with something that runs.
   the tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
   scanner's loop linked into Rust
-  (`docs/native-library-exports-design.md` §6, §10 R3).
+  (`docs/native-library-exports-design.md` §6, §10 R3). Built: the
+  declarations and the controls, on a first function that reads a span
+  (§6.1 there). Not yet: the scanner's loop.
 
 E needs only U1, U3a and U3c. It is last because that is the order asked for;
 it can move up without changing any other round.

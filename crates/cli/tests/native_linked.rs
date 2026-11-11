@@ -67,3 +67,41 @@ fn linked_exports_are_what_the_compiler_emits() {
     }
     std::fs::remove_dir_all(output).unwrap();
 }
+
+// What the contract does not take is refused by name, and nothing is
+// written (docs/native-library-exports-design.md §6, clauses 1 and 4): a
+// seventh word, whether the words are the function's own or a span's
+// address and length among them; and a function that stores into its span,
+// whose contract has a clause more than a reader's (what the span holds
+// after) and is the write half's to export.
+#[test]
+fn what_the_contract_does_not_take_is_refused() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-linked-refusals-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = "import logic;\nimport bool;\nimport nat;\nimport list;\nimport option;\nimport pair;\nimport char;\n\
+        import string;\nimport tactic;\nimport bitvec;\nimport bitvec_nat;\nimport rt;\nimport rt_lower;\n\
+        import function_ir;\nimport function_ir_eval;\nimport runtime;\n\
+        runtime fn seven(a, b, c, d, e, f, g: BitVec(64)) → BitVec(64) { a.add(g) }\n\
+        runtime fn wide_span(span: List<BitVec(8)>, length, a, b, c, d, e: BitVec(64)) → BitVec(64) {\n\
+            span.byte_within(length, a).zero_extend(56).add(e)\n}\n";
+    std::fs::write(dir.join("wide.hthr"), source).unwrap();
+    let wide = dir.join("wide.hthr");
+    let spans = root.join("lib/native/native_tool_spans.hthr");
+    for (module, function, why) in [
+        (&wide, "seven", "takes 7 words: compile-x86 passes at most six"),
+        (&wide, "wide_span", "takes 7 words, an address and a length for each span among them"),
+        (&spans, "raise_span", "`raise_span` stores into its span"),
+    ] {
+        let output = dir.join(format!("{function}.s"));
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .arg("compile-x86").arg(module).args([function, "-o"]).arg(&output)
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success() && stderr.contains(why), "{function}: {stderr}");
+        assert!(!output.exists(), "{function}: a refused function wrote assembly");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

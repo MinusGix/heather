@@ -4,7 +4,11 @@ Status: **proposed 2026-11-10; re-sequenced 2026-11-11** by Minus's answer,
 "unify first and then export". The design of memory and of the contract
 below stands; the rounds of §10 now land in the order
 `docs/native-one-compiler-design.md` gives (its §5 has the mapping), with
-the export itself last. Nothing here is built. Owner: `issues/native-library-exports-design.md` (milestone
+the export itself last. **Built 2026-11-11, the read half's export**
+(§6.1): `compile-x86` takes a `runtime fn` that reads its spans, the Rust
+declarations are generated, and the first such function is linked and
+tested with the contract's controls; the scanner's loop (R3) and the write
+half (R4) are not. Owner: `issues/native-library-exports-design.md` (milestone
 `nh-library`), which asks for this note before any code. It extends
 `docs/compilation-vision.md` (§2.5 there points here) and revises
 `docs/native-lexer-crypto-roadmap.md` §2, whose lean on the unit of export
@@ -348,6 +352,65 @@ pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
 
 The crate's one `unsafe` module is then generated in full, and a hand edit
 to it is a gate failure. A word function stays `safe fn` as today.
+
+### 6.1 As built (2026-11-11)
+
+**The certificate.** `compile-x86` on a `runtime fn` whose generator
+published `f::agrees_over` (one that reads spans) emits each function with
+`Function::emit_lent` under the program's counts of lent buffers, read off
+the program by evaluation and stated as a literal, and its `_returns` is
+`compiled_returns_lent` at any file `now` lying at any `addresses` under a
+`Loan`: the premise is `ArgsIn` and the stack's room as for words, and
+`Stack::LentOver` (each span's two words are its address and its length,
+the file is readable there); the post is `Stack::AnsweredOver` at the
+source function applied to `now.span(j)` and the words, with the file left
+as it was. `{prefix}_quiet` (no function stores into a buffer) is by
+evaluation. A function that stores into its span (`f::runs_over`) is
+refused by name: its contract has a clause more.
+
+**The signature is the compiler's, the names are the table's.** The
+assembly file states what its code takes, from the values the certificate
+is stated with:
+
+```
+# signature: count_newlines(span, word) -> word
+# stack: 144 bytes below the return address
+```
+
+`EXPORTS.tsv` gains a column, the parameters as Rust names them
+(`text: span, count`). `heather linked-exports` (`heather_cli::linked`,
+run by `scripts/linked`) writes `generated/exports.rs` from the two, and
+refuses a row whose kinds are not the file's: a span declared as two
+words, a word as a span, a parameter too few. So the declaration cannot
+pass a pointer where the certificate says a count, and the stack figure
+beside it is the theorem's. `crates/cli/tests/linked_exports.rs` holds the
+file to its generator in every lane; the assembly is held to the compiler
+by `native_linked.rs` as before.
+
+**The first export** is `count_newlines`
+(`lib/native/native_tool_spans.hthr`, `heather_linked::spans`).
+
+**Where each clause's control is.**
+
+| # | control | where |
+|---|---|---|
+| 1 | a seventh word, the function's own or a span's two among them | `native_linked.rs`, `what_the_contract_does_not_take_is_refused` |
+| 1 | a declaration against the code's signature | `linked.rs`'s unit tests; `linked_exports.rs` on the real files |
+| 3 | a value placed in RBX, RBP, RSP, R12 to R15 has no code | `function_ir_compile_tests`, `into_*_refused` |
+| 3 | the callee-saved registers across a real call | `crates/linked/tests/spans.rs`, `both_stack_alignments` |
+| 4 | a differing word stored at or above the entry offset is not `Unchanged` | `function_ir_compile_tests`, `store_above_is_not_unchanged` |
+| 4 | a function that stores into its span is not exported | `native_linked.rs`, the same test |
+| 5 | a load no comparison bounds, the wrong bound, the wrong arm, another buffer | `function_ir_lower_reads_tests`, `*_refused` |
+| 5 | a count of lent buffers that is not the code's | `function_ir_compile_tests`, `first_byte_*_refused` |
+| 5 | a span ending at an unmapped page, read at and past its length; an empty slice | `spans.rs`; the kernel is asked to confirm the next byte cannot be read |
+| 6 | the stack figure | printed in the assembly and beside the declaration |
+| 7 | both stack alignments | `spans.rs`, `both_stack_alignments` |
+| 7, 9 | the code calls only compiled code | `compile-x86` refuses an emission holding a system call |
+| 9 | the instruction inventory | `function_ir_compile_tests`, `Instruction::written`: a match with no default arm, so a new instruction is classed before the library checks |
+
+Not done: clause 7 is exercised for the span export only (the word
+exports are entered at the platform's alignment by their own tests), and
+the contract still has no name (`issues/named-abi-contracts.md`).
 
 ## 7. The write half, in outline
 

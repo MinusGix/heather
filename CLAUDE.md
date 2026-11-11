@@ -117,8 +117,11 @@
   the compiler by `crates/cli/tests/native_linked.rs` (a native gate). After
   changing a linked module (`lib/native/crypto/`, `lib/lang/lexer/`), the
   lowering or the emitter, run **`scripts/linked`** to rewrite the files
-  (`--check` compares); a new export is a line in the table, a `linked!` and
-  a declaration in `src/lib.rs`, and tests against an independent reference.
+  (`--check` compares) and the Rust declarations with them
+  (`generated/exports.rs`, never edited: `tests/linked_exports.rs`); a new
+  export is a line in the table (module, function, parameters, a span of
+  bytes it reads as `name: span`), a wrapper in `src/`, and tests against
+  an independent reference.
   The scanner (`src/scanner.rs`) is held to `heather_syntax::lex` by
   `tests/scanner.rs`; after changing its `PROBES` or the automaton, run
   **`scripts/lexer-probes`** to rewrite the evaluated probes in

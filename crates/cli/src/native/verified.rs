@@ -270,7 +270,16 @@ fn {prefix}_read_{k}() → List<Nat> {{
         match numbers[..] {
             [] => return Err("the verified lowering refused this program with the planner's placement".into()),
             [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
-                items.extend(read_items(&numbers[3..])?);
+                let read = read_items(&numbers[3..])?;
+                // The contract's ground for needing no stack alignment and
+                // touching no state the model lacks: a function's code
+                // calls only compiled code (docs/native-library-exports-design.md
+                // §6, clauses 7 and 9). The function compiler emits no
+                // system call; one would be refused here, not exported.
+                if read.iter().any(|(_, item)| item == "Syscall") {
+                    return Err(format!("function {k}'s code makes a system call: an exported function calls only compiled code"));
+                }
+                items.extend(read);
                 if items.len() != count as usize { return Err(format!("function {k}'s emission did not read back")); }
                 after.push((count as usize, places as usize, names));
             }
