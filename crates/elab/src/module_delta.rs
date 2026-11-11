@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, SealedProof, Type};
@@ -1498,7 +1498,7 @@ impl Elaborator {
 mod tests {
     use std::fs;
     use std::path::Path;
-    use std::sync::Arc as Rc;
+    use heather_kernel::rc::Rc;
 
     use heather_kernel::term::{GlobalBinding, Term};
 

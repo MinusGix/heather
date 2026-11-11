@@ -22,7 +22,7 @@
 //! the order of monomials, only on whether a polynomial is zero.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

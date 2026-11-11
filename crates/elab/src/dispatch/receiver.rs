@@ -3,7 +3,7 @@
 //! This resolves the declaring class at a receiver, reports competing
 //! readings, and projects directly through upcast provenance.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, LocalVar, Term, Type};
 use heather_syntax::{Expr, Span};

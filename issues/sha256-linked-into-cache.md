@@ -48,3 +48,12 @@ regeneration gate holds the checked-in artifact to its source.
 ## Log
 
 - 2026-11-10: One of the two blockers moved: SHA-256's word functions are compiled, proved and linked ([[sha2-compress-native]]), and `heather_linked::sha256::digest` matches the `sha2` crate, the oracle `crates/cache/tests/sha256.rs` holds the compiler's hash to, on every test. It is not a candidate to switch on yet. The linked `compress` is Rust around three calls per round, so the proof covers the arithmetic and not the state handling, and it is slower than the scalar path by the call overhead. This issue waits, as written, on `compress` exported whole.
+- 2026-11-10: A datum for the size of the prize, from a kernel-performance round's
+  whole-run profile (callgrind, cold `docs/showcase/calc_parser.hthr` with a
+  cache directory, cloud box, width one): `Sha256::compress_blocks` is
+  4,455 M of the run's 51,332 M instructions (8.7%), the largest single
+  function. Nearly all of it is the Merkle walk's (`merkle::Walk::node`:
+  1.7 M term and 0.74 M type visits over 254,000 walks, about 110 MB hashed),
+  0.5 G is `module_image::projected_interface`. In seconds it is much less
+  than its instruction share, since the code is straight-line: the
+  `merkle_walk_ns` column is 0.22 s of a 15 s run.

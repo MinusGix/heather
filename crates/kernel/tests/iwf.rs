@@ -24,7 +24,7 @@
 //! literal and a neutral scrutinee, an open family, checking positions (a
 //! value at a convertibly spelled index), and negative controls throughout.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{conv_term, conv_type, oracle};
 use heather_kernel::layer::Layer;

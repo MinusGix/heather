@@ -8,14 +8,14 @@
 //! - φ/δ commute:    t[δ][φ] = t[φ][δ[φ]]
 //! - σ/δ commute:    t[δ][σ] = t[σ][δ[σ]]
 //!
-//! Every case runs with `checks::SkipVerification::Full`: the bounds memo's
+//! Every case runs with `checks::SkipVerification::Full`: the bounds'
 //! skips (`bounds.rs`) are re-walked and compared on every occasion, so these
 //! random terms are also the corpus that law is exhaustive over. Elsewhere the
 //! default samples one skip in sixteen (`crates/kernel/src/checks.rs`).
 
 mod common;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use common::*;
 use heather_kernel::level::{Level, UnivVar};

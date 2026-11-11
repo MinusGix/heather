@@ -19,7 +19,7 @@
 
 mod common;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use common::wt::{identity_branches, identity_motives, FUEL};
 use heather_kernel::conv::conv_type;

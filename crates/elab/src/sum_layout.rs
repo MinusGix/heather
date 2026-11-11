@@ -21,7 +21,7 @@
 //! a node's children come after it. On a right-nested tree node `j` is the
 //! range `[j, n)`, which is what `Spine`'s former `tails[j - 1]` named.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 /// The constructor count from which a sum is balanced rather than
 /// right-nested.

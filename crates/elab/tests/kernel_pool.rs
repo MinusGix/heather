@@ -11,7 +11,7 @@
 //! path the whole rest of the suite already runs.
 
 use std::cell::RefCell;
-use std::sync::Arc as Rc;
+use std::sync::Arc;
 
 use heather_elab::gate::{GateItem, KernelGate};
 use heather_elab::stats::{self, ScopeKind};
@@ -243,15 +243,15 @@ impl KernelGate for Recorder {
 /// (`docs/parallel-kernel-gate-design.md` §5.1).
 #[test]
 fn a_failing_module_records_exactly_the_serial_gate_s_verdicts() {
-    let recorder = Rc::new(Recorder::default());
+    let recorder = Arc::new(Recorder::default());
     let mut elab = with_workers(4);
-    elab.set_gate(Rc::clone(&recorder) as Rc<dyn KernelGate>);
+    elab.set_gate(Arc::clone(&recorder) as Arc<dyn KernelGate>);
     let errors = elab.check_module_source("pool_prefix", LATE_FAILURE);
     assert!(!errors.is_empty(), "the fixture must fail");
 
-    let serial_recorder = Rc::new(Recorder::default());
+    let serial_recorder = Arc::new(Recorder::default());
     let mut serial = with_workers(1);
-    serial.set_gate(Rc::clone(&serial_recorder) as Rc<dyn KernelGate>);
+    serial.set_gate(Arc::clone(&serial_recorder) as Arc<dyn KernelGate>);
     let serial_errors = serial.check_module_source("pool_prefix", LATE_FAILURE);
 
     let accepted = recorder.accepted.borrow().clone();
@@ -272,9 +272,9 @@ fn a_failing_module_records_exactly_the_serial_gate_s_verdicts() {
 /// abandoned would record a verdict nobody asked it to keep.
 #[test]
 fn a_discarded_pass_vouches_for_nothing_before_the_replay() {
-    let recorder = Rc::new(Recorder::default());
+    let recorder = Arc::new(Recorder::default());
     let mut elab = with_workers(4);
-    elab.set_gate(Rc::clone(&recorder) as Rc<dyn KernelGate>);
+    elab.set_gate(Arc::clone(&recorder) as Arc<dyn KernelGate>);
     assert!(!elab.check_module_source("pool_discard", LATE_FAILURE).is_empty());
     let accepted = recorder.accepted.borrow().clone();
     let mut once = accepted.clone();
@@ -353,9 +353,9 @@ fn a_rolled_back_declaration_keeps_the_modules_queued_verdicts() {
 /// order.
 #[test]
 fn a_good_module_vouches_for_everything_in_order() {
-    let recorder = Rc::new(Recorder::default());
+    let recorder = Arc::new(Recorder::default());
     let mut elab = with_workers(4);
-    elab.set_gate(Rc::clone(&recorder) as Rc<dyn KernelGate>);
+    elab.set_gate(Arc::clone(&recorder) as Arc<dyn KernelGate>);
     assert!(elab.check_module_source("pool_all", INDEPENDENT).is_empty());
     let accepted = recorder.accepted.borrow().clone();
     let expect = ["one_one", "two_two", "three_three", "four_four", "five_five", "six_six"];

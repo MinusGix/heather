@@ -23,7 +23,7 @@
 
 pub mod parser;
 
-use std::sync::Arc as Rc;
+use std::sync::Arc;
 
 use heather_kernel::term::GlobalCtx;
 
@@ -131,8 +131,8 @@ fn semantic_test_base_in(
     if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
         eprintln!("decl-cache: {msg}");
     }
-    let cache = Rc::new(cache);
-    elab.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    let cache = Arc::new(cache);
+    elab.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
     for &(name, src) in modules {
         let module = heather_cli::loader::Module {
             name: name.into(),
@@ -157,7 +157,7 @@ fn semantic_test_base_in(
             panic!("{name} did not check:\n{rendered}");
         }
     }
-    elab.set_gate(Rc::new(heather_elab::gate::NoGate));
+    elab.set_gate(Arc::new(heather_elab::gate::NoGate));
     if let Err(err) = cache.save() {
         eprintln!("decl-cache: could not write {}: {err}", decl_cache.display());
     }
@@ -269,11 +269,11 @@ pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mu
     if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
         eprintln!("decl-cache: {msg}");
     }
-    let cache = Rc::new(cache);
-    e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    let cache = Arc::new(cache);
+    e.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
     prefix(e);
     // Seal: from here on the kernel sees everything again.
-    e.set_gate(Rc::new(heather_elab::gate::NoGate));
+    e.set_gate(Arc::new(heather_elab::gate::NoGate));
     let n = cache.counts();
     eprintln!(
         "decl-cache: {} declaration{} kernel-checked, {} accepted from cache",

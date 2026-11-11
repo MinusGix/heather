@@ -29,7 +29,7 @@ use heather_kernel::subst::{local_bound, local_bound_ty};
 use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
 use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_for_export, spell_checked_for_export_ty};
 use std::cell::RefCell;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 use std::fmt::Write as _;
 
 mod share;
@@ -84,7 +84,7 @@ fn refuse<T>(what: &str) -> R<T> {
 
 fn lvl(l: &Level) -> R<Lvl> {
     // Levels are canonical, so a variable-free one is a constant.
-    match l {
+    match *l {
         Level::Omega => refuse("level ω"),
         _ => l.as_constant().map(Lvl).map_or_else(|| refuse("universe variable (level polymorphism)"), Ok),
     }
@@ -883,7 +883,7 @@ impl Tr<'_> {
 
     /// A checked-spelling intro: `ty`, when present, is the un-reduced type
     /// it was checked at; the prelude constant's own components are holes.
-    fn at_ty(&self, ty: &Option<std::sync::Arc<Type>>, name: &'static str, holes: usize, args: Vec<Hx>) -> R<Hx> {
+    fn at_ty(&self, ty: &Option<heather_kernel::rc::Rc<Type>>, name: &'static str, holes: usize, args: Vec<Hx>) -> R<Hx> {
         let mut all = vec![Hx::Hole; holes];
         all.extend(args);
         let t = app(Hx::Const(name, vec![]), all);
@@ -955,7 +955,7 @@ pub struct Source<'a> {
     pub psi: &'a GlobalCtx,
     /// A theorem's proof by absolute index, when Ψ itself keeps none
     /// (`Elaborator::export_proof`).
-    pub proof: &'a dyn Fn(usize) -> Option<std::sync::Arc<Term>>,
+    pub proof: &'a dyn Fn(usize) -> Option<heather_kernel::rc::Rc<Term>>,
     /// A binding's module-qualified name (`Elaborator::global_key_at`).
     pub name: &'a dyn Fn(usize) -> Option<String>,
     /// A nominal tag's constructor names, in declaration order

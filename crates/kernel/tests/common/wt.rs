@@ -29,7 +29,7 @@
 //!   telescope describes, so one β-step is the identity on code — the
 //!   sharpest cheap cross-check of `reduce.rs`'s `fire` against the tables.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};

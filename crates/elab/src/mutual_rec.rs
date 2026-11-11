@@ -25,7 +25,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::LevelNf;
 use heather_syntax::ast::{

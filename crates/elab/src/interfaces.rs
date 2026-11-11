@@ -12,7 +12,7 @@
 //! needs no rewriting.
 
 use std::collections::BTreeMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{GlobalCtx, GlobalRef, GlobalVar, Term, Type, Withheld};
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, Span, Ty, TyKind};

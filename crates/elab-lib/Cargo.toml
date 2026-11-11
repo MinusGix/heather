@@ -32,7 +32,13 @@ heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 # The process allocator (`ALLOC` in crates/elab/src/lib.rs; issues/global-allocator.md).
-mimalloc = { version = "0.1.52", default-features = false }
+# mimalloc 2, not 3: Rust states an alignment with every request, and
+# mimalloc 3 takes its ordinary path for an aligned request only when the
+# size class is a power of two. Any other size is over-allocated into the
+# next class up whenever its own class's free list is empty, so a syntax
+# node (ten words a type, fourteen a term) would not get the class its
+# size earns.
+mimalloc = { version = "0.1.52", default-features = false, features = ["v2"] }
 
 [lints]
 workspace = true

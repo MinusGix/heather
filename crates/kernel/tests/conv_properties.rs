@@ -18,7 +18,7 @@
 
 mod common;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use common::wt::{
     gen_wt_ctx, gen_wt_env, gen_wt_term, gen_wt_type, identity_branches, identity_motives,

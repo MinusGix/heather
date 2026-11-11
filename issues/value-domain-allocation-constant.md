@@ -245,3 +245,4 @@ and should re-read this at the same time — conversion no longer calls
   Still on this file's list: (2) `Clo1`, (3) one frame stack across `Dom`
   operations, (4) `TmC::value`'s re-wrap, and `Work::Elim` carrying its
   elimination by value.
+- 2026-11-10: Two fixed costs of an `Eval`, found in a whole-run instruction profile once the gate's own constants were down. (1) `ValueArena::new` made ten `typed_arena::Arena`s, each allocating its first chunk at once, and most queries touch two or three: a region is now made at its first allocation (`value::Region`). Whole cold showcase 47,449 M instructions to 47,323 M. (2) Every `Eval` grew its own frame stack from empty: the arena lends one (`lend_frames`/`return_frames`, emptied on return, the larger capacity kept), so a thread's queries share an allocation. No count column moves.

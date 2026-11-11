@@ -16,7 +16,7 @@
 //! binder is a constructor pattern", which is every `match` written before
 //! this round (§9).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};

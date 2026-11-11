@@ -20,7 +20,7 @@
 //!
 //! [`MParts::kids_lam`]: super::MParts
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{LocalVar, Term};
 

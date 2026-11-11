@@ -108,7 +108,7 @@
 //! `:` never continues an expression.
 
 use crate::ast::*;
-use crate::lexer::{lex, Tok, TokKind};
+use crate::lexer::{lex, lex_while, Tok, TokKind};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -147,28 +147,7 @@ pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty
 
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
-    let mut p =
-        Parser {
-            toks,
-            pos: 0,
-            sections: Vec::new(),
-            section_typarams: Vec::new(),
-            no_record_lit: false,
-            no_eq: false,
-            no_iff: false,
-            motive_body: false,
-            spec_failed: std::collections::HashSet::new(),
-            next_hygienic: 0,
-            record_facts: Vec::new(),
-            propagation_count: 0,
-            propagation_depth: 0,
-            elseless_if: false,
-            mut_params: Vec::new(),
-            pending_mut: None,
-            defer_binds: false,
-            mutables: Vec::new(),
-            range_header: false,
-        };
+    let mut p = Parser::over(toks);
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
     // position rule is enforced here rather than in the elaborator because it
@@ -190,6 +169,33 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
         }
     }
     Ok(File { items, section_typarams: p.section_typarams })
+}
+
+/// The imports a source opens with, read without lexing or parsing anything
+/// after them. Imports come first (the rule [`parse_file`] enforces), so in a
+/// source that parses these are all of its imports: the import DAG of a
+/// closure is read at the cost of its import lines, not of its bodies.
+///
+/// The reading ends at the first item that is not an import, and at an import
+/// that does not lex or parse; whatever is wrong there or later is
+/// `parse_file`'s to report. A source that does not parse therefore still has the imports it
+/// opens with.
+pub fn leading_imports(src: &str) -> Vec<ImportItem> {
+    // An import holds one `;`, its last token, so until the first other item
+    // a token opens an item exactly when it is the first or follows a `;`.
+    let mut opens_item = true;
+    let toks = lex_while(src, |tok| {
+        let goes_on = !opens_item || matches!(&tok.kind, TokKind::Ident(k) if k == "import" || k == "export");
+        opens_item = matches!(tok.kind, TokKind::Semi);
+        goes_on
+    });
+    let mut p = Parser::over(toks);
+    let mut imports = Vec::new();
+    while p.at_kw("import") || p.at_kw("export") {
+        let Ok(import) = p.import() else { break };
+        imports.push(import);
+    }
+    imports
 }
 
 /// One `section`'s head, split as [`Parser::splice_sections`] splices it.
@@ -652,6 +658,30 @@ fn curry(binders: Vec<(String, Ty)>, cod: Ty, implicit: bool, span: Span) -> Ty 
 }
 
 impl Parser {
+    fn over(toks: Vec<Tok>) -> Parser {
+        Parser {
+            toks,
+            pos: 0,
+            sections: Vec::new(),
+            section_typarams: Vec::new(),
+            no_record_lit: false,
+            no_eq: false,
+            no_iff: false,
+            motive_body: false,
+            spec_failed: std::collections::HashSet::new(),
+            next_hygienic: 0,
+            record_facts: Vec::new(),
+            propagation_count: 0,
+            propagation_depth: 0,
+            elseless_if: false,
+            mut_params: Vec::new(),
+            pending_mut: None,
+            defer_binds: false,
+            mutables: Vec::new(),
+            range_header: false,
+        }
+    }
+
     fn hygienic(&mut self, kind: &str) -> String {
         let id = self.next_hygienic;
         self.next_hygienic += 1;
@@ -6827,6 +6857,73 @@ mod tests {
             Item::Decl(d) => d,
             other => panic!("expected a declaration, got {other:?}"),
         }
+    }
+
+    /// What [`leading_imports`] reads of a source, as text.
+    fn opens_with(src: &str) -> Vec<String> {
+        leading_imports(src)
+            .iter()
+            .map(|i| format!("{}{}::{{{}}}@{}..{}", if i.reexport { "export " } else { "" }, i.module,
+                i.listed.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(","), i.span.start, i.span.end))
+            .collect()
+    }
+
+    /// The imports of a source that parses, as `opens_with` spells them.
+    fn parsed_imports(src: &str) -> Vec<String> {
+        parse_file(src)
+            .unwrap_or_else(|e| panic!("{src}: {}", e.msg))
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Import(i) => Some(format!("{}{}::{{{}}}@{}..{}", if i.reexport { "export " } else { "" }, i.module,
+                    i.listed.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(","), i.span.start, i.span.end)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // The loader and the session read a module's imports with
+    // `leading_imports`, and the elaborator reads them from the parsed file:
+    // the two readings are the same imports, at the same spans, wherever the
+    // file parses.
+    #[test]
+    fn the_leading_imports_are_the_parsed_files_imports() {
+        for src in [
+            "",
+            "fn f() -> Nat { 0 }",
+            "import nat;",
+            "import nat; import list::{map, fold};\nfn f() -> Nat { 0 }",
+            "// a header\nimport nat; // why\n// and\nimport option::{\n  Option, // the type; with a `;` in the comment\n  map,\n};\nexport list::{list::Nil};\ntheorem t(a: Nat): a = a { refl }",
+            "import a;\nfn import_like(import_x: Nat) -> Nat { import_x }",
+            "import a;\nfn f(s: String) -> String { \"import b; export c::{d};\" }",
+            "import a;\nsection<A> { fn f(x: A) -> A { x } }",
+        ] {
+            assert_eq!(opens_with(src), parsed_imports(src), "{src}");
+        }
+        assert_eq!(opens_with("import nat; import list::{map};").len(), 2);
+    }
+
+    // Nothing past the imports is read: a source whose bodies do not lex or
+    // parse still opens with its imports, and the full parse reports the rest.
+    #[test]
+    fn the_leading_imports_do_not_read_the_bodies() {
+        for body in ["fn f( -> Nat { 0 }", "fn f() -> Nat { \"unterminated }", "fn f() -> Nat { 0 }\nimport late;", "§"] {
+            let src = format!("import a;\nimport b::{{c}};\n{body}");
+            assert!(parse_file(&src).is_err(), "{src}: the control is a source that does not parse");
+            assert_eq!(opens_with(&src), ["a::{}@0..9", "b::{c}@10..24"], "{src}");
+        }
+    }
+
+    // An import that does not parse ends the reading where it stands, and a
+    // name that only starts like the keyword is not one.
+    #[test]
+    fn the_leading_imports_end_at_what_is_not_an_import() {
+        assert_eq!(opens_with("import a; import b c; import d;"), ["a::{}@0..9"]);
+        assert_eq!(opens_with("import a; import b::*; import d;"), ["a::{}@0..9"]);
+        assert_eq!(opens_with("import a; import::gen fn f() -> Nat { 0 } import d;"), ["a::{}@0..9"]);
+        assert_eq!(opens_with("imports a; import b;"), [] as [&str; 0]);
+        assert_eq!(opens_with("import a"), [] as [&str; 0]);
+        assert_eq!(opens_with("import a; import §; import d;"), ["a::{}@0..9"]);
     }
 
     #[test]

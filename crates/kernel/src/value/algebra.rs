@@ -20,7 +20,7 @@
 //! iteration has to be declined for size.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
 
 use super::program::ContextProgram;
 
@@ -251,7 +251,7 @@ mod tests {
     use super::{AffineTree, Increment, Path, Proj};
     use crate::value::program::ContextProgram;
     use std::num::NonZeroU64;
-    use std::sync::Arc as Rc;
+    use crate::rc::Rc;
 
     fn n(v: u64) -> NonZeroU64 {
         NonZeroU64::new(v).unwrap()

@@ -12,7 +12,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, LocalVar, Term, Type};
 use heather_kernel::typing;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

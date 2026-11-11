@@ -4,7 +4,7 @@
 //! Wf from silently becoming an emitted annotation. The raw kernel AST still
 //! uses Type; crossing back to it is explicit at the emission/read sites.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, Term, Type};

@@ -38,7 +38,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc as Rc;
+use std::sync::Arc;
 
 use heather_cache::Cache;
 use heather_cache::module_image::ImageFreshness;
@@ -418,7 +418,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
             eprintln!("{msg}");
         }
-        Rc::new(c)
+        Arc::new(c)
     });
     // A run without `--cache` still asks a gate: one with nothing behind it
     // and nothing saved, so the only verdicts it holds are the ones this
@@ -427,7 +427,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     // in its own world, and then loaded into each world that imports it
     // beside another chain; without a gate every such load checked the
     // module again (`issues/cacheless-run-rechecks-loaded-modules.md`).
-    let own = (!opts.cache).then(|| Rc::new(Cache::in_process()));
+    let own = (!opts.cache).then(|| Arc::new(Cache::in_process()));
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -455,17 +455,17 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         // cached (docs/cache-v1-design.md §4).
         if let Some(c) = &own {
             c.begin_run();
-            elab.set_gate(Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>);
+            elab.set_gate(Arc::clone(c) as Arc<dyn heather_elab::gate::KernelGate>);
         }
         let before = cache.as_ref().map(|c| {
             // Each root is a fresh Ψ, so the cache's view of it restarts too;
             // the recorded entries, being content-addressed, do not.
             c.begin_run();
-            let store = Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>;
+            let store = Arc::clone(c) as Arc<dyn heather_elab::gate::KernelGate>;
             // `--only`: the named declarations face the kernel every time
             // and the store never learns that they passed.
-            let gate: Rc<dyn heather_elab::gate::KernelGate> = match &opts.only {
-                Some(names) => Rc::new(heather_elab::gate::Except::new(
+            let gate: Arc<dyn heather_elab::gate::KernelGate> = match &opts.only {
+                Some(names) => Arc::new(heather_elab::gate::Except::new(
                     store,
                     names.iter().map(|n| n.rsplit("::").next().unwrap_or(n).to_string()).collect(),
                 )),

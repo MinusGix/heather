@@ -46,7 +46,8 @@ use std::collections::HashMap;
 #[cfg(feature = "value-metrics")]
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
+use std::sync::Arc;
 use typed_arena::Arena;
 
 use crate::few_map::FewMap;
@@ -377,10 +378,7 @@ pub struct ValueArena<'v> {
     /// classes and for the same reason: the verdict depends on nothing but
     /// the closure and the definitions, both fixed for one arena.
     bit_types: RefCell<PtrMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
-    /// Lazily made: `typed_arena::Arena::new` allocates its first chunk up
-    /// front, and a value arena is built per query — one more eager chunk
-    /// was a 1.27× constant on `nat/step-once`, a single β-step.
-    bit_tys: std::cell::OnceCell<Arena<BitTy<'v>>>,
+    bit_tys: Region<BitTy<'v>>,
     /// The transducer class of a width fold, keyed on **both** the step and
     /// the motive: the argument modes are read off the motive, so two
     /// eliminations sharing a step but not a motive are two questions
@@ -433,19 +431,50 @@ pub struct ValueArena<'v> {
     subjects: RefCell<FewMap<(usize, u32), (Rc<Term>, &'v TmClo<'v>)>>,
     /// The two eliminations [`ValueArena::subject`] pends, made once.
     projections: [Cell<Option<&'v Elim<'v>>>; 2],
-    envs: Arena<EnvNode<'v>>,
+    /// An evaluation run's emptied continuation stack, between runs
+    /// ([`ValueArena::lend_frames`]).
+    frames: RefCell<Vec<crate::eval::Frame<'v>>>,
+    envs: Region<EnvNode<'v>>,
     /// The forced values themselves (`issues/value-cache-memo-in-arena.md`):
     /// a value is born here, so forcing a node is a bump of this region
     /// rather than a heap allocation beside it, and the memo above holds a
     /// borrow of it rather than a reference count.
-    vals: Arena<Val<'v>>,
-    vtys: Arena<VTy<'v>>,
-    neutrals: Arena<VNeutral<'v>>,
-    elim_cells: Arena<Elim<'v>>,
-    levels: Arena<Level>,
-    elims: Arena<ElimNode<'v>>,
-    terms: Arena<TmClo<'v>>,
-    types: Arena<TyClo<'v>>,
+    vals: Region<Val<'v>>,
+    vtys: Region<VTy<'v>>,
+    neutrals: Region<VNeutral<'v>>,
+    elim_cells: Region<Elim<'v>>,
+    elims: Region<ElimNode<'v>>,
+    terms: Region<TmClo<'v>>,
+    types: Region<TyClo<'v>>,
+}
+
+/// One of a [`ValueArena`]'s typed regions: a `typed_arena::Arena` made at
+/// its first allocation.
+///
+/// `Arena::new` allocates its first chunk up front. A value arena is built
+/// per conversion query and holds ten regions, most queries are small and
+/// put something in a few of them, and the rest was a chunk allocated and
+/// freed unread: one more eager chunk measured as a 1.27× constant on
+/// `nat/step-once`, a single β-step. A region that is used grows exactly
+/// as the arena under it does.
+struct Region<T>(std::cell::OnceCell<Arena<T>>);
+
+impl<T> Region<T> {
+    fn new() -> Region<T> {
+        Region(std::cell::OnceCell::new())
+    }
+
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    fn alloc(&self, value: T) -> &mut T {
+        self.0.get_or_init(Arena::new).alloc(value)
+    }
+
+    /// How many values it holds.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.get().map_or(0, Arena::len)
+    }
 }
 
 /// Aggregate, observational counters for value-machine regions.
@@ -477,7 +506,7 @@ struct ValueMetricCells {
     /// (issues/conv-miss-sampler-item-attribution.md). `None` outside any
     /// item, and always `None` without the feature.
     #[cfg(feature = "value-metrics")]
-    current_item: RefCell<Option<Rc<str>>>,
+    current_item: RefCell<Option<Arc<str>>>,
     arenas: Cell<u64>,
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
@@ -507,7 +536,7 @@ struct ConvMissBucket {
     /// name current when the miss was recorded. Misses outside any item
     /// (imports, replay, generated definitions minted between items) are
     /// keyed by the empty name.
-    items: BTreeMap<Rc<str>, (u64, u64)>,
+    items: BTreeMap<Arc<str>, (u64, u64)>,
 }
 
 /// A copyable snapshot of [`ValueMetrics`]. Counts aggregate every profiled
@@ -587,7 +616,7 @@ impl ValueMetrics {
             .current_item
             .borrow()
             .clone()
-            .unwrap_or_else(|| Rc::from(""));
+            .unwrap_or_else(|| Arc::from(""));
         let share = bucket.items.entry(item).or_default();
         share.0 += 1;
         share.1 = share.1.saturating_add(ns);
@@ -599,11 +628,11 @@ impl ValueMetrics {
     /// collector is enabled.
     /// The item named by [`ValueMetrics::set_current_item`], if any.
     #[cfg(feature = "value-metrics")]
-    pub fn current_item(&self) -> Option<Rc<str>> {
+    pub fn current_item(&self) -> Option<Arc<str>> {
         self.inner.current_item.borrow().clone()
     }
 
-    pub fn set_current_item(&self, item: Option<Rc<str>>) {
+    pub fn set_current_item(&self, item: Option<Arc<str>>) {
         #[cfg(feature = "value-metrics")]
         {
             *self.inner.current_item.borrow_mut() = item;
@@ -627,7 +656,7 @@ impl ValueMetrics {
             // Per item: its heaviest bucket, gathered while walking the
             // buckets below. Keyed by name; the value is (ns in that bucket,
             // its heads, count) so the print is one line per item.
-            let mut per_item: BTreeMap<Rc<str>, (u64, (&str, &str), u64, u64)> = BTreeMap::new();
+            let mut per_item: BTreeMap<Arc<str>, (u64, (&str, &str), u64, u64)> = BTreeMap::new();
             for ((expected, inferred), bucket) in rows {
                 let _ = writeln!(
                     out,
@@ -839,6 +868,23 @@ impl<'v> ValueArena<'v> {
         self.shared_apps.borrow_mut().insert(key, value);
     }
 
+    /// The continuation stack for one evaluation run: the one the last run
+    /// handed back, with its capacity, or an empty one while another run
+    /// holds it (a run made inside a run).
+    pub(crate) fn lend_frames(&self) -> Vec<crate::eval::Frame<'v>> {
+        std::mem::take(&mut *self.frames.borrow_mut())
+    }
+
+    /// A finished run's stack. Whatever a failed run left on it is dropped
+    /// here; the larger of this and the one already kept is kept.
+    pub(crate) fn return_frames(&self, mut frames: Vec<crate::eval::Frame<'v>>) {
+        frames.clear();
+        let mut kept = self.frames.borrow_mut();
+        if frames.capacity() > kept.capacity() {
+            *kept = frames;
+        }
+    }
+
     pub fn new() -> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]
@@ -848,7 +894,7 @@ impl<'v> ValueArena<'v> {
             fold_classes: RefCell::new(PtrMap::default()),
             closed_values: RefCell::new(PtrMap::default()),
             bit_types: RefCell::new(PtrMap::default()),
-            bit_tys: std::cell::OnceCell::new(),
+            bit_tys: Region::new(),
             transducers: RefCell::new(PtrMap::default()),
             sealed_glues: RefCell::new(Vec::new()),
             sealed_any: Cell::new(false),
@@ -857,15 +903,15 @@ impl<'v> ValueArena<'v> {
             vars: RefCell::new(Vec::new()),
             subjects: RefCell::new(FewMap::default()),
             projections: [Cell::new(None), Cell::new(None)],
-            envs: Arena::new(),
-            vals: Arena::new(),
-            vtys: Arena::new(),
-            neutrals: Arena::new(),
-            elim_cells: Arena::new(),
-            levels: Arena::new(),
-            elims: Arena::new(),
-            terms: Arena::new(),
-            types: Arena::new(),
+            frames: RefCell::new(Vec::new()),
+            envs: Region::new(),
+            vals: Region::new(),
+            vtys: Region::new(),
+            neutrals: Region::new(),
+            elim_cells: Region::new(),
+            elims: Region::new(),
+            terms: Region::new(),
+            types: Region::new(),
         }
     }
 
@@ -881,7 +927,7 @@ impl<'v> ValueArena<'v> {
                 fold_classes: RefCell::new(PtrMap::default()),
                 closed_values: RefCell::new(PtrMap::default()),
                 bit_types: RefCell::new(PtrMap::default()),
-                bit_tys: std::cell::OnceCell::new(),
+                bit_tys: Region::new(),
                 transducers: RefCell::new(PtrMap::default()),
                 sealed_glues: RefCell::new(Vec::new()),
                 sealed_any: Cell::new(false),
@@ -890,15 +936,15 @@ impl<'v> ValueArena<'v> {
                 vars: RefCell::new(Vec::new()),
             subjects: RefCell::new(FewMap::default()),
             projections: [Cell::new(None), Cell::new(None)],
-            envs: Arena::new(),
-                vals: Arena::new(),
-                vtys: Arena::new(),
-                neutrals: Arena::new(),
-                elim_cells: Arena::new(),
-                levels: Arena::new(),
-                elims: Arena::new(),
-                terms: Arena::new(),
-                types: Arena::new(),
+            frames: RefCell::new(Vec::new()),
+            envs: Region::new(),
+                vals: Region::new(),
+                vtys: Region::new(),
+                neutrals: Region::new(),
+                elim_cells: Region::new(),
+                elims: Region::new(),
+                terms: Region::new(),
+                types: Region::new(),
             }
         }
         #[cfg(not(feature = "value-metrics"))]
@@ -1038,22 +1084,18 @@ impl<'v> ValueArena<'v> {
         self.types.alloc(value)
     }
 
-    /// Build one of the uncommon synthesized type forms. Keeping its level
-    /// in the query region rather than inline lets the overwhelmingly common
-    /// syntactic closures carry the compact 16-byte environment handle.
+    /// Build one of the uncommon synthesized type forms.
     pub fn ty_vec(
         &'v self,
         level: Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
     ) -> &'v TyClo<'v> {
-        let level = self.levels.alloc(level);
         self.ty(TyClo::vec(level, elem, len))
     }
 
     /// The `El` counterpart of [`ValueArena::ty_vec`].
     pub fn ty_el(&'v self, level: Level, tm: &'v TmClo<'v>) -> &'v TyClo<'v> {
-        let level = self.levels.alloc(level);
         self.ty(TyClo::el(level, tm))
     }
 
@@ -1086,7 +1128,7 @@ impl<'v> ValueArena<'v> {
     }
 
     pub fn bit_ty(&'v self, ty: BitTy<'v>) -> &'v BitTy<'v> {
-        self.bit_tys.get_or_init(Arena::new).alloc(ty)
+        self.bit_tys.alloc(ty)
     }
 
     pub fn transducer(
@@ -1384,10 +1426,10 @@ pub type CloId = (usize, usize, u32, u32);
 ///   a vector at a canonical length stays lazy even when the element type is
 ///   a value with no syntax. Forcing it is `Eval::vec_ty`.
 ///
-/// The uncommon synthesized forms store their universe level out of line in
-/// the query arena. That keeps both closure enums at four words and a memo
-/// on 64-bit targets instead of making every syntactic closure pay for
-/// `Level`'s rare largest variant.
+/// A level is one word (`level.rs`), so the uncommon synthesized forms hold
+/// theirs inline and both closure enums stay at four words and a memo. (It
+/// was two words with a rare largest variant, and these forms kept it in a
+/// region of the query arena so that no syntactic closure paid for it.)
 pub enum TyClo<'v> {
     Syn {
         env: Env<'v>,
@@ -1396,7 +1438,7 @@ pub enum TyClo<'v> {
     },
     Val(&'v VTy<'v>),
     Vec {
-        level: &'v Level,
+        level: Level,
         elem: &'v TyClo<'v>,
         len: &'v TmClo<'v>,
         memo: Memo<&'v VTy<'v>>,
@@ -1406,7 +1448,7 @@ pub enum TyClo<'v> {
     /// keeping it lazy is what makes the decode one step deep and lets
     /// conversion synthesize `El`s over encodings that are values.
     El {
-        level: &'v Level,
+        level: Level,
         tm: &'v TmClo<'v>,
         memo: Memo<&'v VTy<'v>>,
     },
@@ -1421,11 +1463,11 @@ impl<'v> TyClo<'v> {
         TyClo::Val(v)
     }
 
-    fn vec(level: &'v Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
+    fn vec(level: Level, elem: &'v TyClo<'v>, len: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::Vec { level, elem, len, memo: Cell::new(None) }
     }
 
-    fn el(level: &'v Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
+    fn el(level: Level, tm: &'v TmClo<'v>) -> TyClo<'v> {
         TyClo::El { level, tm, memo: Cell::new(None) }
     }
 
@@ -2712,7 +2754,7 @@ impl fmt::Debug for Val<'_> {
 #[cfg(test)]
 mod tests {
     use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, VTy, Val, ValueArena, ValueMetrics};
-    use std::sync::Arc as Rc;
+    use crate::rc::Rc;
 
     #[test]
     #[cfg(target_pointer_width = "64")]
@@ -2725,13 +2767,13 @@ mod tests {
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
-        assert_eq!(std::mem::size_of::<Val<'_>>(), 72);
+        assert_eq!(std::mem::size_of::<Val<'_>>(), 56);
         // Types and eliminations ride the evaluator's and conversion's
         // recursion; a former with many components keeps them behind one
-        // pointer (`VIWfSig`) instead of growing every one. A `Level` is two
-        // words (`issues/kernel-compact-level.md`).
-        assert_eq!(std::mem::size_of::<VTy<'_>>(), 56);
-        assert_eq!(std::mem::size_of::<Elim<'_>>(), 104);
+        // pointer (`VIWfSig`) instead of growing every one. A `Level` is one
+        // word (`issues/kernel-level-eight-bytes.md`).
+        assert_eq!(std::mem::size_of::<VTy<'_>>(), 48);
+        assert_eq!(std::mem::size_of::<Elim<'_>>(), 80);
     }
 
     #[test]

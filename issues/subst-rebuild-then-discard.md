@@ -4,7 +4,7 @@ status: open
 labels: [kernel,performance,representation,substitution]
 area: kernel
 created: 2026-09-11
-updated: 2026-09-11
+updated: 2026-11-10
 ---
 
 `subst.rs`'s `sub_ty`/`sub_tm` always call `map_type`/`map_term` to build a replacement node, then — if the mapper reported no change — `drop` it and return `Rc::clone(orig)` (`shared_ty`/`shared_tm`). The built node allocates nothing (its children are `Rc` clones), but it costs one refcount increment per child on the way up and one decrement per child on the drop.
@@ -22,3 +22,7 @@ Raised out of [[parallel-kernel-gate]] (2026-09-11), whose clone/drop audit foun
 ## What it assumes from elsewhere
 
 - **[[kernel-arena-terms-frozen-prefix]]** owns the representation answer, under which this cost disappears entirely (cloning a term becomes copying a `u32`). Assumed here: only that the arena is not imminent, so a representation-preserving fix is still worth its round. If the arena lands first, close this.
+
+## Log
+
+- 2026-11-10: Counted, on a whole cold check of `docs/showcase/calc_parser.hthr` (width one, 2026-11-10, after [[subst-variable-copies-payload-root]]): of the 7.1 M nodes the substitution traversals walk rather than skip, 6.5 M come back changed and 0.6 M (8%) are built and dropped unchanged. The bounds skip takes nearly every unchanged subtree before it is walked, so what this issue would remove is the child clone and drop pair on about 0.6 M nodes a run, well under one percent of its instructions. The rewrite of every `map_*` arm is not worth that today; the count is the thing to take again if a workload shows identity-heavy substitutions (`t[id]` over open terms is the shape that walks without changing).

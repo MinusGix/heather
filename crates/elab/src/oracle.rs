@@ -5,7 +5,7 @@
 //! decoding shares that input while deliberately having a different failure
 //! contract: it declines instead of turning exhaustion into an error.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::{self, ConvError};
 use heather_kernel::eval;
@@ -514,7 +514,7 @@ impl DiagnosticOracle<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc as Rc;
+    use heather_kernel::rc::Rc;
 
     use heather_kernel::term::{GlobalVar, LocalSubst, LocalVar};
 

@@ -1,6 +1,6 @@
 //! Surface vector operations and container-recursion lowering.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type, nth};

@@ -6,7 +6,7 @@
 //! claimed slot always resolves to the definition that claimed it.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{Term, Type};
 

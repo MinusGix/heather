@@ -6,7 +6,7 @@
 
 mod common;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use common::*;
 use heather_kernel::level::{Level, UnivVar};

@@ -19,7 +19,7 @@
 //! is rebuilt bottom-up, one congruence step per changed node, and the proof
 //! is chained by transitivity instead of `J`.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

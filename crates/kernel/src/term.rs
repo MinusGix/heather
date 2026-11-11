@@ -17,7 +17,8 @@
 
 pub use heather_numeral::Numeral;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc as Rc;
+use crate::rc::Rc;
+use std::sync::Arc;
 
 use crate::layer::Layer;
 use crate::level::Level;
@@ -798,7 +799,7 @@ pub enum Term {
     VecItems {
         level: Level,
         elem: Rc<Type>,
-        items: Rc<[Rc<Term>]>,
+        items: Arc<[Rc<Term>]>,
         from: u32,
     },
 
@@ -2520,7 +2521,9 @@ impl GlobalCtx {
         #[cfg(debug_assertions)]
         if crate::checks::verify_this_skip() {
             assert!(
-                b.reindex_global(&mut |r| matches!(r, GlobalRef::Const(_)).then_some(r)).is_some(),
+                crate::checks::rederive(crate::checks::Claim::Kept, || {
+                    b.reindex_global(&mut |r| matches!(r, GlobalRef::Const(_)).then_some(r)).is_some()
+                }),
                 "a constant committed with a global variable free in it"
             );
         }
@@ -2843,12 +2846,12 @@ fn vec_chain_node(level: &Level, elem: &Rc<Type>, shifted: &Rc<Type>, rest_len: 
 /// further on (or `⟨⟩^l` after the last). The adequacy owner, as
 /// [`vec_lit_unfold`] is for [`Term::VecLit`]: projections, the evaluator
 /// and the full chain all read the node through it. `None` out of range.
-pub fn vec_items_unfold(level: &Level, elem: &Rc<Type>, items: &Rc<[Rc<Term>]>, from: u32) -> Option<Term> {
+pub fn vec_items_unfold(level: &Level, elem: &Rc<Type>, items: &Arc<[Rc<Term>]>, from: u32) -> Option<Term> {
     let live = vec_items_live(items, from)?;
     let rest = if live.len() == 1 {
         Term::Triv { level: level.clone() }
     } else {
-        Term::VecItems { level: level.clone(), elem: Rc::clone(elem), items: Rc::clone(items), from: from + 1 }
+        Term::VecItems { level: level.clone(), elem: Rc::clone(elem), items: Arc::clone(items), from: from + 1 }
     };
     let shifted = Rc::new(elem.shift_local(1));
     Some(vec_chain_node(level, elem, &shifted, live.len() - 1, Rc::clone(&live[0]), rest))
@@ -3330,20 +3333,24 @@ impl IWfSig {
         Level::join(self.level.clone(), self.idx_level.clone())
     }
 
+}
+
+/// The operations that hand the signature on, so they take the node.
+impl Rc<IWfSig> {
     /// `IWf(…)(m)`.
-    pub fn at(self: &Rc<Self>, index: Rc<Term>) -> Type {
+    pub fn at(&self, index: Rc<Term>) -> Type {
         Type::IWf { sig: Rc::clone(self), index }
     }
 
     /// `sup_i(…; a; cs)`, at this signature.
-    pub fn supi(self: &Rc<Self>, label: Rc<Term>, children: Rc<Term>) -> Term {
+    pub fn supi(&self, label: Rc<Term>, children: Rc<Term>) -> Term {
         Term::Supi { sig: Rc::clone(self), label, children }
     }
 
     /// The signature weakened past `by` binders. The components under the
     /// shape's (and the position's) binder keep those binders fixed, which is
     /// what shifting the whole former does, so it is done that way.
-    pub fn shift_local(self: &Rc<Self>, by: u32) -> Rc<IWfSig> {
+    pub fn shift_local(&self, by: u32) -> Rc<IWfSig> {
         if by == 0 {
             return Rc::clone(self);
         }
@@ -3490,23 +3497,6 @@ impl MSig {
         Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 
-    /// `M(…)(j)`.
-    pub fn at(self: &Rc<Self>, index: Rc<Term>) -> Type {
-        Type::M { sig: Rc::clone(self), index }
-    }
-
-    /// The signature weakened past `by` binders, by shifting the whole former
-    /// (the components under binders keep them fixed).
-    pub fn shift_local(self: &Rc<Self>, by: u32) -> Rc<MSig> {
-        if by == 0 {
-            return Rc::clone(self);
-        }
-        match self.at(Rc::new(Term::Zero)).shift_local(by) {
-            Type::M { sig, .. } => sig,
-            _ => unreachable!("shifting an M yields an M"),
-        }
-    }
-
     /// `S[j/i]`, in Γ for `j` in Γ.
     pub fn shape_at(&self, j: &Term) -> Type {
         self.shape.inst_top(0, j)
@@ -3520,6 +3510,26 @@ impl MSig {
     /// `o[j/i, s, p]`, in `(Γ, s, p)` for `j` in Γ.
     pub fn next_at(&self, j: &Term) -> Term {
         self.next.inst_top_above(0, 2, j)
+    }
+}
+
+/// The operations that hand the signature on, so they take the node.
+impl Rc<MSig> {
+    /// `M(…)(j)`.
+    pub fn at(&self, index: Rc<Term>) -> Type {
+        Type::M { sig: Rc::clone(self), index }
+    }
+
+    /// The signature weakened past `by` binders, by shifting the whole former
+    /// (the components under binders keep them fixed).
+    pub fn shift_local(&self, by: u32) -> Rc<MSig> {
+        if by == 0 {
+            return Rc::clone(self);
+        }
+        match self.at(Rc::new(Term::Zero)).shift_local(by) {
+            Type::M { sig, .. } => sig,
+            _ => unreachable!("shifting an M yields an M"),
+        }
     }
 }
 
@@ -3847,19 +3857,19 @@ mod size_tests {
     /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
     /// constructor value overflow the 8 MiB stack. A former with many
     /// components keeps them behind one pointer (`IWfSig`). The annotated
-    /// formers carry up to three `Level`s, two words each
-    /// (`issues/kernel-compact-level.md`).
+    /// formers carry up to three `Level`s, a word each
+    /// (`issues/kernel-level-eight-bytes.md`).
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn syntax_nodes_stay_their_size() {
-        assert_eq!(std::mem::size_of::<Type>(), 56);
-        assert_eq!(std::mem::size_of::<Term>(), 104);
+        assert_eq!(std::mem::size_of::<Type>(), 48);
+        assert_eq!(std::mem::size_of::<Term>(), 80);
     }
 }
 
 #[cfg(test)]
 mod global_ctx_tests {
-    use std::sync::Arc as Rc;
+    use crate::rc::Rc;
 
     use super::*;
 

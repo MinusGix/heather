@@ -63,6 +63,16 @@ import nat;                 // qualified access: nat::le_add
 import option::{Option, some_ne_none};   // these names, unqualified
 ```
 
+That reading is `heather_syntax::leading_imports`: the import items a source
+opens with, lexed and parsed up to the first token that begins anything else.
+The loader orders a build by it and the session derives a module's image key
+from it, so neither parses a body; the elaborator reads the same imports
+from the whole parse, and `crates/cli/tests/lib_closures.rs` holds the two
+readings equal over every source in the tree. A source that does not parse
+still has the imports it opens with, and the elaborator reports what is
+wrong with it once its imports are built
+(`issues/import-lines-read-by-whole-parses.md`).
+
 `import m::{…}` also brings `m` itself into scope for qualified access —
 the list is a convenience, not a different mode. No glob form `import m::*;`
 in v1: §4's resolution regime makes plain `import m;` already behave like

@@ -26,7 +26,7 @@
 //! since the context [`MParts`] was read in, and every term argument is
 //! already scoped at that depth.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, LocalSubst, LocalVar, MSig, Term, Type, m_out_ty, m_step_ty};

@@ -15,7 +15,7 @@
 //! `elab`, which sits above the kernel and cannot be reached from here —
 //! `issues/frontend-benchmarks.md` owns that number.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

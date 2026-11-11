@@ -95,7 +95,7 @@ impl Representations {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc as Rc;
+    use heather_kernel::rc::Rc;
 
     use super::*;
     use crate::datarepr::Provenance;

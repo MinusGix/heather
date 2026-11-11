@@ -19,7 +19,7 @@
 
 mod common;
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use common::wt::{gen_encoding, gen_wt_env, gen_wt_type, identity_branches, identity_motives, FUEL};
 use common::Rng;

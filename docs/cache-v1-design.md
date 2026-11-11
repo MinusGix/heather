@@ -626,6 +626,23 @@ over those referents' types and the δ-visible bodies their interfaces carry,
 and nothing else. A statement check that opened a sealed proof keeps no
 verdict, by the rule `accepted` follows.
 
+**What the build checked, its first replay finds (2026-11-11).** Two kinds
+of binding still faced the kernel on the first replay of an image, though
+the build that wrote it had checked both
+(`issues/first-replay-rechecks-what-the-build-checked.md`). A theorem's
+build-time verdict was kept under its check key only, and a replay asks
+under the statement key: `accepted` now writes both when the theorem lands
+in Ψ with an empty context and nothing withheld, which is when the gate's
+statement check is the replay's. The statement was the first half of what
+the gate checked, and its key is one hash of the interface hash in hand. A
+check that opened a sealed proof keeps neither, as before. And the
+resolver's minted derivations (`#open`, `#derived`) were checked without
+the oracle being asked or told, so no build kept a verdict about one; they
+are gate items now (`resolve.rs`, `mint_passes`). A mint's refusal is
+routine (a derivation that reached into a scope is not shared), so
+`abandon` also forgets the interface hash its question left pending for
+`sync`: before, that hash waited for whatever landed next at its index.
+
 **One gate, several Ψs (2026-10-29).** An elaborator and its forks share
 one gate, and `write-elf` asks it about the parent's Ψ and each fork's in
 turn. The prefix of interface hashes was reset whenever a shorter Ψ asked

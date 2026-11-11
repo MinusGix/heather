@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc as Rc;
+use std::sync::Arc;
 
 use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
@@ -138,8 +138,8 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
     if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
         eprintln!("{msg}");
     }
-    let store = Rc::new(store);
-    elab.set_gate(Rc::clone(&store) as Rc<dyn heather_elab::gate::KernelGate>);
+    let store = Arc::new(store);
+    elab.set_gate(Arc::clone(&store) as Arc<dyn heather_elab::gate::KernelGate>);
     let mut session = SemanticSession::new(Some(dir));
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -332,13 +332,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
             eprintln!("{msg}");
         }
-        Rc::new(store)
+        Arc::new(store)
     });
     // Without a directory, the verdicts of this process alone
     // (`Cache::in_process`): a module loaded into a second world is not
     // checked a second time.
-    let gate = verdicts.clone().unwrap_or_else(|| Rc::new(heather_cache::Cache::in_process()));
-    elab.set_gate(gate as Rc<dyn heather_elab::gate::KernelGate>);
+    let gate = verdicts.clone().unwrap_or_else(|| Arc::new(heather_cache::Cache::in_process()));
+    elab.set_gate(gate as Arc<dyn heather_elab::gate::KernelGate>);
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -542,7 +542,7 @@ mod tests {
     fn the_bundled_library_checks() {
         let mut elab = Elaborator::with_prelude().unwrap();
         let verdicts = heather_cache::Cache::in_process();
-        elab.set_gate(Rc::new(verdicts) as Rc<dyn heather_elab::gate::KernelGate>);
+        elab.set_gate(Arc::new(verdicts) as Arc<dyn heather_elab::gate::KernelGate>);
         let mut session = SemanticSession::new(Some(heather_cli::showcase::native_test_images()));
         for &(name, src) in SUPPORT {
             check_module(&mut elab, &mut session, &loader::Module {

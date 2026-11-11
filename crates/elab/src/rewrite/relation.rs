@@ -29,7 +29,8 @@
 //! leaves it, discharged by `on ?label := …`.
 
 use std::collections::HashMap;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
+use std::sync::Arc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalVar, Term, Type};
@@ -335,7 +336,7 @@ enum Node {
 /// application `rel(x, y)`. `identity` when it is `RelId` at its carrier (up
 /// to conversion): every context preserves it, and a chain meets it as an
 /// `=` step (§11.6).
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub(super) struct Rel {
     head: Rc<Term>,
     carrier: Rc<Type>,
@@ -346,7 +347,7 @@ pub(super) struct Rel {
 
 /// The binders' types and levels a pointwise relation ranges over,
 /// outermost first, each scoped where the λ they bind sits.
-type Domains = Rc<[(Rc<Type>, Level)]>;
+type Domains = Arc<[(Rc<Type>, Level)]>;
 
 impl Node {
     fn changed(&self) -> bool {
@@ -355,12 +356,12 @@ impl Node {
 
     /// A change related by `R` itself.
     fn related(term: Rc<Term>, proof: Rc<Term>) -> Node {
-        Node::Changed { term, proof, over: Rc::from([]), rel: None }
+        Node::Changed { term, proof, over: Arc::from([]), rel: None }
     }
 
     /// A change related by `rel`, `None` for `R` itself.
     fn related_by(term: Rc<Term>, proof: Rc<Term>, rel: Option<Rc<Rel>>) -> Node {
-        Node::Changed { term, proof, over: Rc::from([]), rel }
+        Node::Changed { term, proof, over: Arc::from([]), rel }
     }
 
     /// The relation the change is by, `None` for `R` itself.
@@ -1162,7 +1163,7 @@ impl<'a> RelationRewrite<'a> {
             (Shape::Unary, Rc::new(carrier.shift_local(self.depth())), level.clone())
         } else {
             let (fun, flevel) = self.function_type(over, &carrier, &level);
-            (Shape::Pointwise(Rc::clone(over)), Rc::new(fun), flevel)
+            (Shape::Pointwise(Arc::clone(over)), Rc::new(fun), flevel)
         };
         let unary = partial.is_some();
         let mut context = match partial {

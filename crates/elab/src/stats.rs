@@ -326,19 +326,19 @@ thread_local! {
 /// copy-on-write write goes through here.
 #[track_caller]
 #[inline]
-pub fn make_mut<T: Clone>(rc: &mut std::sync::Arc<T>) -> &mut T {
-    if std::sync::Arc::strong_count(rc) == 1 && std::sync::Arc::weak_count(rc) == 0 {
-        return std::sync::Arc::make_mut(rc);
+pub fn make_mut<T: Clone>(rc: &mut heather_kernel::rc::Rc<T>) -> &mut T {
+    if heather_kernel::rc::Rc::strong_count(rc) == 1 {
+        return heather_kernel::rc::Rc::make_mut(rc);
     }
     cow_copy(std::panic::Location::caller(), rc)
 }
 
 #[cold]
 #[inline(never)]
-fn cow_copy<'a, T: Clone>(site: &'static std::panic::Location<'static>, rc: &'a mut std::sync::Arc<T>) -> &'a mut T {
+fn cow_copy<'a, T: Clone>(site: &'static std::panic::Location<'static>, rc: &'a mut heather_kernel::rc::Rc<T>) -> &'a mut T {
     count(Counter::CowCopies);
     let guard = guard(Timer::Cow);
-    std::sync::Arc::make_mut(rc);
+    heather_kernel::rc::Rc::make_mut(rc);
     let ns = guard.finish();
     COW_SITES.with(|sites| {
         let mut sites = sites.borrow_mut();
@@ -346,7 +346,7 @@ fn cow_copy<'a, T: Clone>(site: &'static std::panic::Location<'static>, rc: &'a 
         entry.0 += 1;
         entry.1 += ns;
     });
-    std::sync::Arc::get_mut(rc).expect("make_mut left the value unshared")
+    heather_kernel::rc::Rc::get_mut(rc).expect("make_mut left the value unshared")
 }
 
 /// `alloc::vec::Vec<heather_kernel::term::Type>` as `Vec<Type>`: every
@@ -1046,7 +1046,7 @@ pub fn with_env_timings<T>(label: &str, f: impl FnOnce() -> T) -> T {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc as Rc;
+    use heather_kernel::rc::Rc;
 
     use super::*;
 

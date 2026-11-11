@@ -12,7 +12,7 @@
 //! Both eliminate at any index and β on a constructor at any index, so the
 //! `J`'s case computes at `y := lhs` exactly as tier 0's does.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;

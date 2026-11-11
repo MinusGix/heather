@@ -6,7 +6,7 @@
 //! actual kernel encoding and constructor term construction.
 
 use std::borrow::Borrow;
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalVar, LocalSubst, LocalVar, Term, Type};

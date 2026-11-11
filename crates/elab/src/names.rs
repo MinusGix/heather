@@ -17,13 +17,13 @@
 //! decides anything. The consequence that pays for it: library growth can
 //! introduce errors, never reinterpretations.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc as Rc;
+use std::collections::HashMap;
+use heather_kernel::rc::Rc;
 
 use heather_syntax::Decl;
 
 use super::ParamMeta;
-use crate::layered::{Layer, Layered, index_hash};
+use crate::layered::{Layer, Layered, NameMap, NameSet, index_hash};
 
 thread_local! {
     /// While recording: the last `::` segment of every name and module this
@@ -48,13 +48,25 @@ fn note(name: &str) {
 
 /// Start recording this thread's name lookups, dropping any earlier record.
 pub fn record_name_lookups() {
+    RECORD.with(|r| r.set(r.get() + 1));
     QUERIED.with(|q| *q.borrow_mut() = Some(Default::default()));
 }
 
 /// Stop recording and return what was looked up since
 /// [`record_name_lookups`]; `None` when nothing was recording.
 pub fn take_name_lookups() -> Option<std::collections::BTreeSet<String>> {
+    RECORD.with(|r| r.set(r.get() + 1));
     QUERIED.with(|q| q.borrow_mut().take())
+}
+
+thread_local! {
+    /// Which record [`QUERIED`] is: stepped whenever one starts or is taken,
+    /// so that a lookup answered from a table ([`CommonClosure`]) knows
+    /// whether this record already has the names its walk would have noted.
+    static RECORD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The record, the closure and how much of that closure's walk has been
+    /// noted in the record ([`CommonClosure::note_walk`]).
+    static WALK_NOTED: std::cell::Cell<(u64, u64, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
 }
 
 /// Which table a name lives in. Resolution is by name first and kind second —
@@ -127,19 +139,19 @@ struct NameEntry {
 /// lookup rather than a scan, and it is the only place ambiguity is visible.
 #[derive(Clone, Default)]
 struct NameIndex {
-    by_name: HashMap<String, Vec<NameEntry>>,
+    by_name: NameMap<String, Vec<NameEntry>>,
 }
 
 /// One module-sized name-registry delta. Sealed layers are immutable and
 /// shared; only the current layer is detached when a suffix commits a name.
 #[derive(Clone, Default)]
 struct NameLayer {
-    module_scopes: HashMap<String, Scope>,
+    module_scopes: NameMap<String, Scope>,
     index: NameIndex,
-    globals: HashMap<String, GlobalInfo>,
+    globals: NameMap<String, GlobalInfo>,
     by_abs: HashMap<u32, String>,
-    member_bases: HashSet<String>,
-    surface_decls: HashMap<String, Decl>,
+    member_bases: NameSet<String>,
+    surface_decls: NameMap<String, Decl>,
 }
 
 /// [`NameLayer`]'s tables, as the layer index numbers them.
@@ -187,6 +199,71 @@ impl NameLayer {
 pub(crate) struct Names {
     scope: Scope,
     tables: Layered<NameLayer>,
+    /// The common prelude's import closure as [`common_reaches`] walks it,
+    /// made at the first asking. It is a function of the module scopes, so
+    /// [`Names::enter_scope`], their one writer, drops it when it writes one;
+    /// a snapshot carries the closure of the tables it carries.
+    common: std::sync::OnceLock<Rc<CommonClosure>>,
+}
+
+/// The walk of the common prelude's import closure, kept
+/// ([`Names::common`]): which modules it pops, in order, and for each module
+/// some popped module imports, how many had been popped when it was first
+/// met. That is everything [`common_reaches`] reads off the walk, the names
+/// it notes included.
+struct CommonClosure {
+    id: u64,
+    popped: Vec<String>,
+    met_after: NameMap<String, usize>,
+}
+
+impl CommonClosure {
+    /// The walk [`common_reaches`] did per asking, done once, to its end.
+    fn walk(names: &Names) -> CommonClosure {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut popped: Vec<String> = Vec::new();
+        let mut met_after: NameMap<String, usize> = NameMap::default();
+        let mut seen: NameSet<&str> = NameSet::default();
+        seen.insert(COMMON_MODULE);
+        let mut stack: Vec<&str> = vec![COMMON_MODULE];
+        while let Some(m) = stack.pop() {
+            popped.push(m.to_string());
+            let Some(s) = names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) else { continue };
+            for i in &s.imports {
+                // The root is never met: asked for, it is the answer only if
+                // a module of the closure imports it.
+                if i.module == COMMON_MODULE {
+                    met_after.entry(i.module.clone()).or_insert(popped.len());
+                }
+                if seen.insert(&i.module) {
+                    met_after.entry(i.module.clone()).or_insert(popped.len());
+                    stack.push(&i.module);
+                }
+            }
+        }
+        CommonClosure { id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), popped, met_after }
+    }
+
+    /// Note the first `upto` modules of the walk in the record, as the walk
+    /// would have: once per record, since a noted name stays noted.
+    fn note_walk(&self, upto: usize) {
+        QUERIED.with(|q| {
+            let mut q = q.borrow_mut();
+            let Some(set) = q.as_mut() else { return };
+            let record = RECORD.with(|r| r.get());
+            let done = match WALK_NOTED.with(|n| n.get()) {
+                (r, id, done) if r == record && id == self.id => done,
+                _ => 0,
+            };
+            for m in self.popped.iter().take(upto).skip(done) {
+                let last = m.rsplit("::").next().unwrap_or(m);
+                if !set.contains(last) {
+                    set.insert(last.to_string());
+                }
+            }
+            WALK_NOTED.with(|n| n.set((record, self.id, done.max(upto))));
+        });
+    }
 }
 
 /// A callable global's Ψ coordinate and surface parameter metadata.
@@ -235,8 +312,16 @@ pub(crate) enum NameRes {
 /// The key every name table uses: `module::name`. Deliberately the same
 /// string the surface writes for a qualified reference, so a table dump and a
 /// diagnostic read alike.
+///
+/// Built by hand, at its final size: `format!` goes through the formatting
+/// machinery and grows the string as it writes, and every keyed lookup
+/// builds one of these.
 pub(crate) fn qkey(module: &str, name: &str) -> String {
-    format!("{module}::{name}")
+    let mut key = String::with_capacity(module.len() + 2 + name.len());
+    key.push_str(module);
+    key.push_str("::");
+    key.push_str(name);
+    key
 }
 
 /// Split a written reference into its qualifier and base name. `None` for an
@@ -249,8 +334,14 @@ pub(crate) fn qkey(module: &str, name: &str) -> String {
 /// (`Elaborator::key_of_declared_kinds`). The lexer joins a chain as of
 /// 2026-08-17 (`docs/instance-resolved-key-design.md` §5); nothing here had to
 /// move for it.
+///
+/// A byte scan, not `split_once("::")`: a two-byte pattern builds a
+/// `StrSearcher` (the two-way algorithm's preprocessing) per call, which
+/// costs more than reading a name of this length does, and resolution asks
+/// this of every name it keys.
 pub(crate) fn split_qual(name: &str) -> Option<(&str, &str)> {
-    name.split_once("::")
+    let at = name.as_bytes().windows(2).position(|w| w == b"::")?;
+    Some((&name[..at], &name[at + 2..]))
 }
 
 impl NameIndex {
@@ -275,6 +366,7 @@ impl Names {
         Names {
             scope: Scope::new(module),
             tables: Layered::default(),
+            common: std::sync::OnceLock::new(),
         }
     }
 
@@ -332,6 +424,7 @@ impl Names {
             self.tables.current_mut()
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
+            self.common = std::sync::OnceLock::new();
         }
         // Publish aliases only in the visibility index: global coordinates,
         // nominal tags, signatures and proof provenance stay at their origin.
@@ -695,17 +788,53 @@ fn resolve_kinds(
 /// namespace (issues/std-prelude-facade.md,
 /// issues/feature-implicit-module-dependencies.md). Read off the prelude's
 /// own scope, so nothing about it is stored in the importer's.
+///
+/// Asked of every qualified name whose qualifier is not a module the scope
+/// imports, which is every `Type::member`, and for those the answer is no
+/// only after the whole closure has been walked. So the walk is done once
+/// ([`CommonClosure`]) and an asking reads it: whether `module` was met, and
+/// how far the walk had got, which is how many of its modules the asking
+/// notes ([`note`], the early cutoff's account).
 fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
     if scope.module == COMMON_MODULE || !scope.imports_module(COMMON_MODULE) {
         return false;
     }
+    let closure = names.common.get_or_init(|| Rc::new(CommonClosure::walk(names)));
+    #[cfg(debug_assertions)]
+    if crate::readback::sampled() {
+        let (found, popped) = common_walk_per_asking(names, module);
+        let kept = closure.met_after.get(module).copied();
+        assert!(
+            found == kept.is_some() && popped.iter().eq(closure.popped.iter().take(kept.unwrap_or(usize::MAX))),
+            "the kept walk of the prelude's closure is not the walk for `{module}`"
+        );
+    }
+    match closure.met_after.get(module) {
+        Some(&popped) => {
+            closure.note_walk(popped);
+            true
+        }
+        None => {
+            closure.note_walk(closure.popped.len());
+            false
+        }
+    }
+}
+
+/// [`common_reaches`]' walk as it was done per asking, for the debug check
+/// and the tests: the answer, and the modules it popped, each of which it
+/// noted.
+#[cfg(any(debug_assertions, test))]
+fn common_walk_per_asking<'a>(names: &'a Names, module: &str) -> (bool, Vec<&'a str>) {
+    let mut popped: Vec<&str> = Vec::new();
     let mut seen: Vec<&str> = vec![COMMON_MODULE];
     let mut stack: Vec<&str> = vec![COMMON_MODULE];
     while let Some(m) = stack.pop() {
-        let Some(s) = names.module_scope(m) else { continue };
+        popped.push(m);
+        let Some(s) = names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) else { continue };
         for i in &s.imports {
             if i.module == module {
-                return true;
+                return (true, popped);
             }
             if !seen.contains(&i.module.as_str()) {
                 seen.push(&i.module);
@@ -713,7 +842,7 @@ fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
             }
         }
     }
-    false
+    (false, popped)
 }
 
 fn resolve_bare(names: &Names, scope: &Scope, name: &str) -> NameRes {
@@ -815,6 +944,77 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
 #[cfg(test)]
 mod layered_tests {
     use super::*;
+
+    /// `split_qual` is `split_once("::")`, written as a scan: the first `::`
+    /// splits, whatever is around it.
+    #[test]
+    fn a_name_splits_at_its_first_double_colon() {
+        for name in [
+            "", ":", "::", ":::", "a", "a:", "a:b", "a::b", "a::b::c", "::a", "a::", "a:::b",
+            "int::Le::Decide", "naïve::é", "é::naïve::x", "x#1::y", "a: :b",
+        ] {
+            assert_eq!(split_qual(name), name.split_once("::"), "{name:?}");
+        }
+    }
+
+    fn scope(module: &str, imports: &[&str]) -> Scope {
+        Scope {
+            module: module.to_string(),
+            imports: imports
+                .iter()
+                .map(|m| ImportSpec { module: m.to_string(), listed: Vec::new(), exported: Vec::new() })
+                .collect(),
+        }
+    }
+
+    /// The prelude's closure is walked once and read at each asking: the
+    /// answer and the names noted are the per-asking walk's, for a module in
+    /// the closure, one outside it, one never entered and the root; a record
+    /// started later is told again; and entering a scope makes a new walk.
+    #[test]
+    fn the_preludes_closure_is_walked_once_and_reads_as_the_walk() {
+        let mut names = Names::new(DEFAULT_MODULE);
+        // A diamond with a cycle back to the top, a module imported and never
+        // entered, and one the prelude does not reach.
+        names.enter_scope(scope("d", &["b", "ghost"]));
+        names.enter_scope(scope("b", &["d"]));
+        names.enter_scope(scope("c", &["d", "b"]));
+        names.enter_scope(scope("apart", &["d"]));
+        names.enter_scope(scope(COMMON_MODULE, &["b", "c"]));
+        let user = scope("user", &[COMMON_MODULE]);
+        names.enter_scope(user.clone());
+
+        let asked = ["b", "c", "d", "ghost", "apart", "user", COMMON_MODULE, "Nat"];
+        let noted = |names: &Names, module: &str| {
+            record_name_lookups();
+            let found = common_reaches(names, &user, module);
+            (found, take_name_lookups().expect("recording"))
+        };
+        for module in asked {
+            let (found, popped) = common_walk_per_asking(&names, module);
+            let (kept, record) = noted(&names, module);
+            assert_eq!(kept, found, "{module}");
+            assert_eq!(record, popped.iter().map(|m| m.to_string()).collect(), "{module}");
+            // The same record, asked twice, and then for the whole walk.
+            record_name_lookups();
+            assert_eq!(common_reaches(&names, &user, module), found);
+            assert_eq!(common_reaches(&names, &user, module), found);
+            assert!(!common_reaches(&names, &user, "Nat"));
+            let whole = common_walk_per_asking(&names, "Nat").1;
+            assert_eq!(take_name_lookups().expect("recording"), whole.iter().map(|m| m.to_string()).collect());
+        }
+        assert!(common_reaches(&names, &user, "d") && !common_reaches(&names, &user, "apart"));
+        assert!(!common_reaches(&names, &scope("other", &[]), "d"), "a scope that does not import the prelude");
+
+        // A snapshot keeps the walk of its own tables; the registry that
+        // enters a scope walks again.
+        let before = names.clone();
+        names.enter_scope(scope("d", &["b", "ghost", "apart"]));
+        names.enter_scope(user.clone());
+        assert!(common_reaches(&names, &user, "apart"));
+        assert!(!common_reaches(&before, &user, "apart"));
+        assert_eq!(noted(&names, "apart").1, common_walk_per_asking(&names, "apart").1.iter().map(|m| m.to_string()).collect());
+    }
 
     #[test]
     fn semantic_snapshot_seals_modules_and_suffix_mutates_only_an_empty_delta() {

@@ -3,7 +3,7 @@
 //! stack holds one frame per level of — or refuse it — on a thread with an
 //! ordinary stack.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
@@ -40,6 +40,43 @@ fn a_deep_chain_shifts() {
         let c = Rc::new(chain(DEEP, 0));
         let s = c.shift_local(1);
         assert!(s == *c);
+    });
+}
+
+/// A shared tower: `n` pairs, each holding the one below it twice. A tree of
+/// `2^n` leaves, and `n` nodes.
+fn tower(n: usize, leaf: Term) -> Rc<Term> {
+    let mut t = Rc::new(leaf);
+    for _ in 0..n {
+        t = Rc::new(Term::PairAt { ty: None, fst: Rc::clone(&t), snd: Rc::clone(&t) });
+    }
+    t
+}
+
+/// The kernel's re-verification of a skip or of a memo hit is a walk of its
+/// own (`checks::rederive`), and it has to be the walk it checks: flat over a
+/// deep chain, once over a shared node, and absent from the counters. Each
+/// failed once, with every skip verified
+/// (`issues/self-checks-nest.md`): the chain overflowed this
+/// stack, a tower was walked as its tree, and the counts were the checks'.
+#[test]
+fn verifying_every_skip_is_flat_shared_and_uncounted() {
+    use heather_kernel::checks::{set_skip_verification, SkipVerification};
+    on_small_stack(|| {
+        let counted = |level| {
+            set_skip_verification(level);
+            let deep = Rc::new(chain(DEEP, 0));
+            let closed = tower(64, Term::NatLit(1u64.into()));
+            let open = tower(64, Term::Var(heather_kernel::term::LocalVar(0)));
+            let before = heather_kernel::stats::snapshot();
+            assert!(deep.shift_local(1) == *deep);
+            assert!(closed.shift_local(1) == *closed);
+            let _ = open.shift_local(1);
+            heather_kernel::stats::snapshot().since(&before).values()
+        };
+        let unverified = counted(SkipVerification::Off);
+        let verified = counted(SkipVerification::Full);
+        assert_eq!(unverified, verified, "{:?}", heather_kernel::stats::Snapshot::NAMES);
     });
 }
 

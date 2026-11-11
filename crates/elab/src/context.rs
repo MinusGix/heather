@@ -1,6 +1,7 @@
 //! The kernel local context and its parallel surface-level bindings.
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
+use std::sync::Arc;
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -96,7 +97,7 @@ pub(crate) struct Cx {
     /// The codata type of the innermost `match` on codata, while its arms
     /// elaborate — only so an unguarded self-call there can say that codata
     /// has no structural order (docs/codata-elaborator-design.md §4).
-    pub(crate) codata_match: Option<Rc<str>>,
+    pub(crate) codata_match: Option<Arc<str>>,
     /// The `match`es on a parameter, inside the recursion, that were passed
     /// over as case splits (`recursion::guard_param`), each with the guard
     /// that stood through it — only so a self-call that descends neither can

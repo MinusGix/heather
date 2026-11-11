@@ -11,7 +11,7 @@
 //! this file was `transp`'s β and the strip rule, with the head-only strip
 //! gap's negatives (`issues/seq-strip-type-former-negatives.md`, moot now).
 
-use std::sync::Arc as Rc;
+use heather_kernel::rc::Rc;
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
