@@ -195,7 +195,7 @@ impl Printer<'_> {
 /// A source with procedures spells itself `[2]`, its depth after its words
 /// and its procedures after its buffers; one with functions `[3]`, as `[2]`
 /// with its functions before its procedures, each a definition
-/// (`{p}_fn_{k}()`).
+/// (`{p}_fn_{k}()`) and each ending with how many buffers it is lent.
 pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u64, usize)>)>, String> {
     let mut printer = Printer { reader: Reader { numbers, at: 0 }, p, defs: String::new(), count: 0 };
     let tag = printer.reader.next()?;
@@ -211,7 +211,10 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u
             let parameters = printer.reader.ids()?;
             let (body, _) = printer.reader.region()?;
             let result = printer.reader.next()?;
-            printer.defs.push_str(&format!("fn {p}_fn_{k}() → Function {{ Function({parameters}, {body}, {result}) }}\n"));
+            // How many buffers it is lent: said only where it is lent any,
+            // so a program of functions over words is the literal it was.
+            let lent = match printer.reader.next()? { 0 => String::new(), lent => format!(", lent := {lent}") };
+            printer.defs.push_str(&format!("fn {p}_fn_{k}() → Function {{ Function({parameters}, {body}, {result}{lent}) }}\n"));
             functions.push(format!("{p}_fn_{k}()"));
         }
     }

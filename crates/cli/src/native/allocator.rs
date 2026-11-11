@@ -176,6 +176,8 @@ fn main_of(numbers: &[u64]) -> Option<(u64, Stmt)> {
         for _ in 0..r.next()? {
             r.ids()?;
             r.region()?;
+            // Its result, and how many buffers it is lent.
+            r.next()?;
             r.next()?;
         }
         if r.next()? != 0 { return None; }

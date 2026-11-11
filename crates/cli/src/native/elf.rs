@@ -566,8 +566,8 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
         14 => format!("the call of procedure {first} does not fit: no such procedure, other counts of arguments or results than it takes, more than six, a word past the slots, more saved words than slots, or a result not apart from what is live after it"),
         15 => format!("procedure {first} does not compile (`Procedure::code`)"),
-        16 => format!("the call of function {first} does not fit: no such function, another count of arguments than it takes, more than six, or a word past the slots"),
-        17 => "the functions it calls do not link (`Prog::links`): they are not evaluable, or the function compiler refused them with its own placement of their values".into(),
+        16 => format!("the call of function {first} does not fit: no such function, another count of arguments than it takes after the homes of the buffers it is lent, more than six registers with them, a word past the slots, or more buffers lent than the source has"),
+        17 => "the functions it calls do not link (`Prog::links`): they are not evaluable, they are not placeless (an answer could depend on where a lent buffer lies), or the function compiler refused them with its own placement of their values".into(),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

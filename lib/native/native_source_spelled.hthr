@@ -125,11 +125,13 @@ fn List::spell_procedures(self procs: List<Procedure>) → Option<List<Nat>> {
     }
 }
 
-// Each function: its parameters' count and ids, its body, then its result.
+// Each function: its parameters' count and ids, its body, its result, then
+// how many buffers it is lent.
 fn List::spell_functions(self functions: List<Function>) → List<Nat> {
     match functions {
         Nil => [],
-        Cons(f, rest) => List::append(f.parameters.spell_ids(), List::append(f.body.spelled_tagged(), Cons(f.result, rest.spell_functions()))),
+        Cons(f, rest) => List::append(f.parameters.spell_ids(),
+            List::append(f.body.spelled_tagged(), Cons(f.result, Cons(f.lent, rest.spell_functions())))),
     }
 }
 
