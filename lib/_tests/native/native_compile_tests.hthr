@@ -174,9 +174,11 @@ fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)),
 theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
 
 // A part read back is its emission at `Start`: the label name after it,
-// then how many numbers its items are, the items and their lengths.
+// then how many numbers its items are, the items, their lengths and their
+// bytes, a jump's displacement not yet its own.
 theorem exit3_exit_reading(): Exit(0).emission_reading(slotted(exit3()), [], [], 5) =
-    Cons(5, Start.exits(slotted(exit3()), [], 0).reading()) { refl }
+    Cons(5, Start.exits(slotted(exit3()), [], 0).reading() ++ Start.exits(slotted(exit3()), [], 0).unlinked()) { refl }
+theorem unlinked_jump(): At(At(Start, 0, Jmp(7)), 7, Syscall).unlinked() = [233, 251, 255, 255, 255, 15, 5] { refl }
 theorem far_exit_reads_nothing(): Exit(64).emission_reading(slotted(far_exit()), [], [], 0) = [] { refl }
 
 // What a leaf leaves known: each word a constant ends in, newest first, and

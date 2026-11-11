@@ -41,7 +41,7 @@ One four-core cloud box, release binary at #553 plus the name-record fix.
    - build children replaying their imports: [[build-children-replay-their-imports]];
    - name resolution: [[name-resolution-reads-entries-four-times]];
    - the kernel's open performance issues: [[conversion-closed-pairs-across-gates]], [[conv-query-identity-env-per-gamma]], [[instance-match-walks-the-template-twice]].
-3. Native tools in every lane: [[native-tool-compile-attribution]].
+3. Native tools in every lane: [[native-tool-compile-attribution]] (attributed and its largest part fixed the same day: a cold `sort_tool` 67 to 39 s; left: [[native-emission-membership-scans]], [[native-write-elf-join-liveness]], [[native-process-fixed-cost]]).
 4. The serial front of a cold check: [[proof-bodies-on-the-workers]].
 5. The measuring tools: [[timings-instrumentation-cost]], [[bench-probe-cases-stale-2026-11]].
 
