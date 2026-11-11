@@ -150,9 +150,36 @@ theorem under_a_binder_route<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (
     simp_show(List::append_nil)
 }
 
+// A fold's step is crossed one binder at a time
+// (`Pointwise(Pointwise(RelId))`), and each consumer in `list_pointwise`
+// has its evidence.
+theorem under_a_foldr<A>(xs: List<List<A>>): xs.foldr(λ x n => (x ++ Nil).len() + n, 0) = xs.foldr(λ x n => x.len() + n, 0) {
+    simp_only(List::append_nil)
+}
+theorem under_a_foldl<A>(xs: List<List<A>>): xs.foldl(λ n x => n + (x ++ Nil).len(), 0) = xs.foldl(λ n x => n + x.len(), 0) {
+    simp_only(List::append_nil)
+}
+theorem under_any_and_all<A>(xs: List<List<A>>, ys: List<A>):
+    xs.any_bit(λ x => (x ++ Nil).len().leb(ys.len())) && xs.all_bit(λ x => (x ++ Nil).len().leb(ys.len()))
+        = xs.any_bit(λ x => x.len().leb(ys.len())) && xs.all_bit(λ x => x.len().leb(ys.len()))
+{
+    simp_only(List::append_nil)
+}
+theorem under_a_find<A>(xs: List<List<A>>, ys: List<A>): xs.find(λ x => (x ++ Nil).len().leb(ys.len())) = xs.find(λ x => x.len().leb(ys.len())) {
+    simp_only(List::append_nil)
+}
+theorem under_an_update<A>(xs: List<List<A>>): xs.update(2, λ x => x ++ Nil) = xs.update(2, λ x => x) { simp_only(List::append_nil) }
+theorem under_a_split<A>(xs: List<List<A>>): xs.split_by(λ x => (x ++ Nil).non_empty()) = xs.split_by(λ x => x.non_empty()) {
+    simp_only(List::append_nil)
+}
+theorem under_a_foldr_by_defaults<A>(xs: List<List<A>>): xs.foldr(λ x n => (x ++ Nil).len() + n, 0) = xs.foldr(λ x n => x.len() + n, 0) {
+    by simp()
+}
+
 // A consumer with no pointwise evidence is named.
+fn sum_of<A>(xs: List<A>, f: A → Nat) → Nat { xs.foldr(λ x n => f(x) + n, 0) }
 // expect-error: PreservesRelation(Pointwise
-theorem under_a_binder_no_evidence<A>(xs: List<List<A>>): xs.foldr(λ x n => (x ++ Nil).len() + n, 0) = xs.foldr(λ x n => x.len() + n, 0) {
+theorem under_a_binder_no_evidence<A>(xs: List<List<A>>): sum_of(xs, λ x => (x ++ Nil).len()) = sum_of(xs, λ x => x.len()) {
     simp_show(List::append_nil)
 }
 
@@ -350,6 +377,14 @@ theorem below_two_exists<A>(xs, ys: List<A>, w: Exists<A>(λ (a: A) => Exists<A>
     Exists<A>(λ (a: A) => Exists<A>(λ (b: A) => a = b ∧ Mem(b, xs ++ ys)))
 {
     simp_only(List::mem_append_iff, then := w)
+}
+
+// The default sets of a type met only inside an `∃`: the host's view of
+// `Exists(P)` presents `P`, which `by simp()` enters.
+theorem defaults_below_exists<A>(xs, ys: List<A>):
+    Exists(λ (a: A) => Mem(a, xs ++ (ys ++ Nil))) ↔ Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys))
+{
+    by simp()
 }
 
 // expect-error: 1. `List::mem_append_iff`: `Mem(x, xs ++ ys)` ⟶ `Or<Mem(x, xs), Mem(x, ys)>`

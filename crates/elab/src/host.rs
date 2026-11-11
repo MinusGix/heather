@@ -3233,13 +3233,34 @@ impl Host<'_> {
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
-        let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
-        let mut sols = vec![Sol::Unsolved; m as usize];
-        AppUnify(self).unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
-        let solved = crate::unification::zonked(&inline, m, &sols)?;
-        if !self.conv_types(&cx, &solved, ty, level) {
-            return None;
-        }
+        // Spelled applied, `El(C#tycode_fn ā)`, the arguments are read off
+        // the spine: unifying the inline lowering would meet a value
+        // argument applied and uncontracted (`Exists(P)`'s `El(P(witness))`,
+        // a β-redex against the template's `?P(witness)`), and leave it
+        // unsolved.
+        let applied = match ty {
+            Type::El { tm, .. } => match self.gen_app_of(tm) {
+                Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) if tag == ind.tag && args.len() == m as usize => Some(args),
+                _ => None,
+            },
+            _ => None,
+        };
+        let sols = match applied {
+            Some(args) => args.into_iter().map(Sol::Solved).collect::<Vec<_>>(),
+            None => {
+                let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
+                let mut sols = vec![Sol::Unsolved; m as usize];
+                AppUnify(self).unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
+                if sols.iter().any(|s| s.solved().is_none()) {
+                    applied_values(&cx, &inline, ty, m, 0, &mut sols);
+                }
+                let solved = crate::unification::zonked(&inline, m, &sols)?;
+                if !self.conv_types(&cx, &solved, ty, level) {
+                    return None;
+                }
+                sols
+            }
+        };
         let mut handles = Vec::with_capacity(sols.len());
         for (i, sol) in sols.iter().enumerate() {
             let a = sol.solved()?;
@@ -4704,5 +4725,50 @@ fn contract_redexes(ty: &Type) -> Type {
                 _ => t,
             }
         }
+    }
+}
+
+/// A value argument the unifier left unsolved, read where the template
+/// applies it: the template's `El(?j(a))` against the type's `El(F(a))` at
+/// the same position of the lowering, `F` the argument once it mentions no
+/// binder the lowering crossed. `Exists(P)` lowers to
+/// `Σ(tag). Σ(A). Σ(El(P(witness))). Unit` with the predicate applied and
+/// not contracted, which the unifier does not invert. The caller's
+/// conversion check of the template at what was read is the soundness check.
+fn applied_values(cx: &Cx, template: &Type, ty: &Type, m: u32, crossed: u32, sols: &mut [Sol]) {
+    match (template, ty) {
+        (
+            Type::Sigma { fst: a, snd: b, .. },
+            Type::Sigma { fst: c, fst_level, snd: d, .. },
+        )
+        | (
+            Type::Pi { dom: a, cod: b, .. },
+            Type::Pi { dom: c, dom_level: fst_level, cod: d, .. },
+        ) => {
+            applied_values(cx, a, c, m, crossed, sols);
+            let mut below = cx.clone();
+            below.push("_".into(), (**c).clone(), fst_level.clone());
+            applied_values(&below, b, d, m, crossed + 1, sols);
+        }
+        (Type::Sum { lhs: a, rhs: b, .. }, Type::Sum { lhs: c, rhs: d, .. }) => {
+            applied_values(cx, a, c, m, crossed, sols);
+            applied_values(cx, b, d, m, crossed, sols);
+        }
+        (Type::El { tm: t, .. }, Type::El { tm: u, .. }) => {
+            let Some((head, arg)) = crate::spelling::app_of(t) else { return };
+            let Term::GlobalTm { var, .. } = &**head else { return };
+            let Some(j) = var.as_index().filter(|&j| j < m) else { return };
+            if sols[j as usize].solved().is_some() {
+                return;
+            }
+            let Some((fun, at)) = crate::spelling::app_of(u) else { return };
+            if arg != at {
+                return;
+            }
+            if let Some(f) = crate::unification::strengthen_tm(&cx.gamma, fun, crossed) {
+                sols[j as usize] = Sol::Solved(Rc::new(f));
+            }
+        }
+        _ => {}
     }
 }
