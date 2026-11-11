@@ -204,3 +204,20 @@ theorem ctor_indexed_function(m: Nat, S: Keep(m) → Keep(m) → Type, tr: Trans
 // expect-error: changes in 2 of its children
 theorem ctor_both_children(S: Two → Two → Type, tr: Transitive<Two>(S), a, b: Two, h: S(a, b), u: Two, e: S(Node(b, b), u)): S(Node(a, a), u)
 { rewrite(h, e) }
+
+// `rel_cong` under a constructor of a parametric type: the compatibility is
+// registered at the constructor's name, for every element type
+// (issues/rel-cong-under-constructors.md; the closed carrier's probes are in
+// lib/_tests/std/text/regex/regex_dfa_tests.hthr).
+inductive CongTree<A> { CongLeaf(a: A), CongNode(l: CongTree<A>, r: CongTree<A>) }
+fn CongTree::Alike<A>(a, b: CongTree<A>) → Type { a = b }
+instance<A> Reflexive<CongTree<A>>(CongTree::Alike<A>) { rel_refl := λ a => refl }
+instance<A> Respects2<CongTree<A>, CongTree<A>, CongTree<A>>(CongTree::Alike<A>, CongTree::Alike<A>, CongTree::Alike<A>, CongTree::CongNode) {
+    respects2 := λ a a2 sa b b2 sb => subst(sym(sa), subst(sym(sb), refl)),
+}
+theorem cong_under_node<A>(a, a2, b: CongTree<A>, h: CongTree::Alike(a, a2)): CongTree::Alike(CongNode(a, b), CongNode(a2, b)) { rel_cong(h) }
+theorem cong_under_nodes(a, a2, b: CongTree<Nat>, h: CongTree::Alike(a, a2)):
+    CongTree::Alike(CongNode(CongNode(a, b), CongLeaf(3)), CongNode(CongNode(a2, b), CongLeaf(3))) { rel_cong(h) }
+// A leaf's field is an element, not a tree: no context.
+// expect-error: context mismatch
+theorem cong_under_leaf(x, y: Nat, h: CongTree::Alike(CongLeaf(x), CongLeaf(x))): CongTree::Alike(CongLeaf(x), CongLeaf(y)) { rel_cong(h) }
