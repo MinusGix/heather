@@ -1,0 +1,78 @@
+// Probes of `lib/std/data/fintype.hthr` and `lib/std/data/fin.hthr`: finite
+// types' enumerations, cardinalities and quantifiers at closed and open
+// types, and what they refuse. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import fin; import fintype;
+
+// Cardinalities compute, through every instance at once.
+theorem card_bool(): Fintype::card<Bool>() = 2 { refl }
+theorem card_fin(): Fintype::card<Fin(7)>() = 7 { refl }
+theorem card_empty(): Fintype::card<Fin(0)>() = 0 { refl }
+theorem card_mixed(): Fintype::card<Pair<Option<Bool>, Or<Fin(3), Bool>>>() = 15 { refl }
+
+// At a neutral length the count is a theorem, not an evaluation.
+theorem card_fin_open(n: Nat): Fintype::card<Fin(n)>() = n { Fin::len_all(n) }
+
+// expect-error(kernel)
+theorem card_fin_wrong(): Fintype::card<Fin(7)>() = 8 { refl }
+
+// The enumeration's order is fixed: increasing indices, `None` first, the
+// first component outermost.
+theorem fin_order(): Fintype::enumerate<Fin(3)>() = [FZ, FS(FZ), FS(FS(FZ))] { refl }
+theorem pair_order(): Fintype::enumerate<Pair<Bool, Bool>>() = [Pair(False, False), Pair(False, True), Pair(True, False), Pair(True, True)] { refl }
+
+// A closed universal claim, by evaluation: as a Bool, by `decide`, and spent
+// at an open point.
+theorem excluded_middle_bit(): Fintype::all<Bool>(λ b => b || !b) = True { refl }
+theorem excluded_middle(): Fintype::All<Bool>(λ b => b || !b) { decide }
+theorem excluded_middle_at(b: Bool): (b || !b) = True { excluded_middle()(b) }
+theorem excluded_middle_direct(b: Bool): (b || !b) = True { Fintype::all_sound(λ (b: Bool) => b || !b, refl, b) }
+
+// Two variables: a quantifier over the product.
+theorem and_comm_all(): Fintype::All<Pair<Bool, Bool>>(λ q => !(q.fst && q.snd).xor(q.snd && q.fst)) { decide }
+
+// A false universal claim is refuted, and the refutation's witness computes.
+theorem not_all_true(): ¬Fintype::All<Bool>(λ b => b) { decide }
+theorem counterexample(): Fintype::find<Bool>(λ b => !b) = Some(False) { refl }
+
+// expect-error(kernel)
+theorem all_true_wrong(): Fintype::All<Bool>(λ b => b) { decide }
+
+// Existence, with its witness, and its refutation.
+theorem some_index(): Fintype::Any<Fin(4)>(λ i => True) { decide }
+theorem no_index(): ¬Fintype::Any<Fin(0)>(λ i => True) { decide }
+theorem found(): Fintype::find<Option<Bool>>(λ o => match o { None => False, Some(b) => b }) = Some(Some(True)) { refl }
+theorem not_found(): Fintype::find<Fin(3)>(λ i => False) = None { refl }
+
+// An enum is an instance by its constructor list; the evidence is one
+// `refl` per constructor and one refuted equation per pair.
+inductive Color { Red, Green, Blue }
+
+instance Fintype<Color> {
+    elems := [Red, Green, Blue],
+    complete := λ c => match c { Red => Inl(refl), Green => Inr(Inl(refl)), Blue => Inr(Inr(Inl(refl))) },
+    nodup := And(λ m => match m { Inl(e) => absurd(e), Inr(m) => match m { Inl(e) => absurd(e), Inr(m) => m } },
+        And(λ m => match m { Inl(e) => absurd(e), Inr(m) => m }, And(λ m => m, trivial))),
+}
+
+fn Color::warm(self c: Color) → Bool { match c { Red => True, Green => False, Blue => False } }
+
+theorem card_color_pairs(): Fintype::card<Pair<Color, Color>>() = 9 { refl }
+theorem some_warm(): Fintype::Any<Color>(λ c => c.warm()) { decide }
+theorem not_all_warm(): ¬Fintype::All<Color>(λ c => c.warm()) { decide }
+
+// A list that repeats an element is no enumeration.
+inductive One { U }
+
+// expect-error(kernel)
+instance Fintype<One> { elems := [U, U], complete := λ c => match c { U => Inl(refl) }, nodup := And(λ m => m, And(λ m => m, trivial)) }
+
+// At an open finite type: the quantifiers' soundness is generic, and an
+// instance's enumeration is complete and duplicate-free.
+theorem all_spent<A: Fintype>(p: A → Bool, h: Fintype::all<A>(p) = True, a: A): p(a) = True { Fintype::all_sound(p, h, a) }
+theorem option_complete<A: Fintype>(o: Option<A>): Mem(o, Fintype::enumerate<Option<A>>()) { Fintype::complete_of(o) }
+theorem pair_nodup<A: Fintype, B: Fintype>(): Fintype::enumerate<Pair<A, B>>().NoDup() { Fintype::nodup_of<Pair<A, B>>() }
+
+// `Fin`'s constructors, at a neutral length.
+theorem succ_apart(n: Nat, a, b: Fin(n), e: Fin::succ(a) = Fin::succ(b)): a = b { Fin::succ_inj(a, b, e) }
+theorem zero_apart(n: Nat, a: Fin(n)): ¬(FZ = Fin::succ(a)) { Fin::zero_ne_succ(a) }

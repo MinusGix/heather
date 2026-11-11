@@ -1,0 +1,150 @@
+// Finite types: a type with a duplicate-free list of all its elements
+// (issues/finite-types-and-enumeration.md).
+//
+// The class carries the list, not a bijection with `Fin(n)`: the list is what
+// a quantifier folds over and what a sum ranges over, and its length is the
+// cardinality (issues/finite-cardinality-and-pigeonhole.md proves that
+// independent of the list chosen).
+//
+// A claim over every element is decided by evaluation. `Fintype::all<A>(p)`
+// is one Bool, so a closed claim is `Fintype::all_sound(p, refl)`, or
+// `decide` at the goal `Fintype::All<A>(p)`, which unfolds to
+// `(a: A) → p(a) = True`. The refuting directions compute a counterexample.
+// A predicate that is not a Bool enters through its decision's bit,
+// `λ a => decide_bit<P(a)>()`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import fin;
+
+class Fintype<A> { elems: List<A>, complete: (a: A) → Mem(a, elems), nodup: elems.NoDup() }
+
+// The two quantifiers as Bools, and the cardinality.
+fn Fintype::all<A: Fintype>(p: A → Bool) → Bool { A.elems.all_bit(p) }
+fn Fintype::any<A: Fintype>(p: A → Bool) → Bool { A.elems.any_bit(p) }
+fn Fintype::card<A: Fintype>() → Nat { A.elems.len() }
+
+// The enumeration by the type's name, where no dictionary is in reach, and
+// the first element a predicate holds of: the witness of a closed search, or
+// with `!p` the counterexample to a closed claim.
+fn Fintype::enumerate<A: Fintype>() → List<A> { A.elems }
+fn Fintype::find<A: Fintype>(p: A → Bool) → Option<A> { A.elems.find(p) }
+
+theorem Fintype::complete_of<A: Fintype>(a: A): Mem(a, Fintype::enumerate<A>()) { A.complete(a) }
+theorem Fintype::nodup_of<A: Fintype>(): Fintype::enumerate<A>().NoDup() { A.nodup }
+
+theorem Fintype::find_sound<A: Fintype>(p: A → Bool, a: A, h: Fintype::find<A>(p) = Some(a)): p(a) = True {
+    A.elems.find_sound(p, a, h).right
+}
+
+theorem Fintype::find_none<A: Fintype>(p: A → Bool, h: Fintype::find<A>(p) = None): (a: A) → p(a) = False {
+    λ a => A.elems.find_none(p, h, a, A.complete(a))
+}
+
+theorem Fintype::all_sound<A: Fintype>(p: A → Bool, h: Fintype::all<A>(p) = True): (a: A) → p(a) = True {
+    λ a => A.elems.all_bit_sound(p, h, a, A.complete(a))
+}
+
+theorem Fintype::all_refute<A: Fintype>(p: A → Bool, h: Fintype::all<A>(p) = False): Exists(λ (a: A) => p(a) = False) {
+    match A.elems.all_bit_refute(p, h) { Exists(a, w) => Exists(a, w.right) }
+}
+
+theorem Fintype::any_sound<A: Fintype>(p: A → Bool, h: Fintype::any<A>(p) = True): Exists(λ (a: A) => p(a) = True) {
+    match A.elems.any_bit_sound(p, h) { Exists(a, w) => Exists(a, w.right) }
+}
+
+theorem Fintype::any_refute<A: Fintype>(p: A → Bool, h: Fintype::any<A>(p) = False): (a: A) → p(a) = False {
+    λ a => A.elems.any_bit_refute(p, h, a, A.complete(a))
+}
+
+// ---------------------------------------------------------------------------
+// Instances. A sum of two types is `Or`, a product is `Pair`.
+
+instance Fintype<Bool> {
+    elems := [False, True],
+    complete := λ b => match b { False => Inl(refl), True => Inr(Inl(refl)) },
+    nodup := And(λ m => match m { Inl(e) => absurd(e), Inr(n) => n }, And(λ m => m, trivial)),
+}
+
+instance Fintype<True> { elems := [trivial], complete := λ u => Inl(refl), nodup := And(λ m => m, trivial) }
+
+instance Fintype<False> { elems := [], complete := λ u => match u {}, nodup := trivial }
+
+instance(n: Nat) Fintype<Fin(n)> { elems := Fin::all(n), complete := Fin::all_complete(n), nodup := Fin::all_nodup(n) }
+
+instance<A: Fintype> Fintype<Option<A>> {
+    elems := Cons(None, A.elems.map(λ (a: A) => Some(a))),
+    complete := λ o => match o {
+        None => Inl(refl),
+        Some(a) => Inr(A.elems.mem_map(a, λ (a: A) => Some(a), A.complete(a))),
+    },
+    nodup := And(
+        λ m => match A.elems.mem_map_inv(λ (a: A) => Some(a), None, m) {
+            Exists(a, w) => Option::none_ne_some(a, sym(w.right), False),
+        },
+        A.elems.nodup_map(λ (a: A) => Some(a), λ a b e => Option::some_inj(a, b, e), A.nodup)),
+}
+
+instance<A: Fintype, B: Fintype> Fintype<Pair<A, B>> {
+    elems := A.elems.product(B.elems),
+    complete := λ q => match q { Pair(a, b) => A.elems.mem_product(B.elems, a, b, A.complete(a), B.complete(b)) },
+    nodup := A.elems.nodup_product(B.elems, A.nodup, B.nodup),
+}
+
+instance<A: Fintype, B: Fintype> Fintype<Or<A, B>> {
+    elems := A.elems.map(λ (a: A) => Inl<A, B>(a)) ++ B.elems.map(λ (b: B) => Inr<A, B>(b)),
+    complete := λ s => match s {
+        Inl(a) => (A.elems.map(λ (a: A) => Inl<A, B>(a))).mem_append_l(B.elems.map(λ (b: B) => Inr<A, B>(b)), Inl(a),
+            A.elems.mem_map(a, λ (a: A) => Inl<A, B>(a), A.complete(a))),
+        Inr(b) => (A.elems.map(λ (a: A) => Inl<A, B>(a))).mem_append_r(B.elems.map(λ (b: B) => Inr<A, B>(b)), Inr(b),
+            B.elems.mem_map(b, λ (b: B) => Inr<A, B>(b), B.complete(b))),
+    },
+    nodup := (A.elems.map(λ (a: A) => Inl<A, B>(a))).nodup_append(B.elems.map(λ (b: B) => Inr<A, B>(b)),
+        λ s ml mr => match A.elems.mem_map_inv(λ (a: A) => Inl<A, B>(a), s, ml) {
+            Exists(a, wa) => match B.elems.mem_map_inv(λ (b: B) => Inr<A, B>(b), s, mr) {
+                Exists(b, wb) => Or::inl_ne_inr(a, b, trans(wa.right, sym(wb.right))),
+            },
+        },
+        A.elems.nodup_map(λ (a: A) => Inl<A, B>(a), λ a1 a2 e => Or::inl_inj(a1, a2, e), A.nodup),
+        B.elems.nodup_map(λ (b: B) => Inr<A, B>(b), λ b1 b2 e => Or::inr_inj(b1, b2, e), B.nodup)),
+}
+
+// ---------------------------------------------------------------------------
+// The quantifiers as propositions with decisions. `All` and `Any` are type
+// formers so that `Decide` has a carrier to key on: a bare `(a: A) → …` has
+// none (issues/decide-at-dependent-function-carrier.md).
+
+fn Fintype::All<A>(p: A → Bool) → Type { (a: A) → p(a) = True }
+fn Fintype::Any<A>(p: A → Bool) → Type { Exists(λ (a: A) => p(a) = True) }
+
+fn Fintype::all_dec<A: Fintype>(p: A → Bool) → Fintype::All<A>(p) ∨ ¬Fintype::All<A>(p) {
+    match h: Fintype::all<A>(p) {
+        True => Inl(Fintype::all_sound(p, h)),
+        False => Inr(λ f => match Fintype::all_refute(p, h) { Exists(a, w) => absurd(trans(sym(f(a)), w)) }),
+    }
+}
+
+instance<A: Fintype>(p: A → Bool) Decide<Fintype::All<A>(p)> {
+    dec := Fintype::all_dec(p),
+    bit := Fintype::all<A>(p),
+    reflects := And(λ e => Fintype::all_sound(p, e),
+        λ e => λ f => match Fintype::all_refute(p, e) { Exists(a, w) => absurd(trans(sym(f(a)), w)) }),
+}
+
+fn Fintype::any_dec<A: Fintype>(p: A → Bool) → Fintype::Any<A>(p) ∨ ¬Fintype::Any<A>(p) {
+    match h: Fintype::any<A>(p) {
+        True => Inl(Fintype::any_sound(p, h)),
+        False => Inr(λ w => absurd(trans(sym(w.proof), Fintype::any_refute(p, h, w.witness)))),
+    }
+}
+
+instance<A: Fintype>(p: A → Bool) Decide<Fintype::Any<A>(p)> {
+    dec := Fintype::any_dec(p),
+    bit := Fintype::any<A>(p),
+    reflects := And(λ e => Fintype::any_sound(p, e),
+        λ e => λ w => absurd(trans(sym(w.proof), Fintype::any_refute(p, e, w.witness)))),
+}

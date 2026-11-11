@@ -1,0 +1,59 @@
+// `BitVec(n)` as a finite type: all `2^n` words of a width, the head bit
+// outermost and `False` first (issues/finite-types-and-enumeration.md). A
+// claim over every byte is then one evaluation,
+// `Fintype::All<BitVec(8)>(p)` by `decide`.
+//
+// A word is its head bit on its tail by conversion (the vector's η), so
+// completeness and the constructors' injectivity need no lemma about bits.
+
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import fintype;
+
+fn BitVec::all(n: Nat) → List<BitVec(n)> {
+    match n {
+        Zero => [BitVec::nil()],
+        Succ(k) => BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x))
+            ++ BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x)),
+    }
+}
+
+theorem BitVec::all_complete(n: Nat): (x: BitVec(n)) → Mem(x, BitVec::all(n)) {
+    match n {
+        Zero => λ x => Inl(refl),
+        Succ(k) => λ x => (match hd: x.head_bit() {
+            False => (BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(False, y))).mem_append_l(
+                BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(True, y)), x,
+                j(hd, λ c q => Mem(x, BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(c, y))),
+                    BitVec::all(k).mem_map(x.tail_bits(), λ (y: BitVec(k)) => BitVec::cons_bit(x.head_bit(), y), BitVec::all_complete(k, x.tail_bits())))),
+            True => (BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(False, y))).mem_append_r(
+                BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(True, y)), x,
+                j(hd, λ c q => Mem(x, BitVec::all(k).map(λ (y: BitVec(k)) => BitVec::cons_bit(c, y))),
+                    BitVec::all(k).mem_map(x.tail_bits(), λ (y: BitVec(k)) => BitVec::cons_bit(x.head_bit(), y), BitVec::all_complete(k, x.tail_bits())))),
+        }),
+    }
+}
+
+theorem BitVec::cons_bit_inj(n: Nat, b: Bool, x, y: BitVec(n), e: BitVec::cons_bit(b, x) = BitVec::cons_bit(b, y)): x = y {
+    cong_fn(λ (w: BitVec(Succ(n))) => w.tail_bits(), e)
+}
+
+theorem BitVec::all_nodup(n: Nat): BitVec::all(n).NoDup() {
+    match n {
+        Zero => And(λ m => m, trivial),
+        Succ(k) => (BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x))).nodup_append(
+            BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x)),
+            λ w ml mr => match BitVec::all(k).mem_map_inv(λ (x: BitVec(k)) => BitVec::cons_bit(False, x), w, ml) {
+                Exists(_, wx) => match BitVec::all(k).mem_map_inv(λ (x: BitVec(k)) => BitVec::cons_bit(True, x), w, mr) {
+                    Exists(_, wy) => absurd(cong_fn(λ (v: BitVec(Succ(k))) => v.head_bit(), trans(wx.right, sym(wy.right)))),
+                },
+            },
+            BitVec::all(k).nodup_map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x), λ x y e => BitVec::cons_bit_inj(k, False, x, y, e), BitVec::all_nodup(k)),
+            BitVec::all(k).nodup_map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x), λ x y e => BitVec::cons_bit_inj(k, True, x, y, e), BitVec::all_nodup(k))),
+    }
+}
+
+instance(n: Nat) Fintype<BitVec(n)> { elems := BitVec::all(n), complete := BitVec::all_complete(n), nodup := BitVec::all_nodup(n) }

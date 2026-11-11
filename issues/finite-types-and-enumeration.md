@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,finite]
 area: mathematics
 milestone: [math-finite]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 From the foundational-mathematics ranking Minus accepted on 2026-11-10
@@ -43,3 +43,11 @@ literal `n` by `decide`, with no enumeration lemma of its own, and
 - **[[automation-lemma-registries]]** owns how a new instance reaches
   tactics. Assumed here: nothing yet; instances are ordinary class
   instances.
+
+## Log
+
+- 2026-11-11: Round 1 built. `lib/std/data/fintype.hthr`: `class Fintype<A> { elems, complete, nodup }` (the name `Finite` is the floats'), `Fintype::all`/`any`/`find`/`card` as evaluating functions with soundness and refutation both ways, and the propositions `Fintype::All<A>(p)`/`Any<A>(p)` with `Decide` instances, so a closed claim is `decide` or `Fintype::all_sound(p, refl)`. Instances: `Bool`, `True`, `False`, `Fin(n)`, `Option`, `Pair`, `Or` (the sum). `lib/std/data/fin.hthr` is new: `Fin::succ`, injectivity and apartness of the constructors, `Fin::all` with completeness, `NoDup` and its length. `list.hthr` gained `mem_map_inv`, `NoDup` with `nodup_map`/`nodup_append`, `all_bit`/`any_bit`/`find` with their laws, and `product`; `logic.hthr` gained `Or`'s injectivity and apartness.
+
+  Elaborator change this needed: `Fin` had no carrier name, so `instance(n: Nat) C<Fin(n)>` and `fn Fin::f` were refused. `Fin` is now a constant carrier as `Nat` is (`head_name`, `names_a_type`, `carrier_of_ty`). Only the unreduced former answers: a `Fin` type already reduced to its sum has no namespace.
+
+  Not built, with owners: `decide` on a bare `(a: A) → …` goal ([[decide-at-dependent-function-carrier]]); enum instances by `derive`, since a generator cannot build a `match` ([[derive-fintype-for-enums]]; a hand instance is three lines and is probed). Words are an instance at every width (`lib/std/bitvec/bitvec_fintype.hthr`, `Fintype<BitVec(n)>`, head bit outermost): a word is its head bit on its tail by the vector's η, so completeness needed no bit lemma. What remains of this issue's scope is only the enum instances, owned by the derive issue.

@@ -62,6 +62,7 @@ impl Elaborator {
         self.lookup_inductive(name).is_some()
             || self.lookup_member(name).is_some()
             || name == "Nat"
+            || name == "Fin"
             || name == "Type"
             || name == "True"
     }
@@ -151,6 +152,12 @@ impl Elaborator {
     pub(crate) fn carrier_of_ty(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Carrier> {
         if matches!(ty, Type::Nat) {
             return Some(Carrier::constant("Nat"));
+        }
+        // `Fin(n)` as written, before any reduction: its whnf at a literal
+        // length is a sum or `Empty`, which no namespace owns, so only the
+        // unreduced former answers (`i.succ()` at `i: Fin(n)`).
+        if matches!(ty, Type::Fin { .. }) {
+            return Some(Carrier::constant("Fin"));
         }
         if let Some(c) = self.member_carrier(ty) {
             return Some(c);
