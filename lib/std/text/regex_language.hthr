@@ -21,6 +21,10 @@ import option;
 import char;
 import string;
 import tactic;
+import relation;
+import relation_props;
+import algebra_rel;
+import algebra;
 import regex;
 
 // Every word of `ws` is in the language `P`.

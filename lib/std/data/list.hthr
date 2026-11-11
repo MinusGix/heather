@@ -1441,11 +1441,6 @@ theorem List::collision_sound<A, B: DecEq>(self xs: List<A>, f: A → B, q: Pair
     }
 }
 
-// The lists of a list, one after another.
-fn List::concat<A>(self xss: List<List<A>>) → List<A> {
-    match xss { Nil => Nil, Cons(h, t) => h ++ t.concat() }
-}
-
 // Only two empty lists append to the empty list.
 theorem List::append_nil_parts<A>(self u: List<A>): (v: List<A>) → u ++ v = Nil → u = Nil ∧ v = Nil {
     match u {

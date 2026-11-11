@@ -5,7 +5,7 @@
 // back to the matcher. Tests, not library: nothing imports this module
 // (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
-import regex; import regex_language;
+import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language;
 
 // `(a|b)*` over the codes 97 and 98.
 fn ab_star() → Regex { Star(Alt(Range(97, 97), Range(98, 98))) }

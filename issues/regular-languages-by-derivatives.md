@@ -52,8 +52,8 @@ cites the derivative automaton's language theorem for its soundness.
   correctness is one theorem. Membership decides by running the matcher
   (`denotes_dec`, a `Decide` instance, `matches_refutes`), a `regex def`'s
   Boolean is membership (`accepts_iff`), and `deriv_word_denotes` restates
-  the derivative at a word. `list.hthr` gains `List::concat` and
-  `append_nil_parts`. Probes in
+  the derivative at a word. `list.hthr` gains `append_nil_parts`; the pieces are joined by
+  `algebra.hthr`'s `concat`. Probes in
   `lib/_tests/std/text/regex_language_tests.hthr`.
 
   Kept `Regex` at `Nat` codes instead of a `Regex<A>`: the generator, the
