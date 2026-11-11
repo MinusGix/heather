@@ -886,9 +886,10 @@ fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
 // native-one-compiler-design.md §2.3): buffer `k` of the file is the `k`th
 // it is lent, its address and its capacity immediates in the block that
 // carries R10, since a file's buffers lie where the layout says and are as
-// long as their capacities. A function lent none is called as before.
-// The call of a function lent `lent` buffers: their homes take the first
-// two registers a buffer, and the words the registers after them.
+// long as their capacities. The homes take the first two registers a
+// buffer and the words the registers after them. A function lent none is
+// called as before. `call_lent` is the call at a count of lent buffers
+// computed once.
 fn Prog::call_lent(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat, lent: Nat) → Prog {
     let framed = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)));
     let passed = framed.words_to(layout, arguments, call_registers().drop(2 * lent));
