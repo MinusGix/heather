@@ -23,6 +23,7 @@ use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo, InstKey};
 use crate::{pool, stats, ElabError, Elaborator, R};
 use crate::module_image::same_proof;
+use crate::module_pass::ModulePassMut;
 
 /// Ordered dependency-interface identities supplied by the module loader.
 /// The digest algorithm lives outside the elaborator; these stable bytes are
@@ -486,7 +487,23 @@ impl Deltas<'_> {
     }
 }
 
-impl Elaborator {
+/// Module deltas' part of the elaborator that writes: replaying and rechecking a delta's declarations.
+pub(crate) struct DeltasMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for DeltasMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for DeltasMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl DeltasMut<'_> {
     pub(crate) fn semantic_commit_name(&mut self, name: &str, kind: NameKind) {
         Deltas(self).record_module_event(|| DeltaEvent::Name {
             name: name.to_string(),
@@ -690,7 +707,9 @@ impl Elaborator {
         });
         self.meta_programs.commit(module, name, slot, definition);
     }
+}
 
+impl Elaborator {
     /// Elaborate a whole module atomically and return its logical semantic
     /// delta. A later item failure rolls back successful items before it.
     pub fn elab_module_delta(
@@ -812,7 +831,9 @@ impl Elaborator {
         let plan = self.pass.slice_plan.take().expect("the slice plan was installed");
         result.map(|delta| (delta, plan.report, plan.met))
     }
+}
 
+impl DeltasMut<'_> {
     /// Is any of `names` (an item's name, or a group's members' names) one
     /// the plan forces from source? Records the ones it met.
     pub(crate) fn slice_forced(&mut self, names: &[String]) -> bool {
@@ -873,7 +894,7 @@ impl Deltas<'_> {
     }
 }
 
-impl Elaborator {
+impl DeltasMut<'_> {
     /// Close the slice an item opened with [`Self::slice_begin`], after
     /// everything the item contributes (its derived instances included) has
     /// landed, and keep the plan's `exact` flag honest: it means the prefix
@@ -1072,7 +1093,9 @@ impl Elaborator {
         }));
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Check a whole module with the ordinary diagnostic-recovery policy and,
     /// when every item succeeds, return the same logical delta as
     /// [`Self::elab_module_delta`].
@@ -1095,7 +1118,7 @@ impl Elaborator {
         let base_len = dependency_psi.bindings.len();
         *self.pass.module_journal.borrow_mut() =
             Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
-        let errs = self.check_module_source_inner(module, src);
+        let errs = ModulePassMut(self).check_module_source_inner(module, src);
         let journal = self
             .pass.module_journal
             .borrow_mut()
@@ -1127,7 +1150,7 @@ impl Elaborator {
         let base_len = dependency_psi.bindings.len();
         *self.pass.module_journal.borrow_mut() =
             Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
-        let errs = self.check_module_source_inner(module, src);
+        let errs = ModulePassMut(self).check_module_source_inner(module, src);
         let journal = self
             .pass.module_journal
             .borrow_mut()
@@ -1184,7 +1207,7 @@ impl Elaborator {
             (Some(g), Some(key)) if g.admits_replay(key) => {}
             _ => {
                 let mut clean = true;
-                self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
+                DeltasMut(self).recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
                 if let (Some(g), Some(key), true) = (&gate, replay, clean) {
                     g.replay_accepted(key);
                 }
@@ -1202,14 +1225,16 @@ impl Elaborator {
             Deltas(&candidate).preflight_module_event(event)?;
         }
         for event in delta.events.iter().cloned() {
-            candidate.apply_module_event(event);
+            DeltasMut(&mut candidate).apply_module_event(event);
         }
         candidate.refresh_delta_psi();
         self.committed = candidate.committed;
         self.memos.clear_positional();
         Ok(())
     }
+}
 
+impl DeltasMut<'_> {
     /// `⊢_L Ψ, Ψ'` for the stored suffix — the kernel recheck of a replayed
     /// module, on the kernel worker pool when the elaborator has one, and
     /// through the installed gate oracle when there is one.
@@ -1325,7 +1350,7 @@ impl Elaborator {
                     } else {
                         // Its seals are known only at the join.
                         *clean = false;
-                        self.pass.kernel_pool.submit(pool::Deferred {
+                        self.0.pass.kernel_pool.submit(pool::Deferred {
                             name: name.clone(),
                             span: heather_syntax::Span { start: 0, end: 0 },
                             psi: Rc::clone(&prefix),
@@ -1336,7 +1361,7 @@ impl Elaborator {
                             opaque: false,
                             layer: item.layer,
                             lands_in_psi: true,
-                            fuel: self.policy.fuel,
+                            fuel: self.0.policy.fuel,
                             unsealed: Vec::new(),
                             row: None,
                         });
@@ -1565,12 +1590,12 @@ mod tests {
         // the live journal at the snapshot's lengths.
         let mut e = Elaborator::new();
         *e.pass.module_journal.borrow_mut() = Some(ModuleJournal::new(0, 0));
-        e.semantic_commit_name("before", NameKind::Global);
+        DeltasMut(&mut e).semantic_commit_name("before", NameKind::Global);
         let snapshot = e.clone();
         let mut probe = e.clone();
         assert!(probe.pass.module_journal.borrow().is_none());
-        probe.semantic_commit_name("probed", NameKind::Global);
-        e.semantic_commit_name("failed", NameKind::Global);
+        DeltasMut(&mut probe).semantic_commit_name("probed", NameKind::Global);
+        DeltasMut(&mut e).semantic_commit_name("failed", NameKind::Global);
         assert_eq!(e.pass.module_journal.borrow().as_ref().unwrap().events.len(), 2);
         e.restore_from_clone(snapshot);
         let journal = e.pass.module_journal.borrow();

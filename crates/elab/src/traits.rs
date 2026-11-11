@@ -28,6 +28,8 @@ use crate::resolve::DerivedInst;
 use crate::{ElabError, Elaborator, R, err};
 use crate::dispatch::Carriers;
 use crate::declarations::Declarations;
+use crate::module_delta::DeltasMut;
+use crate::declarations::DeclarationsMut;
 
 /// A declared class: the record it is, plus what `extends` and the instance
 /// assembler need to know about it.
@@ -1513,7 +1515,23 @@ impl std::ops::Deref for Classes<'_> {
     }
 }
 
-impl Elaborator {
+/// Classes' part of the elaborator that writes: class, instance and designation declarations.
+pub(crate) struct ClassesMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for ClassesMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for ClassesMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl ClassesMut<'_> {
     // -- classes ------------------------------------------------------------
 
     /// `class C<p⃗> extends … { f⃗ }` — the record, then the registry entry
@@ -1816,10 +1834,12 @@ impl Elaborator {
             owner,
         };
         let key = qkey(self.names.module(), &d.name);
-        self.semantic_commit_class(key, info);
+        DeltasMut(self).semantic_commit_class(key, info);
         Ok(())
     }
+}
 
+impl Elaborator {
     /// A carrier head as the registry keys it: the **declaration** the head
     /// names, qualified (`docs/instance-resolved-key-design.md` §3).
     ///
@@ -2410,7 +2430,7 @@ impl Classes<'_> {
     }
 }
 
-impl Elaborator {
+impl ClassesMut<'_> {
     /// Inline constraints that **share a symbol at one carrier** become one
     /// constraint at a synthesized class extending them all
     /// (issues/constraints-sharing-indices.md).
@@ -2991,7 +3011,7 @@ impl Classes<'_> {
     }
 }
 
-impl Elaborator {
+impl ClassesMut<'_> {
     // -- designations -------------------------------------------------------
 
     /// `designation + at Nat := add`
@@ -3092,10 +3112,12 @@ impl Elaborator {
             );
         }
         let info = DesignationInfo { op, written, carrier: head };
-        self.semantic_commit_designation(key, info);
+        DeltasMut(self).semantic_commit_designation(key, info);
         Ok(())
     }
+}
 
+impl Elaborator {
     /// The operation `sym` designates at the carrier `head_key`, if any. The
     /// whole of the designation table's read side.
     ///
@@ -3121,7 +3143,7 @@ impl Classes<'_> {
     }
 }
 
-impl Elaborator {
+impl ClassesMut<'_> {
     // -- instances ----------------------------------------------------------
 
     /// `instance C<T⃗> { … }` (design §4).
@@ -3132,7 +3154,7 @@ impl Elaborator {
     /// them behind. `Elaborator` is cheaply clonable exactly so that this kind
     /// of speculative work is expressible (`lib.rs`, the `Clone` note).
     pub(crate) fn elab_instance(&mut self, d: &InstanceDecl) -> R<()> {
-        let snapshot = self.clone();
+        let snapshot = self.0.clone();
         let r = self.elab_instance_inner(d);
         if r.is_err() {
             // Through `restore_from_clone`, never `*self = snapshot`: the
@@ -3390,7 +3412,7 @@ impl Elaborator {
                     body: m.body.clone(),
                     span: m.span,
                 };
-                self.elab_decl_unowned(&decl)?;
+                DeclarationsMut(self).elab_decl_unowned(&decl)?;
                 // Only *after* it lands does the name become visible to the
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
@@ -3407,7 +3429,7 @@ impl Elaborator {
         r?;
         let global = qkey(self.names.module(), &prefix);
         let info = InstanceInfo { global, written, index, parameterized };
-        self.semantic_commit_instance(key, info);
+        DeltasMut(self).semantic_commit_instance(key, info);
         Ok(())
     }
 
@@ -3872,7 +3894,7 @@ impl Elaborator {
                 index: aindex,
                 parameterized,
             };
-            self.semantic_commit_instance(key, info);
+            DeltasMut(self).semantic_commit_instance(key, info);
         }
         Ok(())
     }
@@ -4248,7 +4270,7 @@ impl Classes<'_> {
     }
 }
 
-impl Elaborator {
+impl ClassesMut<'_> {
     /// One synthesized declaration carrying the instance's own telescope.
     fn synth_decl(
         &mut self,
@@ -4275,6 +4297,6 @@ impl Elaborator {
             body: body_of(body),
             span,
         };
-        self.elab_decl_unowned(&decl)
+        DeclarationsMut(self).elab_decl_unowned(&decl)
     }
 }

@@ -302,7 +302,23 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
 /// is one more predecessor a course-of-values window reads.
 const MAX_SPLIT_DEPTH: usize = 5;
 
-impl Elaborator {
+/// Meaning checks' part of the elaborator that writes.
+pub(crate) struct MeaningMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for MeaningMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for MeaningMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl MeaningMut<'_> {
     /// Check that the just-committed structural `fn` `decl`, whose recursion
     /// descended on the parameters `decs` (type parameters counted first),
     /// unfolds to its source, without registering anything.

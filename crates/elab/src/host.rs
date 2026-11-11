@@ -78,6 +78,7 @@ use crate::gendefs::GeneratedDefs;
 use crate::inductive::Inductives;
 use crate::app_unify::AppUnify;
 use crate::inference::Inference;
+use crate::traits::ClassesMut;
 
 /// Fuel for **one force** of the tree's value graph — the kernel's own
 /// default, deliberately not a bespoke larger one. Each force runs on the
@@ -4078,7 +4079,23 @@ impl Host<'_> {
     }
 }
 
-impl Elaborator {
+/// The host interface's part of the elaborator that writes: prefixed and tactic declarations.
+pub(crate) struct HostMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for HostMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for HostMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl HostMut<'_> {
     /// `generate g(args);`: run the generator `g(args)`, a
     /// `tactic::Tac<List<tactic::Decl>>`, at the module's empty context,
     /// and publish the declarations it ends with, every one of them or none
@@ -4102,7 +4119,7 @@ impl Elaborator {
     fn publish_members(&mut self, members: &[Member], psi: usize, label: &str, span: Span) -> R<()> {
         self.session_transaction(|me| {
             for m in members {
-                me.publish_member(m, psi, span).map_err(|e| match e {
+                HostMut(me).publish_member(m, psi, span).map_err(|e| match e {
                     crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
                         msg: format!("`{label}`: the generated `{}` was refused: {msg}", m.name),
                         span,
@@ -4246,7 +4263,7 @@ impl Elaborator {
                     p.span,
                 );
             }
-            me.publish_members(&members, psi, &label, p.span)
+            HostMut(me).publish_members(&members, psi, &label, p.span)
         })
     }
 }
@@ -4353,7 +4370,7 @@ impl Host<'_> {
     }
 }
 
-impl Elaborator {
+impl HostMut<'_> {
     /// Elaborate one generated declaration from its skeleton (see
     /// [`Self::elab_generate`]).
     fn publish_member(&mut self, m: &Member, psi: usize, span: Span) -> R<()> {
@@ -4472,7 +4489,7 @@ impl Elaborator {
             span,
         };
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_instance(&decl))
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| ClassesMut(me).elab_instance(&decl))
     }
 }
 

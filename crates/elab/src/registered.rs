@@ -18,6 +18,7 @@ use heather_syntax::ast::{Block, Expr, ExprKind, Stmt, Ty, TyKind};
 
 use crate::{err, Cx, Elaborator, R};
 use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
 
 /// The names `Lookup` answers without a declaration (host.rs).
 const BUILTIN_NAMES: &[&str] = &["Nat", "Succ", "True", "False"];
@@ -82,7 +83,7 @@ impl Elaborator {
         if self.traits.is_registered(&key) {
             return err(format!("`{}` is already registered", d.name), d.span);
         }
-        self.semantic_commit_registered(ty_key, key);
+        DeltasMut(self).semantic_commit_registered(ty_key, key);
         Ok(())
     }
 }

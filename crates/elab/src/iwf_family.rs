@@ -49,6 +49,7 @@ use crate::iwf_w::IwfW;
 use crate::mutual_family::MutualFamily;
 use crate::gendefs::GeneratedDefs;
 use crate::inductive::Inductives;
+use crate::codata::CodataMut;
 
 /// The two spellings of an `IWf`-route family: the kernel's finitary
 /// `IWf(sig)(m)`, or, for a family with a recursive function field, the
@@ -370,7 +371,23 @@ impl IwfFamily<'_> {
     }
 }
 
-impl Elaborator {
+/// Indexed W families' part of the elaborator that writes: registering a signature.
+pub(crate) struct IwfFamilyMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for IwfFamilyMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for IwfFamilyMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl IwfFamilyMut<'_> {
     // -- the named signature (docs/iwf-named-signature-design.md) -----------
 
     /// `D#iarity`, `D#iout` and `D#ichild` at declaration time: the inline
@@ -411,7 +428,7 @@ impl Elaborator {
             dom: Rc::clone(&sig.shape),
             body: Rc::clone(&sig.arity),
         };
-        if !self.push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
             return;
         }
         // The pieces built before a push name committed definitions only, so
@@ -428,7 +445,7 @@ impl Elaborator {
             dom: Rc::clone(&sig.shape),
             body: Rc::clone(&sig.out),
         };
-        if !self.push_m_def(GenDef::IOut(ind.tag), ind, &tel, out_stmt, lvl(&l, &li), out_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IOut(ind.tag), ind, &tel, out_stmt, lvl(&l, &li), out_body, span) {
             return;
         }
         // `Fin(D#iarity ā x)` over `(tel, x)`, minted now.
@@ -455,7 +472,7 @@ impl Elaborator {
                 body: Rc::clone(&sig.child),
             }),
         };
-        if !self.push_m_def(GenDef::IChild(ind.tag), ind, &tel, child_stmt, lvl(&l, &li), child_body, span) {
+        if !CodataMut(self).push_m_def(GenDef::IChild(ind.tag), ind, &tel, child_stmt, lvl(&l, &li), child_body, span) {
             return;
         }
         // `dnth` over the children tuple, at the named signature built now: in
@@ -489,7 +506,7 @@ impl Elaborator {
                 body: Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: fl.clone(), dom: fin, body: Rc::new(nth) }),
             }),
         };
-        let _ = self.push_m_def(GenDef::IDnth(ind.tag), ind, &tel, stmt, lvl(&l, &fl), body, span);
+        let _ = CodataMut(self).push_m_def(GenDef::IDnth(ind.tag), ind, &tel, stmt, lvl(&l, &fl), body, span);
     }
 }
 

@@ -30,6 +30,7 @@ use crate::{Cx, ElabError, Elaborator, oracle, stats};
 use crate::gendefs::GeneratedDefs;
 use crate::app_unify::AppUnify;
 use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
 
 /// How deep backchaining may go before it refuses. Declaration-time
 /// structural decrease (design §6) is what makes this unreachable; the cap is
@@ -252,7 +253,23 @@ impl Resolution<'_> {
     }
 }
 
-impl Elaborator {
+/// Instance resolution's part of the elaborator that writes: registering evidence.
+pub(crate) struct ResolutionMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for ResolutionMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for ResolutionMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl ResolutionMut<'_> {
     /// Register a checked `evidence theorem`: key it by its conclusion's
     /// relation and check that backchaining through it terminates.
     ///
@@ -333,10 +350,12 @@ impl Elaborator {
         if self.traits.has_evidence(&key) {
             return refuse(format!("`{}` is already an evidence rule", decl.name));
         }
-        self.semantic_commit_evidence(crate::traits::EvidenceRule { global: key, relation, heads });
+        DeltasMut(self).semantic_commit_evidence(crate::traits::EvidenceRule { global: key, relation, heads });
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Resolve one goal, or explain in `tr` why not.
     ///
     /// `display` is what the diagnostic calls the goal (the parameter's
@@ -1596,7 +1615,7 @@ impl Resolution<'_> {
     }
 }
 
-impl Elaborator {
+impl ResolutionMut<'_> {
     /// Mint one open derivation ([`Self::record_open`]): `ty` is the closed
     /// `Π prefix. goal` and `body` the λ over the same binders.
     fn mint_open(&mut self, ty: &Type, lvl: &Level, body: &Term, head: Option<&str>) {
@@ -1630,7 +1649,7 @@ impl Elaborator {
             at: abs,
             head: head.map(str::to_string),
         };
-        self.semantic_commit_derived(derived);
+        DeltasMut(self).semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
 }
@@ -1708,7 +1727,7 @@ impl Resolution<'_> {
     }
 }
 
-impl Elaborator {
+impl ResolutionMut<'_> {
     /// May `body : ty` be minted at the end of Ψ? The gate's pair, a closed
     /// statement in the empty context and the body against it, asked through
     /// the gate's oracle as every other bodied binding's is (`gate.rs`). So a
@@ -1831,7 +1850,7 @@ impl Elaborator {
             at: abs,
             head: prefer.map(str::to_string),
         };
-        self.semantic_commit_derived(derived);
+        DeltasMut(self).semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
 }

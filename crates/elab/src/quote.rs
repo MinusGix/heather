@@ -31,6 +31,8 @@ use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
 use crate::statements::LetValue;
 use crate::{Alias, Cx, ElabError, Elaborator, MetaDef, R, err};
 use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
+use crate::module_pass::ModulePassMut;
 
 /// One binder of a `meta fn`'s signature, in written order.
 ///
@@ -137,7 +139,23 @@ impl std::ops::Deref for Quotation<'_> {
     }
 }
 
-impl Elaborator {
+/// Quotation's part of the elaborator that writes: meta declarations.
+pub(crate) struct QuotationMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for QuotationMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for QuotationMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl QuotationMut<'_> {
     /// A `meta fn` declaration (docs/in-language-map-design.md §3): elaborate
     /// the modal signature and quotation body, kernel-check the whole thing
     /// at `Layer::Meta`, and commit it to the meta-program registry.
@@ -145,7 +163,7 @@ impl Elaborator {
         debug_assert_eq!(decl.kind, DeclKind::Fn);
         // The oracle padding is the declaration's own, and must not outlive
         // it, error or not.
-        self.scoped(|s| s.meta_pushed.get_mut(), Vec::new(), |me| me.elab_meta_decl_inner(decl))
+        self.scoped(|s| s.meta_pushed.get_mut(), Vec::new(), |me| QuotationMut(me).elab_meta_decl_inner(decl))
     }
 }
 
@@ -301,7 +319,7 @@ impl Quotation<'_> {
     }
 }
 
-impl Elaborator {
+impl QuotationMut<'_> {
     fn elab_meta_decl_inner(&mut self, decl: &Decl) -> R<()> {
         if NameLookup(self).own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
@@ -360,7 +378,7 @@ impl Elaborator {
         let body = self.elab_check(&cx, &decl.body.result, &result_ty, &result_lvl)?;
         // As in an ordinary block: a value no splice used still faces the
         // gate (`statements.rs`).
-        let body = LetValue::discard_around(self, &cx, values, body, &result_ty, &result_lvl);
+        let body = LetValue::discard_around(self.0, &cx, values, body, &result_ty, &result_lvl);
 
         let (stmt, lvl) = Quotation::close_meta_ty(&sig, result_ty, result_lvl.clone());
         let term = Quotation::close_meta_term(&sig, body, result_lvl);
@@ -439,7 +457,7 @@ impl Elaborator {
             .unwrap_or((None, Vec::new()));
         let module = self.names.module().to_string();
         let psi_len = self.psi.bindings.len() as u32;
-        self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
+        ModulePassMut(self).declare_name(&decl.name, NameKind::Meta, decl.span)?;
         let name = decl.name.clone();
         let definition = MetaDef {
             term: Rc::new(term),
@@ -447,7 +465,7 @@ impl Elaborator {
             psi_len,
             order,
         };
-        self.semantic_commit_meta(module, name, slot, definition);
+        DeltasMut(self).semantic_commit_meta(module, name, slot, definition);
         Ok(())
     }
 }

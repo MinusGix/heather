@@ -46,6 +46,7 @@ pub(crate) use upto::{Free, FriendMode};
 use crate::infinitary::Infinitary;
 use crate::gendefs::GeneratedDefs;
 use crate::inductive::Inductives;
+use crate::gendefs::GeneratedDefsMut;
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -959,7 +960,23 @@ impl Codata<'_> {
     }
 }
 
-impl Elaborator {
+/// Codata's part of the elaborator that writes: registering an M signature.
+pub(crate) struct CodataMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for CodataMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for CodataMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl CodataMut<'_> {
     // -- the named signature (docs/codata-named-signature-design.md) -----------
 
     /// `D#mshape`, `D#mpos` and (indexed) `D#mnext` at declaration time: the
@@ -1074,7 +1091,7 @@ impl Elaborator {
             ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), cod: Rc::new(ty) };
             level = Level::max(dom_level.clone(), level);
         }
-        self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok()
+        GeneratedDefsMut(self).push_gen_def(key, &ind.name, ty, level, body, span).is_ok()
     }
 }
 

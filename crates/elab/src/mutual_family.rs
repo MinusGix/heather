@@ -32,6 +32,7 @@ use crate::{Cx, Elaborator, R, err};
 use crate::iwf_family::IwfFamily;
 use crate::inductive::Inductives;
 use crate::name_lookup::NameLookup;
+use crate::inductive::InductivesMut;
 
 /// The generated family's name (§2).
 pub(crate) fn family_name(first: &str) -> String {
@@ -169,7 +170,7 @@ impl Elaborator {
         let members_decl = members_decl(first, &heads);
         self.elab_inductive(&members_decl)?;
         let (family, members) = family_decl(first, &heads)?;
-        self.elab_inductive_members(&family, members)?;
+        InductivesMut(self).elab_inductive_members(&family, members)?;
         for d in decls {
             self.add_name(&d.name, NameKind::Inductive);
         }

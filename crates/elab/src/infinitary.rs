@@ -32,6 +32,7 @@ use crate::spelling::checked_app;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 use crate::gendefs::GeneratedDefs;
 use crate::inductive::Inductives;
+use crate::gendefs::GeneratedDefsMut;
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -576,7 +577,7 @@ impl Elaborator {
             };
             ty_level = Level::max(dom_level.clone(), ty_level);
         }
-        let _ = self.push_gen_def(key, &ind.name, ty, ty_level, body, span);
+        let _ = GeneratedDefsMut(self).push_gen_def(key, &ind.name, ty, ty_level, body, span);
     }
 }
 

@@ -3,6 +3,7 @@
 use crate::*;
 use heather_syntax::{Block, Stmt};
 use crate::declarations::Declarations;
+use crate::module_pass::ModulePassMut;
 
 /// Measure contexts' part of the elaborator.
 pub(crate) struct MeasureContext<'e>(pub(crate) &'e Elaborator);
@@ -63,7 +64,7 @@ impl MeasureContext<'_> {
         trial.result = goal.clone();
         trial.body = body;
         let mut query = self.0.clone();
-        query.serially(|q| q.elab_decl_one(&trial, None)).ok()?;
+        ModulePassMut(&mut query).serially(|q| q.elab_decl_one(&trial, None)).ok()?;
         Some(proof)
     }
 

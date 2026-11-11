@@ -47,6 +47,8 @@ use crate::layered::{Layer as RegistryLayer, Layered, index_hash};
 use crate::indexed::IndexedFamilies;
 use crate::inductive::Inductives;
 use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
+use crate::iwf_family::IwfFamilyMut;
 
 /// The key of a machine-named definition. Keys are **nominal**: a declaration
 /// tag plus, where the device is per-constructor, its position. That is what
@@ -1345,7 +1347,23 @@ impl std::ops::Deref for GeneratedDefs<'_> {
     }
 }
 
-impl Elaborator {
+/// Generated definitions' part of the elaborator that writes: registering what a declaration generates.
+pub(crate) struct GeneratedDefsMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for GeneratedDefsMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for GeneratedDefsMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
+impl GeneratedDefsMut<'_> {
     // -- registration -------------------------------------------------------
 
     /// Register everything `ind` owes, at its declaration. Errors are
@@ -1386,7 +1404,7 @@ impl Elaborator {
             let iind = Rc::clone(iind);
             self.register_idx_code(&iind, span);
         }
-        self.register_iwf_sig(ind, span);
+        IwfFamilyMut(self).register_iwf_sig(ind, span);
     }
 
     /// `I#icode := ⌜⟦I⟧⌝`, the index type's code (design §1.1). Best-effort:
@@ -1514,7 +1532,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone(), at);
+            DeltasMut(self).semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone(), at);
         }
     }
 
@@ -1546,7 +1564,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
             .is_ok()
         {
-            self.semantic_commit_gen_ty_code_fn(
+            DeltasMut(self).semantic_commit_gen_ty_code_fn(
                 ind.tag,
                 TyCodeFn {
                     template: Rc::new(template),
@@ -1775,7 +1793,7 @@ impl GeneratedDefs<'_> {
     }
 }
 
-impl Elaborator {
+impl GeneratedDefsMut<'_> {
     /// `D#payloadₖ := ⌜⟦cₖ⟧⌝` per constructor and `D#suffixₖ :=
     /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a declaration's
     /// sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`) — for a
@@ -1860,7 +1878,7 @@ impl Elaborator {
             .ok()?;
         }
         let whole = sum_body(self, 0)?;
-        self.semantic_commit_gen_spine_codes(
+        DeltasMut(self).semantic_commit_gen_spine_codes(
             ind.tag,
             SpineCodes {
                 ctors: spine.ctors,
@@ -2211,7 +2229,7 @@ impl GeneratedDefs<'_> {
     }
 }
 
-impl Elaborator {
+impl GeneratedDefsMut<'_> {
     /// `D#famⱼ := λ(v : ⟦D⟧). λ(x : Fⱼ). ⌜Sⱼ⌝`, the Σ tail family at spine
     /// entry `j`, and the annotation that stands for `Sⱼ` afterwards:
     /// `El (D#famⱼ^δ v x)`, scoped in `·, v, x` exactly as `Sⱼ` was.
@@ -2455,7 +2473,7 @@ impl GeneratedDefs<'_> {
     }
 }
 
-impl Elaborator {
+impl GeneratedDefsMut<'_> {
     /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
     /// **recursive** declaration whose lowering is `Wf(x : S). n`
     /// (`docs/wf-shape-code-design.md` §2.1). Runs off `register_ty_code`'s own
@@ -2547,7 +2565,7 @@ impl Elaborator {
                 level: l.clone(),
                 tm: Rc::new(scode),
             });
-            self.semantic_commit_gen_wf_slots(
+            DeltasMut(self).semantic_commit_gen_wf_slots(
                 ind.tag,
                 WfSlots {
                     shape: Rc::clone(shape),
@@ -4052,7 +4070,7 @@ impl GeneratedDefs<'_> {
     }
 }
 
-impl Elaborator {
+impl GeneratedDefsMut<'_> {
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
     /// Only an **unparameterized** declaration gets one, for
     /// [`Elaborator::register_ty_code`]'s reason: the family's branches mention the
@@ -4072,7 +4090,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, level, body, span)
             .is_ok()
         {
-            self.semantic_commit_gen_fam_levels(ind.tag, l, ilvl);
+            DeltasMut(self).semantic_commit_gen_fam_levels(ind.tag, l, ilvl);
         }
     }
 
@@ -4209,7 +4227,7 @@ impl Elaborator {
             Rc::new(body),
         ));
         match key {
-            Some(key) => self.semantic_commit_gen_def(key, abs),
+            Some(key) => DeltasMut(self).semantic_commit_gen_def(key, abs),
             // A mint has no recognizer key: nothing reads it back by identity,
             // and the binding itself travels in the module's Ψ suffix like any
             // other (`module_delta.rs`'s `extension`).
@@ -4218,7 +4236,9 @@ impl Elaborator {
         self.refresh_delta_psi();
         Ok(())
     }
+}
 
+impl Elaborator {
     // -- reference and read-back --------------------------------------------
 
     /// `u^·` for a registered definition. `None` when the definition was not

@@ -50,6 +50,9 @@ use crate::gendefs::GeneratedDefs;
 use crate::checking::Checking;
 use crate::mismatch_notes::MismatchNotes;
 use crate::name_lookup::NameLookup;
+use crate::module_delta::DeltasMut;
+use crate::codata::CodataMut;
+use crate::gendefs::GeneratedDefsMut;
 
 type Equation = (Term, Type, Level, Rc<Term>, Rc<Term>);
 type CtorEquation = (
@@ -1019,6 +1022,22 @@ impl std::ops::Deref for Inductives<'_> {
     }
 }
 
+/// Inductive types' part of the elaborator that writes: declaring a family and its members.
+pub(crate) struct InductivesMut<'e>(pub(crate) &'e mut Elaborator);
+
+impl std::ops::Deref for InductivesMut<'_> {
+    type Target = Elaborator;
+    fn deref(&self) -> &Elaborator {
+        self.0
+    }
+}
+
+impl std::ops::DerefMut for InductivesMut<'_> {
+    fn deref_mut(&mut self) -> &mut Elaborator {
+        self.0
+    }
+}
+
 impl Elaborator {
     // -- declaration --------------------------------------------------------
 
@@ -1026,9 +1045,11 @@ impl Elaborator {
     /// and assign its nominal tag. Nothing is emitted here — an inductive has
     /// no kernel counterpart of its own; it is lowered at each use (§2).
     pub(crate) fn elab_inductive(&mut self, d: &InductiveDecl) -> R<()> {
-        self.elab_inductive_members(d, Vec::new())
+        InductivesMut(self).elab_inductive_members(d, Vec::new())
     }
+}
 
+impl InductivesMut<'_> {
     /// [`Self::elab_inductive`] for a mutual group's family, which carries
     /// its members (docs/mutual-inductive-design.md §2). Empty `members` is
     /// an ordinary declaration.
@@ -1564,7 +1585,7 @@ impl Elaborator {
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.
         let module = self.names.module().to_string();
-        self.semantic_commit_inductive(module, Rc::clone(&ind));
+        DeltasMut(self).semantic_commit_inductive(module, Rc::clone(&ind));
         if let Some(skeleton) = &ind.skel {
             self.add_name(&skeleton.name, NameKind::Inductive);
         }
@@ -1586,9 +1607,9 @@ impl Elaborator {
             // The signature's shape, positions and child index
             // (docs/codata-named-signature-design.md): `⟦D⟧` is an `M` over
             // references to them, and nothing else is named.
-            self.register_m_sig(&ind, d.span);
+            CodataMut(self).register_m_sig(&ind, d.span);
         } else {
-            self.register_gen_defs(&ind, d.span);
+            GeneratedDefsMut(self).register_gen_defs(&ind, d.span);
         }
         Ok(())
     }

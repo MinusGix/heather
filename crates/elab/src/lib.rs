@@ -98,6 +98,7 @@ use heather_syntax::{
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod access;
+mod module_pass;
 mod app_unify;
 mod refusals;
 mod inference;
@@ -294,6 +295,16 @@ use crate::mismatch_notes::MismatchNotes;
 use crate::inference::Inference;
 use crate::refusals::Refusals;
 use crate::app_unify::AppUnify;
+use crate::module_delta::DeltasMut;
+use crate::traits::ClassesMut;
+use crate::datarepr::DataReprMut;
+use crate::host::HostMut;
+use crate::interfaces::InterfaceDefsMut;
+use crate::meaning::MeaningMut;
+use crate::quote::QuotationMut;
+use crate::resolve::ResolutionMut;
+use crate::declarations::DeclarationsMut;
+use crate::module_pass::ModulePassMut;
 
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
@@ -2370,7 +2381,9 @@ impl Elaborator {
     pub fn elab_generated_source(&mut self, src: &str) -> R<()> {
         self.session_transaction(|me| me.generated_mode(|me| me.elab_source(src)))
     }
+}
 
+impl ModulePassMut<'_> {
     /// [`Self::elab_source`] into a named module. The elaborator does no file
     /// IO: an `import m;` here requires that `m` has *already* been elaborated
     /// into this same accumulator, which is exactly what the CLI's topological
@@ -2450,7 +2463,7 @@ impl Elaborator {
                         GroupKind::Structural => {
                             self.session_transaction(|me| me.elab_structural_group(&members))
                         }
-                        _ => self.session_transaction(|me| me.elab_measure_group(&members)),
+                        _ => self.session_transaction(|me| DeclarationsMut(me).elab_measure_group(&members)),
                     }
                 }
                 Some(_) => Ok(()),
@@ -2478,17 +2491,19 @@ impl Elaborator {
                 Some(_) => Ok(()),
                 None => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
             },
-            Item::Class(c) => stats::timed(stats::Timer::Lower, || self.elab_class(c)),
-            Item::Instance(i) => stats::timed(stats::Timer::Lower, || self.elab_instance(i)),
-            Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
-            Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
-            Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
-            Item::Generate(g) => self.elab_generate(g),
-            Item::Prefixed(p) => self.elab_prefixed(p),
+            Item::Class(c) => stats::timed(stats::Timer::Lower, || ClassesMut(self).elab_class(c)),
+            Item::Instance(i) => stats::timed(stats::Timer::Lower, || ClassesMut(self).elab_instance(i)),
+            Item::Designation(d) => stats::timed(stats::Timer::Lower, || ClassesMut(self).elab_designation(d)),
+            Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || DataReprMut(self).elab_datarepr(d)),
+            Item::Impl(i) => stats::timed(stats::Timer::Lower, || DataReprMut(self).elab_impl(i)),
+            Item::Generate(g) => HostMut(self).elab_generate(g),
+            Item::Prefixed(p) => HostMut(self).elab_prefixed(p),
             Item::Import(_) => Ok(()),
         }
     }
+}
 
+impl Elaborator {
     /// Elaborate a module, kernel-checking every declaration.
     ///
     /// A module's answer never depends on the worker count
@@ -2500,18 +2515,20 @@ impl Elaborator {
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
         let mut deferred_failed = false;
         if self.gate_is_inline() {
-            return self.elab_module_pass(module, src, &mut deferred_failed);
+            return ModulePassMut(self).elab_module_pass(module, src, &mut deferred_failed);
         }
         self.pass.kernel_replay.clear();
         let mark = self.module_pass_checkpoint();
-        let parallel = self.elab_module_pass(module, src, &mut deferred_failed);
+        let parallel = ModulePassMut(self).elab_module_pass(module, src, &mut deferred_failed);
         if !deferred_failed {
             return parallel;
         }
         self.restore_module_pass(mark);
-        self.serially(|me| me.elab_module_pass(module, src, &mut false))
+        ModulePassMut(self).serially(|me| me.elab_module_pass(module, src, &mut false))
     }
+}
 
+impl ModulePassMut<'_> {
     /// Run `f` with the kernel gate inline, restoring the configured width
     /// afterwards. The pool is quiescent at both ends: the fallback is entered
     /// only after a join, and the inline pass queues nothing.
@@ -2543,7 +2560,7 @@ impl Elaborator {
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.policy.lint_profile);
         self.enter_module(module, &file)?;
-        self.slice_enter(module);
+        DeltasMut(self).slice_enter(module);
         let plan = self.begin_container(&file);
         for (idx, item) in file.items.iter().enumerate() {
             let name = item_timing_name(item);
@@ -2565,12 +2582,12 @@ impl Elaborator {
             // `--only` names items that elaborate from source however exact
             // the prefix is (`docs/check-only-design.md`); a group is named
             // through any member.
-            let forced = self.slice_forced(&slice_names(&file, idx, &plan));
+            let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
-                    self.slice_end(mark, slice_source, slice_start, true, unsealing.finish());
+                    DeltasMut(self).slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
                 continue;
             }
@@ -2586,11 +2603,11 @@ impl Elaborator {
                 self.pass.warnings.borrow_mut().truncate(warn_mark);
                 self.pass.omega_reports.borrow_mut().truncate(omega_mark);
             } else {
-                self.mint_pending();
+                ResolutionMut(self).mint_pending();
                 stats::timed(stats::Timer::Lint, || NameLookup(self).run_source_lints(item, &lint_source));
                 if let Some(mark) = slice_mark {
-                    self.slice_elaborated();
-                    self.slice_end(mark, slice_source, slice_start, false, unsealing.finish());
+                    DeltasMut(self).slice_elaborated();
+                    DeltasMut(self).slice_end(mark, slice_source, slice_start, false, unsealing.finish());
                 }
             }
             #[cfg(feature = "value-metrics")]
@@ -2758,7 +2775,9 @@ impl Elaborator {
         }
         Ok(())
     }
+}
 
+impl Elaborator {
     // -- name resolution (docs/modules-design.md §4) -------------------------
 
     /// Resolve a written name to the module that declares it, by the §4
@@ -3216,9 +3235,11 @@ impl Elaborator {
     /// registration time — after the kernel gate — so that the index and the
     /// tables land together.
     pub(crate) fn add_name(&mut self, name: &str, kind: NameKind) {
-        self.semantic_commit_name(name, kind);
+        DeltasMut(self).semantic_commit_name(name, kind);
     }
+}
 
+impl ModulePassMut<'_> {
     /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
     /// register in one step.
     fn declare_name(&mut self, name: &str, kind: NameKind, span: Span) -> R<()> {
@@ -3226,7 +3247,9 @@ impl Elaborator {
         self.add_name(name, kind);
         Ok(())
     }
+}
 
+impl Elaborator {
     /// Check a whole file, recovering per declaration: a failed declaration
     /// registers nothing (globals and Ψ are touched only after the kernel
     /// gate), so the rest of the file still checks against everything that
@@ -3341,9 +3364,11 @@ impl Elaborator {
     /// broken reports that and checks nothing: there is no recovery point
     /// before the scope exists.
     pub fn check_module_source(&mut self, module: &str, src: &str) -> Vec<ElabError> {
-        self.check_module_source_inner(module, src)
+        ModulePassMut(self).check_module_source_inner(module, src)
     }
+}
 
+impl ModulePassMut<'_> {
     pub(crate) fn check_module_source_inner(&mut self, module: &str, src: &str) -> Vec<ElabError> {
         let mut deferred_failed = false;
         if self.gate_is_inline() {
@@ -3379,7 +3404,7 @@ impl Elaborator {
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
-        self.slice_enter(module);
+        DeltasMut(self).slice_enter(module);
         let plan = self.begin_container(&file);
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
@@ -3408,12 +3433,12 @@ impl Elaborator {
             // `--only` names items that elaborate from source however exact
             // the prefix is (`docs/check-only-design.md`); a group is named
             // through any member.
-            let forced = self.slice_forced(&slice_names(&file, idx, &plan));
+            let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
-                    self.slice_end(mark, slice_source, slice_start, true, unsealing.finish());
+                    DeltasMut(self).slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
                 #[cfg(feature = "value-metrics")]
                 if let Some(metrics) = &self.policy.value_metrics {
@@ -3432,13 +3457,13 @@ impl Elaborator {
                 // §4: a failed item's warnings are as speculative as the rest
                 // of it — it registers nothing, and it says nothing.
                 self.pass.warnings.borrow_mut().truncate(warn_mark);
-                self.slice_failed();
+                DeltasMut(self).slice_failed();
             } else {
-                self.mint_pending();
+                ResolutionMut(self).mint_pending();
                 stats::timed(stats::Timer::Lint, || NameLookup(self).run_source_lints(item, &lint_source));
                 if let Some(mark) = slice_mark {
-                    self.slice_elaborated();
-                    self.slice_end(mark, slice_source, slice_start, false, unsealing.finish());
+                    DeltasMut(self).slice_elaborated();
+                    DeltasMut(self).slice_end(mark, slice_source, slice_start, false, unsealing.finish());
                 }
             }
             if let Err(e) = r {
@@ -3465,7 +3490,9 @@ impl Elaborator {
         }
         errs
     }
+}
 
+impl Elaborator {
     /// The canonical derived instances minted so far, in mint order
     /// (docs/traits-layer2-design.md §8) — one per *derivation*, not per use
     /// site, which is the coherence invariant this table is.
@@ -3727,9 +3754,11 @@ impl Elaborator {
     /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
         let owner = decl.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
-        self.elab_decl_as(decl, owner)
+        DeclarationsMut(self).elab_decl_as(decl, owner)
     }
+}
 
+impl DeclarationsMut<'_> {
     /// A declaration an `instance` synthesizes: its qualified name is the
     /// instance's, not a member of a type or function, so its body names no
     /// siblings (docs/sections-design.md §6).
@@ -3738,7 +3767,7 @@ impl Elaborator {
     }
 
     fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
-        self.scoped(|s| &mut s.member_owner, owner, |me| me.elab_decl_owned(decl))
+        self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_decl_owned(decl))
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
@@ -3760,7 +3789,7 @@ impl Elaborator {
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
         if decl.is_meta {
-            return self.elab_meta_decl(decl);
+            return QuotationMut(self).elab_meta_decl(decl);
         }
         // An `evidence theorem` is an ordinary theorem, registered for
         // `:= infer` once it has passed its gate
@@ -3768,7 +3797,7 @@ impl Elaborator {
         if decl.is_evidence {
             Resolution(self).evidence_shape(decl)?;
             self.elab_decl_one(decl, None)?;
-            return self.register_evidence(decl);
+            return ResolutionMut(self).register_evidence(decl);
         }
         // An `interface fn` is elaborated as the `fn` it is, then registered,
         // with its unfolding equations beside it
@@ -3778,9 +3807,9 @@ impl Elaborator {
             let mut plain = decl.clone();
             plain.is_interface = false;
             return self.session_transaction(|me| {
-                me.elab_decl_owned(&plain)?;
-                let equations = me.interface_equations(decl)?;
-                me.register_interface(decl, equations)
+                DeclarationsMut(me).elab_decl_owned(&plain)?;
+                let equations = InterfaceDefsMut(me).interface_equations(decl)?;
+                InterfaceDefsMut(me).register_interface(decl, equations)
             });
         }
         // `decreases e` is not one declaration but a family of them
@@ -3792,13 +3821,13 @@ impl Elaborator {
         // `partial fn` is the family of crates/elab/src/partial.rs: its body
         // over the carrier of its own calls, and `f` as `CoTree::rec` of it.
         if decl.partial.is_some() {
-            return self.session_transaction(|me| me.elab_partial_decl(decl));
+            return self.session_transaction(|me| DeclarationsMut(me).elab_partial_decl(decl));
         }
         if loops::has_loop(decl) {
-            return self.session_transaction(|me| me.elab_loop_decl(decl));
+            return self.session_transaction(|me| DeclarationsMut(me).elab_loop_decl(decl));
         }
         if decl.decreases.is_some() {
-            return self.session_transaction(|me| me.elab_measure_decl(decl));
+            return self.session_transaction(|me| DeclarationsMut(me).elab_measure_decl(decl));
         }
         // A `fn` whose structural lowering would not mean its source is
         // lowered by measure, or refused where that has no unfolding equation
@@ -3832,7 +3861,7 @@ impl Elaborator {
                 && Declarations(self).at_top_candidate(decl, dec)
                 && self.try_recursion_at_top(decl, dec, TopAttempt::Default)
             {
-                return self.check_recursion_meaning(decl);
+                return MeaningMut(self).check_recursion_meaning(decl);
             }
             match plan {
                 recursion::RecursionPlan::Structural => {}
@@ -3841,7 +3870,7 @@ impl Elaborator {
                     // elaborates, and unfolds by conversion; the measure is
                     // the fallback (docs/recursion-at-the-top-design.md §4).
                     if Declarations(self).at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
-                        return self.check_recursion_meaning(decl);
+                        return MeaningMut(self).check_recursion_meaning(decl);
                     }
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
                 }
@@ -3891,7 +3920,7 @@ impl Declarations<'_> {
     }
 }
 
-impl Elaborator {
+impl DeclarationsMut<'_> {
     /// Elaborate `decl` by `elaborate`; where that refuses a self-call (a
     /// structural refusal: the call does not descend at the guard the
     /// lowering chose), try each explicit `Nat` parameter at the top before
@@ -3915,7 +3944,7 @@ impl Elaborator {
         let first = decl.tyvars.len();
         for dec in first..first + decl.params.len() {
             if Declarations(self).at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
-                return self.check_recursion_meaning(decl);
+                return MeaningMut(self).check_recursion_meaning(decl);
             }
         }
         Err(error)
@@ -4073,12 +4102,12 @@ impl Declarations<'_> {
     }
 }
 
-impl Elaborator {
+impl DeclarationsMut<'_> {
     /// A `fn` the planner lowers structurally, then checked to mean its
     /// source (issues/recursion-meaning-check.md).
     fn elab_structural_fn(&mut self, decl: &Decl) -> R<()> {
         self.elab_decl_one(decl, None)?;
-        self.check_recursion_meaning(decl)
+        MeaningMut(self).check_recursion_meaning(decl)
     }
 
     /// A `fn` whose recursive `match` reads its own parameter, lowered as if
@@ -4177,7 +4206,7 @@ impl Elaborator {
         by_measure.decreases = Some(measure);
         // The source wrote no `decreases`: a refusal that names it says why
         // the declaration is under one, and what keeps it structural.
-        self.session_transaction(|me| me.elab_measure_decl(&by_measure)).map_err(|e| match e {
+        self.session_transaction(|me| DeclarationsMut(me).elab_measure_decl(&by_measure)).map_err(|e| match e {
             ElabError::Elab { msg, span } if msg.contains("under `decreases`") => ElabError::Elab {
                 msg: format!(
                     "{msg}\n(`{fname}` is compiled as if declared `decreases` because {what}; \
@@ -4189,7 +4218,9 @@ impl Elaborator {
             other => other,
         })
     }
+}
 
+impl Elaborator {
     /// One ordinary declaration, with `obligations` the measure-obligation
     /// table to reword errors through where this declaration was generated by
     /// [`measure`] (`None` for source declarations).
@@ -4198,7 +4229,7 @@ impl Elaborator {
         // of a synthesized class, made here — between items, where Ψ may
         // grow — before the declaration's own attempts begin
         // (issues/constraints-sharing-indices.md).
-        let merged = self.merge_linked_constraints(decl)?;
+        let merged = ClassesMut(self).merge_linked_constraints(decl)?;
         let decl = merged.as_ref().unwrap_or(decl);
         let warn_mark = self.pass.warnings.borrow().len();
         let mut reserved = 0;
@@ -4206,7 +4237,7 @@ impl Elaborator {
         let r = loop {
             self.attempt.prepare();
             self.pass.pending_derived.borrow_mut().clear();
-            let r = self.check_decl(decl, reserved);
+            let r = DeclarationsMut(self).check_decl(decl, reserved);
             let requested = self.attempt.goal_arena.take_requested_base();
             if requested <= reserved {
                 break r;
@@ -4223,7 +4254,7 @@ impl Elaborator {
         self.refresh_delta_psi();
         match r {
             Ok(pending) => {
-                self.commit_decl(pending);
+                DeclarationsMut(self).commit_decl(pending);
                 for used in self.attempt.op_fallback_uses.borrow_mut().drain(..) {
                     self.emit_lint(
                         Lint::OperatorFallback,
@@ -4251,13 +4282,15 @@ impl Elaborator {
             }
         }
     }
+}
 
+impl DeclarationsMut<'_> {
     /// A declaration whose body holds `for` loops: each loop's step and
     /// state, then the declaration over folds (crates/elab/src/loops.rs).
     /// Each part goes through [`Self::elab_decl`], so a step with loops of
     /// its own is lowered the same way.
     fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
-        let family = loops::lower(decl, self)?;
+        let family = loops::lower(decl, self.0)?;
         for part in &family.parts {
             match part {
                 loops::Part::State(d) => self.elab_inductive(d)?,
@@ -4340,7 +4373,7 @@ impl Elaborator {
         // quantify, so a body whose obligations never read one keeps the
         // plain match it was written with.
         let mut auto = measure::AutoEqs::All;
-        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self.0, true, &auto)?;
         if family.auto_candidates > 0 {
             let mut used: Vec<usize> = family
                 .obligations
@@ -4352,7 +4385,7 @@ impl Elaborator {
             let all = used.len() == family.auto_candidates;
             auto = measure::AutoEqs::Only(used);
             if !all {
-                family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+                family = measure::lower(decl, &self_name, &measure, omega_available, self.0, true, &auto)?;
             }
         }
         let mut lifted = true;
@@ -4367,7 +4400,7 @@ impl Elaborator {
             }
         }
         if !lifted {
-            family = measure::lower(decl, &self_name, &measure, omega_available, self, false, &measure::AutoEqs::Off)?;
+            family = measure::lower(decl, &self_name, &measure, omega_available, self.0, false, &measure::AutoEqs::Off)?;
         }
         for part in &family.decls {
             self.elab_decl_one(&part.decl, Some(&part.obligations))?;
@@ -4384,7 +4417,7 @@ impl Elaborator {
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
         if lifted {
-            match measure::companions(decl, &self_name, &measure, omega_available, self, &auto) {
+            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto) {
                 Err(why) => {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
                 }
@@ -4470,7 +4503,7 @@ impl Elaborator {
         let omega_available = ["omega::nat_le_of_not_not_le", "int::Int::negsucc_lt_ofnat"]
             .iter()
             .all(|n| matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_)));
-        let family = measure::lower_group(&gm, omega_available, self)?;
+        let family = measure::lower_group(&gm, omega_available, self.0)?;
         for part in &family.obligations {
             self.elab_decl_one(&part.decl, Some(&part.obligations))?;
         }
@@ -4531,7 +4564,7 @@ impl Declarations<'_> {
     }
 }
 
-impl Elaborator {
+impl DeclarationsMut<'_> {
     /// The measure is a `Nat`, checked in the declaration's own parameter
     /// context and *before* anything is generated, so the message says so
     /// rather than surfacing as a mismatch inside a generated `nat::Nat::Lt`.
@@ -4600,7 +4633,7 @@ impl Declarations<'_> {
     }
 }
 
-impl Elaborator {
+impl DeclarationsMut<'_> {
     /// The sole commit point for a checked ordinary declaration.
     ///
     /// Every operation here is infallible. In particular, no declaration can
@@ -4633,7 +4666,7 @@ impl Elaborator {
             Some(proof) => self.psi.commit_sealed(binding, proof),
             None => self.psi.commit(binding),
         }
-        self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
+        DeltasMut(self).semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
         self.refresh_delta_psi();
     }
 }
@@ -4707,7 +4740,7 @@ impl Declarations<'_> {
     }
 }
 
-impl Elaborator {
+impl DeclarationsMut<'_> {
     fn check_decl(
         &mut self,
         decl: &Decl,
@@ -5049,7 +5082,7 @@ impl Elaborator {
                 bcx.corec = Some(Rc::clone(site));
                 let (step_ty, step_lvl) = Codata::corec_body_ty(site);
                 let step = statements::check_block(
-                    self,
+                    self.0,
                     &bcx,
                     &decl.body,
                     &step_ty,
@@ -5061,7 +5094,7 @@ impl Elaborator {
                 Codata(self).corec_close(&cx, decl.tyvars.len(), site, step, decl.span)?
             } else {
                 statements::check_block(
-                    self,
+                    self.0,
                     &cx,
                     &decl.body,
                     &res_ty,
@@ -5340,7 +5373,7 @@ impl Elaborator {
             // `accepted` travels with it and is replayed at the join.
             drop(item);
             stats::count(stats::Counter::DeclsGated);
-            self.pass.kernel_pool.submit(pool::Deferred {
+            self.0.pass.kernel_pool.submit(pool::Deferred {
                 name: name.to_string(),
                 span,
                 psi: Rc::clone(psi),
@@ -5351,7 +5384,7 @@ impl Elaborator {
                 opaque,
                 layer: Layer::Code,
                 lands_in_psi: true,
-                fuel: self.policy.fuel,
+                fuel: self.0.policy.fuel,
                 unsealed: recording.finish(),
                 row: stats::current_item(),
             });
