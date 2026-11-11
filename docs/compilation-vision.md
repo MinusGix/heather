@@ -243,8 +243,11 @@ optimization that uses it is proved once under it as a hypothesis.
   lets be written; what such a function returns and leaves is stated by
   evaluation (`program_run`), the same at every address of the spans it
   is lent (`program_run_placeless`), and a program's meaning threads the
-  file through its calls (`program_writers`). The program compiler's
-  proof of such a call, and `rt`'s write, are next.
+  file through its calls (`program_writers`). The program compiler
+  proves such a call: it lends its buffers to write, and the statement
+  after the call holds over the file the callee left
+  (`Target::held_left`), so a program whose functions store links.
+  `rt`'s write is next.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -466,7 +469,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads inside one file (a program lends its buffer to a function it calls); the export after the two compilers are joined | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads and writes inside one file (a program lends its buffers to a function it calls, which may store into them); the export after the two compilers are joined | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |

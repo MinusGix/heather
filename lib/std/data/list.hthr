@@ -966,6 +966,23 @@ theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Ex
     }
 }
 
+// Two lists of one length that hold the same element at every index are
+// one list.
+theorem List::ext_nth<A>(self xs: List<A>): (ys: List<A>) → xs.len() = ys.len() → ((k: Nat) → k < xs.len() → xs.nth(k) = ys.nth(k)) → xs = ys {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ _ _ => refl,
+            Cons(_, more) => λ len _ => false_elim(Nat::zero_ne_succ(more.len(), len)),
+        },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ len _ => false_elim(Nat::succ_ne_zero(rest.len(), len)),
+            Cons(y, more) => λ len same => trans(cong_fn<A, List<A>>(λ head => Cons(head, rest), Option::some_inj(x, y, same(0, trivial))),
+                cong_fn<List<A>, List<A>>(λ tail => Cons(y, tail),
+                    rest.ext_nth(more, Nat::succ_inj(rest.len(), more.len(), len), λ k below => same(Succ(k), below)))),
+        },
+    }
+}
+
 // The element at an index of a list mapped is the element there, mapped.
 theorem List::nth_map_some<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (x: A) → xs.nth(i) = Some(x) → xs.map(f).nth(i) = Some(f(x)) {
     match xs {

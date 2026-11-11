@@ -111,6 +111,94 @@ theorem lent_buffers_past(count: Nat): (held: Buffers()) → (b: Nat) → count 
 // ---------------------------------------------------------------------------
 // Placed against stated, and against the contract
 
+// ---------------------------------------------------------------------------
+// The file a caller holds after a call (`relent`)
+
+theorem buffers_rest_bytes(buffers: Buffers(), b: Nat): buffer_bytes(buffers_rest(buffers), b) = buffer_bytes(buffers, Succ(b)) {
+    match buffers { Nil => refl, Cons(_, _) => refl }
+}
+
+// It has the buffers the caller held.
+theorem relent_len(count: Nat): (after, held: Buffers()) → relent(count, after, held).len() = held.len() {
+    match count {
+        Zero => λ after held => refl,
+        Succ(_, ih) => λ after held => match held {
+            Nil => refl,
+            Cons(_, rest) => Nat::cong_succ(ih(buffers_rest(after), rest)),
+        },
+    }
+}
+
+// A buffer lent is as the callee left it…
+theorem relent_bytes_lent(count: Nat): (after, held: Buffers()) → (b: Nat) → b < count → b < held.len() →
+    buffer_bytes(relent(count, after, held), b) = buffer_bytes(after, b) {
+    match count {
+        Zero => λ after held b below _ => false_elim(omega(below)),
+        Succ(_, ih) => λ after held => match held {
+            Nil => λ b _ inside => false_elim(nothing_below_zero(b, inside)),
+            Cons(_, rest) => λ b => match b {
+                Zero => λ _ _ => refl,
+                Succ(l) => λ below inside => {
+                    let shorter: (Succ(l) < Succ(rest.len())) = inside;
+                    trans(ih(buffers_rest(after), rest, l, omega(below), omega(shorter)), buffers_rest_bytes(after, l))
+                },
+            },
+        },
+    }
+}
+
+// …and one past them as the caller held it.
+theorem relent_bytes_rest(count: Nat): (after, held: Buffers()) → (b: Nat) → count <= b →
+    buffer_bytes(relent(count, after, held), b) = buffer_bytes(held, b) {
+    match count {
+        Zero => λ after held b _ => refl,
+        Succ(_, ih) => λ after held => match held {
+            Nil => λ b _ => refl,
+            Cons(_, rest) => λ b => match b {
+                Zero => λ past => false_elim(omega(past)),
+                Succ(l) => λ past => ih(buffers_rest(after), rest, l, omega(past)),
+            },
+        },
+    }
+}
+
+// Two files of one count of buffers, each buffer's bytes the same, are one
+// file.
+theorem buffers_ext(xs: Buffers()): (ys: Buffers()) → xs.len() = ys.len() → ((b: Nat) → buffer_bytes(xs, b) = buffer_bytes(ys, b)) → xs = ys {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ _ _ => refl,
+            Cons(_, more) => λ len _ => false_elim(Nat::zero_ne_succ(more.len(), len)),
+        },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ len _ => false_elim(Nat::succ_ne_zero(rest.len(), len)),
+            Cons(y, more) => λ len same => eq2(λ (head: List<BitVec(8)>) (tail: Buffers()) => Cons(head, tail), same(0),
+                buffers_ext(rest, more, Nat::succ_inj(rest.len(), more.len(), len), λ b => same(Succ(b)))),
+        },
+    }
+}
+
+// A buffer past a file's end has no bytes.
+theorem buffer_bytes_past(buffers: Buffers(), b: Nat, past: buffers.len() <= b): buffer_bytes(buffers, b) = [] {
+    cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ found => match found { None => [], Some(bytes) => bytes }, buffers.nth_past_end(b, past))
+}
+
+// So the file a caller holds after a call is any of its count of buffers
+// that has the lent ones as the callee left them and the rest as they
+// were.
+theorem relent_is(count: Nat, after, held, file: Buffers(), shape: file.len() = held.len(),
+    lent: (b: Nat) → b < count → b < held.len() → buffer_bytes(file, b) = buffer_bytes(after, b),
+    rest: (b: Nat) → count <= b → buffer_bytes(file, b) = buffer_bytes(held, b)): file = relent(count, after, held) {
+    buffers_ext(file, relent(count, after, held), trans(shape, sym(relent_len(count, after, held))), λ b => match b.lt_or_ge(count) {
+        Inl(below) => match b.lt_or_ge(held.len()) {
+            Inl(inside) => trans(lent(b, below, inside), sym(relent_bytes_lent(count, after, held, b, below, inside))),
+            Inr(past) => trans(buffer_bytes_past(file, b, omega(past, shape)),
+                sym(buffer_bytes_past(relent(count, after, held), b, omega(past, relent_len(count, after, held))))),
+        },
+        Inr(past) => trans(rest(b, past), sym(relent_bytes_rest(count, after, held, b, past))),
+    })
+}
+
 // The placed homes and the homes a program states its call at agree but at
 // the address places, each buffer as long as its place says.
 theorem homes_apart(at: Nat → BitVec(64), size: Nat → Nat, held: Buffers(), words: List<BitVec(64)>, count: Nat): (from: Nat) →

@@ -8,26 +8,29 @@
 // function_ir_lower_calls) says what comes back: the answer in RAX, the
 // registers it keeps as they were, and memory as it was but for stores
 // into its own room below the return address and into the buffers it was
-// lent to write. A program lends its buffers to read (`Target::lending`),
-// so the stores are the function's own (`Stack::Wrote`). The claim
-// between statements (`Target::Held`) is about the data region, the
-// command line above the stack and the frames from the running frame up,
-// and no such store reaches any of them (`Target::held_wrote`), so it
-// holds again once R10 is back; RAX then goes to the result's home.
+// lent to write (`Stack::WroteIn`), the file its meaning leaves in those
+// buffers. A program lends the function its first buffers to write
+// (`Target::lending`). The claim between statements (`Target::Held`) is
+// about the data region, the command line above the stack and the frames
+// from the running frame up: a word the function stores in its own room
+// reaches none of them, and a byte it puts into a buffer is the claim's
+// with that byte set, so after the call the claim holds of the file with
+// the lent buffers as the function left them (`Target::held_left`). RAX
+// then goes to the result's home.
 //
 // Room: each activation keeps 80 bytes a function below its frame
 // (`Target::roomy`), and function `f` asks 72 a level and the CALL a word.
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
-// address (`program_writers`), and the function is placeless, so its
-// answer at the placed homes is the stated one (`Target::answers_of`, by
-// `program_eval_placeless`; a program that stores nothing answers with
-// its word and the buffers as they were, `program_writers_quiet`). What the function reads through a home is the
-// buffer's bytes as they are when it is called (`Target::in_memory`): the
-// claim between statements places them in the data region, which lies
-// below the stack, so the lending laws hold of them under it
-// (`Target::loan`, docs/native-one-compiler-design.md §2.6).
+// address (`program_writers`), and the function is placeless, so its word
+// and the file it leaves at the placed homes are the stated ones
+// (`Target::answers_of`, by `program_run_placeless`). What the function
+// reads through a home is the buffer's bytes as they are when it is called
+// (`Target::in_memory`): the claim between statements places them in the
+// data region, which lies below the stack and is the program's to write,
+// so the lending laws hold of them under it (`Target::loan`,
+// docs/native-one-compiler-design.md §2.6).
 import native_source;
 import native_structured;
 import native_structured_meaning;
@@ -39,11 +42,13 @@ import native_compile_segments;
 import native_compile_steps;
 import native_compile_frames;
 import native_compile_structured;
+import native_compile_bytes;
 import native_compile_perform;
 import function_ir;
 import function_ir_eval;
 import function_ir_writes;
 import function_ir_state;
+import function_ir_run;
 import function_ir_placeless;
 import function_ir_lend;
 import function_ir_lower;
@@ -120,9 +125,10 @@ fn Target::passed_homes(self t: Target, count: Nat) → List<BitVec(64)> {
 }
 
 // What such a function is lent of the buffers `held`: the first `count`,
-// where the layout puts them, to read.
+// where the layout puts them, to read and to write.
 fn Target::lending(self t: Target, held: Buffers(), count: Nat) → Lending {
-    Lending::reading(program_counts(t.functions), placed_addresses(λ (b: Nat) => t.layout().buffer_at(b), 0, count), lent_buffers(count, held))
+    Lending(program_counts(t.functions), placed_addresses(λ (b: Nat) => t.layout().buffer_at(b), 0, count), lent_buffers(count, held),
+        λ (_: Nat) => True)
 }
 
 // What function `f` is called under: the homes of the buffers it is lent
@@ -187,14 +193,59 @@ theorem Target::lent_below(self t: Target, held: Buffers(), count: Nat,
     }
 }
 
+// A buffer lent that has a byte: it is one of the first `count`, the file
+// has it at that size, inside the region, and it lies where the layout
+// puts it.
+theorem Target::lent_span(self t: Target, held: Buffers(), count: Nat,
+    sized: (b: Nat) → b < count → buffer_bytes(held, b).len() = t.layout().capacity(b), b: Nat,
+    some: 0 < buffer_bytes(lent_buffers(count, held), b).len()):
+    ((b < count) ∧ (t.layout().buffer_offset(b) + buffer_bytes(lent_buffers(count, held), b).len() <= t.r.size)) ∧
+        ((t.caps.nth(b) = Some(buffer_bytes(lent_buffers(count, held), b).len())) ∧
+        (address_of(placed_addresses(λ (b: Nat) => t.layout().buffer_at(b), 0, count), b) = next_rip(t.r.low, t.layout().buffer_offset(b)))) {
+    let layout = t.layout();
+    let at = λ (b: Nat) => layout.buffer_at(b);
+    match b.lt_or_ge(count) {
+        Inl(lent) => {
+            let len: (buffer_bytes(lent_buffers(count, held), b).len() = layout.capacity(b)) =
+                trans(cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), lent_buffers_bytes(count, held, b, lent)), sized(b, lent));
+            let address: (address_of(placed_addresses(at, 0, count), b) = next_rip(t.r.low, layout.buffer_offset(b))) =
+                trans(placed_addresses_at(at, count, 0, b, lent),
+                    trans(cong_fn<Nat, BitVec(64)>(λ p => at(p), Nat::add_left_zero(b)), t.at_rip(layout.buffer_offset(b))));
+            match b.lt_or_ge(t.caps.len()) {
+                Inl(present) => {
+                    let found = t.caps.nth_present(b, present);
+                    let cap: (layout.capacity(b) = found.witness) =
+                        cong_fn<Option<Nat>, Nat>(λ (c: Option<Nat>) => match c { None => 0, Some(n) => n }, found.proof);
+                    let ends: (layout.buffer_offset(b) + found.witness <= t.r.size) = Nat::le_trans(layout.buffer_offset(b) + found.witness,
+                        layout.scratch_offset(), t.r.size, layout.buffer_end(b, found.witness, found.proof), t.scratch_fits());
+                    ⟨⟨lent, omega(ends, len, cap)⟩, ⟨j(sym(trans(len, cap)), λ n _ => t.caps.nth(b) = Some(n), found.proof), address⟩⟩
+                },
+                Inr(absent) => {
+                    let cap: (layout.capacity(b) = 0) =
+                        cong_fn<Option<Nat>, Nat>(λ (c: Option<Nat>) => match c { None => 0, Some(n) => n }, t.caps.nth_past_end(b, absent));
+                    false_elim(omega(some, len, cap))
+                },
+            }
+        },
+        Inr(past) => {
+            let none: (buffer_bytes(lent_buffers(count, held), b).len() = 0) =
+                cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), lent_buffers_past(count, held, b, past));
+            false_elim(omega(some, none))
+        },
+    }
+}
+
 // The buffers a function is lent meet the lending laws under the whole
-// stack (`Loan`, x86_64_lending): they lie in the data region, which a
-// word stored to the stack leaves, and none is lent to write.
+// stack (`Loan`, x86_64_lending). They lie in the data region: a word
+// stored to the stack leaves them; the region is the program's to write,
+// a byte stored there reads back and moves no code; the layout keeps the
+// buffers apart, and the stack is above them all.
 theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
     sized: (b: Nat) → b < count → buffer_bytes(held, b).len() = t.layout().capacity(b),
     canonical: (b: Nat) → t.lending(held, count).spans().at(b).toNat() + t.lending(held, count).spans().size(b) <= Nat::pow(2, 47)):
     Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, t.stack.size, t.lending(held, count).spans()) {
     let spans = t.lending(held, count).spans();
+    let layout = t.layout();
     Loan(
         room := t.stack.size.le_refl(),
         canonical := canonical,
@@ -205,12 +256,95 @@ theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
                 t.r.profile.read_agree(m, t.r.profile.store(m, t.stack.at(k), word_bytes(word)).cells, y,
                     t.stack_store_cells(m, k, below, word, y, t.lent_below(held, count, sized, b, i, inside))))
         },
-        writable := λ m b k written inside => absurd(sym(written)),
-        stored := λ m b k written inside byte => absurd(sym(written)),
-        apart := λ m b k written inside byte c i short other => absurd(sym(written)),
-        keeps := λ m b k written inside byte i below => absurd(sym(written)),
-        keeps_code := λ m b k written inside byte bytes at resident => absurd(sym(written)),
+        writable := λ m b k written inside => {
+            let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let sp = t.lent_span(held, count, sized, b, omega(short));
+            j(t.stack_writes, λ ws _ => (ws.writable(m, spans.byte(b, k), 1)) →
+                    (t.stack.writes.writable(m, spans.byte(b, k), 1)), λ e => e)(j(sym(sp.right.right), λ a _ => t.io().writable(m, next_rip(a, k), 1),
+                    t.r.byte_writable(m, layout.buffer_offset(b), k, omega(short, sp.left.right))))
+        },
+        stored := λ m b k written inside byte => {
+            let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let sp = t.lent_span(held, count, sized, b, omega(short));
+            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), [byte]), spans.byte(b, k)) = Some(byte)) →
+                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), [byte]), spans.byte(b, k)) = Some(byte)), λ e => e)(j(sym(sp.right.right), λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), [byte]), next_rip(a, k)) = Some(byte),
+                    t.r.byte_stored(m, layout.buffer_offset(b), k, byte, omega(short, sp.left.right))))
+        },
+        apart := λ m b k written inside byte c i within other => {
+            let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let short_c: (i < buffer_bytes(lent_buffers(count, held), c).len()) = within;
+            let here = t.lent_span(held, count, sized, b, omega(short));
+            let there = t.lent_span(held, count, sized, c, omega(short_c));
+            let one: (layout.buffer_offset(b) + k + 1 <= t.r.size) = omega(short, here.left.right);
+            let order: ((layout.buffer_offset(b) + k + 1 <= layout.buffer_offset(c) + i) ∨ (layout.buffer_offset(c) + i + 1 <= layout.buffer_offset(b) + k)) =
+                match b.eq_dec(c) {
+                    Inl(same) => match other {
+                        Inl(differs) => false_elim(differs(same)),
+                        Inr(differs) => {
+                            let same_offset: (layout.buffer_offset(b) = layout.buffer_offset(c)) = cong_fn<Nat, Nat>(λ n => layout.buffer_offset(n), same);
+                            match k.lt_or_ge(i) {
+                                Inl(lt) => Inl(omega(lt, same_offset)),
+                                Inr(ge) => match i.lt_or_ge(k) {
+                                    Inl(lt) => Inr(omega(lt, same_offset)),
+                                    Inr(le) => {
+                                        let equal: (k = i) = omega(ge, le);
+                                        false_elim(differs(equal))
+                                    },
+                                },
+                            }
+                        },
+                    },
+                    Inr(differs) => match b.lt_or_ge(c) {
+                        Inl(under) => Inl(omega(layout.buffer_apart(b, buffer_bytes(lent_buffers(count, held), b).len(), c, here.right.left, under), short)),
+                        Inr(over) => {
+                            let above: (c < b) = match c.lt_or_ge(b) {
+                                Inl(lt) => lt,
+                                Inr(ge) => {
+                                    let equal: (b = c) = omega(over, ge);
+                                    false_elim(differs(equal))
+                                },
+                            };
+                            Inr(omega(layout.buffer_apart(c, buffer_bytes(lent_buffers(count, held), c).len(), b, there.right.left, above), short_c))
+                        },
+                    },
+                };
+            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), [byte]), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))) →
+                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), [byte]), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))), λ e => e)(j(sym(here.right.right), λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), [byte]), next_rip(spans.at(c), i)) =
+                        t.r.profile.read(m, next_rip(spans.at(c), i)),
+                    j(sym(there.right.right), λ y _ => t.r.profile.read(t.r.profile.store(m, next_rip(next_rip(t.r.low, layout.buffer_offset(b)), k), [byte]),
+                                next_rip(y, i)) = t.r.profile.read(m, next_rip(y, i)),
+                        t.r.store_apart(m, layout.buffer_offset(b), k, [byte], layout.buffer_offset(c), i, one, omega(short_c, there.left.right), order))))
+        },
+        keeps := λ m b k written inside byte i below => {
+            let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let sp = t.lent_span(held, count, sized, b, omega(short));
+            let one: (layout.buffer_offset(b) + k + 1 <= t.r.size) = omega(short, sp.left.right);
+            let at: (spans.byte(b, k) = next_rip(t.r.low, layout.buffer_offset(b) + k)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, k), sp.right.right), rip_compose(t.r.low, layout.buffer_offset(b), k));
+            j(t.stack_writes, λ ws _ => (read_word(t.io().data, ws.store(m, spans.byte(b, k), [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))) →
+                    (read_word(t.io().data, t.stack.writes.store(m, spans.byte(b, k), [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))), λ e => e)(j(sym(at), λ a _ => read_word(t.io().data, t.r.profile.store(m, a, [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i)),
+                    t.stack_read_store(m, layout.buffer_offset(b) + k, [byte], one, i, below)))
+        },
+        keeps_code := λ m b k written inside byte bytes at resident => {
+            let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let sp = t.lent_span(held, count, sized, b, omega(short));
+            j(t.stack_writes, λ ws _ => (CodeResident(t.io().fetch, ws.store(m, spans.byte(b, k), [byte]), bytes, at)) →
+                    (CodeResident(t.io().fetch, t.stack.writes.store(m, spans.byte(b, k), [byte]), bytes, at)), λ e => e)(j(sym(sp.right.right), λ a _ => CodeResident(t.io().fetch, t.r.profile.store(m, next_rip(a, k), [byte]), bytes, at),
+                    t.r.byte_keeps_code(m, layout.buffer_offset(b), k, byte, omega(short, sp.left.right), bytes, at, resident)))
+        },
     )
+}
+
+// What a call of a function lent `count` of the buffers `held` leaves
+// (`Stack::AnsweredOver` under the lending): the word `answer` has in RAX,
+// the registers a function keeps, memory as it was but for the function's
+// own stores and bytes put into the buffers lent, and those buffers in
+// memory as the function left them, which with the rest as they were is
+// the file `answer` has (`relent`).
+fn Target::Left(self t: Target, held: Buffers(), count: Nat, answer: Ending) →
+    Nat → MachineState<X86Memory(t.r.profile)> → MachineState<X86Memory(t.r.profile)> → Type {
+    λ i s u => Exists<Buffers()>(λ after => (answer.buffers = relent(count, after, held)) ∧
+        t.stack.AnsweredOver(t.lending(held, count), answer.word, after)(i, s, u))
 }
 
 // Every function of the target, called at its label so (`CalledWith`) with
@@ -219,20 +353,19 @@ theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
 fn Target::Answered(self t: Target, call: Writers()) → Type {
     (held: Buffers()) → (f: Nat) → Succ(f) <= t.functions.len() → (words: List<BitVec(64)>) →
         arity_fits(program_arity(t.functions, f), 2 * program_lent(t.functions, f) + words.len()).IsTrue() →
-        t.site().Returns(t.stack, asm_labels(t.program, Succ(f)), t.CalledWith(held, f, words), t.stack.CalleePost(call(held, f, words).word))
+        t.site().Returns(t.stack, asm_labels(t.program, Succ(f)), t.CalledWith(held, f, words),
+            t.Left(held, program_lent(t.functions, f), call(held, f, words)))
 }
 
 // What emitting the functions proves (`Site::CallsOver`, at every address,
 // over every buffers and under every loan of them) answers calls as the
-// program states them (`program_writers`), the functions evaluable,
-// placeless and storing into no buffer: the function returns its value at
-// the placed homes over the buffers it is lent (`program_eval_reads`,
-// `program_effects_quiet`), which is its value at the stated ones, and
-// what it stores is its own, nothing being lent to write
-// (`Stack::wrote_in_none`).
+// program states them (`program_writers`), the functions evaluable and
+// placeless: at the placed homes the function returns the word its run
+// computes and leaves the file its run computes (`program_run_effects`),
+// which are the run's at the stated homes (`program_run_placeless`).
 theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functions).IsTrue(), placeless: program_placeless(t.functions).IsTrue(),
-    quiet: program_quiet(t.functions).IsTrue(),
     calls: (addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+        ((b: Nat) → program_stores(t.functions, b).IsTrue() → written(b) = True) →
         Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, top,
             Lending(program_counts(t.functions), addresses, buffers, written).spans()) →
         t.site().CallsOver(t.stack, program_effects(t.functions), t.functions.len(),
@@ -244,30 +377,26 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
         let at = λ (b: Nat) => t.layout().buffer_at(b);
         let size = λ (b: Nat) => t.layout().capacity(b);
         let lent = lent_buffers(k, held);
-        let lending = t.lending(held, k);
         let passed = t.passed_homes(k) ++ words;
         let stated = stated_homes(0, k, held) ++ words;
-        let answer = program_eval_over(lent, t.functions)(f, passed);
-        let same: (answer = program_writers(t.functions)(held, f, words).word) =
-            trans(program_eval_placeless(lent, t.functions, placeless, f, stated, passed,
-                    homes_apart(at, size, held, words, k, 0, λ b _ high => sized(b, omega(high)))),
-                sym(cong_fn<Ending, BitVec(64)>(λ answered => answered.word, program_writers_quiet(t.functions, quiet, held, f, words))));
+        let ran = program_run(t.functions, lent, f, passed);
+        let same: (ran = program_run(t.functions, lent, f, stated)) = program_run_placeless(t.functions, placeless, lent, f, stated, passed,
+            homes_apart(at, size, held, words, k, 0, λ b _ high => sized(b, omega(high))));
         let fit: arity_fits(program_arity(t.functions, f), passed.len()).IsTrue() =
             j(sym(placed_words_len(at, size, k, words)), λ n _ => arity_fits(program_arity(t.functions, f), n).IsTrue(), fits);
         let args: ArgsLent(lent_count(program_counts(t.functions), f), 0, passed, placed_addresses(at, 0, k), lent) =
             j(sym(program_counts_lent(t.functions, f, below)), λ c _ => ArgsLent(c, 0, passed, placed_addresses(at, 0, k), lent),
                 args_lent_first(at, size, held, words, k, sized));
         let loan = t.loan(held, k, sized, λ b => in_memory(b).right.left);
-        let runs: program_effects(t.functions)(lent, f, passed, answer, lent) = program_effects_quiet(t.functions, quiet, lent, f, passed,
-            answer, program_eval_reads(t.functions, lent, evaluable, f, passed, fit));
-        let ran = calls(placed_addresses(at, 0, k), lent, λ (_: Nat) => False, t.stack.size, loan, f, below, passed, answer, lent, lent,
-            s0, at0, resident, i0, rsp, room, ⟨⟨called0.left, ⟨runs, called0.right.left⟩⟩, ⟨args, ⟨room, in_memory⟩⟩⟩, ret, saved);
-        let u = ran.witness;
-        let post = ran.proof.right.right.right.right;
-        let wrote: t.stack.Wrote(i0, s0.memory, u.memory) =
-            t.stack.wrote_in_none(i0, lending.spans(), λ b => refl, s0.memory, u.memory, post.right.right.left);
-        Exists(u, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
-            ⟨trans(post.left, same), ⟨post.right.left, wrote⟩⟩⟩⟩⟩⟩)
+        let runs: program_effects(t.functions)(lent, f, passed, ran.word, ran.buffers) =
+            program_run_effects(t.functions, evaluable, lent, f, passed, fit);
+        let answered = calls(placed_addresses(at, 0, k), lent, λ (_: Nat) => True, t.stack.size, λ b _ => refl, loan, f, below, passed, ran.word, lent,
+            ran.buffers, s0, at0, resident, i0, rsp, room, ⟨⟨called0.left, ⟨runs, called0.right.left⟩⟩, ⟨args, ⟨room, in_memory⟩⟩⟩, ret, saved);
+        let u = answered.witness;
+        let left: t.Left(held, k, program_writers(t.functions)(held, f, words))(i0, s0, u) =
+            j(same, λ r _ => t.Left(held, k, Ending(r.word, relent(k, r.buffers, held)))(i0, s0, u),
+                Exists(ran.buffers, ⟨refl, answered.proof.right.right.right.right⟩));
+        Exists(u, ⟨answered.proof.left, ⟨answered.proof.right.left, ⟨answered.proof.right.right.left, ⟨answered.proof.right.right.right.left, left⟩⟩⟩⟩)
     }
 }
 
@@ -286,7 +415,7 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
         Nil => λ same => j(Option::some_inj(base, program, same), λ x _ => base.Within(x), base.within_self()),
         Cons(last, earlier) => {
             let fs = Cons(last, earlier);
-            (match (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) as λ b => (match b as λ _ => Option<Prog> {
+            (match program_evaluable(fs) && program_placeless(fs) as λ b => (match b as λ _ => Option<Prog> {
                     False => None,
                     True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
                 }) = Some(program) → base.Within(program) {
@@ -301,75 +430,61 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
     }
 }
 
-// Linked, the functions are evaluable and placeless and store into no
-// buffer, and wherever the program is resident each meets its contract at
-// its label, over whatever buffers under whatever loan of them.
+// Linked, the functions are evaluable and placeless, and wherever the
+// program is resident each meets its contract at its label, over whatever
+// buffers under whatever loan of them that lets it write the buffers it
+// stores into.
 theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, program: Prog, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), within: program.Within(site.program), functions: List<Function>):
     base.links(functions, places, names) = Some(program) →
-    (program_evaluable(functions) && program_placeless(functions)).IsTrue() ∧ (program_quiet(functions).IsTrue() ∧
+    (program_evaluable(functions) && program_placeless(functions)).IsTrue() ∧
         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+            ((b: Nat) → program_stores(functions, b).IsTrue() → written(b) = True) →
             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(functions), addresses, buffers, written).spans()) →
             site.CallsOver(stack, program_effects(functions), functions.len(),
-                Lending(program_counts(functions), addresses, buffers, written), top))) {
+                Lending(program_counts(functions), addresses, buffers, written), top)) {
     match functions {
-        Nil => λ _ => ⟨trivial, ⟨trivial,
-            λ addresses buffers written top loan f below words result before after => false_elim(nothing_below_zero(f, below))⟩⟩,
+        Nil => λ _ => ⟨trivial,
+            λ addresses buffers written top allowed loan f below words result before after => false_elim(nothing_below_zero(f, below))⟩,
         Cons(last, earlier) => {
             let fs = Cons(last, earlier);
-            (match (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) as λ b =>
-                    (program_evaluable(fs) && program_placeless(fs)) && program_quiet(fs) = b →
+            (match program_evaluable(fs) && program_placeless(fs) as λ b =>
+                    program_evaluable(fs) && program_placeless(fs) = b →
                     (match b as λ _ => Option<Prog> {
                         False => None,
                         True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
                     }) = Some(program) →
-                    (program_evaluable(fs) && program_placeless(fs)).IsTrue() ∧ (program_quiet(fs).IsTrue() ∧
+                    (program_evaluable(fs) && program_placeless(fs)).IsTrue() ∧
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+                            ((b: Nat) → program_stores(fs, b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
                             site.CallsOver(stack, program_effects(fs), Succ(earlier.len()),
-                                Lending(program_counts(fs), addresses, buffers, written), top))) {
+                                Lending(program_counts(fs), addresses, buffers, written), top)) {
                 False => λ _ none => absurd(none),
                 True => λ checked => {
-                    let both = Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_quiet(fs),
-                        j(sym(checked), λ b _ => b.IsTrue(), trivial));
+                    let both: (program_evaluable(fs) && program_placeless(fs)).IsTrue() = j(sym(checked), λ b _ => b.IsTrue(), trivial);
                     (match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) as λ o =>
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+                            ((b: Nat) → program_stores(fs, b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
                             MayCallOver<M>(site, stack, top, Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
                         (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) →
-                        (program_evaluable(fs) && program_placeless(fs)).IsTrue() ∧ (program_quiet(fs).IsTrue() ∧
+                        (program_evaluable(fs) && program_placeless(fs)).IsTrue() ∧
                             ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+                                ((b: Nat) → program_stores(fs, b).IsTrue() → written(b) = True) →
                                 Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
                                 site.CallsOver(stack, program_effects(fs), Succ(earlier.len()),
-                                    Lending(program_counts(fs), addresses, buffers, written), top))) {
+                                    Lending(program_counts(fs), addresses, buffers, written), top)) {
                         None => λ _ none => absurd(none),
-                        Some(out) => λ may same => ⟨both.left, ⟨both.right,
-                            λ addresses buffers written top loan => may(addresses, buffers, written, top, loan)(
-                                j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩⟩,
-                    })(λ addresses buffers written top loan => emit_functions_after_lent_calls<M>(site, laid, stack, top,
-                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
-                        λ b stores => false_elim(program_quiet_stores(fs, b, both.right, stores))))
+                        Some(out) => λ may same => ⟨both,
+                            λ addresses buffers written top allowed loan => may(addresses, buffers, written, top, allowed, loan)(
+                                j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩,
+                    })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls<M>(site, laid, stack, top,
+                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs, allowed))
                 },
             })(refl)
         },
     }
-}
-
-// ---------------------------------------------------------------------------
-// What the callee's stores leave
-
-// Stores below the running frame keep the claim between statements: the
-// return address a CALL pushes, and whatever the function stores in its
-// own room.
-theorem Target::held_wrote(self t: Target, live: List<Nat>, env: Env, g: Gprs, m, m2: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    i: Nat, below: i <= t.index, wrote: t.stack.Wrote(i, m, m2)): t.Held(live, env, g, m2) {
-    Star::invariant(λ (a: X86Memory(t.r.profile)) (b: X86Memory(t.r.profile)) => t.stack.Own(i, a, b),
-        λ (a: X86Memory(t.r.profile)) => t.Held(live, env, g, a),
-        λ a b kept step => j(sym(step.proof.right.proof), λ x _ => t.Held(live, env, g, x),
-            j(t.stack_writes, λ ws _ => t.Held(live, env, g, ws.store(a, t.stack.at(step.witness), word_bytes(step.proof.right.witness))) →
-                    t.Held(live, env, g, t.stack.writes.store(a, t.stack.at(step.witness), word_bytes(step.proof.right.witness))), λ h => h)(
-                t.held_stack_store(live, env, g, a, kept, step.witness, omega(step.proof.left, below), step.proof.right.witness))),
-        m, m2, held, wrote)
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +532,96 @@ theorem Target::in_memory(self t: Target, live: List<Nat>, env: Env, g: Gprs, m:
             λ xs _ => Readable(t.site().data, m, address_of(placed_addresses(at, 0, count), b), xs),
             j(sym(placed_addresses_past(at, count, 0, b, past)), λ a _ => Readable(t.site().data, m, a, []), ⟨none, λ k no => false_elim(no)⟩)),
     }⟩
+}
+
+// ---------------------------------------------------------------------------
+// The file a call leaves
+
+// A span reads one list of bytes of a length.
+theorem readable_same<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs, ys: List<BitVec(8)>, len: xs.len() = ys.len(),
+    one: Readable(data, memory, a, xs), two: Readable(data, memory, a, ys)): xs = ys {
+    xs.ext_nth(ys, len, λ k below => trans(sym(one.right(k, below)), two.right(k, j(len, λ n _ => k < n, below))))
+}
+
+// What a function lent the first `count` buffers may store keeps the claim
+// between statements, of the file with those buffers as the function left
+// them. Along its stores the claim holds of some file with the caller's
+// count of buffers and the buffers not lent as they were: a word stored
+// below the running frame leaves the file, and a byte put into a buffer
+// lent sets that byte of it (`Target::held_byte`). Where the stores end,
+// the buffers lent read in memory both as that file has them and as the
+// function left them (`Stack::InMemory`), so the file is the one the call
+// answers (`relent_is`).
+theorem Target::held_left(self t: Target, live: List<Nat>, env: Env, g: Gprs, m, m2: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    i: Nat, below: i <= t.index, count: Nat, has: count <= t.caps.len(),
+    sized: (b: Nat) → b < count → buffer_bytes(env.buffers, b).len() = t.layout().capacity(b), after: Buffers(),
+    wrote: t.stack.WroteIn(i, t.lending(env.buffers, count).spans(), m, m2),
+    left: t.stack.InMemory(t.lending(env.buffers, count), after, m2)):
+    t.Held(live, Env(env.words, relent(count, after, env.buffers), env.args), g, m2) {
+    let layout = t.layout();
+    let at = λ (b: Nat) => layout.buffer_at(b);
+    let spans = t.lending(env.buffers, count).spans();
+    let along: X86Memory(t.r.profile) → Type = λ a => Exists<Buffers()>(λ file => t.Held(live, Env(env.words, file, env.args), g, a) ∧
+        ((file.len() = env.buffers.len()) ∧ ((b: Nat) → count <= b → buffer_bytes(file, b) = buffer_bytes(env.buffers, b))));
+    let start: along(m) = Exists(env.buffers, ⟨j(sym(env.with_own_words()), λ e _ => t.Held(live, e, g, m), held), ⟨refl, λ b _ => refl⟩⟩);
+    let ended: along(m2) = Star::invariant(λ (a: X86Memory(t.r.profile)) (b: X86Memory(t.r.profile)) => t.stack.Stores(i, spans, a, b), along,
+        λ a b kept step => match step {
+            Inl(own) => {
+                let file = kept.witness;
+                Exists(file, ⟨j(sym(own.proof.right.proof), λ x _ => t.Held(live, Env(env.words, file, env.args), g, x),
+                    j(t.stack_writes, λ ws _ => (t.Held(live, Env(env.words, file, env.args), g,
+                            ws.store(a, t.stack.at(own.witness), word_bytes(own.proof.right.witness)))) →
+                    (t.Held(live, Env(env.words, file, env.args), g,
+                            t.stack.writes.store(a, t.stack.at(own.witness), word_bytes(own.proof.right.witness)))), λ e => e)(t.held_stack_store(live, Env(env.words, file, env.args), g, a, kept.proof.left, own.witness, omega(own.proof.left, below),
+                            own.proof.right.witness))), kept.proof.right⟩)
+            },
+            Inr(put) => {
+                let file = kept.witness;
+                let b0 = put.witness;
+                let k0 = put.proof.witness;
+                let inside: (k0 < buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = put.proof.proof.left.right;
+                let byte = put.proof.proof.right.witness;
+                let sp = t.lent_span(env.buffers, count, sized, b0, omega(inside));
+                let after_file = store_byte(file, b0, k0, byte);
+                let address: (spans.byte(b0, k0) = next_rip(t.r.low, layout.buffer_offset(b0) + k0)) =
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, k0), sp.right.right), rip_compose(t.r.low, layout.buffer_offset(b0), k0));
+                let stored: t.Held(live, Env(env.words, after_file, env.args), g,
+                    t.r.profile.store(a, next_rip(t.r.low, layout.buffer_offset(b0) + k0), [byte])) =
+                    t.held_byte(live, Env(env.words, file, env.args), g, a, kept.proof.left, b0, buffer_bytes(lent_buffers(count, env.buffers), b0).len(),
+                        sp.right.left, k0, inside, byte);
+                let there: t.Held(live, Env(env.words, after_file, env.args), g, t.stack.writes.store(a, spans.byte(b0, k0), [byte])) =
+                    j(t.stack_writes, λ ws _ => (t.Held(live, Env(env.words, after_file, env.args), g, ws.store(a, spans.byte(b0, k0), [byte]))) →
+                    (t.Held(live, Env(env.words, after_file, env.args), g, t.stack.writes.store(a, spans.byte(b0, k0), [byte]))), λ e => e)(j(sym(address), λ x _ => t.Held(live, Env(env.words, after_file, env.args), g, t.r.profile.store(a, x, [byte])), stored));
+                Exists(after_file, ⟨j(sym(put.proof.proof.right.proof), λ x _ => t.Held(live, Env(env.words, after_file, env.args), g, x), there),
+                    ⟨trans(file.len_update(b0, λ (bytes: List<BitVec(8)>) => bytes.update(k0, λ (_: BitVec(8)) => byte)), kept.proof.right.left),
+                        λ c past => trans(buffer_bytes_store_other(file, b0, k0, byte, c, λ same => false_elim(omega(same, past, sp.left.left))),
+                            kept.proof.right.right(c, past))⟩⟩)
+            },
+        }, m, m2, start, wrote);
+    let file = ended.witness;
+    let words = ended.proof.left.witness;
+    let placed = ended.proof.left.proof.left;
+    let env1 = Env(env.words, file, env.args).with_words(words);
+    let same: (file = relent(count, after, env.buffers)) = relent_is(count, after, env.buffers, file, ended.proof.right.left,
+        λ b lent _ => {
+            let found = t.caps.nth_present(b, omega(lent, has));
+            let ours: Readable(t.site().data, m2, at(b), buffer_bytes(file, b)) = t.buffer_readable(env1, m2, placed, b, found.witness, found.proof);
+            let ours_len: (buffer_bytes(file, b).len() = found.witness) =
+                layout.keeps_buffer_len(env1, placed.witness, placed.proof.right.left, b, found.witness, found.proof);
+            let cap: (layout.capacity(b) = found.witness) =
+                cong_fn<Option<Nat>, Nat>(λ (c: Option<Nat>) => match c { None => 0, Some(n) => n }, found.proof);
+            let theirs = left(b);
+            let lent_len: (buffer_bytes(lent_buffers(count, env.buffers), b).len() = buffer_bytes(env.buffers, b).len()) =
+                cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), lent_buffers_bytes(count, env.buffers, b, lent));
+            let their_len: (buffer_bytes(after, b).len() = buffer_bytes(lent_buffers(count, env.buffers), b).len()) = theirs.left;
+            let same_len: (buffer_bytes(file, b).len() = buffer_bytes(after, b).len()) =
+                trans(ours_len, trans(sym(cap), trans(sym(sized(b, lent)), trans(sym(lent_len), sym(their_len)))));
+            let address: (address_of(placed_addresses(at, 0, count), b) = at(b)) =
+                trans(placed_addresses_at(at, count, 0, b, lent), cong_fn<Nat, BitVec(64)>(λ p => at(p), Nat::add_left_zero(b)));
+            readable_same(t.site().data, m2, at(b), buffer_bytes(file, b), buffer_bytes(after, b), same_len, ours,
+                j(address, λ x _ => Readable(t.site().data, m2, x, buffer_bytes(after, b)), theirs.right))
+        }, ended.proof.right.right);
+    j(same, λ f _ => t.Held(live, Env(env.words, f, env.args), g, m2), ended.proof.left)
 }
 
 // ---------------------------------------------------------------------------
@@ -623,8 +828,9 @@ theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments
 // The call
 
 // Every call of a function the compile emits runs as the call's meaning,
-// the functions meeting their contracts and leaving the file.
-theorem Target::functions_run(self t: Target, call: Writers(), quiet: Writers::Quiet(call), answers: t.Answered(call)): t.Functions(call) {
+// the functions meeting their contracts: the result's word set, in the
+// file the function left.
+theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answered(call)): t.Functions(call) {
     let layout = t.layout();
     λ p out callee arguments result fit within apart env tree next => {
         let region = Call(callee, arguments, result);
@@ -644,15 +850,15 @@ theorem Target::functions_run(self t: Target, call: Writers(), quiet: Writers::Q
         let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f4.left, m);
         let words = env.words_at(arguments);
         let passed = t.passed_homes(k) ++ words;
-        let answer = call(env.buffers, callee, words).word;
+        let answer = call(env.buffers, callee, words);
+        let left = Env(env.words, answer.buffers, env.args);
         let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
         let passed_len: (passed.len() = 2 * k + words.len()) =
             placed_words_len(λ (b: Nat) => layout.buffer_at(b), λ (b: Nat) => layout.capacity(b), k, words);
         let short: (passed.len() <= 6) = omega(passed_len, words_len, few);
         let arity: arity_fits(program_arity(t.functions, callee), 2 * k + words.len()).IsTrue() =
             j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
-        let mean_eq: (region.meaning(call, env) = env.set_word(result, answer)) = trans(env.call_meaning(call, callee, arguments, result),
-            cong_fn<Buffers(), Env>(λ file => Env(env.words, file, env.args).set_word(result, answer), quiet(env.buffers, callee, words)));
+        let mean_eq: (region.meaning(call, env) = left.set_word(result, answer.word)) = env.call_meaning(call, callee, arguments, result);
         // The room below the frame: the CALL's word, then the function's.
         let big: (80 * t.functions.len() <= t.index) = omega(t.roomy);
         let i0 = t.index - 8;
@@ -676,8 +882,8 @@ theorem Target::functions_run(self t: Target, call: Writers(), quiet: Writers::Q
         let w_framed: framed.Within(t.program) = framed.within_trans(passes_to, t.program, Prog::within_words_to(layout, arguments, regs, framed), w_passed);
         let w_b1: b1.Within(t.program) = b1.within_before(0, Load(WordLoad(Rsp, Rbx)), t.program, w_framed);
         // RAX to the result's home.
-        let q6 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (env.set_word(result, read_gpr(Rax, g)) = region.meaning(call, env));
-        let taken = t.goes_result(live, out, env, region.meaning(call, env), back, result, inside(result, Inl(refl)),
+        let q6 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, left, g, m) ∧ (left.set_word(result, read_gpr(Rax, g)) = region.meaning(call, env));
+        let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
         // R10 back from RBX.
         let post5 = λ (s: MachineState<X86Memory(t.r.profile)>) => q6(s.gprs, s.memory);
@@ -709,20 +915,22 @@ theorem Target::functions_run(self t: Target, call: Writers(), quiet: Writers::Q
         };
         let moves = t.site().moves_call(t.stack, t.code_fits(), w_called.witness, carried, 0, Succ(callee), w_called.proof,
             asm_labels(t.program, Succ(callee)), lands, t.CalledWith(env.buffers, callee, words),
-            t.stack.CalleePost(answer), answers(env.buffers, callee, below, words, arity), pre4, post4, λ _ => i0,
+            t.Left(env.buffers, k, answer), answers(env.buffers, callee, below, words, arity), pre4, post4, λ _ => i0,
             λ s held => ⟨trans(held.right.left, frame_i),
                 ⟨fits_i, ⟨s.gprs.args_in(push_address(s.gprs), passed, argument_registers(), short, trivial, held.right.right.left),
                     ⟨room_f, ⟨t.in_memory(live, env, s.gprs, call_near_after(t.stack.writes, displacement, s).memory, entered_held(s, held), k,
                         has), sized(s, held)⟩⟩⟩⟩⟩,
             λ s u held rsp post => {
                 let entered = call_near_after(t.stack.writes, displacement, s);
-                let held2: t.Held(live, env, s.gprs, u.memory) = t.held_wrote(live, env, s.gprs, entered.memory, u.memory, entered_held(s, held), i0,
-                    omega(back_i), post.right.right);
+                let over = post.proof.right;
+                let held2: t.Held(live, left, s.gprs, u.memory) = j(sym(post.proof.left), λ file _ => t.Held(live, Env(env.words, file, env.args), s.gprs, u.memory),
+                    t.held_left(live, env, s.gprs, entered.memory, u.memory, entered_held(s, held), i0, omega(back_i), k, has, sized(s, held),
+                        post.witness, over.right.right.left, over.right.right.right));
                 let g2 = write_gpr(R10, read_gpr(Rbx, u.gprs), u.gprs);
-                let held3: t.Held(live, env, g2, u.memory) = t.held_regs(live, env, s.gprs, g2, u.memory, held2,
-                    λ n in_pool _ => homes_back(s.gprs, u.gprs, push_address(s.gprs), post.right.left, held.right.right.right, n, in_pool));
-                let rax: (read_gpr(Rax, g2) = answer) = trans(read_gpr_other(R10, Rax, read_gpr(Rbx, u.gprs), u.gprs, refl), post.left);
-                let r: post4(u) = ⟨held3, trans(cong_fn<BitVec(64), Env>(λ x => env.set_word(result, x), rax), sym(mean_eq))⟩;
+                let held3: t.Held(live, left, g2, u.memory) = t.held_regs(live, left, s.gprs, g2, u.memory, held2,
+                    λ n in_pool _ => homes_back(s.gprs, u.gprs, push_address(s.gprs), over.right.left, held.right.right.right, n, in_pool));
+                let rax: (read_gpr(Rax, g2) = answer.word) = trans(read_gpr_other(R10, Rax, read_gpr(Rbx, u.gprs), u.gprs, refl), over.left);
+                let r: post4(u) = ⟨held3, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), rax), sym(mean_eq))⟩;
                 r
             });
         let linux = j(t.stack_writes, λ ws _ => t.site().Moves(ws, prog_len(carried), prog_len(carried) + 5, pre4, post4), moves);

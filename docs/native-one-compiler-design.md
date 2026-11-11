@@ -715,10 +715,15 @@ answers a call with the callee's word and the file the callee leaves
 functions.
 
 **A program's call** (`Source`) then answers with the file as well:
-its callees are `Writers` (`program_run` of the source's functions), the
-statement after the call starts from the file the callee left, and the
-claim between statements is rebuilt from the contract's post, the
-buffers being the layout's cells. `tr`'s byte map is the first customer.
+its callees are `Writers` (`program_writers`: `program_run` of the
+source's functions over the buffers lent, the rest of the caller's file
+put back), the statement after the call starts from the file the callee
+left, and the claim between statements is rebuilt from the contract's
+post, the buffers being the layout's cells (`Target::held_left`). A
+program lends every buffer to write: its own statements store into them
+already, so there is no span it must keep from a callee, and which ones
+a callee does store into is the callee's program to say
+(`program_stores`). `tr`'s byte map is the first customer.
 
 **`rt` and the class.** A `runtime fn` takes a span it may write as a
 `mut` parameter, and its Heather type returns the new bytes beside its
@@ -883,10 +888,23 @@ Each is a PR and ends with something that runs.
       with its words alone, its second buffer left as it was
       (`function_ir_placeless_tests.hthr`); `count_newlines` in a tool's
       meaning (`native_tool_spans_tests.hthr`).
-    - *4b-3:* the program compiler lends written spans (`Target::loan`
-      over `DataRegion::loan`), reads the caller's buffers back out of
-      the memory a callee leaves, and `Prog::links` no longer asks
-      `program_quiet`.
+    - *4b-3, built 2026-11-11:* the program compiler proves the call.
+      A program lends its buffers to write (`Target::lending`, every
+      span written) and proves the lending's laws for them from its
+      data region's (`Target::loan`). What a call leaves is a file
+      (`Target::Left`: the memory holds some `after` under the
+      contract's post, and the caller's file is `relent` of it), the
+      claim between statements is rebuilt over that file
+      (`Target::held_left`: the cells a callee stored into read the new
+      bytes, the rest are kept by `WroteIn`), and `Target::answers_of`
+      cites the function compiler's theorem under the program's own
+      stores (`program_run_placeless`, `program_run_effects`).
+      `Prog::links` no longer asks `program_quiet`, and the compile's
+      proofs no longer take `Writers::Quiet`; the `rt` IO layer keeps it
+      until 4c gives `rt` a write. *Runs:* a program whose statement
+      reads the byte its callee stored, compiled, with a store
+      elsewhere and one past the capacity beside it
+      (`native_build_tests.hthr`).
     - *4b-4:* `tr`.
   - *Step 4c:* `rt`'s write, the class, the reflector and the generator.
     *Runs:* the byte map as a `runtime fn`.

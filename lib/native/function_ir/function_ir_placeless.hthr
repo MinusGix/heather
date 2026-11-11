@@ -885,14 +885,20 @@ fn program_readers(functions: List<Function>) → Readers() {
         stated_homes(0, program_lent(functions, f), held) ++ words)
 }
 
+// The buffers after the first.
+fn buffers_rest(buffers: Buffers()) → Buffers() {
+    match buffers { Nil => Nil, Cons(_, rest) => rest }
+}
+
 // The file a caller holds after a call lent its first `count` buffers,
-// which the callee left as `after`: those, then the rest as they were.
+// which the callee left as `after`: those, buffer by buffer, then the rest
+// as they were. The caller's file keeps its count of buffers.
 fn relent(count: Nat, after, held: Buffers()) → Buffers() {
     match count {
         Zero => held,
         Succ(k) => match held {
             Nil => Nil,
-            Cons(bytes, rest) => match after { Nil => Cons(bytes, rest), Cons(left, more) => Cons(left, relent(k, more, rest)) },
+            Cons(_, rest) => Cons(buffer_bytes(after, 0), relent(k, buffers_rest(after), rest)),
         },
     }
 }

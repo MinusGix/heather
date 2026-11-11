@@ -1434,8 +1434,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let live = src.main.live_in(homes, []);
                                 let saved = Start.saves_rsp(layout, src.depth);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
-                                    t.functions_run(call, j(sym(none), λ fs _ => Writers::Quiet(program_writers(fs)), program_writers_still(Nil, trivial)),
-                                        t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
+                                    t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
                                 let w_entry = entry.within_trans(c.prog, whole, src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), Exists(2, refl));
                                 let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
                                 let caps = λ (k: Nat) => {
@@ -1770,7 +1769,7 @@ theorem Target::perform_deep(self t: Target, src: Source, call: Writers(), n: Na
 // Room for one more: the frame entered, the words saved, the arguments
 // passed, the call, the callee's body by the depth below, the return, the
 // words restored, the frame left, and the results taken.
-theorem Target::perform_call(self t: Target, src: Source, call: Writers(), quiet: Writers::Quiet(call), n, d: Nat, room: t.room = Succ(d),
+theorem Target::perform_call(self t: Target, src: Source, call: Writers(), n, d: Nat, room: t.room = Succ(d),
     tp: t.procedures = src.procedures,
     hosts: t.Hosts(), answers: t.Answered(call),
     ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
@@ -1922,7 +1921,7 @@ theorem Target::perform_call(self t: Target, src: Source, call: Writers(), quiet
                             pops(s, rip_s, resident_s, ⟨held_m, ⟨rsp_w, ⟨frames_m, holding_w⟩⟩⟩)
                         })
                 };
-                let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, quiet, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
+                let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
                     n, proc.enter(env, args), k2, exits, returned);
                 let next_c = c.at_like(prog_len(entry), entry_live, tree2, proc.enter(env, args), env.set_words(proc.params, va),
                     env.entered_like(proc.params, entry_live, va, long_params, entry_live.within_mem(proc.params, pf.right.left)), body);
@@ -1989,11 +1988,11 @@ theorem Target::perform_call(self t: Target, src: Source, call: Writers(), quiet
 }
 
 // Every call at depth `d` runs as the call, by induction on the depth.
-theorem Source::calls_at(self src: Source, call: Writers(), quiet: Writers::Quiet(call), n: Nat, d: Nat):
+theorem Source::calls_at(self src: Source, call: Writers(), n: Nat, d: Nat):
     (t: Target) → t.procedures = src.procedures → t.Hosts() → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
     match d {
         Zero => λ t tp hosts _ room => t.perform_deep(src, call, n, room, hosts),
-        Succ(d1) => λ t tp hosts answers room => t.perform_call(src, call, quiet, n, d1, room, tp, hosts, answers, src.calls_at(call, quiet, n, d1)),
+        Succ(d1) => λ t tp hosts answers room => t.perform_call(src, call, n, d1, room, tp, hosts, answers, src.calls_at(call, n, d1)),
     }
 }
 
@@ -2026,16 +2025,15 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, linked.proof.proof);
     let linking = Bool::is_true_and(program_evaluable(src.functions), program_placeless(src.functions), meets.left);
-    let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right.left, meets.right.right);
-    let quiet = program_writers_still(src.functions, meets.right.left);
-    let fns = t.functions_run(call, quiet, answers);
+    let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
+    let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
     let live = src.main.live_in(homes, []);
     let saved = Start.saves_rsp(layout, src.depth);
     let w_c: c.prog.Within(program) = c.prog.within_trans(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
         program, Exists(2, refl), w_whole);
-    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, quiet, n, src.depth, t, refl, hosts, answers, refl), fns,
+    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, answers, refl), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
     let w_entry = entry.within_trans(c.prog, program, src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
     let w_saved = saved.within_trans(entry, program, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
