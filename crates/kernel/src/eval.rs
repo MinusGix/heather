@@ -1406,6 +1406,19 @@ impl<'a, 'v> Eval<'a, 'v> {
         Some(Work::Force(c))
     }
 
+    /// The former a constructor's written type unfolds to
+    /// ([`Eval::ty_to_former`]); a closed annotation's is worked out once
+    /// for the arena ([`ValueArena::memo_former`]).
+    fn annotation_former(&mut self, ty: &Rc<Type>, env: &Env<'v>) -> Res<&'v VTy<'v>> {
+        if let Some(former) = self.arena.memo_former(ty, env) {
+            return Ok(former);
+        }
+        let evaluated = self.eval_ty(ty, env)?;
+        let former = self.ty_to_former(evaluated)?;
+        self.arena.cache_former(ty, env, former);
+        Ok(former)
+    }
+
     /// [`Eval::step_eval`] at a former that is not an elimination.
     #[inline(never)]
     fn step_intro(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
@@ -1582,8 +1595,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Val::Pair { ann: None, fst: tclo(env, fst), snd: tclo(env, snd) }
             }
             Term::PairAt { ty: Some(ty), fst, snd } => {
-                let t = self.eval_ty(ty, env)?;
-                let t = self.ty_to_former(t)?;
+                let t = self.annotation_former(ty, env)?;
                 let VTy::Sigma { fst_level, snd_level, fst: fty, snd: sty } = &*t else {
                     return Err(OutOfFuel);
                 };
@@ -1603,8 +1615,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let ann = match ty {
                     None => None,
                     Some(ty) => {
-                        let s = self.eval_ty(ty, env)?;
-                        let s = self.ty_to_former(s)?;
+                        let s = self.annotation_former(ty, env)?;
                         let VTy::Sum { lhs_level, rhs_level, lhs, rhs } = &*s else {
                             return Err(OutOfFuel);
                         };
@@ -3818,6 +3829,38 @@ mod tests {
         let value = ev.force(second).unwrap();
         assert_eq!(nat_value(&mut ev, value), 1);
         assert_eq!(ev.fuel(), spent);
+    }
+
+    /// A constructor written with a closed type shares the former that
+    /// type unfolds to with every other constructor written at it, whatever
+    /// the environment; one whose type reads the environment has its own.
+    #[test]
+    fn a_closed_annotation_is_unfolded_once() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(1 << 20, Defs::opaque(), CtxBase::Nil, &arena);
+        let zero = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let sum = |lhs: Type| Rc::new(Type::Sum {
+            lhs_level: Level::Zero,
+            rhs_level: Level::Zero,
+            lhs: Rc::new(lhs),
+            rhs: Rc::new(Type::Nat),
+        });
+        let left = |ty: &Rc<Type>| Rc::new(Term::InlAt { ty: Some(Rc::clone(ty)), val: Rc::new(Term::Zero) });
+        let (here, there) = (Env::empty().push(&arena, zero), Env::empty().push(&arena, zero).push(&arena, zero));
+        // The address of the left summand's closure in the value built.
+        fn lhs_at<'v>(ev: &mut Eval<'_, 'v>, t: &Rc<Term>, env: &Env<'v>) -> usize {
+            let value = ev.eval_tm_ref(t, env).unwrap();
+            let Val::Inl { ann: Some(ann), .. } = value else { panic!("an annotated injection") };
+            std::ptr::from_ref(ann.lhs) as usize
+        }
+        let mut lhs_of = |t: &Rc<Term>, env| lhs_at(&mut ev, t, env);
+        let closed = left(&sum(Type::Nat));
+        assert_eq!(lhs_of(&closed, &here), lhs_of(&closed, &there));
+        // The same type written twice is two annotations: the memo is by
+        // the syntax, and promises nothing about its equals.
+        assert_ne!(lhs_of(&closed, &here), lhs_of(&left(&sum(Type::Nat)), &here));
+        let open = left(&sum(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) }));
+        assert_ne!(lhs_of(&open, &here), lhs_of(&open, &there));
     }
 
     /// `(λx. x x)(λx. x x)` as a step body, applied to `ih` when `reads_ih`:
