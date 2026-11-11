@@ -734,6 +734,21 @@ impl Checking<'_> {
             {
                 Rewrites(self).elab_rewrite(cx, args, named, expected, lvl, e.span)
             }
+            // `simp_only(r₁, …, rₙ)` normalises the goal by a list of laws and
+            // closes it; `simp_show` reports the result (docs/simp-design.md).
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if (name == "simp_only" || name == "simp_show")
+                && !self.shadowed(cx, name)
+                && Constructors(self).ctor_here_expected(cx, name, expected).is_none()) =>
+            {
+                let show = matches!(&head.kind, ExprKind::Var(name) if name == "simp_show");
+                crate::rewrite::Simps(self).elab_simp(cx, show, args, named, expected, lvl, e.span)
+            }
             // `subst(h, e)` eliminates a local variable along `h`, reverting
             // the locals that depend on it (docs/equation-rewrite-design.md §8).
             ExprKind::App {

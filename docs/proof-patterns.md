@@ -99,6 +99,26 @@ property of Heather.
   atom, element and predicate doubles the table, so keep a big literal
   behind a name. A call costs a few tenths of a second, mostly the tactic's
   own run; a one-step citation is cheaper.
+- **A chain of rewrites by known laws is `simp_only(l₁, …, lₙ)`**
+  (`docs/simp-design.md` §10), not a `calc` with one law per line or nested
+  `rewrite`s: both sides are normalised by the listed laws, along `=` and
+  along a designated `≈`, and the goal closes where they meet. The list is
+  the whole set, so the proof does not move when a lemma is added elsewhere.
+  Induction hypotheses go in the list (`a.simplify_same()`); a call at a
+  constructor computes first, so a definition's own equations are not
+  listed. At a goal about a common carrier, `by simp()` brings the default
+  sets of the types in it (`List::shape`, `Nat::arith`, `Regex::same`:
+  `lib/std/tactic/simp_laws.hthr`), with `extra := [h]` for the call's own
+  laws; a new carrier registers a `SimpSet` beside its lemmas. In `lib/`
+  prefer the pinned list. `then := e` proves what is left, `using := h` closes from a fact
+  with the same normal form, `discharge := e` proves side conditions the
+  scope does not hold. Write `simp_show(…)` to read the normal form and the
+  route, then replace it: it never closes a goal. A refusal lists each step
+  as `law: lhs ⟶ rhs` and the laws blocked with their unmet condition;
+  read that before adding a law. Not reached yet: a law `P ↔ Q`
+  ([[simp-iff-laws]]), an instance under a λ ([[simp-under-binders]]), and
+  a goal a named `match h: test` left unfolded past its `≈`, which is
+  restated in a one-step `calc` ([[case-split-unfolds-the-goals-relation]]).
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).

@@ -68,6 +68,21 @@ impl Relations<'_> {
         goal: &Type,
         what: &str,
     ) -> R<Option<RelationRewrite<'a>>> {
+        self.relation_step_or(cx, h, proof, proof_ty, goal, None)
+            .map_err(|miss| miss.into_error(self.0, cx, goal, what, "relation", h.span))
+    }
+
+    /// [`Self::relation_step`] with its misses told apart and `premise`
+    /// asked for a side condition, as [`Rewrites::rewrite_instance_or`].
+    pub(super) fn relation_step_or<'a>(
+        &'a self,
+        cx: &'a Cx,
+        h: &Expr,
+        proof: &Term,
+        proof_ty: &Type,
+        goal: &Type,
+        premise: Option<super::Premise<'_>>,
+    ) -> Result<Option<RelationRewrite<'a>>, super::Miss> {
         let mut pcx = cx.clone();
         let mut k = 0u32;
         let mut telescope = Vec::new();
@@ -99,7 +114,7 @@ impl Relations<'_> {
             _ => unreachable!("a relation is an `El` or a family"),
         };
         if k == 0 {
-            return RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds).map(Some);
+            return Ok(RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds).map(Some)?);
         }
         if matches!(&*pattern.left, Term::Var(x) if x.0 < k) {
             return Err(ElabError::Elab {
@@ -107,13 +122,14 @@ impl Relations<'_> {
                       would match every subterm; apply it to that argument"
                     .into(),
                 span: h.span,
-            });
+            }
+            .into());
         }
         // The first node the walk meets that matches fixes the arguments, at
         // whatever depth below the goal's binders it sits (§10.3): the
         // pattern's own context is shifted past them, and the match is asked
         // in the binders' context.
-        let nodes = GoalNodes::of(cx, goal);
+        let nodes = GoalNodes::of(self, cx, goal);
         let mut shifted: Vec<Option<Rc<Term>>> = Vec::new();
         let mut found = None;
         let mut candidates = 0;
@@ -142,32 +158,32 @@ impl Relations<'_> {
             }
         }
         let Some((binds, here, depth)) = found else {
-            return Err(ElabError::Elab {
-                msg: format!(
-                    "`rewrite`: no subterm of {what} `{}` is an instance of this relation's \
-                     left side\n  note: an instance has the left side's head, and its other \
-                     parts convert",
-                    self.display_type(cx, goal)
-                ),
-                span: h.span,
-            });
+            return Err(super::Miss::NoInstance);
         };
         // Binder `j` (outermost first) is `Var(k - 1 - j)` in `pcx`.
         let mut term = Rc::new(proof.shift_local(depth));
         let mut ty_now = proof_ty.shift_local(depth);
         for j in 0..k {
-            let Some(arg) = binds[(k - 1 - j) as usize].clone() else {
-                return Err(ElabError::Elab {
-                    msg: format!(
-                        "`rewrite`: matching the left side does not determine this relation's \
-                         argument {}, which only its right side mentions; give it explicitly",
-                        j + 1
-                    ),
-                    span: h.span,
-                });
-            };
-            let Type::Pi { cod, .. } = self.whnf(&here, &ty_now, h.span)? else {
+            let Type::Pi { dom_level, dom, cod, .. } = self.whnf(&here, &ty_now, h.span)? else {
                 unreachable!("opened as a Π above")
+            };
+            let arg = match binds[(k - 1 - j) as usize].clone() {
+                Some(arg) => arg,
+                None => {
+                    let side = crate::strengthen_ty(&here.gamma, &cod, 1).is_some();
+                    // A side condition is discharged in the goal's own
+                    // context: below a binder the proof would have to be
+                    // found there, which is not attempted.
+                    match premise.filter(|_| side && depth == 0).and_then(|p| p(&here, &dom, &dom_level)) {
+                        Some(found) => Rc::new(found),
+                        None => {
+                            return Err(super::Miss::Unbound {
+                                index: j + 1,
+                                premise: (side && depth == 0).then(|| ((*dom).clone(), dom_level.clone())),
+                            });
+                        }
+                    }
+                }
             };
             ty_now = cod.inst_top(0, &arg);
             term = apply(term, [arg]);
@@ -190,7 +206,8 @@ impl Relations<'_> {
                       a relation rewrite rewrites along one relation throughout"
                     .into(),
                 span: h.span,
-            });
+            }
+            .into());
         };
         let at_base = |t: &Term| Rc::new(relocated(t, base, depth).expect("checked above"));
         let relation = Relation {
@@ -201,7 +218,7 @@ impl Relations<'_> {
             level: instance.level,
         };
         let proof = Rc::unwrap_or_clone(at_base(&term));
-        RelationRewrite::new(self, cx, h.span, relation, proof, base, holds).map(Some)
+        Ok(RelationRewrite::new(self, cx, h.span, relation, proof, base, holds).map(Some)?)
     }
 }
 
@@ -231,33 +248,33 @@ struct GoalNodes {
 }
 
 impl GoalNodes {
-    fn of(cx: &Cx, goal: &Type) -> GoalNodes {
+    fn of(e: &Elaborator, cx: &Cx, goal: &Type) -> GoalNodes {
         let mut nodes = GoalNodes { terms: Vec::new(), scopes: Vec::new() };
         let mut seen = std::collections::HashSet::new();
-        nodes.types(cx, goal, &mut seen);
+        nodes.types(e, cx, goal, &mut seen);
         nodes
     }
 
-    fn types(&mut self, cx: &Cx, ty: &Type, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
+    fn types(&mut self, e: &Elaborator, cx: &Cx, ty: &Type, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
         match ty {
-            Type::El { tm, .. } => self.walk(tm, 0, seen),
+            Type::El { tm, .. } => self.walk(e, cx, tm, 0, seen),
             Type::M { .. } => {
                 if let Some(rel) = Relation::of_family(ty) {
-                    self.walk(&rel.left, 0, seen);
-                    self.walk(&rel.right, 0, seen);
+                    self.walk(e, cx, &rel.left, 0, seen);
+                    self.walk(e, cx, &rel.right, 0, seen);
                 }
             }
             Type::Pi { dom, cod, .. } => {
-                self.types(cx, dom, seen);
+                self.types(e, cx, dom, seen);
                 if let Some(cod) = crate::strengthen_ty(&cx.gamma, cod, 1) {
-                    self.types(cx, &cod, seen);
+                    self.types(e, cx, &cod, seen);
                 }
             }
             _ => {}
         }
     }
 
-    fn walk(&mut self, t: &Rc<Term>, scope: usize, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
+    fn walk(&mut self, e: &Elaborator, cx: &Cx, t: &Rc<Term>, scope: usize, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
         if !seen.insert((Rc::as_ptr(t), scope)) {
             return;
         }
@@ -265,20 +282,28 @@ impl GoalNodes {
         if let Term::Lam { dom_level, dom, body, .. } = &**t {
             self.scopes.push((scope, Rc::clone(dom), dom_level.clone()));
             let inner = self.scopes.len();
-            self.walk(body, inner, seen);
+            self.walk(e, cx, body, inner, seen);
             return;
         }
         // A constructor's children, as written (§11.5).
         if let Some(node) = crate::codata::CtorNode::read(t) {
             for child in &node.children {
-                self.walk(&child.term, scope, seen);
+                self.walk(e, cx, &child.term, scope, seen);
+            }
+            return;
+        }
+        // An inductive constructor's value is not an application: its
+        // fields are read off the lowered value, as the walk reads them.
+        if let Some((_, _, fields)) = e.view_ctor(cx, t) {
+            for f in &fields {
+                self.walk(e, cx, f, scope, seen);
             }
             return;
         }
         let (head, args) = crate::spelling::app_spine(t);
         if !matches!(head, Term::Lam { .. }) {
             for a in args {
-                self.walk(a, scope, seen);
+                self.walk(e, cx, a, scope, seen);
             }
         }
     }
@@ -523,6 +548,10 @@ pub(super) struct RelationRewrite<'a> {
     fields: Vec<(&'static str, Vec<Rc<Term>>, Rc<Term>)>,
     serial: usize,
     goals: usize,
+    /// `Some` when missing evidence is refused rather than raised as a goal
+    /// (a simplifier's step either fires whole or not at all): the
+    /// statements that were missing.
+    pub(super) refused: Option<Vec<String>>,
 }
 
 impl<'a> RelationRewrite<'a> {
@@ -568,6 +597,7 @@ impl<'a> RelationRewrite<'a> {
             fields: Vec::new(),
             serial: 0,
             goals: 0,
+            refused: None,
         };
         rw.carrier_name = rw.fresh();
         rw.cx.tyvars.push(TyVar {
@@ -583,6 +613,22 @@ impl<'a> RelationRewrite<'a> {
 
     /// After [`Self::goal`]: an error unless the walk rewrote something, with
     /// the equation form's hint when the goal holds the right side instead.
+    /// `R(x, x)` by the relation's `Reflexive` evidence.
+    pub(super) fn reflexive_at(&mut self, x: &Rc<Term>) -> R<Rc<Term>> {
+        self.reflexivity(x)
+    }
+
+    /// How many nodes the walk rewrote.
+    pub(super) fn occurrences(&self) -> usize {
+        self.occurrences
+    }
+
+    /// The step's two sides, where they are scoped in the rewrite's own
+    /// context.
+    pub(super) fn sides(&self) -> Option<(Rc<Term>, Rc<Term>)> {
+        (self.base == 0).then(|| (Rc::clone(&self.lhs), Rc::clone(&self.rhs)))
+    }
+
     pub(super) fn require_occurrence(&self, goal: &Type, what: &str) -> R<()> {
         if self.occurrences > 0 {
             return Ok(());
@@ -811,6 +857,11 @@ impl<'a> RelationRewrite<'a> {
         if let Some(node) = crate::codata::CtorNode::read(t) {
             return self.constructor(t, node);
         }
+        if let Some((ind, i, fields)) = self.e.view_ctor(self.here(), t)
+            && !fields.is_empty()
+        {
+            return self.inductive(t, &ind, i, &fields);
+        }
         let (head, args) = crate::spelling::app_spine(t);
         if args.is_empty() || matches!(head, Term::Lam { .. }) {
             return self.opaque(t);
@@ -847,6 +898,97 @@ impl<'a> RelationRewrite<'a> {
         let (head, args) = crate::spelling::app_spine(t);
         head == lhs_head
             && args.iter().zip(&lhs_args).all(|(a, b)| a == b || Rewrites(self.e).terms_convert(self.here(), b, a))
+    }
+
+    /// A value of an inductive's constructor: its fields are rewritten, and
+    /// the constructor is crossed as the function it is, `T::C(x, y)`, by
+    /// the evidence registered at that name (`Respects2<…>(R, R, R, T::C)`,
+    /// `PreservesRelation(R, R, T::C)`), which is what `rel_cong` reads
+    /// there (§10.7). A lowered constructor value is not an application, so
+    /// the congruence is stated over the call and the result read back as a
+    /// value.
+    fn inductive(&mut self, t: &Rc<Term>, ind: &crate::inductive::Inductive, i: usize, fields: &[Rc<Term>]) -> R<Node> {
+        let nodes = fields.iter().map(|f| self.term(f)).collect::<R<Vec<_>>>()?;
+        if !nodes.iter().any(Node::changed) {
+            return self.opaque(t);
+        }
+        let name = format!("{}::{}", ind.name, ind.ctors[i].name);
+        let Some(op) = self.constructor_function(&name, t, fields) else {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: a field of the constructor value{} changes, and `{name}` does \
+                     not name its constructor as a function of those fields here, so no \
+                     evidence can be stated for it",
+                    self.shown(t)
+                ),
+                span: self.span,
+            });
+        };
+        let d = self.depth();
+        let op = Rc::new(op.shift_local(d));
+        let after = fields.iter().zip(&nodes).map(|(f, node)| match node {
+            Node::Changed { term, .. } => Rc::clone(term),
+            Node::Same => Rc::clone(f),
+        });
+        let term = apply(Rc::clone(&op), after);
+        let own = nodes.iter().all(|n| !n.changed() || (n.rel().is_none() && !n.pointwise()));
+        let shape = match (fields.len(), own) {
+            (1, true) => Shape::Unary,
+            (2, true) => Shape::Binary,
+            _ => {
+                return Err(ElabError::Elab {
+                    msg: format!(
+                        "`rewrite`: a field of the constructor value{} changes; a relation \
+                         rewrite crosses a constructor of one field (`PreservesRelation`) or \
+                         of two (`Respects2`), each changed by the rewrite's own relation",
+                        self.shown(t)
+                    ),
+                    span: self.span,
+                });
+            }
+        };
+        if matches!(self.lookup_here(&shape, None, &op, None)?, Lookup::Untyped) {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: a field of the constructor value{} changes, and `{name}` is \
+                     not an operation on the relation's carrier",
+                    self.shown(t)
+                ),
+                span: self.span,
+            });
+        }
+        let (evidence, _) = self.discharge_here(&shape, None, &op, None)?;
+        let mut args = Vec::new();
+        for (f, node) in fields.iter().zip(&nodes) {
+            let (x, x2, hx) = self.side(f, node)?;
+            args.extend([x, x2, hx]);
+        }
+        Ok(Node::related(term, apply(evidence, args)))
+    }
+
+    /// The constructor `name` as a function of `fields`, at the rewrite's
+    /// own scope: a constructor's name alone has no inferred type (it is a
+    /// function only where one is expected), so it is checked against the
+    /// arrow from the fields' types to the value's. `None` when a type
+    /// mentions a binder the walk is below.
+    fn constructor_function(&self, name: &str, t: &Rc<Term>, fields: &[Rc<Term>]) -> Option<Term> {
+        let (mut ty, mut level) = self.result_type(t)?;
+        for (k, f) in fields.iter().enumerate().rev() {
+            let (dom, dom_level) = self.result_type(f)?;
+            ty = Rc::new(Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: level.clone(),
+                dom: Rc::new(dom.shift_local(k as u32)),
+                cod: ty,
+            });
+            level = Level::max(dom_level, level);
+        }
+        // Each codomain sits under the binders before it.
+        let ty = arrow_shifted(&ty, fields.len() as u32);
+        let source = format!("fn generated() -> Type {{ {name} }}");
+        let mut file = parse_file(&source).ok()?;
+        let Some(Item::Decl(d)) = file.items.pop() else { unreachable!("one declaration") };
+        self.e.generated_scope(|e| e.elab_check(&self.cx, &d.body.result, &ty, &level)).ok()
     }
 
     /// A λ: its body rewritten one binder down, and the two λs related by
@@ -1807,6 +1949,12 @@ impl<'a> RelationRewrite<'a> {
     }
 
     fn obligation(&mut self, ty: Type, level: Level, label: &str) -> R<Term> {
+        if let Some(refused) = &mut self.refused {
+            let statement = self.e.spell_type_clean(self.original, &ty).unwrap_or_else(|| self.e.display_type(self.original, &ty));
+            let msg = format!("needs `?{label}`: `{statement}`");
+            refused.push(statement);
+            return Err(ElabError::Elab { msg, span: self.span });
+        }
         self.goals += 1;
         RelationalProof(self.e).relation_obligation(self.original, "rewrite", label, self.goals - 1, ty, level, self.span)
     }
@@ -1986,4 +2134,22 @@ fn rebuild(t: &Rc<Term>, nodes: &[Node]) -> Rc<Term> {
         };
         Rc::new(Term::AppAt { fun, arg })
     })
+}
+
+/// An arrow built innermost-first from closed-over types, with each
+/// codomain moved under the binders written before it: the last of `n`
+/// codomains sits under `n` binders.
+fn arrow_shifted(ty: &Rc<Type>, n: u32) -> Type {
+    fn go(ty: &Type, under: u32, left: u32) -> Type {
+        match ty {
+            Type::Pi { dom_level, cod_level, dom, cod } if left > 0 => Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::new(go(cod, under + 1, left - 1)),
+            },
+            _ => ty.shift_local(under),
+        }
+    }
+    go(ty, 0, n)
 }

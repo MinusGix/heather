@@ -345,6 +345,19 @@ inductive Req {
     // receive it at their own points (Lean's `generalizing`). Refused for
     // a term, and where `Abstract` is.
     Revert(h: Handle, x: Expr),
+    // A proof of the type `goal`, by normalising it with `laws` until its
+    // two sides meet, as `simp_only(laws…)` does there: each law a proof of
+    // an equation or of a designated relation, under any hypotheses. Which
+    // laws a goal gets is the tactic's choice (`simp`, a set's lemmas
+    // resolved); the walk and the proof are the host's
+    // (docs/simp-design.md §7). Refused with `simp_only`'s report: the
+    // route taken and the laws blocked.
+    Simp(laws: List<Expr>, goal: Handle),
+    // `trivial`, when `laws` pass the checks a set of laws is held to
+    // (docs/simp-design.md §4): no law's own statement loops under the
+    // list, and no law is rewritten by another to a result that does not
+    // join. Refused with the law at fault and the route.
+    SimpCheck(laws: List<Expr>),
 }
 
 inductive Never {}
@@ -387,6 +400,8 @@ fn Resp(r: Req) → Type {
         Spell(_) => Checked<Handle>,
         Abstract(_, _) => Checked<Handle>,
         Revert(_, _) => Checked<Handle>,
+        Simp(_, _) => Checked<Handle>,
+        SimpCheck(_) => Checked<Handle>,
     }
 }
 
@@ -480,6 +495,8 @@ fn repr_of(ty: Handle) → Tac<Checked<Handle>> { ask(Repr(ty)) }
 fn next_spelling(e: Expr) → Tac<Checked<Handle>> { ask(Spell(e)) }
 fn abstract_over(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Abstract(h, x)) }
 fn revert_into(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Revert(h, x)) }
+fn simp_by(laws: List<Expr>, goal: Handle) → Tac<Checked<Handle>> { ask(Simp(laws, goal)) }
+fn simp_check_laws(laws: List<Expr>) → Tac<Checked<Handle>> { ask(SimpCheck(laws)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -546,6 +563,8 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Spell(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Abstract(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Revert(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Simp(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        SimpCheck(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -911,7 +930,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 // 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
-// 32: `Spell`. 33: `Abstract`. 34: `Revert`.
+// 32: `Spell`. 33: `Abstract`. 34: `Revert`. 35: `Simp`. 36: `SimpCheck`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -950,6 +969,8 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Spell(_) => 32,
             Abstract(_, _) => 33,
             Revert(_, _) => 34,
+            Simp(_, _) => 35,
+            SimpCheck(_) => 36,
         },
     }
 }
@@ -1009,6 +1030,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Repr(ty) => ty.id,
             Abstract(h, _) => h.id,
             Revert(h, _) => h.id,
+            Simp(_, goal) => goal.id,
             _ => 0,
         },
     }
@@ -1029,9 +1051,9 @@ fn host_split_id(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Close(s, _) => s, _ => 0 } }
 }
 
-// `Close`'s proofs, read one at a time.
+// `Close`'s proofs and `Simp`'s laws, read one at a time.
 fn host_proofs(t: Tac<Expr>) → List<Expr> {
-    match t { Pure(_) => [], Ask(r, _) => match r { Close(_, proofs) => proofs, _ => [] } }
+    match t { Pure(_) => [], Ask(r, _) => match r { Close(_, proofs) => proofs, Simp(laws, _) => laws, SimpCheck(laws) => laws, _ => [] } }
 }
 
 fn exprs_len(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_len(rest)) } }

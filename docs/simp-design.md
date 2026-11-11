@@ -18,6 +18,16 @@ moves cost from *maintenance and diagnosis* to *what is written down*.
 
 ## 0. The decisions
 
+**Decided, Minus, 2026-11-11.** Agreed in general. (2) is amended: there
+*is* a default, and it is by type. A type may associate a default set with
+itself, and a call's default search includes the sets of the types its
+expression mentions (`Nat`, `Int`, `List` show up everywhere, and "this
+fails, no idea what we need" is the failure to avoid); §3.1. (4) as
+recommended: host engine, Heather policy, and the engine moves into
+Heather once tactics compile to runtime code. The failure report is
+wanted, and the route a run took must be easy to see; §6.1. Build it for
+relations as well, not `=` only.
+
 1. **A non-closing `simp` states its result** (§2). The committed form of
    "simplify, then continue" names the simplified goal, and `simp` proves
    the two join. A bare residue exists for exploration and prints the
@@ -165,7 +175,25 @@ A registration is a module event already, so it is in the interface digest
 and dependents re-elaborate when a set changes. That is the property the
 PR lane lacked for the motive rung; here it comes from the mechanism.
 
-There is deliberately no "all sets" set. `issues/lemma-selection-and-search.md`'s
+### 3.1 Default sets belong to types
+
+A set registered with `default_for := name_of(T)` is `T`'s default.
+`by simp()` with no set named uses the union of the defaults of every
+type whose values occur in the goal: the types of the subterms the walk
+visits, read from the heads' result types, not the whole import closure.
+A goal about `List<Nat>` lengths gets `List`'s and `Nat`'s defaults and
+nothing of `Regex`'s, wherever it is written. Naming sets adds to the
+defaults; `only := […]` replaces them.
+
+This keeps what the ambient set is good for (the common carriers work
+without knowing their lemma names) and drops what makes it fragile: the
+set a call uses is a function of the goal's types, a type's default is one
+declaration in the type's module, and a module that tags a lemma about its
+own type cannot change a proof that does not mention that type. A report
+names the defaults that were included and why ("`List::shape`: `xs ++ ys`
+has type `List<A>`").
+
+Apart from the per-type defaults there is no "all sets" set. `issues/lemma-selection-and-search.md`'s
 selection language can *propose* sets for a goal by the heads it mentions
 (`heather search --simp-sets-for <goal>`), which is exploration.
 
@@ -274,6 +302,17 @@ matters most to a program writing proofs: every failure names its next
 action, which is one of *prove this premise*, *add this lemma*, *state the
 other normal form*, *this is not a consequence of the set*.
 
+### 6.1 The route
+
+Every run can show the route it took: the sequence of steps, each with its
+position in the term, the rule or procedure, the instance, and the term
+before and after, in the order the engine took them, ending with the
+normal form. `simp_show` prints it; a failed closing or stated call prints
+the route of each side up to the first position where the sides differ,
+which is usually short. The route is also the `calc` chain the run stands
+for, so it can be pasted as an explicit proof where a pinned call is still
+not explicit enough.
+
 `--log-used` appends (goal heads, set, lemmas used) per successful run:
 the premise-selection corpus `issues/lemma-selection-and-search.md` asks
 for, which cannot be reconstructed later.
@@ -325,7 +364,10 @@ library will call, so any change to its engine re-elaborates the library.
 
 Each leaves something usable.
 
-1. **Engine, pinned lists, closing and stated forms, `=` only.**
+(Minus, 2026-11-11: build it more fully than `=` only; rounds 1 and 4
+are taken together.)
+
+1. **Engine, pinned lists, closing and stated forms.**
    `Normalise` over `rewrite`'s walk with a list of unconditional laws and
    unfolding; `simp(only := […])`; the report's items 1 and 5. Closes
    `issues/rewrite-every-instance.md`. Done when a `len`/`append` chain
@@ -340,7 +382,7 @@ Each leaves something usable.
    round-1 and round-2 proofs name sets instead of lists.
 4. **Relations and hypotheses.** Sets along `≈` and `↔`, `locals`,
    `simp_at`. Done when `regex_dfa.hthr`'s `deriv_simp_same` and
-   `simp_same` are `by simp(Regex::laws)`.
+   `simplify_same` are `by simp(Regex::laws)`.
 5. **Procedures and wrappers.** `SimpProc`, AC sorting, literal
    arithmetic, `store_simp`, a `sets`-backed and a substitution-calculus
    instance as the mathematics milestones need them.
@@ -370,3 +412,101 @@ small addition; §2 argues the library should rarely want it.
   relation walk's binder rules (§10 of the rewrite design) apply where
   the pointwise relation has evidence; elsewhere a rule does not fire
   under a λ and the report says so.
+
+## 10. What is built
+
+Round 1, with relations (2026-11-11). `simp_only(r₁, …, rₙ)` and
+`simp_show(…)` are term forms beside `rewrite`
+(`crates/elab/src/rewrite/simp.rs`); probes are
+`lib/_tests/std/tactic/simp_tests.hthr`.
+
+- **Laws.** A proof of `a = b` or of `R(a, b)` for a designated relation,
+  under any hypotheses: a named lemma, a lemma applied to some arguments, a
+  hypothesis. The first law in the list with an instance fires, at every
+  occurrence of that instance; then the list is tried again from its start.
+- **Computation.** Before each match, a call at a constructor computes
+  (`xs.len()` at `Cons`, `r.simplify()` at `Seq(a, b)`), a structural recursion
+  with its recursive calls kept as calls. A definition's own equations are
+  not laws to list.
+- **Closing.** With no named argument the call closes the goal: both sides
+  are normalised and compared, and the run stops as soon as they are one
+  term, so a commuting law that would move both for ever does not.
+  `then := e` proves the normal form; `using := h` normalises `h`'s
+  statement and requires the two normal forms to convert.
+- **Side conditions.** A law's non-dependent hypothesis is found among the
+  hypotheses in scope (parameters and `let`s), or proved by
+  `discharge := e`. A law whose condition is unmet is reported as blocked,
+  with the condition.
+- **Relations.** The relation walk crosses calls with registered
+  `PreservesRelation`/`Respects2` evidence, and now inductive constructor
+  values of one or two fields, with evidence at `T::C`.
+- **The report** (§6, §6.1). Each refusal carries the route, one line per
+  step, `law: lhs ⟶ rhs`; the laws blocked at the normal form; a loop
+  at its first repeat (the goal after step *n* is the goal after step *k*),
+  and the 256-step budget only behind that.
+
+Sets and defaults: §11.
+
+## 11. Sets and per-type defaults, as built
+
+Round 3's sets, without the checks (2026-11-11).
+
+- **A set** is `register def …: SimpSet = simp_default(name, name_of(T),
+  [name_of(l₁), …]);` (a type's default) or `simp_set(name, […])` (named at
+  a call), in `lib/std/tactic/simp_laws.hthr`'s record: a report name, the
+  types it is the default of, the laws. It is written beside the lemmas,
+  so each name is checked where it is in scope. `Nat::arith` and
+  `List::shape` are in `simp_laws` itself (their modules sit below
+  `string`); `Regex::same` is in `regex_dfa`.
+- **`by simp()`** (`lib/std/tactic/simp.hthr`) walks the goal's views,
+  infers each subterm's type, and takes every registered set that is the
+  default of a type met (§3.1): by the global a `name_of` key denotes
+  where the call is, or by name for a builtin. `extra := [h, …]` adds the
+  call's own laws, tried first; `defaults := False` leaves the type
+  defaults out; `by simp_with([S, …])` names sets (a defaulted parameter
+  has no positional slot, so the form that takes sets by position is its
+  own name).
+- **The run** is the host's, asked for with `Simp(laws, goal)`
+  (`docs/host-elaboration-interface-design.md` §27): the chosen sets'
+  lemmas resolved to terms, then the same driver as `simp_only`.
+- **The report** is the driver's, followed by one line per set used and
+  the type that brought it (``tried the set `Nat::arith`: the default of
+  `Nat`, which the goal has a value of``), or the statement that no type in
+  the goal has a default.
+
+Differences from §3 as proposed: sets are composed as a list at the call,
+not with `+`; `only := […]` is `simp_only`, the term form; a set has no
+order or procedures yet, because nothing checks or runs them.
+
+A free function named `simp` makes `e.simp()` ambiguous wherever both are
+in scope (the member-or-name rule), so `Regex::simp` became
+`Regex::simplify`.
+
+**The checks of §4, as far as running a set shows** (`by
+simp_check([S, …])`, the host request `SimpCheck`). Each law's own
+statement, with its binders as fresh variables, is normalised by the whole
+list. A run that loops refuses the list: it has no normal form at that
+law's instances (commutativity, two laws that undo each other). A run
+whose two sides do not meet means another law rewrote the left side first
+and the results do not join; the refusal prints the two normal forms,
+which is the equation to add. A check is a theorem of `True` beside the
+set (`simp_list_shape_checked` in `simp.hthr`,
+`Regex::simp_regex_same_checked`), or beside the sets a module uses
+together, so it is re-run when a set or a lemma changes and not at every
+call.
+
+This is weaker than §4 in three ways, each left open on
+`issues/simp-tactic.md`: there is no order, so termination is tested at
+each law's generic instance and not proved; an overlap that needs both
+left sides instantiated (associativity against a unit) is not found, since
+that is unification of the two; and nothing forces a registered set to
+have its check, so an unchecked set is only caught by the loop report at a
+call.
+
+Not built: the `--json` report, unfolding by name. Known gaps: a law between statements,
+`P ↔ Q` (`issues/simp-iff-laws.md`); an equation's instance under a binder
+(`issues/simp-under-binders.md`); a goal a named case split left unfolded
+past its relation, which is restated in a one-step `calc`
+(`issues/case-split-unfolds-the-goals-relation.md`). Each step is one walk
+of the goal (`issues/rewrite-every-instance.md`), and a default set is
+tried law by law at each step, so a set's size is a cost at every call.

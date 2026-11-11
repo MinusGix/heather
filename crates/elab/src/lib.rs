@@ -3151,6 +3151,16 @@ impl Elaborator {
                         span,
                     );
                 }
+                if name == "simp_only" || name == "simp_show" {
+                    return err(
+                        format!(
+                            "`{name}(h, …)` needs an expected type: it simplifies a goal, so it \
+                             only means anything where one is known (a `theorem` body, an \
+                             annotated `let`, a `calc` step, an argument)"
+                        ),
+                        span,
+                    );
+                }
                 if name == "subst" {
                     return err(
                         "`subst(h, e)` needs an expected type: it eliminates a variable from a \

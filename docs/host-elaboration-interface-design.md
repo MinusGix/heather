@@ -1059,3 +1059,27 @@ additions serve it, and neither is specific to it:
   binds hypotheses about its points in front of the goal before the points
   are abstracted, so the cases receive them at their own points (Lean's
   `generalizing`). Tag 34.
+
+## 27. A simplifier run: `Simp` (2026-11-11)
+
+- **`Simp(laws: List<Expr>, goal: Handle) → Checked<Handle>`**: a proof of
+  the type `goal`, found by normalising it with `laws` until its two sides
+  meet (`rewrite::Simps::simp_terms`, the run behind `simp_only`). Each law
+  is a term the tactic built (a set's lemma resolved by name, a hypothesis,
+  a lemma applied), read in the join of the laws' scopes and the goal's;
+  a law may be unapplied, and the walk instantiates it where it fires. The
+  split of `docs/simp-design.md` §7: which laws a goal gets is policy, in
+  Heather (`lib/std/tactic/simp.hthr` picks the default sets of the types
+  in the goal from `registered(SimpSet)`); the walk, the congruence
+  evidence and the proof term are the host's, where the relation walk
+  already is. The refusal is the run's report as text: the route, one line
+  per step, and the laws blocked at the normal form. The laws are read
+  through the accessors `Close`'s proofs use (`host_proof_count`,
+  `host_proof`). Tag 35.
+- **`SimpCheck(laws: List<Expr>) → Checked<Handle>`**: `trivial`, when the
+  laws pass the checks a set is held to (`rewrite::Simps::check_terms`,
+  `docs/simp-design.md` §11): no law's own statement loops under the list,
+  and none is rewritten by another to a result that does not join. Answered
+  with a proof of `True` so that a check is a theorem beside the set
+  (`by simp_check([S])`); refused with the law at fault and the route.
+  Tag 36.
