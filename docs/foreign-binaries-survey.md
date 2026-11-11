@@ -1,7 +1,8 @@
 # Foreign binaries: proving things about code Heather did not compile
 
-Status: **survey and design sketch**, 2026-11-11. Speculative and not
-scheduled: no milestone needs it, and Minus said it will not be done soon.
+Status: **survey and design sketch**, 2026-11-11, with Minus's answers of
+the same day in §13. Speculative and not scheduled: no milestone needs it,
+and Minus said it will not be done soon.
 Owner: `issues/foreign-binary-contracts.md`. It extends
 `docs/compilation-vision.md` in one direction (a foreign artifact as one more
 producer of `Compile(f)`) and reads `docs/native-library-exports-design.md`
@@ -253,7 +254,7 @@ with a checked result is plausible; "search" means invariants are needed.
 | 2 | **Footprint**: stores only into its own frame and spans lent for writing; callee-saved registers kept; reads only its frame, its code and spans lent | `Stack::Wrote`, `Kept`, `Lends`, generalised (§4.2) | automatic for compiler-shaped code, by the analysis of §5 |
 | 3 | **Total**: terminates, no fault, stack use below a stated bound | `Returns` in full; `loop_variant` | search (variants), bounded loops automatic |
 | 4 | **System calls**: none, or only within a policy | `Sim` against a tree, or a predicate on every trace (`io-footprint-facts`' `Io::Only`, one level down) | automatic for "none" (no SYSCALL form reachable) |
-| 5 | **Function**: RAX is `f` of the arguments and the buffers | `Compile(f)`; `compiled_returns_lent`'s shape | search, or decompilation (§3.1 c) |
+| 5 | **Result**: a stated property of what it returns and writes, up to the function `f` it computes (§13, answer 2) | an `ensures` over the contract; `Compile(f)` at the strongest | search within what the automation reaches, or decompilation (§3.1 c) |
 | 6 | **Leakage**: constant-time under a named contract | `docs/constant-time-survey.md`'s labelled steps | automatic taint analysis, checked |
 
 ### 4.1 Rung 0 is a discipline over machine code
@@ -649,6 +650,8 @@ making, written down so it is not unmade by accident.
 
 ## 12. Questions for Minus
 
+Answered in part on 2026-11-11: §13.
+
 1. Is the right first-class notion the **assumed foreign contract with
    provenance** (F0)? It is the only part with near-term use, since
    `nh-library` and `runtime-extern-c-abi` will need imports anyway, and
@@ -662,6 +665,103 @@ making, written down so it is not unmade by accident.
    still the policy at foreign-code scale, or is importing a
    machine-readable semantics as the cross-check (never the authority)
    acceptable when the time comes?
+
+## 13. Minus's answers (2026-11-11)
+
+Given the same day, after reading the note. Recorded as said, with the
+reading taken of each; where a sentence is this note's inference, it says
+so.
+
+1. **Two modes, both wanted.** An *assumed contract*, and *active
+   verification*, "a smart linkage thing": you link to this code, so check
+   that the function you call does what you say it does. This answers §12
+   question 1: the assumed contract is worth having as its own mode and
+   not only as a step toward the other. Where verification is out of
+   reach, "you can't verify and you just have to assume, and that's an
+   axiom. As expected."
+
+2. **Verification is up to the abstraction the caller cares about.** "You
+   have a sort function, you only care that it returns a sorted [list],
+   you don't care about the implementation details." So rung 5 of §4 is
+   too narrow as written: what is proved is a *stated property of the
+   result*, of which "equals `f`" is the strongest case. Sortedness
+   without permutation, a bound on a length, "the output buffer holds a
+   valid encoding" are all contracts. The condition Minus puts on it: it
+   "has to be something that your automated tactic prover or inference
+   thing can verify". The contract language is therefore bounded by the
+   automation, not by what can be stated, and a contract the automation
+   cannot reach falls back to the assumed mode rather than to a hand
+   proof.
+
+3. **The probe's proof is too verbose to be the artifact** (§13.1). As it
+   stands it is "basically unverifiable for [a] normal human to read. And
+   even for an AI, that might be a bit rough." Some good way of embedding,
+   or something smarter, is needed.
+
+4. **Instructions.** Many of the missing ones "aren't that hard to add.
+   But SSE is going to be troublesome, but important." Inference: this
+   leans §12 question 3 toward continuing to write forms by hand for the
+   integer core, with SSE the part that needs its own design.
+
+5. **Code that calls back out is the harder half.** Outside code "can do
+   absurdly crazy things to you and requires analyzing the whole program,
+   which is another whole thing." A leaf function is a closed object;
+   anything that reaches the rest of the process (callbacks, globals, the
+   allocator, system calls) needs §3.3's premises for everything it
+   touches, or the whole-program statement of §4.3.
+
+6. **Not now, but it will be wanted in both directions**: "we will want to
+   call and be called by outside functions." Being called is `nh-library`;
+   calling is this note and `runtime-extern-c-abi`.
+
+§12 question 2 (which area) is still open.
+
+### 13.1 What the statement and proof should look like
+
+The probe's `add2_returns` fails as a thing to read for two reasons, and
+neither is about foreign code:
+
+- **The statement is spelled in machine terms.** A reader must unfold
+  `Site`, `Returns`, a λ over two states and three conjuncts to learn
+  "returns `a + b`, touches nothing". The contract is a System V word
+  function; it should be said once, by name.
+- **The proof restates the statement four times** (for `returns_by`,
+  twice for `moves_weaken`, for `moves_block`) around three `refl`s.
+
+A sketch of the target, with every name provisional:
+
+```
+// One predicate per named ABI contract (issues/named-abi-contracts.md):
+// what "these bytes are a System V function of two words with this
+// result" means. Its body is Returns + Kept(callee_kept()) + Wrote, with
+// the registers and the footprint the contract's, not the caller's to spell.
+fn SysV::Meets2(bytes: List<BitVec(8)>, ensures: BitVec(64) → BitVec(64) → BitVec(64) → Type) → Type
+
+// The statement a person reads:
+theorem add2_contract(): SysV::Meets2(add2_bytes(), λ a b result => result = a.add(b)) { foreign }
+
+// or, at the surface, the declaration is the statement and the tactic is implied:
+foreign "vendor/add.o" fn add2(a, b: u64) → u64 ensures result = a + b;
+foreign "vendor/sort.o" fn sort(xs: lent mut [u64]) ensures xs.sorted();     // answer 2: a property, not the function
+```
+
+- The **embedding** is the named contract: a caller sees the Heather
+  signature and the `ensures`, and cites `SysV::Meets2` only through the
+  `Compile` instance it produces. The machine statement exists once, in
+  the contract's definition, where it is reviewed once.
+- The **proof** is one tactic, `foreign`: lift (propose a `Prog`, check
+  by re-assembly), compute `Wp`, close what conversion and the arithmetic
+  tactics close, and hand back the residue. That is
+  `wp-obligation-tactic` with the lift in front of it. A failure names
+  the instruction or the side condition it stopped at, and the user's
+  recourse is `assumed`.
+- What a human audits is then three things, each short: the declaration,
+  the named contract's definition, and the list of axioms (assumed
+  imports) the program rests on.
+
+The probe was written without any of this on purpose, to show what the
+library gives today; its length is the measure of what the embedding and
+the tactic have to remove.
 
 ---
 

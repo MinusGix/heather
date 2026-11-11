@@ -60,3 +60,18 @@ with near-term use.
 The note's §12: whether the assumed foreign contract is the first-class
 notion to build first, whether this is a horizon area of its own beside
 `rust-in-heather`, and the policy for growing the model at this scale.
+
+## Log
+
+- 2026-11-11: Minus read the note. Two modes are wanted: an assumed
+  contract (an axiom, as expected, wherever verification is out of reach)
+  and active verification at link time, up to the abstraction the caller
+  cares about (a sort is verified to return something sorted, not to be a
+  particular sort), limited to what the automation can prove. The probe's
+  proof is too verbose to be read by a person or comfortably by an AI: the
+  statement needs an embedding (a named contract predicate, a declaration
+  with `ensures`) and the proof a tactic. Missing integer instructions are
+  not hard to add; SSE is troublesome and important. Code that calls back
+  out needs whole-program analysis and is a separate, harder matter. Not
+  for now, but calling and being called by outside functions will be
+  wanted. Recorded in the note's §13.
