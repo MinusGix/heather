@@ -176,6 +176,7 @@ mod datarepr;
 mod diagnostics;
 mod dispatch;
 mod display;
+pub use display::global_type_source;
 mod expr;
 pub mod gate;
 pub mod heather_emit;

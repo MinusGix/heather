@@ -289,6 +289,20 @@ impl Elaborator {
     }
 }
 
+/// The type of the closed top-level term `name`, spelled as source with
+/// every name qualified ([`Elaborator::spell_type_source`]), after the
+/// display's decoding: what a tool generating code over the term's value
+/// needs to annotate it (`heather eval`). `None` for a name that is not a
+/// plain top-level term, or a type with a node the speller cannot write.
+/// A generated annotation is elaborated again, so a wrong spelling is a
+/// refusal there and not a misreading.
+pub fn global_type_source(el: &Elaborator, name: &str) -> Option<String> {
+    let (_, ty, _) = crate::host::Host(el).raw_global(name)?;
+    let cx = Cx::empty();
+    let decoded = el.display_decode(&cx, &ty);
+    el.spell_type_source(&cx, decoded.as_ref().unwrap_or(&ty))
+}
+
 /// A type name the program wrote, and the instance it names: what the
 /// display respells by that name (issues/type-name-display-respelling.md).
 ///
