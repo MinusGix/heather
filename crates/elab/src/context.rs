@@ -26,8 +26,10 @@ use crate::{R, Skel, quote};
 #[derive(Clone)]
 pub(crate) struct Cx {
     /// One enclosing dot call's chain, shared by lookup and its cloned
-    /// desugared argument. Only source dots are keyed by span: desugaring
-    /// builds applications, so generated nodes cannot alias this key.
+    /// desugared argument. Only source dots are keyed, by span and by what
+    /// they say: desugaring builds applications, but a surface generator
+    /// that substitutes into an expression (`decreases` writes its measure
+    /// at each call's arguments) leaves two different dots at one span.
     pub(crate) dot_receiver: Option<Rc<DotReceivers>>,
     /// Parallel to `gamma.entries`: each binder's written name and the
     /// implicitness skeleton of its *written* type, where it had one
@@ -121,7 +123,27 @@ type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
 pub(crate) struct DotReceivers {
     gamma: LocalCtx,
     aliases: Spine<Rc<Alias>>,
-    inferred: RefCell<BTreeMap<(usize, usize), Rc<ReceiverInference>>>,
+    inferred: RefCell<BTreeMap<(usize, usize, u64), Rc<ReceiverInference>>>,
+}
+
+/// A receiver's key: its span, and a fingerprint of the expression itself.
+/// The span alone is not an identity: a generated copy of a source
+/// expression keeps its spans, and `decreases` states its obligation with
+/// the measure written twice, once at the call's arguments
+/// (issues/decreases-self-call-in-method-receiver.md), so a dot in one
+/// copy would be read as its twin in the other.
+fn receiver_key(e: &Expr) -> (usize, usize, u64) {
+    use std::hash::Hasher;
+    struct Feed(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for Feed {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut feed = Feed(std::collections::hash_map::DefaultHasher::new());
+    let _ = std::fmt::write(&mut feed, format_args!("{e:?}"));
+    (e.span.start, e.span.end, feed.0.finish())
 }
 
 impl DotReceivers {
@@ -135,11 +157,17 @@ impl DotReceivers {
         if !matches!(e.kind, ExprKind::Dot { .. }) || !self.matches(cx) {
             return None;
         }
-        self.inferred.borrow().get(&(e.span.start, e.span.end)).cloned()
+        // Most dots checked inside a chain are not its receivers: only a
+        // span that was registered pays for the fingerprint.
+        let span = (e.span.start, e.span.end);
+        if !self.inferred.borrow().range((span.0, span.1, 0)..=(span.0, span.1, u64::MAX)).any(|_| true) {
+            return None;
+        }
+        self.inferred.borrow().get(&receiver_key(e)).cloned()
     }
 
     fn register(&self, e: &Expr) {
-        self.inferred.borrow_mut().entry((e.span.start, e.span.end))
+        self.inferred.borrow_mut().entry(receiver_key(e))
             .or_insert_with(|| Rc::new(OnceCell::new()));
     }
 }
@@ -458,6 +486,13 @@ mod tests {
         let second = retry.dot_receiver.as_ref().unwrap().inference(&retry, &recv.clone()).unwrap();
         assert!(Rc::ptr_eq(&first, &second));
         assert!(second.get().unwrap().is_ok());
+        // A different dot at the same span (a generated copy with something
+        // substituted into it) is not this receiver.
+        let mut twin = recv.clone();
+        if let ExprKind::Dot { recv, .. } = &mut twin.kind {
+            recv.kind = ExprKind::Var("y".into());
+        }
+        assert!(receivers.inference(&scoped, &twin).is_none());
 
         let mut changed = scoped.clone();
         changed.gamma.base = heather_kernel::term::CtxBase::Var(heather_kernel::term::GlobalVar::index(0));
