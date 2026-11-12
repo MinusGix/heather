@@ -1,0 +1,139 @@
+// Probes of views (x86_64_views; docs/native-library-exports-design.md
+// §3.1): the two halves of a span of sixteen bytes lent apart, the first
+// to write and the second to read, under any lending of the span, and what
+// the lender has after. Then the controls: views that share a byte, a view
+// past its span's end, and a view to write of a span lent to read are not
+// lendable. Tests, not library: nothing imports this module.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_views;
+import memory;
+import bitvec;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Two halves of span 0, the first written
+
+fn half_start(v: Nat) → Nat { match v { Zero => 0, Succ(k) => match k { Zero => 8, Succ(_) => 0 } } }
+fn half_size(v: Nat) → Nat { match v { Zero => 8, Succ(k) => match k { Zero => 8, Succ(_) => 0 } } }
+fn first_written(v: Nat) → Bool { match v { Zero => True, Succ(_) => False } }
+
+fn halves() → Views { Views(λ _ => 0, half_start, half_size, first_written) }
+
+theorem halves_viewed(spans: Spans, sixteen: spans.size(0) = 16, writes: spans.written(0) = True): Viewed(halves(), spans) {
+    let whole: (0 + 8 <= spans.size(0)) = omega(sixteen);
+    let upper: (8 + 8 <= spans.size(0)) = omega(sixteen);
+    let none: (0 + 0 <= spans.size(0)) = omega(sixteen);
+    let meet: (0 + 8 <= 8) = omega;
+    let empty: (0 + 0 <= 0) = omega;
+    Viewed(
+        inside := λ v => match v {
+            Zero => whole,
+            Succ(k) => match k { Zero => upper, Succ(_) => none },
+        },
+        allowed := λ v _ => writes,
+        alone := λ v u => match v {
+            Zero => match u {
+                Zero => λ _ differs => false_elim(differs(refl)),
+                Succ(k) => match k {
+                    Zero => λ _ _ => Inr(Inl(meet)),
+                    Succ(_) => λ _ _ => Inr(Inr(empty)),
+                },
+            },
+            Succ(_) => λ written _ => absurd(written),
+        },
+    )
+}
+
+// The halves are lent under any lending of the span.
+theorem halves_loan<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans), sixteen: spans.size(0) = 16, writes: spans.written(0) = True):
+    Loan<M>(fetch, data, stack, top, halves().spans(spans)) {
+    loan.view(halves(), halves_viewed(spans, sixteen, writes))
+}
+
+// The second half is where the span's byte 8 is.
+theorem second_half_at(spans: Spans): halves().spans(spans).at(1) = next_rip(spans.at(0), 8) { refl }
+
+// What the borrower reads through the first half: the span's first eight
+// bytes.
+theorem first_half_reads<M>(data: ByteReadAccess<M>, memory: M, spans: Spans, xs: List<BitVec(8)>, whole: xs.len() = 16,
+    reads: Readable(data, memory, spans.at(0), xs)): Readable(data, memory, halves().spans(spans).at(0), xs.window(0, 8)) {
+    readable_window(data, memory, spans.at(0), xs, reads, 0, 8, omega, omega(whole))
+}
+
+// What the borrower stored through the halves, the lender could have
+// stored through the span.
+theorem halves_wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    sixteen: spans.size(0) = 16, writes: spans.written(0) = True, before, after: M,
+    wrote: stack.WroteIn(i, halves().spans(spans), before, after)): stack.WroteIn(i, spans, before, after) {
+    stack.wrote_in_view(i, spans, halves(), halves_viewed(spans, sixteen, writes), before, after, wrote)
+}
+
+// After it, the span reads its bytes with the first eight replaced by what
+// the first half reads.
+theorem span_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans), sixteen: spans.size(0) = 16, writes: spans.written(0) = True, i: Nat, low: i <= top,
+    xs, ys: List<BitVec(8)>, whole: xs.len() = 16, eight: ys.len() = 8, before, after: M,
+    wrote: stack.WroteIn(i, halves().spans(spans), before, after), was: Readable(data, before, spans.at(0), xs),
+    now: Readable(data, after, halves().spans(spans).at(0), ys)): Readable(data, after, spans.at(0), xs.put_window(0, ys)) {
+    loan.view_written_reads(halves(), halves_viewed(spans, sixteen, writes), i, low, 0,
+        λ u => match u {
+            Zero => λ _ _ => refl,
+            Succ(_) => λ written _ => absurd(written),
+        }, xs, ys, trans(whole, sym(sixteen)), eight, before, after, wrote, was, now)
+}
+
+// And byte 12, in the half lent to read, reads what it did.
+theorem second_half_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans), sixteen: spans.size(0) = 16, writes: spans.written(0) = True, i: Nat, low: i <= top,
+    before, after: M, wrote: stack.WroteIn(i, halves().spans(spans), before, after)):
+    data.read(after, spans.byte(0, 12)) = data.read(before, spans.byte(0, 12)) {
+    let past: (0 + 8 <= 12) = omega;
+    loan.view_outside(halves(), halves_viewed(spans, sixteen, writes), i, low, 0, 12, omega(sixteen),
+        λ v => match v {
+            Zero => λ _ _ => Inr(past),
+            Succ(_) => λ written _ => absurd(written),
+        }, before, after, wrote)
+}
+
+// ---------------------------------------------------------------------------
+// The controls
+
+// A view to write that shares bytes with another view is not lendable:
+// bytes 0 to 8 written, bytes 4 to 12 read.
+fn lapped_start(v: Nat) → Nat { match v { Zero => 0, Succ(k) => match k { Zero => 4, Succ(_) => 0 } } }
+
+theorem overlap_refused(spans: Spans): ¬Viewed(Views(λ _ => 0, lapped_start, half_size, first_written), spans) {
+    λ viewed => match viewed.alone(0, 1, refl, λ same => absurd(same)) {
+        Inl(spans_differ) => spans_differ(refl),
+        Inr(apart) => match apart {
+            Inl(before) => before,
+            Inr(after) => after,
+        },
+    }
+}
+
+// A view past its span's end is not: seventeen bytes of sixteen.
+theorem past_end_refused(spans: Spans, sixteen: spans.size(0) = 16): ¬Viewed(Views(λ _ => 0, λ _ => 0, λ _ => 17, λ _ => False), spans) {
+    λ viewed => {
+        let inside: (0 + 17 <= spans.size(0)) = viewed.inside(0);
+        omega(inside, sixteen)
+    }
+}
+
+// Nor is a view to write of a span lent to read.
+theorem write_through_read_refused(spans: Spans, read_only: spans.written(0) = False): ¬Viewed(halves(), spans) {
+    λ viewed => absurd(trans(sym(viewed.allowed(0, refl)), read_only))
+}

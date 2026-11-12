@@ -1,0 +1,35 @@
+// Probes of `lib/std/data/list_window.hthr`: a window and a window replaced
+// compute at closed lists, the laws apply at an open list, and each law's
+// hypothesis is needed. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import list_window;
+
+fn five() → List<Nat> { [10, 11, 12, 13, 14] }
+
+fn one() → List<Nat> { [1] }
+
+theorem a_window(): five().window(1, 4) = [11, 12, 13] { refl }
+theorem a_window_past_the_end(): five().window(3, 9) = [13, 14] { refl }
+theorem an_empty_window(): five().window(2, 2) = Nil<Nat> { refl }
+theorem a_window_replaced(): five().put_window(1, [7, 8]) = [10, 7, 8, 13, 14] { refl }
+theorem a_window_updated(): five().put_window(1, five().window(1, 4).update(2, λ n => n + 1)) = five().update(3, λ n => n + 1) { refl }
+
+// The laws at an open list and an open element type.
+theorem read_back<A>(xs: List<A>, ys: List<A>, start: Nat, inside: start <= xs.len()): xs.put_window(start, ys).window(start, ys.len() + start) = ys {
+    xs.window_put_window(start, ys, inside)
+}
+
+theorem stored_through<A>(xs: List<A>, start, end, i: Nat, x: A, high: end <= xs.len(), inside: i < end - start):
+    xs.put_window(start, xs.window(start, end).update(i, λ _ => x)).nth(i + start) = xs.update(i + start, λ _ => x).nth(i + start) {
+    cong_fn<List<A>, Option<A>>(λ zs => zs.nth(i + start), xs.put_window_update(start, end, i, λ _ => x, high, inside))
+}
+
+// A window written past the list's end is not read back: `window_put_window`
+// needs its `start <= xs.len()`.
+theorem outside_is_not_read_back(): ¬(one().put_window(3, [9]).window(3, 4) = [9]) { decide }
+
+// Nor does it leave the length: `len_put_window` needs the window to fit.
+theorem outside_grows(): ¬(five().put_window(4, [7, 8]).len() = five().len()) { decide }
+
+// A window starts at its start, not at the list's.
+theorem window_is_offset(): ¬(five().window(1, 4) = five().take(3)) { decide }

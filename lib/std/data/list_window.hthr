@@ -1,0 +1,242 @@
+// A window of a list and the list with a window replaced: the two halves
+// of reading and writing part of a buffer through a view of it
+// (docs/native-library-exports-design.md §3.1).
+//
+// `xs.window(start, end)` is the elements from `start` up to `end`, and
+// `xs.put_window(start, ys)` is `xs` with `ys` written over it from
+// `start`. Both are total: a window past the list's end is shorter, as a
+// `take` is. Where the window lies inside the list (`start <= end` and
+// `end <= xs.len()`) the two are a lens: what is put is what is then read
+// (`window_put_window`), putting back what was read changes nothing
+// (`put_window_window`), and the list keeps its length
+// (`len_put_window`). An update inside the window is the update of the
+// list at the same element (`put_window_update`), which is what makes a
+// store through a view a store into the buffer; an element outside the
+// window is the list's own (`nth_put_window_before`, `_after`).
+//
+// Offsets are written `i + start`, the window's index first: `+` recurses
+// on its second argument, so a `Succ` start steps by evaluation.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import omega;
+
+// The elements of `xs` from `start` up to `end`.
+fn List::window<A>(self xs: List<A>, start, end: Nat) → List<A> { xs.drop(start).take(end - start) }
+
+// `xs` with `ys` written over it from `start`.
+fn List::put_window<A>(self xs: List<A>, start: Nat, ys: List<A>) → List<A> { xs.take(start) ++ (ys ++ xs.drop(ys.len() + start)) }
+
+// ---------------------------------------------------------------------------
+// Reading through `take` and `drop`
+
+theorem List::nth_take<A>(self xs: List<A>): (n, i: Nat) → i < n → xs.take(n).nth(i) = xs.nth(i) {
+    match xs {
+        Nil => λ n i _ => refl,
+        Cons(_, t) => λ n i => match n {
+            Zero => λ no => false_elim(no),
+            Succ(m) => match i {
+                Zero => λ _ => refl,
+                Succ(k) => λ below => t.nth_take(m, k, below),
+            },
+        },
+    }
+}
+
+theorem List::nth_drop_add<A>(self xs: List<A>): (n, i: Nat) → xs.drop(n).nth(i) = xs.nth(i + n) {
+    match xs {
+        Nil => λ n i => refl,
+        Cons(_, t) => λ n i => match n {
+            Zero => refl,
+            Succ(m) => t.nth_drop_add(m, i),
+        },
+    }
+}
+
+// What follows a list in an append is the append with the list dropped.
+theorem List::drop_append_len<A>(self xs: List<A>, ys: List<A>): (xs ++ ys).drop(xs.len()) = ys {
+    match xs {
+        Nil => ys.drop_zero(),
+        Cons(_, t) => t.drop_append_len(ys),
+    }
+}
+
+// An update inside a prefix is the update of the list.
+theorem List::update_take<A>(self xs: List<A>): (n, i: Nat) → (f: A → A) → i < n → xs.take(n).update(i, f) ++ xs.drop(n) = xs.update(i, f) {
+    match xs {
+        Nil => λ n i f _ => refl,
+        Cons(h, t) => λ n i f => match n {
+            Zero => λ no => false_elim(no),
+            Succ(m) => match i {
+                Zero => λ _ => cong_fn<List<A>, List<A>>(λ r => Cons(f(h), r), t.take_append_drop(m)),
+                Succ(k) => λ below => List::cong_cons(h, t.update_take(m, k, f, below)),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A window
+
+theorem List::window_succ<A>(h: A, t: List<A>, start, end: Nat): Cons(h, t).window(Succ(start), Succ(end)) = t.window(start, end) { refl }
+
+theorem List::window_from_zero<A>(self xs: List<A>, end: Nat): xs.window(0, end) = xs.take(end) {
+    let all: (end - 0 = end) = omega();
+    trans(cong_fn<Nat, List<A>>(λ n => xs.drop(0).take(n), all), cong_fn<List<A>, List<A>>(λ ys => ys.take(end), xs.drop_zero()))
+}
+
+theorem List::len_window<A>(self xs: List<A>, start, end: Nat, low: start <= end, high: end <= xs.len()): xs.window(start, end).len() = end - start {
+    xs.drop(start).len_take(end - start, omega(low, high, xs.len_drop(start)))
+}
+
+// Element `i` of a window is element `i + start` of the list.
+theorem List::nth_window<A>(self xs: List<A>, start, end, i: Nat, inside: i < end - start): xs.window(start, end).nth(i) = xs.nth(i + start) {
+    trans(xs.drop(start).nth_take(end - start, i, inside), xs.nth_drop_add(start, i))
+}
+
+// ---------------------------------------------------------------------------
+// A window replaced
+
+theorem List::put_window_succ<A>(h: A, t: List<A>, start: Nat, ys: List<A>): Cons(h, t).put_window(Succ(start), ys) = Cons(h, t.put_window(start, ys)) {
+    refl
+}
+
+theorem List::put_window_from_zero<A>(self xs: List<A>, ys: List<A>): xs.put_window(0, ys) = ys ++ xs.drop(ys.len()) {
+    cong_fn<List<A>, List<A>>(λ front => front ++ (ys ++ xs.drop(ys.len())), xs.take_zero())
+}
+
+// Written inside the list, a window leaves the list's length.
+theorem List::len_put_window<A>(self xs: List<A>, start: Nat, ys: List<A>, fits: ys.len() + start <= xs.len()):
+    xs.put_window(start, ys).len() = xs.len() {
+    omega(fits, xs.take(start).len_append(ys ++ xs.drop(ys.len() + start)), ys.len_append(xs.drop(ys.len() + start)),
+        xs.len_take(start, omega(fits)), xs.len_drop(ys.len() + start))
+}
+
+theorem List::window_put_window_zero<A>(self xs: List<A>, ys: List<A>): xs.put_window(0, ys).window(0, ys.len()) = ys {
+    trans(xs.put_window(0, ys).window_from_zero(ys.len()),
+        trans(cong_fn<List<A>, List<A>>(λ zs => zs.take(ys.len()), xs.put_window_from_zero(ys)), ys.take_append_len(xs.drop(ys.len()))))
+}
+
+// What is put is what is then read.
+theorem List::window_put_window<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → start <= xs.len() →
+    xs.put_window(start, ys).window(start, ys.len() + start) = ys {
+    match xs {
+        Nil => λ start ys => match start {
+            Zero => λ _ => List::window_put_window_zero<A>(Nil, ys),
+            Succ(_) => λ no => false_elim(no),
+        },
+        Cons(h, t) => λ start ys => match start {
+            Zero => λ _ => Cons(h, t).window_put_window_zero(ys),
+            Succ(s) => λ inside => t.window_put_window(s, ys, inside),
+        },
+    }
+}
+
+// Putting back what was read changes nothing.
+theorem List::put_window_window<A>(self xs: List<A>): (start, end: Nat) → start <= end → end <= xs.len() →
+    xs.put_window(start, xs.window(start, end)) = xs {
+    match xs {
+        Nil => λ start end low high => match start {
+            Zero => refl,
+            Succ(_) => refl,
+        },
+        Cons(h, t) => λ start end => match start {
+            Zero => λ _ high => trans(Cons(h, t).put_window_from_zero(Cons(h, t).window(0, end)),
+                j(sym(Cons(h, t).window_from_zero(end)), λ w _ => w ++ Cons(h, t).drop(w.len()) = Cons(h, t),
+                    j(sym(Cons(h, t).len_take(end, high)), λ n _ => Cons(h, t).take(end) ++ Cons(h, t).drop(n) = Cons(h, t),
+                        Cons(h, t).take_append_drop(end)))),
+            Succ(s) => match end {
+                Zero => λ no _ => false_elim(no),
+                Succ(e) => λ low high => List::cong_cons(h, t.put_window_window(s, e, low, high)),
+            },
+        },
+    }
+}
+
+// An update inside a window, put back, is the update of the list.
+theorem List::put_window_update<A>(self xs: List<A>): (start, end, i: Nat) → (f: A → A) → end <= xs.len() → i < end - start →
+    xs.put_window(start, xs.window(start, end).update(i, f)) = xs.update(i + start, f) {
+    match xs {
+        Nil => λ start end i f high inside => match end {
+            Zero => false_elim(inside),
+            Succ(_) => false_elim(high),
+        },
+        Cons(h, t) => λ start end i f => match start {
+            Zero => λ high inside => {
+                let xs = Cons(h, t);
+                let updated = xs.take(end).update(i, f);
+                let same_len: (updated.len() = end) = trans(xs.take(end).len_update(i, f), xs.len_take(end, high));
+                trans(cong_fn<List<A>, List<A>>(λ w => xs.put_window(0, w.update(i, f)), xs.window_from_zero(end)),
+                    trans(xs.put_window_from_zero(updated),
+                        trans(cong_fn<Nat, List<A>>(λ n => updated ++ xs.drop(n), same_len), xs.update_take(end, i, f, omega(inside)))))
+            },
+            Succ(s) => match end {
+                Zero => λ _ inside => false_elim(inside),
+                Succ(e) => λ high inside => List::cong_cons(h, t.put_window_update(s, e, i, f, high, inside)),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Elements of a list with a window replaced
+
+theorem List::nth_put_window_before<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → (k: Nat) → k < start → start <= xs.len() →
+    xs.put_window(start, ys).nth(k) = xs.nth(k) {
+    match xs {
+        Nil => λ start ys k before inside => match start {
+            Zero => false_elim(before),
+            Succ(_) => false_elim(inside),
+        },
+        Cons(h, t) => λ start ys k => match start {
+            Zero => λ before _ => false_elim(before),
+            Succ(s) => match k {
+                Zero => λ _ _ => refl,
+                Succ(j) => λ before inside => t.nth_put_window_before(s, ys, j, before, inside),
+            },
+        },
+    }
+}
+
+theorem List::nth_put_window_inside_zero<A>(self xs: List<A>, ys: List<A>, i: Nat, inside: i < ys.len()): xs.put_window(0, ys).nth(i) = ys.nth(i) {
+    match ys.nth_present(i, inside) {
+        ⟨c, at⟩ => trans(cong_fn<List<A>, Option<A>>(λ zs => zs.nth(i), xs.put_window_from_zero(ys)),
+            trans(ys.nth_append_l(xs.drop(ys.len()), i, c, at), sym(at))),
+    }
+}
+
+theorem List::nth_put_window_inside<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → (i: Nat) → i < ys.len() → start <= xs.len() →
+    xs.put_window(start, ys).nth(i + start) = ys.nth(i) {
+    match xs {
+        Nil => λ start ys i inside => match start {
+            Zero => λ _ => List::nth_put_window_inside_zero<A>(Nil, ys, i, inside),
+            Succ(_) => λ fits => false_elim(fits),
+        },
+        Cons(h, t) => λ start ys i inside => match start {
+            Zero => λ _ => Cons(h, t).nth_put_window_inside_zero(ys, i, inside),
+            Succ(s) => λ fits => t.nth_put_window_inside(s, ys, i, inside, fits),
+        },
+    }
+}
+
+theorem List::nth_put_window_after_zero<A>(self xs: List<A>, ys: List<A>, k: Nat): xs.put_window(0, ys).nth(k + ys.len()) = xs.nth(k + ys.len()) {
+    trans(cong_fn<List<A>, Option<A>>(λ zs => zs.nth(k + ys.len()), xs.put_window_from_zero(ys)),
+        trans(ys.nth_append_r(xs.drop(ys.len()), k), xs.nth_drop_add(ys.len(), k)))
+}
+
+theorem List::nth_put_window_after<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → (k: Nat) → start <= xs.len() →
+    xs.put_window(start, ys).nth(k + (ys.len() + start)) = xs.nth(k + (ys.len() + start)) {
+    match xs {
+        Nil => λ start ys k => match start {
+            Zero => λ _ => List::nth_put_window_after_zero<A>(Nil, ys, k),
+            Succ(_) => λ fits => false_elim(fits),
+        },
+        Cons(h, t) => λ start ys k => match start {
+            Zero => λ _ => Cons(h, t).nth_put_window_after_zero(ys, k),
+            Succ(s) => λ fits => t.nth_put_window_after(s, ys, k, fits),
+        },
+    }
+}
