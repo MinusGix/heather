@@ -856,13 +856,45 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    - A function that changes nothing (`self t: T`, a word) is compiled
      the same way, and a branch around the whole result is two ends.
 
+   - **An array of words is its elements, each a part.** A field
+     `[u32; 8]` whose element codec has an accessor is read by
+     `vector_index(t.f, i, trivial)` at a literal `i`, which stands for
+     the accessor's read where element `i` lies
+     (`T::f_part().then(Part::element(codec, n, i, _))`, the parts of
+     §6.1 composed, its offset by `Numeral`). A field whose new value
+     differs from the old in an entry stores that entry: `t.f := [a, b,
+     …]` is a store for each element, `t.f := vector_update(t.f, i, w)`
+     one. The theory did not change: an element is one more entry of
+     its accessor's mark, with the same field lemma. The marks name
+     only the elements a function reaches (the literal offsets its
+     accessors are called at, read off the reflection), so an array of
+     sixty-four words costs a function that stores one of them one
+     entry.
+   - **compile-x86 exports a record function as its function over the
+     span.** The row names the method (`Sha256::init`), the symbol is
+     derived from the path (`sha256_init`), and the certificate's
+     statement is at `T::m::bytes`.
+
+   First customer: `Sha256::init` (`lib/native/crypto/sha256_stream.hthr`)
+   is a function of the context, `s.hash := […]; s.count := 0`, the
+   linked `sha256_init` is its code, and `Sha256::init_holds` says the
+   span is left holding the context with the initial hash value and no
+   bytes taken, with nothing proved by hand.
+
    What it does not take yet is
    `issues/runtime-record-function-limits.md`: a call of another
-   function of the record, a branch before the end with a store in it,
-   operands and results other than 64-bit words, fields with no
-   accessor. First customers: SHA-256's `init` and the count's update.
+   function of the record (which is what keeps the count's update a
+   function of the span: its callers are), a branch before the end with
+   a store in it, operands and results other than 64-bit words, fields
+   with no accessor, an element at an index that is not a literal, and
+   the index spelled `t.f[i]`.
 4. **The floor and loops**: the class's floor, length preservation, the
-   loop's equation carried through an exact codec. Then SHA-256's
+   loop's equation carried through an exact codec; a call of another
+   function of the record; an element at an index that is a word (a
+   reader marked with a family of parts and a bound the body's test
+   gives); and a word array's bytes (`sha256_take_block` and
+   `sha256_begin` store bytes where words lie, which is a second part
+   over the same bytes). Then SHA-256's
    functions are methods of `Sha256` whole, its entry points are exported
    as methods (`linked-export-of-a-method`, merged), and
    `sha256-context-type` closes.
