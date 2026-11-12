@@ -108,7 +108,9 @@ fn importers() -> Vec<(PathBuf, String)> {
 
 /// Every module under `lib/` is reached: another file imports it, a test
 /// names its file, it is a `lib/_tests` module (those are roots by design),
-/// or it is listed in [`KEPT_ROOTS`] with a reason.
+/// or it is listed in [`KEPT_ROOTS`] with a reason. `scripts/lib-closures`
+/// runs the same lint, with the same reading, before the suite builds
+/// (`issues/orphan-module-check-before-the-gate.md`); change both together.
 #[test]
 fn every_library_module_is_reached() {
     let root = root();

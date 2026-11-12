@@ -117,7 +117,8 @@
   the compiler by `crates/cli/tests/native_linked.rs` (a native gate). After
   changing a linked module (`lib/native/crypto/`, `lib/lang/lexer/`), the
   lowering or the emitter, run **`scripts/linked`** to rewrite the files
-  (`--check` compares); a new export is a line in the table, a `linked!` and
+  (`--check` compares; a row whose binary and import closure are unchanged
+  is not recompiled); a new export is a line in the table, a `linked!` and
   a declaration in `src/lib.rs`, and tests against an independent reference.
   The scanner (`src/scanner.rs`) is held to `heather_syntax::lex` by
   `tests/scanner.rs`; after changing its `PROBES` or the automaton, run
@@ -204,6 +205,8 @@
   <roots>… [minus <roots>…]` and written by `scripts/lib-closures --fix`
   from the imports; `crates/cli/tests/lib_closures.rs` holds marked lists to
   the loader. After adding an `import` to a listed module, run the script.
+  It also fails on a `lib/` module nothing reaches (the whole-library
+  gate's orphan lint, in a second), and `scripts/test` runs it first.
 - **Tactics build `Tac` values through calls**: `pure(a)`, `ask(r)`,
   `ask_then(r, k)`, never `Pure(…)`/`Ask(…)` as a value (patterns are
   free). A written tier-2 constructor re-spells `Tac`'s `W` encoding for the

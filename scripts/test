@@ -62,6 +62,11 @@ node scripts/check-tree-sitter-inventory.js
 # binaries mount their member files by path), so check no file fell out.
 node scripts/check-elab-test-families.mjs
 node --test scripts/test-target-runner.test.mjs scripts/affected-targets.test.mjs
+# The library's import graph, read in a second: a stale `// lib-closure:`
+# list or a module nothing reaches would otherwise surface only in
+# `lib_closures` and the whole-library gate, after the build and most of
+# the run (issues/orphan-module-check-before-the-gate.md).
+scripts/lib-closures
 
 # The kernel's `value-metrics` feature is off in every test target — it is the
 # diagnostic build (`--timings`' value counters, the conv-miss sampler, the
