@@ -299,7 +299,10 @@ fn narrow_signed_operations_are_refused() {
         runtime fn signed_widen(a, b: BitVec(64)) → BitVec(64) {\n\
             a.truncate(32, 32).sign_extend(32).add(b)\n}\n";
     std::fs::write(dir.join("signed.hthr"), source).unwrap();
-    for function in ["signed_below", "signed_shift", "signed_widen"] {
+    // The refusal says where: the node the lowering has no code for, as the
+    // library's mirror of the emitter finds it (`function_ir_refusal`).
+    for (function, node) in [("signed_below", "the node `4 = less32 2, 3`"), ("signed_shift", "= sar32 "),
+        ("signed_widen", "the node `3 = sign_resize32to64 2`, placed in rax")] {
         let output = dir.join(format!("{function}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(dir.join("signed.hthr")).args([function, "-o"]).arg(&output)
@@ -308,6 +311,7 @@ fn narrow_signed_operations_are_refused() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains("the verified lowering refused this program"),
             "{function}: {stderr}");
+        assert!(stderr.contains(node) && stderr.contains("the function's nodes, values by their ids:"), "{function}: {stderr}");
         assert!(!output.exists(), "{function}: a refused function wrote assembly");
     }
     std::fs::remove_dir_all(dir).unwrap();

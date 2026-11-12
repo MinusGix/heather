@@ -834,7 +834,10 @@ fn StructuredRegion::crossed_in(self region: StructuredRegion, after, crossed: R
 // input still to move (`LoopRegisters::Apart`); its body is planned from
 // the head's file, the count, the exit bit and the next state live after
 // it and the next state wanted in the state's registers. The loop is a
-// barrier: the file after it is the outputs' and the exhausted bit's.
+// barrier: the file after it is the outputs' and the exhausted bit's, and
+// nothing of a pass is read after a call that follows the pass (what the
+// close reads, it moves before the next pass begins), so the body is
+// planned with nothing `crossed` but what its own calls cross.
 //
 // A branch's arms are planned one after the other from the same file, and
 // the code keeps of them only the registers they agree on (`File::meet`).
@@ -887,7 +890,7 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                             None => File::empty(),
                             Some(h) => h,
                         };
-                        let pass = body.plan_in(head, read, word_ports(next), state, pool, folds, body.crossed_in(read, crossed), apart);
+                        let pass = body.plan_in(head, read, word_ports(next), state, pool, folds, MEmpty, apart);
                         let out = match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(flag, state)) {
                             None => File::empty(),
                             Some(o) => o,

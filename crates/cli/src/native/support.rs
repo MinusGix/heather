@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile x86_64_asm_table
+// lib-closure: function_ir_compile x86_64_asm_table function_ir_refusal
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -64,4 +64,8 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_lower_calls", include_str!("../../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
     ("x86_64_asm_table", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
+    ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),
+    ("derive", include_str!("../../../../lib/std/tactic/derive.hthr")),
+    ("utf8", include_str!("../../../../lib/std/text/utf8.hthr")),
+    ("function_ir_refusal", include_str!("../../../../lib/native/function_ir/function_ir_refusal.hthr")),
 ];

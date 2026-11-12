@@ -69,30 +69,24 @@ runtime fn scan_stopped(state, i, last: u64) → u64 {
 
 // The longest token from `state`, the state the automaton is in at offset
 // `i`: `last` is the word of the last position it accepted at before this
-// one, zero for none. It steps while the state goes on and bytes are left;
+// one, zero for none. It steps while bytes are left and the state goes on;
 // past the span's end the automaton is given `END` once. One loop with one
 // way round: where it stops is decided after it (`scan_stopped`).
-//
-// The test reads the state before the bound, and the offset is the last
-// parameter, so that it is the last word a pass computes: either the other
-// way round and the register planner loses a value in the pass
-// (issues/function-ir-planner-register-pressure.md). Neither changes what
-// the function is.
-runtime fn scan_from(source: List<BitVec(8)>, length, state, last, i: u64) → u64 decreases length.sub(i).toNat() {
-    match h: !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) && i.unsigned_lt_bit(length) {
+runtime fn scan_from(source: List<BitVec(8)>, length, state, i, last: u64) → u64 decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) {
         False => scan_stopped(state, i, last),
-        True => scan_from(source, length, scan_at(source, length, state, i), scan_last(state, i, last), i.add(1)),
+        True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
     }
     on ?dec1 := {
         let below = bitvec_omega::unsigned_true(64, i, length,
-            Bool::and_true_parts(!(state.eq_bit(FAIL) || state.eq_bit(DEAD)), i.unsigned_lt_bit(length), h).right);
+            Bool::and_true_parts(i.unsigned_lt_bit(length), !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), h).left);
         bv_omega
     };
 }
 
 // The longest token of `source` from `at`, after a token of kind
 // `previous` (zero at the start of the source).
-runtime fn scan_token(source: List<BitVec(8)>, length, at, previous: u64) → u64 { scan_from(source, length, scan_begin(previous), 0, at) }
+runtime fn scan_token(source: List<BitVec(8)>, length, at, previous: u64) → u64 { scan_from(source, length, scan_begin(previous), at, 0) }
 
 // ---------------------------------------------------------------------------
 // The loop is the specification's (`lexer_tokens`' `Accepted::longest`), at
@@ -115,23 +109,23 @@ theorem scan_last_after(state, i: u64, rest: List<u8>, found: Option<Accepted>):
 
 // The loop where its test fails, and where it holds.
 theorem scan_from_stops(source: List<BitVec(8)>, length, state, i, last: u64,
-    stop: (!(state.eq_bit(FAIL) || state.eq_bit(DEAD)) && i.unsigned_lt_bit(length)) = False):
-    scan_from(source, length, state, last, i) = scan_stopped(state, i, last) {
-    trans(scan_from_unfold(source, length, state, last, i),
+    stop: (i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = False):
+    scan_from(source, length, state, i, last) = scan_stopped(state, i, last) {
+    trans(scan_from_unfold(source, length, state, i, last),
         j(sym(stop), λ b _ => (match h: b {
             False => scan_stopped(state, i, last),
-            True => scan_from(source, length, scan_at(source, length, state, i), scan_last(state, i, last), i.add(1)),
+            True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
         }) = scan_stopped(state, i, last), refl))
 }
 
 theorem scan_from_steps(source: List<BitVec(8)>, length, state, i, last: u64,
-    go: (!(state.eq_bit(FAIL) || state.eq_bit(DEAD)) && i.unsigned_lt_bit(length)) = True):
-    scan_from(source, length, state, last, i) = scan_from(source, length, scan_at(source, length, state, i), scan_last(state, i, last), i.add(1)) {
-    trans(scan_from_unfold(source, length, state, last, i),
+    go: (i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = True):
+    scan_from(source, length, state, i, last) = scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)) {
+    trans(scan_from_unfold(source, length, state, i, last),
         j(sym(go), λ b _ => (match h: b {
             False => scan_stopped(state, i, last),
-            True => scan_from(source, length, scan_at(source, length, state, i), scan_last(state, i, last), i.add(1)),
-        }) = scan_from(source, length, scan_at(source, length, state, i), scan_last(state, i, last), i.add(1)), refl))
+            True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+        }) = scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)), refl))
 }
 
 // The machine's unsigned test, from the bound in `Nat` either way.
@@ -150,7 +144,7 @@ theorem scan_past(i, length: u64, past: length.toNat() <= i.toNat()): i.unsigned
     })(refl)
 }
 
-// A state that goes on passes the loop's second test.
+// A state that goes on passes the loop's test of the state.
 theorem scan_goes(state: u64, live: state.eq_bit(FAIL) = False, on: state.eq_bit(DEAD) = False):
     !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) = True {
     j(sym(live), λ b _ => !(b || state.eq_bit(DEAD)) = True, j(sym(on), λ b _ => !b = True, refl))
@@ -193,14 +187,13 @@ theorem scan_at_head(source: List<u8>, length, state, i: u64, byte: u8, tail: Li
 // specification's longest token from there, as a word.
 theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state, i: u64) → (found: Option<Accepted>) →
     source.drop(i.toNat()) = rest → i.toNat() + rest.len() = length.toNat() → state.eq_bit(FAIL) = False → state.eq_bit(DEAD) = False →
-    scan_from(source, length, state, Accepted::word(found), i)
+    scan_from(source, length, state, i, Accepted::word(found))
         = Accepted::word(Accepted::longest(state, rest, i.toNat(), Accepted::after(state, rest, i.toNat(), found))) {
     match rest {
         Nil => λ state i found here ends live on => {
             let past: (length.toNat() <= i.toNat()) = j(ends, λ n _ => n <= i.toNat(), i.toNat().le_refl());
-            let stop: ((!(state.eq_bit(FAIL) || state.eq_bit(DEAD)) && i.unsigned_lt_bit(length)) = False) =
-                trans(cong_fn(λ (b: Bool) => !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) && b, scan_past(i, length, past)),
-                    (!(state.eq_bit(FAIL) || state.eq_bit(DEAD))).and_false_r());
+            let stop: ((i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = False) =
+                cong_fn(λ (b: Bool) => b && !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), scan_past(i, length, past));
             trans(scan_from_stops(source, length, state, i, Accepted::word(found), stop),
                 trans(scan_stopped_at_end(state, i, Accepted::word(found), live, on),
                     match scan_step(state, END).eq_bit(FAIL) as λ b => (match b { False => scan_last(state, i, Accepted::word(found)), True => 0 })
@@ -215,13 +208,13 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
             let next = scan_step(state, byte.zero_extend(56));
             let kept = Accepted::after(state, Cons(byte, tail), i.toNat(), found);
             let up: (i.add(1).toNat() = Succ(i.toNat())) = bv_omega;
-            let stepped: (scan_from(source, length, state, Accepted::word(found), i) = scan_from(source, length, next, Accepted::word(kept), i.add(1))) =
+            let stepped: (scan_from(source, length, state, i, Accepted::word(found)) = scan_from(source, length, next, i.add(1), Accepted::word(kept))) =
                 trans(scan_from_steps(source, length, state, i, Accepted::word(found),
-                        Bool::and_true_of(!(state.eq_bit(FAIL) || state.eq_bit(DEAD)), i.unsigned_lt_bit(length), scan_goes(state, live, on), under)),
-                    trans(cong_fn(λ (s: u64) => scan_from(source, length, s, scan_last(state, i, Accepted::word(found)), i.add(1)),
+                        Bool::and_true_of(i.unsigned_lt_bit(length), !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), under, scan_goes(state, live, on))),
+                    trans(cong_fn(λ (s: u64) => scan_from(source, length, s, i.add(1), scan_last(state, i, Accepted::word(found))),
                             scan_at_head(source, length, state, i, byte, tail, here, under)),
-                        cong_fn(λ (w: u64) => scan_from(source, length, next, w, i.add(1)), scan_last_after(state, i, Cons(byte, tail), found))));
-            trans(stepped, (match next.eq_bit(FAIL) as λ b => next.eq_bit(FAIL) = b → scan_from(source, length, next, Accepted::word(kept), i.add(1))
+                        cong_fn(λ (w: u64) => scan_from(source, length, next, i.add(1), w), scan_last_after(state, i, Cons(byte, tail), found))));
+            trans(stepped, (match next.eq_bit(FAIL) as λ b => next.eq_bit(FAIL) = b → scan_from(source, length, next, i.add(1), Accepted::word(kept))
                 = Accepted::word(if b {
                     None
                 } else if next.eq_bit(DEAD) {
@@ -230,18 +223,20 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
                     Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept))
                 }) {
                 True => λ failed => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
-                        cong_fn(λ (b: Bool) => !(b || next.eq_bit(DEAD)) && i.add(1).unsigned_lt_bit(length), failed)),
+                        trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !(b || next.eq_bit(DEAD)), failed),
+                            i.add(1).unsigned_lt_bit(length).and_false_r())),
                     scan_stopped_failed(next, i.add(1), Accepted::word(kept), failed)),
-                False => λ live2 => (match next.eq_bit(DEAD) as λ b => next.eq_bit(DEAD) = b → scan_from(source, length, next, Accepted::word(kept), i.add(1))
+                False => λ live2 => (match next.eq_bit(DEAD) as λ b => next.eq_bit(DEAD) = b → scan_from(source, length, next, i.add(1), Accepted::word(kept))
                     = Accepted::word(if b { kept } else { Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept)) }) {
                     True => λ dead => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
-                            cong_fn(λ (b: Bool) => !b && i.add(1).unsigned_lt_bit(length), trans(cong_fn(λ (b: Bool) => b || next.eq_bit(DEAD), live2), dead))),
+                            trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !b, trans(cong_fn(λ (b: Bool) => b || next.eq_bit(DEAD), live2), dead)),
+                                i.add(1).unsigned_lt_bit(length).and_false_r())),
                         scan_stopped_dead(next, i.add(1), Accepted::word(kept), live2, dead)),
                     False => λ on2 => {
                         let left: (source.drop(i.add(1).toNat()) = tail) =
                             trans(cong_fn(λ (n: Nat) => source.drop(n), up), trans(source.drop_succ(i.toNat()), trans(cong_fn(λ (l: List<u8>) => l.drop(1), here), tail.drop_zero())));
                         let ends2: (i.add(1).toNat() + tail.len() = length.toNat()) = omega;
-                        j(up, λ n _ => scan_from(source, length, next, Accepted::word(kept), i.add(1))
+                        j(up, λ n _ => scan_from(source, length, next, i.add(1), Accepted::word(kept))
                             = Accepted::word(Accepted::longest(next, tail, n, Accepted::after(next, tail, n, kept))),
                             scan_from_longest(source, length, tail)(next, i.add(1), kept, left, ends2, live2, on2))
                     },

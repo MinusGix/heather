@@ -267,9 +267,25 @@ fn {prefix}_read_{k}() → List<Nat> {{
         fork.elab_module_source(&step, &text).map_err(|e| e.render(&text))?;
         let numbers = read(&fork, &step, &format!("read_{k}"))?;
         match numbers[..] {
-            // Which function, so the search for the node starts there
-            // (issues/function-ir-planner-register-pressure.md).
-            [] => return Err(format!("the verified lowering refused this program with the planner's placement: its function {k} of {m}, callees first")),
+            // Which function and where in it: the library's mirror of the
+            // emitter's tests says (`function_ir_refusal`,
+            // issues/function-ir-planner-register-pressure.md). Each a read
+            // of its own, as every read here is.
+            [] => {
+                let counts = if lent { format!("{prefix}_counts()") } else { "[]".to_string() };
+                let why = format!("{probe}_refusal");
+                let text = format!("{imports}import function_ir_refusal;\n{}
+fn {prefix}_refused() → List<Nat> {{ {prefix}_fn{k}().refusal_bytes({k}, {names}, {counts}) }}
+fn {prefix}_shown() → List<Nat> {{ {prefix}_fn{k}().shown_bytes() }}
+", uses(&modules));
+                let defined = fork.elab_module_source(&why, &text).is_ok();
+                let said = |item: &str| read(&fork, &why, item).ok().filter(|_| defined)
+                    .map(|bytes| String::from_utf8_lossy(&bytes.iter().map(|&b| b as u8).collect::<Vec<u8>>()).into_owned());
+                let (at, nodes) = (said("refused"), said("shown"));
+                return Err(format!("the verified lowering refused this program with the planner's placement: its function {k} of {m}, callees first{}{}",
+                    at.map_or(String::new(), |at| format!(", at {at}")),
+                    nodes.map_or(String::new(), |nodes| format!("\n  the function's nodes, values by their ids: {nodes}"))));
+            },
             [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
                 let read = read_items(&numbers[3..])?;
                 // The contract's ground for needing no stack alignment and

@@ -1,0 +1,251 @@
+// Where the verified lowering refuses a function with a placement: the
+// way to the node, call or loop edge `Function::emit_lent` has no code
+// for, the place the node was given, and what each register held there.
+//
+// `heather compile-x86` evaluates `Function::refused` when its emission of
+// a function is `None`, so that its refusal says where. Nothing here is
+// part of a theorem: these functions mirror the emitter's tests
+// (`StructuredRegion::emit_calls`, `File::emit_call`, `Emitted::loop_close`)
+// and answer text. The lowering is right to refuse a placement it cannot
+// check, and the placement is untrusted search (`Node::choose_by`,
+// `StructuredRegion::plan_in`), so what is found is usually the planner's
+// and not the function's (issues/function-ir-planner-register-pressure.md).
+// `StructuredRegion::shown` writes a region's nodes and calls in the order
+// they are emitted, to read a report against.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_writes;
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_kept;
+import x86_64_block;
+import x86_64_stack;
+import x86_64_lending;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+import derive;
+import utf8;
+
+fn refusal_number(n: Nat) → String { decimal_name(20, n) }
+
+fn refusal_numbers(ns: List<Nat>) → String {
+    match ns {
+        Nil => "",
+        Cons(n, rest) => match rest { Nil => refusal_number(n), Cons(_, _) => refusal_number(n) ++ ", " ++ refusal_numbers(rest) },
+    }
+}
+
+fn Gpr::shown(self register: Gpr) → String {
+    match register {
+        Rax => "rax", Rcx => "rcx", Rdx => "rdx", Rbx => "rbx", Rsp => "rsp", Rbp => "rbp", Rsi => "rsi", Rdi => "rdi",
+        R8 => "r8", R9 => "r9", R10 => "r10", R11 => "r11", R12 => "r12", R13 => "r13", R14 => "r14", R15 => "r15",
+    }
+}
+
+fn Place::shown(self place: Place) → String { match place { Into(register) => register.shown(), Folded => "folded" } }
+
+fn binary_shown(name: String, w, o, a, b: Nat) → String {
+    refusal_number(o) ++ " = " ++ name ++ refusal_number(w) ++ " " ++ refusal_number(a) ++ ", " ++ refusal_number(b)
+}
+
+// A node as `output = operation width operands`, values by their ids.
+fn Node::shown(self node: Node) → String {
+    match node {
+        Const(w, o, v) => refusal_number(o) ++ " = const" ++ refusal_number(w) ++ " " ++ refusal_number(v),
+        Move(w, o, a) => refusal_number(o) ++ " = move" ++ refusal_number(w) ++ " " ++ refusal_number(a),
+        Add(w, o, a, b) => binary_shown("add", w, o, a, b),
+        Sub(w, o, a, b) => binary_shown("sub", w, o, a, b),
+        BitAnd(w, o, a, b) => binary_shown("and", w, o, a, b),
+        BitOr(w, o, a, b) => binary_shown("or", w, o, a, b),
+        BitXor(w, o, a, b) => binary_shown("xor", w, o, a, b),
+        ShiftLeft(w, o, a, b) => binary_shown("shl", w, o, a, b),
+        LogicalShiftRight(w, o, a, b) => binary_shown("shr", w, o, a, b),
+        ArithmeticShiftRight(w, o, a, b) => binary_shown("sar", w, o, a, b),
+        UnsignedLessThan(w, o, a, b) => binary_shown("below", w, o, a, b),
+        SignedLessThan(w, o, a, b) => binary_shown("less", w, o, a, b),
+        Equal(w, o, a, b) => binary_shown("equal", w, o, a, b),
+        BufferLoad(o, b, i) => refusal_number(o) ++ " = load buffer " ++ refusal_number(b) ++ " at " ++ refusal_number(i),
+        BufferStore(o, b, i, v) =>
+            refusal_number(o) ++ " = store buffer " ++ refusal_number(b) ++ " at " ++ refusal_number(i) ++ " of " ++ refusal_number(v),
+        Resize(f, t, o, a) => refusal_number(o) ++ " = resize" ++ refusal_number(f) ++ "to" ++ refusal_number(t) ++ " " ++ refusal_number(a),
+        SignResize(f, t, o, a) =>
+            refusal_number(o) ++ " = sign_resize" ++ refusal_number(f) ++ "to" ++ refusal_number(t) ++ " " ++ refusal_number(a),
+    }
+}
+
+fn nodes_shown(nodes: List<Node>) → String {
+    match nodes { Nil => "", Cons(node, rest) => node.shown() ++ "; " ++ nodes_shown(rest) }
+}
+
+fn Kind::shown(self kind: Kind) → String {
+    match kind { Word => "", Bit => " (a bit)", Narrow(w) => " (" ++ refusal_number(w) ++ " bits)", Low(w) => " (low " ++ refusal_number(w) ++ " bits)" }
+}
+
+// The registers of `registers` that hold a value, each with its value.
+fn File::shown_in(self file: File, registers: List<Gpr>) → String {
+    match registers {
+        Nil => "",
+        Cons(register, rest) => match file.at(register) {
+            None => file.shown_in(rest),
+            Some(held) => register.shown() ++ " holds " ++ refusal_number(held.id) ++ held.kind.shown() ++ "; " ++ file.shown_in(rest),
+        },
+    }
+}
+
+fn File::shown(self file: File) → String { file.shown_in(scratch_pool()) }
+
+// A region's nodes and calls in the order they are emitted.
+fn StructuredRegion::shown(self region: StructuredRegion) → String {
+    match region {
+        Dataflow(body) => nodes_shown(body.nodes),
+        Sequence(prefix, continuation) => nodes_shown(prefix.nodes) ++ continuation.shown(),
+        Compose(prefix, continuation) => prefix.shown() ++ continuation.shown(),
+        Conditional(_, condition, _, _, when_true, when_false) =>
+            "if " ++ refusal_number(condition) ++ " { " ++ when_true.shown() ++ "} else { " ++ when_false.shown() ++ "} ",
+        Call(callee, arguments, result) =>
+            refusal_number(result) ++ " = call function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "); ",
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
+            "loop (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
+                ++ "; count " ++ refusal_number(count) ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
+    }
+}
+
+// The first node of a block that `emit_leaf` has no code for after the
+// ones `before` it, with its place and the file the ones before it leave.
+fn leaf_refusal(prog: Prog, file: File, before, rest: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → String {
+    match rest {
+        Nil => "a block of nodes, registers: " ++ file.shown(),
+        Cons(node, later) => match emit_leaf(prog, file, before ++ [node], placement, names, homes) {
+            Some(_) => leaf_refusal(prog, file, before ++ [node], later, placement, names, homes),
+            None => "the node `" ++ node.shown() ++ "`, placed "
+                ++ (match placement.nth(before.len()) { None => "nowhere (the placement ran out)", Some(place) => "in " ++ place.shown() })
+                ++ ", where " ++ (match emit_leaf(prog, file, before, placement, names, homes) { None => file.shown(), Some(left) => left.file.shown() }),
+        },
+    }
+}
+
+// `File::emit_call`, saying which of its tests refuses.
+fn File::call_refusal(self file: File, callee: Nat, arguments: List<Nat>, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
+    let call = "the call of function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "): ";
+    match Succ(callee).leb(bound) {
+        False => call ++ "the callee is not below this function",
+        True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
+            False => call ++ "its leading arguments are not the homes of the buffers the callee is lent",
+            True => match file.move_outputs(ArgumentMove::ports(file.call_moves(arguments)), ArgumentMove::registers(file.call_moves(arguments))) {
+                None => call ++ "an argument is in no register, where " ++ file.shown(),
+                Some(moves) => match moves.file.outputs_check(word_ports(arguments), argument_registers()) {
+                    False => call ++ "the moves do not leave the arguments in their registers, where " ++ file.shown(),
+                    True => match leaves_all(moves.code, callee_saved()) {
+                        False => call ++ "a move writes a callee-saved register",
+                        True => call ++ "no test of the call refuses",
+                    },
+                },
+            },
+        },
+    }
+}
+
+// `Emitted::loop_close`, saying which of its tests refuses.
+fn Emitted::close_refusal(self pass: Emitted, registers: LoopRegisters, count, exit: Nat, next: List<Nat>) → String {
+    let held = ", where " ++ pass.file.shown();
+    match pass.file.find(Held(exit, Bit)) {
+        None => "the end of a loop's pass: its exit bit " ++ refusal_number(exit) ++ " is in no register" ++ held,
+        Some(_) => match pass.file.move_outputs(word_ports(next), registers.state) {
+            None => "the end of a loop's pass: a next state word (" ++ refusal_numbers(next) ++ ") is in no register" ++ held,
+            Some(_) => match pass.file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) {
+                None => "the end of a loop's pass: the count " ++ refusal_number(count) ++ " is in no register" ++ held,
+                Some(_) => "the end of a loop's pass: the moves into the state's registers" ++ held,
+            },
+        },
+    }
+}
+
+// `StructuredRegion::emit_calls`, answering the way to what it refuses.
+fn StructuredRegion::refusal(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
+    counts: List<Nat>, homes: List<Lent>) → String {
+    match region {
+        Dataflow(body) => leaf_refusal(prog, file, [], body.nodes, placement, names, homes),
+        Sequence(prefix, continuation) => match emit_leaf(prog, file, prefix.nodes, placement, names, homes) {
+            None => leaf_refusal(prog, file, [], prefix.nodes, placement, names, homes),
+            Some(first) => continuation.refusal(first.prog, first.file, first.placement, first.names, bound, counts, homes),
+        },
+        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound, counts, homes) {
+            None => prefix.refusal(prog, file, placement, names, bound, counts, homes),
+            Some(first) => continuation.refusal(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
+            None => "the branch on " ++ refusal_number(condition) ++ ": its bit is in no register, where " ++ file.shown(),
+            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+                Succ(Succ(names)), bound, counts, homes) {
+                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(prog.branched(tested.test, Succ(names)),
+                    file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names,
+                    bound, counts, homes) {
+                    None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(
+                        yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes),
+                    Some(no) => "where the arms of the branch on " ++ refusal_number(condition) ++ " meet: after the true arm "
+                        ++ yes.file.shown() ++ "and after the false arm " ++ no.file.shown(),
+                },
+            },
+        },
+        Call(callee, arguments, _) => file.call_refusal(callee, arguments, bound, counts, homes),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
+            match file.loop_entry(inputs, limit, parameters, count, placement) {
+                None => "the entry of a loop: its bound " ++ refusal_number(limit) ++ " or an input (" ++ refusal_numbers(inputs)
+                    ++ ") is in no register, or its registers are not apart, where " ++ file.shown(),
+                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    None => "in a loop's pass, " ++ body.refusal(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                        Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
+                    Some(pass) => match pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names) {
+                        None => pass.close_refusal(entry.registers, count, exit, next),
+                        Some(_) => "nothing in the loop",
+                    },
+                },
+            },
+    }
+}
+
+// `Function::emit_lent` of function `k` after no code: what it refuses.
+// The answer does not depend on the code before a function.
+fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>) → String {
+    match function.lent.same(lent_count(counts, k)) {
+        False => "the function is lent " ++ refusal_number(function.lent) ++ " buffers and the program's counts say "
+            ++ refusal_number(lent_count(counts, k)),
+        True => match input_file(word_ports(function.parameters), argument_registers()) {
+            None => "the function has more parameters than argument registers",
+            Some(file) => match function.body.emit_calls(function_opened(Start, k), file, placement, names, k, counts, function.homes()) {
+                None => function.body.refusal(function_opened(Start, k), file, placement, names, k, counts, function.homes()),
+                Some(body) => match function.closing(body) {
+                    None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
+                        ++ body.file.shown(),
+                    Some(_) => "nothing: the function has code after no other",
+                },
+            },
+        },
+    }
+}
+
+fn bytes_numbers(bytes: List<BitVec(8)>) → List<Nat> {
+    match bytes { Nil => [], Cons(byte, rest) => Cons(byte.toNat(), bytes_numbers(rest)) }
+}
+
+// The report as bytes, which is what the compiler's evaluator reads.
+fn Function::refusal_bytes(self function: Function, k: Nat, names: Nat, counts: List<Nat>) → List<Nat> {
+    bytes_numbers(utf8::encode(function.refused(k, function.plan(), names, counts)))
+}
+
+// The function's nodes and calls, as bytes.
+fn Function::shown_bytes(self function: Function) → List<Nat> { bytes_numbers(utf8::encode(function.body.shown())) }
