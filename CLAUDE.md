@@ -126,6 +126,11 @@
   function is a function of, and it is then a label in that export's file,
   not a file), a wrapper in `src/`, and tests against
   an independent reference.
+  The `heather` binary links these files, so one that lost a symbol (a merge
+  conflict taken from the wrong side) fails every build with `undefined
+  symbol: scan_token`: restore a complete copy (`git checkout HEAD --
+  crates/linked/generated/<file>.s`), build, then run `scripts/linked`
+  (`issues/linked-assembly-bootstrap.md`).
   When `compile-x86` answers "the verified lowering refused this program
   with the planner's placement", it names the node refused, its place and
   what each register held (`lib/native/function_ir/function_ir_refusal.hthr`

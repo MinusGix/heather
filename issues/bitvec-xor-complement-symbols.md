@@ -1,6 +1,6 @@
 ---
 title: Exclusive or, complement and rotates at BitVec have no symbol (^ is power)
-status: open
+status: closed
 labels: [surface-syntax,bitvec,design,ergonomics]
 area: language
 created: 2026-11-12
@@ -22,3 +22,4 @@ Done when: the round functions of SHA-256 read as FIPS 180-4 §4.1.2 writes them
 ## Log
 
 - 2026-11-12: Decided by Minus (2026-11-12): exclusive or is `⊕` and complement is prefix `~`. An ASCII spelling beside `⊕` (`^^` was suggested) was not decided and is left out until it is. Rotates stay methods.
+- 2026-11-12: Built by PR #585 (merged): `⊕` is exclusive or and prefix `~` complement at `BitVec(n)`, lexed as `KIND_OPLUS = 69` and `KIND_TILDE = 70` in all three numberings. Rotates stay methods. `lib/native/crypto/sha256_round.hthr` is respelled with them on PR #551.

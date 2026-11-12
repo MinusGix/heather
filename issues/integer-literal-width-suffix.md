@@ -1,6 +1,6 @@
 ---
 title: Integer literals with a width suffix: 42u64, 0x80u8
-status: open
+status: closed
 labels: [frontend,syntax,numerals,ergonomics]
 area: language
 created: 2026-11-12
@@ -19,3 +19,4 @@ Done when: `let mut i = 0u64;` elaborates, the three lexers agree on it, and the
 ## Log
 
 - 2026-11-12: Decided by Minus (2026-11-12): `42u64` goes ahead; no bare `42u`.
+- 2026-11-12: Built by PR #585 (merged): `42u64`, `0x80u8`, `7i32` lex as `SuffixedNum` (the scanner's `Num`), with no context dependence. `42u` with the width inferred was considered and skipped (Minus, 2026-11-12): a numeral already takes its width from where it stands.

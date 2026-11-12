@@ -67,3 +67,4 @@ checked-in artifact to `lib/lang/lexer.hthr`.
 
   What is left before the default can move: the speed ([[linked-scanner-speed-unmeasured]]; with the switch every token is also read once by the Rust lexer for its value, so the switch costs more than the scan alone), the values in Heather ([[heather-lexer-evaluated]]), and the refusal's message from Heather. The done-when here asks for the token stream on every file under `lib/` and a green suite with the switch on: the first holds by the tests above; the second is a suite run under `HEATHER_LEXER=linked`, recorded below when it has been made.
 - 2026-11-12: Filed from the switch: [[lex-while-eof-position-by-kind]].
+- 2026-11-12: The binary now links what it generates, which a merge conflict in `generated/` turns into a build that cannot repair itself: [[linked-assembly-bootstrap]] has the recovery (restore a complete file, build, `scripts/linked`).
