@@ -66,6 +66,15 @@ theorem MonoidRel::range_cong(n: Nat, f, g: Nat → A):
     }
 }
 
+// A sum respects its summand pointwise along `=` as well: a theorem about
+// `range`, by induction, since there is no function extensionality.
+theorem MonoidRel::range_ext(n: Nat, f, g: Nat → A, h: (k: Nat) → f(k) = g(k)): MonoidRel::range(op, n, f) = MonoidRel::range(op, n, g) {
+    match n {
+        Zero => refl,
+        Succ(m) => simp_only(MonoidRel::range_ext(op, m, f, g, h), h(m)),
+    }
+}
+
 theorem MonoidRel::range_eq(n, n2: Nat, f: Nat → A, e: n = n2):
     MonoidRel::range(op, n, f) ≈ MonoidRel::range(op, n2, f)
 {
@@ -193,6 +202,13 @@ evidence theorem MonoidRel::range_pointwise<A>({R: A → A → Type}, {op: A →
     {n: Nat}): PreservesRelation(Pointwise<Nat, A>(R), R, λ f => MonoidRel::range(op, n, f))
 {
     λ f g h => MonoidRel::range_cong(op, n, f, g, λ k _ => h(k))
+}
+
+// Along `=` as well, for a sum under an equation: `range_ext`.
+evidence theorem MonoidRel::range_pointwise_eq<A>({R: A → A → Type}, {op: A → A → A}, {d: MonoidRel<A>(R, op)},
+    {n: Nat}): PreservesRelation(Pointwise<Nat, A>(RelId<A>), RelId<A>, λ f => MonoidRel::range(op, n, f))
+{
+    λ f g h => MonoidRel::range_ext(op, n, f, g, h)
 }
 
 // The antidiagonal's two binders, crossed at once.

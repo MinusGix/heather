@@ -572,17 +572,57 @@ is crossed its own way.
   `RelId` with no evidence; the λ's consumer needs
   `PreservesRelation(Pointwise(RelId), RelId, λ f => xs.map(f))`, an
   `evidence theorem` beside the function. `lib/std/data/list_pointwise.hthr`
-  has it for `map`, `filter` and `count`, each with the lemma a proof cites
-  (`List::map_ext`). A consumer without it is named in the report's blocked
-  line, with the statement it needs.
+  has it for `map`, `filter`, `count`, `foldr`, `foldl`, `any_bit`,
+  `all_bit`, `find`, `split_by` and `update`, each with the lemma a proof
+  cites (`List::map_ext`); a step of two arguments (a fold's) is related by
+  `Pointwise(Pointwise(RelId))` and crossed one binder at a time.
+  `big_operator` has it for `∑`/`∏` along the carrier's relation
+  (`range_pointwise`) and along `=` (`range_pointwise_eq`). A consumer
+  without it is named in the report's blocked line, with the statement it
+  needs.
 
 The route spells an instance where it was found, with the walk's name for
 the binder (`f(x0) ++ []`).
 
-Gaps left: `by simp()` does not find the default sets of types that occur
-only inside an `∃`, because a view of `Exists(P)` does not present `P`
-(`issues/view-of-value-parameterised-record.md`; `simp_only`, `extra :=`
-and `simp_with` are unaffected); a side condition of a law fired under a
-binder is not discharged there; the evidence exists for three list
-functions, and each further consumer (`foldr`, `any`, a `∑`'s at `=`) is
-one lemma.
+`by simp()` finds the default sets of types that occur only inside an
+`∃`: the host's view of a value-parameterised record reads a value
+argument the unifier leaves unsolved where the template applies it
+(`El(?P(witness))` against `El((λ x => …)(witness))`), so `Exists(P)` views
+as `Exists` with `A` and `P`, and `P` as a λ that `Open` enters.
+
+Gaps left: a side condition of a law fired under a binder is not
+discharged there; and each further consumer of a λ is one lemma and one
+evidence theorem.
+
+A call at a constructor computes to its arm with the recursive call
+written as a call (`goal_combinators::recursion_at_constructor`, over the
+reduct walk's refolded firing in `refold.rs`), so a law over the call
+matches what is left. Two shapes used to fall through to a law that found
+its instance by unfolding, which leaves the raw recursor that no source
+spells: a tail call on an accumulator (`foldl`'s arm is the recursion
+itself, which the check that an arm was selected read as stuck), and a
+recursion on `Nat` (`range`), whose `elim_Nat` the walk did not refold
+(`issues/simp-unfolded-call-loses-spelling.md`).
+
+## 14. Unfolding by name, as built
+
+A definition named among the laws (`simp_only(Node::step, Valuation::set_here)`)
+is unfolded wherever it is called while the goal is computed: its body at
+the call's arguments, the β-redexes that leaves contracted, no other
+definition unfolded (`goal_combinators::simplify_goal_unfolding`). It never
+fires as a rewrite and the route does not list it, as a call computed at a
+constructor is not listed. The goal before and after convert, so the
+unfolding costs no proof term.
+
+What counts as a definition: a transparent global (a theorem's proof is
+opaque, so a theorem is always a law) whose type's conclusion is not an
+equation, a relation or a `↔`. A local function is neither a law nor
+unfolded, and is refused as before. An unfolding the source cannot spell is
+not taken: a body that is a match on a non-constructor stays a call
+(`issues/simp-adoption-native-gaps.md`).
+
+Found by the adoption round on the native chains (2026-11-12): a law about
+a definition's body (`Valuation::set_here`, about `Valuation::set`) does not
+match a call of a definition that is that body (`Node::step(Move(…), v)`)
+until the call is unfolded. Before this, the proof wrote the unfolding as a
+`refl` equation and passed it as a law.

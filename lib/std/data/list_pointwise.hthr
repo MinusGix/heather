@@ -61,3 +61,107 @@ evidence theorem List::count_pointwise<A>({xs: List<A>}):
 {
     λ p q h => xs.count_ext(p, q, h)
 }
+
+// A fold's step takes two arguments, so it agrees pointwise twice over:
+// the evidence's relation is `Pointwise(Pointwise(RelId))`, which a rewrite
+// in the body of `λ a b => …` meets one binder at a time.
+theorem List::foldr_ext<A, B>(self xs: List<A>, f, g: A → B → B, z: B, h: (a: A) → (b: B) → f(a, b) = g(a, b)):
+    xs.foldr(f, z) = xs.foldr(g, z)
+{
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(t.foldr_ext(f, g, z, h), h(a, t.foldr(g, z))),
+    }
+}
+
+theorem List::foldl_ext<A, B>(self xs: List<A>, f, g: B → A → B, h: (b: B) → (a: A) → f(b, a) = g(b, a)):
+    (z: B) → xs.foldl(f, z) = xs.foldl(g, z)
+{
+    match xs {
+        Nil => λ z => refl,
+        Cons(a, t) => λ z => simp_only(h(z, a), t.foldl_ext(f, g, h, g(z, a))),
+    }
+}
+
+theorem List::all_bit_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.all_bit(p) = xs.all_bit(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), t.all_bit_ext(p, q, h)),
+    }
+}
+
+theorem List::any_bit_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.any_bit(p) = xs.any_bit(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), t.any_bit_ext(p, q, h)),
+    }
+}
+
+theorem List::find_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.find(p) = xs.find(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), then := match q(a) {
+            True => refl,
+            False => t.find_ext(p, q, h),
+        }),
+    }
+}
+
+theorem List::split_by_ext<A>(self xs: List<A>, p, q: A → Bool, h: (x: A) → p(x) = q(x)): xs.split_by(p) = xs.split_by(q) {
+    match xs {
+        Nil => refl,
+        Cons(a, t) => simp_only(h(a), t.split_by_ext(p, q, h)),
+    }
+}
+
+theorem List::update_ext<A>(self xs: List<A>, f, g: A → A, h: (x: A) → f(x) = g(x)): (i: Nat) → xs.update(i, f) = xs.update(i, g) {
+    match xs {
+        Nil => λ i => refl,
+        Cons(a, t) => λ i => match i {
+            Zero => simp_only(h(a)),
+            Succ(k) => List::cong_cons(a, t.update_ext(f, g, h, k)),
+        },
+    }
+}
+
+evidence theorem List::foldr_pointwise<A, B>({xs: List<A>}, {z: B}):
+    PreservesRelation(Pointwise<A, B → B>(Pointwise<B, B>(RelId<B>)), RelId<B>, λ f => xs.foldr(f, z))
+{
+    λ f g h => xs.foldr_ext(f, g, z, h)
+}
+
+evidence theorem List::foldl_pointwise<A, B>({xs: List<A>}, {z: B}):
+    PreservesRelation(Pointwise<B, A → B>(Pointwise<A, B>(RelId<B>)), RelId<B>, λ f => xs.foldl(f, z))
+{
+    λ f g h => xs.foldl_ext(f, g, h, z)
+}
+
+evidence theorem List::all_bit_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<Bool>, λ p => xs.all_bit(p))
+{
+    λ p q h => xs.all_bit_ext(p, q, h)
+}
+
+evidence theorem List::any_bit_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<Bool>, λ p => xs.any_bit(p))
+{
+    λ p q h => xs.any_bit_ext(p, q, h)
+}
+
+evidence theorem List::find_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<Option<A>>, λ p => xs.find(p))
+{
+    λ p q h => xs.find_ext(p, q, h)
+}
+
+evidence theorem List::split_by_pointwise<A>({xs: List<A>}):
+    PreservesRelation(Pointwise<A, Bool>(RelId<Bool>), RelId<List<List<A>>>, λ p => xs.split_by(p))
+{
+    λ p q h => xs.split_by_ext(p, q, h)
+}
+
+evidence theorem List::update_pointwise<A>({xs: List<A>}, {i: Nat}):
+    PreservesRelation(Pointwise<A, A>(RelId<A>), RelId<List<A>>, λ f => xs.update(i, f))
+{
+    λ f g h => xs.update_ext(f, g, h, i)
+}

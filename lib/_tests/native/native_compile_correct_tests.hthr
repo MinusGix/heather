@@ -23,3 +23,15 @@ fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless
 theorem branch_is_no_then(): exit_unless().main.left().emits(Start, eu_layout(), [], [], 0) = Exit(2).emits(Start, eu_layout(), [], [], 0) {
     Stmt::emits_then_of(exit_unless().main.left(), trivial, Start, eu_layout(), [], [], 0, Compiled(Start, 0), refl)
 }
+
+// A rest that starts with an exit reads known words, so the set live before
+// it is not the check's (`Stmt::live_head`), and the checked join does not
+// take it.
+fn two_exits() → Source { Source::of([], Then(Exit(1), Exit(2))) }
+fn te_layout() → Layout { two_exits().layout(low(), Homes::slots(two_exits())) }
+
+// expect-error: `reads_known(right((two_exits).main))` and `False` are not
+theorem exit_rest_is_not_plain(): two_exits().main.emits(Start, te_layout(), [], [], 0) =
+    two_exits().main.right().emits(Start, te_layout(), [], two_exits().main.left().carried(two_exits().main.right(), te_layout().homes, []), 0) {
+    Stmt::emits_then_checked(two_exits().main, trivial, Start, te_layout(), [], [], 0, Compiled(Start, 0), [], refl, refl, refl)
+}

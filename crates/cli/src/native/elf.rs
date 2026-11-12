@@ -212,10 +212,16 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     };
     let finish = "then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)";
     let homes = format!("{p}_homes()");
-    let layout = format!("{src}().layout({LOW}, {homes})");
+    // The layout by name, a literal (`layout_literal`): every statement of
+    // the emission names it, and `Source::layout` walks the program for its
+    // word count and filters the register pools by the homes, which each
+    // declaration of the certificate otherwise did again
+    // (issues/native-certificate-layout-per-item.md).
+    let layout = format!("{p}_layout()");
     let entry = format!("{src}().entry({LOW}, {homes})");
     let probes = format!("import {root};\n{imports}{lowered}
 fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacities(), Homes([], [])).size(), io_data_limit()] }}
+fn {p}_sizes() → List<Nat> {{ Cons({src}().words, {src}().capacities()) }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
@@ -240,6 +246,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range and saved RSP, \
             past the I/O profile's limit of {limit} (`io_data_limit`)"));
     }
+    let sizes = numbers(&fork, &probe, &format!("{p}_sizes"))?;
     let region = DATA..DATA + size;
     let address = |width: u32, n: u64| {
         if width == 64 && region.contains(&n) { format!("{LOW}.add_nat({})", n - DATA) }
@@ -279,8 +286,9 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
-        let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
-            homes_literal(spelled, places.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
+        let homes_def = format!("fn {homes} → Homes {{ {} }}\nfn {layout} → Layout {{ {} }}\n",
+            homes_literal(spelled, places.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?,
+            layout_literal(&src, &homes, &sizes, spelled).ok_or_else(|| format!("`{symbol}`'s layout did not read back"))?);
         let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
             fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
             fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
@@ -304,6 +312,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         return Err(refused(symbol, &allocation));
     }
     let live_sets = numbers(&fork, &parts, &format!("{p}_live_sets"))?;
+    let plain = numbers(&fork, &parts, &format!("{p}_plain"))?;
     // The reads of the parts in sessions that share what they force
     // (`function_ir_source::read_sharing`): a part's statement, its
     // live-out set and what is known as it starts are each spelled from its
@@ -343,7 +352,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     plan.text = emission::live_literals(p, &plan.text, &sets)?;
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, &plain, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
         emission::Checks { src: &src, homes: &homes, sets: &live_sets })?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
@@ -407,8 +416,8 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // (`Source::compile_calls_of`; with functions and no procedure,
     // `Source::compile_functions_of`).
     let (emitted, compiles) = match &calls {
-        None => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
-    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
+        None => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
 "), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, refl, {p}_emitted(), {p}_laid())")),
@@ -431,7 +440,7 @@ import {root};
 // The words' homes and the loops' sets, as the greedy allocator gave them
 // (and, for a source that calls functions, where the function compiler's
 // heuristic puts their values).
-{homes_def}
+{homes_def}theorem {p}_layout_is(): {p}_layout() = {src}().layout({LOW}, {homes}) {{ refl }}
 // The program: what `{src}().compile` computes.
 {code}
 // Its emission, and the compile's check of the homes (`{p}_ck_`), a part of
@@ -618,6 +627,24 @@ fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
     }
     let places = places.map(|places| format!(", {places}")).unwrap_or_default();
     Some(format!("Homes([{}], [{}]{places})", of.join(", "), sets.join(", ")))
+}
+
+/// The layout `Source::layout` computes over these homes, as a literal: the
+/// word count and the capacities as read (`sizes`), the registers no word
+/// lives in (`Homes::leaf_pool`) and those one does (`Homes::registers`),
+/// each worked out here from the homes' spelling. The kernel checks it
+/// against the computed one, once (`{p}_layout_is`).
+fn layout_literal(src: &str, homes: &str, sizes: &[u64], spelled: &[u64]) -> Option<String> {
+    const REGISTER_POOL: [&str; 14] = ["Rax", "Rcx", "Rdx", "Rsi", "Rdi", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "Rbp"];
+    const HOME_POOL: [&str; 6] = ["R12", "R13", "R14", "R15", "Rbp", "R10"];
+    let (words, capacities) = sizes.split_first()?;
+    let (&count, rest) = spelled.split_first()?;
+    let of = rest.get(..usize::try_from(count).ok()?)?;
+    // `home_register`: a home past the pool reads as the pool's first.
+    let used: Vec<&str> = of.iter().filter(|&&h| h != 0).map(|&h| HOME_POOL.get((h - 1) as usize).copied().unwrap_or(HOME_POOL[0])).collect();
+    let list = |pool: &[&str], keep: bool| pool.iter().filter(|r| used.contains(r) == keep).copied().collect::<Vec<_>>().join(", ");
+    Some(format!("Layout({LOW}, {words}, [{}], {homes}, [{}], [{}], {src}().procedures, {src}().functions)",
+        capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", "), list(&REGISTER_POOL, false), list(&HOME_POOL, true)))
 }
 
 /// `{p}_upto_c()`'s length for each piece `c`, from the program's start:

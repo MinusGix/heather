@@ -11,7 +11,11 @@
 //! `Repeat` or `Branch` puts around its parts. In the certificate each whole
 //! part is one `refl`, and every larger one is joined from its parts'
 //! statements by `Stmt::emits_then_of`, `emits_repeat_of` or `emits_branch_of`
-//! (native_compile_correct). A part is named by its parent's (`Stmt::left`,
+//! (native_compile_correct); a sequence whose rest reads no known word, in
+//! the main statement, by `Stmt::emits_then_checked`, which takes the set
+//! live between its parts from the allocation's check (`{p}_ck_`) where
+//! `emits_then_of` has the kernel work it out from the rest
+//! (issues/native-emission-join-liveness.md). A part is named by its parent's (`Stmt::left`,
 //! `right`), and so are what is live after it (`{p}_o_`: the parent's, but
 //! `right().live_with(…)` for a `Then`'s first part and `loop_out` for a
 //! loop's body) and what is known as it starts (`{p}_kn_`: nothing, but for
@@ -108,7 +112,11 @@ impl Part {
 /// last) or the items around parts (`Prog::reading`). `programs[r]` spells
 /// read `r`'s program, at `Start`, for reading the bytes of a read that did
 /// not give them (`byte_reads`).
-pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part, exit: usize, calls: Option<Calls> }
+/// `joins` are the sequences stated as joins, by the id of each one's rest,
+/// which `{p}_plain` reads in the same order: 1 where the rest does not start
+/// with a call or an exit (`Stmt::reads_known`), and the join can take the set
+/// live before it from the allocation's check (`Stmt::emits_then_checked`).
+pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part, exit: usize, calls: Option<Calls>, joins: Vec<usize> }
 
 /// A source with procedures or functions: each procedure's way in, its
 /// body's parts and its way out, read after the exit, then the shared exit,
@@ -150,7 +158,7 @@ fn procedure(src: &str, index: usize) -> String { format!("{src}().procedures.pr
 pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64], first: u64, calls: Option<CallsOf<'_>>) -> Result<Plan, String> {
     let tree = tree_of(shape, Some(first))?;
     let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\nfn {p}_kn_0() → List<Fact> {{ [] }}\n");
-    let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
+    let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1, joins: Vec::new() };
     planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
     let exit = planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
@@ -178,10 +186,12 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
             Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions })
         }
     };
-    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root, exit, calls })
+    let plain: Vec<String> = planner.joins.iter().map(|rest| format!("match {p}_s_{rest}().reads_known() {{ True => 0, False => 1 }}")).collect();
+    planner.text.push_str(&format!("fn {p}_plain() → List<Nat> {{ [{}] }}\n", plain.join(", ")));
+    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root, exit, calls, joins: planner.joins })
 }
 
-struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize }
+struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize, joins: Vec<usize> }
 
 impl Planner<'_> {
     /// The items around parts, of the program `program` spells.
@@ -223,6 +233,7 @@ impl Planner<'_> {
                 let f = self.child(id, "left", format!("{p}_s_{id}().right().live_with({layout}.homes, {carried}, {p}_o_{id}())"),
                     format!("{p}_s_{id}().left().first_known({p}_kn_{id}())"));
                 let r = self.child(id, "right", format!("{p}_o_{id}()"), carried);
+                self.joins.push(r);
                 Part::Then { id, names, first: Box::new(self.part(first, f)?), rest: Box::new(self.part(rest, r)?), index: shape.index }
             }
             (2, [body]) if shape.then == ss => {
@@ -307,7 +318,7 @@ pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: 
 /// from its parts (`Inits::state`); without, by one `refl` over the set
 /// live as `main` starts, which the allocation's check found
 /// (`Source::entry_at`): the entry zeroes those words of `main`'s frame.
-pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Checks<'_>) -> Result<Stated, String> {
+pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64], readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Checks<'_>) -> Result<Stated, String> {
     if readings.len() != plan.reads.len() { return Err(out_of_order()); }
     let mut starts = Vec::with_capacity(readings.len());
     let (mut items, mut lens) = (Vec::new(), Vec::new());
@@ -319,11 +330,15 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     let (entered, main) = (starts[1], starts[plan.exit]);
     let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_")) || line.starts_with(&format!("fn {p}_o_")) || line.starts_with(&format!("fn {p}_kn_")))
         .map(|line| format!("{line}\n")).collect();
-    let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts };
+    if plain.len() != plan.joins.len() { return Err(out_of_order()); }
+    let plain: BTreeSet<usize> = plan.joins.iter().zip(plain).filter(|&(_, &flag)| flag == 1).map(|(&rest, _)| rest).collect();
+    let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts, plain: &plain, checked: false };
     // The allocation's check first: the entry reads the set it found
-    // before `main` (`{p}_ck_0`).
+    // before `main` (`{p}_ck_0`), and the main statement's joins cite its
+    // verdicts.
     let (checked, live) = checks.state(p, &plan.root)?;
     writer.theorems.push_str(&checked);
+    writer.checked = true;
     match inits {
         Some(inits) => inits.state(&mut writer, entered, &live)?,
         None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{\n    \
@@ -331,6 +346,7 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
             src = checks.src, homes = checks.homes, LOW = super::elf::LOW)),
     }
     let (start, end, names) = writer.part(&plan.root)?;
+    writer.checked = false;
     if start != entered || end != main { return Err(out_of_order()); }
     let calls = match &plan.calls {
         None => None,
@@ -609,6 +625,11 @@ struct Writer<'a> {
     /// The item counts the literal is cut at.
     cuts: BTreeSet<usize>,
     theorems: String,
+    /// The rests (by id) that do not start with a call or an exit.
+    plain: &'a BTreeSet<usize>,
+    /// Whether the statement being written has the allocation's check
+    /// stated over its parts (`{p}_ck_{id}`): the main statement's.
+    checked: bool,
 }
 
 impl Writer<'_> {
@@ -634,8 +655,16 @@ impl Writer<'_> {
                 let (rest_start, end, after) = self.part(rest)?;
                 if rest_start != middle { return Err(out_of_order()); }
                 if rest.names() != between { return Err(miscounted()); }
-                let proof = format!("trans(Stmt::emits_then_of({p}_s_{id}(), trivial, {}, {layout}, {p}_o_{id}(), {p}_kn_{id}(), {names}, Compiled({}, {between}), {p}_e_{}()), {p}_e_{}())",
-                    self.program(start), self.program(middle), first.id(), rest.id());
+                // The set live between the two: from the check's verdict on
+                // the rest where that is stated and the rest reads nothing
+                // known, otherwise worked out by the kernel from the rest.
+                let proof = if self.checked && self.plain.contains(&rest.id()) {
+                    format!("trans(Stmt::emits_then_checked({p}_s_{id}(), trivial, {}, {layout}, {p}_o_{id}(), {p}_kn_{id}(), {names}, Compiled({}, {between}), {p}_o_{}(), refl, {p}_ck_{}(), {p}_e_{}()), {p}_e_{}())",
+                        self.program(start), self.program(middle), first.id(), rest.id(), first.id(), rest.id())
+                } else {
+                    format!("trans(Stmt::emits_then_of({p}_s_{id}(), trivial, {}, {layout}, {p}_o_{id}(), {p}_kn_{id}(), {names}, Compiled({}, {between}), {p}_e_{}()), {p}_e_{}())",
+                        self.program(start), self.program(middle), first.id(), rest.id())
+                };
                 (*id, *names, start, end, after, proof)
             }
             Part::Repeat { id, names, open, body, close, .. } => {
