@@ -359,6 +359,11 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
     }
     if let Some(why) = layout_refusal(&items, &lens) {
+        // The compile's own reason first, where it has one: functions that
+        // do not link (`Prog::links`) leave the calls of them with no label
+        // to go to, and the reason is theirs, not the layout's.
+        let reason = numbers(&fork, &parts, &format!("{p}_refusal"))?;
+        if !reason.is_empty() { return Err(refused(symbol, &reason)); }
         return Err(format!("`{symbol}` is refused: the program's labels did not lay out ({why})"));
     }
     let pieces = verified::cut_pieces(&lens, PIECE);
