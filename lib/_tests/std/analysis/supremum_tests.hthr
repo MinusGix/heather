@@ -78,9 +78,9 @@ theorem merged_call_through_upcast(xs: Nat → K, b: K, h: MergedUb(λ (y: K) =>
 }
 // The negative control: a merged argument of the wrong type is refused at
 // its own site, not accepted and not aborted. An inferred argument's
-// comparison with its domain is owed to the gate (`OwedChecks`), so the
-// refusal is the kernel's.
-// expect-error(kernel): NotConvertible
+// comparison with its domain is owed to the gate (`OwedChecks`); the gate's
+// refusal is reported at the argument, both types spelled.
+// expect-error: this has type `MergedEb(xs, b)`, but `Exists<…>(λ (x: Nat) => (z: Nat) -> Le(x, z) -> y <= xs(z))` is expected here; `MergedEb(xs, b)` unfolds to `Exists<…>(λ (x: Nat) => (z: Nat) -> Le(x, z) -> b <= xs(z))`
 theorem merged_call_wrong_argument(xs: Nat → K, b: K, h: MergedUb(λ (y: K) => MergedEb(xs, y), b), y: K, sy: MergedEb(xs, b)): y <= b {
     merged_ub_at(xs, b, h, y, sy)
 }
