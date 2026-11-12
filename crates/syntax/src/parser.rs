@@ -8497,7 +8497,7 @@ mod tests {
             ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { let k: a <= b = h; 0 }", "<="),
             ("fn f(a: Nat, b: Nat, h: a < b) -> Nat { let k: a < b = h; 0 }", "<"),
             ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { have k: a <= b = h; 0 }", "<="),
-            ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { let k: a <= b ∧ b <= b = h; 0 }", "∧"),
+            ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { let k: a <= b ∧ b <= b = h; 0 }", "And"),
         ] {
             let d = decl_of(src);
             let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[0] else { panic!("{src}: a let") };

@@ -1045,8 +1045,7 @@ impl Speller<'_> {
         }
         let ctor = &ind.ctors[i];
         let undetermined = ind.params.iter().any(|p| {
-            let names = std::slice::from_ref(p);
-            !ctor.fields.iter().any(|(_, ty)| crate::datarepr::mentions_free_ty(ty, names, &mut Vec::new()))
+            !ctor.fields.iter().any(|(_, ty)| crate::inductive::occurs(ty, p).is_some())
         });
         if !undetermined {
             return String::new();
