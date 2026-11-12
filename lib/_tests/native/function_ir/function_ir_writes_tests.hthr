@@ -160,3 +160,39 @@ theorem peek_within_none(): program_stores_within([peek()], []) = True { refl }
 theorem caller_stores_marked(buffer: Nat, stores: program_stores([caller(), storer()], buffer).IsTrue()): marked([True], buffer) = True {
     program_stores_marked([caller(), storer()], [True], buffer, trivial, stores)
 }
+
+// ---------------------------------------------------------------------------
+// What each function needs written, as rows
+//
+// One list of marks asks of every function what any function stores into.
+// A row for each function says what that function needs: what it stores
+// into and what the functions it calls need (`program_marked`; row `f` is
+// function `f`'s, and `storer` is function 0).
+
+theorem marks_within_shorter(): marks_within([True, False], [True]) = True { refl }
+theorem marks_within_missing(): marks_within([False, True], [True]) = False { refl }
+theorem marks_within_unmarked(): marks_within([True], [False]) = False { refl }
+theorem marks_within_none(): marks_within([], []) = True { refl }
+
+// A caller needs what its callee does.
+theorem caller_rows(): program_marked([caller(), storer()], [[True], [True]]) = True { refl }
+theorem caller_row_short(): program_marked([caller(), storer()], [[True], []]) = False { refl }
+theorem storer_row_short(): program_marked([caller(), storer()], [[], [True]]) = False { refl }
+
+// A function beside a storer that neither stores nor calls it needs
+// nothing, which one list for the program cannot say.
+theorem peek_beside_rows(): program_marked([peek(), storer()], [[True], []]) = True { refl }
+theorem peek_beside_one_list(): program_stores_within([peek(), storer()], []) = False { refl }
+
+// What the rows give, at a neutral buffer: the caller's stores and its
+// callee's needs are in its row.
+theorem caller_needs(): ProgramNeeds([caller(), storer()], λ (f: Nat) (b: Nat) => marked(marks_row([[True], [True]], f), b)) {
+    program_marked_needs([caller(), storer()], [[True], [True]], trivial)
+}
+
+// A program with no call over views, under one answer for every function.
+theorem caller_lendless(): program_lendless([caller(), storer()]) = True { refl }
+theorem caller_needs_all(written: Nat → Bool, allowed: (b: Nat) → program_stores([caller(), storer()], b).IsTrue() → written(b) = True):
+    ProgramNeeds([caller(), storer()], λ (_: Nat) (b: Nat) => written(b)) {
+    program_needs_all([caller(), storer()], written, trivial, allowed)
+}

@@ -70,7 +70,7 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 // (`ran`). Whoever lends discharges the premises: a program from its data
 // region, Rust from a slice.
 theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program),
+    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), lendless: program_lendless(functions).IsTrue(),
     allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True,
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
@@ -82,7 +82,7 @@ theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Plac
         stack.AnsweredOver(lending, result, after)) {
     let site = Site<M>(fetch, data, program, last, origin);
     let calls = lower_program_lent_correct<M>(functions, placement, lending, program, lowered, fetch, data, last, origin, stack, top, loan,
-        allowed);
+        lendless, allowed);
     site.returns_weaken(stack, asm_labels(program)(Succ(f)),
         stack.CalledOver(program_effects(functions), lending, top, f, arguments, result, before, after),
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
@@ -96,6 +96,7 @@ theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Plac
 // meaning allows, so the code returns the one and leaves the other.
 theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
     lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    lendless: program_lendless(functions).IsTrue(),
     allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True,
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
@@ -106,7 +107,7 @@ theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, answer.word, answer.buffers)) {
-    compiled_returns_over<M>(functions, placement, lending, program, lowered, allowed, fetch, data, last, origin, stack, top, loan, f, below,
+    compiled_returns_over<M>(functions, placement, lending, program, lowered, lendless, allowed, fetch, data, last, origin, stack, top, loan, f, below,
         arguments, answer.word, before, answer.buffers,
         j(runs, λ x _ => program_effects(functions)(before, f, arguments, x.word, x.buffers),
             program_run_effects(functions, evaluable, before, f, arguments, fits)))
@@ -131,7 +132,7 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), answer.word, answer.buffers)) {
     compiled_returns_run<M>(functions, placement, Lending::writing(counts, addresses, before, marks), program, lowered, evaluable,
-        λ b stores => program_stores_marked(functions, marks, b, within, stores), fetch, data, last, origin, stack, top, loan, f, below,
+        program_stores_within_lendless(functions, marks, within), λ b stores => program_stores_marked(functions, marks, b, within, stores), fetch, data, last, origin, stack, top, loan, f, below,
         arguments, fits, before, answer, runs)
 }
 
@@ -153,7 +154,7 @@ theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Plac
     let value = program_eval_over(now, functions, f, arguments);
     let computed = program_effects_quiet(functions, quiet, now, f, arguments, value,
         program_eval_reads(functions, now, evaluable, f, arguments, fits));
-    compiled_returns_over<M>(functions, placement, lending, program, lowered,
+    compiled_returns_over<M>(functions, placement, lending, program, lowered, program_quiet_lendless(functions, quiet),
         λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores)), fetch, data, last, origin, stack, top, loan, f, below,
         arguments, answer, now, now, j(evaluates, λ x _ => program_effects(functions)(now, f, arguments, x, now), computed))
 }

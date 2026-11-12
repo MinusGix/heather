@@ -582,14 +582,73 @@ theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: Li
     }
 }
 
-// Every store of every function of the program is into a marked buffer.
+// Whether a region makes no call over views.
+fn StructuredRegion::lendless(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.lendless(),
+        Compose(prefix, continuation) => prefix.lendless() && continuation.lendless(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.lendless() && when_false.lendless(),
+        Lend(_, _, _, _) => False,
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.lendless(),
+    }
+}
+
+fn program_lendless(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.lendless() && program_lendless(earlier) }
+}
+
+// A region that stores into no buffer makes no call over views: such a
+// call is taken for one that stores.
+theorem StructuredRegion::quiet_lendless(self region: StructuredRegion): region.quiet().IsTrue() → region.lendless().IsTrue() {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(prefix, continuation) => λ quiet =>
+            continuation.quiet_lendless(Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet).right),
+        Compose(prefix, continuation) => λ quiet => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.lendless(), continuation.lendless(), prefix.quiet_lendless(both.left),
+                continuation.quiet_lendless(both.right))
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ quiet => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            Bool::is_true_and_intro(when_true.lendless(), when_false.lendless(), when_true.quiet_lendless(both.left),
+                when_false.quiet_lendless(both.right))
+        },
+        Lend(_, _, _, _) => λ never => never,
+        Call(_, _, _) => λ _ => trivial,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet_lendless(),
+    }
+}
+
+theorem program_quiet_lendless(functions: List<Function>): program_quiet(functions).IsTrue() → program_lendless(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ quiet => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier), last.body.quiet_lendless(both.left),
+                program_quiet_lendless(earlier, both.right))
+        },
+    }
+}
+
+// Every store of every function of the program is into a marked buffer,
+// and no function calls over views: one list of marks for a program says
+// what every function needs written by its own buffers' numbers, and the
+// callee of a call over views numbers its views, not its caller's buffers.
+// A program that lends views is stated with marks for each function
+// (`program_marked`).
 fn program_stores_within(functions: List<Function>, marks: List<Bool>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.body.stores_within(marks) && program_stores_within(earlier, marks) }
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (last.body.stores_within(marks) && last.body.lendless()) && program_stores_within(earlier, marks),
+    }
 }
 
 // A function at a time, as `program_quiet_drop`.
 fn program_stores_within_head(functions: List<Function>, marks: List<Bool>) → Bool {
-    match functions { Nil => True, Cons(last, _) => last.body.stores_within(marks) }
+    match functions { Nil => True, Cons(last, _) => last.body.stores_within(marks) && last.body.lendless() }
 }
 
 theorem program_stores_within_drop_zero(functions: List<Function>, marks: List<Bool>):
@@ -605,8 +664,8 @@ theorem program_stores_within_drop(functions: List<Function>, marks: List<Bool>)
         Cons(last, earlier) => λ n => match n as λ i => program_stores_within_head(Cons(last, earlier).drop(i), marks).IsTrue() →
             program_stores_within(Cons(last, earlier).drop(Succ(i)), marks).IsTrue() →
             program_stores_within(Cons(last, earlier).drop(i), marks).IsTrue() {
-            Zero => λ head rest => Bool::is_true_and_intro(last.body.stores_within(marks), program_stores_within(earlier, marks), head,
-                program_stores_within_drop_zero(earlier, marks, rest)),
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.stores_within(marks) && last.body.lendless(),
+                program_stores_within(earlier, marks), head, program_stores_within_drop_zero(earlier, marks, rest)),
             Succ(k) => λ head rest => program_stores_within_drop(earlier, marks, k, head, rest),
         },
     }
@@ -628,11 +687,218 @@ theorem program_stores_marked(functions: List<Function>, marks: List<Bool>, b: N
     match functions {
         Nil => λ _ never => false_elim(never),
         Cons(last, earlier) => λ within stores => {
-            let both = Bool::is_true_and(last.body.stores_within(marks), program_stores_within(earlier, marks), within);
+            let both = Bool::is_true_and(last.body.stores_within(marks) && last.body.lendless(), program_stores_within(earlier, marks), within);
+            let here_within = Bool::is_true_and(last.body.stores_within(marks), last.body.lendless(), both.left).left;
             match Bool::is_true_or(last.body.stores(b), program_stores(earlier, b), stores) {
-                Inl(here) => eq_true_of_is_true(marked(marks, b), last.body.stores_marked(marks, b, both.left, here)),
+                Inl(here) => eq_true_of_is_true(marked(marks, b), last.body.stores_marked(marks, b, here_within, here)),
                 Inr(below) => program_stores_marked(earlier, marks, b, both.right, below),
             }
+        },
+    }
+}
+
+theorem program_stores_within_lendless(functions: List<Function>, marks: List<Bool>): program_stores_within(functions, marks).IsTrue() →
+    program_lendless(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ within => {
+            let both = Bool::is_true_and(last.body.stores_within(marks) && last.body.lendless(), program_stores_within(earlier, marks), within);
+            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier),
+                Bool::is_true_and(last.body.stores_within(marks), last.body.lendless(), both.left).right,
+                program_stores_within_lendless(earlier, marks, both.right))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What each function needs written
+//
+// `program_stores` answers for the whole program, which is enough while a
+// callee's buffers are its caller's: a call passes its caller's buffers on
+// by number. A call over views gives its callee windows numbered from
+// zero, so what the callee stores into says nothing of its caller's
+// buffers. `needs(f, b)` says of each function which of its own buffers it
+// needs lent to write: those it stores into (a written view's buffer among
+// them) and those the functions it calls need. At a call over views the
+// callee's needs are met by the views, each lent to write where the callee
+// needs it so (docs/native-library-exports-design.md §3.1).
+
+// The views as marks: which are lent to write.
+fn views_marks(views: List<View>) → List<Bool> {
+    match views { Nil => [], Cons(view, rest) => Cons(view.written, views_marks(rest)) }
+}
+
+// What a region's calls ask, given what each function needs: a call, that
+// `written` lets be written what its callee needs; a call over views, that
+// the views do.
+fn StructuredRegion::Asks(self region: StructuredRegion, needs: Nat → Nat → Bool, written: Nat → Bool) → Type {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.Asks(needs, written),
+        Compose(prefix, continuation) => prefix.Asks(needs, written) ∧ continuation.Asks(needs, written),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.Asks(needs, written) ∧ when_false.Asks(needs, written),
+        Lend(views, callee, _, _) => (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
+        Call(callee, _, _) => (b: Nat) → needs(callee, b).IsTrue() → written(b) = True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.Asks(needs, written),
+    }
+}
+
+// What is asked of `mine` is met by whatever lets `mine` be written.
+theorem StructuredRegion::asks_within(self region: StructuredRegion, needs: Nat → Nat → Bool, mine, written: Nat → Bool,
+    covers: (b: Nat) → mine(b).IsTrue() → written(b) = True): region.Asks(needs, mine) → region.Asks(needs, written) {
+    match region {
+        Dataflow(_) => λ asks => asks,
+        Sequence(_, continuation) => continuation.asks_within(needs, mine, written, covers),
+        Compose(prefix, continuation) => λ asks => ⟨prefix.asks_within(needs, mine, written, covers, asks.left),
+            continuation.asks_within(needs, mine, written, covers, asks.right)⟩,
+        Conditional(_, _, _, _, when_true, when_false) => λ asks => ⟨when_true.asks_within(needs, mine, written, covers, asks.left),
+            when_false.asks_within(needs, mine, written, covers, asks.right)⟩,
+        Lend(_, _, _, _) => λ asks => asks,
+        Call(callee, _, _) => λ asks b need => covers(b, Bool::is_true_of_eq(asks(b, need))),
+        Loop(_, _, _, _, body, _, _, _, _) => body.asks_within(needs, mine, written, covers),
+    }
+}
+
+// `needs` is right for a program: each function needs what it stores
+// into, and what its calls ask.
+fn ProgramNeeds(functions: List<Function>, needs: Nat → Nat → Bool) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (((b: Nat) → last.body.stores(b).IsTrue() → needs(earlier.len(), b) = True) ∧
+            last.body.Asks(needs, λ (b: Nat) => needs(earlier.len(), b))) ∧ ProgramNeeds(earlier, needs),
+    }
+}
+
+// With no call over views, one answer for every function is right where
+// it covers the program's stores: a callee needs what its caller does.
+theorem StructuredRegion::lendless_asks(self region: StructuredRegion, all: Nat → Bool): region.lendless().IsTrue() →
+    region.Asks(λ (_: Nat) (b: Nat) => all(b), λ (b: Nat) => all(b)) {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => continuation.lendless_asks(all),
+        Compose(prefix, continuation) => λ lendless => {
+            let both = Bool::is_true_and(prefix.lendless(), continuation.lendless(), lendless);
+            ⟨prefix.lendless_asks(all, both.left), continuation.lendless_asks(all, both.right)⟩
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ lendless => {
+            let both = Bool::is_true_and(when_true.lendless(), when_false.lendless(), lendless);
+            ⟨when_true.lendless_asks(all, both.left), when_false.lendless_asks(all, both.right)⟩
+        },
+        Lend(_, _, _, _) => λ never => false_elim(never),
+        Call(_, _, _) => λ _ b need => eq_true_of_is_true(all(b), need),
+        Loop(_, _, _, _, body, _, _, _, _) => body.lendless_asks(all),
+    }
+}
+
+theorem program_needs_all(functions: List<Function>, all: Nat → Bool): program_lendless(functions).IsTrue() →
+    ((b: Nat) → program_stores(functions, b).IsTrue() → all(b) = True) → ProgramNeeds(functions, λ (_: Nat) (b: Nat) => all(b)) {
+    match functions {
+        Nil => λ _ _ => trivial,
+        Cons(last, earlier) => λ lendless covers => {
+            let both = Bool::is_true_and(last.body.lendless(), program_lendless(earlier), lendless);
+            ⟨⟨λ b stores => covers(b, Bool::is_true_or_l(last.body.stores(b), program_stores(earlier, b), stores)),
+              last.body.lendless_asks(all, both.left)⟩,
+             program_needs_all(earlier, all, both.right,
+                λ b stores => covers(b, Bool::is_true_or_r(last.body.stores(b), program_stores(earlier, b), stores)))⟩
+        },
+    }
+}
+
+// As data: row `f` of `tables` marks the buffers function `f` needs
+// written. Rows are in the order of the program's counts, a function's
+// index its row's.
+fn marks_row(tables: List<List<Bool>>, f: Nat) → List<Bool> { match tables.nth(f) { None => [], Some(marks) => marks } }
+
+// Every mark of `need` is one of `have`.
+fn marks_within(need, have: List<Bool>) → Bool {
+    match need {
+        Nil => True,
+        Cons(mark, rest) => match have {
+            Nil => mark.not() && marks_within(rest, []),
+            Cons(held, others) => (mark.not() || held) && marks_within(rest, others),
+        },
+    }
+}
+
+theorem marks_within_marked(need: List<Bool>): (have: List<Bool>) → (b: Nat) → marks_within(need, have).IsTrue() →
+    marked(need, b).IsTrue() → marked(have, b) = True {
+    match need {
+        Nil => λ have b _ never => false_elim(never),
+        Cons(mark, rest) => λ have b => match have {
+            Nil => match b {
+                Zero => λ within here => false_elim(mark.is_true_not(Bool::is_true_and(mark.not(), marks_within(rest, []), within).left, here)),
+                Succ(k) => λ within later => marks_within_marked(rest, [], k,
+                    Bool::is_true_and(mark.not(), marks_within(rest, []), within).right, later),
+            },
+            Cons(held, others) => match b {
+                Zero => λ within here =>
+                    match Bool::is_true_or(mark.not(), held, Bool::is_true_and(mark.not() || held, marks_within(rest, others), within).left) {
+                        Inl(unmarked) => false_elim(mark.is_true_not(unmarked, here)),
+                        Inr(holds) => eq_true_of_is_true(held, holds),
+                    },
+                Succ(k) => λ within later => marks_within_marked(rest, others, k,
+                    Bool::is_true_and(mark.not() || held, marks_within(rest, others), within).right, later),
+            },
+        },
+    }
+}
+
+// A region's calls ask no more than `mine`: a callee's row is within it,
+// and at a call over views within the views lent to write.
+fn StructuredRegion::calls_within(self region: StructuredRegion, tables: List<List<Bool>>, mine: List<Bool>) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_within(tables, mine),
+        Compose(prefix, continuation) => prefix.calls_within(tables, mine) && continuation.calls_within(tables, mine),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_within(tables, mine) && when_false.calls_within(tables, mine),
+        Lend(views, callee, _, _) => marks_within(marks_row(tables, callee), views_marks(views)),
+        Call(callee, _, _) => marks_within(marks_row(tables, callee), mine),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_within(tables, mine),
+    }
+}
+
+theorem StructuredRegion::calls_within_asks(self region: StructuredRegion, tables: List<List<Bool>>, mine: List<Bool>):
+    region.calls_within(tables, mine).IsTrue() →
+    region.Asks(λ (f: Nat) (b: Nat) => marked(marks_row(tables, f), b), λ (b: Nat) => marked(mine, b)) {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => continuation.calls_within_asks(tables, mine),
+        Compose(prefix, continuation) => λ within => {
+            let both = Bool::is_true_and(prefix.calls_within(tables, mine), continuation.calls_within(tables, mine), within);
+            ⟨prefix.calls_within_asks(tables, mine, both.left), continuation.calls_within_asks(tables, mine, both.right)⟩
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ within => {
+            let both = Bool::is_true_and(when_true.calls_within(tables, mine), when_false.calls_within(tables, mine), within);
+            ⟨when_true.calls_within_asks(tables, mine, both.left), when_false.calls_within_asks(tables, mine, both.right)⟩
+        },
+        Lend(views, callee, _, _) => λ within v need => marks_within_marked(marks_row(tables, callee), views_marks(views), v, within, need),
+        Call(callee, _, _) => λ within b need => marks_within_marked(marks_row(tables, callee), mine, b, within, need),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_within_asks(tables, mine),
+    }
+}
+
+// The rows are right for the program: each function's stores and what its
+// calls ask are within its row. By evaluation, as `program_stores_within`.
+fn program_marked(functions: List<Function>, tables: List<List<Bool>>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (last.body.stores_within(marks_row(tables, earlier.len())) &&
+            last.body.calls_within(tables, marks_row(tables, earlier.len()))) && program_marked(earlier, tables),
+    }
+}
+
+theorem program_marked_needs(functions: List<Function>, tables: List<List<Bool>>): program_marked(functions, tables).IsTrue() →
+    ProgramNeeds(functions, λ (f: Nat) (b: Nat) => marked(marks_row(tables, f), b)) {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ within => {
+            let mine = marks_row(tables, earlier.len());
+            let both = Bool::is_true_and(last.body.stores_within(mine) && last.body.calls_within(tables, mine), program_marked(earlier, tables),
+                within);
+            let here = Bool::is_true_and(last.body.stores_within(mine), last.body.calls_within(tables, mine), both.left);
+            ⟨⟨λ b stores => eq_true_of_is_true(marked(mine, b), last.body.stores_marked(mine, b, here.left, stores)),
+              last.body.calls_within_asks(tables, mine, here.right)⟩,
+             program_marked_needs(earlier, tables, both.right)⟩
         },
     }
 }

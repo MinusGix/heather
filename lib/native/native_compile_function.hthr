@@ -477,7 +477,8 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                             λ addresses buffers written top allowed loan => may(addresses, buffers, written, top, allowed, loan)(
                                 j(sym(Option::some_inj(out.prog, program, same)), λ x _ => x.Within(site.program), within))⟩,
                     })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls<M>(site, laid, stack, top,
-                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs, allowed))
+                        Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
+                        program_placeless_lendless(fs, Bool::is_true_and(program_evaluable(fs), program_placeless(fs), both).right), allowed))
                 },
             })(refl)
         },

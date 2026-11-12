@@ -556,6 +556,49 @@ fn program_placeless(functions: List<Function>) → Bool {
     match functions { Nil => True, Cons(last, earlier) => last.placeless(program_lent(earlier)) && program_placeless(earlier) }
 }
 
+// A placeless region makes no call over views, which the check has no
+// place for yet.
+theorem StructuredRegion::placeless_lendless(self region: StructuredRegion, lent: Nat → Nat): (hidden: List<Nat>) →
+    region.placeless(lent, hidden).IsTrue() → region.lendless().IsTrue() {
+    match region {
+        Dataflow(_) => λ hidden _ => trivial,
+        Sequence(prefix, continuation) => λ hidden ok => continuation.placeless_lendless(lent, hidden,
+            Bool::is_true_and(nodes_clear(prefix.nodes, hidden), continuation.placeless(lent, hidden), ok).right),
+        Compose(prefix, continuation) => λ hidden ok => {
+            let both = Bool::is_true_and(prefix.placeless(lent, hidden), continuation.placeless(lent, prefix.taints(hidden)), ok);
+            Bool::is_true_and_intro(prefix.lendless(), continuation.lendless(), prefix.placeless_lendless(lent, hidden, both.left),
+                continuation.placeless_lendless(lent, prefix.taints(hidden), both.right))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ hidden ok => {
+            let arms = Bool::is_true_and(when_true.placeless(lent, hidden), when_false.placeless(lent, hidden),
+                Bool::is_true_and(absent(condition, hidden), when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden), ok).right);
+            Bool::is_true_and_intro(when_true.lendless(), when_false.lendless(), when_true.placeless_lendless(lent, hidden, arms.left),
+                when_false.placeless_lendless(lent, hidden, arms.right))
+        },
+        Lend(_, _, _, _) => λ hidden never => never,
+        Call(_, _, _) => λ hidden _ => trivial,
+        Loop(inputs, bound, parameters, _, body, exit, next, _, _) => λ hidden ok => {
+            let carried = taint_onto(parameters, mask_of(inputs, hidden), []);
+            let leaves = absent(exit, body.taints(carried)) && mask_covers(mask_of(next, body.taints(carried)), mask_of(inputs, hidden));
+            let inner = Bool::is_true_and(absent(bound, hidden), body.placeless(lent, carried) && leaves, ok).right;
+            body.placeless_lendless(lent, carried, Bool::is_true_and(body.placeless(lent, carried), leaves, inner).left)
+        },
+    }
+}
+
+theorem program_placeless_lendless(functions: List<Function>): program_placeless(functions).IsTrue() → program_lendless(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ ok => {
+            let both = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
+            let body = Bool::is_true_and(last.body.placeless(program_lent(earlier), last.addresses()),
+                absent(last.result, last.body.taints(last.addresses())), both.left);
+            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier),
+                last.body.placeless_lendless(program_lent(earlier), last.addresses(), body.left), program_placeless_lendless(earlier, both.right))
+        },
+    }
+}
+
 // The theorem for programs: a placeless program's functions answer alike
 // at every address word, over any buffers.
 theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>): program_placeless(functions).IsTrue() → (f: Nat) →

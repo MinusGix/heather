@@ -169,9 +169,10 @@ contract bounds a span below the canonical boundary.
 
 ### 3.1 Views: lending a part of a buffer (2026-11-12)
 
-*Status: the design, with V1 to V4a built. A call over views is in the IR
-and means what this section says; its lowering is V4b and V4c, and until
-then the lowering refuses it by name.*
+*Status: the design, with V1 to V4b built. A call over views is in the IR
+and means what this section says, and the lowering's contract is stated
+at every lending, a function at a time; the lowering of the call itself is
+V4c, and until then the lowering refuses it by name.*
 
 **What is missing.** At an export's boundary a view is free: Rust slices
 the span and passes the slice's parts. Inside a program it is not
@@ -254,22 +255,43 @@ nodes' values, where any two valuations of the region agree
 **What a lend may store.** `stores(b)` of a lend is "a written view is of
 `b`" (`views_store`), and `stores_within(marks)` asks every written view to
 be of a marked buffer, so §4.1's rule reads a lend as a store into the
-buffers it lends to write. The rule itself is one set of marks for the
+buffers it lends to write. The rule itself was one set of marks for the
 whole program, read by each function at its own buffer numbers. That is
-coarse once numbers differ between caller and callee: a callee that stores
-into its buffer `0`, called over a view of its caller's buffer `2`, asks
-the marks to have both. Marks a function are the fix
-(`issues/function-ir-store-marks-per-function.md`).
+coarse once numbers differ between caller and callee, and with two views
+of one buffer it is wrong for the lowering: the lender's written view
+marks its buffer `0`, so the callee would be asked to have its view `0`
+lent to write, which is the half lent to read.
+
+**What each function needs written** (V4b, `function_ir_writes.hthr`).
+`needs(f, b)` says of function `f` which of its own buffers it needs lent
+to write. It is right for a program (`ProgramNeeds`) when each function
+needs what it stores into, a written view's buffer among them, and what
+its calls ask (`StructuredRegion::Asks`): a call passes its caller's
+buffers on by number, so the caller needs what its callee needs; a call
+over views asks nothing of the caller's lending beyond its own stores, and
+asks of the views that each is lent to write where the callee needs it so.
+As data it is a row of marks a function, checked by evaluation
+(`program_marked`, `program_marked_needs`). One answer for every function
+is the instance for a program with no call over views
+(`program_needs_all`), and that is what the theorems stated with one list
+of marks or with `program_stores` are: `program_stores_within` now also
+says the program lends no views, `program_quiet` says so already, and a
+placeless program lends none until V4d.
 
 **The lowering** (V4b, V4c). A lend's callee runs under the lending of the
 views: the program's counts, the views' bases as addresses, `viewed` as the
 file, the views' `written` as marks. The contract a region is lowered
 against speaks of one lending, so the first step is the contract at every
-lending with the program's counts whose marks cover what the program
-stores (`Site::CallsLent`), which the program's induction supplies; a
-region's theorem keeps its one lending, and only the function-level
-theorems change. Then a lend lowers as its views' nodes through the leaf
-lowering (`emit_leaf`) and the call as it is (`File::emit_call`), the views'
+lending with the program's counts, a function at a time: function `f`
+meets its contract under any lending that lets it write what it needs
+(`Site::CallsLent`). The program's induction supplies it
+(`emit_functions_calls_lent`, `lower_program_lent_needs`); a region's
+theorem keeps its one lending and takes what its calls ask of it, a call's
+code is proved against its one callee's contract (`call_step`), and the
+statements at one lending are corollaries. So a function that only reads
+is called under a lending to read whatever the functions beside it store,
+which one list of marks could not say. Then a lend lowers as its views'
+nodes through the leaf lowering (`emit_leaf`) and the call as it is (`File::emit_call`), the views'
 homes being the lent arguments. The lender's loan gives the views' loan
 (`Loan::view`), what the callee stored through the views the lender could
 have stored through its spans (`Stack::wrote_in_view`), and the spans after
@@ -326,7 +348,8 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
   and an arm in every structural recursion over regions (evaluation, the
   threaded run and its relation, stores and marks, linking, the planner,
   the program compiler's walks). The lowering refuses it. *Built.*
-- **V4b. The contract at every lending** (`Site::CallsLent`).
+- **V4b. The contract at every lending, a function at a time**
+  (`Site::CallsLent`, `ProgramNeeds`). *Built.*
 - **V4c. The lowering of a lend and its theorem.**
 - **V4d. The placeless check** with a view's base hidden.
 - **V5. The languages above**: a statement of `Source` that lends, the
@@ -794,7 +817,9 @@ the part that faces a caller who is not a Heather program.
   `program_stores_within(functions, marks)` says every store of every
   function is into a buffer `marks` marks, one walk of each function
   checked by evaluation a function at a time, and `program_stores_marked`
-  turns it into that premise (`function_ir_writes.hthr`).
+  turns it into that premise (`function_ir_writes.hthr`). Since §3.1's
+  V4b it also says that no function calls over views; a program that does
+  is stated with a row of marks a function (`program_marked`).
   `Lending::writing(counts, addresses, buffers, marks)` is the lending
   that lets exactly the marked buffers be written, and
   `compiled_returns_written` the theorem a certificate instantiates

@@ -137,6 +137,38 @@ theorem halves_allowed(file: Buffers(), address, length, mid, i: BitVec(64)):
 }
 
 // ---------------------------------------------------------------------------
+// What each function needs written
+//
+// A callee over views numbers its views, so one list of marks for a
+// program cannot say what it needs: `program_stores_within` is of programs
+// with no call over views. Rows can (`program_marked`). `put` needs its
+// buffer 0, which is `lends`'s view 0, lent to write; and `lends` needs its
+// own buffer 0, because the view it lends to write is of it.
+
+theorem lending_no_one_list(): program_stores_within(lending(), [True]) = False { refl }
+theorem lending_rows(): program_marked(lending(), [[True], [True]]) = True { refl }
+theorem lending_needs(): ProgramNeeds(lending(), λ (f: Nat) (b: Nat) => marked(marks_row([[True], [True]], f), b)) {
+    program_marked_needs(lending(), [[True], [True]], trivial)
+}
+
+// The lender's row may not leave out the buffer its written view is of.
+theorem lending_row_short(): program_marked(lending(), [[True], []]) = False { refl }
+
+// A view lent to read does not meet a callee that stores through it: no
+// rows are right for `showing`, whether `put`'s says what it stores or not.
+theorem showing_rows(): program_marked(showing(), [[True], [True]]) = False { refl }
+theorem showing_rows_reading(): program_marked(showing(), [[True], []]) = False { refl }
+theorem showing_rows_none(): program_marked(showing(), [[], []]) = False { refl }
+
+// Two views of one buffer: `carry` needs its view 1, the half lent to
+// write, and not its view 0; `halves` needs its buffer 0.
+theorem halving_rows(): program_marked(halving(), [[False, True], [True]]) = True { refl }
+
+// The control: did `carry` need view 0 written too, the first half, lent
+// to read, would not meet it.
+theorem halving_rows_both(): program_marked(halving(), [[True, True], [True]]) = False { refl }
+
+// ---------------------------------------------------------------------------
 // The lowering has none yet, and says so
 
 theorem halves_not_placeless(): halves().body.placeless(λ _ => 2, [0]) = False { refl }
