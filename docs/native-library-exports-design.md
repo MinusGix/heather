@@ -441,14 +441,42 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
   `File::emit_lend_runs`, `function_ir_lower_views.hthr`). *Built.*
 - **V4d. The placeless check** with a view's base hidden, and linking
   under rows of marks found by search (`program_rows`). *Built.*
-- **V5. The languages above**: a statement of `Source` that lends, the
-  arena's line as a view, `rt`'s `Bytes` held as one so a slice costs no
-  copy, and the done-when program of `issues/source-buffers-as-views.md`
-  with its control (a store through a view lent to read is refused).
+- **V5. The languages above**, in three parts. What `rt` has to change is
+  read off its code after V4d and is not built:
+  - *V5a, a `runtime fn` lends.* On the surface a view is the library's
+    window: `callee(span.window(a, b), length, …)` for a span read, and for
+    a span written the callee's answer put back
+    (`span.put_window(a, part)`). In `rt` the place for it is the file
+    layer (`FTm`, `rt_file.hthr`), whose meaning threads the written span:
+    a computation that calls another over windows, lowered to `Lend`, the
+    spans it passes whole being views from the constant 0 to their length,
+    which the lowering takes with no comparison. Two things stand in the
+    way. A computation's callees are meanings over one fixed list of read
+    spans (`FWorld.writers` beside `FWorld.rest`), so a callee read over a
+    window of a read span needs the writers' meanings at every such list,
+    as the pure functions' already are (`FWorld.callees`). And a pure term
+    (`Tm`) is stated against the evaluation over one fixed file
+    (`Answers`, `Tm::CallsAgree`), which cannot say a view (V4a): a pure
+    call over a window goes through the file layer, or the fixed-file
+    evaluation takes callees that read (`Readers`), which touches every
+    theorem over `eval_over`. The first is the plan. SHA-256's loop over
+    its blocks is the shape to build it against: `compress(state, block)`
+    with the state written and the block a window of the message. That is
+    two spans before it is a view, and a function that writes is a
+    function of one span today (`FTm::Source`), as a loop is lent one
+    (`issues/runtime-loop-over-several-spans.md`), so that comes first.
+  - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
+    no copy.
+  - *V5c, a statement of `Source` that lends*, and the done-when program
+    of `issues/source-buffers-as-views.md`. Its control is built at the
+    functions' door (V4d).
 - **V6. U5's step 5d**: a statement's own byte nodes through the shared
   leaf (`emit_leaf`), the leaf's theorems restated over any stack bound
   first (the log of the issue has the scoping). It comes last because it
-  pays when a home is a word, which V4 makes true.
+  pays when a statement holds a home as a word. V4 makes that true of a
+  function; of a statement it is V5c. Built before it, the bridge is
+  written for the layout's literal addresses and is longer than the two
+  proofs it replaces (`goes_byte_to`, `goes_byte_from`).
 
 ## 4. The theorem
 
