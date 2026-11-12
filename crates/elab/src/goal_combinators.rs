@@ -840,7 +840,7 @@ fn literal_word(elab: &Elaborator, term: &Term) -> Option<u64> {
 /// unfolds to no match that selects an arm, and a recursive definition
 /// selects one whose recursive calls are the raw recursor, which no source
 /// spells (issues/split-all-through-recursive-definitions.md owns that case).
-fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Term> {
+fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term, simp: bool) -> Option<Term> {
     let (head, _) = crate::spelling::app_spine(call);
     if !matches!(head, Term::GlobalTm { .. }) || word_operation(elab, call) {
         return None;
@@ -866,9 +866,12 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         // An arm that reads the constructor's fields (`node_output(Const(64,
         // flag, 1))` is `Output(64, flag)`) reads them as projections out of
         // its label's payload, which no source spells: contracted, they are
-        // the fields written. Only where the arm as selected did not spell:
-        // contracting an arm that did changes what `omega` reads
-        // (`CReal::archimedean`).
+        // the fields written. Only for `simp`, and only where the arm as
+        // selected did not spell: either contraction elsewhere changes what
+        // `omega` reads (`CReal::archimedean`'s `Rat` sum).
+        if !simp {
+            return None;
+        }
         let contracted = contracted(elab, cx, &oracle, &selected, &mut 256);
         elab.spell_term_source(cx, &contracted)?;
         return Some(contracted);
@@ -1118,7 +1121,7 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                 {
                     return term(elab, cx, &reduced, budget);
                 }
-                if let Some(reduced) = matched_at_constructor(elab, cx, &output) {
+                if let Some(reduced) = matched_at_constructor(elab, cx, &output, budget.1) {
                     return term(elab, cx, &reduced, budget);
                 }
                 if budget.1
