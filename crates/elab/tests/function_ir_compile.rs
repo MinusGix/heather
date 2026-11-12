@@ -25,6 +25,8 @@ fn checker() -> heather_elab::Elaborator {
         ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
+        // A call over views: the windows it lends and puts back.
+        ("function_ir_views", include_str!("../../../lib/native/function_ir/function_ir_views.hthr")),
         // The evaluator that threads the file through stores and calls, which
         // `compiled_returns_run` states a writing function's answer by.
         ("function_ir_run", include_str!("../../../lib/native/function_ir/function_ir_run.hthr")),

@@ -22,6 +22,8 @@ fn checker_over(native_cat: &str) -> heather_elab::Elaborator {
         ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
         // The placeless check is stated over the run with the file threaded too.
         ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
+        // A call over views: the windows it lends and puts back.
+        ("function_ir_views", include_str!("../../../lib/native/function_ir/function_ir_views.hthr")),
         ("function_ir_run", include_str!("../../../lib/native/function_ir/function_ir_run.hthr")),
         ("function_ir_placeless", include_str!("../../../lib/native/function_ir/function_ir_placeless.hthr")),
         ("native_source", include_str!("../../../lib/native/native_source.hthr")),

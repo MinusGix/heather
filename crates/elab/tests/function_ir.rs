@@ -34,6 +34,9 @@ const MODULES: &[(&str, &str)] = &[
     ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("bitvec", BITVEC),
+    // A view of a buffer is a window of a list (`list_window`, whose laws are `omega`'s).
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("list_window", include_str!("../../../lib/std/data/list_window.hthr")),
     ("function_ir", FUNCTION_IR),
     ("function_ir_certificates", FUNCTION_IR_CERTIFICATES),
 ];
