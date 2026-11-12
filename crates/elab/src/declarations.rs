@@ -575,6 +575,9 @@ impl DeclarationsMut<'_> {
         let decl = &measure::deshadowed(decl);
         let measure = decl.decreases.clone().expect("a measure declaration");
         measure::check_shape(decl, &measure)?;
+        // A member's self-call may be written as a method call on its
+        // receiver; every route below reads the call it desugars to.
+        let decl = &measure::method_calls_as_calls(decl, base_name(&decl.name), self.0)?;
         // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
         // the default closer spells `omega`'s certificates, which name the
         // `omega` module. Neither is the prelude's, so the module has to import
@@ -701,6 +704,9 @@ impl DeclarationsMut<'_> {
         let span = members[0].span;
         // As `elab_measure_decl`: every name in a member's body means one binder.
         let owned: Vec<Decl> = members.iter().map(|d| measure::deshadowed(d)).collect();
+        let owned: Vec<Decl> = owned.iter()
+            .map(|d| measure::method_calls_as_calls(d, base_name(&d.name), self.0))
+            .collect::<R<_>>()?;
         let members: Vec<&Decl> = owned.iter().collect();
         let members = &members[..];
         let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
