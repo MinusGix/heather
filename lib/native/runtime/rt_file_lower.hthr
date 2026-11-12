@@ -65,14 +65,15 @@ fn FTm::Answers(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, rest: List<List<BitVe
 
 // `call` answers the program: over every file `Cons(own, rest)`, the pure
 // functions with their meanings there, leaving it, and each computation of
-// a word signature with its meaning from `own`.
+// a word signature with its meaning from `own`, at every rest of a file
+// (a computation called over windows runs on a file of the windows).
 fn FTm::CallsAgree(fw: FWorld, base: Nat, call: Writers()) → Type {
     ((own: List<BitVec(8)>) → Tm::CallsAgree(fw.at(own), Writers::words(call, Cons(own, fw.rest)))) ∧
     (((f: Nat) → FTm::pure(base, f).IsTrue() → (own: List<BitVec(8)>) → (words: List<BitVec(64)>) →
         call(Cons(own, fw.rest), f, words).buffers = Cons(own, fw.rest)) ∧
-    ((f: Nat) → Sig::at(fw.fsigs, f).Words(fw.w.tys) → (own: List<BitVec(8)>) →
-        FTm::Answers(fw.w.tys, Sig::at(fw.fsigs, f).params, Sig::at(fw.fsigs, f).result, fw.rest,
-            FTm::get(fw.w.tys, fw.fsigs, fw.writers, f, own), λ ws => call(Cons(own, fw.rest), base + f, ws))))
+    ((f: Nat) → Sig::at(fw.fsigs, f).Words(fw.w.tys) → (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
+        FTm::Answers(fw.w.tys, Sig::at(fw.fsigs, f).params, Sig::at(fw.fsigs, f).result, rest,
+            FTm::get(fw.w.tys, fw.fsigs, fw.writers(rest), f, own), λ ws => call(Cons(own, rest), base + f, ws))))
 }
 
 // A program with no functions has nothing to answer.
@@ -518,7 +519,7 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
             let m = FTm::called(fw, g, env, f, args, own);
             let answered: (call(file, base + f, words_of(values, qs)) = FTm::ended(tys, r, fw.rest, m)) =
                 FTm::call_args_sound(fw.w, g, ports, values, env, held, r, fw.rest, Mutated(own, r.default(tys)), ps, args,
-                    FTm::get(tys, fw.fsigs, fw.writers, f, own), λ ws => call(file, base + f, ws), agree.right.right(f, ⟨ok, er⟩, own), qs, e_qs);
+                    FTm::get(tys, fw.fsigs, fw.writers(fw.rest), f, own), λ ws => call(file, base + f, ws), agree.right.right(f, ⟨ok, er⟩, fw.rest, own), qs, e_qs);
             let word = Ty::cast(tys, r, Word(64), m.value);
             let called = Valuation::set(values, next, word_value(word));
             let moved = λ (wd: Nat) => called(wd, next);

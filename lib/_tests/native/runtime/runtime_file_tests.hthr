@@ -101,7 +101,7 @@ fn raise_typed() → Itself(List<BitVec(8)> → BitVec(64) → BitVec(64) → Mu
 
 // The function's equation, from its recursor's `ext` and `irrel`.
 theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(), Word(64), raise_body(),
-    FWorld::of(raise_table(), raise_callees(), [], trivial, rest), FTm::source_at(RecInfo::none, 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
+    FWorld::of(raise_table(), raise_callees(), [], λ _ => trivial, rest), FTm::source_at(RecInfo::none, 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
     raise_measure) {
     λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
         sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
@@ -130,9 +130,9 @@ fn linked_program() → List<Function> {
     [CompileSpan::linked(raise_from, raise_from_compile(), [1]), Compile::linked(raise, raise::compile, [1]), Compile::linked(twice, twice::compile, [0])]
 }
 
-fn linked_srcs(rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
+fn linked_srcs() → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
     span_all_cons(Compile::span_source(twice, twice::compile), span_all_cons(Compile::span_source(raise, raise::compile),
-        span_all_cons(CompileSpan::source(raise_from, raise_from_compile()), span_all_nil())))(rest)
+        span_all_cons(CompileSpan::source(raise_from, raise_from_compile()), span_all_nil())))
 }
 
 // It runs: "abc" from index 1 becomes "aBC".
@@ -145,17 +145,17 @@ theorem linked_accepted(): lower_program_lent(linked_program(), plan_program(lin
     refl
 }
 
-// The link, a function at a time: what each is checked by is two short
-// lists and a code that stores nothing.
-theorem linked_spanned(rest: List<List<BitVec(8)>>):
-    program_spanned(linked_program(), [3, 1, 1], [False, True, True], span_file(rest), span_sources(rest, linked_srcs(rest))) {
-    ⟨CompileSpan::spanned(raise_from, raise_from_compile(), rest, linked_srcs(rest), [1], [],
-            linked_arity(linked_program().tail(), [1, 1]), linked_still(linked_program().tail(), [True, True]), refl, λ own => refl, trivial,
-            λ own => refl, trivial),
-        ⟨Compile::spanned(raise, raise::compile, trivial, rest, linked_srcs(rest), [1], linked_arity(linked_program().drop(2), [1]),
-                linked_still(linked_program().drop(2), [True]), λ own => refl, trivial),
-            ⟨Compile::spanned(twice, twice::compile, trivial, rest, linked_srcs(rest), [0], linked_arity([], []), linked_still([], []),
-                λ own => refl, trivial), trivial⟩⟩⟩
+// The link, a function at a time, over every span and every rest of a
+// file: what each is checked by is two short lists and a code that stores
+// nothing.
+theorem linked_spanned(): program_spanned(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs())) {
+    ⟨CompileSpan::spanned(raise_from, raise_from_compile(), linked_srcs(), [1], [],
+            linked_arity(linked_program().tail(), [1, 1]), linked_still(linked_program().tail(), [True, True]), refl, λ rest own => refl, trivial,
+            λ rest own => refl, trivial),
+        ⟨Compile::spanned(raise, raise::compile, trivial, linked_srcs(), [1], linked_arity(linked_program().drop(2), [1]),
+                linked_still(linked_program().drop(2), [True]), λ rest own => refl, trivial),
+            ⟨Compile::spanned(twice, twice::compile, trivial, linked_srcs(), [0], linked_arity([], []), linked_still([], []),
+                λ rest own => refl, trivial), trivial⟩⟩⟩
 }
 
 // So the program's function 2, over any file with a span first, at any
@@ -163,15 +163,15 @@ theorem linked_spanned(rest: List<List<BitVec(8)>>):
 theorem linked_raises(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
     program_run(linked_program(), Cons(span, rest), 2, [place, length, i]) =
         Ending(raise_from(span, length, i).value, Cons(raise_from(span, length, i).after, rest)) {
-    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file(rest), span_sources(rest, linked_srcs(rest)),
-        linked_spanned(rest), span, 2, [place, length, i], trivial)
+    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
+        linked_spanned(), span_pair(span, rest), 2, [place, length, i], trivial)
 }
 
 // And `raise`, function 1, returns its word and leaves the file.
 theorem linked_raise(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, x: BitVec(64)):
     program_run(linked_program(), Cons(span, rest), 1, [x]) = Ending(raise(x), Cons(span, rest)) {
-    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file(rest), span_sources(rest, linked_srcs(rest)),
-        linked_spanned(rest), span, 1, [x], trivial)
+    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
+        linked_spanned(), span_pair(span, rest), 1, [x], trivial)
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ theorem linked_raise(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, x: BitV
 // is not the meaning the loop's table has for its callee.
 // expect-error(kernel): the kernel rejected `linked_misnamed`: NotConvertible
 theorem linked_misnamed(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>):
-    List::map(Cons(0, Nil), λ (n: Nat) => link_source(linked_srcs(rest)(own).map(span_word), n)) =
+    List::map(Cons(0, Nil), λ (n: Nat) => link_source(linked_srcs()(rest, own).map(span_word), n)) =
         Sig::uncurried(RecInfo::none, raise_table().sigs, raise_callees()(Cons(own, rest))) { refl }
 
 // The loop linked as a function that only reads would be: its name is not

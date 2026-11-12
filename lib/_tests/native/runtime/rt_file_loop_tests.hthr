@@ -222,7 +222,7 @@ fn raise_body() → FTm {
 // is computation 0, FunctionIR function 1.
 fn raise_pure() → World { World(RecInfo::none, [raise_rt().sig()], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
 fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
-    FWorld(raise_pure(), λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], trivial, rest)
+    FWorld(raise_pure(), λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], λ _ => trivial, rest)
 }
 
 fn raise_lowered() → Option<Function> {

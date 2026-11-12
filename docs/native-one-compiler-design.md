@@ -956,6 +956,18 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   nothing is carried, and the program's run is its sources over the
   family by induction along the program (`program_spanned_sources`).
 
+  The family is every span with every rest of a file after it
+  (`SpanFile`, `span_file`, `runtime_file.hthr`). It was the spans over
+  one rest, the rest a parameter of each link, which is enough while a
+  callee runs on its caller's file. A callee called over windows
+  (§3.1 of the exports note) runs on a file of the windows, another
+  rest, so the callees' meanings in a computation's world are at every
+  rest (`FWorld.writers`), `FTm::CallsAgree` answers each computation
+  at every rest, and a link's two lists are checked at every rest and
+  span, still by conversion (`span_every`). Nothing a call on the
+  caller's own file uses changed: it reads the meanings at the world's
+  own rest.
+
   Two things are said of what answers the calls (`Writers::Sourced`):
   a call of as many words as the function takes ends as its source
   does, and a function marked still leaves the file whatever it is

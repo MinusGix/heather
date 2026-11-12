@@ -161,7 +161,7 @@ fn poke_pair_rt() → FFun {
 // The program's computations: `poke`'s signature, and its meaning over the
 // rest of the file.
 fn pair_world(rest: List<List<BitVec(8)>>) → FWorld {
-    FWorld(bare(), λ _ => trivial, [poke_rt().sig()], Pair(poke_rt().meaning(alone(rest)), trivial), rest)
+    FWorld(bare(), λ _ => trivial, [poke_rt().sig()], λ (r: List<List<BitVec(8)>>) => Pair(poke_rt().meaning(alone(r)), trivial), rest)
 }
 
 fn poke_pair_code() → Function { code_of(poke_pair_rt().lower(bare(), [poke_rt().sig()], 0)) }
@@ -182,8 +182,8 @@ theorem pair_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(pair_world(res
     ⟨λ own => Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), Writers::words(program_run([poke_code()]), Cons(own, rest))),
         ⟨λ f among => false_elim(among),
             λ f => match f {
-                Zero => λ _ own => FFun::lower_sound(poke_rt(), alone(rest), 0, program_run([]),
-                    FTm::calls_agree_none(RecInfo::none, rest, program_run([])), own),
+                Zero => λ _ r own => FFun::lower_sound(poke_rt(), alone(r), 0, program_run([]),
+                    FTm::calls_agree_none(RecInfo::none, r, program_run([])), own),
                 Succ(_) => λ ok => false_elim(ok.right),
             }⟩⟩
 }

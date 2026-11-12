@@ -90,7 +90,7 @@ theorem poke_pair_reflected(): True { by reflects_file_as(["List::poke", "List::
 
 fn pair_world(rest: List<List<BitVec(8)>>) → FWorld {
     FWorld(World(RecInfo::none, [], trivial), λ _ => trivial, [poke_rt().sig()],
-        Pair(λ (span: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (v: BitVec(64)) => List::poke(span, length, i, v), trivial), rest)
+        λ _ => Pair(λ (span: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (v: BitVec(64)) => List::poke(span, length, i, v), trivial), rest)
 }
 
 // The pin, the callee's meaning the callee itself: no callee is unfolded.
@@ -137,7 +137,7 @@ theorem raise_from_reflected(): True { by reflects_file_as(["raise_from"], ["rai
 
 fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
     FWorld(World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)),
-        λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], trivial, rest)
+        λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], λ _ => trivial, rest)
 }
 
 // The pin of a loop is of its step: the body with its own call answered by

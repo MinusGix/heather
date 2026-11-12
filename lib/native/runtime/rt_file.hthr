@@ -102,12 +102,15 @@ fn FTm::get(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::Sems(tys, sigs) → 
 // What a computation's meaning reads besides the term and the span it
 // writes: the types and the pure signatures (`w`, whose own callees and
 // spans are not read), the pure functions' meanings at each file, the
-// computations' signatures and meanings, and the spans after the first.
+// computations' signatures and their meanings at each rest of a file, and
+// the spans after the first. A computation called on the spans as they are
+// is read at `rest`; the meanings are at every rest because one called
+// over windows of the spans is read at the windows.
 record FWorld {
     w: World,
     callees: (b: List<List<BitVec(8)>>) → Sig::Sems(w.tys, w.sigs),
     fsigs: List<Sig>,
-    writers: FTm::Sems(w.tys, fsigs),
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
     rest: List<List<BitVec(8)>>,
 }
 
@@ -117,7 +120,7 @@ fn FWorld::at(self fw: FWorld, own: List<BitVec(8)>) → World {
 }
 
 // A program with no functions over a table of types: nothing to call.
-fn FWorld::alone(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>) → FWorld { FWorld(World(tys, [], trivial), λ _ => trivial, [], trivial, rest) }
+fn FWorld::alone(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>) → FWorld { FWorld(World(tys, [], trivial), λ _ => trivial, [], λ _ => trivial, rest) }
 
 // A pure term's value there, at the code it has in `w`: the two codes are
 // one (`Tm::ty_static`, rt_lower), and at a closed term the cast is a
@@ -169,7 +172,7 @@ fn FTm::called(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, args: Lis
     → Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)> {
     FTm::apply(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
         Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), Sig::at(fw.fsigs, f).params,
-        FTm::get(fw.w.tys, fw.fsigs, fw.writers, f, own), args)
+        FTm::get(fw.w.tys, fw.fsigs, fw.writers(fw.rest), f, own), args)
 }
 
 // The meaning: a function threading the written span's bytes, at the code

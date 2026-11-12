@@ -110,3 +110,12 @@ a store through a read-only view is refused by the judgment.
   - Export: `copy_span(out: span mut, text: span, count, from)` in `native_tool_spans.hthr` and `heather_linked::spans`, six words in the six argument registers. Rust tests against a reference at every pairing of lengths, inside larger buffers, between unmapped pages on both spans, on empty slices and at both stack alignments.
 
   V5a is done as far as spans go: what is left of it is the lend itself (a `runtime fn` calling over a window, through `Lend`).
+- 2026-11-12: V5a, the lend, first stage: the callees' meanings and the link at every rest of a file.
+
+  A callee called over windows runs on a file of the windows, which is another rest than its caller's. Three statements were at one rest and are now at every one, with no change to what a call on the caller's own file uses:
+
+  - `FWorld.writers` is the computations' meanings at each rest (`FTm::called` reads them at the world's own);
+  - `FTm::CallsAgree`'s third part answers each computation at every rest;
+  - the link's family is every span with every rest (`SpanFile`, `span_file`, `span_sources`), so `Compile::spanned` and `CompileSpan::spanned` take no rest and their two lists are checked at every rest and span (`span_every`), still by conversion. `f::runs_over` is the family's statement at `span_pair(span, rest)`.
+
+  Next: the term (`FTm::Lend`, a computation called over windows of this function's spans), its meaning with the written window put back, its lowering to the IR's `Lend` and the once-proof against `StructuredRegion::run`'s clause; then the reflector for `callee(span.window(a, b), …)` and the generator.

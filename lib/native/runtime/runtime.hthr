@@ -2179,11 +2179,11 @@ fn runtime_span_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, E
     pure(SpanLinked(program, srcs, arities, stills))
 }
 
-// The link, a function at a time, at the rest of the file `rest`: each
-// function's instance and its two lists (`Compile::spanned` for one that
-// only reads, `CompileSpan::spanned` for one that writes), the last
-// function's first, as `program_spanned` reads them.
-fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: SpanLinked, rest: Expr) → Tac<Expr> {
+// The link, a function at a time, over every span and every rest of a
+// file: each function's instance and its two lists (`Compile::spanned` for
+// one that only reads, `CompileSpan::spanned` for one that writes), the
+// last function's first, as `program_spanned` reads them.
+fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: SpanLinked) → Tac<Expr> {
     let c_spanned <- runtime_span_ref("Compile::spanned");
     let s_spanned <- runtime_span_ref("CompileSpan::spanned");
     let c_table <- runtime_span_ref("Compile::span_table");
@@ -2196,18 +2196,17 @@ fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: Spa
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let n = insts.len();
-    let srcs = ap(sl.srcs, [rest]);
     let part: Nat → Expr = λ i => {
         let p = insts.nth(i).unwrap_or(Pair(Blank, Blank));
         let links = runtime_links(l.order, l.tables.nth(i).unwrap_or([]));
         let arity = ap(arity_at, [sl.program, sl.arities, NatLit(n - i)]);
         let still = ap(still_at, [sl.program, sl.stills, NatLit(n - i)]);
         match l.reads.nth(i).unwrap_or(None) {
-            None => ap(c_spanned, [Blank, p.fst, p.snd, Hd(trivial_h), rest, srcs, q.nat_list(links), arity, still,
-                ap(every, [Blank, ap(c_table, [Blank, p.fst, p.snd, rest])]), Hd(trivial_h)]),
-            Some(k) => ap(s_spanned, [Blank, p.fst, p.snd, rest, srcs, q.nat_list(links.take(k)), q.nat_list(links.drop(k)), arity, still,
-                ap(rfl, [Blank, NatLit(k)]), ap(every, [Blank, ap(reads_table, [Blank, p.fst, p.snd, rest])]), Hd(trivial_h),
-                ap(every, [Blank, ap(writes_table, [Blank, p.fst, p.snd, rest])]), Hd(trivial_h)]),
+            None => ap(c_spanned, [Blank, p.fst, p.snd, Hd(trivial_h), sl.srcs, q.nat_list(links), arity, still,
+                ap(every, [Blank, ap(c_table, [Blank, p.fst, p.snd])]), Hd(trivial_h)]),
+            Some(k) => ap(s_spanned, [Blank, p.fst, p.snd, sl.srcs, q.nat_list(links.take(k)), q.nat_list(links.drop(k)), arity, still,
+                ap(rfl, [Blank, NatLit(k)]), ap(every, [Blank, ap(reads_table, [Blank, p.fst, p.snd])]), Hd(trivial_h),
+                ap(every, [Blank, ap(writes_table, [Blank, p.fst, p.snd])]), Hd(trivial_h)]),
         }
     };
     pure(List::range(n).rev().map(part).foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h)))
@@ -2248,6 +2247,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let answers <- runtime_span_ref("program_spanned_answers");
     let span_file <- runtime_span_ref("span_file");
     let span_sources <- runtime_span_ref("span_sources");
+    let span_pair <- runtime_span_ref("span_pair");
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let params_e = Ty::quotes(rfun.params, q);
     let res_e = Ty::quote(rfun.result, q);
@@ -2314,7 +2314,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let pin: List<Decl> = match measured {
         True => [],
         False => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(Cons(rest0.ref, Cons(span0.ref, Cons(place0.ref, xs0)))),
-            Equation(ap(ap(meaning, [rt_e, ap(fworld, [world_e, reads_e, fsigs_e, ap(writes_e, [Local(rest0.ref)]), Local(rest0.ref)])]),
+            Equation(ap(ap(meaning, [rt_e, ap(fworld, [world_e, reads_e, fsigs_e, writes_e, Local(rest0.ref)])]),
                 Cons(Local(span0.ref), Cons(Local(place0.ref), runtime_locals(xs0)))), at0),
             ap(rfl, [Blank, at0]))],
     };
@@ -2330,7 +2330,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let rest1 <- assume(Hd(buffers_h), "rest", Some(span1.ref)).or_fail("runtime: the rest of a file: ");
     let place1 <- assume(Hd(ts.word), "place", Some(rest1.ref)).or_fail("runtime: a span's place: ");
     let xs1 <- runtime_params(ts.word, own_words, Some(place1.ref), 0);
-    let parts <- runtime_span_parts(q, l, insts, sl, Local(rest1.ref));
+    let parts <- runtime_span_parts(q, l, insts, sl);
     let words_e = RtQ::seq(word_list, Cons(Local(place1.ref), runtime_locals(xs1)));
     let file_e = ap(runtime_at(buffers, 1), [Local(span1.ref), Local(rest1.ref)]);
     let tail: List<Decl> = [
@@ -2340,8 +2340,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         Decl(AsTheorem, name ++ "::runs_over", runtime_params_of(Cons(span1.ref, Cons(rest1.ref, Cons(place1.ref, xs1)))),
             Equation(ap(program_run, [sl.program, file_e, root, words_e]),
                 ap(end_of, [Local(rest1.ref), ap(Global(f), own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)))])),
-            ap(answers, [Blank, sl.program, sl.arities, sl.stills, ap(span_file, [Local(rest1.ref)]),
-                ap(span_sources, [Local(rest1.ref), ap(sl.srcs, [Local(rest1.ref)])]), parts, Local(span1.ref), root, words_e, Hd(trivial_h)]))];
+            ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts,
+                ap(span_pair, [Local(span1.ref), Local(rest1.ref)]), root, words_e, Hd(trivial_h)]))];
     pure(head.append(pin).append(made).append(tail))
 }
 
