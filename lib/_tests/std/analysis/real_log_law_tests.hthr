@@ -40,6 +40,7 @@ theorem clamp_lip(p, q: Rat): (p.clamp_up(Rat::inv_succ(3)) - q.clamp_up(Rat::in
     Rat::clamp_up_lip(p, q, Rat::inv_succ(3))
 }
 
-// A negative control: log(exp a) is not a + 1.
-// expect-error (kernel)
+// A negative control: log(exp a) is not a + 1, refused at the proof with
+// both sides spelled.
+// expect-error: this has type `log(exp(a)) ≈ a`, but `log(exp(a)) ≈ a + 1` is expected here
 theorem log_exp_wrong(a: CReal): (CReal::exp(a)).log(h := CReal::exp_pos(a)) ≈ a + 1 { CReal::log_exp(a) }

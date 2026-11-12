@@ -351,6 +351,7 @@ fn stale_model_is_rejected(base: &Elaborator) {
     match e.elab_module_source("function_ir_stale_certificate", &source) {
         Ok(()) => panic!("a certificate generated from a stale model checked"),
         Err(ElabError::Parse(error)) => panic!("generated text did not parse: {}", error.msg),
+        Err(ElabError::Elab { msg, .. }) => assert!(msg.contains("is expected here"), "{msg}"),
         Err(error) => assert!(format!("{error:?}").contains("NotConvertible"), "{error:?}"),
     }
 }

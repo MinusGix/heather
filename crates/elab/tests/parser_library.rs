@@ -66,7 +66,7 @@ fn deferred_parser_map_reports_the_selected_callee_and_rough_types() {
         let result = library().elab_module_source("qualified_parser", &source);
         if !call.starts_with("r.and_then") {
             let msg = result.expect_err("map nests the callback's Result").render(&source);
-            assert!(msg.contains("has type `Result<") && msg.contains("Success<"), "{msg}");
+            assert!(msg.contains("unfolds to `Result<") && msg.contains("Success<"), "{msg}");
             assert!(msg.contains("expected here") && !msg.contains("was deferred"), "{msg}");
         } else {
             result.unwrap_or_else(|err| panic!("{}", err.render(&source)));

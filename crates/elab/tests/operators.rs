@@ -301,7 +301,7 @@ fn le_is_the_proposition_and_not_the_boolean() {
     // Rejected at the gate, not by the parser, and the message says which two
     // things were confused (issues/check-fallback-discards-expected-type.md).
     assert!(
-        e.contains("this has type `Bool`, but `leb(n, m) = True` is expected here"),
+        e.contains("this has type `Bool`, but `Le(n, m)` is expected here; `Le(n, m)` unfolds to `leb(n, m) = True`"),
         "should die in the kernel, not the parser: {e}"
     );
 }

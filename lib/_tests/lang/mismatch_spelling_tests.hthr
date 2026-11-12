@@ -1,0 +1,42 @@
+// A checking mismatch is the elaborator's, at the expression, with both
+// types spelled, wherever both have a spelling: here the ones that reached
+// the kernel gate instead, refused at the whole declaration with a type that
+// "has no surface spelling". Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import nat;
+import list;
+
+// A predicate's body under its binder: the type arguments of `∨` spell as
+// they stand (issues/value-parameter-mismatch-reaches-kernel.md).
+// expect-error: this has type `Exists<…>(λ (x: A) => Or<Mem(x, xs), Mem(x, ys)>)`, but `Exists<…>(λ (x: A) => Mem(x, xs ++ ys))` is expected here
+theorem plain<A>(xs, ys: List<A>, w: Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys))):
+    Exists(λ (a: A) => Mem(a, xs ++ ys)) { w }
+
+// The same, closed, and with an equation in the disjunction.
+// expect-error: this has type `Exists<…>(λ (x: Nat) => Or<x = x, True>)`, but `Exists<…>(λ (x: Nat) => x = 0)` is expected here
+theorem closed_body(w: Exists(λ (n: Nat) => n = n ∨ True)): Exists(λ (n: Nat) => n = 0) { w }
+
+// The same predicate converts: a control.
+theorem same_body<A>(xs, ys: List<A>, w: Exists(λ (a: A) => Mem(a, xs) ∨ Mem(a, ys))):
+    Exists(λ (b: A) => Mem(b, xs) ∨ Mem(b, ys)) { w }
+
+// Zero-argument type functions, one an argument short of the other
+// (issues/type-function-argument-mismatch-only-kernel-refuses.md): named as
+// the program wrote them, with what each unfolds to.
+fn Inner() → Type { Nat → List<Nat> → Nat }
+fn Outer() → Type { List<Nat> → Inner() }
+
+fn takes(f: Outer()) → Nat { f([], 0, []) }
+fn inner() → Inner() { λ n ws => n }
+
+// expect-error: this has type `Inner()`, but `Outer()` is expected here; `Inner()` unfolds to `Nat -> List<Nat> -> Nat`, and `Outer()` to `List<Nat> -> Inner()`
+fn wrong() → Nat { takes(inner()) }
+
+// Against a written function type, only the call unfolds.
+// expect-error: this has type `Inner()`, but `List<Nat> -> Inner()` is expected here; `Inner()` unfolds to `Nat -> List<Nat> -> Nat`
+fn written(f: Inner()) → List<Nat> → Inner() { f }
+
+// The right argument passes, and so does `Inner()` where its unfolding is
+// written: controls.
+fn right() → Nat { takes(λ ws => inner()) }
+fn unfolded(f: Inner()) → Nat → List<Nat> → Nat { f }
