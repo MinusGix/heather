@@ -3675,11 +3675,125 @@ fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
         ((read_gpr(Rsp, t.gprs) = stack.at(d + 112)) ∧ stack.Entered(lending, d, s0.memory, after, t.memory)))
 }
 
-// The body starts where the saves end, which is a state the proof meets
-// and does not name: the entry is run to it, the body and the result's
-// moves from it, and the saves are loaded back from the slots the body's
-// own stores and its callees' left (`Loan::unchanged`: they lie above the
-// eight a call spills into).
+// A function's run is three stages, each a theorem at the state it starts
+// from, so that no stage's statement holds the proof of the one before it
+// (docs/proof-patterns.md §2: as one theorem this was most of what the
+// bundled library costs to check, issues/bundled-library-cold-check-past-the-rail.md).
+// `function_enters` runs the entry to the state the saves end in;
+// `function_runs_saved` runs the body and the result's moves from there; and
+// `function_closes` loads the saves back from the slots the body's own
+// stores and its callees' left (`Loan::unchanged`: they lie above the eight
+// a call spills into) and frees the frame.
+theorem function_closes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), inner: Prog, code: List<Instruction>,
+    within: function_closed(inner, code, saves).Within(site.program), s0: MachineState<M>, d: Nat, fits: d + 112 <= stack.size,
+    under: d + 120 <= top, before, after: Buffers(), answer: BitVec(64), x1, x2: MachineState<M>,
+    at1: (x1.gprs = stack.opened(d, s0).gprs) ∧ (stack.Entered(lending, d, s0.memory, before, x1.memory) ∧
+        stack.Saved(d, function_saves(saves), 8, stack.opened(d, s0).gprs, x1.memory)),
+    here: x2.rip = next_rip(site.origin, prog_len(At(inner, 0, Block(code)))), resident: site.Resident(x2.memory),
+    at2: (read_gpr(Rax, x2.gprs) = answer) ∧ stack.Trailed(saves, lending, d, x1, after, x2)):
+    site.Arrives(stack.writes, x2, prog_len(function_closed(inner, code, saves)),
+        λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, answer, t)) {
+    let g1 = stack.opened(d, s0).gprs;
+    let spans = lending.spans();
+    let returned = At(inner, 0, Block(code));
+    let restored = function_saves(saves).reloads(returned, 8);
+    let closed = function_closed(inner, code, saves);
+    let under_frame: (d + 112 <= top) = { omega };
+    let sizes = saves_fit(saves, d, stack.size, fits);
+    let sizes_top = saves_fit(saves, d, top, under_frame);
+    let restored_in = restored.within_before(0, Block([frame_free()]), site.program, within);
+    let done = λ (m: M) => stack.Entered(lending, d, s0.memory, after, m);
+    let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) =
+        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), read_gpr_after_write(Rsp, stack.at(d), s0.gprs));
+    let rsp_x2: (read_gpr(Rsp, x2.gprs) = stack.at(d)) = trans(at2.right.left.left, rsp_x1);
+    let saved2: stack.Saved(d, function_saves(saves), 8, g1, x2.memory) =
+        stack.saved_above(d, d + 64, top, g1, x1.memory, x2.memory, loan.unchanged(d + 64, x1.memory, x2.memory, at2.right.right.left),
+            function_saves(saves), 8, { omega }, sizes_top.right, at1.right.right);
+    let memory2: stack.Entered(lending, d, s0.memory, after, x2.memory) =
+        ⟨stack.wrote_in_trans(d + 112, spans, s0.memory, x1.memory, x2.memory, at1.right.left.left,
+            stack.wrote_in_deeper(d + 64, d + 112, { omega }, spans, x1.memory, x2.memory, at2.right.right.left)), at2.right.right.right⟩;
+    let back = restore(function_saves(saves), g1, x2.gprs);
+    let loaded = saves_restored(saves, g1, x2.gprs);
+    let third = site.moves_trans(stack.writes, prog_len(returned), prog_len(restored), prog_len(closed),
+        λ (x: MachineState<M>) => (x.gprs = x2.gprs) ∧ (done(x.memory) ∧ stack.Saved(d, function_saves(saves), 8, g1, x.memory)),
+        λ (x: MachineState<M>) => (x.gprs = back) ∧ done(x.memory),
+        λ (t: MachineState<M>) => (t.gprs = write_gpr(Rsp, stack.at(d + 112), back)) ∧ done(t.memory),
+        site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g1, function_saves(saves), returned, 8, x2.gprs, sizes.left,
+            sizes.right, saves_spare(saves), rsp_x2, done, restored_in),
+        epilogue_moves<M>(site, laid, stack, d, done, back, trans(loaded.left, rsp_x2), restored, within.witness, within.proof))(
+        x2, here, resident, ⟨refl, ⟨memory2, saved2⟩⟩);
+    let t = third.witness;
+    let at3 = third.proof.right.right.right;
+    let last = write_gpr(Rsp, stack.at(d + 112), back);
+    let kept_body: Kept(kept_order().drop(saves), g1, x2.gprs) =
+        j(at1.left, λ g _ => Kept(kept_order().drop(saves), g, x2.gprs), at2.right.left.right);
+    let kept: Kept(callee_kept(), s0.gprs, last) = kept_trans(callee_kept(), s0.gprs, g1, last, kept_past_rsp(s0.gprs, stack.at(d)),
+        kept_trans(callee_kept(), g1, back, last, loaded.right.right(kept_body), kept_past_rsp(back, stack.at(d + 112))));
+    let rax: (read_gpr(Rax, last) = answer) = trans(write_spares(Rsp, Rax, stack.at(d + 112), back, trivial), trans(loaded.right.left, at2.left));
+    let closed_at: stack.Closed(lending, d, s0, after, answer, t) =
+        ⟨j(sym(at3.left), λ g _ => read_gpr(Rax, g) = answer, rax),
+         ⟨j(sym(at3.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept),
+          ⟨j(sym(at3.left), λ g _ => read_gpr(Rsp, g) = stack.at(d + 112), read_gpr_after_write(Rsp, stack.at(d + 112), back)), at3.right⟩⟩⟩;
+    Exists(t, ⟨third.proof.left, ⟨third.proof.right.left, ⟨third.proof.right.right.left, closed_at⟩⟩⟩)
+}
+
+theorem function_runs_saved<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    effects: Effects(), k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, k, lending.counts, needs, top), function: Function, prog: Prog,
+    file: File, placement: List<Place>, names: Nat, body: Emitted,
+    allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
+    emitted: function.body.emit_calls(saves, function_opened(prog, k, saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
+    moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
+    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
+    within: function_closed(body.prog, moves.code, saves).Within(site.program),
+    values: Valuation(), s0: MachineState<M>, d: Nat, room: 120 * k + 8 <= d, fits: d + 112 <= stack.size, under: d + 120 <= top,
+    before, after: Buffers(), ready: file.Represents(values, stack.opened(d, s0).gprs),
+    holds: StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
+        HomesHold(function.homes(), values, lending.addresses, lending.buffers),
+    x1: MachineState<M>, here: x1.rip = next_rip(site.origin, prog_len(function_opened(prog, k, saves))), resident: site.Resident(x1.memory),
+    at1: (x1.gprs = stack.opened(d, s0).gprs) ∧ (stack.Entered(lending, d, s0.memory, before, x1.memory) ∧
+        stack.Saved(d, function_saves(saves), 8, stack.opened(d, s0).gprs, x1.memory))):
+    site.Arrives(stack.writes, x1, prog_len(function_closed(body.prog, moves.code, saves)),
+        λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, values(64, function.result), t)) {
+    let spans = lending.spans();
+    let opened = function_opened(prog, k, saves);
+    let returned = At(body.prog, 0, Block(moves.code));
+    let restored = function_saves(saves).reloads(returned, 8);
+    let closed = function_closed(body.prog, moves.code, saves);
+    let answer = values(64, function.result);
+    let facts = StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
+        HomesHold(function.homes(), values, lending.addresses, lending.buffers);
+    let fits_body: (d + 64 <= stack.size) = { omega };
+    let under_body: (d + 72 <= top) = { omega };
+    let restored_in = restored.within_before(0, Block([frame_free()]), site.program, within);
+    let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, 8), restored_in);
+    let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
+    let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) =
+        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), read_gpr_after_write(Rsp, stack.at(d), s0.gprs));
+    let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
+        λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, x1, opened, file, facts, before, after, e),
+        body, emitted,
+        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, k, lending, loan, needs, calls, values, d, x1, rsp_x1, room,
+            fits_body, under_body, allowed, asks, function.homes(), opened, file, placement, names, before, after));
+    let start: stack.Trailed(saves, lending, d, x1, before, x1) =
+        ⟨kept_refl(body_kept(saves), x1.gprs), ⟨stack.wrote_in_refl(d + 64, spans, x1.memory), at1.right.left.right⟩⟩;
+    let keep = λ (m: M) => stack.Trail(lending, d, x1.memory, after, m);
+    let second = site.moves_trans(stack.writes, prog_len(opened), prog_len(body.prog), prog_len(returned),
+        λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ facts) ∧ stack.Trailed(saves, lending, d, x1, before, x),
+        λ (t: MachineState<M>) => body.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, x1, after, t),
+        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ stack.Trailed(saves, lending, d, x1, after, t),
+        body_emits.right(body_in),
+        result_moves<M>(saves, site, laid, stack, values, keep, x1, body.prog, body.file, function.result, moves, keeps(values), placed,
+            leaves, returned_in.witness, returned_in.proof))(x1, here, resident,
+        ⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩);
+    site.arrives_after(stack.writes, x1, second.witness, prog_len(closed),
+        λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, answer, t), second.proof.left,
+        function_closes<M>(saves, site, laid, stack, top, lending, loan, body.prog, moves.code, within, s0, d, fits, under, before, after, answer,
+            x1, second.witness, at1, second.proof.right.left, second.proof.right.right.left, second.proof.right.right.right))
+}
+
 theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     effects: Effects(), k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, k, lending.counts, needs, top), function: Function, prog: Prog,
@@ -3702,7 +3816,6 @@ theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
         λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, values(64, function.result), t)) {
     let g1 = stack.opened(d, s0).gprs;
-    let spans = lending.spans();
     let opened = function_opened(prog, k, saves);
     let returned = At(body.prog, 0, Block(moves.code));
     let restored = function_saves(saves).reloads(returned, 8);
@@ -3713,75 +3826,28 @@ theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
     let fits_body: (d + 64 <= stack.size) = { omega };
     let under_body: (d + 72 <= top) = { omega };
     let under_frame: (d + 112 <= top) = { omega };
-    let sizes = saves_fit(saves, d, stack.size, fits);
-    let sizes_top = saves_fit(saves, d, top, under_frame);
     let restored_in = restored.within_before(0, Block([frame_free()]), site.program, within);
     let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, 8), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
-    let body_emits = λ (s1: MachineState<M>) (rsp1: read_gpr(Rsp, s1.gprs) = stack.at(d)) =>
-        function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
-            λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, s1, opened, file, facts, before, after, e),
-            body, emitted,
-            function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, k, lending, loan, needs, calls, values, d, s1, rsp1, room,
-                fits_body, under_body, allowed, asks, function.homes(), opened, file, placement, names, before, after));
     let rsp_g1: (read_gpr(Rsp, g1) = stack.at(d)) = read_gpr_after_write(Rsp, stack.at(d), s0.gprs);
-    let opened_in = opened.within_trans(body.prog, site.program, body_emits(stack.opened(d, s0), rsp_g1).left, body_in);
+    // The entry lies in the program because the body does, which the
+    // body's emission says at any state: at the opened one here.
+    let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
+        λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, stack.opened(d, s0), opened, file, facts, before, after, e),
+        body, emitted,
+        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, k, lending, loan, needs, calls, values, d, stack.opened(d, s0),
+            rsp_g1, room, fits_body, under_body, allowed, asks, function.homes(), opened, file, placement, names, before, after));
+    let opened_in = opened.within_trans(body.prog, site.program, body_emits.left, body_in);
     let ready: file.Represents(values, g1) = entered(values)(g1, args_ports(values, function.parameters, argument_registers(), g1,
         args_after_write(words_of(values, function.parameters), argument_registers(), s0.gprs, Rsp, stack.at(d), trivial, args)));
-    let done = λ (m: M) => stack.Entered(lending, d, s0.memory, after, m);
     λ s here resident held => {
         let first = function_enters<M>(saves, site, laid, stack, top, lending, loan, prog, k, s0, d, rsp, fits, under_frame, before, in_memory,
             opened_in)(s, here, resident, held);
-        let x1 = first.witness;
-        let at1 = first.proof.right.right.right;
-        let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) = j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), rsp_g1);
-        let start: stack.Trailed(saves, lending, d, x1, before, x1) =
-            ⟨kept_refl(body_kept(saves), x1.gprs), ⟨stack.wrote_in_refl(d + 64, spans, x1.memory), at1.right.left.right⟩⟩;
-        let keep = λ (m: M) => stack.Trail(lending, d, x1.memory, after, m);
-        let second = site.moves_trans(stack.writes, prog_len(opened), prog_len(body.prog), prog_len(returned),
-            λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ facts) ∧ stack.Trailed(saves, lending, d, x1, before, x),
-            λ (t: MachineState<M>) => body.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, x1, after, t),
-            λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ stack.Trailed(saves, lending, d, x1, after, t),
-            body_emits(x1, rsp_x1).right(body_in),
-            result_moves<M>(saves, site, laid, stack, values, keep, x1, body.prog, body.file, function.result, moves, keeps(values), placed,
-                leaves, returned_in.witness, returned_in.proof))(x1, first.proof.right.left, first.proof.right.right.left,
-            ⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩);
-        let x2 = second.witness;
-        let at2 = second.proof.right.right.right;
-        let rsp_x2: (read_gpr(Rsp, x2.gprs) = stack.at(d)) = trans(at2.right.left.left, rsp_x1);
-        let saved2: stack.Saved(d, function_saves(saves), 8, g1, x2.memory) =
-            stack.saved_above(d, d + 64, top, g1, x1.memory, x2.memory, loan.unchanged(d + 64, x1.memory, x2.memory, at2.right.right.left),
-                function_saves(saves), 8, { omega }, sizes_top.right, at1.right.right);
-        let memory2: stack.Entered(lending, d, s0.memory, after, x2.memory) =
-            ⟨stack.wrote_in_trans(d + 112, spans, s0.memory, x1.memory, x2.memory, at1.right.left.left,
-                stack.wrote_in_deeper(d + 64, d + 112, { omega }, spans, x1.memory, x2.memory, at2.right.right.left)), at2.right.right.right⟩;
-        let back = restore(function_saves(saves), g1, x2.gprs);
-        let loaded = saves_restored(saves, g1, x2.gprs);
-        let third = site.moves_trans(stack.writes, prog_len(returned), prog_len(restored), prog_len(closed),
-            λ (x: MachineState<M>) => (x.gprs = x2.gprs) ∧ (done(x.memory) ∧ stack.Saved(d, function_saves(saves), 8, g1, x.memory)),
-            λ (x: MachineState<M>) => (x.gprs = back) ∧ done(x.memory),
-            λ (t: MachineState<M>) => (t.gprs = write_gpr(Rsp, stack.at(d + 112), back)) ∧ done(t.memory),
-            site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g1, function_saves(saves), returned, 8, x2.gprs, sizes.left,
-                sizes.right, saves_spare(saves), rsp_x2, done, restored_in),
-            epilogue_moves<M>(site, laid, stack, d, done, back, trans(loaded.left, rsp_x2), restored, within.witness, within.proof))(
-            x2, second.proof.right.left, second.proof.right.right.left, ⟨refl, ⟨memory2, saved2⟩⟩);
-        let t = third.witness;
-        let at3 = third.proof.right.right.right;
-        let last = write_gpr(Rsp, stack.at(d + 112), back);
-        let kept_body: Kept(kept_order().drop(saves), g1, x2.gprs) =
-            j(at1.left, λ g _ => Kept(kept_order().drop(saves), g, x2.gprs), at2.right.left.right);
-        let kept: Kept(callee_kept(), s0.gprs, last) = kept_trans(callee_kept(), s0.gprs, g1, last, kept_past_rsp(s0.gprs, stack.at(d)),
-            kept_trans(callee_kept(), g1, back, last, loaded.right.right(kept_body), kept_past_rsp(back, stack.at(d + 112))));
-        let rax: (read_gpr(Rax, last) = answer) = trans(write_spares(Rsp, Rax, stack.at(d + 112), back, trivial), trans(loaded.right.left, at2.left));
-        let closed_at: stack.Closed(lending, d, s0, after, answer, t) =
-            ⟨j(sym(at3.left), λ g _ => read_gpr(Rax, g) = answer, rax),
-             ⟨j(sym(at3.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept),
-              ⟨j(sym(at3.left), λ g _ => read_gpr(Rsp, g) = stack.at(d + 112), read_gpr_after_write(Rsp, stack.at(d + 112), back)), at3.right⟩⟩⟩;
-        site.arrives_after(stack.writes, s, x1, prog_len(closed),
+        site.arrives_after(stack.writes, s, first.witness, prog_len(closed),
             λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, answer, t), first.proof.left,
-            site.arrives_after(stack.writes, x1, x2, prog_len(closed),
-                λ (t: MachineState<M>) => stack.Closed(lending, d, s0, after, answer, t), second.proof.left,
-                Exists(t, ⟨third.proof.left, ⟨third.proof.right.left, ⟨third.proof.right.right.left, closed_at⟩⟩⟩)))
+            function_runs_saved<M>(saves, site, laid, stack, top, effects, k, lending, loan, needs, calls, function, prog, file, placement, names,
+                body, allowed, asks, emitted, moves, keeps, placed, leaves, within, values, s0, d, room, fits, under, before, after, ready, holds,
+                first.witness, first.proof.right.left, first.proof.right.right.left, first.proof.right.right.right))
     }
 }
 
