@@ -63,14 +63,31 @@ if h : P { yes } else { no }
 to the same match tree as
 
 ```heather
-match decide<P>() {
-    Inl(h) => yes,
-    Inr(h) => no,
+match e: decide_bit<P>() {
+    True => { let h = decide_true<P>(e); yes },
+    False => { let h = decide_false<P>(e); no },
 }
 ```
 
 The two occurrences of `h` inhabit separate scopes and have types `P` and
-`P -> False`, respectively. `MatchForm::If` is retained only as source
+`P -> False`, respectively, each read from the bit's equation through the
+instance's `reflects`. Until 2026-11-12 the evidence form was the match on
+`decide<P>()` (`Inl(h)`/`Inr(h)`); it moved to the bit, as the evidence-free
+form had (below, and for the same reason), when a `runtime fn` written
+`if h: i < 64` could not be read by the reflector, which meets the
+instance's `P ∨ ¬P` and not the comparison
+(issues/runtime-fn-if-word-proposition.md, Minus's choice). `e` is a
+hygienic name; a `Bool` or mixed condition reads `decide_true` as it reads
+the scrutinee, so `if h: b` still gives `h: b.IsTrue()`.
+
+A branch that never names `h` binds none, so a function whose branches do
+not use the evidence is a plain convoyed match on the bit. A proof that
+cases the same test (`if h: P { refl } else { … }`) abstracts that bit in
+the unfolded function: motive synthesis abstracts the scrutinee as written
+beside its stuck spelling (`matching::with_scrutinee`), since the convoy's
+`refl` and motive hold it as written. A branch that does use `h` holds
+`decide_true<P>(e)`, typed by the instance's bit rather than by the
+scrutinee, and a proof about it rewrites with the bit's equation instead. `MatchForm::If` is retained only as source
 provenance for diagnostics; computation and dependent elimination continue
 through the ordinary match implementation.
 
@@ -107,7 +124,7 @@ prints the written condition rather than the parser-generated call.
 
 In a checking position the lowered match uses the existing dependent motive
 synthesis. Branches can therefore establish results whose indices follow the
-actual `Inl` or `Inr` decision, rather than being restricted to choosing two
+actual `True` or `False` bit (with its evidence), rather than being restricted to choosing two
 values of a non-dependent type.
 
 An `if` can also infer a constant result type. Elaboration tries a branch in

@@ -157,25 +157,47 @@ pub(crate) struct Condition {
     pub(crate) ty: Ty,
     pub(crate) expr: Option<Expr>,
     pub(crate) evidence: bool,
+    /// The lowered call's head (`decide_bit`, `decide`, or an `if h:`'s
+    /// `decide_true`/`decide_false`) and its arguments (the bit's equation).
+    pub(crate) head: String,
+    pub(crate) args: Vec<Expr>,
+}
+
+impl Condition {
+    /// The same lowered call at another reading of its condition.
+    pub(crate) fn call(&self, proposition: Ty, span: Span) -> Expr {
+        let mut call = decide_call(proposition, false, span);
+        if let ExprKind::App { head, args, .. } = &mut call.kind {
+            if let ExprKind::TyApp { head, .. } = &mut head.kind {
+                head.kind = ExprKind::Var(self.head.clone());
+            }
+            args.clone_from(&self.args);
+        }
+        call
+    }
 }
 
 pub(crate) fn lowered_condition(e: &Expr) -> Option<Condition> {
     let ExprKind::App { head, args, named, explicit: false, .. } = &e.kind else { return None };
-    if !args.is_empty() || !named.is_empty() {
+    if !named.is_empty() {
         return None;
     }
     let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else { return None };
     let ExprKind::Var(name) = &callee.kind else { return None };
-    let evidence = match name.as_str() {
-        "decide_bit" => false,
-        "decide" => true,
+    let (evidence, arity) = match name.as_str() {
+        "decide_bit" => (false, 0),
+        "decide" => (true, 0),
+        "decide_true" | "decide_false" => (true, 1),
         _ => return None,
     };
+    if args.len() != arity {
+        return None;
+    }
     let [condition] = tyargs.as_slice() else { return None };
     if callee.span != condition.span {
         return None;
     }
-    Some(Condition { ty: condition.clone(), expr: condition_expression(condition), evidence })
+    Some(Condition { ty: condition.clone(), expr: condition_expression(condition), evidence, head: name.clone(), args: args.clone() })
 }
 
 /// The expression a condition's type syntax was written as, when it is one

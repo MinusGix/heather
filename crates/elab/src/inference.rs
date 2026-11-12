@@ -34,7 +34,7 @@ use crate::quote::Quotation;
 use crate::registered::Registered;
 use crate::rewrite::Rewrites;
 use crate::surface::{
-    Condition, condition_connective, condition_expression, decide_call, is_true_of, lowered_condition,
+    Condition, condition_connective, condition_expression, is_true_of, lowered_condition,
     rebuild_connective,
 };
 use crate::traits::Classes;
@@ -267,7 +267,7 @@ impl Inference<'_> {
                     // The Bool read as the proposition its `IsTrue` instance decides.
                     let span = condition.span;
                     let is_true = Ty { kind: TyKind::OfExpr(Box::new(is_true_of(condition))), span };
-                    return self.elab_infer_written(cx, &decide_call(is_true, true, span), expected).map_err(|_| proposition_error);
+                    return self.elab_infer_written(cx, &c.call(is_true, span), expected).map_err(|_| proposition_error);
                 }
                 ConditionType::Other(got) => not_bool = Some((got, condition.span)),
                 ConditionType::Unread => {}
@@ -330,7 +330,7 @@ impl Inference<'_> {
         if bools == 0 {
             return None;
         }
-        let call = decide_call(proposition, c.evidence, c.ty.span);
+        let call = c.call(proposition, c.ty.span);
         let attempt = matching::MatchRollback::new(self.0);
         let read = self.elab_infer_written(cx, &call, expected);
         if read.is_ok() {

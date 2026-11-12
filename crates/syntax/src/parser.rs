@@ -693,6 +693,13 @@ impl Parser {
         }
     }
 
+    /// Whether an identifier token `name` was read since token `from`: a
+    /// conservative "the source names it" (a shadowing binder counts too).
+    fn names_from(&self, from: usize, name: Option<&str>) -> bool {
+        let Some(name) = name else { return false };
+        self.toks[from..self.pos].iter().any(|t| matches!(&t.kind, TokKind::Ident(n) if n == name))
+    }
+
     fn hygienic(&mut self, kind: &str) -> String {
         let id = self.next_hygienic;
         self.next_hygienic += 1;
@@ -6228,25 +6235,31 @@ impl Parser {
 
     /// `if P { yes } else { no }` and `if h : P { yes } else { no }`.
     ///
-    /// Proposition-directed branching with evidence is exactly elimination of
-    /// the decision evidence, so the parser makes that identity structural:
-    ///
-    /// ```text
-    /// match decide<P>() { Inl(h) => yes, Inr(h) => no }
-    /// ```
-    ///
-    /// Without a binder there is no evidence to eliminate, and the `if`
-    /// branches on the decision's bit (issues/native-frontend-decided-matches.md):
+    /// Both branch on the decision's bit (issues/native-frontend-decided-matches.md):
     ///
     /// ```text
     /// match decide_bit<P>() { True => yes, False => no }
     /// ```
     ///
     /// so a decision built from a comparison is a match on that comparison's
-    /// bit, the way code branches on it.
+    /// bit, the way code branches on it. With a binder the match is convoyed,
+    /// and each branch binds the evidence from the bit's equation through the
+    /// instance's `reflects` (issues/runtime-fn-if-word-proposition.md):
+    ///
+    /// ```text
+    /// match e: decide_bit<P>() {
+    ///     True => { let h = decide_true<P>(e); yes },
+    ///     False => { let h = decide_false<P>(e); no },
+    /// }
+    /// ```
+    ///
+    /// (a branch that never names `h` binds none), so `h: P` and `h: ¬P` as
+    /// before, and the `runtime fn` reflector, the
+    /// measure obligations and `split_all` read the bit the code tests, never
+    /// the `P ∨ ¬P` decision.
     ///
     /// `MatchForm::If` is diagnostic provenance only. Everything that types or
-    /// computes sees the same ordinary `Or` match as the explicit spelling.
+    /// computes sees the same ordinary match as the explicit spelling.
     fn if_expr(&mut self) -> R<Expr> {
         let start = self.bump().span; // `if`
         if self.eat_kw("let") {
@@ -6262,7 +6275,10 @@ impl Parser {
         let proposition = expr_as_ty(&condition);
 
         let elseless = std::mem::take(&mut self.elseless_if);
+        let yes_from = self.pos;
         let yes = self.if_branch("the `if` branch")?;
+        let yes_names = self.names_from(yes_from, evidence.as_deref());
+        let no_from = self.pos;
         let no = if self.eat_kw("else") {
             if self.at_kw("if") {
                 // `else if c { … }`: the nested `if` is the `else` branch, and
@@ -6306,55 +6322,69 @@ impl Parser {
             return self.err("an `if` needs an `else { … }` branch");
         };
 
+        let no_names = self.names_from(no_from, evidence.as_deref());
         let ev_span = condition.span;
-        let decide_head = Expr {
-            kind: ExprKind::Var(if evidence.is_some() { "decide" } else { "decide_bit" }.into()),
-            span: condition.span,
-        };
-        let decide = Expr {
-            kind: ExprKind::TyApp {
-                head: Box::new(decide_head),
-                args: vec![proposition],
-            },
-            span: condition.span,
-        };
-        let scrut = Expr {
+        // The condition's own span on every lowered call's head: it is what
+        // marks the call as a lowered condition for the elaborator's
+        // readings (`surface::lowered_condition`).
+        let call = |head: &str, proposition: &Ty, args: Vec<Expr>| Expr {
             kind: ExprKind::App {
-                head: Box::new(decide),
-                args: vec![],
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr { kind: ExprKind::Var(head.into()), span: ev_span }),
+                        args: vec![proposition.clone()],
+                    },
+                    span: ev_span,
+                }),
+                args,
                 named: vec![],
                 explicit: false,
                 goal_oriented: false,
             },
-            span: condition.span,
+            span: ev_span,
         };
-        let (yes_ctor, no_ctor, binders) = match evidence {
-            Some(name) => ("Inl", "Inr", vec![Pat::Var { name, span: ev_span }]),
-            None => ("True", "False", vec![]),
+        let scrut = call("decide_bit", &proposition, vec![]);
+        // With evidence the match is still on the bit, convoyed, and each
+        // branch binds `h` from the instance's `reflects` at that equation:
+        // `decide_true<P>(e): P`, `decide_false<P>(e): ¬P`.
+        let eqbind = evidence.as_ref().map(|_| self.hygienic("if_bit"));
+        // A branch that never names the evidence binds none: the function
+        // is then a plain convoy, which a proof that cases the same test can
+        // abstract (an evidence term is typed by the instance's bit, not by
+        // the scrutinee the motive abstracts).
+        let branch = |body: Expr, side: &str, names: bool| match (&evidence, &eqbind) {
+            (Some(name), Some(e)) if names => {
+                let bit = Expr { kind: ExprKind::Var(e.clone()), span: ev_span };
+                let span = body.span;
+                let evidence = Stmt::Let { name: name.clone(), ty: None, expr: call(side, &proposition, vec![bit]), span: ev_span, opaque: false };
+                Expr { kind: ExprKind::Block(Box::new(Block { stmts: vec![evidence], result: Box::new(body), ons: Vec::new(), span })), span }
+            }
+            _ => body,
         };
+        let (yes_span, no_span) = (yes.span, no.span);
         let arms = vec![
             Arm {
-                ctor: yes_ctor.into(),
+                ctor: "True".into(),
                 default: false,
-                binders: binders.clone(),
-                span: yes.span,
-                body: yes,
+                binders: vec![],
+                span: yes_span,
+                body: branch(yes, "decide_true", yes_names),
             },
             Arm {
-                ctor: no_ctor.into(),
+                ctor: "False".into(),
                 default: false,
-                binders,
-                span: no.span,
-                body: no,
+                binders: vec![],
+                span: no_span,
+                body: branch(no, "decide_false", no_names),
             },
         ];
-        let span = start.join(arms[1].body.span);
+        let span = start.join(no_span);
         Ok(Expr {
             kind: ExprKind::Match {
                 form: MatchForm::If,
                 generated: false,
                 scrut: Box::new(scrut),
-                eqbind: None,
+                eqbind,
                 motive: None,
                 arms,
             },
