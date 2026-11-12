@@ -105,7 +105,7 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     unsafe { raw::sha256_compress(ctx.as_mut_ptr(), ctx.len() as u64, block.as_ptr(), block.len() as u64) }
 }
 
-/// `sha256_init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 480 bytes.
+/// `Sha256::init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 360 bytes.
 pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_init_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
