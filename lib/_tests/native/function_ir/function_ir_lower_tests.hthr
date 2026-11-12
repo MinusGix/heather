@@ -4,6 +4,7 @@
 import function_ir;
 import function_ir_lower;
 import x86_64;
+import x86_64_block;
 import bitvec;
 import list;
 import logic;
@@ -85,3 +86,49 @@ theorem sar_flags(): shift_flags(OpSar, BitVec::ofNat(0x8000000000000001), False
     shift_flags(OpSar, BitVec::ofNat(0x8000000000000001), False).sf = True { ⟨refl, ⟨refl, refl⟩⟩ }
 theorem shr_flags(): shift_flags(OpShr, BitVec::ofNat(0x8000000000000000), False).of = True ∧
     shift_flags(OpShr, BitVec::ofNat(0x8000000000000000), False).sf = False { ⟨refl, refl⟩ }
+
+// ---------------------------------------------------------------------------
+// A comparison whose destination holds an operand
+// (issues/function-ir-planner-register-pressure.md): the XOR form clears
+// the destination before the CMP, so it has no code there; the second
+// form compares first and clears with a MOV, which writes no flag.
+fn two_words() → File { File::empty().write(Rdi, Some(Held(0, Word))).write(Rsi, Some(Held(1, Word))) }
+
+theorem equal_fresh_code(): code_of(Equal(64, 2, 0, 1).lower(Rax, two_words())) =
+    [XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetEqual(Al)] { refl }
+theorem equal_over_left_code(): code_of(Equal(64, 2, 0, 1).lower(Rdi, two_words())) =
+    [CmpRR(Rdi, Rsi), MovRI(Rdi, BitVec::zero()), SetEqual(Dil)] { refl }
+theorem below_over_right_code(): code_of(UnsignedLessThan(64, 2, 0, 1).lower(Rsi, two_words())) =
+    [CmpRR(Rdi, Rsi), MovRI(Rsi, BitVec::zero()), SetBelow(Sil)] { refl }
+// The operand written over is gone from the file, and the bit is there.
+theorem equal_over_left_file(): (match Equal(64, 2, 0, 1).lower(Rdi, two_words()) { None => None, Some(l) => l.file.at(Rdi) }) =
+    Some(Held(2, Bit)) { refl }
+// The SETcc reads flags the CMP defined: the MOV between them keeps them.
+theorem equal_over_reads_defined(): block_reads(code_of(Equal(64, 2, 0, 1).lower(Rdi, two_words())), DefinedFlags::none()) = True { refl }
+// An operand in no register is still refused, in either form.
+theorem equal_missing_refused(): Equal(64, 2, 0, 7).lower(Rdi, two_words()) = None { refl }
+
+// The planner's side of it. With a register of the pool free, a comparison
+// takes that (the shorter code); with none, RAX when nothing live is there;
+// and with RAX live too, the register of an operand that dies at it.
+fn crowded_file() → File { two_words().write(Rax, Some(Held(5, Word))) }
+fn reads_any(ids: List<Nat>) → Nat → Bool { λ (id: Nat) => function_ir_lower::mentions(ids, id) }
+
+theorem compare_takes_a_free_register():
+    Equal(64, 2, 0, 1).choose_by(two_words(), reads_any([0, 1]), reads_any([]), [], [], [Rdi, Rsi, Rcx], reads_any([]), []) = Rcx { refl }
+theorem compare_takes_rax_when_free():
+    Equal(64, 2, 0, 1).choose_by(two_words(), reads_any([0, 1]), reads_any([]), [], [], [Rdi, Rsi], reads_any([]), []) = Rax { refl }
+theorem compare_takes_a_dying_operand():
+    Equal(64, 2, 0, 1).choose_by(crowded_file(), reads_any([0, 1, 5]), reads_any([0, 5]), [], [], [Rdi, Rsi], reads_any([]), []) = Rsi { refl }
+// The place it takes then has code, and the value in RAX is still there.
+theorem compare_crowded_lowers():
+    (match Equal(64, 2, 0, 1).lower(Rsi, crowded_file()) { None => None, Some(l) => l.file.at(Rax) }) = Some(Held(5, Word)) { refl }
+// With both operands read later nothing is free, and the answer is RAX,
+// which the code that follows cannot use: the lowering refuses the read of
+// 5 there, the planner does not decide.
+theorem compare_with_nothing_dying():
+    Equal(64, 2, 0, 1).choose_by(crowded_file(), reads_any([0, 1, 5]), reads_any([0, 1, 5]), [], [], [Rdi, Rsi], reads_any([]), []) = Rax { refl }
+// A narrow comparison has the XOR form only, so its operands are not taken.
+theorem narrow_compare_takes_no_operand(): Equal(32, 2, 0, 1).overwritable() = [] { refl }
+// Arithmetic takes its first operand's register, not its second's.
+theorem add_overwrites_its_first(): Add(64, 2, 0, 1).overwritable() = [0] { refl }

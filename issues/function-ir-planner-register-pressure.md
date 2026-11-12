@@ -1,6 +1,6 @@
 ---
 title: The register planner loses a value in a calling loop's body where an operand's register or a wanted one would do
-status: open
+status: closed
 labels: [native,ir,x86,planner]
 area: heather-in-heather
 milestone: [self-lexer,nh-library]
@@ -33,3 +33,16 @@ Both were found with a probe that mirrors `emit_calls` and names the node it ref
 ## Done when
 
 The scanner's loop compiles in either order of its test and with its parameters in the specification's order (`state, i, last`), the source says so by being written that way, and `compile-x86`'s refusal names the function and the node.
+
+## Log
+
+- 2026-11-12: Fixed on PR #551 (2026-11-12). The loop is written in the specification's order (`scan_from(source, length, state, i, last)`, the bound tested first) and compiles; the two refusals no longer happen in any of the four orders (each compiled with its certificate checked: either order of the test with either order of the parameters).
+
+  - **A comparison may write over an operand that dies at it.** The lowering's XOR form clears the destination before the CMP, so this needed code, not only a heuristic: `File::compare_over` is `CMP a, b; MOV d, 0; SETcc d`, proved (`compare_over_keeps`), and `File::compare_with` takes it where the XOR form has none. A MOV writes no flag (`Instruction::defines`), so the block still reads only flags it defined.
+  - **The planner, with no register free** (`Node::crowded`): RAX if nothing live is there and the output is not read past a later call; else the register of an operand that dies at the node and that its code can write over (`Node::overwritable`: the first operand of arithmetic and moves at any kind, either operand of a comparison of words); else RAX as before. Plans that had a free register are unchanged: of the eleven linked exports only `scan_token.s` moved.
+  - **A loop's body is planned with nothing read past a call but what its own calls cross.** It was planned with everything the loop's close reads counted as read past a call whenever the body called anywhere, so a pass's last values could not stay in RAX.
+  - **`compile-x86` says what it refuses**: the function, then the node, call or loop edge, its place and what each register held, and the function's nodes. `lib/native/function_ir/function_ir_refusal.hthr` mirrors the emitter's tests and is evaluated on a refusal; `scripts/lowering-refusal-probe.hthr` became that module. `narrow_signed_operations_are_refused` (`crates/cli/tests/native_program.rs`) holds the message to the node.
+
+  Probes: `lib/_tests/native/function_ir/function_ir_lower_tests.hthr` (both forms' code, the flags, the planner's three choices and the case it cannot decide) and `function_ir_refusal_tests.hthr`.
+
+  What this did not do is filed on its own: a constant operand folded into the CMP ([[x86-compare-immediate]]), and callee-saved registers for values with coalescing into a wanted register ([[function-ir-values-in-kept-registers]]).

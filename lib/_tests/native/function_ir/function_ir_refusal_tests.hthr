@@ -1,0 +1,50 @@
+// Probes of what the function compiler says where it refuses
+// (`lib/native/function_ir/function_ir_refusal.hthr`, read by `heather
+// compile-x86`): the report names the node the lowering has no code for,
+// its place and the registers, and says nothing is wrong where nothing is.
+// `crates/cli/tests/native_program.rs` holds the compiler's message to it.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+fn sum() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+// A sign extension from 32 bits has no code (function_ir_lower).
+fn widened() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]),
+            nodes := [Resize(64, 32, 2, 0), SignResize(32, 64, 3, 2), Add(width := 64, output := 4, left := 3, right := 1)],
+            outputs := Ports([word(4)]))),
+        result := 4)
+}
+
+theorem node_is_shown(): Add(width := 64, output := 2, left := 0, right := 1).shown() = "2 = add64 0, 1" { refl }
+theorem region_is_shown(): widened().body.shown() = "2 = resize64to32 0; 3 = sign_resize32to64 2; 4 = add64 3, 1; " { refl }
+
+// A placement the lowering takes has nothing to report.
+theorem good_placement_reports_nothing(): sum().refused(0, sum().plan(), 1, []) = "nothing: the function has code after no other" { refl }
+
+// The node refused is the second, not the block: the first has code, and
+// the registers are as the first left them.
+theorem refusal_names_the_node(): widened().refused(0, widened().plan(), 1, []) =
+    "the node `3 = sign_resize32to64 2`, placed in rax, where rsi holds 1; rdi holds 2 (32 bits); " { refl }

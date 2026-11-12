@@ -451,12 +451,23 @@ is what takes it to the bytes.
   program and ran out of the kernel's fuel with the automaton in it; it
   is proved a function at a time, as `{prefix}_evaluable` is
   (`program_quiet_drop`).
-- *The register planner* lost a value in the loop's pass twice, and the
-  source is written round it: the test reads the state before the bound,
-  and the offset is the last parameter
-  (`issues/function-ir-planner-register-pressure.md`, with the probe that
-  names the refused node). `compile-x86`'s refusal now says which
-  function of the program it was.
+- *The register planner* lost a value in the loop's pass twice: a loop
+  that calls has three registers free in its body. The loop was first
+  linked with its source written round that (the state tested before the
+  bound, the offset as the last parameter), and is written in the
+  specification's order since the cause was fixed
+  (`issues/function-ir-planner-register-pressure.md`). Three things
+  fixed it. The verified lowering has a second form of a comparison of
+  words, `CMP a, b; MOV d, 0; SETcc d` (`File::compare_over`): a MOV
+  writes no flag, so the bit may take the register of an operand that
+  dies at the comparison, which the XOR form cannot. The planner, with no
+  register free, takes RAX if nothing live is there and else such an
+  operand's register (`Node::crowded`). And a loop's body is planned with
+  nothing read past a call but what its own calls cross, so the last
+  values of a pass may stay in RAX. `compile-x86`'s refusal now names the
+  function, the node, its place and what each register held, by
+  evaluating the library's mirror of the emitter's tests
+  (`lib/native/function_ir/function_ir_refusal.hthr`).
 
 **Controls.** `tests/scanner.rs`: the scanner through `token` against
 `heather_syntax::lex` on every source in the repository and on its
