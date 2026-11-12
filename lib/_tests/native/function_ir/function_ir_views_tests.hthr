@@ -12,6 +12,7 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_run;
 import function_ir_placeless;
+import function_ir_rows;
 import bitvec;
 import bool;
 import list;
@@ -169,6 +170,19 @@ theorem halving_rows(): program_marked(halving(), [[False, True], [True]]) = Tru
 theorem halving_rows_both(): program_marked(halving(), [[True, True], [True]]) = False { refl }
 
 // ---------------------------------------------------------------------------
-// The lowering has none yet, and says so
+// The lowering has them
+//
+// A function that lends two views of the buffer it was lent is placeless:
+// each view's home is the base the function hides, and that is all that
+// reads it. The programs above link under the rows the search finds
+// (`program_rows`), and `showing`, whose callee stores through a view lent
+// to read, has none.
 
-theorem halves_not_placeless(): halves().body.placeless(λ _ => 2, [0]) = False { refl }
+theorem halves_placeless(): halves().body.placeless(λ _ => 2, [0]) = True { refl }
+theorem lending_placeless(): program_placeless(lending()) = True { refl }
+theorem halving_placeless(): program_placeless(halving()) = True { refl }
+theorem lending_found(): program_rows(lending()) = [[True], [True]] { refl }
+theorem halving_found(): program_rows(halving()) = [[False, True], [True]] { refl }
+theorem lending_rowed(): program_rowed(lending()) = True { refl }
+theorem halving_rowed(): program_rowed(halving()) = True { refl }
+theorem showing_unrowed(): program_rowed(showing()) = False { refl }
