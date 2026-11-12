@@ -9,8 +9,10 @@
 // run over any file `Cons(own, rest)` with its calls answered by the
 // program, ends with `f`'s word and leaves `f`'s span over `rest`. `f` is
 // any function of the span to `Mutated`, a `mut self` method's kernel
-// type, of its length word and its other words; the code takes the span's
-// place first, which `f` does not read (`FTm::of_source`).
+// type, of its length word, of the spans it only reads, each before its
+// length word, and of its other words (`FTm::Source`). The spans it reads
+// are the file's next ones, `rest`'s first, and the code takes a place
+// before each length word, which `f` does not read (`FTm::of_source`).
 //
 // An instance is the once-proved lowering read at a reflection:
 // `FFun::lower_sound` for a body with no recursion, pinned to `f` by
@@ -53,24 +55,63 @@ import runtime;
 // ---------------------------------------------------------------------------
 // The function and the class
 
-// The type of a function over the span it writes whose code takes `ps`:
-// the span's bytes, then every word after the first, which is the span's
-// place.
-fn FTm::Source(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Type {
-    match ps {
-        Nil => List<BitVec(8)> → Mutated<List<BitVec(8)>, r.sem(tys)>,
-        Cons(_, more) => List<BitVec(8)> → Ty::ArrowsTo(tys, more, Mutated<List<BitVec(8)>, r.sem(tys)>),
+// What follows a span's place among a function's parameters where `n` more
+// spans follow that it only reads: the span's length word, then each read
+// span's bytes and its length word, then the words. With none it is the
+// words.
+fn FTm::Reads(tys: Nat → RecInfo, n: Nat, ps: List<Ty>, R: Type) → Type {
+    match n {
+        Zero => Ty::ArrowsTo(tys, ps, R),
+        Succ(k) => match ps {
+            Nil => R,
+            Cons(length, more) => match more {
+                Nil => length.sem(tys) → R,
+                Cons(_, later) => length.sem(tys) → List<BitVec(8)> → FTm::Reads(tys, k, later, R),
+            },
+        },
     }
 }
 
-// Such a function as a computation's meaning: the place is not read.
-fn FTm::of_source(tys: Nat → RecInfo, r: Ty, ps: List<Ty>) → FTm::Source(tys, ps, r) → FTm::Sem(tys, Sig(ps, r)) {
-    match ps { Nil => λ v => v, Cons(_, more) => λ v => λ own _ => v(own) }
+// Such a function at the spans of `rest` from the `k`th on: a read span's
+// place is not read, and its bytes are `rest`'s.
+fn FTm::read_at(tys: Nat → RecInfo, R: Type, rest: List<List<BitVec(8)>>, n: Nat) → (k: Nat) → (ps: List<Ty>) → FTm::Reads(tys, n, ps, R) →
+    Ty::ArrowsTo(tys, ps, R) {
+    match n {
+        Zero => λ k ps v => v,
+        Succ(m) => λ k ps => match ps as λ qs => FTm::Reads(tys, Succ(m), qs, R) → Ty::ArrowsTo(tys, qs, R) {
+            Nil => λ v => v,
+            Cons(length, more) => match more as λ qs => FTm::Reads(tys, Succ(m), Cons(length, qs), R) → Ty::ArrowsTo(tys, Cons(length, qs), R) {
+                Nil => λ v => v,
+                Cons(_, later) => λ v => λ len _ => FTm::read_at(tys, R, rest, m, Succ(k), later, v(len, List::span(rest, k))),
+            },
+        },
+    }
+}
+
+// The type of a function over the span it writes, lent `lent` spans, whose
+// code takes `ps`: the written span's bytes, then what follows its place
+// (`FTm::Reads`), the spans after the first only read.
+fn FTm::Source(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty) → Type {
+    match ps {
+        Nil => List<BitVec(8)> → Mutated<List<BitVec(8)>, r.sem(tys)>,
+        Cons(_, more) => List<BitVec(8)> → FTm::Reads(tys, lent.pred(), more, Mutated<List<BitVec(8)>, r.sem(tys)>),
+    }
+}
+
+// Such a function as a computation's meaning over the read spans `rest`:
+// no place is read.
+fn FTm::of_source(tys: Nat → RecInfo, r: Ty, lent: Nat, ps: List<Ty>, rest: List<List<BitVec(8)>>) → FTm::Source(tys, lent, ps, r) →
+    FTm::Sem(tys, Sig(ps, r)) {
+    match ps {
+        Nil => λ v => v,
+        Cons(_, more) => λ v => λ own _ => FTm::read_at(tys, Mutated<List<BitVec(8)>, r.sem(tys)>, rest, lent.pred(), 0, more, v(own)),
+    }
 }
 
 // A function of any type `F` that is such a function's, as a meaning.
-fn FTm::source_at<F>(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, ps, r)), f: F) → FTm::Sem(tys, Sig(ps, r)) {
-    FTm::of_source(tys, r, ps, retype(FTm::Source(tys, ps, r), typed, f))
+fn FTm::source_at<F>(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), f: F,
+    rest: List<List<BitVec(8)>>) → FTm::Sem(tys, Sig(ps, r)) {
+    FTm::of_source(tys, r, lent, ps, rest, retype(FTm::Source(tys, lent, ps, r), typed, f))
 }
 
 // A world of a function that writes, from its parts.
@@ -89,13 +130,13 @@ class CompileSpan<F>(f: F) {
     world: World,
     callees: (b: Buffers()) → Sig::Sems(world.tys, world.sigs),
     fsigs: List<Sig>,
-    writers: FTm::Sems(world.tys, fsigs),
-    typed: Itself(F) = Itself(FTm::Source(world.tys, reflected.params, reflected.result)),
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(world.tys, fsigs),
+    typed: Itself(F) = Itself(FTm::Source(world.tys, reflected.lent, reflected.params, reflected.result)),
     code: Function,
     runs: (rest: List<List<BitVec(8)>>) → (call: Writers()) →
-        FTm::CallsAgree(FWorld::of(world, callees, fsigs, writers, rest), world.sigs.len(), call) → (own: List<BitVec(8)>) →
+        FTm::CallsAgree(FWorld::of(world, callees, fsigs, writers(rest), rest), world.sigs.len(), call) → (own: List<BitVec(8)>) →
         FTm::Answers(world.tys, reflected.params, reflected.result, rest,
-            FTm::source_at(world.tys, reflected.params, reflected.result, typed, f, own), λ xs => code.run(call, xs, Cons(own, rest))),
+            FTm::source_at(world.tys, reflected.lent, reflected.params, reflected.result, typed, f, rest, own), λ xs => code.run(call, xs, Cons(own, rest))),
 }
 
 // ---------------------------------------------------------------------------
@@ -119,66 +160,66 @@ fn FFun::code(self f: FFun, w: World, fsigs: List<Sig>) → Function { Setup::co
 // The class's statement for such a reflection, pinned to `f`: the pin is
 // `refl` at a function the reflection was read from.
 theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
-    writers: FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.params, rt.result)),
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
     pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
-        FTm::source_at(w.tys, rt.params, rt.result, typed, f, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
+        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers(rest), rest), own),
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())).IsTrue()):
-    (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
+    (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
-    FTm::Answers(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.params, rt.result, typed, f, own),
+    FTm::Answers(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
         λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))) {
     λ rest call agree own =>
         j(sym(pinned(rest, own)), λ g _ => FTm::Answers(w.tys, rt.params, rt.result, rest, g, λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))),
-            rt.lowered_answers(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), ok,
-                rt.lower_sound(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len()), call, agree, own))
+            rt.lowered_answers(FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), ok,
+                rt.lower_sound(FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len()), call, agree, own))
 }
 
 fn FFun::compile<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
-    writers: FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.params, rt.result)),
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
     pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
-        FTm::source_at(w.tys, rt.params, rt.result, typed, f, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
+        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers(rest), rest), own),
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())).IsTrue()) → CompileSpan<F>(f) {
     CompileSpan(rt, w, callees, fsigs, writers, typed, rt.code(w, fsigs), FFun::plain_runs(f, rt, w, callees, fsigs, writers, typed, pinned, ok))
 }
 
 // A measured recursion's reflection and code: the words `ks` kept from
 // pass to pass, the rest moved.
-fn FFun::measured(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm) → FFun { FFun(ks ++ Cons(w0, wrest), res, body) }
+fn FFun::measured(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat) → FFun { FFun(ks ++ Cons(w0, wrest), res, body, lent) }
 
-fn FFun::measured_code(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, w: World, fsigs: List<Sig>) → Function {
-    Setup::code_of(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), 1))
+fn FFun::measured_code(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World, fsigs: List<Sig>) → Function {
+    Setup::code_of(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent))
 }
 
 // The class's statement for it: no pin (the function at an open measure is
 // stuck on it), but the function's own equation, its body with its
 // recursion answered by anything that agrees with it below the measure
 // (`FFun::Guarded`, which the function's recursor gives).
-theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, w: World,
-    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: FTm::Sems(w.tys, fsigs),
-    typed: Itself(F) = Itself(FTm::Source(w.tys, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
+theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
     bounded: FFun::Bounded(ks ++ Cons(w0, wrest), m),
-    guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
-        FTm::source_at(w.tys, ks ++ Cons(w0, wrest), res, typed, f), m),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), 1)).IsTrue()):
-    (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
+    guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers(rest), rest),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m),
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()):
+    (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
-    FTm::Answers(w.tys, ks ++ Cons(w0, wrest), res, rest, FTm::source_at(w.tys, ks ++ Cons(w0, wrest), res, typed, f, own),
-        λ xs => FFun::measured_code(ks, w0, wrest, res, body, w, fsigs).run(call, xs, Cons(own, rest))) {
-    λ rest => FFun::measured_answers(ks ++ Cons(w0, wrest), res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(),
-        FTm::source_at(w.tys, ks ++ Cons(w0, wrest), res, typed, f), FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), 1), ok,
-        FFun::measured_sound(ks, w0, wrest, body, res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), 1,
-            FTm::source_at(w.tys, ks ++ Cons(w0, wrest), res, typed, f), m, bounded, guarded(rest)))
+    FTm::Answers(w.tys, ks ++ Cons(w0, wrest), res, rest, FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest, own),
+        λ xs => FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs).run(call, xs, Cons(own, rest))) {
+    λ rest => FFun::measured_answers(ks ++ Cons(w0, wrest), res, FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent), ok,
+        FFun::measured_sound(ks, w0, wrest, body, res, FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), lent,
+            FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m, bounded, guarded(rest)))
 }
 
-fn FFun::compile_measured<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, w: World,
-    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: FTm::Sems(w.tys, fsigs),
-    typed: Itself(F) = Itself(FTm::Source(w.tys, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
+fn FFun::compile_measured<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
     bounded: FFun::Bounded(ks ++ Cons(w0, wrest), m),
-    guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
-        FTm::source_at(w.tys, ks ++ Cons(w0, wrest), res, typed, f), m),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), 1)).IsTrue()) → CompileSpan<F>(f) {
-    CompileSpan(FFun::measured(ks, w0, wrest, res, body), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, w, fsigs),
-        FFun::measured_runs(f, ks, w0, wrest, res, body, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
+    guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers(rest), rest),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m),
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()) → CompileSpan<F>(f) {
+    CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
+        FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
 }
 
 // ---------------------------------------------------------------------------
@@ -232,12 +273,12 @@ fn Compile::span_source<F>(f: F, c: Compile<F>(f), rest: List<List<BitVec(8)>>) 
 
 // A function that writes: its meaning from the span, as a word and the
 // span it leaves over the rest.
-fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f)) → FTm::Sem(c.world.tys, Sig(c.reflected.params, c.reflected.result)) {
-    FTm::source_at(c.world.tys, c.reflected.params, c.reflected.result, c.typed, f)
+fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → FTm::Sem(c.world.tys, Sig(c.reflected.params, c.reflected.result)) {
+    FTm::source_at(c.world.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed, f, rest)
 }
 
 fn CompileSpan::source<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<BitVec(64)> → Ending {
-    λ own xs => FTm::end_of(rest, FFun::uncurry(c.world.tys, c.reflected.params, c.reflected.result, CompileSpan::sem(f, c), xs, own))
+    λ own xs => FTm::end_of(rest, FFun::uncurry(c.world.tys, c.reflected.params, c.reflected.result, CompileSpan::sem(f, c, rest), xs, own))
 }
 
 fn CompileSpan::linked<F>(f: F, c: CompileSpan<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
@@ -439,7 +480,7 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitV
         Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Cons(own, rest))),
     named: Sig::links_fit(c.world.sigs, pures, still_arity(arity, still)).IsTrue(),
     written: (own: List<BitVec(8)>) → comps.map(λ (n: Nat) => span_source(srcs(own), Cons(own, rest), n)) =
-        FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers),
+        FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers(rest)),
     fitted: Sig::links_fit(c.fsigs, comps, arity).IsTrue()):
     (call: Writers()) → Writers::Sourced(call, span_file(rest), span_sources(rest, srcs), arity, still) →
     ((own: List<BitVec(8)>) → (words: List<BitVec(64)>) → arity_fits(Some(CompileSpan::arity(f, c)), words.len()).IsTrue() →
@@ -449,7 +490,7 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitV
     λ call sourced => ⟨λ own words n => {
         let links = pures ++ comps;
         let other = Writers::relabel(call, link_at(links));
-        let fw = FWorld::of(c.world, c.callees, c.fsigs, c.writers, rest);
+        let fw = FWorld::of(c.world, c.callees, c.fsigs, c.writers(rest), rest);
         let agree: FTm::CallsAgree(fw, c.world.sigs.len(), other) = ⟨
             λ o => Sig::links_answer(c.world.tys, srcs(o).map(span_word), λ k ws => call(Cons(o, rest), k, ws).word, still_arity(arity, still),
                 λ k ws ok => trans(cong_fn(λ (e: Ending) => e.word, sourced.left(o, k, ws, still_arity_fits(arity, still, k, ws.len(), ok).right)),
@@ -458,11 +499,11 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitV
             ⟨λ k among o ws => sourced.right(o, link_at(links, k), Sig::links_still(arity, still, comps, c.world.sigs, pures, named, k, among), ws),
             λ k ok o => j(sym(j(counted, λ m _ => link_at(pures ++ comps, m + k) = link_at(comps, k), link_at_append(pures, comps, k))),
                 λ m _ => FTm::Answers(c.world.tys, Sig::at(c.fsigs, k).params, Sig::at(c.fsigs, k).result, rest,
-                    FTm::get(c.world.tys, c.fsigs, c.writers, k, o), λ xs => call(Cons(o, rest), m, xs)),
+                    FTm::get(c.world.tys, c.fsigs, c.writers(rest), k, o), λ xs => call(Cons(o, rest), m, xs)),
                 FTm::links_answer(c.world.tys, rest, o, Cons(o, rest), srcs(o), λ m xs => call(Cons(o, rest), m, xs), arity,
-                    λ m xs fits => sourced.left(o, m, xs, fits), c.fsigs, c.writers, comps, written(o), fitted, k, ok))⟩⟩;
+                    λ m xs fits => sourced.left(o, m, xs, fits), c.fsigs, c.writers(rest), comps, written(o), fitted, k, ok))⟩⟩;
         trans(c.code.relabel_run(call, link_at(links), words, Cons(own, rest)),
-            FTm::answers_at(c.world.tys, c.reflected.result, rest, c.reflected.params, CompileSpan::sem(f, c, own),
+            FTm::answers_at(c.world.tys, c.reflected.result, rest, c.reflected.params, CompileSpan::sem(f, c, rest, own),
                 λ xs => c.code.run(other, xs, Cons(own, rest)), c.runs(rest, other, agree, own), words,
                 sym(c.reflected.params.len().matches_eq(words.len(), n))))
     }, λ never _ _ => false_elim(never)⟩
@@ -474,19 +515,19 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitV
 
 // The pin of a function its reflection's meaning converts to: it at every
 // rest of the file and every span.
-theorem FFun::source_every<F>(f: F, tys: Nat → RecInfo, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, ps, r))):
+theorem FFun::source_every<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r))):
     (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
-    FTm::source_at(tys, ps, r, typed, f, own) = FTm::source_at(tys, ps, r, typed, f, own) {
+    FTm::source_at(tys, lent, ps, r, typed, f, rest, own) = FTm::source_at(tys, lent, ps, r, typed, f, rest, own) {
     λ _ _ => refl
 }
 
 // The table of the functions that write, an entry at a time: each function
 // as a meaning.
-fn FTm::sems_nil(tys: Nat → RecInfo) → FTm::Sems(tys, Nil) { trivial }
+fn FTm::sems_nil(tys: Nat → RecInfo) → List<List<BitVec(8)>> → FTm::Sems(tys, Nil) { λ _ => trivial }
 
-fn FTm::sems_cons<F>(f: F, tys: Nat → RecInfo, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, ps, r)), sigs: List<Sig>,
-    rest: FTm::Sems(tys, sigs)) → FTm::Sems(tys, Cons(Sig(ps, r), sigs)) {
-    Pair(FTm::source_at(tys, ps, r, typed, f), rest)
+fn FTm::sems_cons<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), sigs: List<Sig>,
+    more: List<List<BitVec(8)>> → FTm::Sems(tys, sigs)) → List<List<BitVec(8)>> → FTm::Sems(tys, Cons(Sig(ps, r), sigs)) {
+    λ rest => Pair(FTm::source_at(tys, lent, ps, r, typed, f, rest), more(rest))
 }
 
 // A measure over the span and the words, from a function of them.
@@ -508,7 +549,7 @@ fn CompileSpan::reads_table<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVe
 }
 
 fn CompileSpan::writes_table<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
-    λ own => FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers)
+    λ own => FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers(rest))
 }
 
 // The functions marked still before function `k` from the last: what that

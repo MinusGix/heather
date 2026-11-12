@@ -1,0 +1,98 @@
+// Probes of `runtime fn` on functions that write one span and read others
+// (lib/native/runtime/runtime_file.hthr's `FTm::Source`;
+// docs/native-library-exports-design.md §3.1, V5a): the first span is the
+// written one, each span after it comes with its length word and is only
+// read, and the generated statements are at every file, the read spans
+// being the file's after the first. Tests, not library: nothing imports
+// this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn abc() → List<BitVec(8)> { [b(97), b(98), b(99)] }
+fn xyz() → List<BitVec(8)> { [b(120), b(121), b(122)] }
+
+// ---------------------------------------------------------------------------
+// One byte of a read span stored into the written one
+
+// Byte `i` of `src` at `i` of `dst`, each under its own length word.
+runtime fn copy_byte(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn: BitVec(64), i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    Mutated(dst.with_byte_within(dn, i, src.byte_within(sn, i)), i)
+}
+
+theorem copy_byte_shaped(): copy_byte::rt.lent = 2 { refl }
+
+theorem copy_byte_runs(): program_run(copy_byte::program, [abc(), xyz()], 0, [w(4096), w(3), w(8192), w(3), w(1)]) =
+    Ending(w(1), [[b(97), b(121), b(99)], xyz()]) { refl }
+
+// Past the read span's length word the byte read is zero, and past the
+// written span's nothing is stored.
+theorem copy_byte_short_read(): program_run(copy_byte::program, [abc(), xyz()], 0, [w(4096), w(3), w(8192), w(1), w(1)]) =
+    Ending(w(1), [[b(97), b(0), b(99)], xyz()]) { refl }
+theorem copy_byte_short_write(): program_run(copy_byte::program, [abc(), xyz()], 0, [w(4096), w(1), w(8192), w(3), w(1)]) =
+    Ending(w(1), [abc(), xyz()]) { refl }
+
+// What the generator states, at every file: the span read is the file's
+// second, and the rest is left.
+theorem copy_byte_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, i: BitVec(64)):
+    program_run(copy_byte::program, Cons(dst, rest), 0, [dp, dn, sp, sn, i]) = FTm::end_of(rest, copy_byte(dst, dn, rest.span(0), sn, i)) {
+    copy_byte::runs_over(dst, rest, dp, dn, sp, sn, i)
+}
+
+// Only the written span is marked: the function compiler lends the second
+// to read.
+theorem copy_byte_stores(): program_stores_within(copy_byte::program, [True, False]) = True { refl }
+theorem copy_byte_placeless(): program_placeless(copy_byte::program) = True { refl }
+theorem copy_byte_lowers(): lower_program_lent(copy_byte::program, plan_program(copy_byte::program), program_counts(copy_byte::program)).is_some()
+    = True { refl }
+
+// ---------------------------------------------------------------------------
+// A function that writes calls another, the read span passed on
+
+runtime fn copy_pair(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn: BitVec(64), i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let first = copy_byte(dst, dn, src, sn, i);
+    let second = copy_byte(first.after, dn, src, sn, i.add(BitVec::ofNat(1)));
+    Mutated(second.after, second.value)
+}
+
+theorem copy_pair_runs(): program_run(copy_pair::program, [abc(), xyz()], 1, [w(4096), w(3), w(8192), w(3), w(1)]) =
+    Ending(w(2), [[b(97), b(121), b(122)], xyz()]) { refl }
+
+theorem copy_pair_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, i: BitVec(64)):
+    program_run(copy_pair::program, Cons(dst, rest), 1, [dp, dn, sp, sn, i]) = FTm::end_of(rest, copy_pair(dst, dn, rest.span(0), sn, i)) {
+    copy_pair::runs_over(dst, rest, dp, dn, sp, sn, i)
+}

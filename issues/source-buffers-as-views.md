@@ -88,3 +88,16 @@ a store through a read-only view is refused by the judgment.
     - A pure term (`Tm`) is stated against the evaluation over one fixed file (`Answers`, `Tm::CallsAgree`), which cannot say a view. A pure call over a window goes through the file layer, or the fixed-file evaluation takes callees that read (`Readers`), which touches every theorem over `eval_over`.
     - Step 5d (V6) as scoped on 2026-11-11 pays when a statement holds a home as a word, which is a statement that lends (V5c). Before it the bridge is written for the layout's literal addresses and is longer than `goes_byte_to` and `goes_byte_from`.
 - 2026-11-12: V5a, first part: a loop that reads is lent any number of spans ([[runtime-loop-over-several-spans]], closed). The generator's family is keyed by the list of a file's first spans (`Setup::GuardedSpans` at any `lent`), and `differ_sum`, a loop over two spans, has its `agrees_over` at every file and compiles with its certificate. So of the two things the scoping above put first, the loop's is done; the writer's is next: a function that writes is a function of one span (`FTm::Source`), and `compress(state, block)` writes one span and reads another. What the loop met is registers (four home words kept in place for two spans), logged on [[function-ir-values-in-kept-registers]].
+- 2026-11-12: V5a, second part: a `runtime fn` that writes its first span reads the spans after it.
+
+  The file layer's meaning already read the whole file (a computation's pure terms are read at `Cons(own, rest)`), so nothing below the class moved. What was of one span:
+
+  - the source's type: `FTm::Source(tys, lent, ps, r)` now takes each read span's bytes before its length word, and `FTm::source_at` reads them from `rest` (`FTm::read_at`);
+  - the class's table of writers, fixed over one `rest`: `CompileSpan.writers` is now the writers' meanings at every `rest` (`FTm::sems_cons`), which is what lets a caller's theorem be read at each file;
+  - the reflector's gate (`rt_file_codes` answers the count of spans; a span only read is a parameter span `j ≥ 1` in `rt_span`; a call passes the read spans on, `rt_lent_args`);
+  - the generator (`runtime_span_publish` at any count; `f::runs_over` states the function at `Setup::span_at(rest, k)`);
+  - `compile-x86`'s gate (`Shape::runtime_written`): a writer of its first span whose later spans are unmarked. `copy_byte` exports as `(span mut, span, word) -> word`.
+
+  Probes: `lib/_tests/native/runtime/runtime_span_reads_tests.hthr` (`copy_byte`: runs, short read, short write, stated at every file, marks `[True, False]`, placeless, lowers; `copy_pair` calls it twice).
+
+  Owed, third part: a loop that writes and reads another span. `FFun::Guarded` is at one fixed `rest` and the loop's `ext` companion asks its recursions to agree at every read span, so the generator refuses it by name. Needed is the family keyed by the rest of the file (`FFun::GuardedBy` and a theorem to `FFun::Guarded` at each rest), as `Fun::GuardedBy`/`Fun::guarded_by` are for a loop that only reads. A copy of one span into another is the probe and the first linked export with a `span mut` and a `span`.

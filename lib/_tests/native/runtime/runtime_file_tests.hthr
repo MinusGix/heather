@@ -97,11 +97,11 @@ fn raise_measure(ys: List<BitVec(64)>, span: List<BitVec(8)>) → Nat {
 theorem raise_bounded(): FFun::Bounded(raise_words(), raise_measure) { λ span place length i => BitVec::toNat_lt_pow(64, length.sub(i)) }
 
 fn raise_typed() → Itself(List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>) =
-    Itself(FTm::Source(RecInfo::none, raise_words(), Word(64))) { refl }
+    Itself(FTm::Source(RecInfo::none, 1, raise_words(), Word(64))) { refl }
 
 // The function's equation, from its recursor's `ext` and `irrel`.
 theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(), Word(64), raise_body(),
-    FWorld::of(raise_table(), raise_callees(), [], trivial, rest), FTm::source_at(RecInfo::none, raise_words(), Word(64), raise_typed(), raise_from),
+    FWorld::of(raise_table(), raise_callees(), [], trivial, rest), FTm::source_at(RecInfo::none, 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
     raise_measure) {
     λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
         sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
@@ -117,7 +117,7 @@ theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(),
 }
 
 fn raise_from_compile() → CompileSpan<List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>>(raise_from) {
-    FFun::compile_measured(raise_from, [Word(64), Word(64)], Word(64), [], Word(64), raise_body(), raise_table(), raise_callees(), [], trivial,
+    FFun::compile_measured(raise_from, [Word(64), Word(64)], Word(64), [], Word(64), raise_body(), 1, raise_table(), raise_callees(), [], λ _ => trivial,
         raise_typed(), raise_measure, raise_bounded(), raise_guarded, trivial)
 }
 

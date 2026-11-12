@@ -907,7 +907,22 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   ends with `f`'s word and leaves `f`'s span over `rest`. `f` is the
   function as written, of the span, its length word and its other
   words; the code takes the span's place first, which `f` does not
-  read (`FTm::of_source`). An instance is the once-proved lowering read
+  read (`FTm::of_source`). A function may also read spans it does not
+  write: they follow the written span's length word, each before its
+  own, and `f` at a file is `f` at `rest`'s first spans
+  (`FTm::Source(tys, lent, …)`, `FTm::read_at`). The meaning below it
+  needed nothing for this, since a computation's pure terms are read
+  at the whole file; what was of one span was the source's type, and
+  with it the callees' table, which is now the writers' meanings at
+  every `rest` so that a caller's theorem can be read at each file
+  (`CompileSpan.writers`, `FTm::sems_cons`). A call passes its
+  caller's read spans on as a pure call does (`rt_file_call`). The
+  probes are `runtime_span_reads_tests.hthr`: a byte copied from one
+  span into another, stated at every file, and a caller of it twice. A
+  loop that writes and reads another span is not built: its recursion
+  must agree at every read span, which asks the writer's family keyed
+  by the rest of the file, as `Fun::GuardedBy` is for a loop that only
+  reads. An instance is the once-proved lowering read
   at a reflection: `FFun::lower_sound` pinned to `f` by conversion
   where the body has no recursion (`FFun::compile`), and
   `FFun::measured_sound` from `f`'s own recursor where it calls itself

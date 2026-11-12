@@ -177,7 +177,9 @@ fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Ta
 }
 
 // A call of a computation: it is handed the span as it is and the span's
-// length word, then its own words; its word is bound for what follows.
+// length word, then the spans it only reads, each passed on as it came in
+// with its length word (`rt_lent_args`), then its own words; its word is
+// bound for what follows.
 fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: GlobalRef, name: String, ops: List<Handle>) → Tac<FWalk> {
     match ops {
         Cons(length, rest) => {
@@ -187,7 +189,8 @@ fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: Globa
             match RSt::level(rl.snd).same(1) {
                 False => rt_file_length("a call that writes"),
                 True => {
-                    let r <- RSt::operands(λ s a => rt_go(fuel, kk, s, a, True), rl.fst, rest);
+                    let reads <- rt_call_lent(64, kk, rest);
+                    let r <- rt_lent_args(λ s a => rt_go(fuel, kk, s, a, True), kk, rl.fst, 1, reads, rest);
                     let st = r.fst;
                     pure(FWalk(st.written(Succ(st.depth)),
                         Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(r.snd)))), FSeg::lets(st.lets) ++ w.segs),
@@ -281,7 +284,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                         match RSt::level(rl.snd).same(1) {
                             False => rt_file_length("a loop's own call"),
                             True => {
-                                let r <- RSt::operands(λ s a => rt_go(f, kk, s, a, True), rl.fst, rest);
+                                let r <- rt_lent_args(λ s a => rt_go(f, kk, s, a, True), kk, rl.fst, 1, k.lent.pred(), rest);
                                 let st = r.fst;
                                 pure(FileEnd(FSeg::close(FSeg::lets(st.lets) ++ w1.segs,
                                     FTm::Again(Cons(st.index(0), Cons(st.index(1), st.indices(r.snd))))), st.funs, w1.cfuns))
@@ -326,13 +329,14 @@ fn rt_file_span(locals: List<Pair<Nat, Nat>>) → Tac<Nat> {
     }
 }
 
-// The codes the function's code takes: two words for the span and its
-// length word, then the function's own words. One span, the written one.
-fn rt_file_codes(tys: List<Ty>) → Tac<List<Ty>> {
+// How many spans the function is lent and the codes its code takes: two
+// words for each span and its length word, then the function's own words.
+// The first span is the written one; the spans after it are only read.
+fn rt_file_codes(tys: List<Ty>) → Tac<Pair<Nat, List<Ty>>> {
     let lent = rt_lent(tys);
-    match lent.fst.same(1).and(!rt_has_bytes(lent.snd)) {
-        True => pure(lent.snd),
-        False => rt_refuse("a function over a span takes the span first and then its 64-bit length word, and no other byte list (a second span, read or written, is not reflected yet)"),
+    match Nat::leb(1, lent.fst).and(!rt_has_bytes(lent.snd)) {
+        True => pure(lent),
+        False => rt_refuse("a function over a span takes the span first and then its 64-bit length word, the spans it only reads after it, each with its length word, and no other byte list"),
     }
 }
 
@@ -348,8 +352,8 @@ fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>
     let p <- rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
-    let r <- rt_file_tail(fuel, k.lending(1), names, None, 0, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), p.snd);
-    pure(FileReflected(FFun(codes, result, r.term, 1), r.funs, r.cfuns))
+    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), p.snd);
+    pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }
 
 // A function that `decreases`, read from its step `f::body`: `λ k g span
@@ -366,8 +370,9 @@ fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<N
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
-    let r <- rt_file_tail(fuel, k.lending(1), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), o3.body);
-    pure(FileReflected(FFun(codes, result, r.term, 1), r.funs, r.cfuns))
+    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns),
+        o3.body);
+    pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }
 
 fn rt_file_reflect_one(k: Known, names: FileNames, cfuns: List<Nat>, g: Nat, name: String) → Tac<FileReflected> {

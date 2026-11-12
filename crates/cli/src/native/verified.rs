@@ -193,16 +193,20 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
         Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, entries: Vec::new() }
     }
 
-    /// A `runtime fn` that stores into the span it is lent: its program's
-    /// every store is into a buffer `marks` marks (`{prefix}_within`, by
-    /// evaluation), and over any file whose first span is `span` it runs to
-    /// the source function there (`{source}::runs_over`, the generator's
-    /// theorem): the word it answers, and the span as it leaves it. The
-    /// code's words are the span's address, then the function's own, its
-    /// length parameter first.
+    /// A `runtime fn` that stores into the first span it is lent: its
+    /// program's every store is into a buffer `marks` marks
+    /// (`{prefix}_within`, by evaluation), and over any file whose first
+    /// span is `span` it runs to the source function there
+    /// (`{source}::runs_over`, the generator's theorem): the word it
+    /// answers, and the span as it leaves it. The code's words are the
+    /// span's address, then the function's own, its length parameter first;
+    /// a span it only reads is the file's, where the code takes its address
+    /// (`Setup::span_at(rest, k)` for the function's span `k + 1`).
     pub fn runtime_written(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>) -> Shape {
         let parameters = arguments(arity);
-        let own = parameters[1..].join(", ");
+        let spans = counts[functions - 1] as usize;
+        let own = (1..arity).map(|i| if i % 2 == 0 && i < 2 * spans { format!("Setup::span_at(rest, {})", i / 2 - 1) } else { parameters[i].clone() })
+            .collect::<Vec<_>>().join(", ");
         let comma = if own.is_empty() { "" } else { ", " };
         let answer = format!("{source}(span{comma}{own})");
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
@@ -272,10 +276,13 @@ fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}
         [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {
             let (counts, marks) = rest.split_at(functions as usize);
             // The generator states a writer's run over a file whose first
-            // span is the function's (`f::runs_over`): one span, lent first.
-            if counts[functions as usize - 1] != 1 || marks.len() != 1 || arity < 2 {
-                return Err(format!("`{source}` stores into its span and its program is lent {} buffers: compile-x86 exports a writer of one span",
-                    counts[functions as usize - 1]));
+            // span is the function's (`f::runs_over`) and whose other spans
+            // it leaves: the written span is lent first, and the spans
+            // after it are only read.
+            let spans = counts[functions as usize - 1];
+            if spans < 1 || marks.len() as u64 != spans || arity < 2 * spans || marks[1..].iter().any(|mark| *mark != 0) {
+                return Err(format!("`{source}` stores into its span and its program is lent {spans} buffers, marked {marks:?}: compile-x86 exports a \
+                    writer of its first span, which may read the spans after it"));
             }
             Ok(Shape::runtime_written(prefix, owner, source, functions as usize, arity as usize, counts.to_vec(),
                 marks.iter().map(|mark| *mark != 0).collect()))

@@ -462,8 +462,14 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     theorem over `eval_over`. The first is the plan. SHA-256's loop over
     its blocks is the shape to build it against: `compress(state, block)`
     with the state written and the block a window of the message. That is
-    two spans before it is a view, and a function that writes is a
-    function of one span today (`FTm::Source`), so that comes first. A
+    two spans before it is a view, so several spans come first, in three
+    parts. A function that writes reads the spans after its own
+    (`FTm::Source` at a count of lent spans, the callees' table at every
+    rest of the file, *built*: `copy_byte` in
+    `runtime_span_reads_tests.hthr`, which `compile-x86` exports as
+    `(span mut, span, word) -> word`). A loop that writes and reads
+    another span is owed: the writer's family keyed by the rest of the
+    file, then a copy of one span into another as its export. A
     loop that only reads is no longer lent one span: the generator's
     family is keyed by the list of spans (`Setup::GuardedSpans`,
     `issues/runtime-loop-over-several-spans.md`, *built*), and what it
@@ -992,10 +998,11 @@ the part that faces a caller who is not a Heather program.
   loop may leave from inside or call itself in two places
   (`runtime_span_tests.hthr`: `clear_from`, `clear_line`, `clear_text`).
 
-Limits, each refused by name or filed: one span per writer
-(`issues/runtime-loop-over-several-spans.md` for loops; a writer's
-generator takes one span), six words in registers with the span's address
-and length among them, and a byte read before a store and used after it
+Limits, each refused by name or filed: one span written per function,
+and a loop that writes lent that span alone (a function with no loop may
+read the spans after it, §3.1 V5a), six words in registers with the
+span's address and length among them, and a byte read before a store and
+used after it
 (`issues/rt-file-read-before-store.md`). In-place `Set` under `Unique`
 (the third point of the outline) was not needed: a writer's meaning
 threads the span, and the store leaf is proved against the file the run
