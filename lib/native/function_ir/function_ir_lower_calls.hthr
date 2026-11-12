@@ -803,7 +803,7 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file:
             Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
                 Succ(Succ(names)), bound, counts, homes) {
                 None => None,
-                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound,
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound,
                     counts, homes) {
                     None => None,
                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
@@ -1014,7 +1014,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                     (match when_true.emit_calls(branched, file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes) as λ y =>
                         Grows(branched, y) → Grows(prog, match y {
                             None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes) {
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes) {
                                 None => None,
                                 Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
@@ -1022,7 +1022,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                         None => λ _ => trivial,
                         Some(yes) => λ yes_grown => {
                             let second = yes.prog.else_label(Succ(names), Succ(Succ(names)));
-                            (match when_false.emit_calls(second, file, yes.placement, yes.names, bound, counts, homes) as λ n =>
+                            (match when_false.emit_calls(second, file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes) as λ n =>
                                 Grows(second, n) → Grows(prog, match n {
                                     None => None,
                                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
@@ -1035,7 +1035,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                                         prog.within_step(yes.prog, 0, Jmp(Succ(Succ(names))), prog.within_trans(branched, yes.prog, to_branch, yes_grown)));
                                     prog.within_step(no.prog, Succ(Succ(names)), Block([]), prog.within_trans(second, no.prog, to_second, no_grown))
                                 },
-                            })(when_false.emit_calls_grows(bound, counts, homes, second, file, yes.placement, yes.names))
+                            })(when_false.emit_calls_grows(bound, counts, homes, second, file.know(Falsity(condition)), yes.placement, yes.names))
                         },
                     })(when_true.emit_calls_grows(bound, counts, homes, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
                 },
@@ -1773,13 +1773,18 @@ theorem not_false(b: Bool, clear: !b = False): b = True {
     (match b as λ c => !c = False → c = True { False => λ no => absurd(no), True => λ _ => refl })(clear)
 }
 
+// And one whose negation is set is clear.
+theorem not_true(b: Bool, set: !b = True): b = False {
+    (match b as λ c => !c = True → c = False { False => λ _ => refl, True => λ no => absurd(no) })(set)
+}
+
 theorem branch_emits_over<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     lending: Lending, effects: Effects(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
     inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion, scope: Type, before, after: Buffers(),
     tested: Tested(file, condition), names: Nat, yes, no: Emitted,
     yes_emits: EmitsOver<M>(site, stack, lending, values, d, s0, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)),
         StructuredRegionRunsOver(effects, values, when_true, before, after) ∧ scope, before, after, yes),
-    no_emits: EmitsOver<M>(site, stack, lending, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+    no_emits: EmitsOver<M>(site, stack, lending, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)),
         StructuredRegionRunsOver(effects, values, when_false, before, after) ∧ scope, before, after, no)):
     EmitsOver<M>(site, stack, lending, values, d, s0, prog, file,
         StructuredRegionRunsOver(effects, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false), before, after) ∧ scope,
@@ -1843,19 +1848,22 @@ theorem branch_emits_over<M>(site: Site<M>, laid: site.program.laid_out().IsTrue
                 },
                 λ t held => ⟨yes.file.meet_left(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩),
             site.moves_weaken(stack.writes, prog_len(second), prog_len(no.prog),
-                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧
+                λ (s: MachineState<M>) => ((file.know(Falsity(condition)).Represents(values, s.gprs) ∧
                     (StructuredRegionRunsOver(effects, values, when_false, before, after) ∧ scope)) ∧ stack.Trailed(lending, d, s0, before, s)) ∧ known,
                 λ (t: MachineState<M>) => (no.file.Represents(values, t.gprs) ∧ stack.Trailed(lending, d, s0, after, t)) ∧ known,
                 λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
                 site.moves_carry(stack.writes, prog_len(second), prog_len(no.prog),
-                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧
+                    λ (s: MachineState<M>) => (file.know(Falsity(condition)).Represents(values, s.gprs) ∧
                         (StructuredRegionRunsOver(effects, values, when_false, before, after) ∧ scope)) ∧ stack.Trailed(lending, d, s0, before, s),
                     λ (t: MachineState<M>) => no.file.Represents(values, t.gprs) ∧ stack.Trailed(lending, d, s0, after, t), known, no_emits.right(no_in)),
-                λ s held => ⟨⟨⟨held.left.left.left, ⟨when_zero_over(effects, values, inputs, condition, arguments, outputs, when_true,
-                    when_false, before, after, trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right.left),
-                    held.left.left.right.right⟩⟩, held.left.right⟩,
-                    held.left.left.left.right⟩,
+                λ s held => {
+                    let set: (!values(1, condition).head_bit() = True) = trans(sym(selects(s.gprs, held.left.left.left)), held.right);
+                    ⟨⟨⟨file.represents_know(values, s.gprs, Falsity(condition), held.left.left.left, not_true(values(1, condition).head_bit(), set)),
+                        ⟨when_zero_over(effects, values, inputs, condition, arguments, outputs, when_true, when_false, before, after, set,
+                            held.left.left.right.left), held.left.left.right.right⟩⟩, held.left.right⟩,
+                     held.left.left.left.right⟩
+                },
                 λ t held => ⟨yes.file.meet_right(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩))
      }⟩
 }
@@ -2988,7 +2996,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                         None => None,
                         Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, lending.counts, homes) {
                             None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) {
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, lending.counts, homes) {
                                 None => None,
                                 Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
@@ -3001,15 +3009,15 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                             StructuredRegionRunsOver(effects, values, when_true, before, after) ∧ held_homes, before, after, y) →
                         MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, match y {
                                 None => None,
-                                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) {
+                                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, lending.counts, homes) {
                                     None => None,
                                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 },
                             }) {
                         None => λ _ => trivial,
                         Some(yes) => λ yes_emits =>
-                            (match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, lending.counts, homes) as λ n =>
-                                MayEmitOver<M>(site, stack, lending, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                            (match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, lending.counts, homes) as λ n =>
+                                MayEmitOver<M>(site, stack, lending, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)),
                                     StructuredRegionRunsOver(effects, values, when_false, before, after) ∧ held_homes, before, after, n) →
                                 MayEmitOver<M>(site, stack, lending, values, d, s0, prog, file, facts, before, after, match n {
                                         None => None,
@@ -3020,7 +3028,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                                     inputs, condition, arguments, outputs, when_true, when_false, held_homes, before, after, tested, names,
                                     yes, no, yes_emits, no_emits),
                             })(when_false.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0,
-                                room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(when_true.stores(b), when_false.stores(b), stores)), homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names,
+                                room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(when_true.stores(b), when_false.stores(b), stores)), homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
                                 before, after)),
                     })(when_true.emit_calls_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0, room,
                         fits, under, λ b stores => allowed(b, Bool::is_true_or_l(when_true.stores(b), when_false.stores(b), stores)), homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
@@ -3938,7 +3946,7 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound:
                     (match when_true.emit_calls(branched, file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, []) as λ y =>
                         Quiets(when_true.quiet(), y) → Quiets(when_true.quiet() && when_false.quiet(), match y {
                             None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, []) {
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, []) {
                                 None => None,
                                 Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
@@ -3946,14 +3954,14 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound:
                         None => λ _ => trivial,
                         Some(yes) => λ yes_quiet => {
                             let second = yes.prog.else_label(Succ(names), Succ(Succ(names)));
-                            (match when_false.emit_calls(second, file, yes.placement, yes.names, bound, counts, []) as λ n =>
+                            (match when_false.emit_calls(second, file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, []) as λ n =>
                                 Quiets(when_false.quiet(), n) → Quiets(when_true.quiet() && when_false.quiet(), match n {
                                     None => None,
                                     Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_quiet => Bool::is_true_and_intro(when_true.quiet(), when_false.quiet(), yes_quiet, no_quiet),
-                            })(when_false.emit_calls_quiet(bound, counts, second, file, yes.placement, yes.names))
+                            })(when_false.emit_calls_quiet(bound, counts, second, file.know(Falsity(condition)), yes.placement, yes.names))
                         },
                     })(when_true.emit_calls_quiet(bound, counts, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
                 },

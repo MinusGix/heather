@@ -219,6 +219,7 @@ fn known_bounded(all, known: List<Known>, index, length: Nat) → Bool {
             Constant(_, _) => known_bounded(all, rest, index, length),
             Compared(_, _, _, _) => known_bounded(all, rest, index, length),
             Truth(id) => truth_bounds(all, id, index, length) || known_bounded(all, rest, index, length),
+            Falsity(_) => known_bounded(all, rest, index, length),
         },
     }
 }
@@ -236,6 +237,7 @@ theorem known_bounded_sound(values: Valuation(), all: List<Known>, index, length
                     Inl(now) => truth_bounds_sound(values, all, id, index, length, now, holds, part.left),
                     Inr(later) => known_bounded_sound(values, all, index, length, holds, rest, later, part.right),
                 },
+            Falsity(_) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
         },
     }
 }
@@ -247,6 +249,99 @@ theorem File::bounded_sound(self file: File, values: Valuation(), gprs: Gprs, in
     represents: file.Represents(values, gprs), bounded: file.bounded(index, length).IsTrue()):
     values(64, index).toNat() < values(64, length).toNat() {
     known_bounded_sound(values, file.known, index, length, represents.right, file.known, bounded, represents.right)
+}
+
+// ---------------------------------------------------------------------------
+// At most: what the path knows from an arm taken where a bit is clear
+
+// `id` clear says `low` is at most `high`: the bit is `high` below `low`.
+fn at_most(op: CompareOp, left, right, low, high: Nat) → Bool {
+    match op { Below => left.same(high) && right.same(low), Less => False, Same => False }
+}
+
+theorem not_below_known(values: Valuation(), id, left, right: Nat, holds: CompareOp::Holds(function_ir_lower::Below, values, id, left, right),
+    clear: values(1, id).head_bit() = False): values(64, right).toNat() <= values(64, left).toNat() {
+    let bit: (values(64, left).unsigned_lt_bit(values(64, right)) = False) =
+        trans(sym(BitVec::head_bit_ofBool(values(64, left).unsigned_lt_bit(values(64, right)))),
+            trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), sym(holds)), clear));
+    match values(64, left).toNat().lt_or_ge(values(64, right).toNat()) {
+        Inl(below) => absurd(trans(sym(BitVec::borrow_sub_bit_true_iff(64, values(64, left), values(64, right)).mpr(below)), bit)),
+        Inr(not_below) => not_below,
+    }
+}
+
+theorem at_most_sound(values: Valuation(), op: CompareOp, id, left, right, low, high: Nat):
+    at_most(op, left, right, low, high).IsTrue() → op.Holds(values, id, left, right) → values(1, id).head_bit() = False →
+    values(64, low).toNat() <= values(64, high).toNat() {
+    match op {
+        Below => λ both below clear => {
+            let sides = Bool::is_true_and(left.same(high), right.same(low), both);
+            let at_left = left.same_sound(high, eq_true_of_is_true(left.same(high), sides.left));
+            let at_right = right.same_sound(low, eq_true_of_is_true(right.same(low), sides.right));
+            j(at_left, λ h _ => values(64, low).toNat() <= values(64, h).toNat(),
+                j(at_right, λ l _ => values(64, l).toNat() <= values(64, left).toNat(), not_below_known(values, id, left, right, below, clear)))
+        },
+        Less => λ no _ _ => false_elim(no),
+        Same => λ no _ _ => false_elim(no),
+    }
+}
+
+// The bit `id`, which the path knows clear, is such a comparison.
+fn falsity_at_most(all: List<Known>, id, low, high: Nat) → Bool {
+    match known_comparison(all, id) {
+        None => False,
+        Some(compared) => at_most(compared.op, compared.left, compared.right, low, high),
+    }
+}
+
+theorem falsity_at_most_sound(values: Valuation(), all: List<Known>, id, low, high: Nat):
+    falsity_at_most(all, id, low, high).IsTrue() → KnownHold(values, all) → values(1, id).head_bit() = False →
+    values(64, low).toNat() <= values(64, high).toNat() {
+    (match known_comparison(all, id) as λ found => known_comparison(all, id) = found →
+        (match found { None => False, Some(compared) => at_most(compared.op, compared.left, compared.right, low, high) }).IsTrue() →
+        KnownHold(values, all) → values(1, id).head_bit() = False → values(64, low).toNat() <= values(64, high).toNat() {
+        None => λ _ no _ _ => false_elim(no),
+        Some(compared) => λ found ok holds clear => at_most_sound(values, compared.op, id, compared.left, compared.right, low, high, ok,
+            known_comparison_holds(values, id, compared, all, found, holds), clear),
+    })(refl)
+}
+
+fn known_at_most(all, known: List<Known>, low, high: Nat) → Bool {
+    match known {
+        Nil => False,
+        Cons(here, rest) => match here {
+            Constant(_, _) => known_at_most(all, rest, low, high),
+            Compared(_, _, _, _) => known_at_most(all, rest, low, high),
+            Truth(_) => known_at_most(all, rest, low, high),
+            Falsity(id) => falsity_at_most(all, id, low, high) || known_at_most(all, rest, low, high),
+        },
+    }
+}
+
+theorem known_at_most_sound(values: Valuation(), all: List<Known>, low, high: Nat, holds: KnownHold(values, all), known: List<Known>):
+    known_at_most(all, known, low, high).IsTrue() → KnownHold(values, known) → values(64, low).toNat() <= values(64, high).toNat() {
+    match known {
+        Nil => λ no _ => false_elim(no),
+        Cons(here, rest) => match here {
+            Constant(_, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Compared(_, _, _, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Truth(_) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Falsity(id) => λ ok part =>
+                match Bool::is_true_or(falsity_at_most(all, id, low, high), known_at_most(all, rest, low, high), ok) {
+                    Inl(now) => falsity_at_most_sound(values, all, id, low, high, now, holds, part.left),
+                    Inr(later) => known_at_most_sound(values, all, low, high, holds, rest, later, part.right),
+                },
+        },
+    }
+}
+
+// Some arm taken on the way here tested `high` below `low` and found it
+// not so: `low` is at most `high`.
+fn File::at_most(self file: File, low, high: Nat) → Bool { known_at_most(file.known, file.known, low, high) }
+
+theorem File::at_most_sound(self file: File, values: Valuation(), gprs: Gprs, low, high: Nat, represents: file.Represents(values, gprs),
+    known: file.at_most(low, high).IsTrue()): values(64, low).toNat() <= values(64, high).toNat() {
+    known_at_most_sound(values, file.known, low, high, represents.right, file.known, known, represents.right)
 }
 
 // ---------------------------------------------------------------------------

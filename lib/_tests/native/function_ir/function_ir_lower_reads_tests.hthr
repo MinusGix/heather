@@ -547,3 +547,43 @@ fn drifting() → Function {
 }
 theorem drifting_carries_nothing(): loop_carried(drifting().homes(), [0, 1], [10, 11], [16, 11]) = [] { refl }
 theorem drifting_refused(): lower_program_lent([drifting()], plan_program([drifting()]), [1]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// What a false arm knows (docs/native-library-exports-design.md §3.1, V3)
+
+// The file of an arm taken where the bit 2, `1 below 0`, is clear: value 0
+// is at most value 1. Whatever else the file holds.
+fn in_false_arm(file: File) → File { file.know(Compared(2, function_ir_lower::Below, 1, 0)).know(Falsity(2)) }
+
+theorem false_arm_at_most(file: File): in_false_arm(file).at_most(0, 1) = True { refl }
+
+// And it is so of the words, at any valuation the file represents.
+theorem false_arm_orders(file: File, values: Valuation(), gprs: Gprs, represents: in_false_arm(file).Represents(values, gprs)):
+    values(64, 0).toNat() <= values(64, 1).toNat() {
+    in_false_arm(file).at_most_sound(values, gprs, 0, 1, represents, trivial)
+}
+
+// The controls. The other order is not known; the arm taken where the bit
+// is set knows no such thing, and its own fact (`bounded`) is not a false
+// arm's; a clear signed comparison says nothing of the unsigned order.
+theorem false_arm_not_the_other_way(): in_false_arm(File::empty()).at_most(1, 0) = False { refl }
+theorem true_arm_not_at_most():
+    File::empty().know(Compared(2, function_ir_lower::Below, 1, 0)).know(Truth(2)).at_most(0, 1) = False { refl }
+theorem false_arm_not_bounded(): in_false_arm(File::empty()).bounded(1, 0) = False { refl }
+theorem signed_says_nothing(): File::empty().know(Compared(2, function_ir_lower::Less, 1, 0)).know(Falsity(2)).at_most(0, 1) = False { refl }
+
+// A load in the arm taken where `index below length` is clear is refused as
+// before: a false arm's fact admits no load.
+fn load_in_false_arm() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]), nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(1), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]), nodes := [BufferLoad(output := 4, buffer := 0, index := 2)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+theorem load_in_false_arm_refused(): lower_program_lent([load_in_false_arm()], plan_program([load_in_false_arm()]), [1]) = None { refl }

@@ -191,10 +191,10 @@ fn StructuredRegion::refusal(self region: StructuredRegion, prog: Prog, file: Fi
                 Succ(Succ(names)), bound, counts, homes) {
                 None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(prog.branched(tested.test, Succ(names)),
                     file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
-                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names,
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
                     bound, counts, homes) {
                     None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(
-                        yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes),
+                        yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes),
                     Some(no) => "where the arms of the branch on " ++ refusal_number(condition) ++ " meet: after the true arm "
                         ++ yes.file.shown() ++ "and after the false arm " ++ no.file.shown(),
                 },
