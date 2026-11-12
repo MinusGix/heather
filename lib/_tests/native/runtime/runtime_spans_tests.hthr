@@ -46,7 +46,7 @@ fn peek_base() → World { World(RecInfo::none, [], trivial) }
 // The instance. The pin is `refl` at every file: the reflection's meaning
 // at the file `f` reads `f`'s span 0, which is what `peek` is handed.
 fn peek_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
-    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f => refl, trivial, refl)
+    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f => refl, refl, refl)
 }
 
 instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
@@ -148,7 +148,7 @@ fn count_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) →
         λ f => Fun::guarded_by(count_words(), Word(64), count_body(), λ (g: Buffers()) => count_base().at(count_callees, g),
             λ (g: Buffers()) => count_at(g.span(0)), λ (g: Buffers()) => g.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure,
             λ g ys => refl, count_guarded(), f),
-        trivial)
+        refl)
 }
 
 // Over any file, lent at any place with any length word, the one code

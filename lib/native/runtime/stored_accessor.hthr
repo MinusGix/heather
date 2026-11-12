@@ -87,6 +87,16 @@ instance Accessor<BitVec(64)>(Stored::u64_be()) {
     writes := λ span length i word inside own => span.put_u64_be_within_stored(length, i, word, inside, own),
 }
 
+// The members as functions of the codec. A generator applies these: a
+// tactic's `Expr` has no form for a member of a class.
+fn Stored::word_read<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, i: u64) → u64 { A.read(span, length, i) }
+
+fn Stored::word_write<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, i, word: u64) → Mutated<List<u8>, u64> { A.write(span, length, i, word) }
+
+fn Stored::word_of<A: Accessor(codec)>(self codec: Stored<A>, a: A) → u64 { A.wide(a) }
+
+fn Stored::of_word<A: Accessor(codec)>(self codec: Stored<A>, word: u64) → A { A.narrow(word) }
+
 // A word read by compiled code where a part lies is the part of the
 // whole the span holds, as a word.
 theorem Stored::read_at_part<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, span: List<u8>, length, i: u64, p: Part<A, B>(whole), base: Nat,

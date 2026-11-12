@@ -65,6 +65,9 @@ record Part<A, B>(whole: Stored<A>) {
 // a tactic's `Expr` has no form for a field of a record.
 fn Part::place<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole)) → Nat { p.offset }
 
+// A part's codec, the same way.
+fn Part::stores<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole)) → Stored<B> { p.codec }
+
 // The whole is a part of itself.
 fn Part::all<A>(s: Stored<A>) → Part<A, A>(s) {
     Part(0, s, λ a => a, λ _ a => a, Nat::le_refl(s.layout.size),

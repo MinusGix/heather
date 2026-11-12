@@ -1,8 +1,10 @@
 // Probes for `lib/native/runtime/rt_held.hthr` and `rt_held_fields.hthr`:
 // a function of a laid record pinned to the held meaning of a compiled
 // function's terms by evaluation, the world's promises from the two
-// field lemmas, and the record-level statement of the compiled
-// function's run with nothing proved for the function.
+// field lemmas, one application per field, and the record-level
+// statement of the compiled function's run with nothing proved for the
+// function. A field access is the codec's own accessor called at the
+// field's offset: nothing is compiled per field.
 import logic;
 import bool;
 import nat;
@@ -56,42 +58,50 @@ laid(endian := BigEndian) record Tally { count: u64, total: u64 }
 // What the source says: a function of the record.
 fn Tally::bump(self t: Tally) → Mutated<Tally, u64> { Mutated(t with { count = t.count + 1 }, t.count + 1) }
 
-// A field's reader and its writer, each the codec's accessor where the
-// field lies.
-runtime fn tally_count(span: List<u8>, length: u64) → u64 { span.u64_be_within(length, Tally::count_at) }
+// What is compiled: the same function over the span, each field access
+// the accessor of the field's codec at the field's offset.
+runtime fn List::tally_bump(mut self span: List<u8>, length: u64) → u64 {
+    span.put_u64_be_within(length, Tally::count_at, span.u64_be_within(length, Tally::count_at) + 1)
+}
 
-runtime fn List::tally_put_count(mut self span: List<u8>, length, v: u64) → u64 { span.put_u64_be_within(length, Tally::count_at, v) }
-
-// What is compiled: the same function over the span, each field access a
-// call.
-runtime fn List::tally_bump(mut self span: List<u8>, length: u64) → u64 { span.tally_put_count(length, tally_count(span, length) + 1) }
-
-// Its world, with its two callees marked.
+// Its world, with its two callees marked: the reader and the writer of
+// an eight-byte word, each with the fields of the record it reaches.
 fn bump_world(rest: List<List<u8>>) → FWorld {
     FWorld::of(List::tally_bump::compile.world, List::tally_bump::compile.callees, List::tally_bump::compile.fsigs, List::tally_bump::compile.writers, rest)
 }
 
-fn bump_held(rest: List<List<u8>>) → HWorld<Tally> {
-    HWorld(bump_world(rest), [Reads(64, λ (t: Tally) => t.count)], [Writes(64, λ (t: Tally) (v: u64) => t with { count = v })])
-}
+fn tally_reads() → Reader<Tally> { Reads(64, [Pair(0, λ (t: Tally) => t.count), Pair(8, λ (t: Tally) => t.total)]) }
+
+fn tally_writes() → Writer<Tally> { Writes(64, [Pair(0, λ (t: Tally) (v: u64) => t with { count = v }), Pair(8, λ (t: Tally) (v: u64) => t with { total = v })]) }
+
+fn bump_held(rest: List<List<u8>>) → HWorld<Tally> { HWorld(bump_world(rest), [tally_reads()], [tally_writes()]) }
 
 // The pin: the held meaning of the compiled function's terms is the
 // function of the record, by evaluation, at every span.
 theorem bump_pinned(rest: List<List<u8>>, own: List<u8>, t: Tally, place, length: u64):
     List::tally_bump::rt.body.held(bump_held(rest), [Word(64), Word(64)], Pair(length, Pair(place, trivial)), own, t) = Tally::bump(t) { refl }
 
-// What the world owes: one application of a field lemma per mark.
+// What the world owes: one application of a field lemma per field of
+// each mark.
 theorem bump_sound(rest: List<List<u8>>): Sound<Tally>(bump_held(rest), Tally::stored()) {
     Sound(
-        And(λ place length own a g env holds =>
-            Stored::u64_be().held_read(Tally::count_part(), refl, Tally::count_at, refl, own, FTm::word(bump_held(rest).fw.w.tys, g, env, length), a, holds), trivial),
-        And(λ place length v own a g env holds =>
-            Stored::u64_be().held_write(Tally::count_part(), refl, Tally::count_at, refl, own, FTm::word(bump_held(rest).fw.w.tys, g, env, length), a,
-                FTm::word(bump_held(rest).fw.w.tys, g, env, v), holds), trivial))
+        And(And(λ place length i own a g env holds here =>
+                Stored::u64_be().held_read(Tally::count_part(), refl, FTm::word(bump_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(bump_held(rest).fw.w.tys, g, env, length), a, holds),
+            And(λ place length i own a g env holds here =>
+                Stored::u64_be().held_read(Tally::total_part(), refl, FTm::word(bump_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(bump_held(rest).fw.w.tys, g, env, length), a, holds), trivial)), trivial),
+        And(And(λ place length i v own a g env holds here =>
+                Stored::u64_be().held_write(Tally::count_part(), refl, FTm::word(bump_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(bump_held(rest).fw.w.tys, g, env, length), a, FTm::word(bump_held(rest).fw.w.tys, g, env, v), holds),
+            And(λ place length i v own a g env holds here =>
+                Stored::u64_be().held_write(Tally::total_part(), refl, FTm::word(bump_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(bump_held(rest).fw.w.tys, g, env, length), a, FTm::word(bump_held(rest).fw.w.tys, g, env, v), holds), trivial)), trivial))
 }
 
-// That the terms are a held function's is a verdict, by evaluation.
-theorem bump_kept(rest: List<List<u8>>): List::tally_bump::rt.body.kept(bump_held(rest), 0) = True { refl }
+// That the terms are a held function's is a verdict, by evaluation: the
+// store's offset is a literal, and a field lies there.
+theorem bump_kept(rest: List<List<u8>>): List::tally_bump::rt.body.kept(bump_held(rest), 0, Nil) = True { refl }
 
 // The record-level statement, with nothing proved for `bump`: where the
 // span, lent under its length word, holds a tally, the compiled function
@@ -121,9 +131,9 @@ theorem bump_after(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().
 
 // And the program's run is the compiled function, as for every
 // `runtime fn`: the two readers and two writers of an eight-byte word,
-// the count's reader and writer, and `tally_bump` last.
+// and `tally_bump` last.
 theorem bump_program(rest: List<List<u8>>, own: List<u8>, place, length: u64):
-    program_run(List::tally_bump::program, Cons(own, rest), 6, [place, length]) = FTm::end_of(rest, List::tally_bump(own, length)) {
+    program_run(List::tally_bump::program, Cons(own, rest), 4, [place, length]) = FTm::end_of(rest, List::tally_bump(own, length)) {
     List::tally_bump::runs_over(own, rest, place, length)
 }
 
@@ -139,8 +149,8 @@ fn Tally::bump_to(self t: Tally, limit: u64) → Mutated<Tally, u64> {
 }
 
 runtime fn List::tally_bump_to(mut self span: List<u8>, length, limit: u64) → u64 {
-    if tally_count(span, length) < limit {
-        span.tally_put_count(length, tally_count(span, length) + 1)
+    if span.u64_be_within(length, Tally::count_at) < limit {
+        span.put_u64_be_within(length, Tally::count_at, span.u64_be_within(length, Tally::count_at) + 1)
     } else {
         limit
     }
@@ -150,17 +160,22 @@ fn to_world(rest: List<List<u8>>) → FWorld {
     FWorld::of(List::tally_bump_to::compile.world, List::tally_bump_to::compile.callees, List::tally_bump_to::compile.fsigs, List::tally_bump_to::compile.writers, rest)
 }
 
-fn to_held(rest: List<List<u8>>) → HWorld<Tally> {
-    HWorld(to_world(rest), [Reads(64, λ (t: Tally) => t.count)], [Writes(64, λ (t: Tally) (v: u64) => t with { count = v })])
-}
+fn to_held(rest: List<List<u8>>) → HWorld<Tally> { HWorld(to_world(rest), [tally_reads()], [tally_writes()]) }
 
 theorem to_sound(rest: List<List<u8>>): Sound<Tally>(to_held(rest), Tally::stored()) {
     Sound(
-        And(λ place length own a g env holds =>
-            Stored::u64_be().held_read(Tally::count_part(), refl, Tally::count_at, refl, own, FTm::word(to_held(rest).fw.w.tys, g, env, length), a, holds), trivial),
-        And(λ place length v own a g env holds =>
-            Stored::u64_be().held_write(Tally::count_part(), refl, Tally::count_at, refl, own, FTm::word(to_held(rest).fw.w.tys, g, env, length), a,
-                FTm::word(to_held(rest).fw.w.tys, g, env, v), holds), trivial))
+        And(And(λ place length i own a g env holds here =>
+                Stored::u64_be().held_read(Tally::count_part(), refl, FTm::word(to_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(to_held(rest).fw.w.tys, g, env, length), a, holds),
+            And(λ place length i own a g env holds here =>
+                Stored::u64_be().held_read(Tally::total_part(), refl, FTm::word(to_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(to_held(rest).fw.w.tys, g, env, length), a, holds), trivial)), trivial),
+        And(And(λ place length i v own a g env holds here =>
+                Stored::u64_be().held_write(Tally::count_part(), refl, FTm::word(to_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(to_held(rest).fw.w.tys, g, env, length), a, FTm::word(to_held(rest).fw.w.tys, g, env, v), holds),
+            And(λ place length i v own a g env holds here =>
+                Stored::u64_be().held_write(Tally::total_part(), refl, FTm::word(to_held(rest).fw.w.tys, g, env, i), here, own,
+                    FTm::word(to_held(rest).fw.w.tys, g, env, length), a, FTm::word(to_held(rest).fw.w.tys, g, env, v), holds), trivial)), trivial))
 }
 
 // The function's own `match` is the terms': the pin is `refl` through
@@ -179,20 +194,38 @@ theorem to_runs(own: List<u8>, t: Tally, length, limit: u64, holds: Tally::store
 // What is not a held function's
 
 // A world with no marks: the store is a call of a computation that is
-// not a field's writer.
-theorem unmarked_not_kept(rest: List<List<u8>>): List::tally_bump::rt.body.kept(HWorld<Tally>(bump_world(rest), [], []), 0) = False { refl }
+// not a codec's writer.
+theorem unmarked_not_kept(rest: List<List<u8>>): List::tally_bump::rt.body.kept(HWorld<Tally>(bump_world(rest), [], []), 0, Nil) = False { refl }
 
 // The length word named wrongly: every field access is then under a word
 // that is not the span's.
-theorem other_length_not_kept(rest: List<List<u8>>): List::tally_bump_to::rt.body.kept(to_held(rest), 0) = False { refl }
+theorem other_length_not_kept(rest: List<List<u8>>): List::tally_bump_to::rt.body.kept(to_held(rest), 0, Nil) = False { refl }
 
 // A field read under a word the body made: under it the accessor is the
 // codec's only if the record is inside it, which nothing says of such a
 // word. (A store under one is refused by the reflector already.)
-theorem made_length_not_kept(rest: List<List<u8>>): FTm::Let(Lit(Word(64), 16), Let(Call(0, [2, 0]), Pure(Var(0)))).kept(bump_held(rest), 0) = False { refl }
+theorem made_length_not_kept(rest: List<List<u8>>):
+    FTm::Let(Lit(Word(64), 16), Let(Lit(Word(64), 0), Let(Call(0, [3, 1, 0]), Pure(Var(0))))).kept(bump_held(rest), 0, Nil) = False { refl }
+
+// A store where no field lies: four bytes in, across the count.
+theorem store_between_not_kept(rest: List<List<u8>>):
+    FTm::Let(Lit(Word(64), 4), Call(0, [2, 1, 0, 1], Pure(Var(0)))).kept(bump_held(rest), 0, Nil) = False { refl }
+
+// The same store where the total lies is kept.
+theorem store_at_total_kept(rest: List<List<u8>>):
+    FTm::Let(Lit(Word(64), 8), Call(0, [2, 1, 0, 1], Pure(Var(0)))).kept(bump_held(rest), 0, Nil) = True { refl }
+
+// A store at an offset that is not a literal: here the length word
+// itself. Whether a field lies there is not the term's to say.
+theorem store_computed_not_kept(rest: List<List<u8>>): FTm::Call(0, [1, 0, 0, 0], Pure(Var(0))).kept(bump_held(rest), 0, Nil) = False { refl }
+
+// A read where no field lies is kept: it is the bytes' own, as any term
+// that is no field access is.
+theorem read_between_kept(rest: List<List<u8>>):
+    FTm::Let(Lit(Word(64), 4), Let(Call(0, [2, 1, 0]), Pure(Var(0)))).kept(bump_held(rest), 0, Nil) = True { refl }
 
 // A term that stores a byte itself.
-theorem put_not_kept(rest: List<List<u8>>): FTm::Put(0, 0, 0, Pure(Lit(Word(64), 0))).kept(bump_held(rest), 0) = False { refl }
+theorem put_not_kept(rest: List<List<u8>>): FTm::Put(0, 0, 0, Pure(Lit(Word(64), 0))).kept(bump_held(rest), 0, Nil) = False { refl }
 
 // The pin is to the held meaning and not to the byte meaning: the bytes
 // a store leaves are not the record's by evaluation.

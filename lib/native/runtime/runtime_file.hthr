@@ -167,14 +167,14 @@ theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) �
     writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
     pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
         FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
-    ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())).IsTrue()):
+    ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())) = True):
     (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
     FTm::Answers(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
         λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))) {
     λ rest call agree own =>
         j(sym(pinned(rest, own)), λ g _ => FTm::Answers(w.tys, rt.params, rt.result, rest, g, λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))),
-            rt.lowered_answers(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), ok,
+            rt.lowered_answers(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), Bool::is_true_of_eq(ok),
                 rt.lower_sound(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len()), call, agree, own))
 }
 
@@ -184,7 +184,7 @@ fn FFun::compile<F>(rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.
     writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), f: F, typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
     pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
         FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
-    ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())).IsTrue()) → CompileSpan<F>(f) {
+    ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())) = True) → CompileSpan<F>(f) {
     CompileSpan(rt, w, callees, fsigs, writers, typed, rt.code(w, fsigs), FFun::plain_runs(f, rt, w, callees, fsigs, writers, typed, pinned, ok))
 }
 
@@ -207,13 +207,13 @@ theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res:
     bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
     guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
         FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest)),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()):
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True):
     (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
     FTm::Answers(w.tys, ks ++ Cons(w0, wrest), res, rest, FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest, own),
         λ xs => FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs).run(call, xs, Cons(own, rest))) {
     λ rest => FFun::measured_answers(ks ++ Cons(w0, wrest), res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(),
-        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent), ok,
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent), Bool::is_true_of_eq(ok),
         FFun::measured_sound(ks, w0, wrest, body, res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), lent,
             FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest), bounded(rest), guarded(rest)))
 }
@@ -226,7 +226,7 @@ fn FFun::compile_measured<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, bod
     bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
     guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
         FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest)),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()) → CompileSpan<F>(f) {
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True) → CompileSpan<F>(f) {
     CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
         FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
 }
@@ -340,8 +340,8 @@ fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) 
 // (lib/native/runtime/runtime.hthr).
 fn CompileSpan::source<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<BitVec(64)> → Ending {
     match c {
-        CompileSpan(reflected, world, _, _, _, typed, _, _) => λ own xs => FTm::end_of(rest, FFun::uncurry(world.tys,
-            reflected.params, reflected.result, FTm::source_at(world.tys, reflected.lent, reflected.params, reflected.result, typed, f, rest), xs, own)),
+        CompileSpan(reflected, World(tys, _, _, _), _, _, _, typed, _, _) => λ own xs => FTm::end_of(rest, FFun::uncurry(tys,
+            reflected.params, reflected.result, FTm::source_at(tys, reflected.lent, reflected.params, reflected.result, typed, f, rest), xs, own)),
     }
 }
 

@@ -1,0 +1,373 @@
+// The reflector for functions of a laid record: a function from a record
+// `T` laid over bytes (`laid record T`, lib/std/machine/laid.hthr) to
+// `Mutated<T, R>`, read from its elaborated body as the `FFun` of the
+// function over the span that holds the record
+// (docs/layout-design.md §9.2, §9.5 round 3).
+//
+// The source is the kernel type a `mut self` method on the record has,
+// `fn T::m(mut self t: T, x: u64, …) → R`, or the same function written
+// out, returning `Mutated(t, value)` itself. The code takes the span's
+// place and its 64-bit length word, then the words, as every function
+// over a span does (`rt_file_reflect`).
+//
+// The body is read as the elaborator built it, under the record's own
+// local `t`. A read of a field, `t.f`, stands for its accessor's read of
+// the span at the field's offset (`Known.named`): the accessor is the one
+// of the field's codec, found by resolution (`Accessor(codec)`,
+// `stored_accessor.hthr`), and nothing is compiled per field. The pure
+// walk reflects a field's read where the field is first read, so a field
+// the function does not read is not read. A body ends in
+// `Mutated(T(e₁, …, eₙ), value)`, in `Mutated(t, value)`, or in a `match`
+// on a `Bool` whose arms do. At such an end the reflector:
+//
+// 1. reflects each field's new value that is not the field itself, and
+//    the value, as pure `rt` over the span as it came in;
+// 2. emits one call of the field's accessor's writer for each field that
+//    changed, in the record's order, the offset a literal bound just
+//    before it;
+// 3. answers the value.
+//
+// So the code reads the fields it needs, computes, and stores the fields
+// that changed. Whether a field changed is read off the term: a field
+// whose new value is the read of that field is not stored.
+//
+// Untrusted like every producer: what a `runtime fn` of a record
+// publishes is the pin of this reflection's held meaning
+// (`FTm::held`, rt_held.hthr) to the function, by conversion, and a wrong
+// reflection fails it.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import rt;
+import rt_file;
+import rt_reflect;
+import rt_file_reflect;
+
+// A field's accessor as the walk carries it: the globals of the reader
+// and the writer its codec's `Accessor` names, and the terms a
+// generator states the field's promises with (its type, its part, its
+// codec and the instance).
+record HeldAccess { reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, ty: Expr, part: Expr, codec: Expr, instance: Expr }
+
+// A field: its name, where it lies (the word `T::f_at`), and its accessor,
+// if its codec has one.
+record HeldField { name: String, at: Handle, access: Option<HeldAccess> }
+
+// A function of a laid record after it was walked: its reflection, the
+// program's pure functions and computations, the record and its fields,
+// how many words it takes beside the record, and whether it changes the
+// record or only reads it.
+record HeldReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat>, record: Handle, record_name: String, stored: GlobalRef, fields: List<HeldField>,
+    operands: Nat, changes: Bool }
+
+// A term applied to arguments.
+fn rt_ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
+
+fn rt_held_ends<A>() → Tac<A> {
+    rt_refuse("a function of a laid record ends in `Mutated(record, value)`, or in a `match` on a `Bool` whose arms do")
+}
+
+// The accessor of a field's codec: the instance `Accessor<B>(codec)`, by
+// the search an instance argument runs, and the functions it names, read
+// at the span, its length word and the field's offset; and beside it
+// what a read of the field stands for, the accessor's read there at the
+// field's own width. `None` where the codec has no instance (an array, a
+// record inside the record).
+fn rt_held_access(tname: String, fname: String, ty: Handle, span, length: Expr, at: Expr) → Tac<Option<Pair<HeldAccess, Handle>>> {
+    let part_g <- lookup(tname ++ "::" ++ fname ++ "_part").bind(λ c => rt_accepted("the part of field `" ++ fname ++ "`", c));
+    let stores <- lookup("Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
+    let codec = rt_ap(Global(stores), [Blank, Hd(ty), Blank, Global(part_g)]);
+    let class <- lookup("Accessor").bind(λ c => rt_accepted("the class of a codec's accessor (import `stored_accessor`)", c));
+    let goal <- as_type(rt_ap(Global(class), [Hd(ty), codec])).bind(λ c => rt_accepted("the accessor of field `" ++ fname ++ "`'s codec", c));
+    let found <- synth(goal);
+    match found {
+        Refused(_) => pure(None),
+        Accepted(inst) => {
+            let read <- lookup("Stored::word_read").bind(λ c => rt_accepted("an accessor's read", c));
+            let write <- lookup("Stored::word_write").bind(λ c => rt_accepted("an accessor's store", c));
+            let wide <- lookup("Stored::word_of").bind(λ c => rt_accepted("an accessor's word of a value", c));
+            let narrow <- lookup("Stored::of_word").bind(λ c => rt_accepted("an accessor's value of a word", c));
+            let of: List<Expr> = [Hd(ty), codec, Hd(inst)];
+            let rd <- next_spelling(rt_ap(Global(read), of ++ [span, length, at])).bind(λ c => rt_accepted("an accessor's read", c));
+            let wr <- next_spelling(rt_ap(Global(write), of ++ [span, length, at, length])).bind(λ c => rt_accepted("an accessor's store", c));
+            let value <- next_spelling(rt_ap(Global(narrow), of ++ [Hd(rd)])).bind(λ c => rt_accepted("an accessor's read at its field's width", c));
+            let rv <- view(rd);
+            let wv <- view(wr);
+            match rv {
+                HGlobal(rg, _, _) => match wv {
+                    HGlobal(wg, wname, _) => pure(Some(Pair(HeldAccess(rg.id, wg, wname, rt_ap(Global(wide), of), Hd(ty), Global(part_g), codec, Hd(inst)), value))),
+                    _ => rt_refuse("the accessor of field `" ++ fname ++ "`'s codec does not store by a function of the program"),
+                },
+                _ => rt_refuse("the accessor of field `" ++ fname ++ "`'s codec does not read by a function of the program"),
+            }
+        },
+    }
+}
+
+// The fields of the record, and what a read of each stands for.
+record HeldFields { fields: List<HeldField>, named: List<FieldTerm> }
+
+fn rt_held_fields(tname: String, record: Nat, fs: List<FieldInfo>, span, length: Expr) → Tac<HeldFields> {
+    match fs {
+        Nil => pure(HeldFields([], [])),
+        Cons(f, rest) => match f.ty {
+            None => rt_refuse("a field of `" ++ tname ++ "` whose type mentions an earlier field"),
+            Some(ty) => {
+                let at_g <- lookup(tname ++ "::" ++ f.name ++ "_at").bind(λ c => rt_accepted("where field `" ++ f.name ++ "` lies", c));
+                let at <- resolve(tname ++ "::" ++ f.name ++ "_at").bind(λ c => rt_accepted("where field `" ++ f.name ++ "` lies", c));
+                let access <- rt_held_access(tname, f.name, ty, span, length, Global(at_g));
+                let more <- rt_held_fields(tname, record, rest, span, length);
+                let named = match access { None => more.named, Some(a) => Cons(FieldTerm(record, f.name, a.snd), more.named) };
+                pure(HeldFields(Cons(HeldField(f.name, at, access.map(λ a => a.fst)), more.fields), named))
+            },
+        },
+    }
+}
+
+// Whether a term is the field `field` of the record's local, read through
+// the fields of records just built.
+fn rt_held_is(fuel: Nat, k: Known, h: Handle, record: Nat, field: String) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(f) => view(h).bind(λ v => {
+            let read: Option<Pair<Handle, String>> = match v {
+                HGlobal(_, name, args) => match args {
+                    Nil => None,
+                    Cons(r, more) => match more { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+                },
+                HField(r, name, args) => match args { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+                _ => None,
+            };
+            match read {
+                Some(p) => view(p.fst).bind(λ rv => {
+                    let own: Bool = match rv {
+                        HLocal(y, args) => match args { Nil => y.id.same(record) && Known::str_same(rt_base_name(p.snd), field), Cons(_, _) => False },
+                        _ => False,
+                    };
+                    match own {
+                        True => pure(True),
+                        False => rt_field_of_value(k, p.fst, p.snd).bind(λ e => match e { Some(u) => rt_held_is(f, k, u, record, field), None => pure(False) }),
+                    }
+                }),
+                None => match v {
+                    HOther => next_spelling(Hd(h)).bind(λ c => match c { Accepted(u) => rt_held_is(f, k, u, record, field), Refused(_) => pure(False) }),
+                    _ => pure(False),
+                },
+            }
+        }),
+    }
+}
+
+// The fields of the record a function leaves: the constructor's, where
+// the term is one, and `None` where it is the record as it came in.
+fn rt_held_left(fuel: Nat, ty: Nat, record: Nat, h: Handle) → Tac<Option<List<Handle>>> {
+    match fuel {
+        Zero => rt_refuse("the record a function leaves is deeper than the reflector's fuel"),
+        Succ(f) => view(h).bind(λ v => match v {
+            HCtor(cty, _, _, values) => match cty.id.same(ty) {
+                True => pure(Some(values)),
+                False => rt_refuse("a function of a laid record leaves a record of its own type"),
+            },
+            HLocal(y, _) => match y.id.same(record) {
+                True => pure(None),
+                False => rt_refuse("a function of a laid record leaves its own record"),
+            },
+            HMatch(_) => rt_refuse("the record a function leaves is chosen by a branch inside `Mutated`: write the branch around the whole result, each arm its own end"),
+            HOther => next_spelling(Hd(h)).bind(λ c => match c {
+                Accepted(u) => rt_held_left(f, ty, record, u),
+                Refused(_) => rt_refuse("the record a function leaves is not built from its fields"),
+            }),
+            _ => rt_refuse("the record a function leaves is not built from its fields (a call of another function of the record is not reflected yet)"),
+        }),
+    }
+}
+
+// A field that changed: its accessor, where it lies, and the variable
+// its new value's word is.
+record HeldSet { access: HeldAccess, at: Handle, level: Nat }
+
+// Each field's new value that is not the field itself, as a variable.
+fn rt_held_sets(fuel: Nat, k: Known, st: RSt, record: Nat, fs: List<HeldField>, values: List<Handle>) → Tac<Pair<RSt, List<HeldSet>>> {
+    match fs {
+        Nil => pure(Pair(st, [])),
+        Cons(field, rest) => match values {
+            Nil => rt_refuse("a record built from fewer fields than it has"),
+            Cons(value, more) => rt_held_is(fuel, k, value, record, field.name).bind(λ same => match same {
+                True => rt_held_sets(fuel, k, st, record, rest, more),
+                False => match field.access {
+                    None => rt_refuse("it changes the field `" ++ field.name ++ "`, whose codec has no accessor: only a field stored as a word is written for now"),
+                    Some(a) => {
+                        let word <- next_spelling(rt_ap(a.wide, [Hd(value)])).bind(λ c => rt_accepted("a field's new value as a word", c));
+                        let r <- rt_go(fuel, k, st, word, True);
+                        let later <- rt_held_sets(fuel, k, r.fst, record, rest, more);
+                        pure(Pair(later.fst, Cons(HeldSet(a, field.at, RSt::level(r.snd)), later.snd)))
+                    },
+                },
+            }),
+        },
+    }
+}
+
+// The stores, in order: each a call of the accessor's writer on the
+// span's place, its length word, the field's offset and the word.
+record HeldStored { st: RSt, segs: List<FSeg>, cfuns: List<Nat> }
+
+fn rt_held_stores(fuel: Nat, k: Known, w: HeldStored, sets: List<HeldSet>) → Tac<HeldStored> {
+    match sets {
+        Nil => pure(w),
+        Cons(s, rest) => {
+            let found <- rt_file_callee(k, w.cfuns, s.access.writer, s.access.writer_name);
+            let ra <- rt_go(fuel, k, w.st, s.at, True);
+            let st = ra.fst;
+            rt_held_stores(fuel, k,
+                HeldStored(st.written(Succ(st.depth)),
+                    Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(ra.snd)), st.index(s.level)]), FSeg::lets(st.lets) ++ w.segs), found.fst),
+                rest)
+        },
+    }
+}
+
+// A body in tail position. `k` reads pure code at the span as it came in;
+// `ty` is the record's type and `record` the local the body takes it as.
+fn rt_held_tail(fuel: Nat, k: Known, names: FileNames, ty: Nat, record: Nat, fs: List<HeldField>, st: RSt, cfuns: List<Nat>, h: Handle) → Tac<FileEnd> {
+    match fuel {
+        Zero => rt_refuse("the body is deeper than the reflector's fuel"),
+        Succ(f) => view(h).bind(λ v => match v {
+            HCtor(cty, _, _, values) => match cty.id.same(names.mutated) {
+                False => rt_held_ends(),
+                True => match values.rev() {
+                    Cons(value, Cons(after, _)) => {
+                        let left <- rt_held_left(f, ty, record, after);
+                        let changed: Tac<Pair<RSt, List<HeldSet>>> = match left { None => pure(Pair(st, [])), Some(vs) => rt_held_sets(f, k, st, record, fs, vs) };
+                        let sets <- changed;
+                        let rv <- rt_go(f, k, sets.fst, value, True);
+                        let done <- rt_held_stores(f, k, HeldStored(rv.fst, [], cfuns), sets.snd);
+                        pure(FileEnd(FSeg::close(FSeg::lets(done.st.lets) ++ done.segs, FTm::Pure(Var(done.st.index(RSt::level(rv.snd))))), done.st.funs, done.cfuns))
+                    },
+                    _ => rt_refuse("`Mutated` without its record and value"),
+                },
+            },
+            HMatch(_) => {
+                let m <- arms(h).bind(λ c => rt_accepted("a `match`", c));
+                let t <- k.ty_of(m.scrut);
+                match t {
+                    Bit => {
+                        let rc <- rt_go(f, k, st, m.scrut, True);
+                        let yes_h <- rt_arm(m, 1);
+                        let no_h <- rt_arm(m, 0);
+                        let base = RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs);
+                        let ry <- rt_held_tail(f, k, names, ty, record, fs, base, cfuns, yes_h);
+                        let rn <- rt_held_tail(f, k, names, ty, record, fs, base.with_funs(ry.funs), ry.cfuns, no_h);
+                        let c = rc.fst.index(RSt::level(rc.snd));
+                        let node: FTm = match m.args { Nil => FTm::If(c, ry.term, rn.term), Cons(_, _) => FTm::IfEq(c, ry.term, rn.term) };
+                        pure(FileEnd(FSeg::close(FSeg::lets(rc.fst.lets), node), rn.funs, rn.cfuns))
+                    },
+                    _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
+                }
+            },
+            HGlobal(_, name, _) => rt_refuse("it ends in a call of `" ++ name ++ "`: a call of another function of the record is not reflected yet"),
+            _ => rt_held_ends(),
+        }),
+    }
+}
+
+// The words a function takes after its record: the body's `λ`s opened,
+// each local at levels 2 on (the span's place and its length word are 0
+// and 1), and the body under them.
+record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef }
+
+fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef) → Tac<HeldWords> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => view(h).bind(λ v => match v {
+            HLam(dom) => k.ty(dom).bind(λ at => match (match at { Word(w) => w.same(64), _ => False }) {
+                False => rt_refuse("a function of a laid record takes 64-bit words after its record, for now"),
+                True => {
+                    let o <- open(h, "x").bind(λ c => rt_accepted("a parameter", c));
+                    let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref);
+                    pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last))
+                },
+            }),
+            _ => pure(HeldWords([], [], h, under)),
+        }),
+    }
+}
+
+// The code of the value a body answers, and whether it answers it beside
+// its record: its type is `Mutated<T, R>` at the record's type `T` where
+// the function changes the record, and `R` where it only reads it.
+fn rt_held_result(k: Known, names: FileNames, record: Handle, b: Handle) → Tac<Pair<Bool, Ty>> {
+    let t <- infer(Hd(b)).bind(λ c => rt_accepted("its body's type", c));
+    let v <- view(t);
+    let read: Tac<Pair<Bool, Ty>> = k.ty(t).bind(λ r => pure(Pair(False, r)));
+    match v {
+        HGlobal(g, _, args) => match g.id.same(names.mutated) {
+            True => match args {
+                Cons(left, Cons(r, Nil)) => defeq(Hd(left), Hd(record)).bind(λ same => match same {
+                    True => k.ty(r).bind(λ code => pure(Pair(True, code))),
+                    False => rt_refuse("a function of a laid record that returns `Mutated` returns it of that record"),
+                }),
+                _ => rt_refuse("`Mutated` without its two types"),
+            },
+            False => read,
+        },
+        _ => read,
+    }
+}
+
+// The only constructor of a record.
+fn rt_held_ctor(tname: String, cs: List<CtorInfo>) → Tac<CtorInfo> {
+    match cs {
+        Nil => rt_refuse("`" ++ tname ++ "` has no constructor"),
+        Cons(c, more) => match more { Nil => pure(c), Cons(_, _) => rt_refuse("`" ++ tname ++ "` is not a record: it has more than one constructor") },
+    }
+}
+
+// The function `g`, whose first parameter is the record.
+fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef) → Tac<HeldReflected> {
+    let fuel = 4096;
+    let b0 <- body(g).bind(λ c => rt_accepted("its body", c));
+    let o <- open(b0, "record").bind(λ c => rt_accepted("its record parameter", c));
+    let record = o.local.ty;
+    let rv <- view(record);
+    let found: Tac<Pair<GlobalRef, String>> = match rv {
+        HGlobal(rg, tname, args) => match args { Nil => pure(Pair(rg, tname)), Cons(_, _) => rt_refuse("a laid record has no type parameters") },
+        _ => rt_refuse("its first parameter is not a record"),
+    };
+    let rg <- found;
+    let tname = rg.snd;
+    let stored <- lookup(tname ++ "::stored").bind(λ c => match c {
+        Accepted(s) => pure(s),
+        Refused(_) => rt_refuse("`" ++ tname ++ "` is not laid over bytes: declare it `laid record " ++ tname ++ "`"),
+    });
+    let cs <- ctors(record).bind(λ c => rt_accepted("its record's constructor", c));
+    let ctor <- rt_held_ctor(tname, cs);
+    let ws <- rt_held_words(fuel, k, o.body, 2, o.local.ref);
+    let result <- rt_held_result(k, names, record, ws.body);
+    let word <- as_type(rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(64)])).bind(λ c => rt_accepted("a word's type", c));
+    let bytes <- as_type(rt_ap(Global(GlobalRef(k.list)), [rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(8)])])).bind(λ c => rt_accepted("a span's type", c));
+    let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
+    let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
+    let hf <- rt_held_fields(tname, o.local.ref.id, ctor.fields, Local(span.ref), Local(length.ref));
+    let kk = k.lending(1).naming(hf.named).at_file(FileKnown(span.ref.id, None, []));
+    let st = RSt(2 + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), ws.bound)), k.funs);
+    // A function that only reads the record is one value, its branches
+    // values too: the function of the record is its value beside the
+    // record as it was, and a branch around that is not a branch inside it.
+    let walked: Tac<FileEnd> = match result.fst {
+        True => rt_held_tail(fuel, kk, names, rg.fst.id, o.local.ref.id, hf.fields, st, [], ws.body),
+        False => rt_go(fuel, kk, st, ws.body, True).bind(λ rv =>
+            pure(FileEnd(FSeg::close(FSeg::lets(rv.fst.lets), FTm::Pure(Var(rv.fst.index(RSt::level(rv.snd))))), rv.fst.funs, []))),
+    };
+    let r <- walked;
+    let params: List<Ty> = Cons(Word(64), Cons(Word(64), ws.locals.map(λ _ => Word(64))));
+    pure(HeldReflected(FFun(params, result.snd, r.term, 1), r.funs, r.cfuns, record, tname, stored, hf.fields, ws.locals.len(), result.fst))
+}

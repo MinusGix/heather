@@ -158,6 +158,18 @@ fn laid_stores(codec: Expr, what: String) → Tac<Expr> {
     }
 }
 
+// An expression held as a hole it solves, so that every later mention of
+// it is one node. Each field's part names the codec of all the fields and
+// a path through the codecs of the fields before it: spelled out, what the
+// generator publishes would grow with the cube of the fields, and a record
+// of fourteen would be past what the host reads of one reply.
+fn laid_held(e: Expr, what: String) → Tac<Expr> {
+    let t <- infer(e).or_fail("laid: " ++ what ++ ": ");
+    let held <- hole(t).or_fail("laid: " ++ what ++ ": ");
+    let solved <- defeq(Hd(held), e);
+    match solved { True => pure(Hd(held)), False => fail("laid: " ++ what ++ " does not solve its hole", []) }
+}
+
 fn laid_named(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
 
 // The library's codec of a word of `bits` bits in an order.
@@ -263,17 +275,20 @@ fn laid_fields(l: LaidLib, names: List<String>, tys: List<Handle>, codecs: List<
             Nil => pure([]),
             Cons(t, ts) => match codecs {
                 Nil => pure([]),
-                Cons(c, cs) => match before {
-                    None => {
-                        let f = LaidField(n, Hd(t), c, Hd(t), c);
-                        laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
-                    },
-                    Some(b) => {
-                        let upto = apps(l.then, [b.upto_ty, Hd(t), b.upto, c]);
-                        let upto_ty <- laid_stores(upto, "the codec given for `" ++ n ++ "`");
-                        let f = LaidField(n, Hd(t), c, upto_ty, upto);
-                        laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
-                    },
+                Cons(given, cs) => {
+                    let c <- laid_held(given, "the codec given for `" ++ n ++ "`");
+                    match before {
+                        None => {
+                            let f = LaidField(n, Hd(t), c, Hd(t), c);
+                            laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                        },
+                        Some(b) => {
+                            let upto <- laid_held(apps(l.then, [b.upto_ty, Hd(t), b.upto, c]), "the codec given for `" ++ n ++ "`");
+                            let upto_ty <- laid_stores(upto, "the codec given for `" ++ n ++ "`");
+                            let f = LaidField(n, Hd(t), c, upto_ty, upto);
+                            laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                        },
+                    }
                 },
             },
         },
@@ -357,7 +372,7 @@ fn laid_parts(l: LaidLib, name: String, t: Expr, whole: Expr, last: LaidField, o
         Nil => pure([]),
         Cons(f, before) => {
             let k = all.len() - Succ(before.len());
-            let part = apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]);
+            let part <- laid_held(apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]), "field `" ++ f.name ++ "`");
             let ty <- infer(part).or_fail("laid: field `" ++ f.name ++ "`: ");
             let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", [], Hd(ty), part);
             // Where the field lies, as the word compiled code adds to where
@@ -382,14 +397,14 @@ fn laid_out(h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs
         Cons(last, _) => {
             let p <- assume(last.upto_ty, "fields", None).or_fail("laid: ");
             let ps <- laid_projections(Local(p.ref), lf.len());
-            let of = Lam(p.ref, apps(Hd(mk), ps));
+            let of <- laid_held(Lam(p.ref, apps(Hd(mk), ps)), "`" ++ name ++ "` of its fields");
             let r <- assume(Hd(h), "value", None).or_fail("laid: ");
             let rf <- fields(Local(r.ref)).or_fail("laid: ");
             let nested <- laid_pairs(l, lf, laid_field_terms(rf.fields), None);
-            let to = Lam(r.ref, nested);
+            let to <- laid_held(Lam(r.ref, nested), "the fields of `" ++ name ++ "`");
             let back = Lam(r.ref, apps(l.rfl, [Hd(h), Local(r.ref)]));
             let forth = Lam(p.ref, apps(l.rfl, [last.upto_ty, Local(p.ref)]));
-            let whole = apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]);
+            let whole <- laid_held(apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]), "`" ++ name ++ "`'s codec");
             let whole_ty <- infer(whole).or_fail("laid: ");
             let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
             laid_parts(l, name, Hd(h), whole, last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))

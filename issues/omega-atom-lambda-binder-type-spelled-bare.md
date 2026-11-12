@@ -1,10 +1,10 @@
 ---
 title: omega spells a lambda binder of type `BitVec(8)` as `BitVec` in its atom list
-status: open
+status: closed
 labels: [omega,proofs,elaboration,display]
 area: tactics
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 An atom that contains a lambda whose binder has an applied type is spelled

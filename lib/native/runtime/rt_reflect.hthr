@@ -97,6 +97,9 @@ record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes> }
 // nothing reads.
 record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
 
+// The field `field` of the local `of` stands for `term`.
+record FieldTerm { of: Nat, field: String, term: Handle }
+
 record Known {
     prims: List<PrimEntry>,
     // The program's functions, in order: a `Call`'s index.
@@ -125,18 +128,26 @@ record Known {
     lent: Nat,
     // The span a computation writes; `None` for code that writes nothing.
     file: Option<FileKnown>,
+    // Fields of a local that stand for a term each (a field of the record
+    // a span holds, for its accessor's read, `rt_held_reflect`): a read of
+    // the field is the term, reflected where it is first read.
+    named: List<FieldTerm>,
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named)
 }
 
 fn Known::lending(self k: Known, lent: Nat) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named)
+}
+
+fn Known::naming(self k: Known, named: List<FieldTerm>) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named)
 }
 
 // The span a parameter level is the bytes of, if it is one.
@@ -213,6 +224,21 @@ fn Known::word_op(op: Nat, w: Nat) → Op {
 // Small plumbing.
 
 fn rt_refuse<A>(why: String) → Tac<A> { fail("rt: " ++ why, []) }
+
+// A refusal that shows the term refused.
+fn rt_refuse_at<A>(why: String, h: Handle) → Tac<A> {
+    view(h).bind(λ v => {
+        let what = match v {
+            HPi(_) => "a function type",
+            HEq(_, _) => "an equation",
+            HHole => "a term not known yet",
+            HLam(_) => "a function value",
+            HOther => "a term the host shows no layer of",
+            _ => "not reflected",
+        };
+        fail("rt: " ++ why, [At(Hd(h), Tried("the term", what))])
+    })
+}
 
 fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
     match c { Accepted(a) => pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
@@ -488,7 +514,47 @@ fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<
 // position.
 fn rt_field_names(fs: List<FieldInfo>) → List<String> { fs.map(λ f => f.name) }
 
-fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+// The part of a name after its last `::`.
+fn rt_base_chars(cs: List<Char>, acc: List<Char>) → List<Char> {
+    match cs {
+        Nil => acc.rev(),
+        Cons(c, rest) => match c.code.same(58) { True => rt_base_chars(rest, []), False => rt_base_chars(rest, Cons(c, acc)) },
+    }
+}
+
+fn rt_base_name(name: String) → String { String(rt_base_chars(name.chars, [])) }
+
+// The field `name` of `r` where `r` is a constructor's value of a type
+// with one constructor that the program holds neither as a record nor by
+// a repr: the field's own term, which is what the read computes to. A
+// function of a record that the source updates and reads back
+// (`t.count := e; t.count`) elaborates to such reads.
+fn rt_field_of_value(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
+    view(r).bind(λ v => match v {
+        HCtor(ty, _, _, values) => match Known::rec(k.recs, ty.id, 0) {
+            Some(_) => pure(None),
+            None => k.is_repr_typed(r).bind(λ held => match held {
+                True => pure(None),
+                False => as_type(Global(ty)).bind(λ ct => match ct {
+                    Refused(_) => pure(None),
+                    Accepted(t) => ctors(t).bind(λ cc => match cc {
+                        Refused(_) => pure(None),
+                        Accepted(cs) => match cs {
+                            Nil => pure(None),
+                            Cons(c, more) => match more {
+                                Nil => pure(Known::field(rt_field_names(c.fields), rt_base_name(name), 0).and_then(λ pos => values.nth(pos))),
+                                Cons(_, _) => pure(None),
+                            },
+                        },
+                    }),
+                }),
+            }),
+        },
+        _ => pure(None),
+    })
+}
+
+fn rt_field_at(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     k.ty_of(r).bind(λ t => match t {
@@ -502,6 +568,39 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
                 Nil => rt_refuse("a record with no constructor"),
             })),
         _ => rt_unknown(name),
+    })
+}
+
+// The term a field of a local stands for, if the setup named one.
+fn Known::named_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Handle> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n.of.same(x) && Known::str_same(n.field, field) { True => Some(n.term), False => Known::named_at(rest, x, field) },
+    }
+}
+
+fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
+    match k.named {
+        Nil => pure(None),
+        Cons(_, _) => view(r).bind(λ v => {
+            let found: Option<Handle> = match v {
+                HLocal(x, args) => match args { Nil => Known::named_at(k.named, x.id, rt_base_name(name)), Cons(_, _) => None },
+                _ => None,
+            };
+            pure(found)
+        }),
+    }
+}
+
+fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    rt_field_named(k, r, name).bind(λ named => match named {
+        Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+        None => rt_field_of_value(k, r, name).bind(λ value => match value {
+            Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+            None => rt_field_at(f, k, st, h, operand, r, name, step),
+        }),
     })
 }
 
@@ -1219,9 +1318,14 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                 _ => arms(h).bind(λ c => match c {
                     Accepted(m) => k.ty_of(m.scrut).bind(λ st_ty => match st_ty {
                         Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
-                        _ => rt_refuse("a form the reflected fragment does not have"),
+                        _ => rt_refuse_at("a form the reflected fragment does not have", h),
                     }),
-                    Refused(_) => rt_refuse("a form the reflected fragment does not have"),
+                    // A field read of a record just built, left as the
+                    // record's projection: one step on is the field's term.
+                    Refused(_) => next_spelling(Hd(h)).bind(λ s => match s {
+                        Accepted(u) => rt_go(f, k, st, u, operand),
+                        Refused(_) => rt_refuse_at("a form the reflected fragment does not have", h),
+                    }),
                 }),
             }),
         },
@@ -1400,7 +1504,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(base ++ derived, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None))))))))))
+    pure(Known(base ++ derived, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None, []))))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

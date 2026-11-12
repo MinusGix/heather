@@ -1,0 +1,247 @@
+// Probes for the generator of a function of a laid record
+// (`lib/native/runtime/runtime.hthr`, "A function of a laid record"): a
+// `runtime fn` whose receiver is a `laid record` is compiled over the span
+// that holds the record, and what is published says its code answers what
+// the function answers and leaves the span holding the record it leaves.
+// Nothing here is proved by hand: each theorem restates or reads what the
+// generator published. The theory's own probes are `rt_held_tests.hthr`.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+
+// ---------------------------------------------------------------------------
+// Two words: stores, operands, a branch around the whole result, a
+// function that changes nothing.
+
+laid(endian := BigEndian) record Tally { count: u64, total: u64 }
+
+runtime fn Tally::bump(self t: Tally) → Mutated<Tally, u64> { Mutated(t with { count = t.count + 1 }, t.count + 1) }
+
+runtime fn Tally::step(mut self t: Tally, by: u64) → u64 {
+    t.count := t.count + by;
+    t.total := t.total + t.count;
+    t.count
+}
+
+runtime fn Tally::bump_to(self t: Tally, limit: u64) → Mutated<Tally, u64> {
+    match t.count.unsigned_lt_bit(limit) {
+        False => Mutated(t, limit),
+        True => Mutated(t with { count = t.count + 1 }, t.count + 1),
+    }
+}
+
+runtime fn Tally::raise(mut self t: Tally, limit: u64) → u64 {
+    if t.count.unsigned_lt_bit(limit) {
+        t.count := t.count + 1;
+        t.count
+    } else {
+        t.count
+    }
+}
+
+runtime fn Tally::clear(mut self t: Tally) → u64 {
+    t.count := 0;
+    t.total := 0;
+    7
+}
+
+runtime fn Tally::get(self t: Tally) → u64 { t.count }
+
+runtime fn Tally::larger(self t: Tally, limit: u64) → u64 {
+    let sum = t.count + t.total;
+    match sum.unsigned_lt_bit(limit) { False => sum, True => limit }
+}
+
+// What is published, restated: the code's function over the span agrees
+// with the function of the record wherever the span holds one.
+theorem bump_held(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::bump(t), Tally::bump::bytes(own, length)) {
+    Tally::bump::runs_held(own, t, length, holds)
+}
+
+theorem step_held(own: List<u8>, t: Tally, length, by: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::step(t, by), Tally::step::bytes(own, length, by)) {
+    Tally::step::runs_held(own, t, length, by, holds)
+}
+
+// Read out: the word answered, and the record the span is left holding.
+theorem step_value(own: List<u8>, t: Tally, length, by: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::step::bytes(own, length, by).value = t.count + by {
+    sym(Tally::step::runs_held(own, t, length, by, holds).value)
+}
+
+theorem clear_holds(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::stored().Holds(Tally::clear::bytes(own, length).after, length, Tally(0, 0)) {
+    Tally::clear::runs_held(own, t, length, holds).holds
+}
+
+// A function that changes nothing answers its word and leaves the record.
+theorem get_value(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().Holds(own, length, t)): Tally::get::bytes(own, length).value = t.count {
+    sym(Tally::get::runs_held(own, t, length, holds).value)
+}
+
+// The program: the code, the two accessors it calls and the two those
+// call, its own last.
+theorem step_program(): Tally::step::program.len() = 5 { refl }
+
+theorem step_runs(span: List<u8>, rest: List<List<u8>>, place, length, by: u64):
+    program_run(Tally::step::program, Cons(span, rest), 4, [place, length, by]) = FTm::end_of(rest, Tally::step::bytes(span, length, by)) {
+    Tally::step::runs_over(span, rest, place, length, by)
+}
+
+// ---------------------------------------------------------------------------
+// Two widths: a narrow field read into a word, stored from a literal, and
+// a field with no accessor left alone.
+
+laid(endian := BigEndian) record Mixed { tag: u32, size: u64, small: u16 }
+
+runtime fn Mixed::kind(self m: Mixed) → u64 { m.tag.zero_extend(32) }
+
+runtime fn Mixed::grow(mut self m: Mixed) → u64 {
+    m.size := m.size + 1;
+    m.size
+}
+
+runtime fn Mixed::retag(mut self m: Mixed) → u64 {
+    m.tag := 7;
+    m.tag.zero_extend(32)
+}
+
+runtime fn Mixed::tagged(mut self m: Mixed) → u64 {
+    m.size := m.size + 1;
+    m.tag.zero_extend(32)
+}
+
+theorem retag_holds(own: List<u8>, m: Mixed, length: u64, holds: Mixed::stored().Holds(own, length, m)):
+    Mixed::stored().Holds(Mixed::retag::bytes(own, length).after, length, m with { tag = 7 }) {
+    Mixed::retag::runs_held(own, m, length, holds).holds
+}
+
+// ---------------------------------------------------------------------------
+// A state the size of a hash's: every field stored, then one word
+// counted. Each statement is two calls of an accessor, and none of what
+// is published is compared through an accessor's body.
+
+laid(endian := BigEndian) record State { h0: u32, h1: u32, h2: u32, h3: u32, h4: u32, h5: u32, h6: u32, h7: u32, count: u64 }
+
+runtime fn State::init(mut self s: State) → u64 {
+    s.h0 := 0x6a09e667;
+    s.h1 := 0xbb67ae85;
+    s.h2 := 0x3c6ef372;
+    s.h3 := 0xa54ff53a;
+    s.h4 := 0x510e527f;
+    s.h5 := 0x9b05688c;
+    s.h6 := 0x1f83d9ab;
+    s.h7 := 0x5be0cd19;
+    s.count := 0;
+    0
+}
+
+runtime fn State::counted(mut self s: State, n: u64) → u64 {
+    s.count := s.count + n;
+    s.count
+}
+
+runtime fn State::mix(mut self s: State, x: u64) → u64 {
+    s.h0 := s.h0 + s.h1;
+    s.h1 := s.h1 ⊕ s.h2;
+    s.h2 := s.h2 + s.h3;
+    s.h3 := s.h3 ⊕ s.h4;
+    s.h4 := s.h4 + s.h5;
+    s.h5 := s.h5 ⊕ s.h6;
+    s.h6 := s.h6 + s.h7;
+    s.h7 := s.h7 ⊕ s.h0;
+    s.count := s.count + x;
+    s.count
+}
+
+theorem init_holds(own: List<u8>, s: State, length: u64, holds: State::stored().Holds(own, length, s)):
+    State::stored().Holds(State::init::bytes(own, length).after, length,
+        State(0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19, 0)) {
+    State::init::runs_held(own, s, length, holds).holds
+}
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+record Plain { count: u64 }
+
+// expect-error: `Plain` has no runtime layout
+runtime fn Plain::bump(mut self p: Plain) → u64 {
+    p.count := p.count + 1;
+    p.count
+}
+
+// expect-error: a function of a laid record takes 64-bit words after its record
+runtime fn Tally::add(mut self t: Tally, n: Nat) → u64 {
+    t.count := t.count + BitVec::ofNat(n);
+    t.count
+}
+
+// expect-error: it changes the field `small`, whose codec has no accessor
+runtime fn Mixed::shrink(mut self m: Mixed) → u64 {
+    m.small := 3;
+    m.size
+}
+
+// expect-error: the record a function leaves is chosen by a branch inside `Mutated`
+runtime fn Tally::choose(self t: Tally, limit: u64) → Mutated<Tally, u64> {
+    Mutated(match t.count.unsigned_lt_bit(limit) { False => t, True => t with { count = limit } }, limit)
+}
+
+// expect-error: it answers a 64-bit word for now, beside its record
+runtime fn Tally::low(mut self t: Tally) → u32 {
+    t.count := 0;
+    5
+}
+
+// expect-error: a call of another function of the record is not reflected yet
+runtime fn Tally::twice(mut self t: Tally) → u64 {
+    let once = t.bump();
+    t.bump()
+}
