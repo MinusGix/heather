@@ -719,7 +719,7 @@ fn abstract_below(
     if hits.is_empty() {
         return None;
     }
-    below.abstract_local_any(&hits)
+    below.abstract_local_any(&with_scrutinee(hits, scrutinee))
 }
 
 /// `ty` with its term positions reduced, below `Π` codomains and `Σ`
@@ -805,7 +805,22 @@ fn abstract_stuck(
                 )
         })
         .collect();
-    exposed.abstract_local_any(&hits)
+    exposed.abstract_local_any(&with_scrutinee(hits, scrutinee))
+}
+
+/// The stuck positions that convert to the scrutinee, and the scrutinee as
+/// written beside them: an exposed goal can hold it both ways. A function
+/// defined by a convoyed match (`match h:`, `if h:`) unfolds to the
+/// eliminator at the scrutinee read to its stuck form, applied to `refl` of
+/// the scrutinee as written, under a motive that spells it as written too.
+/// Abstracting only the stuck spelling leaves the `refl` at a type its motive
+/// no longer gives it, which the kernel refuses
+/// (issues/runtime-fn-if-word-proposition.md).
+fn with_scrutinee(mut hits: Vec<Term>, scrutinee: &Term) -> Vec<Term> {
+    if !hits.is_empty() && !hits.contains(scrutinee) {
+        hits.push(scrutinee.clone());
+    }
+    hits
 }
 
 pub(crate) fn expose(elab: &impl MotiveSynthesisElab, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {

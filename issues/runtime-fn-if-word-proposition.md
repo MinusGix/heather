@@ -1,6 +1,6 @@
 ---
 title: A runtime fn's if h: i < 64 over a word is refused by the generator: Or has no runtime layout
-status: open
+status: closed
 labels: [native,runtime-fn,bitvec]
 area: heather-in-heather
 milestone: nh-front
@@ -26,4 +26,4 @@ The measure discharges now ([[decreases-word-measures-by-hand]]: `bv_omega` read
 
 ## Log
 
-- 2026-11-12: From the SHA-256 loops (PR #551): the plain test, with no `h:`, is refused too, with a different message. `runtime fn f(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> decreases (64 - i).toNat() { if i < 64 { let mut ctx = ctx; ctx.put_within(cn, i + 64, 0); f(ctx, cn, i + 1) } else { Mutated(ctx, i) } }` elaborates (the measure discharges) and the generator answers "`f` cannot be a runtime fn that writes a span: it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it". Outside a loop `if a < b` on words compiles (`sha256_pad`, `sha256_k`). So the eight loops of `lib/native/crypto` keep `match h: i.unsigned_lt_bit(n)` for now, without their `on ?dec1` blocks. The done-when should hold both spellings, with and without `h:`.
+- 2026-11-12: Done (Minus chose the reading): if h: P elaborates as a convoyed match on decide_bit<P>(), with h read from the instance's reflects through bool's decide_true/decide_false, bound only in a branch that names it. count_up_if in runtime_loop_tests certifies. Motive synthesis now abstracts the scrutinee as written beside its stuck spelling (matching::with_scrutinee), so a proof casing a convoy-defined function's own test works; imperative_statements_tests larger_is_right/left and larger_bit_is_right. Limit: a function whose branch uses h cannot be proved about by casing the test, [[if-evidence-proof-by-cases]].

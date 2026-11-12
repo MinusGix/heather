@@ -92,6 +92,18 @@ theorem count_up_to_64_runs(i, acc: BitVec(64)): program_eval(count_up_to_64::pr
 }
 theorem count_up_to_64_lit(): count_up_to_64(60, 0) = 246 { refl }
 
+// The test as the proposition, `if h: i < 64`: the `if` matches on the
+// bit, so the reflector reads the loop as the `match h:` one above
+// (issues/runtime-fn-if-word-proposition.md).
+runtime fn count_up_if(i, acc: BitVec(64)) → BitVec(64) decreases (64 - i).toNat() {
+    if h: i < 64 { count_up_if(i + 1, acc + i) } else { acc }
+}
+
+theorem count_up_if_runs(i, acc: BitVec(64)): program_eval(count_up_if::program, 0, [i, acc]) = count_up_if(i, acc) {
+    count_up_if::agrees(i, acc)
+}
+theorem count_up_if_lit(): count_up_if(60, 0) = 246 { refl }
+
 // Both loops called, one with a count computed from a word.
 runtime fn both_loops(n: BitVec(64)) → BitVec(64) { count_down(n, sum_down(n.toNat(), n, BitVec::ofNat(0))) }
 
