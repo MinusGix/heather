@@ -1,0 +1,180 @@
+// SHA-256's context as a record laid over its span (docs/layout-design.md
+// §6.2, issues/sha256-context-type.md). `sha256_block` and
+// `sha256_stream` read and store the context by byte offsets written in
+// their bodies; this module says what those bytes are: a `Sha256`, with
+// the hash value, the working variables, the message schedule and the
+// count, stored in that order as big-endian words.
+//
+// Nothing here is proved about SHA-256. The record's codec is its
+// fields' codecs in order (`Stored::record`), each field is a `Part` made
+// by the combinators of `lib/std/machine/part.hthr`, the offsets are
+// computed (`Sha256::schedule_at`: word `i` of the schedule is at
+// `i * 4 + 64`), and the theorems are instances of the four in
+// `stored_words`: a word compiled code reads at a field's offset is that
+// field of `Sha256::of(ctx)`, and a word it stores there leaves
+// `Sha256::of(ctx) with { … }`.
+//
+// What is written by hand here (the fields' type, the two maps, one part
+// per field) is what the `laid` declaration will write (§6.2).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import stored_words;
+import sha2;
+import sha256_round;
+import sha256_block;
+import sha256_stream;
+
+// The context as a value: the hash value so far, the working variables
+// of the round being run, the message schedule (whose first sixteen words
+// are the block being assembled), and the count of bytes taken.
+record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
+
+def Sha256Fields: Type = Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>;
+
+// `n` words, each four bytes with the most significant first.
+fn Sha256::words(n: Nat) → Stored<[u32; n]> { Stored::u32_be().array(n) }
+
+fn Sha256::fields() → Stored<Sha256Fields> { Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)).then(Stored::u64_be()) }
+
+fn Sha256::of_fields(p: Sha256Fields) → Sha256 { Sha256(p.fst.fst.fst, p.fst.fst.snd, p.fst.snd, p.snd) }
+fn Sha256::to_fields(c: Sha256) → Sha256Fields { Pair(Pair(Pair(c.hash, c.working), c.schedule), c.count) }
+
+// How a context is bytes.
+fn Sha256::stored() → Stored<Sha256> { Sha256::fields().record(Sha256::of_fields, Sha256::to_fields, λ c => refl) }
+
+// The context a span holds.
+fn Sha256::of(ctx: List<u8>) → Sha256 { Sha256::stored().get(ctx, 0) }
+
+fn Sha256::part<B>(p: Part<Sha256Fields, B>(Sha256::fields())) → Part<Sha256, B>(Sha256::stored()) {
+    p.field(Sha256::of_fields, Sha256::to_fields, λ c => refl, λ p => refl)
+}
+
+// The four fields.
+fn Sha256::hash_part() → Part<Sha256, [u32; 8]>(Sha256::stored()) {
+    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
+        .then(Part::fst(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64)))
+        .then(Part::fst(Sha256::words(8), Sha256::words(8))))
+}
+
+fn Sha256::working_part() → Part<Sha256, [u32; 8]>(Sha256::stored()) {
+    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
+        .then(Part::fst(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64)))
+        .then(Part::snd(Sha256::words(8), Sha256::words(8))))
+}
+
+fn Sha256::schedule_part() → Part<Sha256, [u32; 64]>(Sha256::stored()) {
+    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
+        .then(Part::snd(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64))))
+}
+
+fn Sha256::count_part() → Part<Sha256, u64>(Sha256::stored()) {
+    Sha256::part(Part::snd(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be()))
+}
+
+// One word of each array.
+fn Sha256::hash_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::hash_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }
+fn Sha256::working_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::working_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }
+fn Sha256::schedule_word(i: Nat, inside: i < 64) → Part<Sha256, u32>(Sha256::stored()) { Sha256::schedule_part().then(Part::element(Stored::u32_be(), 64, i, inside)) }
+
+// Where everything is: the numbers `sha256_block` and `sha256_stream`
+// write in their bodies, computed.
+theorem Sha256::layout_is(): Sha256::stored().layout = Layout(328, 3) { refl }
+theorem Sha256::hash_at(i: Nat, inside: i < 8): Sha256::hash_word(i, inside).offset = i * 4 { refl }
+theorem Sha256::working_at(i: Nat, inside: i < 8): Sha256::working_word(i, inside).offset = i * 4 + 32 { refl }
+theorem Sha256::schedule_at(i: Nat, inside: i < 64): Sha256::schedule_word(i, inside).offset = i * 4 + 64 { refl }
+theorem Sha256::count_at(): Sha256::count_part().offset = 320 { refl }
+
+// What compiled code reads and stores there, as the context.
+
+// Schedule word `i`, read by the accessor at byte `4 * i + 64`.
+theorem Sha256::schedule_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat()):
+    ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).schedule, i, here).zero_extend(32) {
+    ctx.u32_be_within_part(cn, at, Sha256::schedule_word(i, here), 0, refl, place, inside)
+}
+
+// A word stored there: the context with that schedule word replaced.
+theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+    Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { schedule = vector_update(Sha256::of(ctx).schedule, i, word.truncate(32, 32)) }) {
+    ctx.put_u32_be_within_part(cn, at, word, Sha256::schedule_word(i, here), 0, refl, place, inside, own, fits)
+}
+
+theorem Sha256::working_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + 32, inside: at.toNat() + 4 <= cn.toNat()):
+    ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).working, i, here).zero_extend(32) {
+    ctx.u32_be_within_part(cn, at, Sha256::working_word(i, here), 0, refl, place, inside)
+}
+
+theorem Sha256::working_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + 32, inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+    Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { working = vector_update(Sha256::of(ctx).working, i, word.truncate(32, 32)) }) {
+    ctx.put_u32_be_within_part(cn, at, word, Sha256::working_word(i, here), 0, refl, place, inside, own, fits)
+}
+
+theorem Sha256::hash_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4, inside: at.toNat() + 4 <= cn.toNat()):
+    ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).hash, i, here).zero_extend(32) {
+    ctx.u32_be_within_part(cn, at, Sha256::hash_word(i, here), 0, refl, place, inside)
+}
+
+theorem Sha256::hash_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4, inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+    Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { hash = vector_update(Sha256::of(ctx).hash, i, word.truncate(32, 32)) }) {
+    ctx.put_u32_be_within_part(cn, at, word, Sha256::hash_word(i, here), 0, refl, place, inside, own, fits)
+}
+
+// The count, read and stored by the eight-byte accessors at byte 320.
+theorem Sha256::count_read(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): ctx.u64_be_within(cn, 320) = Sha256::of(ctx).count {
+    ctx.u64_be_within_part(cn, 320, Sha256::count_part(), 0, refl, refl, inside)
+}
+
+theorem Sha256::count_put(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.toNat(), own: cn.toNat() <= ctx.len()):
+    Sha256::of(List::put_u64_be_within(ctx, cn, 320, count).after) = (Sha256::of(ctx) with { count = count }) {
+    let fits: (328 <= ctx.len()) = Nat::le_trans(328, cn.toNat(), ctx.len(), inside, own);
+    ctx.put_u64_be_within_part(cn, 320, count, Sha256::count_part(), 0, refl, refl, inside, own, fits)
+}
+
+// The stream's own accessors are those: the count `sha256_update` and
+// `sha256_finish` read is the context's, and the one they store is the
+// context with its count replaced.
+theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count {
+    Sha256::count_read(ctx, cn, inside)
+}
+
+theorem Sha256::put_count_is(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.toNat(), own: cn.toNat() <= ctx.len()):
+    Sha256::of(List::sha256_put_count(ctx, cn, count).after) = (Sha256::of(ctx) with { count = count }) {
+    Sha256::count_put(ctx, cn, count, inside, own)
+}

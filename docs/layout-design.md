@@ -1,9 +1,11 @@
 # Layout as a library, and records laid over bytes
 
 Status: **2026-11-12: layers 1, 2 and 3 are built on PR #551, and so is
-the first piece of layer 4: big-endian words read and stored by compiled
-code, proved to be the codec's, which SHA-256's modules now use. The
-generator and the record held by a `runtime fn` are design.**
+the first pieces of layer 4: big-endian words read and stored by compiled
+code, proved to be the codec's, which SHA-256's modules now use; fields
+as values with their laws (`Part`, §5.3); and SHA-256's context as a
+record over its span, written by hand as the generator will write it
+(§6.2). The generator and the record held by a `runtime fn` are design.**
 Minus's direction (2026-11-12, the native thread): SHA-256's context goes
 "straight to laid out fields, we're going to want them very soon
 regardless", and "laying out should be something that's easy to use
@@ -241,9 +243,8 @@ fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8
   to be `Stored::u64_be().get(bytes, 320 + at)` and schedule word `i` to
   be `Stored::u32_be().get(bytes, i * 4 + (64 + at))` by these laws alone,
   which is the statement a generated accessor is proved against (§6).
-  **Not built:** the same for stores (a store into a field is the
-  record's `put` of the record with that field replaced), which wants an
-  update on `[A; n]`.
+  The same for stores is §5.3, where a field is a value that carries
+  both.
 - **A word is its bytes at their indices**: `get_be_bytes`, `get_le_bytes`
   (the word of `bytes.vector_at(at, k, 0)`, the `k` entries from `at`) and
   `put_be_bytes`, `put_le_bytes` (`bytes.update_from(at, …)`, the entries
@@ -267,6 +268,58 @@ fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8
 Alignment matters for layers 1 and 2 (it is what `repr(C)` and an
 allocator are about) and not for these laws, which are about bytes of a
 list. It comes back where a machine load wants it (§6).
+
+### 5.3 Parts: a field as a value (built)
+
+`lib/std/machine/part.hthr`. Rust's `offset_of!` gives a number; what a
+proof wants of a field is the number and what it means. A
+`Part<A, B>(whole)` is a `B` inside a stored `A`:
+
+```heather
+record Part<A, B>(whole: Stored<A>) {
+    offset: Nat,
+    codec: Stored<B>,
+    of: A → B,                  // the part of a whole
+    with: A → B → A,            // the whole with the part replaced
+    within: codec.layout.size + offset <= whole.layout.size,
+    reads: …,                   // codec.get(bytes, offset + at) = of(whole.get(bytes, at))
+    frames: …,                  // bytes changed only inside the part read as `with`
+}
+```
+
+`reads` is the projection law of §5.2 as a field. `frames` is the law for
+stores in its general form: where two lists agree on the whole's bytes
+before the part and after it, the whole read from the changed one is the
+whole read from the other `with` what the part's codec reads in the
+changed one. A store through the codec is its first instance
+(`Part::get_put`: `whole.get(p.codec.put(bytes, p.offset + at, b), at)
+= p.with(whole.get(bytes, at), b)`), and a store by compiled code is the
+second (§6.1). Stated over the changed bytes and not over `put`, it also
+covers a part written a byte at a time, or by another function that is
+proved to touch nothing else.
+
+Parts are made by combinators, each proved once: `Part::all`, `fst` and
+`snd` of a `then`, `padded`, `mapped`, `element(s, n, i, inside)` of an
+array (whose `of` is `vector_index` and whose `with` is `vector_update`,
+both new in `vector.hthr` with their laws and `vector_ext`), `then` for a
+part of a part (offsets add), and `field` for a part of a record's fields
+as a part of the record (`Stored::record` is the fields padded and read
+through the constructor). So a record's parts are compositions, its
+offsets are computed and are numerals by evaluation, `of` and `with`
+reduce to the record's own projection and `with { f = … }` by `refl`, and
+both laws come with no proof written for the record. The probes
+(`lib/_tests/std/machine/part_tests.hthr`) do this for a header with
+padding inside it and after it (a byte, a `u64` at 8, three `u16`s at 16,
+24 bytes), for an element of an array of pairs at open codecs, and refuse
+a law stated at the packed offset, a fourth flag, and a hand-made part
+whose projection is not the one at its offset.
+
+What it costs: a part is a dependent record with two proofs, so a
+composition of five is a term of that depth. Offsets and `of`/`with`
+still reduce by `refl` at SHA-256's record (§6.2); a record of hundreds
+of fields would want the generator to publish each offset as a `def`
+with its equation and not recompute it, which is the usual closed-verdict
+trade.
 
 ## 6. Layer 4: a record laid over a span
 
@@ -299,9 +352,16 @@ With §5.2's laws a body that stores a word and reads another is reasoned
 about as `Stored::get` and `Stored::put` (the probes `put_then_get`,
 `put_leaves_the_other` in `lib/_tests/native/runtime/stored_words_tests.hthr`).
 
+The same four are stated at a part (`u32_be_within_part`,
+`put_u32_be_within_part` and the two for eight bytes): a word compiled
+code reads where a part lies is `p.of` of the whole the span holds,
+and a word it stores there leaves `p.with` of it. The premises are the
+part's codec being the word's (`refl` for a field of that type), the
+index being the part's offset, and the two bounds.
+
 So what the generator of stage A has left to publish per field is small:
-an offset, an accessor that is one of these at that offset, and the
-projection law instantiated.
+the part (a composition), and the accessors' laws as instances of those
+four.
 
 ### 6.2 The declaration
 
@@ -311,7 +371,7 @@ What the source should read as (**proposed**; the spelling is §7's):
 laid record Sha256 {
     hash: [u32; 8] be,
     working: [u32; 8] be,
-    block: [u32; 64] be,
+    schedule: [u32; 64] be,
     count: u64 be,
 }
 
@@ -328,8 +388,8 @@ field an offset and a pair of accessors over the bytes with their laws
 instantiated. Prove the generator, not the copies: the laws are §5's
 theorems applied, never re-proved per record. At this stage SHA-256's
 modules stay methods on the span, and their bodies say
-`Sha256::block.put(ctx, cn, t, word)` where they say
-`ctx.sha256_put_word(cn, (t << 2) + 64, word)`: no offset in a body, which
+`Sha256::schedule.put(ctx, cn, t, word)` where they say
+`ctx.put_u32_be_within(cn, (t << 2) + 64, word)`: no offset in a body, which
 is `sha256-context-type`'s "done when" but for the receiver's type. The
 accessors are `runtime fn`s over a span as today's are, so the programs
 are the ones already linked and tested.
@@ -339,7 +399,7 @@ run after an ordinary record, which is how `congruences` is run today
 (`lib/std/tactic/derive.hthr`):
 
 ```heather
-record Sha256 { hash: [u32; 8], working: [u32; 8], block: [u32; 64], count: u64 }
+record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
 generate laid(Sha256, …);        // the byte order, and anything a field's type does not say
 ```
 
@@ -351,6 +411,30 @@ library's own composition, which checks today for this record (the probe
 `sha256_stored_layout`): the fields' codecs joined by `Stored::then`,
 padded, and read through the record's constructor by `Stored::map`, whose
 round trip is `refl` because a record is its fields.
+
+**Built by hand, as the generator will write it:**
+`lib/native/crypto/sha256_context.hthr`. `record Sha256 { hash, working,
+schedule, count }`, its fields' type and the two maps between them,
+`Sha256::stored()`, one part per field and one per word of each array,
+and `Sha256::of(ctx)`, the context a span holds. The offsets the SHA
+modules write in their bodies are theorems by `refl`
+(`Sha256::schedule_at(i)`: `i * 4 + 64`; `count_at`: 320; the layout is
+`Layout(328, 3)`), and each access is tied to the record:
+
+```heather
+theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, …):
+    Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after)
+        = (Sha256::of(ctx) with { schedule = vector_update(Sha256::of(ctx).schedule, i, word.truncate(32, 32)) })
+
+theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count
+```
+
+Each is one application of a `stored_words` theorem, with `refl` for the
+codec and the offset. Nothing in SHA-256's bodies or its assembly
+changes: this is the statement side, which is what stage B's refinements
+will cite. What a correctness proof of `sha256_compress` against the
+specification would do with it is rewrite each store and read of the
+loop into an update or a field of a `Sha256`, and never mention a byte.
 
 **Stage B: a `runtime fn` holds the record.** `ctx: Sha256` is the record
 in the source and the span in the code. This is `datarepr` with a carrier
@@ -406,12 +490,15 @@ section once A is built and shows what the refinements look like.
    `issues/bitvec-shift-mask-arithmetic.md`; the twins are not built).
 2. Layer 2 (built): `Fits`, the in-order rule, the check by evaluation.
    Layer 3 (built): `Stored` for words, arrays and records, its laws, and
-   the projection laws for reads. Left: the projection laws for stores.
+   fields as values with the laws for reads and for stores (`Part`,
+   §5.3).
 3. Words as compiled code (§6.1, built for big-endian `u32` and `u64`;
    SHA-256's modules read and store through them: `sha256_compress.s`
    is byte for byte what it was, and the three stream files change
    because the count's accessors now call the eight-byte ones, one call
-   deeper). Then stage A's generator, and SHA-256's modules over
+   deeper). SHA-256's context as a record, written by hand
+   (`sha256_context.hthr`, built). Then stage A's generator, which writes
+   that module's contents from the record, and SHA-256's modules over
    generated accessors. Two probes say what the generator may publish:
    a plain `fn` becomes run-time code afterwards by
    `generate runtime("Name");`, and a `def` numeral is read in a

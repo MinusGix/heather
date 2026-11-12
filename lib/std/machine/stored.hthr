@@ -352,3 +352,18 @@ theorem Stored::get_array_nth<A>(self s: Stored<A>, n: Nat, bytes: List<u8>, at,
         cong_fn<List<u8>, Option<A>>(λ bs => Some(s.read(bs)),
             bytes.take_drop_window(at, n * s.layout.stride() + at, i * s.layout.stride(), s.layout.size, omega)))
 }
+
+// A pair is read as its two values, each by its own codec.
+theorem Stored::get_then<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at: Nat):
+    s.then(t).get(bytes, at) = Pair(s.get(bytes, at), t.get(bytes, s.layout.offset_of(t.layout) + at)) {
+    let whole = s.then(t).get(bytes, at);
+    let both: (Pair(whole.fst, whole.snd) = Pair(s.get(bytes, at), t.get(bytes, s.layout.offset_of(t.layout) + at))) =
+        rewrite(s.get_then_fst(t, bytes, at), s.get_then_snd(t, bytes, at), refl);
+    both
+}
+
+// The same by the vector's own index.
+theorem Stored::get_array_index<A>(self s: Stored<A>, n: Nat, bytes: List<u8>, at, i: Nat, inside: i < n):
+    vector_index(s.array(n).get(bytes, at), i, inside) = s.get(bytes, i * s.layout.stride() + at) {
+    inj(trans(sym(vector_entries_nth(n, s.array(n).get(bytes, at), i, inside)), s.get_array_nth(n, bytes, at, i, inside)))
+}

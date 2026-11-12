@@ -323,6 +323,29 @@ theorem List::window_window<A>(self xs: List<A>, a, b, c, d: Nat, inside: d + a 
     }
 }
 
+// Where two lists have one window, they have each window inside it.
+theorem List::window_eq_sub<A>(self xs: List<A>, ys: List<A>, a, b, c, d: Nat, same: xs.window(a, b) = ys.window(a, b), low: a <= c, high: d <= b):
+    xs.window(c, d) = ys.window(c, d) {
+    let start: ((c - a) + a = c) = Nat::sub_add_cancel(a, c, low);
+    let inner: (xs.window(a, b).window(c - a, d - a) = ys.window(a, b).window(c - a, d - a)) = cong_fn(λ (w: List<A>) => w.window(c - a, d - a), same);
+    match Nat::le_total(a, d) {
+        Inl(a_le_d) => {
+            let end: ((d - a) + a = d) = Nat::sub_add_cancel(a, d, a_le_d);
+            let left: (xs.window(a, b).window(c - a, d - a) = xs.window(c, d)) =
+                trans(xs.window_window(a, b, c - a, d - a, omega), rewrite(start, end, refl));
+            let right: (ys.window(a, b).window(c - a, d - a) = ys.window(c, d)) =
+                trans(ys.window_window(a, b, c - a, d - a, omega), rewrite(start, end, refl));
+            trans(sym(left), trans(inner, right))
+        },
+        Inr(d_le_a) => {
+            let none: (d - c = 0) = omega;
+            let left: (xs.window(c, d) = Nil) = trans(cong_fn(λ (n: Nat) => xs.drop(c).take(n), none), xs.drop(c).take_zero());
+            let right: (ys.window(c, d) = Nil) = trans(cong_fn(λ (n: Nat) => ys.drop(c).take(n), none), ys.drop(c).take_zero());
+            trans(left, sym(right))
+        },
+    }
+}
+
 // The front of a window is the window that ends sooner.
 theorem List::take_window<A>(self xs: List<A>, a, b, k: Nat, inside: k + a <= b): xs.window(a, b).take(k) = xs.window(a, k + a) {
     trans(sym(xs.window(a, b).window_from_zero(k)),

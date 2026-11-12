@@ -173,3 +173,81 @@ theorem List::vector_of_take<A>(k: Nat, pad: A): (xs: List<A>) → xs.take(k).ve
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Entries by index
+
+// Entry `i` of a vector.
+fn vector_index<A>({n: Nat}, v: [A; n], i: Nat, inside: i < n) → A {
+    (match n as λ m => [A; m] → (i: Nat) → i < m → A {
+        Zero => λ v i inside => false_elim(inside),
+        Succ(_, ih) => λ v i => match i { Zero => λ _ => head(v), Succ(j) => λ inside => ih(tail(v), j, inside) },
+    })(v, i, inside)
+}
+
+// The vector with `a` at entry `i`; the vector where it has no such entry.
+fn vector_update<A>({n: Nat}, v: [A; n], i: Nat, a: A) → [A; n] {
+    (match n as λ m => [A; m] → Nat → [A; m] {
+        Zero => λ v i => v,
+        Succ(_, ih) => λ v i => match i { Zero => cons(a, tail(v)), Succ(j) => cons(head(v), ih(tail(v), j)) },
+    })(v, i)
+}
+
+// It is the entry of the vector's list.
+theorem vector_entries_nth<A>(n: Nat): (v: [A; n]) → (i: Nat) → (inside: i < n) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (inside: i < m) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
+        Zero => λ v i inside => false_elim(inside),
+        Succ(k, ih) => λ v i => match i {
+            Zero => λ inside => refl,
+            Succ(j) => λ inside => ih(tail(v), j, inside),
+        },
+    }
+}
+
+// The updated entry is the new value.
+theorem vector_index_update_same<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a: A) → (inside: j < n) → j = i → vector_index(vector_update(v, i, a), j, inside) = a {
+    match n as λ m => (v: [A; m]) → (i, j: Nat) → (a: A) → (inside: j < m) → j = i → vector_index(vector_update(v, i, a), j, inside) = a {
+        Zero => λ v i j a inside same => false_elim(inside),
+        Succ(k, ih) => λ v i j a => match i {
+            Zero => match j {
+                Zero => λ inside same => refl,
+                Succ(_) => λ inside same => absurd(same),
+            },
+            Succ(i1) => match j {
+                Zero => λ inside same => absurd(same),
+                Succ(j1) => λ inside same => ih(tail(v), i1, j1, a, inside, Nat::succ_inj(j1, i1, same)),
+            },
+        },
+    }
+}
+
+// Every other entry is as it was.
+theorem vector_index_update_other<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a: A) → (inside: j < n) → ¬(j = i) →
+    vector_index(vector_update(v, i, a), j, inside) = vector_index(v, j, inside) {
+    match n as λ m => (v: [A; m]) → (i, j: Nat) → (a: A) → (inside: j < m) → ¬(j = i) → vector_index(vector_update(v, i, a), j, inside) = vector_index(v, j, inside) {
+        Zero => λ v i j a inside other => false_elim(inside),
+        Succ(k, ih) => λ v i j a => match i {
+            Zero => match j {
+                Zero => λ inside other => false_elim(other(refl)),
+                Succ(_) => λ inside other => refl,
+            },
+            Succ(i1) => match j {
+                Zero => λ inside other => refl,
+                Succ(j1) => λ inside other => ih(tail(v), i1, j1, a, inside, λ same => other(cong_fn(λ (m: Nat) => Succ(m), same))),
+            },
+        },
+    }
+}
+
+// Two vectors with the same entries are one.
+theorem vector_ext<A>(n: Nat): (v, w: [A; n]) → ((j: Nat) → (inside: j < n) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
+    match n as λ m => (v, w: [A; m]) → ((j: Nat) → (inside: j < m) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
+        Zero => λ v w same => refl,
+        Succ(k, ih) => λ v w same => {
+            let first: (head(v) = head(w)) = same(0, trivial);
+            let rest: (tail(v) = tail(w)) = ih(tail(v), tail(w), λ j inside => same(Succ(j), inside));
+            let both: (cons(head(v), tail(v)) = cons(head(w), tail(w))) = rewrite(first, rest, refl);
+            both
+        },
+    }
+}

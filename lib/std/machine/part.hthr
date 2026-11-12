@@ -1,0 +1,210 @@
+// Parts of what is stored: a field of a record, an element of an array,
+// a field of a field, as a value (docs/layout-design.md §5.3). The fourth
+// piece over `layout.hthr` and `stored.hthr`: a `Stored<A>` says how an
+// `A` is bytes, and a `Part<A, B>(whole)` says where in those bytes a `B`
+// is, how it is stored there, what it is of the whole (`of`) and what the
+// whole is with it replaced (`with`).
+//
+// It carries its laws, so they are proved once per way of making a part
+// and never per record:
+//
+// - `reads`: reading the part where it lies is reading the whole and
+//   taking the part;
+// - `frames`: bytes that differ from others only inside the part read as
+//   the whole with the part replaced by what is read there. A store into
+//   the part is the first instance (`Part::get_put`): the whole read back
+//   is the whole `with` the value stored.
+//
+// The ways: the whole itself (`all`), the two values of a pair (`fst`,
+// `snd`), what padding surrounds (`padded`), what a mapped codec stores
+// (`mapped`, and `record` for the two together, which is how a record is
+// its fields), an element of an array (`element`), and a part of a part
+// (`then`). An offset is computed by them, as Rust's `offset_of!` computes
+// it, and at a closed layout it is a numeral by evaluation.
+//
+// What a record's parts look like is in the probes
+// (lib/_tests/std/machine/part_tests.hthr): a header with padding inside
+// it and after it, each field at the offset the layout computes and each
+// with both laws and no proof written for it. SHA-256's context is
+// lib/native/crypto/sha256_context.hthr.
+
+import logic;
+import bool;
+import nat;
+import option;
+import pair;
+import list;
+import list_window;
+import omega;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import layout;
+import stored;
+
+// A part of a stored `A` that is a `B`: a field of a record, an element
+// of an array, a field of a field. Where it is, how it is stored, what it
+// is of the whole and what the whole is with it replaced; that it lies in
+// the whole; that reading it there is reading the whole and taking it;
+// and that bytes changed only inside it read as the whole with it
+// replaced by what is read there.
+record Part<A, B>(whole: Stored<A>) {
+    offset: Nat,
+    codec: Stored<B>,
+    of: A → B,
+    with: A → B → A,
+    within: codec.layout.size + offset <= whole.layout.size,
+    reads: (bytes: List<u8>) → (at: Nat) → codec.get(bytes, offset + at) = of(whole.get(bytes, at)),
+    frames: (bytes, changed: List<u8>) → (at: Nat) →
+        changed.window(at, offset + at) = bytes.window(at, offset + at) →
+        changed.window(codec.layout.size + (offset + at), whole.layout.size + at) = bytes.window(codec.layout.size + (offset + at), whole.layout.size + at) →
+        whole.get(changed, at) = with(whole.get(bytes, at), codec.get(changed, offset + at)),
+}
+
+// The whole is a part of itself.
+fn Part::all<A>(s: Stored<A>) → Part<A, A>(s) {
+    Part(0, s, λ a => a, λ _ a => a, Nat::le_refl(s.layout.size),
+        λ bytes at => cong_fn(λ (n: Nat) => s.get(bytes, n), at.add_left_zero()),
+        λ bytes changed at before after => cong_fn(λ (n: Nat) => s.get(changed, n), sym(at.add_left_zero())))
+}
+
+// The two parts of a pair.
+fn Part::fst<A, B>(s: Stored<A>, t: Stored<B>) → Part<Pair<A, B>, A>(s.then(t)) {
+    Part(0, s, λ p => p.fst, λ p a => Pair(a, p.snd), s.layout.extend_first_inside(t.layout),
+        λ bytes at => trans(cong_fn(λ (n: Nat) => s.get(bytes, n), at.add_left_zero()), sym(s.get_then_fst(t, bytes, at))),
+        λ bytes changed at before after => {
+            let off = s.layout.offset_of(t.layout);
+            let room: s.layout.size <= off = s.layout.offset_of_ge(t.layout);
+            let start: (0 + at = at) = at.add_left_zero();
+            let second: (changed.window(off + at, t.layout.size + (off + at)) = bytes.window(off + at, t.layout.size + (off + at))) =
+                changed.window_eq_sub(bytes, s.layout.size + (0 + at), (t.layout.size + off) + at, off + at, t.layout.size + (off + at), after, omega, omega);
+            trans(s.get_then(t, changed, at),
+                trans(cong_fn(λ (b: B) => Pair(s.get(changed, at), b), trans(cong_fn(λ (w: List<u8>) => t.read(w), second), sym(s.get_then_snd(t, bytes, at)))),
+                    cong_fn(λ (n: Nat) => Pair(s.get(changed, n), s.then(t).get(bytes, at).snd), sym(start))))
+        })
+}
+
+fn Part::snd<A, B>(s: Stored<A>, t: Stored<B>) → Part<Pair<A, B>, B>(s.then(t)) {
+    Part(s.layout.offset_of(t.layout), t, λ p => p.snd, λ p b => Pair(p.fst, b), Nat::le_refl(t.layout.size + s.layout.offset_of(t.layout)),
+        λ bytes at => sym(s.get_then_snd(t, bytes, at)),
+        λ bytes changed at before after => {
+            let off = s.layout.offset_of(t.layout);
+            let room: s.layout.size <= off = s.layout.offset_of_ge(t.layout);
+            let first: (changed.window(at, s.layout.size + at) = bytes.window(at, s.layout.size + at)) =
+                changed.window_eq_sub(bytes, at, off + at, at, s.layout.size + at, before, omega, omega);
+            trans(s.get_then(t, changed, at),
+                cong_fn(λ (a: A) => Pair(a, t.get(changed, off + at)), trans(cong_fn(λ (w: List<u8>) => s.read(w), first), sym(s.get_then_fst(t, bytes, at)))))
+        })
+}
+
+// A part of a part.
+fn Part::then<A, B, C>({whole: Stored<A>}, self p: Part<A, B>(whole), q: Part<B, C>(p.codec)) → Part<A, C>(whole) {
+    let inside: q.codec.layout.size + (q.offset + p.offset) <= whole.layout.size = omega(p.within, q.within);
+    Part(q.offset + p.offset, q.codec, λ a => q.of(p.of(a)), λ a c => p.with(a, q.with(p.of(a), c)), inside,
+        λ bytes at => trans(cong_fn(λ (n: Nat) => q.codec.get(bytes, n), q.offset.add_assoc(p.offset, at)),
+            trans(q.reads(bytes, p.offset + at), cong_fn(q.of, p.reads(bytes, at)))),
+        λ bytes changed at before after => {
+            let p_in: p.codec.layout.size + p.offset <= whole.layout.size = p.within;
+            let q_in: q.codec.layout.size + q.offset <= p.codec.layout.size = q.within;
+            let place: ((q.offset + p.offset) + at = q.offset + (p.offset + at)) = q.offset.add_assoc(p.offset, at);
+            let before_p: (changed.window(at, p.offset + at) = bytes.window(at, p.offset + at)) =
+                changed.window_eq_sub(bytes, at, (q.offset + p.offset) + at, at, p.offset + at, before, omega, omega);
+            let after_p: (changed.window(p.codec.layout.size + (p.offset + at), whole.layout.size + at) = bytes.window(p.codec.layout.size + (p.offset + at), whole.layout.size + at)) =
+                changed.window_eq_sub(bytes, q.codec.layout.size + ((q.offset + p.offset) + at), whole.layout.size + at,
+                    p.codec.layout.size + (p.offset + at), whole.layout.size + at, after, omega, omega);
+            let before_q: (changed.window(p.offset + at, q.offset + (p.offset + at)) = bytes.window(p.offset + at, q.offset + (p.offset + at))) =
+                changed.window_eq_sub(bytes, at, (q.offset + p.offset) + at, p.offset + at, q.offset + (p.offset + at), before, omega, omega);
+            let after_q: (changed.window(q.codec.layout.size + (q.offset + (p.offset + at)), p.codec.layout.size + (p.offset + at))
+                    = bytes.window(q.codec.layout.size + (q.offset + (p.offset + at)), p.codec.layout.size + (p.offset + at))) =
+                changed.window_eq_sub(bytes, q.codec.layout.size + ((q.offset + p.offset) + at), whole.layout.size + at,
+                    q.codec.layout.size + (q.offset + (p.offset + at)), p.codec.layout.size + (p.offset + at), after, omega, omega);
+            let outer: (whole.get(changed, at) = p.with(whole.get(bytes, at), p.codec.get(changed, p.offset + at))) = p.frames(bytes, changed, at, before_p, after_p);
+            let inner: (p.codec.get(changed, p.offset + at) = q.with(p.codec.get(bytes, p.offset + at), q.codec.get(changed, q.offset + (p.offset + at)))) =
+                q.frames(bytes, changed, p.offset + at, before_q, after_q);
+            let read: (p.codec.get(bytes, p.offset + at) = p.of(whole.get(bytes, at))) = p.reads(bytes, at);
+            let stepped: (q.with(p.codec.get(bytes, p.offset + at), q.codec.get(changed, q.offset + (p.offset + at)))
+                    = q.with(p.of(whole.get(bytes, at)), q.codec.get(changed, (q.offset + p.offset) + at))) =
+                trans(cong_fn(λ (b: B) => q.with(b, q.codec.get(changed, q.offset + (p.offset + at))), read),
+                    cong_fn(λ (n: Nat) => q.with(p.of(whole.get(bytes, at)), q.codec.get(changed, n)), sym(place)));
+            trans(outer, cong_fn(λ (b: B) => p.with(whole.get(bytes, at), b), trans(inner, stepped)))
+        })
+}
+
+// What padding surrounds.
+fn Part::padded<A>(s: Stored<A>) → Part<A, A>(s.padded()) {
+    Part(0, s, λ a => a, λ _ a => a, s.layout.stride_ge(),
+        λ bytes at => trans(cong_fn(λ (n: Nat) => s.get(bytes, n), at.add_left_zero()), sym(s.get_padded(bytes, at))),
+        λ bytes changed at before after => trans(s.get_padded(changed, at), cong_fn(λ (n: Nat) => s.get(changed, n), sym(at.add_left_zero()))))
+}
+
+// What a mapped codec stores, where the functions are inverse both ways
+// (a record and its fields are).
+fn Part::mapped<A, B>(s: Stored<A>, to: A → B, from: B → A, back: (b: B) → to(from(b)) = b, forth: (a: A) → from(to(a)) = a) → Part<B, A>(s.map(to, from, back)) {
+    Part(0, s, from, λ _ a => to(a), Nat::le_refl(s.layout.size),
+        λ bytes at => trans(cong_fn(λ (n: Nat) => s.get(bytes, n), at.add_left_zero()), sym(forth(s.get(bytes, at)))),
+        λ bytes changed at before after => cong_fn(λ (n: Nat) => to(s.get(changed, n)), sym(at.add_left_zero())))
+}
+
+// A store into a part, read back as the whole: the whole with the part
+// replaced.
+theorem Part::get_put<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), bytes: List<u8>, at: Nat, b: B, fits: whole.layout.size + at <= bytes.len()):
+    whole.get(p.codec.put(bytes, p.offset + at, b), at) = p.with(whole.get(bytes, at), b) {
+    let inside: p.codec.layout.size + p.offset <= whole.layout.size = p.within;
+    let changed = p.codec.put(bytes, p.offset + at, b);
+    let before: (changed.window(at, p.offset + at) = bytes.window(at, p.offset + at)) =
+        bytes.window_put_window_before(p.offset + at, p.codec.write(b), at, p.offset + at, Nat::le_refl(p.offset + at), omega);
+    let after: (changed.window(p.codec.layout.size + (p.offset + at), whole.layout.size + at) = bytes.window(p.codec.layout.size + (p.offset + at), whole.layout.size + at)) =
+        bytes.window_put_window_after(p.offset + at, p.codec.write(b), p.codec.layout.size + (p.offset + at), whole.layout.size + at,
+            j(sym(p.codec.sized(b)), λ n _ => n + (p.offset + at) <= p.codec.layout.size + (p.offset + at), Nat::le_refl(p.codec.layout.size + (p.offset + at))), omega);
+    trans(p.frames(bytes, changed, at, before, after),
+        cong_fn(λ (v: B) => p.with(whole.get(bytes, at), v), p.codec.get_put(bytes, p.offset + at, b, omega)))
+}
+
+// Element `i` of an array.
+fn Part::element<A>(s: Stored<A>, n, i: Nat, inside: i < n) → Part<[A; n], A>(s.array(n)) {
+    Part(i * s.layout.stride(), s, λ v => vector_index(v, i, inside), λ v a => vector_update(v, i, a), s.layout.array_element_inside(inside),
+        λ bytes at => sym(s.get_array_index(n, bytes, at, i, inside)),
+        λ bytes changed at before after => {
+            let stride = s.layout.stride();
+            let size = s.layout.size;
+            let new = s.get(changed, i * stride + at);
+            vector_ext(n, s.array(n).get(changed, at), vector_update(s.array(n).get(bytes, at), i, new), λ j here => {
+                let read: (vector_index(s.array(n).get(changed, at), j, here) = s.get(changed, j * stride + at)) = s.get_array_index(n, changed, at, j, here);
+                let last: size + j * stride <= n * stride = s.layout.array_element_inside(here);
+                match j.lt_trichotomy(i) {
+                    Inl(below) => {
+                        let apart: size + j * stride <= i * stride = s.layout.array_elements_apart(below);
+                        let same: (changed.window(j * stride + at, size + (j * stride + at)) = bytes.window(j * stride + at, size + (j * stride + at))) =
+                            changed.window_eq_sub(bytes, at, i * stride + at, j * stride + at, size + (j * stride + at), before, omega, omega);
+                        trans(read, trans(cong_fn(λ (w: List<u8>) => s.read(w), same),
+                            trans(sym(s.get_array_index(n, bytes, at, j, here)),
+                                sym(vector_index_update_other(n, s.array(n).get(bytes, at), i, j, new, here, j.ne_of_lt(i, below))))))
+                    },
+                    Inr(rest) => match rest {
+                        Inl(same_index) => trans(read, trans(cong_fn(λ (m: Nat) => s.get(changed, m * stride + at), same_index),
+                            sym(vector_index_update_same(n, s.array(n).get(bytes, at), i, j, new, here, same_index)))),
+                        Inr(above) => {
+                            let apart: size + i * stride <= j * stride = s.layout.array_elements_apart(above);
+                            let same: (changed.window(j * stride + at, size + (j * stride + at)) = bytes.window(j * stride + at, size + (j * stride + at))) =
+                                changed.window_eq_sub(bytes, size + (i * stride + at), n * stride + at, j * stride + at, size + (j * stride + at), after, omega, omega);
+                            trans(read, trans(cong_fn(λ (w: List<u8>) => s.read(w), same),
+                                trans(sym(s.get_array_index(n, bytes, at, j, here)),
+                                    sym(vector_index_update_other(n, s.array(n).get(bytes, at), i, j, new, here, λ eq => i.ne_of_lt(j, above, sym(eq)))))))
+                        },
+                    },
+                }
+            })
+        })
+}
+
+// A record as its fields: the fields in order, padded to the alignment,
+// read through the record's constructor.
+fn Stored::record<F, R>(self fields: Stored<F>, to: F → R, from: R → F, back: (r: R) → to(from(r)) = r) → Stored<R> {
+    fields.padded().map(to, from, back)
+}
+
+// A part of the fields is a part of the record.
+fn Part::field<F, R, B>({fields: Stored<F>}, self p: Part<F, B>(fields), to: F → R, from: R → F, back: (r: R) → to(from(r)) = r, forth: (f: F) → from(to(f)) = f) →
+    Part<R, B>(fields.record(to, from, back)) {
+    Part::mapped(fields.padded(), to, from, back, forth).then(Part::padded(fields)).then(p)
+}

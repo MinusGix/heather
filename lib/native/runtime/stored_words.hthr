@@ -16,6 +16,11 @@
 // bytes joined by shifts are the codec's word (`BitVec::be_join_32`), and
 // the span's entries at `at`, `at + 1`, … are the window's
 // (`List::vector_of_window`, `List::put_window_update_from`).
+//
+// The last section is the same at a part (`lib/std/machine/part.hthr`):
+// a word read where a field lies is the field of the record the span
+// holds, and a word stored there leaves the record with that field
+// replaced. A record's accessors are instances of these four.
 import logic;
 import bool;
 import nat;
@@ -36,6 +41,7 @@ import bitvec_bytes;
 import list_window;
 import layout;
 import stored;
+import part;
 import rt;
 import rt_reflect;
 import rt_lower;
@@ -205,4 +211,51 @@ theorem List::put_u64_be_within_stored(self span: List<u8>, length, i, word: u64
     List::put_u64_be_within(span, length, i, word) = Mutated(Stored::u64_be().put(span, i.toNat(), word), word) {
     trans(span.put_u64_be_within_entries(length, i, word, inside),
         cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), sym(Stored::put_be_bytes(8, span, i.toNat(), word, omega))))
+}
+
+// ---------------------------------------------------------------------------
+// At a part of what the span holds
+
+// A word read by compiled code where a part lies is the part of the
+// whole, widened.
+theorem List::u32_be_within_part<A>({whole: Stored<A>}, self span: List<u8>, length, i: u64, p: Part<A, u32>(whole), base: Nat,
+    codec: p.codec = Stored::u32_be(), place: i.toNat() = p.offset + base, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_be_within(length, i) = p.of(whole.get(span, base)).zero_extend(32) {
+    let read: (Stored::u32_be().get(span, i.toNat()) = p.of(whole.get(span, base))) =
+        trans(cong_fn(λ (n: Nat) => Stored::u32_be().get(span, n), place),
+            trans(cong_fn(λ (s: Stored<u32>) => s.get(span, p.offset + base), sym(codec)), p.reads(span, base)));
+    trans(span.u32_be_within_stored(length, i, inside), cong_fn(λ (w: u32) => w.zero_extend(32), read))
+}
+
+// A word stored by compiled code where a part lies reads back as the
+// whole with the part replaced by the word's low half.
+theorem List::put_u32_be_within_part<A>({whole: Stored<A>}, self span: List<u8>, length, i, word: u64, p: Part<A, u32>(whole), base: Nat,
+    codec: p.codec = Stored::u32_be(), place: i.toNat() = p.offset + base, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len(),
+    fits: whole.layout.size + base <= span.len()):
+    whole.get(List::put_u32_be_within(span, length, i, word).after, base) = p.with(whole.get(span, base), word.truncate(32, 32)) {
+    let stored: (List::put_u32_be_within(span, length, i, word).after = p.codec.put(span, p.offset + base, word.truncate(32, 32))) =
+        trans(cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, span.put_u32_be_within_stored(length, i, word, inside, own)),
+            trans(cong_fn(λ (n: Nat) => Stored::u32_be().put(span, n, word.truncate(32, 32)), place),
+                cong_fn(λ (s: Stored<u32>) => s.put(span, p.offset + base, word.truncate(32, 32)), sym(codec))));
+    trans(cong_fn(λ (bytes: List<u8>) => whole.get(bytes, base), stored), p.get_put(span, base, word.truncate(32, 32), fits))
+}
+
+// The same for a word of eight bytes.
+theorem List::u64_be_within_part<A>({whole: Stored<A>}, self span: List<u8>, length, i: u64, p: Part<A, u64>(whole), base: Nat,
+    codec: p.codec = Stored::u64_be(), place: i.toNat() = p.offset + base, inside: i.toNat() + 8 <= length.toNat()):
+    span.u64_be_within(length, i) = p.of(whole.get(span, base)) {
+    trans(span.u64_be_within_stored(length, i, inside),
+        trans(cong_fn(λ (n: Nat) => Stored::u64_be().get(span, n), place),
+            trans(cong_fn(λ (s: Stored<u64>) => s.get(span, p.offset + base), sym(codec)), p.reads(span, base))))
+}
+
+theorem List::put_u64_be_within_part<A>({whole: Stored<A>}, self span: List<u8>, length, i, word: u64, p: Part<A, u64>(whole), base: Nat,
+    codec: p.codec = Stored::u64_be(), place: i.toNat() = p.offset + base, inside: i.toNat() + 8 <= length.toNat(), own: length.toNat() <= span.len(),
+    fits: whole.layout.size + base <= span.len()):
+    whole.get(List::put_u64_be_within(span, length, i, word).after, base) = p.with(whole.get(span, base), word) {
+    let stored: (List::put_u64_be_within(span, length, i, word).after = p.codec.put(span, p.offset + base, word)) =
+        trans(cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, span.put_u64_be_within_stored(length, i, word, inside, own)),
+            trans(cong_fn(λ (n: Nat) => Stored::u64_be().put(span, n, word), place),
+                cong_fn(λ (s: Stored<u64>) => s.put(span, p.offset + base, word), sym(codec))));
+    trans(cong_fn(λ (bytes: List<u8>) => whole.get(bytes, base), stored), p.get_put(span, base, word, fits))
 }
