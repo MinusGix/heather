@@ -1,8 +1,8 @@
-//! Acceptance for issues/decidable-if-expression.md. `if h: P` is ordinary
-//! elimination of `decide<P>()`, with the evidence named in both branch
-//! scopes; `if P` without evidence is a match on the decision's bit
-//! (issues/native-frontend-decided-matches.md); no Boolean/proposition
-//! coercion.
+//! Acceptance for issues/decidable-if-expression.md. `if P` is a match on
+//! the decision's bit (issues/native-frontend-decided-matches.md), and so is
+//! `if h: P`, convoyed, with the evidence read from the bit's equation in
+//! both branch scopes (issues/runtime-fn-if-word-proposition.md); no
+//! Boolean/proposition coercion.
 
 use heather_elab::Elaborator;
 
@@ -70,7 +70,7 @@ fn if_is_definitionally_the_explicit_bit_match() {
 }
 
 #[test]
-fn if_with_evidence_is_definitionally_the_explicit_decision_match() {
+fn if_with_evidence_is_definitionally_the_convoyed_bit_match() {
     ok(
         &mut with_std(),
         r#"
@@ -80,7 +80,10 @@ fn if_with_evidence_is_definitionally_the_explicit_decision_match() {
 
         fn via_if(n, m: Nat) -> Nat { if h: n <= m { m } else { n } }
         fn via_match(n, m: Nat) -> Nat {
-            match decide<nat::Nat::Le(n, m)>() { Inl(h) => m, Inr(h) => n }
+            match e: decide_bit<nat::Nat::Le(n, m)>() {
+                True => { let h = decide_true<nat::Nat::Le(n, m)>(e); m },
+                False => { let h = decide_false<nat::Nat::Le(n, m)>(e); n },
+            }
         }
         theorem same(n, m: Nat): via_if(n, m) = via_match(n, m) { refl }
         "#,

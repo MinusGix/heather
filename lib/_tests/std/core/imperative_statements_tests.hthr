@@ -567,6 +567,31 @@ fn witnessed(b: Bool) → Nat { if h: b { let _w: b.IsTrue() = h; 1 } else { 0 }
 theorem witnessed_t(): witnessed(True) = 1 { refl }
 theorem witnessed_f(): witnessed(False) = 0 { refl }
 
+// `if h: P` is a convoyed match on the instance's bit, `h` read from its
+// `reflects` (issues/runtime-fn-if-word-proposition.md): its function
+// unfolds to the match on `n.leb(m)`, and a proof that cases the same test
+// reads each side's goal off it, at a neutral argument.
+fn larger(n, m: Nat) → Nat { if h: n <= m { m } else { n } }
+theorem larger_lit(): larger(2, 5) = 5 { refl }
+theorem larger_is_right(n, m: Nat, p: n <= m): larger(n, m) = m { if h: n <= m { refl } else { false_elim(h(p)) } }
+theorem larger_is_left(n, m: Nat, p: ¬(n <= m)): larger(n, m) = n { if h: n <= m { false_elim(p(h)) } else { refl } }
+// The same over a written `match h:` on the bit.
+fn larger_bit(n, m: Nat) → Nat { match e: n.leb(m) { True => m, False => n } }
+theorem larger_bit_is_right(n, m: Nat, p: n <= m): larger_bit(n, m) = m {
+    match e: n.leb(m) { True => refl, False => false_elim(decide_false<n <= m>(e)(p)) }
+}
+// A branch that passes `h` on. Its evidence is typed by the instance's bit,
+// which a motive abstracting the bit cannot keep, so casing the same test
+// at a neutral argument is not yet a proof of `before(n) = n - 1`
+// (issues/if-evidence-proof-by-cases.md; the kernel refuses it unrecorded,
+// so it is no directive here).
+fn need(n: Nat, h: 1 <= n) → Nat { n - 1 }
+fn before(n: Nat) → Nat { if h: 1 <= n { need(n, h) } else { 0 } }
+theorem before_lit(): before(3) = 2 { refl }
+// The evidence, used, has the proposition's type on each side.
+fn evidenced(n: Nat) → Nat { if h: n < 3 { let _w: (n < 3) = h; 1 } else { let _v: ¬(n < 3) = h; 2 } }
+theorem evidenced_lit(): evidenced(1) = 1 { refl }
+
 // `False`/`True` with no type written are the `Bool` constructors in a term
 // position, `logic` imported or not; at a universe `False` is still the type.
 fn any_zero(xs: List<Nat>) → Bool {

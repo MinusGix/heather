@@ -75,8 +75,9 @@ theorem Bool::or_comm(self a, b: Bool): a || b = b || a {
 // `bit` is `True` exactly when `P` holds, and `reflects` says so. An `if P`
 // without an evidence binder is `match decide_bit<P>()`, so a decision built
 // from a comparison is a match on that comparison's bit, the way code
-// branches on it. `dec` stays for `if h: P` and every consumer that wants the
-// evidence. The class lives here, beside `Bool`, because its bit is one.
+// branches on it. An `if h: P` matches on the bit too, its `h` read from
+// `reflects` (`decide_true`, `decide_false`). `dec` stays for every consumer
+// that wants the evidence as a disjunction. The class lives here, beside `Bool`, because its bit is one.
 
 // `bit` decides `P`: it is `True` exactly when `P` holds.
 fn Reflects(P: Type, bit: Bool) → Type { ((bit = True) → P) ∧ ((bit = False) → ¬P) }
@@ -228,6 +229,12 @@ instance<P: Decide, Q: Decide> Decide<P → Q> {
 fn decide<P: Decide>() → P ∨ ¬P { P.dec }
 
 fn decide_bit<P: Decide>() → Bool { P.bit }
+
+// An `if h: P`'s evidence: the `if` matches on `decide_bit<P>()`, and each
+// branch has `P` or `¬P` from the bit's equation.
+fn decide_true<P: Decide>(e: decide_bit<P>() = True) → P { P.reflects.left(e) }
+
+fn decide_false<P: Decide>(e: decide_bit<P>() = False) → ¬P { P.reflects.right(e) }
 
 fn decide_pick<P: Decide, A>(x, y: A) → A { or_pick(P.dec, x, y) }
 
