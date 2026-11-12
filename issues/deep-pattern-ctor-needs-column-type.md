@@ -3,7 +3,7 @@ title: An ambiguous constructor name in a deep pattern is silently read as a bin
 status: closed
 labels: [frontend, elaboration, patterns, modules]
 created: 2026-08-16
-updated: 2026-08-20
+updated: 2026-11-12
 ---
 
 Found in passing while landing [[ctor-resolution-by-expected-type]] (2026-08-16),
@@ -100,3 +100,4 @@ this stops being hypothetical and starts being a wrong answer.
   unchanged. The module regression crosses two colliding Option constructors,
   a colliding recursive child, and the negative control where the same name at
   Nat remains a binder. Full `scripts/test`: 1978 passed, 0 failed.
+- 2026-11-12: A sibling found 2026-11-12 ([[deep-pattern-ctor-unknown-column-type]]): the classification against the column's type has no answer where that type is not yet known (a match on a `let x <- t;` binding, whose continuation is elaborated before the carrier is resolved), and the identifier is then still read as a binder, silently.
