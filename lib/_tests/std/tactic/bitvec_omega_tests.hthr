@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import list;
 
 // ---- The test, read from the context as it is written ----
 
@@ -92,4 +92,40 @@ fn count_up_wrong(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
         False => 1 + count_up_wrong(i + 1),
         True => 0,
     }
+}
+
+// ---- A lambda binder in an atom ----
+
+// omega spells an atom containing a lambda as source, and a binder at a type
+// with a value argument is spelled whole (`BitVec(8)`, not the `BitVec` that
+// does not elaborate), whether or not the fact holding it is listed
+// (issues/omega-atom-lambda-binder-type-spelled-bare.md).
+theorem respell_binder(xs: List<BitVec(8)>, k, t: Nat, byte: BitVec(8),
+    short: t < xs.update(k, λ (_: BitVec(8)) => byte).len(), whole: xs.len() = 16, before: t < xs.len()): t < 16 {
+    omega(before, whole)
+}
+// The atom is the fact omega reads, at a neutral width.
+theorem binder_neutral_width(n: Nat, xs: List<BitVec(n)>, k, t: Nat, byte: BitVec(n),
+    short: t < xs.update(k, λ (_: BitVec(n)) => byte).len()): t < xs.update(k, λ (_: BitVec(n)) => byte).len() + 1 {
+    omega
+}
+// A family with a type argument and a value argument, the type argument open.
+record Tagged<A>(n: Nat) { items: [A; n] }
+theorem binder_type_and_value<A>(xs: List<Tagged<A>(3)>, k, t: Nat, v: Tagged<A>(3),
+    short: t < xs.update(k, λ (_: Tagged<A>(3)) => v).len()): t < xs.update(k, λ (_: Tagged<A>(3)) => v).len() + 1 {
+    omega
+}
+// In a checking position.
+theorem binder_checking(xs: List<BitVec(8)>, k, t: Nat, byte: BitVec(8),
+    short: t < xs.update(k, λ (_: BitVec(8)) => byte).len()): t < xs.update(k, λ (_: BitVec(8)) => byte).len() + 2 {
+    let h: (t < xs.update(k, λ (_: BitVec(8)) => byte).len() + 2) = omega;
+    h
+}
+// Negative control: a value argument no field mentions cannot be read back
+// off the type, so the spelling declines rather than write the bare name.
+record Phantom(n: Nat) { tag: Nat }
+// expect-error: could not spell
+theorem binder_phantom_declines(xs: List<Phantom(3)>, k, t: Nat, v: Phantom(3),
+    short: t < xs.update(k, λ (_: Phantom(3)) => v).len()): t < xs.update(k, λ (_: Phantom(3)) => v).len() + 1 {
+    omega
 }

@@ -2461,6 +2461,13 @@ impl GeneratedDefs<'_> {
     /// hole-match is the same checked one [`Self::instance_args`] uses, so a
     /// type that is not an instance declines rather than mis-reads.
     pub(crate) fn display_vargs(&self, cx: &Cx, ind: &Inductive, ty: &Type, under: u32) -> Option<Vec<Rc<Term>>> {
+        let np = ind.params.len();
+        self.display_args(cx, ind, ty, under).map(|args| args[np..].to_vec())
+    }
+
+    /// [`Self::display_vargs`] with the type arguments before them, as
+    /// codes: what a source spelling needs to write `D<Ā>(v̄)` whole.
+    pub(crate) fn display_args(&self, cx: &Cx, ind: &Inductive, ty: &Type, under: u32) -> Option<Vec<Rc<Term>>> {
         let args = match ty {
             Type::El { tm, .. } => match self.gen_app_of(tm) {
                 Some((GenDef::TyCodeFn(tag), args)) if tag == ind.tag => args,
@@ -2468,8 +2475,7 @@ impl GeneratedDefs<'_> {
             },
             _ => self.instance_match(cx, ind, ty, under, 0)?.1,
         };
-        let np = ind.params.len();
-        (args.len() == np + ind.valparams.len()).then(|| args[np..].to_vec())
+        (args.len() == ind.params.len() + ind.valparams.len()).then_some(args)
     }
 }
 
