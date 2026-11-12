@@ -45,10 +45,15 @@
 // the variables to the environment (`FTm::Knows`). A read needs no such
 // knowledge: at an offset that is no field's it is the byte meaning's.
 //
-// Not here yet: a loop (`Again`), a lend, a byte stored outside a field,
-// a store at a computed offset (an array's element) and a call of
-// another held function are refused by `FTm::kept`; the first needs the
-// floor of docs/layout-design.md §9.3.
+// A computation may also be another held function (`Runs(words, run)`):
+// its call answers what its function of the record answers and leaves
+// what that leaves, and what it owes (`HWorld::Runs`) is its own
+// agreement, which its generator published.
+//
+// Not here yet: a loop (`Again`), a lend, a byte stored outside a field
+// and a store at a computed offset (an array's element at an index that
+// is a word) are refused by `FTm::kept`; the first needs the floor of
+// docs/layout-design.md §9.3.
 import logic;
 import bool;
 import nat;
@@ -71,10 +76,17 @@ import rt_file;
 // the span's place, its length word and the offset.
 inductive Reader<A> { Plain, Reads(width: Nat, fields: List<Pair<Nat, A → BitVec(width)>>) }
 
-// What a computation of the program is to one: not held, or the store of
-// a word into a field, by the offset the field lies at. A writer takes
-// the span's place, its length word, the offset and the word.
-inductive Writer<A> { Apart, Writes(width: Nat, fields: List<Pair<Nat, A → BitVec(width) → A>>) }
+// What a computation of the program is to one: not held, the store of a
+// word into a field, by the offset the field lies at, or another held
+// function, by the function of what the span holds that it is. A writer
+// takes the span's place, its length word, the offset and the word; a
+// held function the span's place, its length word and `words` words,
+// which its function of the record takes as a list.
+inductive Writer<A> {
+    Apart,
+    Writes(width: Nat, fields: List<Pair<Nat, A → BitVec(width) → A>>),
+    Runs(words: Nat, run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>),
+}
 
 // The marks of a program's functions, in the order of its tables; a
 // function past a list's end is the plain kind.
@@ -161,11 +173,26 @@ fn FTm::held_value<A>(hw: HWorld<A>, own: List<BitVec(8)>, e: Tm, g: List<Ty>, e
     e.reader(hw).value(hw.fw.w.tys, e.ty(hw.fw.w, g), a, FTm::word(hw.fw.w.tys, g, env, e.offset()).toNat(), FTm::value(hw.fw, own, e, g, env))
 }
 
+// A call's operands after the span's place and its length word, and the
+// words they are.
+fn FTm::operands(args: List<Nat>) → List<Nat> {
+    match args {
+        Nil => [],
+        Cons(_, after_place) => match after_place { Nil => [], Cons(_, rest) => rest },
+    }
+}
+
+fn FTm::words(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), vs: List<Nat>) → List<BitVec(64)> {
+    match vs { Nil => [], Cons(v, rest) => Cons(FTm::word(tys, g, env, v), FTm::words(tys, g, env, rest)) }
+}
+
 // What a computation leaves the span holding: a writer at a field's
-// offset, its third operand, stores its fourth into the field.
+// offset, its third operand, stores its fourth into the field, and a
+// held function leaves what its function of the record leaves.
 fn Writer::state<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A) → A {
     match w {
         Apart => a,
+        Runs(_, run) => run(a, FTm::words(tys, g, env, FTm::operands(args))).after,
         Writes(width, fields) => match args {
             Nil => a,
             Cons(_, after_place) => match after_place {
@@ -187,6 +214,23 @@ fn Writer::state<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g:
 
 fn FTm::held_state<A>(hw: HWorld<A>, f: Nat, args: List<Nat>, g: List<Ty>, env: Env(hw.fw.w.tys, g), a: A) → A {
     Writer::at(hw.writers, f).state(hw.fw.w.tys, args, g, env, a)
+}
+
+// What a computation answers, to a held computation: a held function's
+// word is its function of the record's, so that a caller's held meaning
+// names the callee's function of the record and never the span; any
+// other computation's is the byte meaning's own (`plain`).
+fn Writer::answer<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A, to: Ty, plain: to.sem(tys)) → to.sem(tys) {
+    match w {
+        Apart => plain,
+        Writes(_, _) => plain,
+        Runs(_, run) => Ty::cast(tys, Word(64), to, run(a, FTm::words(tys, g, env, FTm::operands(args))).value),
+    }
+}
+
+fn FTm::held_answer<A>(hw: HWorld<A>, f: Nat, args: List<Nat>, g: List<Ty>, env: Env(hw.fw.w.tys, g), a: A, plain: Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys))
+    → Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys) {
+    Writer::at(hw.writers, f).answer(hw.fw.w.tys, args, g, env, a, Sig::at(hw.fw.fsigs, f).result, plain)
 }
 
 // A held computation's answer read at another code.
@@ -214,7 +258,8 @@ fn FTm::held<A>(self t: FTm, hw: HWorld<A>) → (g: List<Ty>) → Env(hw.fw.w.ty
         Put(i, length, v, body) => λ g env own a => body.held(hw, g, env, FTm::put(hw.fw.w.tys, g, env, i, length, v, own), a),
         Call(f, args, body) => λ g env own a =>
             shared(FTm::called(hw.fw, g, env, f, args, own), λ m =>
-                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, FTm::held_state(hw, f, args, g, env, a))),
+                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(FTm::held_answer(hw, f, args, g, env, a, m.value), env), m.after,
+                    FTm::held_state(hw, f, args, g, env, a))),
         Again(args) => λ g env own a => Mutated(a, FTm::called(hw.fw, g, env, 0, args, own).value),
         Lend(f, views, args, body) => λ g env own a =>
             shared(FTm::lent(hw.fw, g, env, f, views, args, own), λ m =>
@@ -260,6 +305,54 @@ fn FTm::write_args(args: List<Nat>, len: Nat) → Bool {
                     Nil => False,
                     Cons(_, more) => match more { Nil => l.same(len), Cons(_, _) => False },
                 },
+            },
+        },
+    }
+}
+
+// A held function's: a place, the variable `len`, and `words` operands.
+fn FTm::run_args(args: List<Nat>, len: Nat, words: Nat) → Bool {
+    match args {
+        Nil => False,
+        Cons(_, after_place) => match after_place {
+            Nil => False,
+            Cons(l, rest) => l.same(len) && rest.len().same(words),
+        },
+    }
+}
+
+// A statement about a list of `k` variables, as a function of them: what
+// a promise about a call of `k` operands is stated as, so that the call's
+// operands are a list written out and its callee is applied to each.
+fn FTm::Shaped(k: Nat, P: List<Nat> → Type) → Type {
+    match k {
+        Zero => P(Nil),
+        Succ(j) => (x: Nat) → FTm::Shaped(j, λ (rest: List<Nat>) => P(Cons(x, rest))),
+    }
+}
+
+theorem FTm::shaped(k: Nat): (P: List<Nat> → Type) → FTm::Shaped(k, P) → (rest: List<Nat>) → rest.len().same(k).IsTrue() → P(rest) {
+    match k {
+        Zero => λ P all rest => match rest {
+            Nil => λ _ => all,
+            Cons(_, _) => λ never => false_elim(never),
+        },
+        Succ(j, ih) => λ P all rest => match rest {
+            Nil => λ never => false_elim(never),
+            Cons(x, more) => λ long => ih(λ (r: List<Nat>) => P(Cons(x, r)), all(x), more, long),
+        },
+    }
+}
+
+theorem FTm::run_args_elim(args: List<Nat>, len: Nat, words: Nat, P: List<Nat> → Type,
+    at: (place: Nat) → (rest: List<Nat>) → rest.len().same(words).IsTrue() → P(Cons(place, Cons(len, rest)))): FTm::run_args(args, len, words).IsTrue() → P(args) {
+    match args {
+        Nil => λ never => false_elim(never),
+        Cons(place, after_place) => match after_place {
+            Nil => λ never => false_elim(never),
+            Cons(l, rest) => λ is => {
+                let two = l.same(len).is_true_and(rest.len().same(words), is);
+                j(sym(l.same_sound(len, eq_true_of_is_true(l.same(len), two.left))), λ x _ => P(Cons(place, Cons(x, rest))), at(place, rest, two.right))
             },
         },
     }
@@ -416,6 +509,27 @@ fn HWorld::Writes<A>(self hw: HWorld<A>, whole: Stored<A>, f: Nat, width: Nat, a
             set(a, Ty::cast(hw.fw.w.tys, Ty::at(g, v), Word(width), Env::get(hw.fw.w.tys, g, env, v))))
 }
 
+// The held meaning beside the byte meaning: the same value, and the
+// bytes the second leaves hold the record the first leaves, under the
+// same length word.
+record Agrees<A, R>(whole: Stored<A>, n: BitVec(64), h: Mutated<A, R>, m: Mutated<List<BitVec(8)>, R>) {
+    value: h.value = m.value,
+    holds: whole.Holds(m.after, n, h.after),
+}
+
+// What a held function owes: called on a place, the span's length word
+// and its operands, where the span holds a record it answers what its
+// function of the record answers and leaves the span holding the record
+// that leaves. Stated at the operands written out (`FTm::Shaped`).
+fn HWorld::Runs<A>(self hw: HWorld<A>, whole: Stored<A>, f: Nat, words: Nat, run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Type {
+    (place, length: Nat) → FTm::Shaped(words, λ (rest: List<Nat>) => (own: List<BitVec(8)>) → (a: A) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+        whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, length), a) →
+        Agrees<A, Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, length),
+            Mutated(run(a, FTm::words(hw.fw.w.tys, g, env, rest)).after,
+                Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.fsigs, f).result, run(a, FTm::words(hw.fw.w.tys, g, env, rest)).value)),
+            FTm::called(hw.fw, g, env, f, Cons(place, Cons(length, rest)), own)))
+}
+
 // Each mark's obligation, in the tables' order: a tuple, one proof per
 // field of each function, which is what a generator writes.
 fn Reader::Owes<A>(self r: Reader<A>, P: (width: Nat) → Nat → (A → BitVec(width)) → Type) → Type {
@@ -429,14 +543,16 @@ fn Reader::All<A>(rs: List<Reader<A>>, P: Nat → (width: Nat) → Nat → (A �
     }
 }
 
-fn Writer::Owes<A>(self w: Writer<A>, P: (width: Nat) → Nat → (A → BitVec(width) → A) → Type) → Type {
-    match w { Apart => True, Writes(width, fields) => FTm::Fields(fields, P(width)) }
+fn Writer::Owes<A>(self w: Writer<A>, P: (width: Nat) → Nat → (A → BitVec(width) → A) → Type,
+    Q: (words: Nat) → (A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Type) → Type {
+    match w { Apart => True, Writes(width, fields) => FTm::Fields(fields, P(width)), Runs(words, run) => Q(words, run) }
 }
 
-fn Writer::All<A>(ws: List<Writer<A>>, P: Nat → (width: Nat) → Nat → (A → BitVec(width) → A) → Type) → Type {
+fn Writer::All<A>(ws: List<Writer<A>>, P: Nat → (width: Nat) → Nat → (A → BitVec(width) → A) → Type,
+    Q: Nat → (words: Nat) → (A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Type) → Type {
     match ws {
         Nil => True,
-        Cons(w, rest) => w.Owes(P(Zero)) ∧ Writer::All(rest, λ (k: Nat) => P(Succ(k))),
+        Cons(w, rest) => w.Owes(P(Zero), Q(Zero)) ∧ Writer::All(rest, λ (k: Nat) => P(Succ(k)), λ (k: Nat) => Q(Succ(k))),
     }
 }
 
@@ -451,13 +567,14 @@ theorem Reader::all_at<A>(rs: List<Reader<A>>): (P: Nat → (width: Nat) → Nat
     }
 }
 
-theorem Writer::all_at<A>(ws: List<Writer<A>>): (P: Nat → (width: Nat) → Nat → (A → BitVec(width) → A) → Type) → Writer::All(ws, P) → (f: Nat) →
-    Writer::at(ws, f).Owes(P(f)) {
+theorem Writer::all_at<A>(ws: List<Writer<A>>): (P: Nat → (width: Nat) → Nat → (A → BitVec(width) → A) → Type) →
+    (Q: Nat → (words: Nat) → (A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Type) → Writer::All(ws, P, Q) → (f: Nat) →
+    Writer::at(ws, f).Owes(P(f), Q(f)) {
     match ws {
-        Nil => λ P all f => trivial,
-        Cons(w, rest) => λ P all f => match f {
+        Nil => λ P Q all f => trivial,
+        Cons(w, rest) => λ P Q all f => match f {
             Zero => all.left,
-            Succ(k) => Writer::all_at(rest, λ (j: Nat) => P(Succ(j)), all.right, k),
+            Succ(k) => Writer::all_at(rest, λ (j: Nat) => P(Succ(j)), λ (j: Nat) => Q(Succ(j)), all.right, k),
         },
     }
 }
@@ -465,7 +582,8 @@ theorem Writer::all_at<A>(ws: List<Writer<A>>): (P: Nat → (width: Nat) → Nat
 // What a held world owes, whole.
 record Sound<A>(hw: HWorld<A>, whole: Stored<A>) {
     readers: Reader::All(hw.readers, λ (f: Nat) (width: Nat) (at: Nat) (get: A → BitVec(width)) => hw.Reads(whole, f, width, at, get)),
-    writers: Writer::All(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set)),
+    writers: Writer::All(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+        λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run)),
 }
 
 // A bound term a held function may have: a reader is called on the
@@ -484,7 +602,11 @@ fn Tm::kept<A>(self e: Tm, hw: HWorld<A>, len: Nat) → Bool {
 // A call a held function may make: a writer's, on that length word, at
 // an offset known to be a field's.
 fn Writer::lent<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, len: Nat, known: List<Option<Pair<Ty, Nat>>>) → Bool {
-    match w { Apart => False, Writes(_, fields) => FTm::write_args(args, len) && FTm::known_field(tys, fields, known, FTm::third(args)) }
+    match w {
+        Apart => False,
+        Writes(_, fields) => FTm::write_args(args, len) && FTm::known_field(tys, fields, known, FTm::third(args)),
+        Runs(words, _) => FTm::run_args(args, len, words),
+    }
 }
 
 // The computations a held function is made of, where `len` is the
@@ -503,14 +625,6 @@ fn FTm::kept<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair<Ty, Nat
         Again(_) => λ len known => False,
         Lend(_, _, _, _) => λ len known => False,
     }
-}
-
-// The held meaning beside the byte meaning: the same value, and the
-// bytes the second leaves hold the record the first leaves, under the
-// same length word.
-record Agrees<A, R>(whole: Stored<A>, n: BitVec(64), h: Mutated<A, R>, m: Mutated<List<BitVec(8)>, R>) {
-    value: h.value = m.value,
-    holds: whole.Holds(m.after, n, h.after),
 }
 
 theorem Agrees::recast<A>(whole: Stored<A>, n: BitVec(64), tys: Nat → RecInfo, x, y: Ty, h: Mutated<A, x.sem(tys)>, m: Mutated<List<BitVec(8)>, x.sem(tys)>,
@@ -637,14 +751,17 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
         Put(_, _, _, _) => λ len known kept => false_elim(kept),
         Call(f, args, body) => λ len known kept g env knows own a holds => {
             let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.kept(hw, Succ(len), Cons(None, known)), kept);
-            let by_case: ((w: Writer<A>) → w.Owes(λ (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set)) →
+            let by_case: ((w: Writer<A>) → w.Owes(λ (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+                    λ (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run)) →
                 w.lent(hw.fw.w.tys, args, len, known).IsTrue() →
-                whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), w.state(hw.fw.w.tys, args, g, env, a))) =
+                (w.answer(hw.fw.w.tys, args, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value)
+                    = FTm::called(hw.fw, g, env, f, args, own).value)
+                ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), w.state(hw.fw.w.tys, args, g, env, a))) =
                 λ w => match w {
                     Apart => λ _ never => false_elim(never),
                     Writes(width, fields) => λ writes lent => {
                         let two = FTm::write_args(args, len).is_true_and(FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(args)), lent);
-                        FTm::write_args_elim(args, len,
+                        And(refl, FTm::write_args_elim(args, len,
                             λ (xs: List<Nat>) => FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(xs)).IsTrue() →
                                 whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
                                     Writes(width, fields).state(hw.fw.w.tys, xs, g, env, a)),
@@ -660,15 +777,41 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
                                     λ never => false_elim(never),
                                     λ set promise _ => promise(place, len, i, v, own, a, g, env, holds, refl),
                                     writes)(FTm::known_found(hw.fw.w.tys, g, env, known, knows, fields, i, found)),
-                            two.left)(two.right)
+                            two.left)(two.right))
                     },
+                    Runs(words, run) => λ runs lent =>
+                        FTm::run_args_elim(args, len, words,
+                            λ (xs: List<Nat>) => (Runs(words, run).answer(hw.fw.w.tys, xs, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, xs, own).value)
+                                    = FTm::called(hw.fw, g, env, f, xs, own).value)
+                                ∧ whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
+                                    Runs(words, run).state(hw.fw.w.tys, xs, g, env, a)),
+                            λ place rest long => {
+                                let agrees = FTm::shaped(words, λ (r: List<Nat>) => (own: List<BitVec(8)>) → (a: A) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+                                        whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a) →
+                                        Agrees<A, Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                                            Mutated(run(a, FTm::words(hw.fw.w.tys, g, env, r)).after,
+                                                Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.fsigs, f).result, run(a, FTm::words(hw.fw.w.tys, g, env, r)).value)),
+                                            FTm::called(hw.fw, g, env, f, Cons(place, Cons(len, r)), own)),
+                                    runs(place, len), rest, long)(own, a, g, env, holds);
+                                And(agrees.value, agrees.holds)
+                            },
+                            lent),
                 };
-            let left = by_case(Writer::at(hw.writers, f),
-                Writer::all_at(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set), sound.writers, f), both.left);
-            body.held_runs(hw, whole, sound, Succ(len), Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+            let got = by_case(Writer::at(hw.writers, f),
+                Writer::all_at(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+                    λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run), sound.writers, f), both.left);
+            let ran = body.held_runs(hw, whole, sound, Succ(len), Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
                 Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
                 FTm::knows_more(hw.fw.w.tys, g, env, known, knows, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value),
-                FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a), left)
+                FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a), got.right);
+            let same: (FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value) = FTm::called(hw.fw, g, env, f, args, own).value) = got.left;
+            let goal: Agrees<A, body.ty(hw.fw.w, hw.fw.fsigs, Cons(Sig::at(hw.fw.fsigs, f).result, g)).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+                    Pair(FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value), env),
+                    FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a)),
+                body.sem(hw.fw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
+                    FTm::called(hw.fw, g, env, f, args, own).after)) = rewrite(same, ran);
+            goal
         },
         Again(_) => λ len known kept => false_elim(kept),
         Lend(_, _, _, _) => λ len known kept => false_elim(kept),
@@ -735,6 +878,10 @@ fn Writer::apart<A>() → Writer<A> { Apart }
 
 fn Writer::of<A>(fields: List<Pair<Nat, A → BitVec(64) → A>>) → Writer<A> { Writes(64, fields) }
 
+// A held function's mark: how many words it takes after the span's
+// length word, and its function of the record at them.
+fn Writer::runs<A>(words: Nat, run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Writer<A> { Runs(words, run) }
+
 fn HWorld::marked<A>(fw: FWorld, readers: List<Reader<A>>, writers: List<Writer<A>>) → HWorld<A> { HWorld(fw, readers, writers) }
 
 fn HWorld::none<X>() → List<X> { Nil }
@@ -781,7 +928,8 @@ fn HWorld::either<S>(c: Bool, yes: S, no: S) → S { match c { False => no, True
 
 theorem Sound::of<A>(hw: HWorld<A>, whole: Stored<A>,
     readers: Reader::All(hw.readers, λ (f: Nat) (width: Nat) (at: Nat) (get: A → BitVec(width)) => hw.Reads(whole, f, width, at, get)),
-    writers: Writer::All(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set))): Sound<A>(hw, whole) {
+    writers: Writer::All(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+        λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run))): Sound<A>(hw, whole) {
     Sound(readers, writers)
 }
 
