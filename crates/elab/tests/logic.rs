@@ -334,7 +334,6 @@ fn no_ascii_digraph_for_the_other_connectives() {
     for src in [
         r"theorem t(P: Type, Q: Type, h: And<P, Q>): P /\ Q { h }",
         r"theorem t(P: Type, Q: Type, h: Or<P, Q>): P \/ Q { h }",
-        "theorem t(P: Type, h: Not(P)): ~P { h }",
     ] {
         let err = bad(src);
         assert!(
@@ -342,6 +341,11 @@ fn no_ascii_digraph_for_the_other_connectives() {
             "expected `{src}` not to lex, got: {err}"
         );
     }
+    // `~` lexes, as a word's complement (issues/bitvec-xor-complement-symbols.md),
+    // but it is no spelling of `¬`: at a proposition nothing designates it.
+    let src = "theorem t(P: Type, h: Not(P)): ~P { h }";
+    let err = bad(src);
+    assert!(err.contains("`~` has no meaning here"), "expected `{src}` to be refused for `~`, got: {err}");
 }
 
 // ---------------------------------------------------------------------------
