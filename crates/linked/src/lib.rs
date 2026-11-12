@@ -30,7 +30,18 @@
 //! those premises, so the function Rust sees takes one: the declaration
 //! over a pointer is `unsafe` and private, and the wrapper that calls it
 //! with a slice's parts is generated with the premises beside the call
-//! (`generated/exports.rs`). No export stores into a span yet.
+//! (`generated/exports.rs`).
+//!
+//! And an export may **store into a span its caller lends**: the theorem's
+//! lending then marks the span as one to write, its premises ask what a
+//! store needs (the bytes writable, and apart from every other span, the
+//! stack and the code), and it says what the span holds after: the bytes
+//! the Heather function answers, with every other byte of memory the
+//! caller owns as it was (`Stack::WroteIn`, `Stack::AnsweredOver`). A
+//! `&mut [u8]` meets those premises, so that is what the wrapper takes.
+//! Which spans a function is lent to write is read off its compiled
+//! program, not its type: the assembly's signature says `span mut` exactly
+//! where some function of the program stores.
 //!
 //! What the theorem does not cover is stated where the compiler states it:
 //! the platform around the call (that `extern "sysv64"` really passes
@@ -58,10 +69,12 @@
 //! lexer on every Heather source in the repository; nothing shipped calls
 //! it yet (`issues/self-lexer-linked.md`).
 //!
-//! [`spans`]: the first export that reads memory its caller owns, a count
-//! of a text's newlines (`lib/native/native_tool_spans.hthr`). Its tests
-//! are the contract's process controls: a span that ends at an unmapped
-//! page, an empty slice, and both stack alignments.
+//! [`spans`]: the first exports over memory their caller owns
+//! (`lib/native/native_tool_spans.hthr`): a count of a text's newlines,
+//! which reads, and a text's letters raised to upper case in place, which
+//! writes. Their tests are the contract's process controls: a span that
+//! ends at an unmapped page, a written span with unwritable pages on both
+//! sides, an empty slice, and both stack alignments.
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod scanner;

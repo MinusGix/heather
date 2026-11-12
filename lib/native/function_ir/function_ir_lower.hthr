@@ -1404,7 +1404,7 @@ theorem File::compare_with_keeps<M>(self file: File, values: Valuation(), op: Co
                 None => file.compare_over(op, byte, output, left, right,
                     file.find(Held(left, Word)), file.find(Held(right, Word))),
             }) {
-            Some(lowered) => λ keeps => keeps,
+            Some(_) => λ keeps => keeps,
             None => λ _ => file.compare_over_keeps<M>(values, op, byte, output, left, right,
                 file.find(Held(left, Word)), file.find(Held(right, Word))),
         })(file.compare_found_keeps<M>(values, op, byte, output, left, right,

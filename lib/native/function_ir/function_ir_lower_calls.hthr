@@ -205,6 +205,12 @@ fn Lending::reading(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buf
     Lending(counts, addresses, buffers, λ (_: Nat) => False)
 }
 
+// A lending to write: the buffers `marks` marks may be written
+// (`marked`, function_ir_writes), the others only read.
+fn Lending::writing(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers(), marks: List<Bool>) → Lending {
+    Lending(counts, addresses, buffers, λ (b: Nat) => marked(marks, b))
+}
+
 fn lent_count(counts: List<Nat>, f: Nat) → Nat { match counts.nth(f) { None => 0, Some(count) => count } }
 
 // The lending with the file as it is `now`.

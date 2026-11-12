@@ -1,15 +1,15 @@
 # The Heather functions this crate links, one per line: the source module,
 # the `runtime fn` in it, and its parameters as the Rust declaration names
 # them, separated by commas (a word is a bare name, a span of bytes the
-# function reads is `name: span`). `generated/<function>.s` is what
-# `heather compile-x86 <module> <function>` writes, checked in so a build of
-# the workspace needs no Heather compiler (docs/native-lexer-crypto-roadmap.md
-# §2, piece 7), and `generated/exports.rs` the declarations, written from
-# this table and the signature each file states
-# (docs/native-library-exports-design.md §6). `scripts/linked` rewrites
-# both; `crates/cli/tests/native_linked.rs` holds the assembly to the
-# compiler and `crates/cli/tests/linked_exports.rs` the declarations to
-# their generator.
+# function reads is `name: span`, one it stores into `name: span mut`).
+# `generated/<function>.s` is what `heather compile-x86 <module> <function>`
+# writes, checked in so a build of the workspace needs no Heather compiler
+# (docs/native-lexer-crypto-roadmap.md §2, piece 7), and
+# `generated/exports.rs` the declarations, written from this table and the
+# signature each file states (docs/native-library-exports-design.md §6,
+# §7). `scripts/linked` rewrites both; `crates/cli/tests/native_linked.rs`
+# holds the assembly to the compiler and
+# `crates/cli/tests/linked_exports.rs` the declarations to their generator.
 lib/native/crypto/sha512_round.hthr	sha512_t1	h, e, f, g, k, w
 lib/native/crypto/sha512_round.hthr	sha512_t2	a, b, c
 lib/native/crypto/sha512_round.hthr	sha512_next	w2, w7, w15, w16
@@ -20,4 +20,5 @@ lib/lang/lexer/lexer_scan.hthr	scan_step	state, byte
 lib/lang/lexer/lexer_scan.hthr	scan_accept	state
 lib/lang/lexer/lexer_scan.hthr	scan_begin	previous
 lib/native/native_tool_spans.hthr	count_newlines	text: span, count
+lib/native/native_tool_spans.hthr	raise_span	text: span mut, count, from
 lib/lang/lexer/lexer_span.hthr	scan_token	source: span, at, previous

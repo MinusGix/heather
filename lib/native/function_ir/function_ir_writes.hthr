@@ -447,6 +447,147 @@ theorem program_quiet_stores(functions: List<Function>, b: Nat): program_quiet(f
     }
 }
 
+// ---------------------------------------------------------------------------
+// Which buffers a program stores into, as data
+//
+// `program_stores(functions, b)` answers for one buffer. A caller that
+// lends a program its buffers states which of them may be written before
+// it knows `b` (`Lending.written`), so the claim it needs is over every
+// buffer: each store of the program is into a buffer `marks` marks. That
+// is one walk of each function, checked by evaluation a function at a
+// time as `program_quiet` is, and `program_quiet` is the case of no marks.
+
+// Buffer `b` is marked: `marks` has `True` at `b`.
+fn marked(marks: List<Bool>, b: Nat) → Bool { match marks.nth(b) { None => False, Some(mark) => mark } }
+
+fn Node::stores_within(self node: Node, marks: List<Bool>) → Bool {
+    match node { BufferStore(_, buffer, _, _) => marked(marks, buffer), _ => True }
+}
+
+fn nodes_store_within(nodes: List<Node>, marks: List<Bool>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.stores_within(marks) && nodes_store_within(rest, marks) }
+}
+
+theorem Node::stores_marked(self node: Node, marks: List<Bool>, b: Nat): node.stores_within(marks).IsTrue() → node.stores_to(b).IsTrue() →
+    marked(marks, b).IsTrue() {
+    match node as λ n => n.stores_within(marks).IsTrue() → n.stores_to(b).IsTrue() → marked(marks, b).IsTrue() {
+        BufferStore(_, buffer, _, _) => λ within here =>
+            j(buffer.same_sound(b, eq_true_of_is_true(buffer.same(b), here)), λ x _ => marked(marks, x).IsTrue(), within),
+        _ => λ _ never => false_elim(never),
+    }
+}
+
+theorem nodes_store_marked(nodes: List<Node>, marks: List<Bool>, b: Nat): nodes_store_within(nodes, marks).IsTrue() →
+    nodes_store(nodes, b).IsTrue() → marked(marks, b).IsTrue() {
+    match nodes {
+        Nil => λ _ never => false_elim(never),
+        Cons(node, rest) => λ within stores => {
+            let both = Bool::is_true_and(node.stores_within(marks), nodes_store_within(rest, marks), within);
+            match Bool::is_true_or(node.stores_to(b), nodes_store(rest, b), stores) {
+                Inl(here) => node.stores_marked(marks, b, both.left, here),
+                Inr(later) => nodes_store_marked(rest, marks, b, both.right, later),
+            }
+        },
+    }
+}
+
+// Every store the region makes itself is into a marked buffer.
+fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bool>) → Bool {
+    match region {
+        Dataflow(body) => nodes_store_within(body.nodes, marks),
+        Sequence(prefix, continuation) => nodes_store_within(prefix.nodes, marks) && continuation.stores_within(marks),
+        Compose(prefix, continuation) => prefix.stores_within(marks) && continuation.stores_within(marks),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.stores_within(marks) && when_false.stores_within(marks),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores_within(marks),
+    }
+}
+
+theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: List<Bool>, b: Nat): region.stores_within(marks).IsTrue() →
+    region.stores(b).IsTrue() → marked(marks, b).IsTrue() {
+    match region {
+        Dataflow(body) => nodes_store_marked(body.nodes, marks, b),
+        Sequence(prefix, continuation) => λ within stores => {
+            let both = Bool::is_true_and(nodes_store_within(prefix.nodes, marks), continuation.stores_within(marks), within);
+            match Bool::is_true_or(nodes_store(prefix.nodes, b), continuation.stores(b), stores) {
+                Inl(first) => nodes_store_marked(prefix.nodes, marks, b, both.left, first),
+                Inr(second) => continuation.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Compose(prefix, continuation) => λ within stores => {
+            let both = Bool::is_true_and(prefix.stores_within(marks), continuation.stores_within(marks), within);
+            match Bool::is_true_or(prefix.stores(b), continuation.stores(b), stores) {
+                Inl(first) => prefix.stores_marked(marks, b, both.left, first),
+                Inr(second) => continuation.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ within stores => {
+            let both = Bool::is_true_and(when_true.stores_within(marks), when_false.stores_within(marks), within);
+            match Bool::is_true_or(when_true.stores(b), when_false.stores(b), stores) {
+                Inl(first) => when_true.stores_marked(marks, b, both.left, first),
+                Inr(second) => when_false.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Call(_, _, _) => λ _ never => false_elim(never),
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores_marked(marks, b),
+    }
+}
+
+// Every store of every function of the program is into a marked buffer.
+fn program_stores_within(functions: List<Function>, marks: List<Bool>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.stores_within(marks) && program_stores_within(earlier, marks) }
+}
+
+// A function at a time, as `program_quiet_drop`.
+fn program_stores_within_head(functions: List<Function>, marks: List<Bool>) → Bool {
+    match functions { Nil => True, Cons(last, _) => last.body.stores_within(marks) }
+}
+
+theorem program_stores_within_drop_zero(functions: List<Function>, marks: List<Bool>):
+    program_stores_within(functions.drop(0), marks).IsTrue() → program_stores_within(functions, marks).IsTrue() {
+    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
+theorem program_stores_within_drop(functions: List<Function>, marks: List<Bool>): (n: Nat) →
+    program_stores_within_head(functions.drop(n), marks).IsTrue() → program_stores_within(functions.drop(Succ(n)), marks).IsTrue() →
+    program_stores_within(functions.drop(n), marks).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ n => match n as λ i => program_stores_within_head(Cons(last, earlier).drop(i), marks).IsTrue() →
+            program_stores_within(Cons(last, earlier).drop(Succ(i)), marks).IsTrue() →
+            program_stores_within(Cons(last, earlier).drop(i), marks).IsTrue() {
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.stores_within(marks), program_stores_within(earlier, marks), head,
+                program_stores_within_drop_zero(earlier, marks, rest)),
+            Succ(k) => λ head rest => program_stores_within_drop(earlier, marks, k, head, rest),
+        },
+    }
+}
+
+// Which of the buffers from `at` to below `at + count` the program stores
+// into, as numbers a tool reads (`compile-x86`, for an export's marks): a
+// one for a buffer it stores into.
+fn program_marks(functions: List<Function>, at, count: Nat) → List<Nat> {
+    match count {
+        Zero => [],
+        Succ(k) => Cons(match program_stores(functions, at) { True => 1, False => 0 }, program_marks(functions, Succ(at), k)),
+    }
+}
+
+// What a lender needs: a buffer the program stores into is a marked one.
+theorem program_stores_marked(functions: List<Function>, marks: List<Bool>, b: Nat): program_stores_within(functions, marks).IsTrue() →
+    program_stores(functions, b).IsTrue() → marked(marks, b) = True {
+    match functions {
+        Nil => λ _ never => false_elim(never),
+        Cons(last, earlier) => λ within stores => {
+            let both = Bool::is_true_and(last.body.stores_within(marks), program_stores_within(earlier, marks), within);
+            match Bool::is_true_or(last.body.stores(b), program_stores(earlier, b), stores) {
+                Inl(here) => eq_true_of_is_true(marked(marks, b), last.body.stores_marked(marks, b, both.left, here)),
+                Inr(below) => program_stores_marked(earlier, marks, b, both.right, below),
+            }
+        },
+    }
+}
+
 // A function with no store that computes over a file runs from that file
 // to itself.
 theorem Function::runs_quiet(self function: Function, callees: Buffers() → Callees(), file: Buffers(), quiet: function.body.quiet().IsTrue(),

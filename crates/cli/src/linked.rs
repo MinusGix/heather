@@ -7,9 +7,10 @@
 //! `_returns` theorem is stated with. `crates/linked/generated/EXPORTS.tsv`
 //! names each export's parameters. [`exports_rs`] writes
 //! `generated/exports.rs` from the two: the `global_asm!` of every file, a
-//! `safe fn` for a function of words, and for a function that reads a span
-//! an `unsafe` declaration over a pointer and a length with a safe wrapper
-//! over `&[u8]`, its `SAFETY` comment the theorem's premises in order. The
+//! `safe fn` for a function of words, and for a function over a span an
+//! `unsafe` declaration over a pointer and a length with a safe wrapper
+//! over `&[u8]`, or `&mut [u8]` where the code stores into the span, its
+//! `SAFETY` comment the theorem's premises in order. The
 //! crate's one `unsafe` module is that file, written here in full: nothing
 //! in it is a hand's (`crates/cli/tests/linked_exports.rs` holds the file to
 //! this function, and `tests/native_linked.rs` the assembly to the
@@ -27,11 +28,18 @@ pub enum Kind {
     /// A span of bytes the code reads: two words, its address then its
     /// length.
     Span,
+    /// A span of bytes the code may store into as well: the same two words,
+    /// under a lending that lets the span be written.
+    SpanMut,
 }
 
 impl Kind {
     fn name(self) -> &'static str {
-        match self { Kind::Word => "word", Kind::Span => "span" }
+        match self { Kind::Word => "word", Kind::Span => "span", Kind::SpanMut => "span mut" }
+    }
+
+    fn named(name: &str) -> Option<Kind> {
+        [Kind::Word, Kind::Span, Kind::SpanMut].into_iter().find(|kind| kind.name() == name)
     }
 }
 
@@ -58,11 +66,9 @@ impl Signature {
         let line = assembly.lines().find_map(|line| line.strip_prefix("# signature: ")).ok_or_else(|| missing("signature"))?;
         let kinds = line.strip_prefix(symbol).and_then(|rest| rest.strip_prefix('('))
             .and_then(|rest| rest.strip_suffix(") -> word")).ok_or_else(|| missing("signature of its own"))?;
-        let kinds = kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty()).map(|kind| match kind {
-            "word" => Ok(Kind::Word),
-            "span" => Ok(Kind::Span),
-            other => Err(format!("{symbol}.s: `{other}` is no kind of argument")),
-        }).collect::<Result<Vec<_>, _>>()?;
+        let kinds = kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty())
+            .map(|kind| Kind::named(kind).ok_or_else(|| format!("{symbol}.s: `{kind}` is no kind of argument")))
+            .collect::<Result<Vec<_>, _>>()?;
         let stack = assembly.lines().find_map(|line| line.strip_prefix("# stack: "))
             .and_then(|rest| rest.split(' ').next()).and_then(|bytes| bytes.parse().ok()).ok_or_else(|| missing("stack"))?;
         Ok(Signature { kinds, stack })
@@ -80,7 +86,7 @@ pub struct Export {
 
 /// The table's rows. A row is `<module>\t<function>\t<parameters>`, the
 /// parameters separated by commas, each a name, a span's followed by
-/// `: span`.
+/// `: span`, or by `: span mut` where the function stores into it.
 pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
     let mut rows = Vec::new();
     for line in manifest.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
@@ -96,8 +102,11 @@ pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
         for parameter in parameters.split(',').map(str::trim).filter(|parameter| !parameter.is_empty()) {
             let (name, kind) = match parameter.split_once(':') {
                 None => (parameter, Kind::Word),
-                Some((name, kind)) if kind.trim() == "span" => (name.trim(), Kind::Span),
-                Some((_, kind)) => return Err(format!("EXPORTS.tsv: `{function}`: `{}` is no kind of parameter (a word is a bare name, a span `name: span`)", kind.trim())),
+                Some((name, kind)) => match Kind::named(kind.trim()).filter(|kind| *kind != Kind::Word) {
+                    Some(kind) => (name.trim(), kind),
+                    None => return Err(format!("EXPORTS.tsv: `{function}`: `{}` is no kind of parameter (a word is a bare name, a span \
+                        `name: span`, one the function stores into `name: span mut`)", kind.trim())),
+                },
             };
             if !identifier(name) || named.iter().any(|(earlier, _)| earlier == name) {
                 return Err(format!("EXPORTS.tsv: `{function}`: `{name}` is not a parameter's name, or is one twice"));
@@ -137,6 +146,7 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
         let mut taken = Vec::new();
         let mut passed = Vec::new();
         let mut spans = Vec::new();
+        let mut written = Vec::new();
         for (name, kind) in &row.parameters {
             match kind {
                 Kind::Word => {
@@ -152,10 +162,28 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
                     passed.push(format!("{name}.len() as u64"));
                     spans.push(format!("`{name}`"));
                 }
+                Kind::SpanMut => {
+                    declared.push(format!("{name}: *mut u8"));
+                    declared.push(format!("{name}_length: u64"));
+                    taken.push(format!("{name}: &mut [u8]"));
+                    passed.push(format!("{name}.as_mut_ptr()"));
+                    passed.push(format!("{name}.len() as u64"));
+                    spans.push(format!("`{name}`"));
+                    written.push(format!("`{name}`"));
+                }
             }
         }
         raw.push_str(&format!("        pub unsafe fn {function}({}) -> u64;\n", declared.join(", ")));
         let span = if spans.len() == 1 { format!("the span {}", spans[0]) } else { format!("the spans {}", spans.join(", ")) };
+        // What a lending to write asks besides, where the code stores.
+        let writing = if written.is_empty() { String::new() } else { format!("
+    // - the bytes of {} may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack or with the program's code. The code
+    //   stores into no other span (the lending's marks).", written.join(", ")) };
         wrappers.push_str(&format!("
 {doc}
 pub fn {function}({taken}) -> u64 {{
@@ -163,14 +191,14 @@ pub fn {function}({taken}) -> u64 {{
     // - the arguments are in their registers (`ArgsIn`): the declaration's
     //   order is the table's, which the gate holds to the code's signature.
     // - each span's two words are its address and its length (`ArgsLent`):
-    //   `as_ptr()` and `len()`, for {span}.
+    //   its pointer and `len()`, for {span}.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
-    //   a `&[u8]` is live, initialised memory while it is borrowed, and an
+    //   a slice is live, initialised memory while it is borrowed, and an
     //   empty one is read nowhere.
     // - no word the callee stores below this call's return address changes
     //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
     //   borrowed memory is never the unused stack below RSP, and Linux maps
-    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    //   nothing of a process above 2^47 unless it asks for that by a hint.{writing}
     // The stack's room is the platform's to give, as for a function of
     // words (the crate's comment).
     unsafe {{ raw::{function}({passed}) }}
@@ -211,10 +239,10 @@ unsafe extern \"sysv64\" {{
     }
     if !raw.is_empty() {
         text.push_str(&format!("
-// Functions that read a span, as the code takes them: each span its address
-// and its length. `unsafe`, because the certificate holds only where the
-// two words are a span of readable bytes; the wrappers below are where
-// that is so.
+// Functions over a span, as the code takes them: each span its address and
+// its length. `unsafe`, because the certificate holds only where the two
+// words are a span of readable bytes, writable where the code stores; the
+// wrappers below are where that is so.
 mod raw {{
     unsafe extern \"sysv64\" {{
 {raw}    }}
@@ -234,7 +262,7 @@ mod tests {
 
     #[test]
     fn a_header_reads_back() {
-        for kinds in [&[][..], &[Kind::Word], &[Kind::Span, Kind::Word], &[Kind::Word, Kind::Span, Kind::Span]] {
+        for kinds in [&[][..], &[Kind::Word], &[Kind::Span, Kind::Word], &[Kind::Word, Kind::Span, Kind::Span], &[Kind::SpanMut, Kind::Span, Kind::Word]] {
             let signature = Signature { kinds: kinds.to_vec(), stack: 216 };
             assert_eq!(Signature::read(&stated("f", kinds, 216), "f"), Ok(signature));
         }
@@ -255,6 +283,26 @@ mod tests {
         assert!(text.contains("        pub unsafe fn g(text: *const u8, text_length: u64, count: u64) -> u64;\n"), "{text}");
         assert!(text.contains("pub fn g(text: &[u8], count: u64) -> u64 {"), "{text}");
         assert!(text.contains("unsafe { raw::g(text.as_ptr(), text.len() as u64, count) }"), "{text}");
+    }
+
+    // A span the code stores into is taken by `&mut`, and the wrapper says
+    // what a lending to write asks.
+    #[test]
+    fn a_written_span_is_borrowed_to_write() {
+        let assembly = |_: &str| Ok(stated("w", &[Kind::SpanMut, Kind::Span, Kind::Word], 144));
+        let text = exports_rs("m.hthr\tw\tout: span mut, text: span, count\n", &assembly).unwrap();
+        assert!(text.contains("        pub unsafe fn w(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64) -> u64;\n"), "{text}");
+        assert!(text.contains("pub fn w(out: &mut [u8], text: &[u8], count: u64) -> u64 {"), "{text}");
+        assert!(text.contains("unsafe { raw::w(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, count) }"), "{text}");
+        assert!(text.contains("// - the bytes of `out` may be stored into"), "{text}");
+        // A reader's wrapper says nothing of stores, and the table cannot
+        // lend to read what the code writes, nor to write what it reads.
+        let reader = exports_rs("m.hthr\tg\ttext: span, count\n", &|_: &str| Ok(stated("g", &[Kind::Span, Kind::Word], 144))).unwrap();
+        assert!(!reader.contains("may be stored into"), "{reader}");
+        for parameters in ["out: span, text: span, count", "out: span mut, text: span mut, count"] {
+            let refused = exports_rs(&format!("m.hthr\tw\t{parameters}\n"), &assembly).unwrap_err();
+            assert!(refused.contains("its compiled code takes `(span mut, span, word)`"), "{parameters}: {refused}");
+        }
     }
 
     // The table cannot declare what the code does not take: a span's parts

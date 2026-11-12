@@ -1,4 +1,4 @@
-//! A function over bytes its caller owns, compiled from Heather.
+//! Functions over bytes their caller owns, compiled from Heather.
 //!
 //! `count_newlines` (`lib/native/native_tool_spans.hthr`) is a `runtime fn`
 //! whose first parameter is a span of bytes: it reads the caller's memory
@@ -10,6 +10,14 @@
 //! an index with the length it was passed before it loads, so a count past
 //! the end reads nothing past it (the Heather function counts a byte there
 //! as none, and the code is proved to compute the Heather function).
+//!
+//! `raise_span` in the same module stores into its span: each byte from an
+//! index to below a count is raised to upper case where it is a lower-case
+//! ASCII letter, and stored back. Its certificate says the span holds the
+//! Heather function's bytes after the call and nothing else the caller
+//! owns has changed; the wrapper takes a `&mut [u8]`. A store is under the
+//! length word as a read is, so a count past the end stores nothing past
+//! it.
 
 use crate::exports;
 
@@ -24,4 +32,19 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
 #[inline]
 pub fn newlines(text: &[u8]) -> u64 {
     exports::count_newlines(text, text.len() as u64)
+}
+
+/// `text`'s bytes from `from` to below `count` raised to upper case where
+/// they are lower-case ASCII letters, in place; a byte past the end of
+/// `text` is neither read nor stored. Answers the index it stopped at:
+/// `count`, or `from` where that is not below it.
+#[inline]
+pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
+    exports::raise_span(text, count, from)
+}
+
+/// `text`'s lower-case ASCII letters raised to upper case, in place.
+#[inline]
+pub fn raise(text: &mut [u8]) {
+    exports::raise_span(text, text.len() as u64, 0);
 }

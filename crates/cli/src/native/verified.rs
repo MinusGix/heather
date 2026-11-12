@@ -42,6 +42,10 @@ const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower
 /// none, and the laws its buffers are lent under.
 const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending"];
 
+/// And what one that stores into them needs: the run of a program over a
+/// file, and the ending the generator states it with.
+const WRITTEN_IMPORTS: &[&str] = &["function_ir_run", "rt_file_loop"];
+
 /// What a program and its agreement need (`heather reflect`'s module).
 pub(super) const PROGRAM_IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_compile", "bitvec", "bool", "list", "logic", "nat", "option"];
 
@@ -68,7 +72,17 @@ pub(super) struct Shape {
     /// by function. The code's arguments are then each span's address and
     /// length, the root's spans first, and its words after them.
     pub lent: Option<Vec<u64>>,
+    /// For a program that stores into the spans it is lent (a `runtime fn`
+    /// whose type ends in `Mutated`): which of the root's buffers it stores
+    /// into, by buffer. The certificate's lending lets exactly those be
+    /// written.
+    pub marks: Option<Vec<bool>>,
 }
+
+/// What a `runtime fn` does with spans: takes none, reads them
+/// (`f::agrees_over`), or stores into one (`f::runs_over`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Spans { None, Read, Written }
 
 impl Shape {
     /// The Rust reflector's program, its agreement generated here.
@@ -84,6 +98,7 @@ impl Shape {
             agreement: agreement_text(prefix, program),
             answer: root.answer(&arguments(root.arity)),
             lent: None,
+            marks: None,
         }
     }
 
@@ -113,7 +128,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -157,19 +172,76 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), quiet = quiet_text(prefix, functions), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts) }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None }
+    }
+
+    /// A `runtime fn` that stores into the span it is lent: its program's
+    /// every store is into a buffer `marks` marks (`{prefix}_within`, by
+    /// evaluation), and over any file whose first span is `span` it runs to
+    /// the source function there (`{source}::runs_over`, the generator's
+    /// theorem): the word it answers, and the span as it leaves it. The
+    /// code's words are the span's address, then the function's own, its
+    /// length parameter first.
+    pub fn runtime_written(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>) -> Shape {
+        let parameters = arguments(arity);
+        let own = parameters[1..].join(", ");
+        let comma = if own.is_empty() { "" } else { ", " };
+        let answer = format!("{source}(span{comma}{own})");
+        let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
+        for name in LENT_IMPORTS.iter().chain(WRITTEN_IMPORTS) { definitions.push_str(&format!("import {name};\n")); }
+        definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
+fn {prefix}_program() → List<Function> {{ {source}::program }}
+
+// How many buffers each function is lent, by function: the table the
+// functions are emitted and called under.
+fn {prefix}_counts() → List<Nat> {{ [{}] }}
+
+// Which buffers the program stores into, by buffer: the ones its caller
+// lends it to write.
+fn {prefix}_marks() → List<Bool> {{ [{}] }}
+", counts.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "),
+            marks.iter().map(|mark| if *mark { "True" } else { "False" }).collect::<Vec<_>>().join(", ")));
+        for k in 0..functions {
+            definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ {prefix}_program().drop({}) }}
+fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
+", functions - 1 - k));
+        }
+        let typed = typed(&parameters);
+        let agreement = format!("{evaluable}
+
+{within}
+
+// Over any file whose first span is `span`, the program's function {f} run
+// on the span's place and its words ends as the source function does at the
+// span: its word, and the span as it leaves it, the rest of the file as it
+// was. The generator's theorem, from each function's `CompileSpan` instance.
+theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
+    program_run({prefix}_program(), Cons(span, rest), {f}, [{list}]) = FTm::end_of(rest, {answer}) {{
+    {source}::runs_over(span, rest, {list})
+}}
+", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), within = within_text(prefix, functions), f = functions - 1,
+            list = parameters.join(", "));
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks) }
     }
 }
 
 /// A `runtime fn`'s [`Shape`]: how many functions its published program
 /// has and how many words the function takes, read off the published
-/// values; for one that reads spans (`lent`), how many buffers each
-/// function of the program is lent as well.
-pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str, lent: bool) -> Result<Shape, String> {
+/// values; for one over spans, how many buffers each function of the
+/// program is lent as well, and for one that stores into them, which of
+/// the root's buffers the program stores into.
+pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans) -> Result<Shape, String> {
     let probe = format!("{prefix}_shape");
-    let (imports, counts) = if lent { ("import function_ir_lower_calls;\n", format!("program_counts({source}::program)")) } else { ("", "[]".to_string()) };
+    let lent = spans != Spans::None;
+    let (imports, counts) = if lent { ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")) }
+        else { ("", "[]".to_string()) };
+    // A writer's marks follow its counts: a one for a buffer some function
+    // of the program stores into.
+    let marks = if spans == Spans::Written {
+        format!(" ++ program_marks({source}::program, 0, lent_count(program_counts({source}::program), {source}::program.len() - 1))")
+    } else { String::new() };
     let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport list;\nimport function_ir;\n{imports}
-fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts})) }}\n");
+fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
     let numbers = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?;
@@ -177,8 +249,19 @@ fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}
         [_, arity, ..] if arity > 6 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most six, in registers",
             if lent { ", an address and a length for each span among them" } else { "" })),
         [functions, arity] if functions >= 1 && !lent => Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize)),
-        [functions, arity, ref counts @ ..] if functions >= 1 && lent && counts.len() == functions as usize =>
+        [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
+        [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {
+            let (counts, marks) = rest.split_at(functions as usize);
+            // The generator states a writer's run over a file whose first
+            // span is the function's (`f::runs_over`): one span, lent first.
+            if counts[functions as usize - 1] != 1 || marks.len() != 1 || arity < 2 {
+                return Err(format!("`{source}` stores into its span and its program is lent {} buffers: compile-x86 exports a writer of one span",
+                    counts[functions as usize - 1]));
+            }
+            Ok(Shape::runtime_written(prefix, owner, source, functions as usize, arity as usize, counts.to_vec(),
+                marks.iter().map(|mark| *mark != 0).collect()))
+        }
         _ => Err(format!("`{source}::program` did not read back")),
     }
 }
@@ -428,7 +511,39 @@ theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
 theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ refl }}
 ", label = f + 1));
     let comma = if parameters.is_empty() { "" } else { ", " };
-    if lent {
+    if program.marks.is_some() {
+        // A writer: the file is any whose first span is `span`, and the
+        // lending lets the marked buffers be written, so `loan` asks of
+        // them what a store needs (`Loan::writable`, `stored`, `apart`,
+        // `keeps`, `keeps_code`). What it promises is the run's ending: the
+        // function's word, and the function's span where `span` was.
+        text.push_str(&format!("
+// Called at its label with the span's address and its words in RDI, RSI,
+// …, a return address at RSP and {room} bytes of stack below it, the file
+// in memory with `span` its first buffer (`Stack::LentOver`), the code
+// returns the source function's word in RAX, keeps the callee-saved
+// registers and RSP, stores only into its own room below that address and
+// into the bytes of the buffers `{prefix}_marks` marks (`Stack::WroteIn`), and
+// leaves the file with the function's span where `span` was and the rest as
+// it was (`Stack::AnsweredOver`): resident anywhere, whatever follows it, at
+// any file lying anywhere the stack does not reach.
+fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{
+    Lending::writing({prefix}_counts(), addresses, now, {prefix}_marks())
+}}
+
+theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
+    loan: Loan<M>(fetch, data, stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
+    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i) ∧
+            stack.LentOver({prefix}_lending(addresses, Cons(span, rest)), top, {f}, {list}, Cons(span, rest))(i, s),
+        stack.AnsweredOver({prefix}_lending(addresses, Cons(span, rest)), {call}.value, Cons({call}.after, rest))) {{
+    compiled_returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,
+        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))
+}}
+", label = f + 1, room = 72 * (f + 1), arguments = parameters.join(", ")));
+    } else if lent {
         // The file is any (`now`), lying anywhere (`addresses`) under the
         // lending's laws (`loan`: no buffer reaches the stack below `top`).
         // `Stack::LentOver` is what the caller owes for the spans: each
@@ -527,6 +642,28 @@ theorem {prefix}_quiet_{k}(): program_quiet({program}.drop({d})).IsTrue() {{
     }
     text.push_str(&format!("theorem {prefix}_quiet(): program_quiet({program}).IsTrue() {{
     program_quiet_drop_zero({program}, {prefix}_quiet_{last}())
+}}", last = functions - 1));
+    text
+}
+
+/// `{prefix}_within`: every store of the program is into a buffer
+/// `{prefix}_marks` marks, so a caller that lends those to write has lent
+/// all the program stores into (`program_stores_marked`). A function at a
+/// time, as [`quiet_text`] is.
+fn within_text(prefix: &str, functions: usize) -> String {
+    let (program, marks) = (format!("{prefix}_program()"), format!("{prefix}_marks()"));
+    let mut text = format!("// Every store of the program is into a buffer `{prefix}_marks` marks.
+theorem {prefix}_within_none(): program_stores_within({program}.drop({functions}), {marks}).IsTrue() {{ trivial }}\n");
+    for k in 0..functions {
+        let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
+        text.push_str(&format!("theorem {prefix}_within_head_{k}(): program_stores_within_head({program}.drop({d}), {marks}).IsTrue() {{ trivial }}
+theorem {prefix}_within_{k}(): program_stores_within({program}.drop({d}), {marks}).IsTrue() {{
+    program_stores_within_drop({program}, {marks}, {d}, {prefix}_within_head_{k}(), {prefix}_within_{below}())
+}}
+", d = functions - 1 - k));
+    }
+    text.push_str(&format!("theorem {prefix}_within(): program_stores_within({program}, {marks}).IsTrue() {{
+    program_stores_within_drop_zero({program}, {marks}, {prefix}_within_{last}())
 }}", last = functions - 1));
     text
 }

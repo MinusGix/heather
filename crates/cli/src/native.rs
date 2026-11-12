@@ -424,14 +424,14 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // else unmarked is refused, naming the marker.
     let published = |member: &str| elab.qualified_global(&format!("{source_name}::{member}")).is_some();
     let shape = if published("runs_over") {
-        // A function that stores into its span has a contract with one more
-        // clause (what the span holds after, and that nothing else is
-        // touched): its export is the write half's round
-        // (docs/native-library-exports-design.md §6).
-        return Err(format!("`{symbol}` stores into its span: compile-x86 exports a runtime fn of words, or one that reads its spans"));
+        // A function that stores into its span publishes its run at every
+        // file: the word it answers and the span as it leaves it
+        // (docs/native-library-exports-design.md §7).
+        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, verified::Spans::Written)?
     } else if published("compile") {
         // One that reads spans publishes its agreement at every file.
-        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, published("agrees_over"))?
+        let spans = if published("agrees_over") { verified::Spans::Read } else { verified::Spans::None };
+        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, spans)?
     } else {
         let program = verified::reflect(&elab, &source_name)?;
         if !program.functions.iter().any(|function| function.helped) {
@@ -443,8 +443,10 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // What the code takes, as the certificate's `_returns` states it: a span
     // is an address and a length, the spans first; and the stack its premise
     // asks for below the return address.
+    // A span the program stores into is one its caller lends to write.
     let spans = shape.lent.as_ref().map_or(0, |counts| counts[shape.root] as usize);
-    let mut kinds = vec![heather_cli::linked::Kind::Span; spans];
+    let written = |span: usize| shape.marks.as_ref().is_some_and(|marks| marks.get(span) == Some(&true));
+    let mut kinds: Vec<_> = (0..spans).map(|span| if written(span) { heather_cli::linked::Kind::SpanMut } else { heather_cli::linked::Kind::Span }).collect();
     kinds.resize(shape.arity - spans, heather_cli::linked::Kind::Word);
     let signature = heather_cli::linked::Signature { kinds, stack: 72 * (shape.root as u64 + 1) };
     // A program in the fragment that the lowering then refuses is a defect
