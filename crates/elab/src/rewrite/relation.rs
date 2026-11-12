@@ -845,9 +845,12 @@ impl<'a> RelationRewrite<'a> {
             Plan::Same => Ok(input),
             Plan::Relation { relation, carrier, level, left, right } => {
                 // Each side's relation: `R`, or what a context that left
-                // `R`'s carrier named, at the goal's carrier either way.
+                // `R`'s carrier named, at the goal's carrier either way. `R`
+                // that is `RelId` (an equation walked as a step) chains as
+                // `=` does, with no `Transitive` instance at its carrier.
+                let own = self.identity;
                 let by = |side: &Side| {
-                    side.rel.as_ref().map_or_else(|| (Rc::clone(&self.relation), false), |r| (Rc::clone(&r.head), r.identity))
+                    side.rel.as_ref().map_or_else(|| (Rc::clone(&self.relation), own), |r| (Rc::clone(&r.head), r.identity))
                 };
                 let ((rl, il), (rr, ir)) = (by(left), by(right));
                 let at = (carrier, level);
@@ -963,6 +966,9 @@ impl<'a> RelationRewrite<'a> {
             && !fields.is_empty()
         {
             return self.inductive(t, &ind, i, &fields);
+        }
+        if let Some(node) = self.stuck_match(t)? {
+            return Ok(node);
         }
         let (head, args) = crate::spelling::app_spine(t);
         if args.is_empty() || matches!(head, Term::Lam { .. }) {
@@ -1156,6 +1162,29 @@ impl<'a> RelationRewrite<'a> {
     /// A node the walk does not enter: a former that is no application. An
     /// occurrence inside one would be left behind, and half a rewrite is
     /// worse than none.
+    /// A match stuck on what nothing decides yet (a definition unfolded by
+    /// `simp` into its `match`), the left side occurring in it, its arms
+    /// included: crossed as the context `λ z. match …` with every
+    /// occurrence at `z`, which every function preserves `=` through. Only
+    /// for an equation's step, above every binder the walk crossed, and an
+    /// instance that mentions none of the arms' binders (it is found where
+    /// the walk is); `None` otherwise, and the match is opaque.
+    fn stuck_match(&mut self, t: &Rc<Term>) -> R<Option<Node>> {
+        if !matches!(&**t, Term::Case { .. }) || !self.identity || self.depth() != 0 {
+            return Ok(None);
+        }
+        let Some((lhs, rhs, proof)) = self.pattern() else { return Ok(None) };
+        let Some(Type::El { tm: body, .. }) = (Type::El { level: Level::Zero, tm: Rc::clone(t) }).abstract_local(&lhs) else {
+            return Ok(None);
+        };
+        let term = Rc::new(body.inst_top(0, &rhs));
+        let node = Node::related(rhs, proof);
+        let lam = move |_: &Self, dom: Rc<Type>, dom_level: Level, cod_level: Level| {
+            Rc::new(Term::Lam { dom_level, cod_level, dom, body: Rc::clone(&body) })
+        };
+        self.crossing(t, &lhs, &node, term, None, &lam).map(Some)
+    }
+
     fn opaque(&mut self, t: &Rc<Term>) -> R<Node> {
         let Some((lhs, ..)) = self.pattern() else { return Ok(Node::Same) };
         let probe = Type::El { level: Level::Zero, tm: Rc::clone(t) };

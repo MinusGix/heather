@@ -44,6 +44,8 @@ fn BitVec::cons_bit({n: Nat}, b: Bool, self x: BitVec(n)) → BitVec(Succ(n)) {
 
 fn BitVec::head_bit({n: Nat}, self x: BitVec(Succ(n))) → Bool { head(x.bits) }
 
+theorem BitVec::head_bit_cons_bit({n: Nat}, b: Bool, x: BitVec(n)): x.cons_bit(b).head_bit() = b { refl }
+
 fn BitVec::tail_bits({n: Nat}, self x: BitVec(Succ(n))) → BitVec(n) {
     BitVec::from_bits(tail(x.bits))
 }

@@ -476,13 +476,36 @@ impl Speller<'_> {
             // (one cut back to a prefix); that alias is not in scope here.
             let later = names.len().checked_sub(a.depth)?;
             // The term first: it is the test that almost always fails.
-            if !shifted_projection(&a.term, later as u32, t) {
+            if !shifted_projection(&a.term, later as u32, t) && !self.reduced_child(a, later as u32, t) {
                 return None;
             }
             let shadowed = shadowed_by_alias || names.iter_inner().take(later).any(|n| n == a.name);
             let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
             (written && !shadowed).then(|| a.name.clone())
         })
+    }
+
+    /// Is `t` the arm child alias `a` reads, once read? A recursive child's
+    /// alias is the match's `nth(cs; i)`, which the goal a motive hands an
+    /// arm has already computed to the projection out of the children
+    /// (`fst(cs)` for `rest`), as [`crate::spelling::tuple_fields`] reads it.
+    /// `later` is how far below the alias's depth the walk is.
+    fn reduced_child(&self, a: &crate::context::Alias, later: u32, t: &Term) -> bool {
+        if crate::spelling::proj_of(t).is_none() || !matches!(crate::spelling::app_spine(&a.term).0, Term::ElimNat { .. }) {
+            return false;
+        }
+        // Reduced where the context is, then moved to where the walk is.
+        let Some(to_cx) = self.cx.names.len().checked_sub(a.depth) else {
+            return false;
+        };
+        let Some(below_cx) = (later as usize).checked_sub(to_cx) else {
+            return false;
+        };
+        let term = a.term.shift_local(to_cx as u32);
+        let Ok(reduced) = self.el.goal_oracle().whnf_term_bounded(&self.cx.gamma, &term) else {
+            return false;
+        };
+        crate::spelling::proj_of(&reduced).is_some() && shifted_projection(&reduced, below_cx as u32, t)
     }
 
     /// The name the program wrote for the instance of declaration `tag` at
@@ -946,6 +969,9 @@ impl Speller<'_> {
                 .or_else(|| self.value_field_read(t, d))
                 .or_else(|| self.projection_reduct(t, d))
                 .unwrap_or_else(|| self.raw_tm(t)),
+            // A match the walk cannot name the constructors of, shown to a
+            // reader by what it matches on.
+            Term::Case { scrut, .. } if self.rough.is_some() => format!("match {} {{ … }}", self.tm(scrut, d + 1)),
             Term::GlobalTm { var, subst } => self
                 .global(*var, subst)
                 .map(|(n, _)| n)
