@@ -11,7 +11,11 @@
 // - `Let(e, body)` binds a pure value and goes on;
 // - `Invoke(e, args, body)` makes one call to Linux at word-level operands
 //   (`Effect`) and binds what the call returns (a count, a buffer it
-//   filled) for the rest.
+//   filled) for the rest;
+// - `Lend(f, cap, buf, args, body)` calls a compiled function of the
+//   program on a buffer and words (`Lent`), one that may write the buffer,
+//   and binds the bytes it left and the word it answered, as a read binds
+//   its buffer and count.
 //
 // The capability is **not a value of `rt`**. It is the world the
 // computation threads, so no term can name it, copy it, store it in a record
@@ -36,6 +40,7 @@ import list;
 import option;
 import pair;
 import bitvec;
+import nat_map;
 import linux_calls;
 import linux_world;
 import native_source;
@@ -157,6 +162,50 @@ fn Effect::push(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::En
 }
 
 // ---------------------------------------------------------------------------
+// Functions a computation lends a buffer to
+
+// A compiled function of the program that a computation hands a buffer and
+// words (docs/native-one-compiler-design.md §2.6): how many words it takes
+// after the buffer, and what it does with them, the bytes it leaves and the
+// word it answers. A function that only reads leaves the bytes as they
+// were. The buffer's length is the function's to read off the bytes, as its
+// home's length word is (`stated_homes`), so it is not a word here.
+record Lent { arity: Nat, run: List<BitVec(8)> → List<BitVec(64)> → Mutated<List<BitVec(8)>, BitVec(64)> }
+
+// The program's functions that write, after its pure ones: function `f` of
+// the table is the program's `w.sigs.len() + f`. Past the table's end, a
+// function of no words that leaves the bytes (refused by the lowering).
+fn Lent::at(ls: List<Lent>, f: Nat) → Lent {
+    match ls {
+        Nil => Lent(0, λ own _ => Mutated(own, BitVec::zero())),
+        Cons(l, rest) => match f { Zero => l, Succ(k) => Lent::at(rest, k) },
+    }
+}
+
+// What a call binds: the bytes the function left at the buffer's code, then
+// its word, as a read binds its buffer and count (`Effect::results`).
+fn Lent::results(cap: Nat) → List<Ty> { [Bytes(cap), Word(64)] }
+
+// Variables read as the words a function takes.
+fn Lent::words(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>) → List<BitVec(64)> {
+    match args { Nil => Nil, Cons(a, more) => Cons(Ty::cast(tys, Ty::at(g, a), Word(64), Env::get(tys, g, env, a)), Lent::words(tys, g, env, more)) }
+}
+
+theorem Lent::words_len(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>): Lent::words(tys, g, env, args).len() = args.len() {
+    match args {
+        Nil => refl,
+        Cons(_, more) => cong_fn(λ (n: Nat) => Succ(n), Lent::words_len(tys, g, env, more)),
+    }
+}
+
+// What a call of function `f` binds: the function run once on the buffer
+// variable's bytes and the word variables.
+fn Lent::answer(tys: Nat → RecInfo, ls: List<Lent>, g: List<Ty>, env: rt::Env(tys, g), f, cap, buf: Nat, args: List<Nat>) → Ty::Flats(Lent::results(cap)) {
+    shared(Lent::at(ls, f).run(Ty::cast(tys, Ty::at(g, buf), Bytes(cap), Env::get(tys, g, env, buf)), Lent::words(tys, g, env, args)),
+        λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Pair(m.after, Pair(m.value, trivial)))
+}
+
+// ---------------------------------------------------------------------------
 // Computations
 
 inductive ETm {
@@ -166,6 +215,10 @@ inductive ETm {
     Let(e: Tm, body: ETm),
     // One call on variables; `body` sees its results bound in order.
     Invoke(e: Effect, args: List<Nat>, body: ETm),
+    // Function `f` of the table lent the buffer variable `buf` (of code
+    // `Bytes(cap)`) and the word variables `args`: `body` sees the bytes it
+    // left as variable 1 and its word as variable 0.
+    Lend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>, body: ETm),
 }
 
 // The code a computation returns.
@@ -174,21 +227,26 @@ fn ETm::ty(self t: ETm, w: rt::World, g: List<Ty>) → Ty {
         Pure(v) => v.ty(w, g),
         Let(e, body) => body.ty(w, Cons(e.ty(w, g), g)),
         Invoke(e, _, body) => body.ty(w, Ty::bind_onto(e.results(), g)),
+        Lend(_, cap, _, _, body) => body.ty(w, Ty::bind_onto(Lent::results(cap), g)),
     }
 }
 
-// The meaning: a world-threading function, at the code it returns.
-fn ETm::sem(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, t.ty(w, g).sem(w.tys)> {
+// The meaning: a world-threading function, at the code it returns. The
+// functions it lends buffers to are the table `ls`'s.
+fn ETm::sem(self t: ETm, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, t.ty(w, g).sem(w.tys)> {
     match t {
         Pure(v) => λ g env io => Mutated(io, v.sem(w, g, env)),
-        Let(e, body) => λ g env io => body.sem(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Let(e, body) => λ g env io => body.sem(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
         Invoke(e, args, body) => λ g env io =>
-            body.sem(w, Ty::bind_onto(e.results(), g),
+            body.sem(w, ls, Ty::bind_onto(e.results(), g),
                 Effect::push(w.tys, e.results(), g, env,
                     Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                         e.params(), e.sem(w.tys, io), args).value),
                 Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                     e.params(), e.sem(w.tys, io), args).after),
+        Lend(f, cap, buf, args, body) => λ g env io =>
+            body.sem(w, ls, Ty::bind_onto(Lent::results(cap), g),
+                Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
     }
 }
 
@@ -199,38 +257,45 @@ fn ETm::ctx_end(self t: ETm, w: rt::World, g: List<Ty>) → List<Ty> {
         Pure(_) => g,
         Let(e, body) => body.ctx_end(w, Cons(e.ty(w, g), g)),
         Invoke(e, _, body) => body.ctx_end(w, Ty::bind_onto(e.results(), g)),
+        Lend(_, cap, _, _, body) => body.ctx_end(w, Ty::bind_onto(Lent::results(cap), g)),
     }
 }
 
 // The environment there, with the world after the calls: what a loop's
 // pass rebinds its state from.
-fn ETm::sem_end(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, t.ctx_end(w, g))> {
+fn ETm::sem_end(self t: ETm, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, t.ctx_end(w, g))> {
     match t {
         Pure(_) => λ g env io => Mutated(io, env),
-        Let(e, body) => λ g env io => body.sem_end(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Let(e, body) => λ g env io => body.sem_end(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
         Invoke(e, args, body) => λ g env io =>
-            body.sem_end(w, Ty::bind_onto(e.results(), g),
+            body.sem_end(w, ls, Ty::bind_onto(e.results(), g),
                 Effect::push(w.tys, e.results(), g, env,
                     Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                         e.params(), e.sem(w.tys, io), args).value),
                 Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                     e.params(), e.sem(w.tys, io), args).after),
+        Lend(f, cap, buf, args, body) => λ g env io =>
+            body.sem_end(w, ls, Ty::bind_onto(Lent::results(cap), g),
+                Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
     }
 }
 
 // The world after the calls is the meaning's.
-theorem ETm::sem_end_after(self t: ETm, w: rt::World): (g: List<Ty>) → (env: rt::Env(w.tys, g)) → (io: Io) →
-    t.sem_end(w, g, env, io).after = t.sem(w, g, env, io).after {
+theorem ETm::sem_end_after(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty>) → (env: rt::Env(w.tys, g)) → (io: Io) →
+    t.sem_end(w, ls, g, env, io).after = t.sem(w, ls, g, env, io).after {
     match t {
         Pure(_) => λ g env io => refl,
-        Let(e, body) => λ g env io => body.sem_end_after(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Let(e, body) => λ g env io => body.sem_end_after(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
         Invoke(e, args, body) => λ g env io =>
-            body.sem_end_after(w, Ty::bind_onto(e.results(), g),
+            body.sem_end_after(w, ls, Ty::bind_onto(e.results(), g),
                 Effect::push(w.tys, e.results(), g, env,
                     Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                         e.params(), e.sem(w.tys, io), args).value),
                 Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
                     e.params(), e.sem(w.tys, io), args).after),
+        Lend(f, cap, buf, args, body) => λ g env io =>
+            body.sem_end_after(w, ls, Ty::bind_onto(Lent::results(cap), g),
+                Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
     }
 }
 
@@ -249,11 +314,11 @@ fn EFun::curry(w: rt::World, r: Ty, ps: List<Ty>)
     }
 }
 
-fn EFun::meaning(self f: EFun, w: rt::World) → Io → Ty::ArrowsTo(w.tys, f.params, Mutated<Io, f.result.sem(w.tys)>) {
+fn EFun::meaning(self f: EFun, w: rt::World, ls: List<Lent>) → Io → Ty::ArrowsTo(w.tys, f.params, Mutated<Io, f.result.sem(w.tys)>) {
     λ io => EFun::curry(w, f.result, f.params, Nil, trivial, λ env =>
-        Mutated(f.body.sem(w, Ty::bind_onto(f.params, Nil), env, io).after,
+        Mutated(f.body.sem(w, ls, Ty::bind_onto(f.params, Nil), env, io).after,
             Ty::cast(w.tys, f.body.ty(w, Ty::bind_onto(f.params, Nil)), f.result,
-                f.body.sem(w, Ty::bind_onto(f.params, Nil), env, io).value)))
+                f.body.sem(w, ls, Ty::bind_onto(f.params, Nil), env, io).value)))
 }
 
 // A world with no callees and no records: what an effectful function that

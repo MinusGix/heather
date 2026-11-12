@@ -203,6 +203,11 @@ fn ETm::same(self t: ETm) → ETm → Bool {
             Invoke(e2, args2, body2) => e.same(e2).and(Tm::nats_same(args, args2)).and(body.same(body2)),
             _ => False,
         },
+        Lend(f, cap, buf, args, body) => λ u => match u {
+            Lend(f2, cap2, buf2, args2, body2) =>
+                f.same(f2).and(cap.same(cap2)).and(buf.same(buf2)).and(Tm::nats_same(args, args2)).and(body.same(body2)),
+            _ => False,
+        },
     }
 }
 
@@ -224,6 +229,8 @@ fn ETm::show(self t: ETm) → String {
         Pure(v) => "Pure(" ++ v.show() ++ ")",
         Let(e, body) => "Let(" ++ e.show() ++ ", " ++ body.show() ++ ")",
         Invoke(e, args, body) => "Invoke(" ++ e.show() ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
+        Lend(f, cap, buf, args, body) =>
+            "Lend(" ++ rt_nat(f) ++ ", " ++ rt_nat(cap) ++ ", " ++ rt_nat(buf) ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
     }
 }
 

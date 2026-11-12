@@ -67,14 +67,14 @@ fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64)
 
 fn read_g() → List<Ty> { [Bytes(0)] }
 fn read_locs() → List<Loc> { [InBuffer(0)] }
-fn read_lowered() → Option<ELowered> { read_body().lower(tr_world(), read_g(), read_locs(), 1) }
+fn read_lowered() → Option<ELowered> { read_body().lower(tr_world(), [], read_g(), read_locs(), 1) }
 fn read_stmt() → Stmt { read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).stmt }
 fn read_result() → Nat { read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).result }
 
 fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
 theorem read_lowers(): lowers(read_lowered()) = True { refl }
 
-theorem read_means(io: Io, buf: List<BitVec(8)>): read_body().sem(tr_world(), read_g(), Pair(buf, trivial), io) = Io::read_raised(io, buf) { refl }
+theorem read_means(io: Io, buf: List<BitVec(8)>): read_body().sem(tr_world(), [], read_g(), Pair(buf, trivial), io) = Io::read_raised(io, buf) { refl }
 
 // The program's functions, as a source's calls are answered: `raise_span`
 // among them, which writes.
@@ -111,8 +111,8 @@ fn read_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
             λ flow => flow.read_back(Word(64), RecInfo::none, read_result())),
         λ io => CRet(Io::read_raised(io, buf)))
 {
-    read_body().lower_reads(tr_world(), read_g(), read_locs(), 1, read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        tr_calls(), tr_still(), tr_agrees, perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
+    read_body().lower_reads(tr_world(), [], read_g(), read_locs(), 1, read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
+        tr_calls(), tr_still(), tr_agrees, ETm::lents_agree_none(1, tr_calls()), perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
 // The control: the function that writes is not among the ones that leave

@@ -1,0 +1,330 @@
+// Probes of a computation over `Io` that lends its buffer to a function
+// that writes it (`ETm::Lend`, rt_io; its lowering and soundness,
+// rt_io_lower; issues/rt-io-calls-functions.md): `tr`, which reads stdin
+// into its buffer, hands what it read to `raise_span` (native_tool_spans),
+// a `runtime fn` that raises each lower-case letter in place, and writes
+// what the function left, until the input ends.
+//
+// - the surface method it models, and the program's meaning, its lowered
+//   statements and the surface each run against a scripted world to the
+//   same end;
+// - the soundness theorem instantiated at `tr`'s program
+//   (`raise_span::program`), the table's one function answered by the
+//   program's function 1 (`raise_span_called`): the lowered statements'
+//   tree, read against any world, is the program's meaning;
+// - the program `write-elf` compiles, `tr_lend_source`, which
+//   crates/cli/tests/native_tools.rs runs beside GNU `tr`;
+// - refusals: a write of the buffer's variable from before the call, a
+//   loop that rebinds its buffer to it, a buffer that is not the file's
+//   first, a call with the wrong number of words, a function the table
+//   does not have.
+//
+// The computation is written as an `ELoop` here, as `echo_all`'s is
+// (rt_io_loop_tests): the reflector does not read a `while` over `Io` yet
+// (issues/effects-uniqueness-surface.md). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import itree;
+import coitree;
+import coitree_rec;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+import runtime;
+import runtime_file;
+import native_tool_words;
+import native_tool_words_program;
+import native_tool_spans;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// The buffer's size: what each read asks for at most.
+fn tr_capacity() → Nat { 256 }
+
+// ---------------------------------------------------------------------------
+// The surface method
+
+// Read into the buffer, raise what came back in place, write it; while the
+// last read brought something.
+fn Io::tr_upper(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(tr_capacity()));
+        let m = raise_span(r.buf, BitVec::ofNat(r.buf.len()), r.result, BitVec::ofNat(0));
+        let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
+        buf := m.after;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+// ---------------------------------------------------------------------------
+// The computation
+
+// The world: `raise_word` as `tr`'s program numbers it, function 0, the
+// one function a pure term could call.
+fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }
+
+// The table: `raise_span` on the buffer, the count and the index it starts
+// at, the span's length its own. It is the program's function 1, after
+// `raise_word`.
+fn tr_raise(own: List<BitVec(8)>, words: List<BitVec(64)>) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match words {
+        Nil => Mutated(own, BitVec::zero()),
+        Cons(count, more) => match more {
+            Nil => Mutated(own, BitVec::zero()),
+            Cons(i, _) => raise_span(own, BitVec::ofNat(own.len()), count, i),
+        },
+    }
+}
+
+fn tr_lents() → List<Lent> { [Lent(2, λ own words => tr_raise(own, words))] }
+
+// The loop's condition, `0 <u n`, over the state `[n, buf]`.
+fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
+
+// A pass, over `[n, buf]`: read up to 256 bytes into the buffer, lend what
+// came back to `raise_span` from index 0 to the count, write what it left.
+// It ends in the context `[w, from, fd, word, left, zero, count, buf', max,
+// fd, n, buf]`: `left` (4) the bytes the function left, `buf'` (7) the
+// read's, gone once the function has the buffer.
+fn pass_body() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 5],
+    ETm::Pure(Lit(Word(64), 0))))))))))
+}
+
+// `n := 1`, then the loop rebinding `n` to the read's count and the buffer
+// to the bytes the function left, then `n`.
+fn tr_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(), pass_body(), [6, 4], ELoop::Done(ETm::Pure(Var(0)))))
+}
+
+fn tr_g() → List<Ty> { [Bytes(0)] }
+fn tr_locs() → List<Loc> { [InBuffer(0)] }
+
+fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
+
+fn tr_lowered() → Option<ELowered> { tr_prog().lower(tr_world(), tr_lents(), tr_g(), tr_locs(), 1) }
+
+theorem tr_lowers(): lowers(tr_lowered()) = True { refl }
+
+fn tr_stmt() → Stmt { tr_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).stmt }
+fn tr_result() → Nat { tr_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).result }
+// The words the statements name: a loop's condition and body use words
+// past the `next` it hands on, so the file is sized by the statements.
+fn tr_words() → Nat { tr_stmt().word_bound() }
+
+// ---------------------------------------------------------------------------
+// Running it
+
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), tr_capacity()) }
+fn piped() → Io { Io::of(World::piped([[b(104), b(105), b(33)], [b(65), b(122)]])) }
+fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [buf], []) }
+
+// The program's calls, as a source's are answered: `raise_span` among them.
+fn tr_calls() → Writers() { program_writers(raise_span_program()) }
+
+fn no_procedures() → PerformsCo() { λ p args results env => CRet(Onward(env)) }
+
+// The statements run at a piped world: "hi!" and "Az" come back raised,
+// "HI!AZ", three reads (the last at the end of the input) and three
+// writes; the result word holds the last count, 0. The meaning and the
+// surface method end at the same world with the same value.
+fn tr_run() → Partial(Mutated<Io, BitVec(64)>) {
+    CoTree::map(Events::none(), tr_stmt().run(tr_calls(), no_procedures())(start(zeros()), piped()),
+        λ m => ELoop::back(Word(64), RecInfo::none, tr_result(), m))
+}
+
+fn raised() → List<BitVec(8)> { [b(72), b(73), b(33), b(65), b(90)] }
+
+theorem tr_runs_sent(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), tr_run(), λ m => m.after.sent(Io::stdout())), raised()) {
+    Returns(30, refl)
+}
+
+theorem tr_runs_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), tr_run(), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(30, refl)
+}
+
+fn tr_meaning() → Partial(Mutated<Io, BitVec(64)>) { tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(zeros(), trivial), piped()) }
+
+theorem tr_meaning_sent(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), tr_meaning(), λ m => m.after.sent(Io::stdout())),
+    raised()) { Returns(30, refl) }
+
+theorem tr_meaning_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), tr_meaning(), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(30, refl)
+}
+
+theorem tr_surface_sent(): Returns<List<BitVec(8)>>(Events::none(),
+    CoTree::map(Events::none(), Io::tr_upper(piped(), zeros()), λ m => m.after.sent(Io::stdout())), raised()) { Returns(30, refl) }
+
+theorem tr_surface_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::tr_upper(piped(), zeros()), λ m => m.value),
+    BitVec::ofNat(0)) { Returns(30, refl) }
+
+// ---------------------------------------------------------------------------
+// The theorem at `tr`'s program
+
+// The function a pure term could call leaves every file: the program's own
+// marks (`raise_span::stills`).
+theorem tr_still(): Writers::Still(tr_calls(), functions_below(1)) {
+    Writers::still_within(tr_calls(), functions_below(1), linked_still(raise_span_program(), raise_span::stills),
+        program_writers_stills(raise_span_program(), raise_span::stills, trivial),
+        λ f => match f { Zero => λ _ => trivial, Succ(_) => λ never => false_elim(never) })
+}
+
+// And answers with `raise_word`, over any file the caller holds.
+theorem tr_agrees(held: Buffers()): Tm::CallsAgree(tr_world(), Writers::words(tr_calls(), held)) {
+    λ f => match f {
+        Zero => λ _ x => trans(cong_fn<Ending, BitVec(64)>(λ end => end.word, program_run_quiet(raise_span_program().tail(), trivial, [], 0, [x])),
+            raise_word::agrees(x)),
+        Succ(_) => λ ok => false_elim(ok.right),
+    }
+}
+
+// The table's function is the program's function 1, lent the caller's
+// first buffer: two words, and `raise_span_called` is what it answers.
+theorem tr_lents_agree(): ETm::LentsAgree(1, tr_lents(), tr_calls()) {
+    λ f => match f {
+        Zero => λ _ own rest words => match words as λ ws => ws.len() = 2 →
+                tr_calls()(Cons(own, rest), 1, ws) = Ending(tr_raise(own, ws).value, Cons(tr_raise(own, ws).after, rest)) {
+            Nil => λ e => false_elim(Nat::zero_ne_succ(1, e)),
+            Cons(count, w1) => match w1 as λ ws => Succ(ws.len()) = 2 →
+                    tr_calls()(Cons(own, rest), 1, Cons(count, ws)) = Ending(tr_raise(own, Cons(count, ws)).value, Cons(tr_raise(own, Cons(count, ws)).after, rest)) {
+                Nil => λ e => false_elim(Nat::zero_ne_succ(0, Nat::succ_inj(0, 1, e))),
+                Cons(i, w2) => match w2 as λ ws => Succ(Succ(ws.len())) = 2 →
+                        tr_calls()(Cons(own, rest), 1, Cons(count, Cons(i, ws))) =
+                            Ending(tr_raise(own, Cons(count, Cons(i, ws))).value, Cons(tr_raise(own, Cons(count, Cons(i, ws))).after, rest)) {
+                    Nil => λ _ => raise_span_called(own, rest, count, i),
+                    Cons(_, w3) => λ e => false_elim(Nat::succ_ne_zero(w3.len(), Nat::succ_inj(Succ(w3.len()), 0, Nat::succ_inj(Succ(Succ(w3.len())), 1, e)))),
+                },
+            },
+        },
+        Succ(_) => λ never => false_elim(never),
+    }
+}
+
+// The lowered statements' tree, read against any world, is the program's
+// meaning, up to silent steps: the calls answered by `tr`'s program, the
+// function that writes among them.
+fn tr_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
+            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+        λ io => tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io))
+{
+    tr_prog().lower_reads(tr_world(), tr_lents(), tr_g(), tr_locs(), 1, tr_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
+        tr_calls(), tr_still(), tr_agrees, tr_lents_agree(), perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// The program `write-elf` compiles
+
+// `raise_span`'s program, one buffer of 256 bytes, the lowered statements
+// as `main`.
+fn tr_lend_source() → Source {
+    Source(functions := raise_span_program(), buffers := [Buffer(tr_capacity())], words := tr_words(), main := tr_stmt())
+}
+
+// It starts where the theorem does: the buffer all zeroes.
+theorem tr_lend_starts(): tr_lend_source().start([]) = start(zeros()) { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals: the lowering returns `None`.
+
+// The write sends the read's bytes (variable 7), which the function has
+// since written over: gone, so refused.
+fn stale_pass() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 7, 0, 5],
+    ETm::Pure(Lit(Word(64), 0))))))))))
+}
+
+fn with_pass(pass: ETm, rebind: List<Nat>) → ELoop {
+    ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))), ELoop::While(going(), pass, rebind, ELoop::Done(ETm::Pure(Var(0)))))
+}
+
+fn lowers_at(p: ELoop) → Bool { lowers(p.lower(tr_world(), tr_lents(), tr_g(), tr_locs(), 1)) }
+
+theorem stale_write_refused(): lowers_at(with_pass(stale_pass(), [6, 4])) = False { refl }
+
+// The loop rebinds its buffer to the read's bytes rather than the
+// function's: gone, so refused.
+theorem stale_rebind_refused(): lowers_at(with_pass(pass_body(), [6, 7])) = False { refl }
+
+// The control: the program as written lowers.
+theorem stale_control(): lowers_at(with_pass(pass_body(), [6, 4])) = True { refl }
+
+// The buffer lent is the file's second: a program lends a prefix of its
+// file, so refused (issues/source-buffers-as-views.md).
+theorem second_buffer_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0], ETm::Pure(Var(0)))))
+    .lower(tr_world(), tr_lents(), [Bytes(0), Bytes(0)], [InBuffer(1), InBuffer(0)], 1)) = False { refl }
+
+// Its control: the first buffer lowers.
+theorem first_buffer_control(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0], ETm::Pure(Var(0)))))
+    .lower(tr_world(), tr_lents(), [Bytes(0), Bytes(0)], [InBuffer(0), InBuffer(1)], 1)) = True { refl }
+
+// One word where the function takes two.
+theorem arity_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Lend(0, 0, 1, [0], ETm::Pure(Var(0))))
+    .lower(tr_world(), tr_lents(), tr_g(), tr_locs(), 1)) = False { refl }
+
+// A function the table does not have.
+theorem unknown_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(64), 0), ETm::Lend(1, 0, 2, [1, 0], ETm::Pure(Var(0)))))
+    .lower(tr_world(), tr_lents(), tr_g(), tr_locs(), 1)) = False { refl }
+
+// ---------------------------------------------------------------------------
+// The loop's condition: a comparison's bit stays in the port its region
+// wrote, since the compiler takes no one-bit move; a word is moved to a
+// fresh word.
+
+fn cond_g() → List<Ty> { [Word(64), Bytes(0)] }
+fn cond_locs() → List<Loc> { [InWord(1), InBuffer(0)] }
+
+fn same_place(a: Option<Lowered>, b: Option<Lowered>) → Bool {
+    match a { None => False, Some(x) => match b { None => False, Some(y) => x.result.matches(y.result) } }
+}
+
+fn placed_at(v: Tm) → Bool {
+    same_place(ETm::lower_value(v, tr_world(), cond_g(), cond_locs(), 2), Tm::lower(v, tr_world(), cond_g(), Loc::ports(cond_locs()), 2))
+}
+
+theorem going_in_place(): placed_at(going()) = True { refl }
+
+// The control: a word is moved.
+theorem word_moved(): placed_at(Tm::Prim(Add(64), [0, 0])) = False { refl }
