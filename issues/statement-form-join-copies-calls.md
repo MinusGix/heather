@@ -1,6 +1,10 @@
 ---
 title: A statement if/match that assigns several locals copies its body, calls included, once per local
+<<<<<<< HEAD
 status: closed
+=======
+status: open
+>>>>>>> origin/claude/project-thread-q518ei
 labels: [elaboration, imperative]
 area: language
 created: 2026-11-12
@@ -45,6 +49,7 @@ branch's `let`s that every join reads into one shared binding per branch.
 
 Done when: the example's `if` holds one call, with a probe that counts the
 obligation sites (one `on ?dec1` discharges the method).
+<<<<<<< HEAD
 
 ## Log
 
@@ -59,3 +64,5 @@ obligation sites (one `on ?dec1` discharges the method).
   docs/sequencing-surface-design.md §3, §12 and §14 item 3 amended. The
   whole library re-elaborated under the exact image policy with no proof
   needing the per-local shape.
+=======
+>>>>>>> origin/claude/project-thread-q518ei

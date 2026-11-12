@@ -134,8 +134,14 @@ it cannot use. The names are unspellable by convention, not by the lexer.
   statement `x.f(ā);`, is spelled out as the call bound once, `x` rebound
   to its `after` and `p` to its `value`. Under today's statement rules the
   receiver changes only in statement forms, so a `mut self` loop recurses
+<<<<<<< HEAD
   from a statement `if`/`match`, which binds the call once however many
   locals it assigns (issues/statement-form-join-copies-calls.md). A self-call in a `let` or
+=======
+  from a statement `if`/`match`; one that assigns a second local there
+  copies the call once per local
+  (issues/statement-form-join-copies-calls.md). A self-call in a `let` or
+>>>>>>> origin/claude/project-thread-q518ei
   statement position declines the unfolding equation, as it does for a
   function.
 - **A `theorem` by measure** works the same way: `even_or_odd_wf` recurses

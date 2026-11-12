@@ -791,9 +791,15 @@ on its dependency:
   `decimal_places` is proved against it.
 
 **Cost, stated as shapes.** Lowering is linear in statements. Per-variable
+<<<<<<< HEAD
 joins cost one condition copy per assigned local per `if` (*amended
 2026-11-12*: one join per `if`, whatever it assigns, since a copy per local
 copied each branch's calls too, issues/statement-form-join-copies-calls.md). A chain of `k`
+=======
+joins cost one condition copy per assigned local per `if` — and one copy of
+each branch's calls too, which a recursive call turns into an exponential
+evaluation (issues/statement-form-join-copies-calls.md). A chain of `k`
+>>>>>>> origin/claude/project-thread-q518ei
 binds nests `k` binders, which is the hand-written tower's cost, quadratic
 at worst by the representation's bound on a binder-per-link chain (the
 `let/under` bench, PR #199), and never worse than the tower it replaces.
