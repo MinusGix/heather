@@ -184,6 +184,30 @@ repeated around its renderings, because the motive sits outside the arm. The
 match must be at the anchor, since the motive needs the result type. Below
 the anchor (inside an argument) it is still refused.
 
+**Amended again (2026-11-12, issues/decreases-no-companions-nested-match-calls.md,
+issues/decreases-mut-call-statement-companions.md).** Two loop shapes a
+measured `runtime fn` needs:
+
+- **A branch under the loop test's arm.** An arm of a match the walk spells
+  out has the declaration's result type, as the anchor does, so a match
+  there is spelled out again by the same congruence (`Respell::match_below_anchor`
+  → `match_spelled`): two ways round a loop, or one way round and an early way
+  out, under one `match h:`. `if` is walked as the match on its decision.
+  Only an argument position (whose type the walk does not know) still
+  refuses a match. Two inner matches are declined because `f#body` spells
+  them with an equation the source lacks: one on a variable the measure
+  mentions (the rewrite refines it), and one on a computed scrutinee whose
+  arms' lifted obligations read its `AutoEqs` equation (`match g:` it
+  instead).
+- **A `mut self` call statement before the self-call.** `x.m(a);` and `let p
+  = x.m(a);` rebind `x` (`statements::elaborate_mut_call`), so substituting
+  the block's `let`s must rebind it too: from there on `x` is
+  `\0mutated_after(x.m(a))` and `p` is `\0mutated_value(x.m(a))`, private
+  markers the elaborator reads as the statement does (the `Mutated` record's
+  fields, or the receiver and the call when `m` is not `mut self`). Dropping
+  the statement as a `let` nothing reads proved an equation about a body
+  without the store, which the kernel refused against `f#body`.
+
 A lifted obligation used to quantify over the walk's `__dec_scrut_N` alias as
 if it were a parameter, which made `h: __dec_scrut_N = False` unprovable in
 the lifted statement. It now substitutes the alias's value into the statement

@@ -222,6 +222,9 @@ impl Inference<'_> {
         if let Some(condition) = lowered_condition(e) {
             return self.elab_condition(cx, e, &condition, expected);
         }
+        if let Some(part) = statements::mut_call_part(self.0, cx, e) {
+            return part;
+        }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
     }

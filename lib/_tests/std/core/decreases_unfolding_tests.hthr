@@ -66,3 +66,169 @@ theorem shadowed_arm_lit(): shadowed_arm(3, List::Nil) = [0, 1, 2] { refl }
 fn shadowed_grows(m: Nat, out: List<Nat>) → List<Nat> decreases m {
     match h: decide_bit<1 <= m>() { True => { let m = m + 1; shadowed_grows(m, List::Cons(m, out)) }, False => out }
 }
+
+// `mut self` calls on a `let mut` local before the self-call
+// (issues/decreases-mut-call-statement-companions.md): the statement rebinds
+// its receiver, so the companions' walk reads the local after it as the
+// call's `after`, and `let v = c.tick(…)`'s `v` as its `value`.
+record Counter { n: Nat, log: List<Nat> }
+fn Counter::tick(mut self c: Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, Cons(by, c.log));
+    c.n
+}
+fn Counter::total(c: Counter) → Nat { c.n }
+
+fn fill(c: Counter, m: Nat) → Mutated<Counter, Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => Mutated(c, m),
+        True => { let mut c = c; c.tick(m); fill(c, m - 1) },
+    }
+}
+theorem fill_lit(): fill(Counter(0, []), 2).after = Counter(3, [1, 2]) { refl }
+theorem fill_unfolds(c: Counter, m: Nat):
+    fill(c, m) = (match h: decide_bit<1 <= m>() { False => Mutated(c, m), True => fill(Counter::tick(c, m).after, m - 1) }) {
+    fill_unfold(c, m)
+}
+
+fn fill2(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => { let mut c = c; let v = c.tick(m); c.tick(1); fill2(c, m - 1, acc + v) },
+    }
+}
+theorem fill2_unfolds(c: Counter, m: Nat, acc: Nat):
+    fill2(c, m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => fill2(Counter::tick(Counter::tick(c, m).after, 1).after, m - 1, acc + Counter::tick(c, m).value) }) {
+    fill2_unfold(c, m, acc)
+}
+
+// A method that is not `mut self`, called on a `let mut` local: an ordinary call.
+fn plain(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => { let mut c = c; let k = c.total(); c.tick(k); plain(c, m - 1, acc + k) },
+    }
+}
+theorem plain_unfolds(c: Counter, m: Nat, acc: Nat):
+    plain(c, m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => plain(Counter::tick(c, c.n).after, m - 1, acc + c.n) }) {
+    plain_unfold(c, m, acc)
+}
+
+// A branch under the loop test's arm, each way round a self-call
+// (issues/decreases-no-companions-nested-match-calls.md): the inner match is
+// spelled out on both sides, as the outer convoy is.
+fn two_var(m: Nat, acc: Nat, flip: Bool) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => match flip {
+            True => two_var(m - 1, acc + 1, False),
+            False => two_var(m - 1, acc, True),
+        },
+    }
+}
+theorem two_var_lit(): two_var(5, 0, True) = 3 { refl }
+theorem two_var_unfolds(m: Nat, acc: Nat, flip: Bool):
+    two_var(m, acc, flip) = (match h: decide_bit<1 <= m>() { False => acc, True => match flip { True => two_var(m - 1, acc + 1, False), False => two_var(m - 1, acc, True) } }) {
+    two_var_unfold(m, acc, flip)
+}
+
+// The same branch as an `if`.
+fn by_if(m: Nat, acc: Nat, flip: Bool) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => if flip { by_if(m - 1, acc + 1, False) } else { by_if(m - 1, acc, True) },
+    }
+}
+theorem by_if_unfolds(m: Nat, acc: Nat, flip: Bool):
+    by_if(m, acc, flip) = (match h: decide_bit<1 <= m>() { False => acc, True => if flip { by_if(m - 1, acc + 1, False) } else { by_if(m - 1, acc, True) } }) {
+    by_if_unfold(m, acc, flip)
+}
+
+// An early way out under the loop test, on a test with its own equation.
+fn early(m: Nat, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => match g: decide_bit<3 <= acc>() {
+            True => acc,
+            False => early(m - 1, acc + 1),
+        },
+    }
+}
+theorem early_lit(): early(10, 0) = 3 { refl }
+theorem early_unfolds(m: Nat, acc: Nat):
+    early(m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match g: decide_bit<3 <= acc>() { True => acc, False => early(m - 1, acc + 1) } }) {
+    early_unfold(m, acc)
+}
+
+// A computed inner scrutinee with no equation: its arms' obligations do
+// not read one, so the rewrite binds none either.
+fn computed(m: Nat, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => match decide_bit<3 <= acc>() {
+            True => computed(m - 1, acc),
+            False => computed(m - 1, acc + 2),
+        },
+    }
+}
+theorem computed_unfolds(m: Nat, acc: Nat):
+    computed(m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match decide_bit<3 <= acc>() { True => computed(m - 1, acc), False => computed(m - 1, acc + 2) } }) {
+    computed_unfold(m, acc)
+}
+
+// Two levels of branching, a `mut self` call in the innermost arm.
+fn deep(m: Nat, a: Bool, b: Bool, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => match a {
+            True => match b {
+                True => deep(m - 1, False, b, acc + 1),
+                False => { let mut c = Counter(acc, []); c.tick(2); deep(m - 1, a, True, c.n) },
+            },
+            False => deep(m - 1, True, b, acc),
+        },
+    }
+}
+theorem deep_unfolds(m: Nat, a: Bool, b: Bool, acc: Nat):
+    deep(m, a, b, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match a {
+        True => match b { True => deep(m - 1, False, b, acc + 1), False => deep(m - 1, a, True, acc + 2) },
+        False => deep(m - 1, True, b, acc) } }) {
+    deep_unfold(m, a, b, acc)
+}
+
+// An `if` with evidence as the loop test itself.
+fn top_if(m: Nat, acc: Nat) → Nat decreases m {
+    if h: 1 <= m { top_if(m - 1, acc + m) } else { acc }
+}
+theorem top_if_unfolds(m: Nat, acc: Nat):
+    top_if(m, acc) = (if h: 1 <= m { top_if(m - 1, acc + m) } else { acc }) {
+    top_if_unfold(m, acc)
+}
+
+// An open element type.
+fn poly<A>(xs: List<A>, m: Nat, flip: Bool) → List<A> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => match flip {
+            True => poly(xs, m - 1, False),
+            False => poly(xs.tail(), m - 1, True),
+        },
+    }
+}
+theorem poly_unfolds<A>(xs: List<A>, m: Nat, flip: Bool):
+    poly(xs, m, flip) = (match h: decide_bit<1 <= m>() { False => xs, True => match flip { True => poly(xs, m - 1, False), False => poly(xs.tail(), m - 1, True) } }) {
+    poly_unfold(xs, m, flip)
+}
+
+// Negative control: a match below the loop test's arm on the measured
+// variable is one the body rewrite refines with an equation the source does
+// not bind, so the companions are still declined, naming the case.
+fn on_measure(m: Nat, acc: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => acc,
+        True => match m { Zero => acc, Succ(k) => on_measure(k, acc + 1) },
+    }
+}
+// expect-error: a `match` below another `match`'s arm on a variable the measure mentions
+theorem on_measure_unfolds(m: Nat, acc: Nat): on_measure(m, acc) = on_measure(m, acc) {
+    trans(on_measure_unfold(m, acc), refl)
+}

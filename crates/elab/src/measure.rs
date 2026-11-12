@@ -2743,6 +2743,20 @@ enum Mode {
     Unfold,
 }
 
+/// Where the walk is (§3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum At {
+    /// The whole of what the two anchors denote.
+    Anchor,
+    /// Below the anchor, but still a whole result of the declaration's
+    /// result type: an arm of a match both sides spell out
+    /// ([`Respell::match_spelled`]). A match here is spelled out again, at
+    /// the same constant motive.
+    Result,
+    /// An argument of a call, whose type the walk does not know.
+    Argument,
+}
+
 /// The re-spelling walk (§3): a proof of `lhs = rhs` over the body's own
 /// structure. `lhs`/`rhs` come back with the proof because a congruence step
 /// one level up has to spell both sides of the argument it transports.
@@ -2943,10 +2957,77 @@ impl Respell<'_> {
         found
     }
 
-    /// The walk proper. `at_anchor` says whether the current position is the
-    /// whole of what the two anchors denote — only there can a `match` be
-    /// re-matched under a motive that mentions them.
-    fn walk(&mut self, e: &Expr, at_anchor: bool) -> Result<Triple, String> {
+    /// A block's `let`s substituted into its result (§3: `let` is
+    /// zeta-transparent, so both sides still reduce alike), outermost first,
+    /// each right-hand side under the substitutions before it.
+    ///
+    /// A claimed method call on a `let mut` local (`x.m(a);` at a `#seq`
+    /// name, or `let p = x.m(a);`, [`heather_syntax::MUTATED`]) also rebinds
+    /// its receiver (`statements::elaborate_mut_call`): from there on `x` is
+    /// `\0mutated_after(x.m(a))` and `p` is `\0mutated_value(x.m(a))`, which
+    /// the elaborator reads as the statement does. Dropping the statement as
+    /// a `let` nothing reads would leave `x` the value before the call
+    /// (issues/decreases-mut-call-statement-companions.md).
+    fn inline_lets(&self, stmts: &[Stmt], result: &Expr) -> Result<Expr, String> {
+        let span = self.span;
+        let mut env: Vec<(String, Expr)> = Vec::new();
+        let apply = |env: &[(String, Expr)], e: &Expr| {
+            let map: Vec<(&str, &Expr)> = env.iter().map(|(n, v)| (n.as_str(), v)).collect();
+            subst(e, &map, &mut Vec::new())
+        };
+        let bind = |env: &mut Vec<(String, Expr)>, name: &str, value: Expr| match env.iter_mut().find(|(n, _)| n == name) {
+            Some(slot) => slot.1 = value,
+            None => env.push((name.to_string(), value)),
+        };
+        for st in stmts {
+            let Stmt::Let { name, expr, .. } = st else {
+                return Err("a destructuring or `code` binding in the body".into());
+            };
+            if self.has_self_call(expr) {
+                return Err("a recursive call in a `let` right-hand side".into());
+            }
+            let marked = match &expr.kind {
+                ExprKind::App { head, args, .. } if args.len() == 1 => match &head.kind {
+                    ExprKind::Var(n) if n == heather_syntax::MUTATED || n == heather_syntax::MUTCALL => {
+                        Some((n == heather_syntax::MUTATED, &args[0]))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            match marked {
+                Some((true, call)) => {
+                    let ExprKind::Dot { recv, .. } = &call.kind else {
+                        return Err("a marked call this walk cannot read".into());
+                    };
+                    let ExprKind::Var(receiver) = &recv.kind else {
+                        return Err("a marked call this walk cannot read".into());
+                    };
+                    let call = apply(&env, call);
+                    let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
+                    if !name.starts_with("#seq") {
+                        bind(&mut env, name, part(heather_syntax::MUTATED_VALUE));
+                    }
+                    bind(&mut env, receiver, part(heather_syntax::MUTATED_AFTER));
+                }
+                // An unclaimed candidate is an ordinary call.
+                Some((false, call)) => {
+                    let value = apply(&env, call);
+                    bind(&mut env, name, value);
+                }
+                None => {
+                    let value = apply(&env, expr);
+                    bind(&mut env, name, value);
+                }
+            }
+        }
+        Ok(apply(&env, result))
+    }
+
+    /// The walk proper. `at` says what the current position is (see [`At`]):
+    /// only at the anchor can a `match` be re-matched under a motive that
+    /// mentions the anchors.
+    fn walk(&mut self, e: &Expr, at: At) -> Result<Triple, String> {
         let span = self.span;
         if !self.has_self_call(e) {
             let x = self.sigma_apply(e);
@@ -2967,17 +3048,8 @@ impl Respell<'_> {
                 if !b.ons.is_empty() {
                     return Err("a nested `on` block".into());
                 }
-                let mut result = (*b.result).clone();
-                for s in b.stmts.iter().rev() {
-                    let Stmt::Let { name, expr, .. } = s else {
-                        return Err("a destructuring or `code` binding in the body".into());
-                    };
-                    if self.has_self_call(expr) {
-                        return Err("a recursive call in a `let` right-hand side".into());
-                    }
-                    result = subst(&result, &[(name.as_str(), expr)], &mut Vec::new());
-                }
-                self.walk(&result, at_anchor)
+                let result = self.inline_lets(&b.stmts, &b.result)?;
+                self.walk(&result, at)
             }
             ExprKind::App {
                 head,
@@ -3002,7 +3074,7 @@ impl Respell<'_> {
                 let head_s = self.sigma_apply(head);
                 let mut parts = Vec::new();
                 for a in args {
-                    parts.push((self.has_self_call(a), self.walk(a, false)?));
+                    parts.push((self.has_self_call(a), self.walk(a, At::Argument)?));
                 }
                 let lhs = app(
                     head_s.clone(),
@@ -3053,14 +3125,19 @@ impl Respell<'_> {
                 arms,
                 ..
             } => {
-                if !at_anchor {
+                if at == At::Argument {
                     return Err("a `match` holding a recursive call inside an argument".into());
                 }
-                if *form != MatchForm::Match {
-                    return Err("a `split` or `if` around a recursive call".into());
+                // An `if` is the match on its decision (`MatchForm::If`
+                // survives for diagnostics only), so it is walked as one.
+                if !matches!(form, MatchForm::Match | MatchForm::If) {
+                    return Err("a `split` or `if let` around a recursive call".into());
                 }
                 if motive.is_some() {
                     return Err("a `match` with a written motive".into());
+                }
+                if at == At::Result {
+                    return self.match_below_anchor(e, *form, scrut, eqbind.as_deref(), arms);
                 }
                 // A computed scrutinee, or an equation binding: neither side
                 // reduces into an arm, so both are spelled out (§3's
@@ -3069,16 +3146,16 @@ impl Respell<'_> {
                 // the alias the rewrite gave it, which carries its
                 // [`AutoEqs`] equation where an obligation reads one.
                 if eqbind.is_none() && !matches!(scrut.kind, ExprKind::Var(_)) && !self.has_self_call(scrut) {
-                    return self.convoy_at_anchor(e, scrut, None, arms);
+                    return self.convoy_at_anchor(e, *form, scrut, None, arms);
                 }
                 if eqbind.is_some() || !matches!(scrut.kind, ExprKind::Var(_)) {
                     return self.match_spelled(e, scrut, eqbind.as_deref(), arms);
                 }
                 let ExprKind::Var(v) = &scrut.kind else {
-                    return self.convoy_at_anchor(e, scrut, eqbind.as_deref(), arms);
+                    return self.convoy_at_anchor(e, *form, scrut, eqbind.as_deref(), arms);
                 };
                 if eqbind.is_some() {
-                    return self.convoy_at_anchor(e, scrut, eqbind.as_deref(), arms);
+                    return self.convoy_at_anchor(e, *form, scrut, eqbind.as_deref(), arms);
                 }
                 if self.sigma.iter().any(|(n, _)| n == v) {
                     return Err("a second `match` on an already-refined variable".into());
@@ -3091,6 +3168,47 @@ impl Respell<'_> {
             }
             _ => Err("a body shape the walk does not cover".into()),
         }
+    }
+
+    /// A `match` below the anchor, as an arm of a match both sides spell out
+    /// (issues/decreases-no-companions-nested-match-calls.md): `match flip
+    /// { … }` under `match h: i < n { True => … }`. Neither anchor reaches
+    /// it, but none needs to: [`Self::match_spelled`] is congruence alone,
+    /// each side the match again over its arms' renderings, at the
+    /// declaration's result type.
+    ///
+    /// It has to be spelled as `f#body` spells it, so the two cases where the
+    /// body rewrite gives the match an equation binding the source lacks are
+    /// refused: a variable the (refined) measure mentions, which the rewrite
+    /// refines, and a computed scrutinee whose [`AutoEqs`] equation a lifted
+    /// obligation reads.
+    fn match_below_anchor(
+        &mut self,
+        node: &Expr,
+        form: MatchForm,
+        scrut: &Expr,
+        eqbind: Option<&str>,
+        arms: &[Arm],
+    ) -> Result<Triple, String> {
+        if eqbind.is_none() && form == MatchForm::Match {
+            if matches!(scrut.kind, ExprKind::Var(_)) {
+                if self.rw.refining_match(scrut, &None).is_some() {
+                    return Err("a `match` below another `match`'s arm on a variable the measure mentions".into());
+                }
+            } else if arms.iter().any(|a| self.rw.calls_member(&a.body)) {
+                // The rewrite numbers this candidate as it renders it.
+                let n = self.rw.auto_n;
+                self.rw.auto_n += 1;
+                if self.rw.auto_eqs.admits(n) {
+                    return Err(
+                        "a `match` below another `match`'s arm whose recursive call's obligation reads \
+                         the inner scrutinee's equation: bind it as `match g: …`"
+                            .into(),
+                    );
+                }
+            }
+        }
+        self.match_spelled(node, scrut, eqbind, arms)
     }
 
     /// A `match` at the anchor that neither side reduces into: on a computed
@@ -3146,7 +3264,7 @@ impl Respell<'_> {
                 let ty = pattern_expr(a, span).map(|p| eq_ty((*scrut).clone(), p, span));
                 self.rw.scope.push(Binder { name: eq.to_string(), ty, value: None });
             }
-            let inner = self.walk(&a.body, false);
+            let inner = self.walk(&a.body, At::Result);
             self.rw.scope.truncate(depth);
             let stmts = std::mem::replace(&mut self.lets, saved);
             let inner = match inner {
@@ -3163,7 +3281,7 @@ impl Respell<'_> {
         let sv = var(&s, span);
         let e_name = self.fresh("e");
         let b = self.fresh("b");
-        let result_ty = self.decl.result.clone();
+        let result_ty = self.sigma_apply_ty(&self.decl.result);
         let with_eq = |body: Expr, eq: Option<&str>| match eq {
             Some(h) => lam(&[h], body, span),
             None => body,
@@ -3293,7 +3411,7 @@ impl Respell<'_> {
             let depth = self.rw.scope.len();
             let scrut_ty = self.rw.scrut_ty(&var(v, span));
             self.rw.bind_arm(a, scrut_ty.as_ref());
-            let inner = self.walk(&a.body, true);
+            let inner = self.walk(&a.body, At::Anchor);
             self.rw.scope.truncate(depth);
             let stmts = std::mem::replace(&mut self.lets, saved);
             self.sigma.pop();
@@ -3369,6 +3487,7 @@ impl Respell<'_> {
     fn convoy_at_anchor(
         &mut self,
         node: &Expr,
+        form: MatchForm,
         scrut: &Expr,
         eq: Option<&str>,
         arms: &[Arm],
@@ -3382,16 +3501,7 @@ impl Respell<'_> {
         // expression either way.
         let rendered = self.rw.fork().expr(node);
         let rendered = match &rendered.kind {
-            ExprKind::Block(b) if b.ons.is_empty() => {
-                let mut result = (*b.result).clone();
-                for st in b.stmts.iter().rev() {
-                    let Stmt::Let { name, expr, .. } = st else {
-                        return Err("a rendered `match` this walk cannot read".into());
-                    };
-                    result = subst(&result, &[(name.as_str(), expr)], &mut Vec::new());
-                }
-                result
-            }
+            ExprKind::Block(b) if b.ons.is_empty() => self.inline_lets(&b.stmts, &b.result)?,
             _ => rendered,
         };
         let ExprKind::Match { scrut: r_scrut, arms: r_arms, eqbind: r_eq, .. } = &rendered.kind else {
@@ -3505,7 +3615,7 @@ impl Respell<'_> {
         let depth = self.rw.scope.len();
         if !matches!(scrut.kind, ExprKind::Var(_))
             && let Some(alias) = self.rw.bind_scrut_alias(node, scrut)
-            && self.rw.auto_candidate(MatchForm::Match, &var(&alias, span), &eq.map(str::to_string), arms)
+            && self.rw.auto_candidate(form, &var(&alias, span), &eq.map(str::to_string), arms)
         {
             // The rewrite numbered this candidate as it rendered it; keep
             // the nested ones' numbers in step.
@@ -3528,7 +3638,7 @@ impl Respell<'_> {
             }
             let saved_lets = std::mem::take(&mut self.lets);
             let saved_anchors = self.anchors.replace((rebind(&ra.body), a.body.clone()));
-            let inner = self.walk(&a.body, true);
+            let inner = self.walk(&a.body, At::Anchor);
             self.anchors = saved_anchors;
             let stmts = std::mem::replace(&mut self.lets, saved_lets);
             self.rw.scope.truncate(arm_depth);
@@ -3813,7 +3923,7 @@ pub(crate) fn companions(
         span,
         anchors: None,
     };
-    let ext_proof = ext.walk(&source, true)?;
+    let ext_proof = ext.walk(&source, At::Anchor)?;
     let ext_sites = std::mem::take(&mut ext.rw.sites);
     // Every obligation moved into its own declaration (§4), so the discharges
     // that raised them are no part of a companion; anything else the writer
@@ -4107,7 +4217,7 @@ pub(crate) fn companions(
         span,
         anchors: None,
     };
-    let unfold_proof = unfold.walk(&source, true)?;
+    let unfold_proof = unfold.walk(&source, At::Anchor)?;
     let unfold_sites = std::mem::take(&mut unfold.rw.sites);
     let unfold_decl = Decl {
         kind: DeclKind::Theorem,
