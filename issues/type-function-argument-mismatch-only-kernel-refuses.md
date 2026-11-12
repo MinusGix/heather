@@ -1,10 +1,10 @@
 ---
 title: An argument typed by one type function passes the elaborator where another is expected; only the kernel refuses, without spelling it
-status: open
+status: closed
 labels: [frontend,diagnostics,bug]
 area: language
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 An argument whose type is one zero-argument type function, passed where

@@ -817,19 +817,50 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    `layout-first-order-description`), as Minus decides: a codec's
    compiled accessor by a class, a declared type's layout by a class,
    and a layout as data. A prototype of each checks.
-3. **A held function without loops.** **Built** (§9.2): the marks, the
-   held meaning, the agreement, the two field lemmas, the function's
-   theorem, and the whole statement for two compiled functions written
-   over field accessors by hand. Still to build, and all of it
-   generator: the reflector reading a record receiver (field reads,
-   `x.f := e`) straight to `FTm`, each read bound where it is read (the
-   reflector of functions of bytes refuses a read bound before a store
-   and used after it, `issues/rt-file-read-before-store.md`, which a
-   function of a record does all the time); the function of bytes
-   declared as the reflection's meaning, so that its own pin is nothing;
-   each field's reader and writer as a `runtime fn` found by the
-   accessor class of §10.2; and `f::runs_held` published. First
-   customers: SHA-256's `init` and the count's update.
+3. **A held function without loops.** **Built**: the theory (§9.2: the
+   marks, the held meaning, the agreement, the two field lemmas, the
+   function's theorem) and the generator. `runtime fn T::m(mut self t:
+   T, …)` at a `laid record` publishes `T::m::bytes` (the function over
+   the span the code is compiled from), its instance and program as a
+   function over a span does, `T::m::held` and `T::m::sound` (the marks
+   and what they owe, one field lemma per field), and
+   `T::m::runs_held`: where the span holds a record, the bytes'
+   function answers what `T::m` answers and leaves the span holding
+   the record it leaves. Nothing is proved about `T::m`. Probes:
+   `lib/_tests/native/runtime/runtime_held_tests.hthr`.
+
+   What the build found that the design did not have:
+
+   - **A field access is the codec's accessor called at the field's
+     offset** (`List::u64_be_within`, `put_u32_be_within`, …), found
+     by the accessor class of §10.2. Nothing is compiled per field, and
+     the marks are per accessor with the fields each reaches.
+   - **The function of bytes is the reflection written out**, not the
+     reflection's meaning: each value bound once (`HWorld::once`), each
+     store followed by what comes after at the span it leaves
+     (`HWorld::after`). A meaning stated at one file and compared with
+     the meaning at another is compared environment by environment.
+     Reads are bound where they are read, so a read before a store used
+     after it is not the problem it is for a function of bytes written
+     by hand.
+   - **What is by conversion is proved at every callee** and read at
+     the program's own (`HWorld::at`): with its own accessors in place
+     the kernel unfolds an accessor it reaches on one side first, and a
+     64-bit read cost a quarter of a declaration's budget
+     (`issues/conversion-callee-unfolded-before-the-meet.md`).
+   - **A check's verdict is an equation in every compile entry point**:
+     as a proof of `check.IsTrue()` it was compared at a type the kernel
+     computed, the whole lowering, wherever a link named an instance
+     twice (`issues/conversion-proof-compared-at-computed-type.md`).
+     This changed the span and the reading compilers alike.
+   - A function that changes nothing (`self t: T`, a word) is compiled
+     the same way, and a branch around the whole result is two ends.
+
+   What it does not take yet is
+   `issues/runtime-record-function-limits.md`: a call of another
+   function of the record, a branch before the end with a store in it,
+   operands and results other than 64-bit words, fields with no
+   accessor. First customers: SHA-256's `init` and the count's update.
 4. **The floor and loops**: the class's floor, length preservation, the
    loop's equation carried through an exact codec. Then SHA-256's
    functions are methods of `Sha256` whole, its entry points are exported

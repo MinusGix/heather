@@ -1,6 +1,6 @@
 ---
 title: A store sweep can remove an image another run has planned to replay, which then fails instead of rebuilding
-status: open
+status: closed
 labels: [tooling,infrastructure,cache]
 area: infrastructure
 created: 2026-11-11

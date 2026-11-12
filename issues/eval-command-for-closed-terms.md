@@ -1,6 +1,6 @@
 ---
 title: A command that prints what a closed term evaluates to
-status: open
+status: closed
 labels: [cli,diagnostics]
 area: infrastructure
 created: 2026-11-12

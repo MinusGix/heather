@@ -45,3 +45,7 @@ Remedies, neither done:
 ## Done when
 
 Two `runtime fn`s of one type link at a cost that does not depend on how long their bodies take to tell apart, by a rule (a tag or the kernel's) and not by the order of each builder's parameters; and the comment at `Setup::compile` is then history.
+
+## Log
+
+- 2026-11-12: A fourth pairing, found compiling functions of a laid record with two readers where one calls the other. The root read `[u64r, u32r]` and `u64r`'s own table was the same list, so the root's reading-callee signatures and the callee's were one list at two worlds: `Ty::uncurry(world.at(callees, b).tys, …)` against `Ty::uncurry(c.world.tys, …)`, two applications of `World::tys`, compared world by world with callee tables at different files. `Compile::uncurried` and `CompileSpan::source` now read `tys` by a nested pattern (`World(tys, _, _, _)`), as they already read the instance. See also [[conversion-proof-compared-at-computed-type]]: the same link statement, where the instance's verdict argument was the cost.
