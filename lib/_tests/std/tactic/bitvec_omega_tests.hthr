@@ -1,0 +1,95 @@
+// Probes of `bv_omega` (`lib/std/tactic/bitvec_omega.hthr`,
+// `docs/bv-omega-design.md`) and of the `decreases` discharge that falls
+// back to it over a word measure (issues/decreases-word-measures-by-hand.md).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega;
+
+// ---- The test, read from the context as it is written ----
+
+// The Boolean test a `match h:` states, without binding
+// `bitvec_omega::unsigned_true` by hand.
+theorem lt_bit_true(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = True):
+    BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
+// Its other arm: the test failed, so `i` is at least 64.
+theorem lt_bit_false(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = False): 64 <= i.toNat() { bv_omega }
+// The `<=` bit and the equality bit.
+theorem le_bit_true(i: BitVec(64), h: i.unsigned_le_bit(BitVec::ofNat(63)) = True): i.toNat() < 64 { bv_omega }
+theorem le_bit_false(i: BitVec(64), h: i.unsigned_le_bit(BitVec::ofNat(63)) = False): 63 < i.toNat() { bv_omega }
+theorem eq_bit_true(i: BitVec(64), h: i.eq_bit(BitVec::ofNat(7)) = True): i.toNat() = 7 { bv_omega }
+theorem eq_bit_false(i: BitVec(64), h: i.eq_bit(BitVec::ofNat(7)) = False, k: i.toNat() <= 7): i.toNat() < 7 { bv_omega }
+
+// The propositions `<` and `<=` at a word, the literal's `toNat` evaluated.
+theorem lt_prop(i: BitVec(64), h: i < 64):
+    BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
+theorem le_prop(i: BitVec(64), h: i <= 63): i.toNat() + 1 <= 64 { bv_omega }
+// Two words, neither a literal.
+theorem lt_prop_words(i, j: BitVec(64), h: i < j): (j - (i + 1)).toNat() < (j - i).toNat() { bv_omega }
+// In a checking position.
+theorem lt_prop_checking(i: BitVec(64), h: i < 64): i.toNat() < 64 {
+    let below: (i.toNat() < 64) = bv_omega;
+    below
+}
+// A literal's `toNat` inside a Nat fact.
+theorem literal_in_fact(i: BitVec(8), h: i.toNat() < BitVec::ofNat(200, n := 8).toNat()): i.toNat() < 200 { bv_omega }
+
+// Negative control: the test says nothing about the upper end, so the
+// difference may wrap.
+// expect-error: may borrow
+theorem lt_bit_wrong_way(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = False):
+    BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
+
+// ---- A variable named `t` (issues/bv-omega-binder-captures-t.md) ----
+
+theorem named_t(t: BitVec(64), h: t.unsigned_lt_bit(64) = True): BitVec::sub(BitVec::ofNat(64), t + 1).toNat() < BitVec::sub(BitVec::ofNat(64), t).toNat() { bv_omega }
+
+// ---- Loops over a word, their decrease discharged automatically ----
+
+// The `match h:` form, the measure the word's distance to the bound.
+fn count_up(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
+    match h: i.unsigned_lt_bit(64) {
+        False => 0,
+        True => 1 + count_up(i + 1),
+    }
+}
+theorem count_up_lit(): count_up(60) = 4 { refl }
+theorem count_up_done(): count_up(64) = 0 { refl }
+
+// The test as the proposition `i < 64`.
+fn count_up_if(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
+    if h: i < 64 { 1 + count_up_if(i + 1) } else { 0 }
+}
+theorem count_up_if_lit(): count_up_if(61) = 3 { refl }
+
+// The counter named `t`.
+fn count_up_t(t: BitVec(64)) → Nat decreases (64 - t).toNat() {
+    match h: t.unsigned_lt_bit(64) {
+        False => 0,
+        True => 1 + count_up_t(t + 1),
+    }
+}
+theorem count_up_t_lit(): count_up_t(62) = 2 { refl }
+
+// A `while` over a word: nowhere to write the proof, so it is automatic or
+// nothing.
+fn sum_below(k: BitVec(64)) → BitVec(64) {
+    let mut i: BitVec(64) = k;
+    let mut acc: BitVec(64) = 0;
+    while i < 64 decreases (64 - i).toNat() {
+        acc := acc + i;
+        i := i + 1
+    }
+    acc
+}
+theorem sum_below_lit(): sum_below(60) = 246 { refl }
+theorem sum_below_done(): sum_below(64) = 0 { refl }
+
+// Negative control: the measure does not fall when the counter counts up
+// past the bound the test does not check.
+// expect-error: must decrease the measure
+fn count_up_wrong(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
+    match h: i.unsigned_lt_bit(64) {
+        False => 1 + count_up_wrong(i + 1),
+        True => 0,
+    }
+}

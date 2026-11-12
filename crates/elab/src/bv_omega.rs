@@ -580,20 +580,20 @@ impl<'w, 'a> Emitter<'w, 'a> {
             (Some(&(a, c)), Some(&(b, d))) if a == b => {
                 let (x, y) = (rest(f), rest(g));
                 let r = merge_forms(&x, &y);
-                format!("trans(bitvec_omega::form_step({c}, {d}, {}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
-                    self.atom(a), self.spell(&x), self.spell(&y), add(&mul(&(c + d).to_string(), &self.atom(a)), "t"), add(&self.spell(&x), &self.spell(&y)), self.spell(&r), self.merge_proof(&x, &y))
+                format!("trans(bitvec_omega::form_step({c}, {d}, {}, {}, {}), @cong(λ (__bv_t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), self.spell(&y), add(&mul(&(c + d).to_string(), &self.atom(a)), "__bv_t"), add(&self.spell(&x), &self.spell(&y)), self.spell(&r), self.merge_proof(&x, &y))
             }
             (Some(&(a, c)), next) if next.is_none_or(|&(b, _)| a < b) => {
                 let x = rest(f);
                 let r = merge_forms(&x, g);
-                format!("trans(bitvec_omega::form_left({c}, {}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
-                    self.atom(a), self.spell(&x), self.spell(g), add(&mul(&c.to_string(), &self.atom(a)), "t"), add(&self.spell(&x), &self.spell(g)), self.spell(&r), self.merge_proof(&x, g))
+                format!("trans(bitvec_omega::form_left({c}, {}, {}, {}), @cong(λ (__bv_t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), self.spell(g), add(&mul(&c.to_string(), &self.atom(a)), "__bv_t"), add(&self.spell(&x), &self.spell(g)), self.spell(&r), self.merge_proof(&x, g))
             }
             (_, Some(&(b, d))) => {
                 let y = rest(g);
                 let r = merge_forms(f, &y);
-                format!("trans(bitvec_omega::form_right({}, {d}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
-                    self.spell(f), self.atom(b), self.spell(&y), add(&mul(&d.to_string(), &self.atom(b)), "t"), add(&self.spell(f), &self.spell(&y)), self.spell(&r), self.merge_proof(f, &y))
+                format!("trans(bitvec_omega::form_right({}, {d}, {}, {}), @cong(λ (__bv_t: Nat) => {}, {}, {}, {}))",
+                    self.spell(f), self.atom(b), self.spell(&y), add(&mul(&d.to_string(), &self.atom(b)), "__bv_t"), add(&self.spell(f), &self.spell(&y)), self.spell(&r), self.merge_proof(f, &y))
             }
             _ => unreachable!(),
         }
@@ -606,8 +606,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
             Some(&(a, c)) => {
                 let x = Form { terms: f.terms[1..].to_vec(), k: f.k };
                 let r = Form { terms: x.terms.iter().map(|&(b, d)| (b, d * k)).collect(), k: x.k * k };
-                format!("trans(bitvec_omega::form_scale({k}, {c}, {}, {}), @cong(λ (t: Nat) => {}, {}, {}, {}))",
-                    self.atom(a), self.spell(&x), add(&mul(&(k * c).to_string(), &self.atom(a)), "t"), mul(&k.to_string(), &self.spell(&x)), self.spell(&r), self.scale_proof(k, &x))
+                format!("trans(bitvec_omega::form_scale({k}, {c}, {}, {}), @cong(λ (__bv_t: Nat) => {}, {}, {}, {}))",
+                    self.atom(a), self.spell(&x), add(&mul(&(k * c).to_string(), &self.atom(a)), "__bv_t"), mul(&k.to_string(), &self.spell(&x)), self.spell(&r), self.scale_proof(k, &x))
             }
         }
     }
@@ -622,13 +622,13 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 let (fx, fy) = (Self::syn_form(&self.forms, x), Self::syn_form(&self.forms, y));
                 let (px, py) = (self.reify(x, xs), self.reify(y, ys));
                 let _ = source;
-                format!("trans(trans(@cong(λ (t: Nat) => {}, {xs}, {}, {px}), @cong(λ (t: Nat) => {}, {ys}, {}, {py})), {})",
-                    add("t", ys), self.spell(&fx), add(&self.spell(&fx), "t"), self.spell(&fy), self.merge_proof(&fx, &fy))
+                format!("trans(trans(@cong(λ (__bv_t: Nat) => {}, {xs}, {}, {px}), @cong(λ (__bv_t: Nat) => {}, {ys}, {}, {py})), {})",
+                    add("__bv_t", ys), self.spell(&fx), add(&self.spell(&fx), "__bv_t"), self.spell(&fy), self.merge_proof(&fx, &fy))
             }
             NatSyn::Scale(k, on_left, x, xs) => {
                 let fx = Self::syn_form(&self.forms, x);
                 let px = self.reify(x, xs);
-                let left = format!("trans(@cong(λ (t: Nat) => {}, {xs}, {}, {px}), {})", mul(&k.to_string(), "t"), self.spell(&fx), self.scale_proof(*k, &fx));
+                let left = format!("trans(@cong(λ (__bv_t: Nat) => {}, {xs}, {}, {px}), {})", mul(&k.to_string(), "__bv_t"), self.spell(&fx), self.scale_proof(*k, &fx));
                 if *on_left { left } else { format!("trans(nat::Nat::mul_comm({xs}, {k}), {left})") }
             }
         }
@@ -950,23 +950,88 @@ fn direct_goal(walk: &mut Walk, expected: &Type) -> Option<(usize, bool, Target)
     None
 }
 
+/// Which constructor of `Bool` a term spells, if it spells one.
+fn bool_flag(elab: &Elaborator, cx: &Cx, flag: &Rc<Term>) -> Option<bool> {
+    let source = elab.spell_term_source(cx, flag)?;
+    // The speller may use the bare constructor name. In particular,
+    // `False` also names logic's empty type under these imports.
+    let qualified = if source.contains("::") { source } else { format!("bool::{source}") };
+    let (ind, ctor) = elab.lookup_ctor(&qualified)?;
+    let boolean = elab.lookup_inductive("bool::Bool")?;
+    (ind.tag == boolean.tag).then_some(ctor == 1)
+}
+
 /// A Boolean equation for an unsigned comparison, in either orientation.
 fn comparison(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Vec<Rc<Term>>, bool, bool)> {
     let Type::Id { lhs, rhs, .. } = ty else { return None };
     for (flipped, side, flag) in [(false, lhs, rhs), (true, rhs, lhs)] {
         let Some(args) = named_args(elab, side, "bitvec::BitVec::unsigned_lt_bit") else { continue };
         if args.len() != 3 { continue; }
-        let Some(source) = elab.spell_term_source(cx, flag) else { continue };
-        // The speller may use the bare constructor name. In particular,
-        // `False` also names logic's empty type under these imports.
-        let qualified = if source.contains("::") { source } else { format!("bool::{source}") };
-        let Some((ind, ctor)) = elab.lookup_ctor(&qualified) else { continue };
-        let Some(boolean) = elab.lookup_inductive("bool::Bool") else { continue };
-        if ind.tag == boolean.tag {
-            return Some((args.into_iter().cloned().collect(), ctor == 1, flipped));
+        if let Some(yes) = bool_flag(elab, cx, flag) {
+            return Some((args.into_iter().cloned().collect(), yes, flipped));
         }
     }
     None
+}
+
+/// The Nat relation a comparison of two words states over their values.
+#[derive(Clone, Copy)]
+enum Relation {
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+/// A fact in scope that compares two words, as the test that put it there
+/// is written (issues/decreases-word-measures-by-hand.md): a Boolean test
+/// `a.unsigned_lt_bit(b)`, `a.unsigned_le_bit(b)` or `a.eq_bit(b)` equal to
+/// a constructor, either way round, or the proposition `a < b` or `a <= b`.
+struct WordFact {
+    /// The width and the two operands.
+    args: Vec<Rc<Term>>,
+    /// What it states of `toNat(a)` and `toNat(b)`, in that order unless
+    /// `swapped`.
+    relation: Relation,
+    swapped: bool,
+    /// The `bitvec_omega` lemma that reads it.
+    lemma: &'static str,
+    /// The fact's proof in the lemma's orientation.
+    proof: String,
+}
+
+fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFact> {
+    let three = |args: Vec<&Rc<Term>>| (args.len() == 3).then(|| args.into_iter().cloned().collect::<Vec<_>>());
+    match ty {
+        Type::Id { lhs, rhs, .. } => {
+            for (flipped, side, flag) in [(false, lhs, rhs), (true, rhs, lhs)] {
+                for test in ["unsigned_lt_bit", "unsigned_le_bit", "eq_bit"] {
+                    let Some(args) = named_args(elab, side, &format!("bitvec::BitVec::{test}")).and_then(three) else { continue };
+                    let Some(yes) = bool_flag(elab, cx, flag) else { continue };
+                    let (relation, swapped, lemma) = match (test, yes) {
+                        ("unsigned_lt_bit", true) => (Relation::Lt, false, "unsigned_true"),
+                        ("unsigned_lt_bit", false) => (Relation::Le, true, "unsigned_false"),
+                        ("unsigned_le_bit", true) => (Relation::Le, false, "unsigned_le_true"),
+                        ("unsigned_le_bit", false) => (Relation::Lt, true, "unsigned_le_false"),
+                        (_, true) => (Relation::Eq, false, "equal_true"),
+                        (_, false) => (Relation::Ne, false, "equal_false"),
+                    };
+                    let proof = if flipped { format!("sym({name})") } else { name.to_string() };
+                    return Some(WordFact { args, relation, swapped, lemma, proof });
+                }
+            }
+            None
+        }
+        Type::El { tm, .. } => {
+            for (test, relation, lemma) in [("unsigned_lt", Relation::Lt, "unsigned_lt_prop"), ("unsigned_le", Relation::Le, "unsigned_le_prop")] {
+                if let Some(args) = named_args(elab, tm, &format!("bitvec::BitVec::{test}")).and_then(three) {
+                    return Some(WordFact { args, relation, swapped: false, lemma, proof: name.to_string() });
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Word equality and comparison goals use the same Nat generator through
@@ -1058,13 +1123,14 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     let mut restated: Vec<(String, Type)> = Vec::new();
     let mut optimistic = false;
     for (name, ty) in facts_in_scope {
-        let is_comparison = comparison(elab, cx, &ty).is_some();
+        let compared = word_fact(elab, cx, &name, &ty);
+        let is_comparison = compared.is_some();
         if !is_comparison && !is_nat_relation(elab, cx, &ty) {
             continue;
         }
         let before = walk.clone();
-        if let Some((args, yes, flipped)) = comparison(elab, cx, &ty) {
-            let [n, a, b] = args.as_slice() else { continue };
+        if let Some(fact) = compared {
+            let [n, a, b] = fact.args.as_slice() else { continue };
             for operand in [a, b] {
                 if let Some(i) = walk.word(n, operand)? {
                     walk.found.push(i);
@@ -1076,10 +1142,15 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
             let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
             let at = format!("bitvec::BitVec::toNat({av})");
             let bt = format!("bitvec::BitVec::toNat({bv})");
-            let statement = if yes { lt(&at, &bt) } else { le(&bt, &at) };
-            let proof = if flipped { format!("sym({name})") } else { name.clone() };
+            let (x, y) = if fact.swapped { (&bt, &at) } else { (&at, &bt) };
+            let statement = match fact.relation {
+                Relation::Lt => lt(x, y),
+                Relation::Le => le(x, y),
+                Relation::Eq => format!("{x} = {y}"),
+                Relation::Ne => format!("logic::Not({x} = {y})"),
+            };
             walk.bridges.push((format!("__bv_compare{}", walk.bridges.len()), statement,
-                format!("bitvec_omega::unsigned_{}({ns}, {av}, {bv}, {proof})", if yes { "true" } else { "false" })));
+                format!("bitvec_omega::{}({ns}, {av}, {bv}, {})", fact.lemma, fact.proof)));
         }
         if !is_comparison { walk.scan_type(&ty)?; }
         let mut found = std::mem::take(&mut walk.found);
@@ -1355,6 +1426,25 @@ fn stated_words(elab: &Elaborator, cx: &Cx, ty: &Type, out: &mut HashSet<String>
             go(elab, cx, rhs, out);
         }
         _ => {}
+    }
+}
+
+/// Whether `ty` mentions the `toNat` of a word: where a stuck `omega` has
+/// `bv_omega` to fall back on.
+pub(crate) fn mentions_word(elab: &Elaborator, ty: &Type) -> bool {
+    fn go(elab: &Elaborator, tm: &Rc<Term>) -> bool {
+        if named_args(elab, tm, "bitvec::BitVec::toNat").is_some() {
+            return true;
+        }
+        if let Term::Succ(inner) = &**tm {
+            return go(elab, inner);
+        }
+        crate::spelling::app_spine(tm).1.into_iter().any(|arg| go(elab, arg))
+    }
+    match ty {
+        Type::El { tm, .. } => go(elab, tm),
+        Type::Id { lhs, rhs, .. } => go(elab, lhs) || go(elab, rhs),
+        _ => false,
     }
 }
 

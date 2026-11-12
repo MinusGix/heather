@@ -57,7 +57,11 @@ written, never accepted. The kernel checks the whole recursor afterwards.
 Each recursive call, in source order, owes `e[ȳ] < e` under the name
 `decN`. The writer discharges it with `on ?decN := …;` at the end of the
 body, as any goal; where no `on` names it and the `omega` and `int` modules
-are in scope, the obligation is `omega`. Where they are not, the hole is
+are in scope, the obligation is `omega`, and where `omega` is stuck on an
+obligation over the `toNat` of a word and `bitvec_omega` is imported,
+`bv_omega` (`measure::CLOSER`; a measure such as `(64 - i).toNat()` is two
+unrelated atoms to `omega`). `omega`'s refusal stays the diagnosis, with
+`bv_omega`'s appended. Where they are not, the hole is
 reported as an ordinary unsolved goal with its statement.
 
 The obligation is not raised at the call: it is lifted into a generated

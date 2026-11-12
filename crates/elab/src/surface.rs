@@ -791,6 +791,7 @@ pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
         walk_expr(e, &mut |x| match &x.kind {
             ExprKind::Var(v) if v == "omega" || v == "positivity" => n += OMEGA_ATOM_SLOTS,
             ExprKind::Var(v) if v == "bv_omega" => n += 1 + BV_OMEGA_ATOM_SLOTS,
+            ExprKind::Var(v) if v == crate::measure::CLOSER => n += OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
             _ => {}
         })
     };

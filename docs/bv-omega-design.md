@@ -145,6 +145,10 @@ written name, with equality facts connecting additional aliases.
 
 An unsigned comparison equation in scope, in either orientation, supplies
 `a.toNat() < b.toNat()` for `True`, or `b.toNat() <= a.toNat()` for `False`.
+The other tests a `match h:` or an `if h:` puts in scope are read the same
+way, each through its `bitvec_omega` lemma: `a.unsigned_le_bit(b)` (`<=`, or
+`>` for `False`), `a.eq_bit(b)` (`=`, or `≠`), and the propositions `a < b`
+and `a <= b` at a word (issues/decreases-word-measures-by-hand.md).
 These bridge facts are available before side conditions and are restated
 under the same names when the arithmetic goal generalises composite words.
 Words appearing only in a comparison remain optional in the careful attempt.
