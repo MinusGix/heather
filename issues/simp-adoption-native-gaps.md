@@ -44,3 +44,7 @@ Not tried yet: a default set for `Valuation` (`Valuation()` is a function
 returning a type, so `name_of` may not key it), and the rest of the
 Valuation sites (`native_structured_meaning`, `native_compile_nodes`,
 `rt_lower`, `function_ir_pass`).
+
+## Log
+
+- 2026-11-12: Three theorems of `lib/native/runtime/rt_loop.hthr` that #577 converted to `simp_only` went back to their written chains when PR #551 merged master: their statements there are over a file (`Fun::GuardedBy`), and the converted proofs are of the statements without one. Converting them again over the new statements is the small piece left here from that merge; the chains are the same shape, with the file as one more fixed argument.
