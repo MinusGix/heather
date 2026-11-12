@@ -84,12 +84,13 @@ pub enum Kind {
     SupInverse = 46, Join = 47, Meet = 48, Neg = 49, Wedge = 50, Vee = 51, Iff = 52, LArrow = 53,
     Exists = 54, BigSum = 55, BigProd = 56, UpArrow = 57, Forall = 58, Dollar = 59, Lambda = 60,
     Eq = 61, Ne = 62, EqEq = 63, ColonEq = 64, ColonColon = 65, Eof = 66, Space = 67, Comment = 68,
+    OPlus = 69, Tilde = 70,
 }
 
 impl Kind {
     /// Every kind, in code order: `ALL[k as usize - 1] == k`.
     #[rustfmt::skip]
-    pub const ALL: [Kind; 68] = [
+    pub const ALL: [Kind; 70] = [
         Kind::Ident, Kind::Num, Kind::Scaled, Kind::Char, Kind::Str, Kind::ArgSlot, Kind::Hole,
         Kind::LParen, Kind::RParen, Kind::LBrace, Kind::RBrace, Kind::Comma, Kind::Colon, Kind::Semi,
         Kind::At, Kind::Dot, Kind::Plus, Kind::Minus, Kind::Bang, Kind::PlusPlus, Kind::Star, Kind::Lt,
@@ -100,6 +101,7 @@ impl Kind {
         Kind::Meet, Kind::Neg, Kind::Wedge, Kind::Vee, Kind::Iff, Kind::LArrow, Kind::Exists,
         Kind::BigSum, Kind::BigProd, Kind::UpArrow, Kind::Forall, Kind::Dollar, Kind::Lambda, Kind::Eq,
         Kind::Ne, Kind::EqEq, Kind::ColonEq, Kind::ColonColon, Kind::Eof, Kind::Space, Kind::Comment,
+        Kind::OPlus, Kind::Tilde,
     ];
 
     /// The kind with this code, if it is one.

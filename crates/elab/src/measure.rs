@@ -87,6 +87,11 @@ impl Obligations {
     }
 }
 
+/// The closer an obligation nobody discharges by hand defaults to: `omega`,
+/// then `bv_omega` where the obligation is over the `toNat` of a word
+/// (`Checking::elab_measure_closer`, issues/decreases-word-measures-by-hand.md).
+pub(crate) const CLOSER: &str = "__measure_closer";
+
 const K: &str = "__dec_k";
 const IH: &str = "__dec_ih";
 const H: &str = "__dec_h";
@@ -1327,18 +1332,282 @@ pub(crate) fn check_shape(decl: &Decl, measure: &Expr) -> R<()> {
     if decl.is_meta {
         return err("`decreases` is for ordinary declarations, not `meta fn`", measure.span);
     }
-    if let Some(p) = decl.params.iter().find(|p| p.is_self || p.solver.is_some()) {
+    if let Some(p) = decl.params.iter().find(|p| p.solver.is_some()) {
         return err(
             format!(
-                "`decreases` does not yet cover a declaration with a `self` or \
-                 solver parameter (`{}`): the recursion re-binds every parameter \
-                 explicitly, and those two are filled another way",
+                "`decreases` does not yet cover a declaration with a solver \
+                 parameter (`{}`): the recursion re-binds every parameter \
+                 explicitly, and a solver parameter is filled another way",
                 p.name
             ),
             p.span,
         );
     }
     Ok(())
+}
+
+/// A member's self-calls spelled as method calls, `x.f(ā)`, respelled as the
+/// calls `f(…, x, …)` they desugar to, with the receiver at its parameter's
+/// position (the `self` parameter, or the first explicit one). Every route
+/// below reads a self-call as an application of the self-name; the
+/// elaborator's own desugaring of a method call happens after this
+/// lowering, where `f` names nothing.
+///
+/// A method call names `f` only by its base name, so another type's member
+/// of that name is the other reading. A receiver that is typed and does not
+/// check at the receiver parameter's type is that one and is left alone;
+/// one this pass cannot type is read as the self-call, which is what its
+/// name says inside `f`, and a wrong reading is refused by the checker.
+///
+/// A `mut self` method's call on a mutable local, `let p = x.f(ā);` or the
+/// statement `x.f(ā);` ([`heather_syntax::MUTATED`]), rebinds `x` to the
+/// call's `after` and `p` to its `value`; that is spelled out here, with
+/// the call bound once, as the statement elaborates it.
+pub(crate) fn method_calls_as_calls(decl: &Decl, name: &str, tys: &dyn BinderTys) -> R<Decl> {
+    if !decl.name.contains("::") {
+        return Ok(decl.clone());
+    }
+    let explicit: Vec<&Param> = decl.params.iter().filter(|p| !p.implicit).collect();
+    let Some(slot) = explicit.iter().position(|p| p.is_self).or((!explicit.is_empty()).then_some(0)) else {
+        return Ok(decl.clone());
+    };
+    let subject_ty = explicit[slot].ty.clone();
+    let mutated = matches!(&decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD);
+    // The binders a receiver may be typed over: the parameters and every
+    // annotated `let`. The body is deshadowed, so one name is one binder.
+    let mut scope = scope_of(decl);
+    for s in &decl.body.stmts {
+        if let Stmt::Let { name, ty: Some(ty), .. } = s {
+            scope.push(Binder { name: name.clone(), ty: Some(ty.clone()), value: None });
+        }
+    }
+    let mut collect = |e: &Expr| {
+        crate::surface::walk_expr(e, &mut |x| {
+            if let ExprKind::Block(b) = &x.kind {
+                for s in &b.stmts {
+                    if let Stmt::Let { name, ty: Some(ty), .. } = s {
+                        scope.push(Binder { name: name.clone(), ty: Some(ty.clone()), value: None });
+                    }
+                }
+            }
+        });
+    };
+    for s in &decl.body.stmts {
+        if let Stmt::Let { expr, .. } = s {
+            collect(expr);
+        }
+    }
+    collect(&decl.body.result);
+    let signatures = [(name.to_string(), pi_over(&decl.params, decl.result.clone(), decl.span))];
+    let mut pass = MethodCalls {
+        decl,
+        name,
+        slot,
+        subject_ty,
+        mutated,
+        scope,
+        signatures,
+        tys,
+        next: 0,
+        error: None,
+    };
+    let mut out = decl.clone();
+    pass.block(&mut out.body);
+    match pass.error {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
+}
+
+struct MethodCalls<'a> {
+    decl: &'a Decl,
+    name: &'a str,
+    slot: usize,
+    subject_ty: Ty,
+    mutated: bool,
+    scope: Vec<Binder>,
+    signatures: [(String, Ty); 1],
+    tys: &'a dyn BinderTys,
+    next: usize,
+    error: Option<crate::ElabError>,
+}
+
+impl MethodCalls<'_> {
+    /// Is `recv.<name>(…)` this declaration's own call? See
+    /// [`method_calls_as_calls`] for the rule.
+    fn is_self_call(&self, recv: &Expr) -> bool {
+        let span = recv.span;
+        let at_subject = Expr {
+            kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![Stmt::Let {
+                    name: "__dec_receiver".into(),
+                    ty: Some(self.subject_ty.clone()),
+                    expr: recv.clone(),
+                    span,
+                    opaque: false,
+                }],
+                result: Box::new(var("__dec_receiver", span)),
+                ons: Vec::new(),
+                span,
+            })),
+            span,
+        };
+        let infer = |e: &Expr| self.tys.infer_local(self.decl, &self.signatures, &self.scope, e);
+        infer(&at_subject).is_some() || infer(recv).is_none()
+    }
+
+    /// `recv.f(ā)` as `f(…, recv, …)`, or `None` where `e` is not a self-call.
+    fn call(&mut self, e: &Expr) -> Option<Expr> {
+        let ExprKind::Dot { recv, name, tyargs, args: Some(args), named } = &e.kind else {
+            return None;
+        };
+        if name != self.name || !self.is_self_call(recv) {
+            return None;
+        }
+        if !tyargs.is_empty() {
+            self.fail(
+                format!(
+                    "a recursive call to `{name}` under `decreases` passes every parameter, \
+                     type arguments included, by position: write `@{}(…)`",
+                    self.name
+                ),
+                e.span,
+            );
+            return None;
+        }
+        if self.slot > args.len() {
+            self.fail(
+                format!(
+                    "`{name}`'s receiver is its parameter number {}, so this method call leaves \
+                     it nowhere to go: write the call `{name}(…)`",
+                    self.slot + 1
+                ),
+                e.span,
+            );
+            return None;
+        }
+        let mut args = args.clone();
+        args.insert(self.slot, (**recv).clone());
+        Some(Expr {
+            kind: ExprKind::App {
+                head: Box::new(var(self.name, e.span)),
+                args,
+                named: named.clone(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: e.span,
+        })
+    }
+
+    fn fail(&mut self, msg: String, span: Span) {
+        if self.error.is_none() {
+            self.error = Some(crate::ElabError::Elab { msg, span });
+        }
+    }
+
+    fn expr(&mut self, e: &mut Expr) {
+        crate::alpha::walk_expr_mut(e, &mut |x| {
+            if let ExprKind::Block(b) = &mut x.kind {
+                self.block(b);
+                return true;
+            }
+            if let Some(call) = self.call(x) {
+                *x = call;
+                // The receiver and the arguments may call again.
+                if let ExprKind::App { args, named, .. } = &mut x.kind {
+                    for a in args.iter_mut() {
+                        self.expr(a);
+                    }
+                    for n in named.iter_mut() {
+                        self.expr(&mut n.expr);
+                    }
+                }
+                return true;
+            }
+            false
+        });
+    }
+
+    /// A block's statements, a claimed self-call on a mutable local spelled
+    /// out (see [`method_calls_as_calls`]), then its result and `on`s.
+    fn block(&mut self, b: &mut Block) {
+        let mut stmts = Vec::with_capacity(b.stmts.len());
+        for mut st in std::mem::take(&mut b.stmts) {
+            if let Stmt::Let { name, expr, span, .. } = &st
+                && let Some((receiver, call)) = self.claimed(expr)
+            {
+                let (name, span) = (name.clone(), *span);
+                let mut call = call;
+                // `call`'s receiver is the bare local; its arguments may
+                // call again.
+                if let ExprKind::App { args, named, .. } = &mut call.kind {
+                    for a in args.iter_mut() {
+                        self.expr(a);
+                    }
+                    for n in named.iter_mut() {
+                        self.expr(&mut n.expr);
+                    }
+                }
+                let statement = name.starts_with("#seq");
+                if !self.mutated {
+                    if statement {
+                        self.fail(
+                            format!(
+                                "`{receiver}.{}(…)` does not update `{receiver}` (`{}` is not a `mut self` \
+                                 method), so this statement discards its value: bind it with `let`",
+                                self.name, self.name
+                            ),
+                            span,
+                        );
+                    }
+                    stmts.push(Stmt::Let { name, ty: None, expr: call, span, opaque: false });
+                    continue;
+                }
+                let whole = format!("__dec_mutated{}", self.next);
+                self.next += 1;
+                let field = |f: &str| Expr {
+                    kind: ExprKind::Dot {
+                        recv: Box::new(var(&whole, span)),
+                        name: f.into(),
+                        tyargs: Vec::new(),
+                        args: None,
+                        named: Vec::new(),
+                    },
+                    span,
+                };
+                stmts.push(Stmt::Let { name: whole.clone(), ty: None, expr: call, span, opaque: false });
+                stmts.push(Stmt::Let { name: receiver, ty: None, expr: field("after"), span, opaque: false });
+                if !statement {
+                    stmts.push(Stmt::Let { name, ty: None, expr: field("value"), span, opaque: false });
+                }
+                continue;
+            }
+            match &mut st {
+                Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } => self.expr(expr),
+            }
+            stmts.push(st);
+        }
+        b.stmts = stmts;
+        self.expr(&mut b.result);
+        for on in &mut b.ons {
+            self.expr(&mut on.expr);
+        }
+    }
+
+    /// `\0mutated(x.f(ā))`, a self-call the block declaring `x` claimed:
+    /// the local and the call respelled.
+    fn claimed(&mut self, e: &Expr) -> Option<(String, Expr)> {
+        let ExprKind::App { head, args, .. } = &e.kind else { return None };
+        if !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::MUTATED) {
+            return None;
+        }
+        let [inner] = args.as_slice() else { return None };
+        let ExprKind::Dot { recv, .. } = &inner.kind else { return None };
+        let ExprKind::Var(receiver) = &recv.kind else { return None };
+        let receiver = receiver.clone();
+        Some((receiver, self.call(inner)?))
+    }
 }
 
 /// The self-call rewrite (module docs), threaded through a surface walk that
@@ -1626,7 +1895,7 @@ impl<'a> Rewrite<'a> {
             }
         } else {
             Expr {
-                kind: ExprKind::Var("omega".into()),
+                kind: ExprKind::Var(CLOSER.into()),
                 span,
             }
         };
@@ -2282,6 +2551,7 @@ impl<'a> Rewrite<'a> {
             | ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)

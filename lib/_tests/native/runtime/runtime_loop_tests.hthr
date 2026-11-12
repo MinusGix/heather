@@ -15,6 +15,9 @@ import string;
 import tactic;
 import bitvec;
 import bitvec_nat;
+import bitvec_omega;
+import omega;
+import int;
 import rt;
 import rt_lower;
 import function_ir;
@@ -73,6 +76,21 @@ runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
 }
 
 theorem count_down_runs(n, acc: BitVec(64)): program_eval(count_down::program, 0, [n, acc]) = count_down(n, acc) { count_down::agrees(n, acc) }
+
+// A loop counting up in a word, its measure the distance to the bound: the
+// decrease is `bv_omega`'s, reading `h`, with no `on ?dec1`
+// (issues/decreases-word-measures-by-hand.md).
+runtime fn count_up_to_64(i, acc: BitVec(64)) → BitVec(64) decreases (64 - i).toNat() {
+    match h: i.unsigned_lt_bit(64) {
+        False => acc,
+        True => count_up_to_64(i + 1, acc + i),
+    }
+}
+
+theorem count_up_to_64_runs(i, acc: BitVec(64)): program_eval(count_up_to_64::program, 0, [i, acc]) = count_up_to_64(i, acc) {
+    count_up_to_64::agrees(i, acc)
+}
+theorem count_up_to_64_lit(): count_up_to_64(60, 0) = 246 { refl }
 
 // Both loops called, one with a count computed from a word.
 runtime fn both_loops(n: BitVec(64)) → BitVec(64) { count_down(n, sum_down(n.toNat(), n, BitVec::ofNat(0))) }

@@ -166,8 +166,27 @@ count is a `Nat`, and the carrier probes read only a shift's left operand, so
 Three lexical choices: `//` is still a comment (as in Rust, `a // b` is `a`);
 `|` against `⟩` is the left injection, so `⟨a | b |⟩` injects `a | b`; and
 `>>` is a shift only with a space (or `(`, `,`) before it, because a tight
-`>>` is two closers of nested type arguments, `List<List<A>>`. Xor keeps its
-method (`bxor`): `^` is power.
+`>>` is two closers of nested type arguments, `List<List<A>>`.
+
+Exclusive or is `⊕` and the complement prefix `~`
+(issues/bitvec-xor-complement-symbols.md, Minus, 2026-11-12), designated at
+`BitVec(n)` (`bxor`, `complement`) and at `SInt(n)`. Rust's `^` is power
+here, so `⊕` takes its rung, between `|` and `&`: `a | b ⊕ c & d` is
+`a | (b ⊕ (c & d))`. `!` stays Boolean negation and `¬` the proposition's.
+There is no ASCII spelling of `⊕`; rotates stay methods.
+
+### 4.2 Width-suffixed numerals
+
+`42u64`, `0x80u8` and `7i32` are a numeral read at the type its suffix
+names (issues/integer-literal-width-suffix.md): `42u64` is the term
+`let x: u64 = 42` binds, and it infers `u64` where nothing around it gives a
+type, so `let mut i = 0u64;` needs no annotation. A suffix is `u` or `i` and
+a width written without leading zeros, so it is a width-family name (§2)
+and no hexadecimal digit (`0x1fi8` is `0x1f` at `i8`); it follows a whole
+numeral in any radix, with no `_` before it. The lexer makes the numeral and
+its suffix one token, so the formatter and the editor grammar keep them
+together. There is no bare `42u`: where the width is known a plain `42`
+already means it, and where it is not, `42u` has nothing to solve it from.
 
 ## 5. Byte classes
 

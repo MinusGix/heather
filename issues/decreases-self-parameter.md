@@ -1,10 +1,10 @@
 ---
 title: decreases: a measured recursion cannot be a method (a self or mut self parameter is refused)
-status: open
+status: closed
 labels: [elaboration, termination]
 area: language
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 A `decreases` function may not take a `self` parameter:
@@ -38,3 +38,31 @@ Mutated(x, value) }`, so a self-call on the receiver is a call whose
 `Mutated(r.after, r.value)` and not in the call: with no η for records it
 does not convert to the call, so a tail self-call on the receiver should
 lower to the call itself where it is the method's last expression.
+
+## Log
+
+- 2026-11-12: Closed. `check_shape` refuses only solver parameters now.
+  A member recurses by measure with or without a `self` marker, `mut self`
+  included, and a self-call may be written as a method call on the
+  receiver: `measure::method_calls_as_calls` respells `x.f(ā)` as the call
+  `f(…, x, …)` before the lowering (the receiver at the `self` parameter,
+  or the first explicit one), reading a typed receiver of another type as
+  that type's member and an untyped one as the self-call. A claimed
+  `mut self` call, `let p = x.f(ā);` or `x.f(ā);`, becomes the call bound
+  once with `x` rebound to its `after` and `p` to its `value`, as the
+  statement elaborates. Probes in
+  `lib/_tests/std/core/decreases_unfolding_tests.hthr` (`count_down` with
+  its unfolding, `count_named`, `count_first`, `push_down`, `peek` against
+  another type's `peek`, `fill_down`, `fill_sum`, a negative control);
+  docs/termination-measures-design.md §4 amended.
+
+  What this does not give: the tail-call spelling the last paragraph asks
+  for has no reachable shape. A receiver changes only in statement forms
+  (a block in value position may not assign, and a value-position
+  `x.f(…)` on a `mut self` method is refused), so a measured `mut self`
+  method recurses from a statement `if`/`match`, never as the body's last
+  expression. A statement form that assigns two locals (the receiver and
+  a result) copies the call once per local:
+  [[statement-form-join-copies-calls]]. A self-call in a statement
+  declines the unfolding equation, as a `let`-bound call does for a
+  function.

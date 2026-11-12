@@ -11,15 +11,17 @@ const PREC = {
   BOOL_OR: 6,
   BOOL_AND: 7,
   // Bitwise and shift rungs, in Rust's order (issues/integer-operator-symbols.md).
+  // `⊕` is Rust's `^` (issues/bitvec-xor-complement-symbols.md).
   BIT_OR: 8,
-  BIT_AND: 9,
-  SHIFT: 10,
-  ADD: 11,
-  MUL: 12,
-  PREFIX: 13,
+  BIT_XOR: 9,
+  BIT_AND: 10,
+  SHIFT: 11,
+  ADD: 12,
+  MUL: 13,
+  PREFIX: 14,
   // `-x ^ 2` is `-(x ^ 2)` and `x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, as in the compiler.
-  POWER: 14,
-  POSTFIX: 15,
+  POWER: 15,
+  POSTFIX: 16,
 };
 
 // Words that introduce a special form only before their fixed follower
@@ -374,7 +376,7 @@ module.exports = grammar({
     head_index_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._head_expression), '[', field('index', $._expression), ']',
     )),
-    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._head_expression)),
+    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '~', '¬', '↑'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
@@ -383,6 +385,7 @@ module.exports = grammar({
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['|'], PREC.BIT_OR, 'left'),
+      ...headBinary($, ['⊕'], PREC.BIT_XOR, 'left'),
       ...headBinary($, ['&'], PREC.BIT_AND, 'left'),
       ...headBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
@@ -449,6 +452,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['|'], PREC.BIT_OR, 'left'),
+      ...typeBinary($, ['⊕'], PREC.BIT_XOR, 'left'),
       ...typeBinary($, ['&'], PREC.BIT_AND, 'left'),
       ...typeBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
@@ -462,7 +466,7 @@ module.exports = grammar({
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._declaration_type),
       ',', field('body', $._declaration_type),
     )),
-    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._declaration_type)),
+    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '~', '¬', '↑'), $._declaration_type)),
 
     // A `let`/`have` annotation runs up to the binder's `=`, so, as in the
     // compiler (parser.rs `no_eq`), it is a declaration type without the
@@ -487,6 +491,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
       ...typeBinary($, ['|'], PREC.BIT_OR, 'left', $._annotation_type),
+      ...typeBinary($, ['⊕'], PREC.BIT_XOR, 'left', $._annotation_type),
       ...typeBinary($, ['&'], PREC.BIT_AND, 'left', $._annotation_type),
       ...typeBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left', $._annotation_type),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
@@ -500,7 +505,7 @@ module.exports = grammar({
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._annotation_type),
       ',', field('body', $._annotation_type),
     )),
-    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._annotation_type)),
+    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '~', '¬', '↑'), $._annotation_type)),
 
     _expression: $ => choice(
       $.identifier,
@@ -698,7 +703,7 @@ module.exports = grammar({
     function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
-    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._expression)),
+    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '~', '¬', '↑'), $._expression)),
     // `<- e`, a nested bind: it takes the whole expression after it.
     bind_expression: $ => prec.right(0, seq(choice('<-', '←'), field('value', $._expression))),
     binary_expression: $ => choice(
@@ -711,6 +716,7 @@ module.exports = grammar({
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['|'], PREC.BIT_OR, 'left'),
+      ...binary($, ['⊕'], PREC.BIT_XOR, 'left'),
       ...binary($, ['&'], PREC.BIT_AND, 'left'),
       ...binary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
@@ -719,7 +725,7 @@ module.exports = grammar({
     ),
 
     operator: $ => choice(
-      '+', '-', '!', '++', '*', '/', '%', '&', '|', '<<', $.shift_right, '&&', '||', '∙', '⊔', '⊓',
+      '+', '-', '!', '~', '++', '*', '/', '%', '&', '|', '⊕', '<<', $.shift_right, '&&', '||', '∙', '⊔', '⊓',
       '≈', '<=', '<', '^', '⁻¹',
       // `Monoid(>>)`: after `(` or `,` the lexer reads `>>` as the symbol too.
       alias(seq('>', token.immediate('>')), '>>'),
@@ -737,10 +743,12 @@ module.exports = grammar({
     // A decimal point starts a fraction only before a digit (`1.foo` and
     // `1..2` keep their meaning), and a hex point only when a `p` exponent
     // follows (`0xff.f()` stays a method call): crates/syntax/src/lexer.rs.
+    // A whole numeral may end in a width suffix, `42u64` or `0x1fi8`
+    // (issues/integer-literal-width-suffix.md): `u` or `i` and a width.
     number: _ => token(choice(
-      /0x[0-9A-Fa-f][0-9A-Fa-f_]*((\.[0-9A-Fa-f][0-9A-Fa-f_]*)?[pP][+-]?[0-9][0-9_]*)?/,
-      /0o[0-7][0-7_]*|0b[01][01_]*/,
-      /[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?/,
+      /0x[0-9A-Fa-f][0-9A-Fa-f_]*((\.[0-9A-Fa-f][0-9A-Fa-f_]*)?[pP][+-]?[0-9][0-9_]*|[ui](0|[1-9][0-9]*))?/,
+      /(0o[0-7][0-7_]*|0b[01][01_]*)([ui](0|[1-9][0-9]*))?/,
+      /[0-9][0-9_]*((\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?|[ui](0|[1-9][0-9]*))/,
     )),
     // Match the lexer's closed escape set; scalar-value validation stays in
     // the compiler. Tokens keep spaces and comment markers inside literals.

@@ -52,7 +52,7 @@ impl MeasureContext<'_> {
             while scope.iter().any(|b| b.name == name) { name.push('_'); }
             Stmt::Let { name, ty: None, expr, span, opaque: false }
         }).collect();
-        let body = Block { stmts, result: Box::new(Expr { kind: ExprKind::Var("omega".into()), span }),
+        let body = Block { stmts, result: Box::new(Expr { kind: ExprKind::Var(measure::CLOSER.into()), span }),
             ons: Vec::new(), span };
         let proof = Expr { kind: ExprKind::Block(Box::new(body.clone())), span };
         let selected = measure::select_scope(scope, goal, Some(&proof))?;

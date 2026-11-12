@@ -1,6 +1,6 @@
 ---
 title: bv_omega's generated proof binds t and captures a user variable of that name
-status: open
+status: closed
 labels: [proofs,bitvec,metaprogramming]
 created: 2026-11-12
 updated: 2026-11-12
@@ -33,3 +33,7 @@ The motive's binder gets a name no user term can hold (`__bv_t`, as the rest of 
 ## Done when
 
 The function above checks as written.
+
+## Log
+
+- 2026-11-12: Done: the generated cong motives bind __bv_t. Probe named_t in lib/_tests/std/tactic/bitvec_omega_tests.hthr (and count_up_t, a decreases loop over a counter named t).

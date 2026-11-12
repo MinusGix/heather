@@ -1,6 +1,6 @@
 ---
 title: decreases: a self-call in a method call's receiver gets its obligation at the call's own arguments
-status: open
+status: closed
 labels: [elaboration,termination]
 area: language
 created: 2026-11-12
@@ -53,3 +53,19 @@ So it is the method-call route with the self-call inside its receiver, not the p
 Seen on PR #551's branch with master's #579 merged (2026-11-12), with a plain `fn`; whether it predates #579 was not checked. Found while probing which loop forms `runtime fn` takes; nothing in the library is written this way, so it blocks nothing. The workaround is the function-call spelling.
 
 Done when: the repro checks, with a probe in `lib/_tests/std/core/decreases_unfolding_tests.hthr`.
+
+## Log
+
+- 2026-11-12: Closed. Not the method route, and not BitVec: the dot-call
+  receiver cache (`context::DotReceivers`,
+  issues/method-chain-receiver-reinference.md) keyed a receiver by its
+  source span alone, and the obligation `le_trans(Succ(e[ȳ]), e, …)`
+  writes the measure twice at one span, once substituted. Inside a dot
+  chain (the self-call in `.other`'s receiver) the cache registers every
+  dotted receiver, so `length.sub(i)` was answered with its substituted
+  twin `length.sub(i + 1)`'s inference. Any measure that is a chain of
+  two method calls reproduces it (`decreases n.sub(i).sub(0)` over `Nat`).
+  The key is now the span and a fingerprint of the expression; a span no
+  receiver registered pays nothing extra. Probe `in_receiver` in
+  `lib/_tests/std/core/decreases_unfolding_tests.hthr`; the context unit
+  test checks a same-span twin is not shared.

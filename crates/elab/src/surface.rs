@@ -382,6 +382,7 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
@@ -565,6 +566,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
@@ -637,6 +639,7 @@ mod count_holes_impl {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
@@ -791,6 +794,7 @@ pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
         walk_expr(e, &mut |x| match &x.kind {
             ExprKind::Var(v) if v == "omega" || v == "positivity" => n += OMEGA_ATOM_SLOTS,
             ExprKind::Var(v) if v == "bv_omega" => n += 1 + BV_OMEGA_ATOM_SLOTS,
+            ExprKind::Var(v) if v == crate::measure::CLOSER => n += OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
             _ => {}
         })
     };
@@ -969,6 +973,7 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)

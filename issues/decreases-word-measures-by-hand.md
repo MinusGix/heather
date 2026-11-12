@@ -1,6 +1,6 @@
 ---
 title: A loop counting in a machine word proves its decrease by hand: the discharge never tries bv_omega
-status: open
+status: closed
 labels: [elaboration,termination,bitvec,ergonomics]
 area: language
 created: 2026-11-12
@@ -36,3 +36,7 @@ Three separate things make the tail necessary. Probes, each a `runtime fn` of th
 - Then the loops above lose their `on ?dec1` blocks, the test can be `if i < 64`, and `while i < 64 decreases (64 - i).toNat()` discharges. Whether the generator takes the function a `while` lowers to inside a `runtime fn` is the next question and is not known: the probe stops at the measure.
 
 Done when: the nine loops of the two SHA-256 modules and the loops of `lib/lang/lexer` carry no `on ?dec1`, and a probe in `lib/_tests` holds each of the three readings. Related: [[bv-omega-binder-captures-t]], [[measure-inference]], [[decreases-self-parameter]].
+
+## Log
+
+- 2026-11-12: Done for plain fns: an obligation nobody discharges falls back from omega to bv_omega when it is over a word's toNat (measure::CLOSER, Checking's arm), and bv_omega reads unsigned_lt_bit/unsigned_le_bit/eq_bit = True/False and a < b, a <= b at a word from the context (bitvec_omega::unsigned_le_true/false, unsigned_lt_prop/le_prop), a literal operand's toNat evaluated through the existing comparison bridge. Probes in lib/_tests/std/tactic/bitvec_omega_tests.hthr: match h:, if h: i < 64 and while i < 64 decreases (64 - i).toNat(), with a negative control. The SHA-256 and lexer loops keep their on ?dec1 for now: those modules are another round's (PR #551); dropping the blocks is a follow-up edit there. A `runtime fn` whose test is `if h: i < 64` is still refused, by the generator rather than the measure: [[runtime-fn-if-word-proposition]].

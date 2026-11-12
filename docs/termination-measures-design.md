@@ -57,7 +57,11 @@ written, never accepted. The kernel checks the whole recursor afterwards.
 Each recursive call, in source order, owes `e[ȳ] < e` under the name
 `decN`. The writer discharges it with `on ?decN := …;` at the end of the
 body, as any goal; where no `on` names it and the `omega` and `int` modules
-are in scope, the obligation is `omega`. Where they are not, the hole is
+are in scope, the obligation is `omega`, and where `omega` is stuck on an
+obligation over the `toNat` of a word and `bitvec_omega` is imported,
+`bv_omega` (`measure::CLOSER`; a measure such as `(64 - i).toNat()` is two
+unrelated atoms to `omega`). `omega`'s refusal stays the diagnosis, with
+`bv_omega`'s appended. Where they are not, the hole is
 reported as an ordinary unsolved goal with its statement.
 
 The obligation is not raised at the call: it is lifted into a generated
@@ -115,9 +119,26 @@ it cannot use. The names are unspellable by convention, not by the lexer.
   self-call are refused, as the structural guard refuses them.
 - **Implicit parameters** are quantified explicitly by the motive, so a
   self-call passes them: it must be `@`-marked, and a plain call meets a
-  message saying so. `self` and solver parameters are refused for now — the
-  recursion re-binds every parameter explicitly, and those two are filled
-  another way.
+  message saying so. Solver parameters are refused for now — the
+  recursion re-binds every parameter explicitly, and a solver parameter is
+  filled another way.
+- **Methods** (*amended 2026-11-12*, issues/decreases-self-parameter.md).
+  A member may recurse by measure, with or without a `self` marker, and
+  `mut self` included. A self-call may be written as a method call on the
+  receiver, `x.f(ā)`: before the lowering, `measure::method_calls_as_calls`
+  respells it as the call `f(…, x, …)` it desugars to, since the
+  elaborator's own desugaring comes after the lowering, where `f` names
+  nothing. A receiver typed at another type is that type's member of the
+  same base name and is left alone; one the pass cannot type is read as the
+  self-call. A `mut self` call on a mutable local, `let p = x.f(ā);` or the
+  statement `x.f(ā);`, is spelled out as the call bound once, `x` rebound
+  to its `after` and `p` to its `value`. Under today's statement rules the
+  receiver changes only in statement forms, so a `mut self` loop recurses
+  from a statement `if`/`match`; one that assigns a second local there
+  copies the call once per local
+  (issues/statement-form-join-copies-calls.md). A self-call in a `let` or
+  statement position declines the unfolding equation, as it does for a
+  function.
 - **A `theorem` by measure** works the same way: `even_or_odd_wf` recurses
   at `l` under two matches, and is the one shape course-of-values recursion
   would also reach; a measure reaches further (`halve_steps` at `mod`, or
