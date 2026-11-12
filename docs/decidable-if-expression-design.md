@@ -87,7 +87,18 @@ the unfolded function: motive synthesis abstracts the scrutinee as written
 beside its stuck spelling (`matching::with_scrutinee`), since the convoy's
 `refl` and motive hold it as written. A branch that does use `h` holds
 `decide_true<P>(e)`, typed by the instance's bit rather than by the
-scrutinee, and a proof about it rewrites with the bit's equation instead. `MatchForm::If` is retained only as source
+scrutinee: abstracting the bit leaves the `decide_true` call's argument at
+`z = True` where `decide_bit<P>() = True` is required, and the kernel
+refuses the motive (a `rewrite` with the bit's equation builds the same
+motive). Such a proof does not go through today; it did over the old
+`Inl`/`Inr` form, where `h` was the payload of the generalized decision.
+The fix is a convoy-aware motive: abstract only the stuck scrutinee and
+replace the convoy's `refl` by the proof's own equation, leaving every
+spelling of the bit inside the motive and the arms as written, so the
+unfolded function is `J`'s transport of itself along the equation
+(issues/if-evidence-proof-by-cases.md).
+
+`MatchForm::If` is retained only as source
 provenance for diagnostics; computation and dependent elimination continue
 through the ordinary match implementation.
 

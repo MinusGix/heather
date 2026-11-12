@@ -580,6 +580,14 @@ fn larger_bit(n, m: Nat) → Nat { match e: n.leb(m) { True => m, False => n } }
 theorem larger_bit_is_right(n, m: Nat, p: n <= m): larger_bit(n, m) = m {
     match e: n.leb(m) { True => refl, False => false_elim(decide_false<n <= m>(e)(p)) }
 }
+// A branch that passes `h` on. Its evidence is typed by the instance's bit,
+// which a motive abstracting the bit cannot keep, so casing the same test
+// at a neutral argument is not yet a proof of `before(n) = n - 1`
+// (issues/if-evidence-proof-by-cases.md; the kernel refuses it unrecorded,
+// so it is no directive here).
+fn need(n: Nat, h: 1 <= n) → Nat { n - 1 }
+fn before(n: Nat) → Nat { if h: 1 <= n { need(n, h) } else { 0 } }
+theorem before_lit(): before(3) = 2 { refl }
 // The evidence, used, has the proposition's type on each side.
 fn evidenced(n: Nat) → Nat { if h: n < 3 { let _w: (n < 3) = h; 1 } else { let _v: ¬(n < 3) = h; 2 } }
 theorem evidenced_lit(): evidenced(1) = 1 { refl }
