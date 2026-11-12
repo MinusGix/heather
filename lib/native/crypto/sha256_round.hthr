@@ -47,8 +47,8 @@ runtime fn sha256_t1(h, e, f, g, k, w: u64) → u64 {
     let g32 = g.truncate(32, 32);
     let k32 = k.truncate(32, 32);
     let w32 = w.truncate(32, 32);
-    let big1 = (e32 >> 6 | e32 << 26).bxor(e32 >> 11 | e32 << 21).bxor(e32 >> 25 | e32 << 7);
-    let ch = (e32 & f32).bxor(e32.bxor(0xffffffff) & g32);
+    let big1 = (e32 >> 6 | e32 << 26) ⊕ (e32 >> 11 | e32 << 21) ⊕ (e32 >> 25 | e32 << 7);
+    let ch = (e32 & f32) ⊕ ((e32 ⊕ 0xffffffff) & g32);
     (h32 + big1 + ch + k32 + w32).zero_extend(32)
 }
 
@@ -57,8 +57,8 @@ runtime fn sha256_t2(a, b, c: u64) → u64 {
     let a32 = a.truncate(32, 32);
     let b32 = b.truncate(32, 32);
     let c32 = c.truncate(32, 32);
-    let big0 = (a32 >> 2 | a32 << 30).bxor(a32 >> 13 | a32 << 19).bxor(a32 >> 22 | a32 << 10);
-    let maj = (a32 & b32).bxor(a32 & c32).bxor(b32 & c32);
+    let big0 = (a32 >> 2 | a32 << 30) ⊕ (a32 >> 13 | a32 << 19) ⊕ (a32 >> 22 | a32 << 10);
+    let maj = (a32 & b32) ⊕ (a32 & c32) ⊕ (b32 & c32);
     (big0 + maj).zero_extend(32)
 }
 
@@ -66,8 +66,8 @@ runtime fn sha256_t2(a, b, c: u64) → u64 {
 runtime fn sha256_next(w2, w7, w15, w16: u64) → u64 {
     let x = w2.truncate(32, 32);
     let y = w15.truncate(32, 32);
-    let small1 = (x >> 17 | x << 15).bxor(x >> 19 | x << 13).bxor(x >> 10);
-    let small0 = (y >> 7 | y << 25).bxor(y >> 18 | y << 14).bxor(y >> 3);
+    let small1 = (x >> 17 | x << 15) ⊕ (x >> 19 | x << 13) ⊕ (x >> 10);
+    let small0 = (y >> 7 | y << 25) ⊕ (y >> 18 | y << 14) ⊕ (y >> 3);
     (small1 + w7.truncate(32, 32) + small0 + w16.truncate(32, 32)).zero_extend(32)
 }
 
@@ -76,20 +76,20 @@ runtime fn sha256_next(w2, w7, w15, w16: u64) → u64 {
 // function on the low halves of its arguments.
 
 fn sha256_t1_narrow(h, e, f, g, k, w: u32) → u32 {
-    let big1 = (e >> 6 | e << 26).bxor(e >> 11 | e << 21).bxor(e >> 25 | e << 7);
-    let ch = (e & f).bxor(e.bxor(0xffffffff) & g);
+    let big1 = (e >> 6 | e << 26) ⊕ (e >> 11 | e << 21) ⊕ (e >> 25 | e << 7);
+    let ch = (e & f) ⊕ ((e ⊕ 0xffffffff) & g);
     h + big1 + ch + k + w
 }
 
 fn sha256_t2_narrow(a, b, c: u32) → u32 {
-    let big0 = (a >> 2 | a << 30).bxor(a >> 13 | a << 19).bxor(a >> 22 | a << 10);
-    let maj = (a & b).bxor(a & c).bxor(b & c);
+    let big0 = (a >> 2 | a << 30) ⊕ (a >> 13 | a << 19) ⊕ (a >> 22 | a << 10);
+    let maj = (a & b) ⊕ (a & c) ⊕ (b & c);
     big0 + maj
 }
 
 fn sha256_next_narrow(w2, w7, w15, w16: u32) → u32 {
-    let small1 = (w2 >> 17 | w2 << 15).bxor(w2 >> 19 | w2 << 13).bxor(w2 >> 10);
-    let small0 = (w15 >> 7 | w15 << 25).bxor(w15 >> 18 | w15 << 14).bxor(w15 >> 3);
+    let small1 = (w2 >> 17 | w2 << 15) ⊕ (w2 >> 19 | w2 << 13) ⊕ (w2 >> 10);
+    let small0 = (w15 >> 7 | w15 << 25) ⊕ (w15 >> 18 | w15 << 14) ⊕ (w15 >> 3);
     small1 + w7 + small0 + w16
 }
 
@@ -118,9 +118,9 @@ theorem sha256_ones(): BitVec::ofNat(0xffffffff, n := 32) = BitVec::all_ones() {
 theorem sha256_t1_narrow_spec(s: Sha2State(32), k, w: u32):
     sha256_t1_narrow(s.h, s.e, s.f, s.g, k, w) = Sha2::sha256().t1(s, k, w)
 {
-    let complement: (s.e.bxor(0xffffffff) = s.e.complement()) =
-        j(sym(sha256_ones()), λ ones _ => s.e.bxor(ones) = s.e.complement(), BitVec::bxor_all_ones(32, s.e));
-    cong_fn(λ (c: u32) => s.h + Sha2::sha256().big1.big(s.e) + (s.e & s.f).bxor(c & s.g) + k + w,
+    let complement: (s.e ⊕ 0xffffffff = ~s.e) =
+        j(sym(sha256_ones()), λ ones _ => s.e ⊕ ones = ~s.e, BitVec::bxor_all_ones(32, s.e));
+    cong_fn(λ (c: u32) => s.h + Sha2::sha256().big1.big(s.e) + ((s.e & s.f) ⊕ (c & s.g)) + k + w,
         complement)
 }
 

@@ -155,10 +155,6 @@ runtime fn sha256_take_block(ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64
             sha256_take_block(ctx, cn, block, bn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 64, h);
-        bv_omega
-    };
 }
 
 // Schedule words `i` to 63, each from the four before it that FIPS 180-4
@@ -175,10 +171,6 @@ runtime fn sha256_expand(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
             sha256_expand(put.after, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 64, h);
-        bv_omega
-    };
 }
 
 // The hash value's thirty-two bytes copied to the working variables, at
@@ -193,10 +185,6 @@ runtime fn sha256_begin(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
             sha256_begin(ctx, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 32, h);
-        bv_omega
-    };
 }
 
 // Seven of the working variables each moved to the next: h takes g first
@@ -212,10 +200,6 @@ runtime fn sha256_shift(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
             sha256_shift(put.after, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 7, h);
-        bv_omega
-    };
 }
 
 // The working variables after a round, from the two new words: the seven
@@ -255,10 +239,6 @@ runtime fn sha256_rounds(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
             sha256_rounds(turned.after, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 64, h);
-        bv_omega
-    };
 }
 
 // Each working variable added into its word of the hash value (§6.2.2
@@ -273,10 +253,6 @@ runtime fn sha256_end(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
             sha256_end(put.after, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 8, h);
-        bv_omega
-    };
 }
 
 // §6.2.2 from a schedule whose first sixteen words are in place: the other

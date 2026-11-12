@@ -103,10 +103,6 @@ runtime fn sha256_absorb(ctx: List<u8>, cn: u64, message: List<u8>, mn, j, fill:
             sha256_absorb(pushed.after, cn, message, mn, j + 1, pushed.value)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, j, mn, h);
-        bv_omega
-    };
 }
 
 // A part of the message taken into a context that has `count` bytes
@@ -135,10 +131,6 @@ runtime fn sha256_zero(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> dec
             sha256_zero(ctx, cn, i + 1)
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, 64, h);
-        bv_omega
-    };
 }
 
 // §5.1.1's one bit and its zeros after a block filled to `fill`: the byte
