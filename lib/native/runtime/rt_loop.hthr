@@ -193,19 +193,15 @@ theorem Tm::moves_to_words(ns: List<Nat>): (qs: List<Nat>) → (values: Valuatio
                 let parts = Bool::is_true_and(absent(n, rest), distinct(rest), apart);
                 let dparts = Bool::is_true_and(absent(q, Cons(n, rest)), disjoint(Cons(n, rest), more), dis);
                 let moved = Valuation::set(values, n, λ wd => values(wd, q));
-                let after = eval_nodes(Tm::moves_to(rest, more), moved);
-                let head: (after(64, n) = values(64, q)) = trans(
-                    eval_nodes_frame(Tm::moves_to(rest, more), moved, 64, n, Tm::moves_to_writes(rest, more, n, parts.left)),
-                    Valuation::set_here(values, n, λ wd => values(wd, q), 64));
+                let untouched = Tm::moves_to_writes(rest, more, n, parts.left);
                 // `n` is none of `more`'s sources.
                 let fresh: (y: Nat) → Mem(y, more) → (moved(64, y) = values(64, y)) = λ y m =>
                     Valuation::set_other(values, n, λ wd => values(wd, q), 64, y, Nat::differs_ne(y, n,
                         Bool::is_true_and(y.differs(n), absent(y, rest), disjoint_mem(Cons(n, rest), more, dparts.right, y, m)).left));
-                let tail = trans(Tm::moves_to_words(rest, more, moved, parts.right,
-                        Tm::disjoint_tail(n, rest, more, dparts.right),
+                simp_only(eval_nodes_frame(Tm::moves_to(rest, more)), Node::step, Valuation::set_here,
+                    Tm::moves_to_words(rest, more, moved, parts.right, Tm::disjoint_tail(n, rest, more, dparts.right),
                         Nat::succ_inj(rest.len(), more.len(), same)),
-                    words_agree(more, values, moved, fresh));
-                eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => Cons(x, ws), head, tail)
+                    words_agree(more, values, moved, fresh))
             },
         },
     }
@@ -346,10 +342,10 @@ theorem Tm::lower_again_sound(t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, ne
             // The flag is none of `nexts`.
             let kept: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
                 Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, λ e => absent_mem(flag, nexts, apart.left, y, m, sym(e))));
-            let moved: (words_of(after, nexts) = Tm::words(w, g, env, args)) = trans(kept, trans(
+            let moved: (words_of(after, nexts) = Tm::words(w, g, env, args)) = simp_only(kept,
                 Tm::moves_to_words(nexts, qs, values, apart.right, Tm::disjoint_tail(flag, nexts, qs, rest.left),
                     nexts.len().matches_eq(qs.len(), rest.right)),
-                Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs)));
+                Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs));
             ⟨next.le_refl(), λ again => trans(
                 eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => match x.eq_bit(BitVec::ofNat(1)) {
                         False => Tm::out(w.tys, res, again(ws)), True => ws.head_or(BitVec::zero()) },
@@ -388,10 +384,10 @@ theorem Tm::lower_leaf_sound(t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWor
                     let copied = eval_nodes(copies, moved);
                     let after = Valuation::set(copied, flag, λ wd => BitVec::ofNat(1));
                     let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(copied, flag, λ wd => BitVec::ofNat(1), 64);
-                    let at_n0: (after(64, n0) = mid(64, l.result)) = trans(
-                        Valuation::set_other(copied, flag, λ wd => BitVec::ofNat(1), 64, n0, λ same => Nat::differs_ne(flag, n0, pf.left, sym(same))), trans(
-                        eval_nodes_frame(copies, moved, 64, n0, Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left)),
-                        Valuation::set_here(mid, n0, λ wd => mid(wd, l.result), 64)));
+                    let not_flag: (n0 ≠ flag) = λ same => Nat::differs_ne(flag, n0, pf.left, sym(same));
+                    let untouched = Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left);
+                    let at_n0: (after(64, n0) = mid(64, l.result)) =
+                        simp_only(Valuation::set_other, eval_nodes_frame(copies), Valuation::set_here);
                     let held_one: t.ty(w, g).OneWord(w.tys) = j(sym(e), λ x _ => x.OneWord(w.tys), er);
                     let value: (mid(64, l.result) = Tm::out(w.tys, res, Tm::leaf(t, w, res, g, env))) =
                         trans(Ty::one_word_reads(w.tys, mid, l.result, t.ty(w, g), held_one, t.sem(w, g, env), ran.right.right.right),

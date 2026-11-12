@@ -64,6 +64,10 @@ struct Rule<'x> {
     name: String,
     /// A law between statements, `P ↔ Q`.
     iff: bool,
+    /// A definition named among the laws, by its position in Ψ: its calls
+    /// are unfolded as the goal is computed, and it never fires as a
+    /// rewrite.
+    unfold: Option<usize>,
 }
 
 /// One step taken: what `rewrite` needs to build its proof.
@@ -278,18 +282,40 @@ impl Simps<'_> {
             conclusion = cod;
         }
         let iff = Statements(self.0).is_law(cx, &ty, h.span);
+        // A definition, not a proof: `simp_only(Node::step)` unfolds it.
+        let definition = || {
+            let Term::GlobalTm { var, .. } = &proof else { return None };
+            let abs = self.global_abs_of(*var)?;
+            self.goal_oracle().unfold(&cx.gamma, &proof, crate::oracle::Unfold::OneStep).next()?;
+            Some(abs)
+        };
+        // A transparent definition (a theorem's proof is opaque) whose
+        // result is not a statement: a function, not a law.
+        if !iff && !matches!(conclusion, Type::Id { .. })
+            && let Some(abs) = definition()
+        {
+            let mut below = cx.clone();
+            let mut cur = &ty;
+            while let Type::Pi { dom, dom_level, cod, .. } = cur {
+                below.push("_".into(), (**dom).clone(), dom_level.clone());
+                cur = cod;
+            }
+            if Relation::of_type(self.0, &below, cur, h.span).is_none() {
+                return Ok(Rule { expr: h, proof, ty, name, iff, unfold: Some(abs) });
+            }
+        }
         if !iff && !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
             return Err(ElabError::Elab {
                 msg: format!(
                     "`{form}`: {name} is not a law: a law is a proof of an equation `a = b`, of \
-                     a relation `R(a, b)` or of `P ↔ Q`, under any hypotheses, and this is of \
-                     type `{}`",
+                     a relation `R(a, b)` or of `P ↔ Q`, under any hypotheses, or a definition \
+                     to unfold, and this is of type `{}`",
                     self.display_type(cx, &ty)
                 ),
                 span: h.span,
             });
         }
-        Ok(Rule { expr: h, proof, ty, name, iff })
+        Ok(Rule { expr: h, proof, ty, name, iff, unfold: None })
     }
 
     /// The run and what closes it, for laws already elaborated.
@@ -388,6 +414,7 @@ impl Simps<'_> {
     ) -> R<Run<'a>> {
         let premise = |at: &Cx, ty: &Type, level: &Level| self.discharge(at, ty, level, discharge);
         let mut run = Run { steps: Vec::new(), end: start.clone(), blocked: Vec::new(), exhausted: false, cycle: None };
+        let unfolds: Vec<usize> = rules.iter().filter_map(|rule| rule.unfold).collect();
         let mut seen = vec![start.clone()];
         'steps: loop {
             if run.steps.len() >= BUDGET {
@@ -398,7 +425,7 @@ impl Simps<'_> {
             // `seq(simp(a), simp(b))`), as a split's goal does: a law's left
             // side is matched against what is written, and the definition's
             // own equations are not laws anyone should have to list.
-            let computed = crate::goal_combinators::simplify_goal_with(self.0, cx, &run.end, true);
+            let computed = crate::goal_combinators::simplify_goal_unfolding(self.0, cx, &run.end, true, &unfolds);
             if computed != run.end && self.conv_types(cx, &computed, &run.end, lvl) {
                 run.end = computed;
             }
@@ -459,6 +486,9 @@ impl Simps<'_> {
         lvl: &Level,
         premise: super::Premise<'_>,
     ) -> R<Outcome<'a>> {
+        if rule.unfold.is_some() {
+            return Ok(Outcome::Miss);
+        }
         let direct = self.fire_at(relations, cx, rule, ty, lvl, premise)?;
         if rule.iff || matches!(direct, Outcome::Fired(..)) {
             return Ok(direct);
@@ -470,6 +500,7 @@ impl Simps<'_> {
                 ty: rule.ty.shift_local(depth),
                 name: rule.name.clone(),
                 iff: false,
+                unfold: None,
             };
             let relations = Relations(self.0);
             Ok(match self.fire_at(&relations, at, &deep, operand, level, premise)? {
