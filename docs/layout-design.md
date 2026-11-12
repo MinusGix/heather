@@ -749,12 +749,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    layout library (`Whnf` is out of budget on `Nat::round_up`), so the
    host has a `Numeral` request, which stage B's reflector will use for
    the same reason.
-2. **A layout as data** (`layout-first-order-description`), if Minus
-   takes it: the description, its codec and parts, and `laid record`
-   publishing one.
+2. **How a layout is found** (§10; `layout-classes`,
+   `layout-first-order-description`), as Minus decides: a codec's
+   compiled accessor by a class, a declared type's layout by a class,
+   and a layout as data. A prototype of each checks.
 3. **Held terms without loops**: the two nodes, the record meaning, the
    expansion, the simulation, the reflector reading a record receiver
-   (field reads, `x.f := e`), and the generator publishing the byte
+   (field reads, `x.f := e`, each field's load and store found by the
+   accessor class of §10.2), and the generator publishing the byte
    function with `f::runs_held`. First customers: SHA-256's `init` and
    the count's update.
 4. **The floor and loops**: the class's floor, length preservation, the
@@ -764,3 +766,184 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    `sha256-context-type` closes.
 5. Later, each its own issue: padding-preserving `put`; loads and stores
    wider than a byte; the comparisons a known size makes unnecessary.
+
+## 10. Functions as fields: classes, and a layout as data (2026-11-12)
+
+Minus, on §5 and §6 as built: "I'm unsure on the amount of functions as
+fields though I'm unsure of an obvious best way", then, asked what the
+function records are good for, "why aren't they typeclasses then?" This
+section is what a prototype showed about both answers. Nothing here is
+in the library yet. The prototype's files check against the library as
+it stands and are kept in the project's shared folder
+(`layout-prototype/`: `shape.hthr`, `shape_tests.hthr`, `laidv.hthr`,
+`rec.hthr`, `cls.hthr`, `cls2.hthr`).
+
+### 10.1 What the function records are, and where they stop
+
+`Stored<A>` and `Part<A, B>` are records of functions with their laws.
+That is the right *meaning*: a codec is a way to read, a way to write
+and laws, anything that keeps the laws is one (a varint, a `Bool` in a
+byte), and the laws are proved once for all of them. It is the wrong
+thing to *hold*. A function is opaque, so every reader that needs to
+know what a codec is made of (the declaration, a rule that chooses the
+field order, the generator that emits a field access) evaluates one
+number at a time or matches on a spelling, and at run time a record of
+functions is closures, which the compiled language does not have and
+should not gain for this.
+
+Run time needs numbers (`Layout`, §3 and §4) and, for a field access, a
+load of a known width at a known offset. Neither is a call of `read`.
+
+### 10.2 Two classes
+
+A class is still a record of functions. What it changes is who picks the
+value: resolution, at compile time, from a closed term. Two associations
+here are canonical enough to be classes, and both were being done by
+name.
+
+**A codec to its compiled accessor**, keyed by the codec's term as
+`Compile(f)` is keyed by `f`:
+
+```heather
+class Wide<A>(codec: Stored<A>) { bytes: Nat, sized: codec.layout.size = bytes }
+instance Wide<BitVec(32)>(Stored::u32_be()) { bytes := 4, sized := refl }
+instance Wide<BitVec(32)>(Stored::u32_le()) { bytes := 4, sized := refl }
+fn width<A: Wide(codec)>(codec: Stored<A>) → Nat { A.bytes }
+```
+
+Checked (`cls2.hthr`): two instances at one type are told apart by the
+codec's term, the instance is found from the codec passed, and a codec
+with none is refused as "no instance". The real class holds the
+`runtime fn` that reads the codec's value, the one that stores it, and
+the two theorems of `stored_words.hthr` that tie them to `get` and `put`.
+Stage B's reflector (§9.4) then finds a field's load and store by
+resolution. It is open: a new codec comes with its accessor and the
+generator does not change.
+
+**A declared type to its layout**:
+
+```heather
+class Lay<T> { laid: Laid<T> }
+fn size_of<T: Lay>() → Nat { T.laid.shape.layout().size }
+instance<A: Lay, B: Lay> Lay<Pair<A, B>> { laid := A.laid.then(B.laid) }
+```
+
+Checked (`cls.hthr`): an instance for a record, the pair's derived from
+its parts', `size_of<Pair<Header, Header>>() = 32` and the bytes written
+by `refl`, a `read_at<T>` and `write_at<T>` of any laid type with their
+law from the codec's, and `size_of<Nat>()` refused. `laid record T`
+would declare the instance, and a field of type `R` is then found by
+resolution where the generator now looks up the name `R::stored`.
+
+What stops it short: **an instance is keyed by its class and its
+carrier's head**, so `BitVec(8)`, `BitVec(32)` and `BitVec(64)` cannot
+each have one (`docs/instance-resolved-key-design.md`). Words need one
+instance at every width, which wants a codec of a `BitVec(n)` at any
+`n` (whole bytes, the value resized). That codec is not the library's
+`Stored::u32_le()` by conversion at 32, so the words' theorems would
+need restating over it, or the instance has to choose by cases on the
+width. Open. Byte order is the other limit: an instance is one order,
+the machine's, and a declaration that wants another names it, as now.
+
+### 10.3 A layout as data: `Shape`
+
+```heather
+inductive Shape { Byte, Bytes(k: Nat, order: Endian), Aligned(of: Shape, log: Nat),
+                  Array(of: Shape, n: Nat), Then(a: Shape, b: Shape), Padded(of: Shape) }
+
+fn Shape::Holds(self s: Shape) → Type              // u8, BitVec(8 * k), [A; n], Pair<A, B>
+fn Shape::layout(self s: Shape) → Layout           // plain numbers, no proof in sight
+fn Shape::stored(self s: Shape) → Stored<s.Holds()>
+theorem Shape::stored_layout(self s: Shape): s.stored().layout = s.layout()
+```
+
+A shape is the codec combinators with the functions taken out: one
+constructor per combinator, and `Shape::stored` applies them, so no law
+of a codec is proved again. It is plain data, so a program can build
+one, compare two, sort a list of them by alignment and hold one at run
+time. `Shape::u32(BigEndian).stored()` is `Stored::u32_be()` by
+evaluation.
+
+A place inside a shape is data too:
+
+```heather
+inductive Path { Here, Inside(rest: Path), First(rest: Path), Second(rest: Path), Item(i: Nat, rest: Path) }
+
+fn Shape::at(self s: Shape, p: Path) → Option<Shape>     // the shape at the path
+fn Shape::offset(self s: Shape, p: Path) → Nat           // where it begins
+record Found(s: Shape, p: Path) {
+    shape: Shape,
+    part: Part<s.Holds(), shape.Holds()>(s.stored()),
+    names: s.at(p) = Some(shape),
+    stores: part.codec = shape.stored(),
+    lies: part.offset = s.offset(p),
+}
+fn Shape::find(self s: Shape, p: Path) → Option<Found(s, p)>
+fn Shape::found(self s: Shape, p: Path, has: s.Has(p)) → Found(s, p)
+```
+
+`at` and `offset` are the cheap readings. `find` walks the path
+composing §5.3's parts and returns, beside the part, that it is of the
+shape `at` names, stores it by that shape's codec and lies where
+`offset` says. `s.Has(p)` is a closed fact at a closed shape and path,
+so a caller writes `s.found(p, trivial)` and a path that is not there is
+refused where it is written. Checked on SHA-256's context as a shape:
+its sixth schedule word is at 84, and reading it through the part is
+`vector_index(v.fst.snd, 5, trivial)`, by `refl`.
+
+Three choices, each found by trying the other first:
+
+- **Wrappers are steps of the path** (`Inside` through `Aligned` and
+  `Padded`). With wrappers transparent, `offset` and `at` matched on the
+  shape before the path, and every proof about an open path was stuck
+  on which came first.
+- **`find` is a function to an option, not an indexed family of valid
+  paths.** A family `Path(s, t)` would make an ill-formed path
+  unwritable, and is where the elaborator is weakest (indices that are
+  computed types). The option costs one `trivial` at a closed path.
+- **What `find` returns carries its laws** (`Found(s, p)`) instead of
+  separate theorems about `find`. A theorem about a function that
+  matches on two arguments and maps under an option has to redo the
+  matching; the record is built where the facts are in hand.
+
+**A record as one value** (`laidv.hthr`):
+
+```heather
+record Laid<T> { shape: Shape, of: shape.Holds() → T, to: T → shape.Holds(),
+                 back: (t: T) → of(to(t)) = t, forth: (p: shape.Holds()) → to(of(p)) = p }
+fn Laid::stored<T>(self l: Laid<T>) → Stored<T>
+fn Laid::part<T>(self l: Laid<T>, p: Path, has: l.shape.Has(p)) → Part<T, l.shape.found(p, has).shape.Holds()>(l.stored())
+fn Laid::value<T>(self l: Laid<T>) → Part<l.shape.Holds(), T>(l.shape.stored())
+```
+
+A record carries exactly the two functions that have no first-order
+form, its constructor and its projections. The codec, the layout and
+every field's part with its laws are library functions of that value
+and a path. Checked: a header with padding, a record inside a record
+whose field is read as the inner record (`Laid::value`, over a new
+`Part::through`, the other direction of `Part::mapped`), offsets, `of`,
+`with` and the field's codec by `refl`, and a path that is not there
+refused.
+
+What is not a shape: a codec given as a term (an arbitrary `Stored<A>`
+has no description), a type that does not use every byte pattern, and a
+size that depends on bytes read. `Stored` does not have the last one
+either.
+
+### 10.4 What each is for
+
+| Reader | Needs | From |
+| --- | --- | --- |
+| a proof about a field | laws | `Stored`, `Part` (as built) |
+| the generator, for a field's load and store | the accessor of a codec | the accessor class |
+| the declaration, for a field of type `R` | `R`'s layout | the layout class, or `R::stored` by name as now |
+| a rule that chooses the field order | each field's alignment | `Stored`'s `layout`, which is data already |
+| compiled code that lays memory out | sizes and offsets | `Layout` (§4) |
+| a program that holds a format, or a field as a value it passes | a description | `Shape`, `Path` |
+
+So the classes cover what the shape was first proposed for, in the open
+form, and the shape is what only data can do: the last row. Asked of
+Minus as a decision. The recommendation: the accessor class with stage
+B's reflector (§9.5 round 3), the layout class once words have their
+instance, and the shape left as this checked prototype until a program
+needs to hold a layout.
