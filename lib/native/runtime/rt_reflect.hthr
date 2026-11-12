@@ -104,8 +104,11 @@ record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> 
 record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr }
 
 // What a field `field` of the local `of` stands for: a term, or for an
-// array its elements' terms.
-inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm) }
+// array its elements' terms. `FieldNow(of, call)` says the record the
+// local `of` named is now what `call` left, `call.after`: a field of that
+// term stands for what the local's did, and a field of the local itself,
+// read for the first time, is the record as it was and stands for nothing.
+inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm), FieldNow(of: Nat, call: Handle) }
 
 record Known {
     prims: List<PrimEntry>,
@@ -447,6 +450,20 @@ record RSt { depth: Nat, lets: List<Tm>, memo: List<Pair<Tm, Nat>>, handles: Lis
 
 fn RSt::with_funs(self st: RSt, funs: List<Nat>) → RSt { RSt(st.depth, st.lets, st.memo, st.handles, st.locals, funs) }
 
+fn RSt::with_handles(self st: RSt, handles: List<Pair<Nat, Nat>>) → RSt { RSt(st.depth, st.lets, st.memo, handles, st.locals, st.funs) }
+
+// The local `x` bound to the variable at `level`.
+fn RSt::with_local(self st: RSt, x: Nat, level: Nat) → RSt { RSt(st.depth, st.lets, st.memo, st.handles, Cons(Pair(x, level), st.locals), st.funs) }
+
+// The handle `h` bound to the variable at `level`.
+fn RSt::binding(self st: RSt, h: Handle, level: Nat) → RSt { st.with_handles(Cons(Pair(h.id, level), st.handles)) }
+
+// The handles in `ids` forgotten: what a term stood for before the
+// record changed is not what it stands for after.
+fn RSt::forgetting(self st: RSt, ids: List<Nat>) → RSt {
+    st.with_handles(st.handles.filter(λ p => match Known::index(ids, p.fst, 0) { Some(_) => False, None => True }))
+}
+
 // A level as a de Bruijn index at the current depth.
 fn RSt::index(self st: RSt, l: Nat) → Nat { st.depth - Succ(l) }
 
@@ -585,6 +602,7 @@ fn Known::named_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Han
         Cons(n, rest) => match n {
             FieldWhole(of, name, term) => match of.same(x) && Known::str_same(name, field) { True => Some(term), False => Known::named_at(rest, x, field) },
             FieldEach(_, _, _) => Known::named_at(rest, x, field),
+            FieldNow(_, _) => Known::named_at(rest, x, field),
         },
     }
 }
@@ -594,6 +612,7 @@ fn Known::elements_at(named: List<FieldTerm>, x: Nat, field: String) → Option<
         Nil => None,
         Cons(n, rest) => match n {
             FieldWhole(_, _, _) => Known::elements_at(rest, x, field),
+            FieldNow(_, _) => Known::elements_at(rest, x, field),
             FieldEach(of, name, each) => match of.same(x) && Known::str_same(name, field) { True => Some(each), False => Known::elements_at(rest, x, field) },
         },
     }
@@ -613,8 +632,17 @@ fn ElementTerm::reads(self e: ElementTerm, i: Nat) → Tac<Pair<Handle, Handle>>
     pure(Pair(read, value))
 }
 
-// A term that is a field of a local, by the local and the field's name.
-fn rt_field_of_local(h: Handle) → Tac<Option<Pair<Nat, String>>> {
+// The call whose record a local's fields are now read off, if one has
+// been made (`FieldNow`).
+fn Known::now_at(named: List<FieldTerm>) → Option<Pair<Nat, Handle>> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n { FieldNow(of, call) => Some(Pair(of, call)), _ => Known::now_at(rest) },
+    }
+}
+
+// A term read as a field of a record: the record and the field's name.
+fn rt_field_read(h: Handle) → Tac<Option<Pair<Handle, String>>> {
     let v <- view(h);
     let read: Option<Pair<Handle, String>> = match v {
         HGlobal(_, name, args) => match args {
@@ -624,16 +652,54 @@ fn rt_field_of_local(h: Handle) → Tac<Option<Pair<Nat, String>>> {
         HField(r, name, args) => match args { Nil => Some(Pair(r, name)), Cons(_, _) => None },
         _ => None,
     };
-    match read {
-        None => pure(None),
-        Some(p) => view(p.fst).bind(λ rv => {
-            let found: Option<Pair<Nat, String>> = match rv {
-                HLocal(x, args) => match args { Nil => Some(Pair(x.id, rt_base_name(p.snd))), Cons(_, _) => None },
-                _ => None,
-            };
-            pure(found)
+    pure(read)
+}
+
+// Whether `r` is what `call` left: `call.after`, at that call or a copy
+// of it (the elaborator repeats a call wherever its record is read).
+fn rt_after_of(r: Handle, call: Handle) → Tac<Bool> {
+    rt_field_read(r).bind(λ read => match read {
+        None => pure(False),
+        Some(p) => match Known::str_same(rt_base_name(p.snd), "after") {
+            False => pure(False),
+            True => match p.fst.id.same(call.id) { True => pure(True), False => defeq(Hd(p.fst), Hd(call)) },
+        },
+    })
+}
+
+fn rt_record_before<A>() → Tac<A> {
+    rt_refuse("a field of the record as it was before a call of another function of the record, which the walk did not read before the call (a read under a `match` that is a value): the code reads the record as it is")
+}
+
+// The local whose named fields a record term's fields stand for: the
+// local itself while no call has changed the record, and what the last
+// call left once one has.
+fn rt_named_record(k: Known, r: Handle) → Tac<Option<Nat>> {
+    match k.named {
+        Nil => pure(None),
+        Cons(_, _) => view(r).bind(λ v => {
+            let local: Option<Nat> = match v { HLocal(x, args) => match args { Nil => Some(x.id), Cons(_, _) => None }, _ => None };
+            match Known::now_at(k.named) {
+                None => pure(local),
+                Some(now) => match local {
+                    Some(x) => match x.same(now.fst) { True => rt_record_before(), False => pure(local) },
+                    None => rt_after_of(r, now.snd).bind(λ is => {
+                        let found: Option<Nat> = match is { True => Some(now.fst), False => None };
+                        pure(found)
+                    }),
+                },
+            }
         }),
     }
+}
+
+// A term that is a field of a record with named fields, by the local the
+// record stands for and the field's name.
+fn rt_field_of_local(k: Known, h: Handle) → Tac<Option<Pair<Nat, String>>> {
+    rt_field_read(h).bind(λ read => match read {
+        None => pure(None),
+        Some(p) => rt_named_record(k, p.fst).bind(λ x => pure(x.map(λ id => Pair(id, rt_base_name(p.snd))))),
+    })
 }
 
 // An element of an array field the setup named, read at a literal index:
@@ -648,7 +714,7 @@ fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Handle>
                 None => pure(None),
                 Some(v) => match args.nth(1) {
                     None => pure(None),
-                    Some(i) => rt_field_of_local(v).bind(λ field => match field {
+                    Some(i) => rt_field_of_local(k, v).bind(λ field => match field {
                         None => pure(None),
                         Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
                             None => pure(None),
@@ -665,23 +731,26 @@ fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Handle>
 }
 
 fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
-    match k.named {
-        Nil => pure(None),
-        Cons(_, _) => view(r).bind(λ v => {
-            let found: Option<Handle> = match v {
-                HLocal(x, args) => match args { Nil => Known::named_at(k.named, x.id, rt_base_name(name)), Cons(_, _) => None },
-                _ => None,
-            };
-            pure(found)
-        }),
-    }
+    rt_named_record(k, r).bind(λ x => pure(x.and_then(λ id => Known::named_at(k.named, id, rt_base_name(name)))))
 }
 
 fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     rt_field_named(k, r, name).bind(λ named => match named {
-        Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+        // A named term is one term for a field whatever record the span
+        // holds, so nothing inside it is kept by its handle: only the term
+        // itself, which a walk that changes the record forgets
+        // (`RSt::forgetting`), and the read as the body has it, which is a
+        // read of that record and stays what it was.
+        Some(e) => match rt_assoc(st.handles, e.id) {
+            Some(l) => pure(st.binding(h, l).finish(h, operand, Var(l))),
+            None => step(st.with_handles([]), e).bind(λ rr => {
+                let back = rr.fst.with_handles(st.handles);
+                let kept = match rr.snd { Var(l) => back.binding(e, l).binding(h, l), _ => back };
+                pure(kept.finish(h, operand, rr.snd))
+            }),
+        },
         None => rt_field_of_value(k, r, name).bind(λ value => match value {
             Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
             None => rt_field_at(f, k, st, h, operand, r, name, step),
@@ -1339,7 +1408,11 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Cons(r, rest) => match rest {
                                     Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
                                     Cons(_, _) => rt_element(k, name, args).bind(λ element => match element {
-                                        Some(u) => rt_go(f, k, st, u, True).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+                                        Some(u) => rt_go(f, k, st.with_handles([]), u, True).bind(λ rr => {
+                                            let back = rr.fst.with_handles(st.handles);
+                                            let kept = match rr.snd { Var(l) => back.binding(h, l), _ => back };
+                                            pure(kept.finish(h, operand, rr.snd))
+                                        }),
                                         None => rt_unknown(name),
                                     }),
                                 },

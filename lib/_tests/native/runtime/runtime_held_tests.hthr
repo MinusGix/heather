@@ -217,9 +217,3 @@ runtime fn Tally::low(mut self t: Tally) → u32 {
     t.count := 0;
     5
 }
-
-// expect-error: a call of another function of the record is not reflected yet
-runtime fn Tally::twice(mut self t: Tally) → u64 {
-    let once = t.bump();
-    t.bump()
-}

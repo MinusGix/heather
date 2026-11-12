@@ -1234,6 +1234,28 @@ fn runtime_frame(c: Nat, n: String) → Tac<LinkFrame> {
 
 fn runtime_self<A>(a: A) → a = a { refl }
 
+// The function of a laid record that `g` is the function over the span
+// of (`T::m::bytes`, published as `HWorld::of_record(T::m, …)`), by the
+// name its tables and instance are published under.
+fn runtime_record_of(g: GlobalRef) → Tac<Option<String>> {
+    body(g).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(b) => view(b).bind(λ v => match v {
+            HGlobal(_, n, args) => match Known::str_same(rt_base_name(n), "of_record") {
+                False => pure(None),
+                True => match args {
+                    Cons(source, _) => view(source).bind(λ sv => match sv {
+                        HGlobal(sg, shown, _) => rt_name_of(sg, shown).bind(λ name => pure(Some(name))),
+                        _ => pure(None),
+                    }),
+                    Nil => pure(None),
+                },
+            },
+            _ => pure(None),
+        }),
+    })
+}
+
 // A global's name, spelled as the elaborator spells a call of it.
 fn runtime_name_of(g: Nat) → Tac<String> {
     let same <- runtime_global("runtime_self");
@@ -1241,7 +1263,10 @@ fn runtime_name_of(g: Nat) → Tac<String> {
     let v <- view(t);
     match v {
         HEq(lhs, _) => view(lhs).bind(λ h => match h {
-            HGlobal(_, n, _) => rt_name_of(GlobalRef(g), n),
+            HGlobal(_, n, _) => match Known::str_same(rt_base_name(n), "bytes") {
+                False => rt_name_of(GlobalRef(g), n),
+                True => runtime_record_of(GlobalRef(g)).bind(λ source => match source { Some(name) => pure(name), None => rt_name_of(GlobalRef(g), n) }),
+            },
             _ => runtime_fail("a callee that is not a global"),
         }),
         _ => runtime_fail("a callee's name"),
@@ -2652,7 +2677,10 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let solved <- defeq(Hd(held), built);
     let instance_e <- match solved { True => pure(Hd(held)), False => runtime_fail("`" ++ name ++ "`'s instance does not solve its hole") };
     let writes_t <- infer(writes_e).or_fail("runtime: `" ++ name ++ "`'s writing callees: ");
-    let written: List<Decl> = match meant { False => [], True => [Decl(AsValue, own, [], Hd(ft), fe)] };
+    // Published with the function of the record beside it
+    // (`HWorld::of_record`): the linker finds a callee's tables by that.
+    let of_record <- held_name("HWorld::of_record");
+    let written: List<Decl> = match meant { False => [], True => [Decl(AsValue, own, [], Hd(ft), ap(of_record, [Hd(ft), Blank, Global(f), fe]))] };
     let head: List<Decl> = [
         Decl(AsValue, name ++ "::rt", [], Hd(ffun_h), rt_e),
         Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
@@ -2804,6 +2832,19 @@ fn runtime_reads(name: String, f: GlobalRef) → Tac<List<Decl>> {
 // function's, by evaluation. Both are checked here first, so that a
 // refusal names the function.
 //
+// A function that calls another function of the record `T::n` calls
+// `T::n::bytes`, a computation of its program like an accessor's writer,
+// and that computation's mark is `T::n` itself (`Writer::runs`): the
+// held meaning of the caller names the callee's function of the record,
+// so the pin is still a conversion that enters no code. What the mark
+// owes is `T::n::runs_held`, the callee's own theorem, read along the
+// call as the caller's world makes it; that the world's call is the
+// callee applied is proved with the callee a parameter
+// (`runtime_held_bridge`), since at the callee itself the kernel runs its
+// body before the world's table arrives at its name. `T::n::bytes` is
+// published as `HWorld::of_record(T::n, …)`, where the linker reads whose
+// tables and instance a callee's are (`runtime_record_of`).
+//
 // A function that changes no field (`self t: T`, answering a word) is
 // compiled the same way and its record-level answer is `t` unchanged
 // beside the word (`HWorld::unchanged`). What is by conversion over the
@@ -2844,6 +2885,104 @@ fn runtime_held_names() → Tac<HeldNames> {
         <- runtime_held_ref("FTm::kept"), <- runtime_held_ref("Ty::bind_onto"), <- runtime_held_ref("Stored::Holds"), <- runtime_held_ref("Agrees")))
 }
 
+// A function of the record that the function calls, as its mark: how
+// many words it takes, and the function of the record at them.
+fn runtime_held_run(record, words_t: Expr, c: HeldCall) → Tac<Expr> {
+    let runs <- runtime_held_ref("Writer::runs");
+    let operand <- runtime_held_ref("FTm::operand");
+    let a <- assume(record, "held", None).or_fail("runtime: a record: ");
+    let ws <- assume(words_t, "words", Some(a.ref)).or_fail("runtime: a call's words: ");
+    pure(ap(runs, [record, NatLit(c.operands), Lam(a.ref, Lam(ws.ref,
+        ap(Global(c.run), Cons(Local(a.ref), List::range(c.operands).map(λ i => ap(operand, [Local(ws.ref), NatLit(i)]))))))]))
+}
+
+fn runtime_held_vars(var_t: Expr, n: Nat, under: LocalRef) → Tac<List<LocalRef>> {
+    match n {
+        Zero => pure([]),
+        Succ(m) => assume(var_t, "x", Some(under)).or_fail("runtime: an operand's variable: ").bind(λ x =>
+            runtime_held_vars(var_t, m, x.ref).bind(λ more => pure(Cons(x.ref, more)))),
+    }
+}
+
+// What holds at every callee, as `runtime_at_each`, with a leaf that
+// binds locals of its own.
+fn runtime_at_each_under(at: Expr, cs: List<SpanCallee>, done: List<Expr>, under: Option<LocalRef>, stmt: List<Expr> → LocalRef → Tac<Expr>,
+    leaf: List<Expr> → Option<LocalRef> → Tac<Expr>) → Tac<Expr> {
+    match cs {
+        Nil => leaf(done, under),
+        Cons(c, rest) => {
+            let x <- assume(Hd(c.ty), "callee", under).or_fail("runtime: a callee as a parameter: ");
+            let here = done ++ [Local(x.ref)];
+            let b <- stmt(here ++ rest.map(λ r => r.global), x.ref);
+            let inner <- runtime_at_each_under(at, rest, here, Some(x.ref), stmt, leaf);
+            pure(ap(at, [Hd(c.ty), Lam(x.ref, b), c.global, Lam(x.ref, inner)]))
+        },
+    }
+}
+
+// The names a held callee's promise is stated with.
+record HeldRan { var_t: Expr, scope_t: Expr, env_at: Expr, word_at: Expr, called_at: Expr, ran: Expr, bytes_t: Expr, nats: List<Expr>, rfl: Expr, at: Expr }
+
+// A call of computation `j` on a place, a length word and `k` operands,
+// at a span, a scope and an environment of the marked world `hw`: the
+// locals, the call as the world makes it, and the words the operands are.
+// `held` is a record's local between the span and the scope, where one
+// is asked for (`HWorld::Runs` takes its record there).
+record HeldCalled { locals: List<LocalRef>, own: LocalRef, held: Option<LocalRef>, scope: LocalRef, env: LocalRef, called: Expr, length: Expr, words: List<Expr> }
+
+fn runtime_held_called(h: HeldRan, record, hw: Expr, j, k: Nat, with_record: Bool, under: Option<LocalRef>) → Tac<HeldCalled> {
+    let place <- assume(h.var_t, "place", under).or_fail("runtime: a place's variable: ");
+    let length <- assume(h.var_t, "length", Some(place.ref)).or_fail("runtime: a length word's variable: ");
+    let xs <- runtime_held_vars(h.var_t, k, length.ref);
+    let own <- assume(h.bytes_t, "own", Some(xs.rev().head_or(length.ref))).or_fail("runtime: a span: ");
+    let held: Tac<Option<LocalRef>> = match with_record {
+        False => pure(None),
+        True => assume(record, "held", Some(own.ref)).or_fail("runtime: a record: ").bind(λ a => pure(Some(a.ref))),
+    };
+    let a <- held;
+    let g <- assume(h.scope_t, "scope", Some(a.unwrap_or(own.ref))).or_fail("runtime: a scope: ");
+    let env <- assume(ap(h.env_at, [record, hw, Local(g.ref)]), "env", Some(g.ref)).or_fail("runtime: an environment: ");
+    let word: LocalRef → Expr = λ v => ap(h.word_at, [record, hw, Local(g.ref), Local(env.ref), Local(v)]);
+    let vars = Cons(place.ref, Cons(length.ref, xs));
+    pure(HeldCalled(vars ++ [own.ref, g.ref, env.ref], own.ref, a, g.ref, env.ref,
+        ap(h.called_at, [record, hw, Local(g.ref), Local(env.ref), NatLit(j), RtQ::seq(h.nats, runtime_locals(vars)), Local(own.ref)]),
+        word(length.ref), xs.map(word)))
+}
+
+// The call as the world makes it is the callee applied: at every callee,
+// each a parameter, by computation, and so at the program's own.
+fn runtime_held_bridge(h: HeldRan, record: Expr, hw_of: List<Expr> → Expr, callees: List<SpanCallee>, at_callee: Nat, j, k: Nat) → Tac<Expr> {
+    let applied: List<Expr> → HeldCalled → Expr = λ es c => ap(runtime_at(es, at_callee), Cons(Local(c.own), Cons(c.length, c.words)));
+    runtime_at_each_under(h.at, callees, [], None,
+        λ es under => runtime_held_called(h, record, hw_of(es), j, k, False, Some(under)).bind(λ c =>
+            as_type(c.locals.foldr(λ x acc => Pi(x, acc), Equation(c.called, applied(es, c)))).or_fail("runtime: a held callee's call at its callees: ").bind(λ t => pure(Hd(t)))),
+        λ es under => runtime_held_called(h, record, hw_of(es), j, k, False, under).bind(λ c =>
+            pure(runtime_lams(c.locals, ap(h.rfl, [Blank, applied(es, c)])))))
+}
+
+// What that mark owes (`HWorld::Runs`): the callee's own published
+// agreement, `m::runs_held`, at the words its operands are, read along
+// the call as the world makes it (`bridge`). Nothing is proved here
+// about the callee.
+fn runtime_held_ran(h: HeldRan, record, whole, hw, holds_of, bridge: Expr, j: Nat, c: HeldCall) → Tac<Expr> {
+    let agreed <- runtime_global(c.name ++ "::runs_held");
+    let call <- runtime_held_called(h, record, hw, j, c.operands, True, None);
+    let a = call.held.unwrap_or(call.own);
+    let holds <- assume(ap(holds_of, [record, whole, Local(call.own), call.length, Local(a)]), "holds", Some(call.env)).or_fail("runtime: a span that holds a record: ");
+    let spec = ap(Global(c.run), Cons(Local(a), call.words));
+    let code = ap(Global(GlobalRef(c.bytes)), Cons(Local(call.own), Cons(call.length, call.words)));
+    let got = ap(agreed, Cons(Local(call.own), Cons(Local(a), Cons(call.length, call.words ++ [Local(holds.ref)]))));
+    let k = c.operands;
+    // `HWorld::Runs` takes the span and the record before the scope.
+    let order = call.locals.take(Succ(Succ(Succ(k)))) ++ [a, call.scope, call.env, holds.ref];
+    pure(runtime_lams(order, ap(h.ran, [record, whole, call.length, spec, code, got, call.called, ap(bridge, runtime_locals(call.locals))])))
+}
+
+// Each of a list, in order.
+fn runtime_held_each<A, B>(xs: List<A>, f: A → Tac<B>) → Tac<List<B>> {
+    match xs { Nil => pure([]), Cons(x, rest) => f(x).bind(λ y => runtime_held_each(rest, f).bind(λ ys => pure(Cons(y, ys)))) }
+}
+
 // What is published beside the span's: the marks, what they owe, and the
 // record-level theorem.
 fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts) → Tac<List<Decl>> {
@@ -2866,9 +3005,23 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
         Nil => ap(n.plain, [record]),
         Cons(_, _) => ap(n.reader_of, [record, runtime_held_list(n.more, n.none, fs.map(λ a => entry(n.read_entry, a)))]),
     }));
-    let writers_e = runtime_held_list(n.more, n.none, writers.map(λ fs => match fs {
-        Nil => ap(n.apart, [record]),
-        Cons(_, _) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, fs.map(λ a => entry(n.write_entry, a)))]),
+    // A computation that is a function of the record is marked with that
+    // function.
+    let called: List<Option<HeldCall>> = r.cfuns.map(λ g => r.calls.filter(λ c => c.bytes.same(g)).head());
+    let word_list <- runtime_type_of("runtime_w_words");
+    let runs <- runtime_held_each(called, λ c => match c {
+        None => pure(None),
+        // Held, a closed term: the marks are read again under each
+        // callee's binder.
+        Some(call) => runtime_held_run(record, Hd(word_list), call).bind(λ e =>
+            runtime_held(e, "`" ++ name ++ "`'s mark for `" ++ call.name ++ "`").bind(λ held => pure(Some(held)))),
+    });
+    let writers_e = runtime_held_list(n.more, n.none, List::range(writers.len()).map(λ j => match runs.nth(j).unwrap_or(None) {
+        Some(run) => run,
+        None => match writers.nth(j).unwrap_or([]) {
+            Nil => ap(n.apart, [record]),
+            Cons(a, more) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.write_entry, a)))]),
+        },
     }));
     let marked = ap(n.marked, [record, parts.world, readers_e, writers_e]);
     let marked_t <- infer(marked).or_fail("runtime: `" ++ name ++ "`'s marks: ");
@@ -2878,7 +3031,24 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let owes: Expr → List<List<HeldAccess>> → Expr = λ field fss =>
         runtime_held_tuple(n.owed, end, List::range(fss.len()).map(λ j =>
             runtime_held_tuple(n.owed, end, fss.nth(j).unwrap_or([]).map(λ a => ap(field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl])))));
-    let sound = ap(n.sound_of, [record, hw, whole, owes(n.reads_field, readers), owes(n.writes_field, writers)]);
+    let q <- runtime_quoting(ts);
+    let at_all <- runtime_held_ref("HWorld::at");
+    let ran_names = HeldRan(<- runtime_held_ref("HWorld::Var"), <- runtime_held_ref("HWorld::Scope"), <- runtime_held_ref("HWorld::EnvAt"),
+        <- runtime_held_ref("HWorld::word_at"), <- runtime_held_ref("HWorld::called_at"), <- runtime_held_ref("HWorld::ran"), Hd(bytes_h), q.nats, rfl, at_all);
+    let hw_of: List<Expr> → Expr = λ es => ap(n.marked, [record, parts.world_of(es), readers_e, writers_e]);
+    let rans <- runtime_held_each(List::range(called.len()), λ j => match called.nth(j).unwrap_or(None) {
+        None => pure(None),
+        // The bridge is held, a closed term: it is read under the
+        // promise's own binders.
+        Some(call) => runtime_held_bridge(ran_names, record, hw_of, parts.callees, r.funs.len() + j, j, call.operands).bind(λ bridge =>
+            runtime_held(bridge, "`" ++ name ++ "`'s call of `" ++ call.name ++ "` at its callees").bind(λ held =>
+            runtime_held_ran(ran_names, record, whole, hw, n.holds, held, j, call).bind(λ e => pure(Some(e))))),
+    });
+    let owes_writers = runtime_held_tuple(n.owed, end, List::range(writers.len()).map(λ j => match rans.nth(j).unwrap_or(None) {
+        Some(ran) => ran,
+        None => runtime_held_tuple(n.owed, end, writers.nth(j).unwrap_or([]).map(λ a => ap(n.writes_field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
+    }));
+    let sound = ap(n.sound_of, [record, hw, whole, owes(n.reads_field, readers), owes_writers]);
     let sound_t <- infer(sound).or_fail("runtime: `" ++ name ++ "`: what its accessors owe at the record's fields (a field's accessor is a function of the program that reads or stores its codec's word): ");
     let sound_e <- runtime_held(sound, "what `" ++ name ++ "`'s marks owe");
     // The verdict, by evaluation: the length word is the variable under

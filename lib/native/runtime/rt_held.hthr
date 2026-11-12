@@ -882,6 +882,43 @@ fn Writer::of<A>(fields: List<Pair<Nat, A → BitVec(64) → A>>) → Writer<A> 
 // length word, and its function of the record at them.
 fn Writer::runs<A>(words: Nat, run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Writer<A> { Runs(words, run) }
 
+// Operand `i` of a held function's words: what its mark hands its
+// function of the record, a parameter at a time.
+fn FTm::operand(ws: List<BitVec(64)>, i: Nat) → BitVec(64) {
+    match ws {
+        Nil => 0,
+        Cons(w, rest) => match i { Zero => w, Succ(j) => FTm::operand(rest, j) },
+    }
+}
+
+// What a generator states a held callee's promise with: a variable, a
+// scope and an environment's types, a variable's word, and the callee's
+// own agreement (its `runs_held`) as the promise words it, the function
+// of the record's answer taken apart.
+fn HWorld::Var() → Type { Nat }
+
+fn HWorld::Scope() → Type { List<Ty> }
+
+fn HWorld::EnvAt<A>(self hw: HWorld<A>, g: List<Ty>) → Type { Env(hw.fw.w.tys, g) }
+
+fn HWorld::word_at<A>(self hw: HWorld<A>, g: List<Ty>, env: Env(hw.fw.w.tys, g), v: Nat) → BitVec(64) { FTm::word(hw.fw.w.tys, g, env, v) }
+
+// A call of computation `f`, by the marked world.
+fn HWorld::called_at<A>(self hw: HWorld<A>, g: List<Ty>, env: Env(hw.fw.w.tys, g), f: Nat, args: List<Nat>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys)> {
+    FTm::called(hw.fw, g, env, f, args, own)
+}
+
+// `same` is the call as the world makes it against the callee applied,
+// which a generator proves with the callee a parameter: at the callee
+// itself the kernel would run its body before the world's table arrived
+// at its name.
+theorem HWorld::ran<A>(whole: Stored<A>, n: BitVec(64), spec: Mutated<A, BitVec(64)>, code: Mutated<List<BitVec(8)>, BitVec(64)>,
+    got: Agrees<A, BitVec(64)>(whole, n, spec, code), called: Mutated<List<BitVec(8)>, BitVec(64)>, same: called = code):
+    Agrees<A, BitVec(64)>(whole, n, Mutated(spec.after, spec.value), called) {
+    j(sym(same), λ y _ => Agrees<A, BitVec(64)>(whole, n, Mutated(spec.after, spec.value), y), Agrees(got.value, got.holds))
+}
+
 fn HWorld::marked<A>(fw: FWorld, readers: List<Reader<A>>, writers: List<Writer<A>>) → HWorld<A> { HWorld(fw, readers, writers) }
 
 fn HWorld::none<X>() → List<X> { Nil }
@@ -909,6 +946,12 @@ fn HWorld::once<X, S>(x: X, k: X → S) → S { k(x) }
 // applied to; with no name it runs one side to its end before the other
 // arrives, and compares the two ends.
 fn HWorld::written<F>(f: F) → F { f }
+
+// The function over the span, published as `T::m::bytes`, with the
+// function of the record it is compiled from beside it: a linker that
+// meets it as a callee reads there whose tables and instance are its
+// (`T::m::world`, `T::m::compile`).
+fn HWorld::of_record<F, G>(source: G, f: F) → F { f }
 
 // What holds at every value of a type, at one. A function written out is
 // a function of its callees, and what is proved of it by conversion is
