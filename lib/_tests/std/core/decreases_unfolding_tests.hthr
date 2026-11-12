@@ -336,6 +336,21 @@ fn Counter::fill_sum(mut self c: Counter, m: Nat) → Nat decreases m {
 }
 theorem fill_sum_lit(): Counter::fill_sum(Counter(0, []), 3) = Mutated(Counter(6, [1, 2, 3]), 6) { refl }
 
+// The `if` assigns two locals, `c` and `s`, and is joined once for both
+// (issues/statement-form-join-copies-calls.md): the self-call is written
+// once, so there is one obligation and no `?dec2` to discharge.
+// expect-error: no goal `?dec2` in this block
+fn Counter::fill_once(mut self c: Counter, m: Nat) → Nat decreases m {
+    let mut s = 0;
+    if 1 <= m {
+        c := Counter(c.n + m, Cons(m, c.log));
+        let k = c.fill_once(m - 1);
+        s := k + m;
+    }
+    s
+    on ?dec2 := omega;
+}
+
 // The loop as a `mut self` method whose body ends in the branch
 // (issues/mut-self-tail-branch-receiver.md): each arm returns the receiver,
 // and the method's own call that ends an arm is the record it returns, so

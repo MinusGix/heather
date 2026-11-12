@@ -649,29 +649,28 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                     for v in &vars {
                         if !inner.contains(v) { inner.push(v.clone()); }
                     }
-                    // Every copy of the form reads the locals as they were
-                    // before it: with several, each join lands in a private
-                    // name first, and the locals are rebound after the last.
-                    let staged = vars.len() > 1;
-                    let mut values = Vec::with_capacity(vars.len());
-                    for v in &vars {
-                        let joined = join(form, v, &inner, next)?;
-                        if staged {
-                            let tmp = format!("#stage{}", *next);
-                            *next += 1;
-                            stmts.push(Stmt::Let {
-                                name: tmp.clone(),
-                                ty: Some(type_of(v, form.span)),
-                                expr: joined,
-                                span: form.span,
-                                opaque: false,
-                            });
-                            values.push(var(&tmp, form.span));
-                        } else {
-                            values.push(joined);
-                        }
-                    }
-                    for (v, joined) in vars.into_iter().zip(values) {
+                    // One join for every local the form assigns: each arm
+                    // ends in the state `Mutated(v₁, Mutated(v₂, …))` the
+                    // loop lowering threads, bound once at a private name,
+                    // and the locals are read out of it after. A join per
+                    // local would copy each branch, its calls included, once
+                    // per local (issues/statement-form-join-copies-calls.md).
+                    let joined = join(form, &state_expr(&vars, form.span), &inner, next)?;
+                    let reads = if vars.len() > 1 {
+                        let tmp = format!("#stage{}", *next);
+                        *next += 1;
+                        stmts.push(Stmt::Let {
+                            name: tmp.clone(),
+                            ty: Some(state_type(&vars, form.span)),
+                            expr: joined,
+                            span: form.span,
+                            opaque: false,
+                        });
+                        state_reads(&tmp, &vars, form.span)
+                    } else {
+                        vec![(vars[0].clone(), joined)]
+                    };
+                    for (v, joined) in reads {
                         let mine = env.contains(&v);
                         stmts.push(Stmt::Let {
                             name: v.clone(),
@@ -696,7 +695,7 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
 
 /// `form` with each body rewritten to end in `v`'s value after it: one copy
 /// of the condition per assigned local (§5.1).
-fn join(form: &Expr, v: &str, env: &[String], next: &mut usize) -> R<Expr> {
+fn join(form: &Expr, state: &Expr, env: &[String], next: &mut usize) -> R<Expr> {
     let mut form = form.clone();
     let ExprKind::Match { arms, .. } = &mut form.kind else {
         return fail(form.span, "a statement form is an `if` or a `match`");
@@ -715,7 +714,7 @@ fn join(form: &Expr, v: &str, env: &[String], next: &mut usize) -> R<Expr> {
         }
         let mut lowered = lower_in(*body, env, next)?;
         let span = lowered.result.span;
-        lowered.result = Box::new(var(v, span));
+        lowered.result = Box::new(Expr { span, ..state.clone() });
         arm.body = Expr { kind: ExprKind::Block(Box::new(lowered)), span: arm.body.span };
     }
     Ok(form)
@@ -887,6 +886,19 @@ fn state_expr(vars: &[String], span: Span) -> Expr {
         [v] => var(v, span),
         [v, rest @ ..] => call("Mutated", vec![var(v, span), state_expr(rest, span)], span),
         [] => unreachable!("a carrier loop threads at least one local"),
+    }
+}
+
+/// The type of [`state_expr`]'s state: `Mutated<TypeOf(v₁), …>`, each
+/// local at its type before the form, which `:=` keeps.
+fn state_type(vars: &[String], span: Span) -> Ty {
+    match vars {
+        [v] => type_of(v, span),
+        [v, rest @ ..] => Ty {
+            kind: TyKind::Named { name: "Mutated".into(), args: vec![type_of(v, span), state_type(rest, span)] },
+            span,
+        },
+        [] => unreachable!("a statement form assigns at least one local"),
     }
 }
 

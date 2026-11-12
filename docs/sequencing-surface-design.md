@@ -425,6 +425,8 @@ motive"). This is why layer 2 runs in the elaborator: the walk knows every
 assigned local, which `split_all` handles consistently (it splits every
 occurrence of a comparison, `docs/native-programs-read-like-programs-design.md`
 §2). The alternative is a join tuple, which proofs would have to project.
+*Amended (2026-11-12):* the join tuple is what is built now (§14 item 3):
+per-variable joins copied each branch's calls along with the condition.
 
 *Amended (2026-10-31):* probe P2's refusal is gone. A motive-less `match`
 in inference position now takes its constant motive from any arm whose type
@@ -791,9 +793,9 @@ on its dependency:
   `decimal_places` is proved against it.
 
 **Cost, stated as shapes.** Lowering is linear in statements. Per-variable
-joins cost one condition copy per assigned local per `if` — and one copy of
-each branch's calls too, which a recursive call turns into an exponential
-evaluation (issues/statement-form-join-copies-calls.md). A chain of `k`
+joins cost one condition copy per assigned local per `if` (*amended
+2026-11-12*: one join per `if`, whatever it assigns, since a copy per local
+copied each branch's calls too, issues/statement-form-join-copies-calls.md). A chain of `k`
 binds nests `k` binders, which is the hand-written tower's cost, quadratic
 at worst by the representation's bound on a binder-per-link chain (the
 `let/under` bench, PR #199), and never worse than the tower it replaces.
@@ -950,7 +952,13 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
    `#stageN` first and the locals are rebound after the last. Without this
    a later copy's condition would read an earlier join's result (found by
    `count_words`, whose `else if inside = False` reads a local the same `if`
-   assigns).
+   assigns). *Amended (2026-11-12):* there is one copy, not one per local.
+   Each arm ends in the state `Mutated(v₁, Mutated(v₂, …))` the loop
+   lowering threads, annotated `Mutated<TypeOf(v₁), …>`, bound once at
+   `#stageN`, and the locals are read out of it with `.after`/`.value`. A
+   copy per local copied each branch's calls too: a recursive call ran
+   once per local per level, exponentially
+   (issues/statement-form-join-copies-calls.md).
 4. **`else` is optional only on a statement `if`, and `else if` chains.**
    `{}` is a statement body next to a real one (`None => {}`), while an
    `if`/`match` of `{}` alone stays the empty proof block.
@@ -976,8 +984,9 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
    ranges, labels, `while` (both kinds), loops in a carrier scope (§6),
    assignment to field paths (built since, §20), `mut self`, destructuring `for` binders, and
    loops under a `match` arm that binds. A `for` iterates a `List` only.
-   A loop inside a statement `if` that assigns several locals is copied
-   into each join, and so lifted once per copy.
+   A loop inside a statement `if` that assigns several locals was copied
+   into each join, and so lifted once per copy (one join since
+   2026-11-12, item 3).
 9. **Step facts are `split_all; all_goals { omega }`** over the step's
    nested `if` (`count_words_step_at_most_one` in
    `lib/_tests/std/core/imperative_statements_tests.hthr`), and facts by

@@ -2276,6 +2276,47 @@ theorem Nat::le_of_bit_twice(b: Bool, m: Nat): m <= Nat::of_bit(b) + m.twice() {
         rewrite(m.twice_add_self(), m.le_add_l(m)), Nat::le_add_r(Nat::of_bit(b), m.twice()))
 }
 
+// A bit pushed in below a number, modulo twice a bound: the bit stays and the
+// number is reduced modulo the bound. One digit of `mod 2^k`, what a word's
+// low mask reads as (`BitVec::toNat_band_low_mask`).
+theorem Nat::of_bit_twice_mod(b: Bool, t: Nat, p: Pos<Nat>):
+    (Nat::of_bit(b) + t.twice()).mod(p.twice()) = Nat::of_bit(b) + t.mod(p).twice()
+{
+    let o = Nat::of_bit(b);
+    let q = t.div(p);
+    let s = t.mod(p);
+    let parts: (q * p.twice() + (o + s.twice()) = o + t.twice()) = calc {
+        q * p.twice() + (o + s.twice())
+            = (q * p).twice() + (o + s.twice()) := prelude::cong(q.mul_twice(p)),
+            = o + ((q * p).twice() + s.twice()) := (q * p).twice().add_left_comm(o, s.twice()),
+            = o + (q * p + s).twice() := prelude::cong(sym((q * p).twice_add(s))),
+            = o + t.twice() := prelude::cong(t.div_mul_add_mod(p)),
+    };
+    (o + t.twice()).div_mod_unique(p.twice(), q, o + s.twice(), parts, Nat::of_bit_twice_lt(b, s, p, t.mod_lt(p))).right
+}
+
+// Halving is the quotient by two, and so `shr` is the quotient by `2^k`:
+// what a word's right shift reads as (`BitVec::toNat_shift_right`).
+theorem Nat::half_eq_div_two(self n: Nat): n.half() = n.div(2) {
+    let parts = n.ldiv_bit_parts();
+    sym(n.div_mod_unique(2, n.half(), Nat::ldiv_bit(n, n.half()),
+        trans(Nat::cong(λ (y: Nat) => y + Nat::ldiv_bit(n, n.half()), n.half().mul_two()), parts.left),
+        parts.right).left)
+}
+
+theorem Nat::shr_eq_div(self k: Nat): (n: Nat) → n.shr(k) = n.div(Nat::pow(2, k)) {
+    match k {
+        Zero => λ n => sym(n.div_one()),
+        Succ(i, ih) => λ n => calc {
+            n.shr(Succ(i))
+                = n.shr(i).half() := Nat::shr_succ_half(i, n),
+                = n.div(Nat::pow(2, i)).half() := prelude::cong(ih(n)),
+                = n.div(Nat::pow(2, i)).div(2) := n.div(Nat::pow(2, i)).half_eq_div_two(),
+                = n.div(Nat::pow(2, i) * 2) := n.div_div(Nat::pow(2, i), 2),
+        },
+    }
+}
+
 // Nothing divided by anything is nothing, remainder nothing.
 theorem DivMod::spec_zero(d: Nat): DivMod::Spec(0, d, MkDivMod(0, 0)) {
     And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) })
