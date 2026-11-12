@@ -338,8 +338,10 @@ theorem fill_sum_lit(): Counter::fill_sum(Counter(0, []), 3) = Mutated(Counter(6
 
 // The `if` assigns two locals, `c` and `s`, and is joined once for both
 // (issues/statement-form-join-copies-calls.md): the self-call is written
-// once, so there is one obligation and no `?dec2` to discharge.
-// expect-error: no goal `?dec2` in this block
+// once, so there is one obligation and no `?dec2` to discharge. That one is
+// lifted out of the body (the `if` binds its test's equation), so the block
+// raises no goal at all.
+// expect-error: no goal `?dec2`
 fn Counter::fill_once(mut self c: Counter, m: Nat) → Nat decreases m {
     let mut s = 0;
     if 1 <= m {
