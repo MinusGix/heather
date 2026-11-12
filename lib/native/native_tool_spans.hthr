@@ -59,10 +59,6 @@ runtime fn newlines_from(span: List<BitVec(8)>, length, count, i, acc: BitVec(64
             True => acc.add(BitVec::ofNat(1)),
         }),
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, count, h);
-        bv_omega
-    };
 }
 
 // count_newlines(span, length, count): how many of the span's first
@@ -121,10 +117,6 @@ runtime fn raise_span(span: List<BitVec(8)>, length, count, i: BitVec(64)) → M
             raise_span(span, length, count, i.add(BitVec::ofNat(1)))
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, count, h);
-        bv_omega
-    };
 }
 
 // The program a tool calls it in, and its place there: `raise_word` first,
@@ -159,10 +151,6 @@ runtime fn copy_span(out: List<BitVec(8)>, length: BitVec(64), text: List<BitVec
             copy_span(out, length, text, size, count, i.add(BitVec::ofNat(1)))
         },
     }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, count, h);
-        bv_omega
-    };
 }
 
 // Its program is the loop alone. Over any file, at any addresses: the

@@ -68,13 +68,12 @@ runtime fn sha256_word_at(span: List<u8>, length, i: u64) → u64 {
 }
 
 // A word's low four bytes stored from `i`, the most significant first.
-runtime fn sha256_put_word(span: List<u8>, length, i, word: u64) → Mutated<List<u8>, u64> {
-    let mut span = span;
+runtime fn List::sha256_put_word(mut self span: List<u8>, length, i, word: u64) → u64 {
     span.put_within(length, i, (word >> 24).truncate(8, 56));
     span.put_within(length, i + 1, (word >> 16).truncate(8, 56));
     span.put_within(length, i + 2, (word >> 8).truncate(8, 56));
     span.put_within(length, i + 3, word.truncate(8, 56));
-    Mutated(span, word)
+    word
 }
 
 // The round constant K(t) (FIPS 180-4 §4.2.2), found by halving: compiled
@@ -145,113 +144,102 @@ runtime fn sha256_k(t: u64) → u64 {
 
 // The block's sixty-four bytes stored from byte 64 of the context: the
 // schedule's first sixteen words, a block's words being their bytes.
-runtime fn sha256_take_block(ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64
     decreases (64 - i).toNat() {
-    match h: i.unsigned_lt_bit(64) {
-        False => Mutated(ctx, i),
-        True => {
-            let mut ctx = ctx;
-            ctx.put_within(cn, i + 64, block.byte_within(bn, i));
-            sha256_take_block(ctx, cn, block, bn, i + 1)
-        },
+    if h: i < 64 {
+        ctx.put_within(cn, i + 64, block.byte_within(bn, i));
+        ctx.sha256_take_block(cn, block, bn, i + 1)
+    } else {
+        i
     }
 }
 
 // Schedule words `i` to 63, each from the four before it that FIPS 180-4
 // §6.2.2 step 1 names: W(t) is the word at byte 64 + 4t of the context.
-runtime fn sha256_expand(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (64 - i).toNat() {
-    match h: i.unsigned_lt_bit(64) {
-        False => Mutated(ctx, i),
-        True => {
-            let at = (i << 2) + 64;
-            let word = sha256_next(sha256_word_at(ctx, cn, at - 8), sha256_word_at(ctx, cn, at - 28),
-                sha256_word_at(ctx, cn, at - 60), sha256_word_at(ctx, cn, at - 64));
-            let put = sha256_put_word(ctx, cn, at, word);
-            sha256_expand(put.after, cn, i + 1)
-        },
+    if h: i < 64 {
+        let at = (i << 2) + 64;
+        let word = sha256_next(sha256_word_at(ctx, cn, at - 8), sha256_word_at(ctx, cn, at - 28),
+            sha256_word_at(ctx, cn, at - 60), sha256_word_at(ctx, cn, at - 64));
+        ctx.sha256_put_word(cn, at, word);
+        ctx.sha256_expand(cn, i + 1)
+    } else {
+        i
     }
 }
 
 // The hash value's thirty-two bytes copied to the working variables, at
 // byte 32 of the context (§6.2.2 step 2).
-runtime fn sha256_begin(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_begin(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (32 - i).toNat() {
-    match h: i.unsigned_lt_bit(32) {
-        False => Mutated(ctx, i),
-        True => {
-            let mut ctx = ctx;
-            ctx.put_within(cn, i + 32, ctx.byte_within(cn, i));
-            sha256_begin(ctx, cn, i + 1)
-        },
+    if h: i < 32 {
+        ctx.put_within(cn, i + 32, ctx.byte_within(cn, i));
+        ctx.sha256_begin(cn, i + 1)
+    } else {
+        i
     }
 }
 
 // Seven of the working variables each moved to the next: h takes g first
 // and b takes a last, so that a word is read before it is stored over
 // (§6.2.2 step 3). Pass `i` moves the word at byte 56 − 4i.
-runtime fn sha256_shift(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_shift(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (7 - i).toNat() {
-    match h: i.unsigned_lt_bit(7) {
-        False => Mutated(ctx, i),
-        True => {
-            let at = 56 - (i << 2);
-            let put = sha256_put_word(ctx, cn, at + 4, sha256_word_at(ctx, cn, at));
-            sha256_shift(put.after, cn, i + 1)
-        },
+    if h: i < 7 {
+        let at = 56 - (i << 2);
+        ctx.sha256_put_word(cn, at + 4, sha256_word_at(ctx, cn, at));
+        ctx.sha256_shift(cn, i + 1)
+    } else {
+        i
     }
 }
 
 // The working variables after a round, from the two new words: the seven
 // move, then a and e are stored, e over the d that moved there.
-runtime fn sha256_set(ctx: List<u8>, cn, first, fifth: u64) → Mutated<List<u8>, u64> {
-    let moved = sha256_shift(ctx, cn, 0);
-    let one = sha256_put_word(moved.after, cn, 32, first);
-    let two = sha256_put_word(one.after, cn, 48, fifth);
-    Mutated(two.after, two.value)
+runtime fn List::sha256_set(mut self ctx: List<u8>, cn, first, fifth: u64) → u64 {
+    ctx.sha256_shift(cn, 0);
+    ctx.sha256_put_word(cn, 32, first);
+    ctx.sha256_put_word(cn, 48, fifth)
 }
 
 // A round from its T1: T2 is of a, b and c, and the two new words are
 // T1 + T2 and d + T1, both computed before any word is stored.
-runtime fn sha256_turn(ctx: List<u8>, cn, t1: u64) → Mutated<List<u8>, u64> {
-    let turned = sha256_set(ctx, cn,
+runtime fn List::sha256_turn(mut self ctx: List<u8>, cn, t1: u64) → u64 {
+    ctx.sha256_set(cn,
         t1 + sha256_t2(sha256_word_at(ctx, cn, 32), sha256_word_at(ctx, cn, 36), sha256_word_at(ctx, cn, 40)),
-        sha256_word_at(ctx, cn, 44) + t1);
-    Mutated(turned.after, turned.value)
+        sha256_word_at(ctx, cn, 44) + t1)
 }
 
 // Round `t`: T1 is of h, e, f and g, the round's constant and its schedule
 // word, which is the word at byte 64 + 4t.
-runtime fn sha256_step(ctx: List<u8>, cn, t: u64) → Mutated<List<u8>, u64> {
-    let turned = sha256_turn(ctx, cn,
+runtime fn List::sha256_step(mut self ctx: List<u8>, cn, t: u64) → u64 {
+    ctx.sha256_turn(cn,
         sha256_t1(sha256_word_at(ctx, cn, 60), sha256_word_at(ctx, cn, 48), sha256_word_at(ctx, cn, 52),
-            sha256_word_at(ctx, cn, 56), sha256_k(t), sha256_word_at(ctx, cn, (t << 2) + 64)));
-    Mutated(turned.after, turned.value)
+            sha256_word_at(ctx, cn, 56), sha256_k(t), sha256_word_at(ctx, cn, (t << 2) + 64)))
 }
 
 // Rounds `i` to 63 on the working variables.
-runtime fn sha256_rounds(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_rounds(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (64 - i).toNat() {
-    match h: i.unsigned_lt_bit(64) {
-        False => Mutated(ctx, i),
-        True => {
-            let turned = sha256_step(ctx, cn, i);
-            sha256_rounds(turned.after, cn, i + 1)
-        },
+    if h: i < 64 {
+        ctx.sha256_step(cn, i);
+        ctx.sha256_rounds(cn, i + 1)
+    } else {
+        i
     }
 }
 
 // Each working variable added into its word of the hash value (§6.2.2
 // step 4).
-runtime fn sha256_end(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
+runtime fn List::sha256_end(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (8 - i).toNat() {
-    match h: i.unsigned_lt_bit(8) {
-        False => Mutated(ctx, i),
-        True => {
-            let at = i << 2;
-            let put = sha256_put_word(ctx, cn, at, sha256_word_at(ctx, cn, at) + sha256_word_at(ctx, cn, at + 32));
-            sha256_end(put.after, cn, i + 1)
-        },
+    if h: i < 8 {
+        let at = i << 2;
+        ctx.sha256_put_word(cn, at, sha256_word_at(ctx, cn, at) + sha256_word_at(ctx, cn, at + 32));
+        ctx.sha256_end(cn, i + 1)
+    } else {
+        i
     }
 }
 
@@ -259,12 +247,11 @@ runtime fn sha256_end(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64>
 // forty-eight, the working variables from the hash value, the rounds, and
 // the sums. What a caller that assembles a block in the context itself
 // calls (`sha256_stream`).
-runtime fn sha256_run(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
-    let expanded = sha256_expand(ctx, cn, 16);
-    let begun = sha256_begin(expanded.after, cn, 0);
-    let ran = sha256_rounds(begun.after, cn, 0);
-    let ended = sha256_end(ran.after, cn, 0);
-    Mutated(ended.after, ended.value)
+runtime fn List::sha256_run(mut self ctx: List<u8>, cn: u64) → u64 {
+    ctx.sha256_expand(cn, 16);
+    ctx.sha256_begin(cn, 0);
+    ctx.sha256_rounds(cn, 0);
+    ctx.sha256_end(cn, 0)
 }
 
 // §6.2.2: H(i) from H(i−1) and a block. The context is the hash value's
@@ -273,7 +260,8 @@ runtime fn sha256_run(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
 // bytes, of which the first thirty-two are read and all are written. What
 // the first thirty-two spell after the last block is the digest.
 runtime fn sha256_compress(ctx: List<u8>, cn: u64, block: List<u8>, bn: u64) → Mutated<List<u8>, u64> {
-    let taken = sha256_take_block(ctx, cn, block, bn, 0);
-    let ran = sha256_run(taken.after, cn);
-    Mutated(ran.after, ran.value)
+    let mut ctx = ctx;
+    ctx.sha256_take_block(cn, block, bn, 0);
+    let ran = ctx.sha256_run(cn);
+    Mutated(ctx, ran)
 }

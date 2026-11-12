@@ -61,11 +61,11 @@ theorem word_past_end(): sha256_word_at(six(), w(6), w(4)) = w(0x89ab0000) { ref
 theorem word_under_length(): sha256_word_at(six(), w(2), w(0)) = w(0x01230000) { refl }
 
 // A word's low four bytes are stored, and what is above them is not.
-theorem put_stores_four(): sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
-theorem put_low_half_only(): sha256_put_word(six(), w(6), w(1), w(0x7deadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
-theorem put_then_read(): sha256_word_at(sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after, w(6), w(1)) = w(0xdeadbeef) { refl }
+theorem put_stores_four(): List::sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
+theorem put_low_half_only(): List::sha256_put_word(six(), w(6), w(1), w(0x7deadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
+theorem put_then_read(): sha256_word_at(List::sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after, w(6), w(1)) = w(0xdeadbeef) { refl }
 // Nothing is stored past the end.
-theorem put_at_end(): sha256_put_word(six(), w(6), w(4), w(0xdeadbeef)).after = [b(0x01), b(0x23), b(0x45), b(0x67), b(0xde), b(0xad)] { refl }
+theorem put_at_end(): List::sha256_put_word(six(), w(6), w(4), w(0xdeadbeef)).after = [b(0x01), b(0x23), b(0x45), b(0x67), b(0xde), b(0xad)] { refl }
 
 // ---------------------------------------------------------------------------
 // The round constants
