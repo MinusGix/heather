@@ -1,0 +1,63 @@
+// Probes of exclusive or `⊕`, complement `~`
+// (issues/bitvec-xor-complement-symbols.md) and width-suffixed numerals,
+// `42u64` (issues/integer-literal-width-suffix.md): closed words, a neutral
+// width, the rungs, signed words, checking and inference positions, and
+// refusals. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import bool; import logic; import nat; import int; import algebra; import bitvec; import sint;
+
+// `⊕` is `bxor` and `~` is `complement`, at a closed word and at a neutral
+// width, where they are the methods by definition.
+theorem xor_closed(): 0xf0u8 ⊕ 0x3cu8 = 0xccu8 { refl }
+theorem complement_closed(): ~0x0fu8 = 0xf0u8 { refl }
+theorem xor_is_bxor(n: Nat, a, b: BitVec(n)): a ⊕ b = a.bxor(b) { refl }
+theorem complement_is_method(n: Nat, a: BitVec(n)): ~a = a.complement() { refl }
+
+// The complement is exclusive or against all ones, in the symbols.
+theorem xor_all_ones(n: Nat, x: BitVec(n)): x ⊕ BitVec::all_ones() = ~x { BitVec::bxor_all_ones(n, x) }
+
+// Rust's rungs: `|` below `⊕` below `&`, and a prefix `~` above every infix
+// rung.
+theorem rungs(a, b, c: u8): a | b ⊕ c & a = a.bor(b.bxor(c.band(a))) { refl }
+theorem prefix_binds(a, b: u8): ~a ⊕ b = (a.complement()).bxor(b) { refl }
+theorem left_associative(a, b, c: u32): a ⊕ b ⊕ c = (a.bxor(b)).bxor(c) { refl }
+
+// At a signed word they act on the bits.
+theorem sint_xor(): 5i8 ⊕ -1i8 = -6i8 { refl }
+theorem sint_complement(): ~5i8 = -6i8 { refl }
+theorem sint_neutral(n: Nat, a, b: i(n)): ~(a ⊕ b) = SInt(a.bits.bxor(b.bits).complement()) { refl }
+
+// A suffixed numeral is the numeral at the type its suffix names, in every
+// radix.
+theorem suffix_is_the_numeral(): 42u64 = BitVec::ofNat(42, n := 64) { refl }
+theorem hex_suffix(): 0x80u8.toNat() = 128 { refl }
+theorem binary_suffix(): 0b101u3.toNat() = 5 { refl }
+theorem signed_suffix(): 7i32.toInt() = OfNat(7) { refl }
+theorem odd_width(): 200u7.toNat() = 72 { refl }
+
+// It infers its type where nothing around it gives one: the `let` takes
+// `u8` from the literal, and so `+` wraps.
+fn wraps_at_the_suffix() → Nat { let x = 255u8; (x + 1).toNat() }
+theorem wrapped(): wraps_at_the_suffix() = 0 { refl }
+
+// A plain numeral beside a suffixed one takes its type from it.
+theorem plain_beside(): (250u8 + 10).toNat() = 4 { refl }
+
+// In checking position the suffix's type must be the expected one.
+fn checked() → u8 { 0x80u8 }
+// expect-error: this has type `u8`, but `u16` is expected here
+fn wrong_width() → u16 { 1u8 }
+
+// expect-error: this has type `u8`, but `i8` is expected here
+fn wrong_signedness() → i8 { 1u8 }
+
+// `~` and `⊕` mean nothing at a carrier with no designation.
+// expect-error: nothing designates `~` at `Bool`
+fn no_complement_at_bool(b: Bool) → Bool { ~b }
+
+// expect-error: nothing designates `⊕` at `Nat`
+fn no_xor_at_nat(a, b: Nat) → Nat { a ⊕ b }
+
+// The issue's own case: a mutable counter whose type only the literal gives.
+fn count_up() → Nat { let mut i = 0u64; i := i + 1; i := i ⊕ 3; i.toNat() }
+theorem counted(): count_up() = 2 { refl }

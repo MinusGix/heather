@@ -532,6 +532,7 @@ impl Inference<'_> {
             // alias.
             ExprKind::Char(c) => Literals(self).elab_char_infer(cx, *c, e),
             ExprKind::Scaled(lit) => Literals(self).elab_scaled_infer(cx, lit, e),
+            ExprKind::SuffixedNum { value, suffix } => Literals(self).elab_suffixed_infer(cx, value, suffix, e),
             ExprKind::Str(text) => Literals(self).elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self.0, cx, block),
             ExprKind::RecordUpdate { base, fields } => {

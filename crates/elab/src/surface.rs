@@ -404,6 +404,7 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
@@ -587,6 +588,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
@@ -659,6 +661,7 @@ mod count_holes_impl {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
@@ -992,6 +995,7 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)

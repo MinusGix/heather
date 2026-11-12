@@ -324,6 +324,7 @@ impl<'a> Walk<'a> {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)

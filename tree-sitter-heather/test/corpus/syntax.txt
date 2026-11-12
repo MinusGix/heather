@@ -896,6 +896,68 @@ runtime(owned) fn f(n: Nat) -> Nat { n }
         (identifier)))))
 
 ==================
+Exclusive or, complement and width suffixes
+==================
+
+fn f(a, b: u8) -> u8 { a | ~b ⊕ a & 0x80u8 }
+designation prefix ~ at BitVec(n) := BitVec::complement
+designation ⊕ at BitVec(n) := BitVec::bxor
+fn g() -> Nat { let mut i = 0u64; f(⊕, 7i32, 0x1fi8, 0b1u1) }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (binary_expression
+        (identifier)
+        (binary_expression
+          (prefix_expression
+            (identifier))
+          (binary_expression
+            (identifier)
+            (number))))))
+  (designation_declaration
+    (operator)
+    (call_expression
+      (identifier)
+      (argument_list
+        (identifier)))
+    (qualified_identifier))
+  (designation_declaration
+    (operator)
+    (call_expression
+      (identifier)
+      (argument_list
+        (identifier)))
+    (qualified_identifier))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (let_statement
+        (identifier)
+        (number))
+      (call_expression
+        (identifier)
+        (argument_list
+          (operator)
+          (number)
+          (number)
+          (number))))))
+
+==================
 Integer operator symbols
 ==================
 

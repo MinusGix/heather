@@ -2551,6 +2551,7 @@ impl<'a> Rewrite<'a> {
             | ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
