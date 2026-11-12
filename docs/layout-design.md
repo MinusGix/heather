@@ -509,22 +509,7 @@ specification would do with it is rewrite each store and read of the
 loop into an update or a field of a `Sha256`, and never mention a byte.
 
 **Stage B: a `runtime fn` holds the record.** `ctx: Sha256` is the record
-in the source and the span in the code. This is `datarepr` with a carrier
-that is a span and not a word: `abs` is `Sha256::stored.read`, the
-invariant is the length, a field read is `Stored::get` and a field
-assignment (§20's `ctx.count := e`) is `Stored::put`, each a refinement
-the generator cites from §5. What the generator must learn: a
-representation held in a lent span (today a repr is one word,
-`runtime-repr-types`); the length as part of the value, so `cn` leaves
-every signature; a method's export under a symbol; and loads and stores
-wider than a byte as a later optimisation that the alignment of layer 1
-licenses (`rt-fixed-arrays-and-tables`, `x86-narrow-and-rotate-forms`).
-The bound is the open part: reads are under the length word today, and a
-record whose size is known wants that as one premise of the function
-(`length = size`, which a Rust wrapper over `&mut [u8; 328]` gives for
-free) and not a comparison per access. That is a fact in the sense of
-`docs/compilation-vision.md` §2.3, and this stage is designed in its own
-section once A is built and shows what the refinements look like.
+in the source and the span in the code. Its design is §9.
 
 ## 7. The choices, as Minus decided them (2026-11-12)
 
@@ -583,3 +568,162 @@ of terms. Filed with what it would cost
    `generate runtime("Name");`, and a `def` numeral is read in a
    `runtime fn` body, so an offset can be a published constant.
 4. Stage B's design section, then its rounds.
+
+## 9. Stage B: a `runtime fn` that holds the record (design, 2026-11-12)
+
+Nothing in this section is built. It says what the statement is, what is
+proved once, where the hard part is, and the rounds.
+
+### 9.1 What the source reads as, and what is claimed
+
+```heather
+runtime fn Sha256::count_byte(mut self ctx: Sha256) → u64 {
+    ctx.count := ctx.count + 1;
+    ctx.count
+}
+```
+
+The receiver is the record. A field read is the record's projection and a
+field assignment is §20's `x.f := e` (`docs/sequencing-surface-design.md`),
+so the function is an ordinary Heather function of `Sha256`, and every
+theorem about SHA-256 is about that function and never about bytes. No
+length word is written: the record has a size.
+
+The code is lent a span, as today. What is published for `f` is, in
+words: at every file whose first span `own` is at least the record's size
+long, the program's run returns `f(Sha256::of(own), args).value` and
+leaves a span `own'` of the same length, with
+`Sha256::of(own') = f(Sha256::of(own), args).after` and every byte past
+the record as it was. `Sha256::of` is `T::stored().get(_, 0)`, so this is
+a statement in the library's terms, and a caller in Rust reads it as
+"the 328 bytes I lent hold the context the Heather function returns".
+
+### 9.2 What is proved once: a second meaning, and a simulation
+
+The runtime language has one meaning of a computation over a span: bytes
+to bytes (`FTm::sem`, `rt_file.hthr`). A function over a record cannot be
+pinned to that meaning by conversion, which is how every `runtime fn` is
+pinned today, because `r.count` and "eight bytes at 320 joined" are equal
+by a theorem (`Part::reads`) and not by computation. So:
+
+- **Held terms.** Computations gain two nodes, a field read and a field
+  store, each naming a field of a table the function's world holds: a
+  `Part<A, B>(whole)` whose codec is a word's. Nothing else is new: `Let`,
+  `If`, calls and `Again` are the ones there are.
+- **Two meanings.** The record meaning threads an `A`: a read is `p.of(a)`
+  and a store is `p.with(a, v)`, which at a generated part reduce to the
+  projection and to `a with { f = v }` by `refl` (§5.3, held by the
+  probes). So the pin of a record-level function to its reflection is by
+  conversion, as every pin is. The byte meaning is the existing one after
+  an expansion that replaces each node with the words' code
+  (`stored_words.hthr`'s bodies at the part's offset, inlined by the
+  expansion, so a field access is not a call).
+- **The simulation**, by induction over the term, once: where the span
+  holds a record (`whole.layout.size <= own.len()`), the byte meaning from
+  `own` and the record meaning from `whole.get(own, 0)` return the same
+  word, and the span the first leaves holds the record the second leaves,
+  has the length it had, and is unchanged past the record. Its two leaf
+  cases exist: `u32_be_within_part` and `put_u32_be_within_part` (§6.1).
+  A call is the induction's hypothesis about the callee, which is the
+  same statement.
+
+The function that is compiled, linked and exported is the byte meaning,
+an ordinary function of bytes for which everything downstream is
+unchanged (`CompileSpan`, links, lends, `compile-x86`, `scripts/linked`).
+The record-level statement of §9.1 is `f::runs_over` for it, rewritten by
+the simulation. Prove the generator, not the copies: nothing is proved
+for `f`.
+
+### 9.3 The hard part: a span too short to hold the record
+
+The byte meaning is total: a store past a list's end does nothing and a
+read there is zero, and the class states a function's run at **every**
+span (`CompileSpan.runs`, `FFun::Guarded`). The simulation is true only
+where the span holds the record. Three consequences, in the order they
+bite:
+
+1. **The length word.** Reads and stores are under a length word, and the
+   record-level source has none. The expansion hands the byte operations
+   the record's size as a literal, so the invariant is about the span
+   alone (`size <= own.len()`) and the code needs no word for it. (The
+   exported function still takes the span as a place and a length, which
+   the Rust wrapper gives, and the comparison of a constant offset with a
+   constant size is the lowering's to fold: `x86-compare-immediate`.)
+2. **A function without a loop** has its byte meaning at every span, so
+   it is an instance of the class as it is, and the simulation is a
+   theorem beside it. Nothing new is needed.
+3. **A loop** needs a function of bytes that satisfies the loop's own
+   equation at every span (`FFun::Guarded`), and for a record-level loop
+   the only function there is, is the record-level one. Carried to bytes
+   it is `put(own, 0, f(get(own, 0)))` where the span holds the record,
+   and there the equation follows from the record-level one and the
+   simulation, provided a span is determined by the record it holds and
+   the bytes around it: a codec with `put(b, at, get(b, at)) = b`, which
+   holds where no byte is padding. Where the span is too short there is
+   no such function to name.
+
+So the loop round has a choice that is about the class and not about
+layout. **Recommended: a floor.** `CompileSpan` and `FFun::Guarded` learn
+one number per function, the least length of the written span they speak
+of (zero for every function there is today, so nothing existing changes
+its statement), with one new lemma, that a computation leaves its span's
+length as it was. A call hands the floor on: a callee's floor is at most
+its caller's, and a lend of a window owes the window's length. The other
+routes weighed: a proof as a parameter of a `runtime fn` (a requirement
+in the source, which is where a fact of `docs/compilation-vision.md` §2.3
+belongs in the end, and which needs dependent parameters in a language
+whose types are words), and a loop written over the span that calls held
+functions for its field work (no new theory, and the loops keep a length
+word and a span type in their source).
+
+**Padding.** `Stored::put` writes zeros into padding, so a record with
+padding is not determined by its bytes the way point 3 needs. The first
+loop round takes records with no padding (SHA-256's context is one; the
+check is by evaluation). A `put` that leaves padding as it finds it makes
+every codec a lens in the full sense (`put(b, get(b)) = b`,
+`put(put(b, x), y) = put(b, y)`) and is its own library round.
+
+### 9.4 What reads a codec
+
+The expansion has to know which code reads a field: a word of four bytes,
+most significant first, at offset 64. Today that is a `Part` whose codec
+is a term, and a generator can only match its spelling. This is the first
+reader that needs a layout as data
+(`issues/layout-first-order-description.md`), so that round comes before
+the expansion: the table of fields a held function's world holds is then
+a list of (offset, word shape) pairs computed from the description, and
+the simulation's leaf cases are stated over the shape.
+
+Indexing an array field by a word (`ctx.schedule[t]`) is a field read at
+a computed offset. Its record meaning is total only with a bound, so the
+node carries a test (`t < 64`, one comparison where the bytes take four
+today) and reads zero past it, as a slice index would refuse; a bound the
+path already knows is the same fact the length is.
+
+Words narrower than 64 bits stay as they are in compiled code: a `u32`
+field is read widened and stored from a word's low half, which is what
+the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
+
+### 9.5 Rounds
+
+1. **Offsets by name, now** (no theory): `laid record` also publishes
+   each field's offset as a word a `runtime fn` body can read, SHA-256's
+   bodies name them, and its context drops `order := AsWritten`. This is
+   what makes §7 item 4 safe to turn on, and it is all of
+   `sha256-context-type`'s "no layout offsets in their bodies" that does
+   not need the receiver's type.
+2. **A layout as data** (`layout-first-order-description`), if Minus
+   takes it: the description, its codec and parts, and `laid record`
+   publishing one.
+3. **Held terms without loops**: the two nodes, the record meaning, the
+   expansion, the simulation, the reflector reading a record receiver
+   (field reads, `x.f := e`), and the generator publishing the byte
+   function with `f::runs_held`. First customers: SHA-256's `init` and
+   the count's update.
+4. **The floor and loops**: the class's floor, length preservation, the
+   loop's equation carried through an exact codec. Then SHA-256's
+   functions are methods of `Sha256` whole, its entry points are exported
+   as methods (`linked-export-of-a-method`, merged), and
+   `sha256-context-type` closes.
+5. Later, each its own issue: padding-preserving `put`; loads and stores
+   wider than a byte; the comparisons a known size makes unnecessary.
