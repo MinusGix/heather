@@ -1,6 +1,6 @@
 ---
 title: A statement if/match that assigns several locals copies its body, calls included, once per local
-status: open
+status: closed
 labels: [elaboration, imperative]
 area: language
 created: 2026-11-12
@@ -45,3 +45,17 @@ branch's `let`s that every join reads into one shared binding per branch.
 
 Done when: the example's `if` holds one call, with a probe that counts the
 obligation sites (one `on ?dec1` discharges the method).
+
+## Log
+
+- 2026-11-12: Closed with the first direction. `crates/syntax/src/imperative.rs`
+  joins a statement form once, whatever it assigns: each arm ends in the
+  state `Mutated(v₁, Mutated(v₂, …))` the carrier loop already threads
+  (`state_expr`), bound at `#stageN : Mutated<TypeOf(v₁), …>`, and the
+  locals are read out with `.after`/`.value` (`state_reads`). One local is
+  joined directly as before. Probe `fill_once` in
+  `lib/_tests/std/core/decreases_unfolding_tests.hthr`: the example's
+  `if` owes one obligation, so `on ?dec2` names no goal.
+  docs/sequencing-surface-design.md §3, §12 and §14 item 3 amended. The
+  whole library re-elaborated under the exact image policy with no proof
+  needing the per-local shape.
