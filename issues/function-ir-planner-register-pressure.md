@@ -46,3 +46,4 @@ The scanner's loop compiles in either order of its test and with its parameters 
   Probes: `lib/_tests/native/function_ir/function_ir_lower_tests.hthr` (both forms' code, the flags, the planner's three choices and the case it cannot decide) and `function_ir_refusal_tests.hthr`.
 
   What this did not do is filed on its own: a constant operand folded into the CMP ([[x86-compare-immediate]]), and callee-saved registers for values with coalescing into a wanted register ([[function-ir-values-in-kept-registers]]).
+- 2026-11-12: The function theorem this round wrote for the saved registers (`function_runs`) was composed inline and cost far more to check than anything else in the bundled library: [[bundled-library-cold-check-past-the-rail]] has what it did to the suite and the split into stage theorems (2026-11-12).
