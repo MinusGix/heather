@@ -978,6 +978,7 @@ fn StructuredRegion::lends(self region: StructuredRegion, homes: List<Lent>) →
         Sequence(_, continuation) => continuation.lends(homes),
         Compose(prefix, continuation) => continuation.lends(prefix.lends(homes)),
         Conditional(_, _, _, _, _, _) => homes,
+        Lend(_, _, _, _) => homes,
         Call(_, _, _) => homes,
         Loop(inputs, _, parameters, _, _, _, next, outputs, _) =>
             carried_out(loop_carried(homes, inputs, parameters, next), outputs) ++ homes,
@@ -995,6 +996,7 @@ theorem StructuredRegion::lends_hold(self region: StructuredRegion, values: Valu
             continuation.lends_hold(values, addresses, buffers, effects, prefix.lends(homes), ran.witness, after,
                 prefix.lends_hold(values, addresses, buffers, effects, homes, before, ran.witness, held, ran.proof.left), ran.proof.right),
         Conditional(_, _, _, _, _, _) => λ homes before after held _ => held,
+        Lend(_, _, _, _) => λ homes before after held _ => held,
         Call(_, _, _) => λ homes before after held _ => held,
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes before after held ran =>
             homes_hold_append(values, addresses, buffers, carried_out(loop_carried(homes, inputs, parameters, next), outputs), homes,

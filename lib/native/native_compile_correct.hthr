@@ -166,6 +166,7 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             Sequence(prefix, continuation) => λ p out known names c emitted => Sequence(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
             Compose(prefix, continuation) => λ p out known names c emitted => Compose(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
             Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_extends(layout, p, out, names, c, emitted),
+            Lend(views, callee, arguments, result) => λ p out known names c emitted => Lend(views, callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
             Call(callee, arguments, result) => λ p out known names c emitted => Call(callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
             Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_extends(layout, p, out, names, c, emitted),
         },
@@ -663,6 +664,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
             Sequence(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Sequence(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
             Compose(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Compose(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
             Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted within checked n env k _ => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            Lend(views, callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Lend(views, callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
             Call(callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Call(callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
             Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
         },
@@ -777,6 +779,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                         t.then_nil(Compute(Compose(a, b)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                     Conditional(i, d, a, o, y, w) => λ ih p out known names c emitted within checked n env k _ =>
                         t.then_nil(Compute(Conditional(i, d, a, o, y, w)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
+                    Lend(v, e, a, o) => λ ih p out known names c emitted within checked n env k _ =>
+                        t.then_nil(Compute(Lend(v, e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                     Call(e, a, o) => λ ih p out known names c emitted within checked n env k _ =>
                         t.then_nil(Compute(Call(e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                     Loop(i, b, a, d, y, x, e, o, h) => λ ih p out known names c emitted within checked n env k _ =>

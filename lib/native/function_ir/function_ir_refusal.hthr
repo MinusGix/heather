@@ -106,6 +106,16 @@ fn File::shown_in(self file: File, registers: List<Gpr>) → String {
 
 fn File::shown(self file: File) → String { file.shown_in(scratch_pool()) }
 
+// A call's views: each a window of a buffer, marked where the callee may
+// store into it.
+fn views_shown(views: List<View>) → String {
+    match views {
+        Nil => "",
+        Cons(view, rest) => "buffer " ++ refusal_number(view.buffer) ++ " from " ++ refusal_number(view.start) ++ " to " ++ refusal_number(view.end)
+            ++ (match view.written { False => "", True => " written" }) ++ (match rest { Nil => "", Cons(_, _) => ", " }) ++ views_shown(rest),
+    }
+}
+
 // A region's nodes and calls in the order they are emitted.
 fn StructuredRegion::shown(self region: StructuredRegion) → String {
     match region {
@@ -114,6 +124,9 @@ fn StructuredRegion::shown(self region: StructuredRegion) → String {
         Compose(prefix, continuation) => prefix.shown() ++ continuation.shown(),
         Conditional(_, condition, _, _, when_true, when_false) =>
             "if " ++ refusal_number(condition) ++ " { " ++ when_true.shown() ++ "} else { " ++ when_false.shown() ++ "} ",
+        Lend(views, callee, arguments, result) =>
+            refusal_number(result) ++ " = call function " ++ refusal_number(callee) ++ " over views (" ++ views_shown(views) ++ ") ("
+                ++ refusal_numbers(arguments) ++ "); ",
         Call(callee, arguments, result) =>
             refusal_number(result) ++ " = call function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "); ",
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
@@ -200,6 +213,7 @@ fn StructuredRegion::refusal(self region: StructuredRegion, prog: Prog, file: Fi
                 },
             },
         },
+        Lend(_, callee, _, _) => "the call of function " ++ refusal_number(callee) ++ " over views: a call over views has no lowering yet",
         Call(callee, arguments, _) => file.call_refusal(callee, arguments, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(inputs, limit, parameters, count, placement) {

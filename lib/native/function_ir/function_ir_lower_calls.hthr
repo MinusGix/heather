@@ -810,6 +810,9 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file:
                 },
             },
         },
+        // A call over views has no lowering yet
+        // (docs/native-library-exports-design.md §3.1).
+        Lend(_, _, _, _) => None,
         Call(callee, arguments, result) => file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(inputs, limit, parameters, count, placement) {
@@ -1040,6 +1043,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                     })(when_true.emit_calls_grows(bound, counts, homes, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
                 },
             },
+        Lend(_, _, _, _) => λ homes prog file placement names => trivial,
         Call(callee, arguments, result) => λ homes prog file placement names =>
             file.emit_call_grows(prog, callee, arguments, result, placement, names, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes prog file placement names =>
@@ -3035,6 +3039,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, site
                         Succ(Succ(names)), before, after)),
             }
         },
+        Lend(_, _, _, _) => λ allowed homes prog file placement names before after => trivial,
         Call(callee, arguments, result) => λ allowed homes prog file placement names before after =>
             file.emit_call_runs<M>(site, laid, stack, top, effects, bound, lending, loan, calls, values, d, s0, rsp0, room, fits, under, prog,
                 callee, arguments, result, placement, names, homes, before, after),
@@ -3623,6 +3628,7 @@ fn StructuredRegion::home_reads(self region: StructuredRegion, homes: List<Lent>
         Compose(prefix, continuation) => prefix.home_reads(homes) ++
             (homes_ids(prefix.lends(homes)) ++ continuation.home_reads(prefix.lends(homes))),
         Conditional(_, _, _, _, when_true, when_false) => when_true.home_reads(homes) ++ when_false.home_reads(homes),
+        Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(inputs, _, parameters, _, body, _, next, _, _) =>
             homes_ids(carried_homes(loop_carried(homes, inputs, parameters, next))) ++
@@ -3879,6 +3885,7 @@ theorem StructuredRegion::lends_none(self region: StructuredRegion): region.lend
         Compose(prefix, continuation) =>
             trans(cong_fn(λ (homes: List<Lent>) => continuation.lends(homes), prefix.lends_none()), continuation.lends_none()),
         Conditional(_, _, _, _, _, _) => refl,
+        Lend(_, _, _, _) => refl,
         Call(_, _, _) => refl,
         Loop(_, _, _, _, _, _, _, _, _) => refl,
     }
@@ -3966,6 +3973,7 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, bound:
                     })(when_true.emit_calls_quiet(bound, counts, branched, file.know(Truth(condition)), placement, Succ(Succ(names))))
                 },
             },
+        Lend(_, _, _, _) => λ prog file placement names => trivial,
         Call(callee, arguments, result) => λ prog file placement names =>
             quiets_of(file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, []), True, trivial),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names =>

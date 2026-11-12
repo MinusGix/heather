@@ -269,6 +269,7 @@ fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
         Sequence(prefix, continuation) => nodes_pure(prefix.nodes) && continuation.byte_free(),
         Compose(prefix, continuation) => prefix.byte_free() && continuation.byte_free(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.byte_free() && when_false.byte_free(),
+        Lend(_, _, _, _) => False,
         Call(_, _, _) => True,
         Loop(_, _, _, _, _, _, _, _, _) => False,
     }
@@ -340,6 +341,7 @@ theorem StructuredRegion::eval_byte_free(self region: StructuredRegion, call: An
                         Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values),
                     refl))
         },
+        Lend(_, _, _, _) => λ never => false_elim(never),
         Call(_, _, _) => λ _ values => refl,
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
     }
@@ -385,6 +387,7 @@ theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Wri
                     cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(Writers::words(call, buffers), values), held),
                         same_either)))
         },
+        Lend(_, _, _, _) => λ never => false_elim(never),
         Call(callee, arguments, result) => λ _ fits values buffers => cong_fn<Buffers(), State>(
             λ held => State(Valuation::set(values, result, word_value(call(buffers, callee, words_of(values, arguments)).word)), held),
             still(buffers, callee, fits, words_of(values, arguments))),
@@ -438,6 +441,13 @@ theorem StructuredRegion::written_within(self region: StructuredRegion, call: Wr
                 False => when_false.written_within(call, values, buffers, id, parts.right),
                 True => when_true.written_within(call, values, buffers, id, parts.left),
             }
+        },
+        Lend(views, _, _, result) => λ values buffers id h => {
+            let nodes = views_nodes(views);
+            let parts = absent_append(id, nodes_writes(nodes), [result], h);
+            j(sym(Port::ids_append(nodes_write_ports(nodes), [Port(result, 64)])), λ l _ => absent(id, l).IsTrue(),
+                absent_join(id, Port::ids(nodes_write_ports(nodes)), [result],
+                    j(sym(nodes_write_ids(nodes)), λ l _ => absent(id, l).IsTrue(), parts.left), parts.right))
         },
         Call(_, _, _) => λ values buffers id h => h,
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => λ values buffers id h => {

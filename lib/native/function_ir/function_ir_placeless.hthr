@@ -398,6 +398,7 @@ fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) �
         Sequence(_, continuation) => continuation.taints(hidden),
         Compose(prefix, continuation) => continuation.taints(prefix.taints(hidden)),
         Conditional(_, _, _, _, when_true, when_false) => when_true.taints(hidden) ++ when_false.taints(hidden),
+        Lend(_, _, _, _) => hidden,
         Call(_, _, _) => hidden,
         Loop(inputs, _, _, _, _, _, _, outputs, _) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
     }
@@ -414,6 +415,9 @@ fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat,
         Compose(prefix, continuation) => prefix.placeless(lent, hidden) && continuation.placeless(lent, prefix.taints(hidden)),
         Conditional(_, condition, _, _, when_true, when_false) => absent(condition, hidden)
             && (when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden)),
+        // Not yet: a view's base is an address the lend computes, which this
+        // check has no place for (docs/native-library-exports-design.md §3.1).
+        Lend(_, _, _, _) => False,
         Call(callee, arguments, _) => mask_covers(mask_of(arguments, hidden), base_mask(lent(callee))),
         Loop(inputs, bound, parameters, _, body, exit, next, _, _) => absent(bound, hidden)
             && (body.placeless(lent, taint_onto(parameters, mask_of(inputs, hidden), []))
@@ -469,6 +473,7 @@ theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buf
                     True => when_true.eval_over(buffers, call, values)(w, id),
                 }), aligned)
         },
+        Lend(_, _, _, _) => λ hidden never values other apart => false_elim(never),
         Call(callee, arguments, result) => λ hidden ok values other apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);
@@ -771,6 +776,7 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
                         True => when_true.run(call, values, buffers).buffers,
                     })), aligned)
         },
+        Lend(_, _, _, _) => λ hidden never values other buffers apart => false_elim(never),
         Call(callee, arguments, result) => λ hidden ok values other buffers apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);

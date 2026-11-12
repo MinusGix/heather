@@ -1,0 +1,56 @@
+// What a call over views reads of a valuation
+// (docs/native-library-exports-design.md §3.1).
+//
+// A lend's windows are cut at the values of its views' `start` and `end`,
+// which its own nodes mention, so two valuations that agree on what those
+// nodes mention lend the same windows (`viewed_agree`) and put the same
+// bytes back at the same place (`put_views_agree`). That is what carries a
+// lend from the valuation a run builds to any valuation agreeing with it.
+
+import function_ir;
+import function_ir_eval;
+import list_window;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+theorem viewed_agree(views: List<View>, values, other: Valuation(), held: Buffers()):
+    ((id: Nat) → Mem(id, nodes_mentions(views_nodes(views))) → other(64, id) = values(64, id)) → viewed(views, other, held) = viewed(views, values, held) {
+    match views {
+        Nil => λ _ => refl,
+        Cons(view, rest) => λ same => {
+            let bytes = buffer_bytes(held, view.buffer);
+            let from: (other(64, view.start) = values(64, view.start)) = same(view.start, Inr(Inr(Inl(refl))));
+            let upto: (other(64, view.end) = values(64, view.end)) = same(view.end, Inr(Inr(Inr(Inr(Inl(refl))))));
+            let later = viewed_agree(rest, values, other, held, λ id m => same(id, Inr(Inr(Inr(Inr(Inr(Inr(m))))))));
+            trans(cong_fn<BitVec(64), Buffers()>(λ s => Cons(bytes.window(s.toNat(), other(64, view.end).toNat()), viewed(rest, other, held)), from),
+                trans(cong_fn<BitVec(64), Buffers()>(λ e => Cons(bytes.window(values(64, view.start).toNat(), e.toNat()), viewed(rest, other, held)), upto),
+                    cong_fn<Buffers(), Buffers()>(λ tail => Cons(view.bytes(values, held), tail), later)))
+        },
+    }
+}
+
+theorem View::put_agree(self view: View, values, other: Valuation(), same: other(64, view.start) = values(64, view.start), bytes: List<BitVec(8)>,
+    held: Buffers()): view.put(other, bytes, held) = view.put(values, bytes, held) {
+    cong_fn<BitVec(64), Buffers()>(λ s => match view.written {
+        False => held,
+        True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(s.toNat(), bytes)),
+    }, same)
+}
+
+theorem put_views_agree(views: List<View>, values, other: Valuation()):
+    ((id: Nat) → Mem(id, nodes_mentions(views_nodes(views))) → other(64, id) = values(64, id)) → (after, held: Buffers()) →
+    put_views(views, other, after, held) = put_views(views, values, after, held) {
+    match views {
+        Nil => λ _ after held => refl,
+        Cons(view, rest) => λ same after held => {
+            let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+            trans(cong_fn<Buffers(), Buffers()>(λ put => put_views(rest, other, later, put),
+                    view.put_agree(values, other, same(view.start, Inr(Inr(Inl(refl)))), buffer_bytes(after, 0), held)),
+                put_views_agree(rest, values, other, λ id m => same(id, Inr(Inr(Inr(Inr(Inr(Inr(m))))))), later,
+                    view.put(values, buffer_bytes(after, 0), held)))
+        },
+    }
+}

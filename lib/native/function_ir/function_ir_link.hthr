@@ -103,6 +103,7 @@ theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Write
                         }, match b { False => no.buffers, True => y.buffers }) = whole,
                     refl))
         },
+        Lend(views, callee, arguments, result) => λ values buffers => refl,
         Call(callee, arguments, result) => λ values buffers => refl,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values buffers =>
             cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
@@ -142,6 +143,7 @@ theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: 
             Bool::is_true_and_intro(when_true.calls_among(among), when_false.calls_among(among),
                 when_true.calls_fit_among(arity, among, named, arms.left), when_false.calls_fit_among(arity, among, named, arms.right))
         },
+        Lend(views, callee, arguments, _) => λ ok => named(callee, (views_homes(views) ++ arguments).len(), ok),
         Call(callee, arguments, _) => λ ok => named(callee, arguments.len(), ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
     }

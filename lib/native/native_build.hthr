@@ -527,6 +527,7 @@ fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
         Sequence(_, continuation) => continuation.counts(),
         Compose(prefix, continuation) => prefix.counts() ++ continuation.counts(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.counts() ++ when_false.counts(),
+        Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
     }

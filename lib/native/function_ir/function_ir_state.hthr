@@ -261,6 +261,13 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values:
                 False => when_false.run(call, values, buffers).buffers,
                 True => when_true.run(call, values, buffers).buffers,
             }),
+        // A call over views: the callee runs on the windows, and what it leaves in
+        // a written one is put back.
+        Lend(views, callee, arguments, result) => {
+            let bound = run_nodes(views_nodes(views), values, buffers);
+            shared(call(viewed(views, bound.values, bound.buffers), callee, words_of(bound.values, views_homes(views) ++ arguments)), λ (answer: Ending) =>
+                State(Valuation::set(bound.values, result, word_value(answer.word)), put_views(views, bound.values, answer.buffers, bound.buffers)))
+        },
         // The callee is run once, whoever reads its word or its file.
         Call(callee, arguments, result) => shared(call(buffers, callee, words_of(values, arguments)), λ (answer: Ending) =>
             State(Valuation::set(values, result, word_value(answer.word)), answer.buffers)),

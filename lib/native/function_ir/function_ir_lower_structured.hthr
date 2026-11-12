@@ -142,6 +142,8 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
                 },
             },
         },
+        // So does a call over views.
+        Lend(_, _, _, _) => None,
         // A call needs the stack and its callees: function_ir_lower_calls.
         Call(_, _, _) => None,
         // So does a loop, emitted with them: function_ir_lower_calls.
@@ -380,6 +382,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                     })(when_true.emit_emits<M>(site, laid, values, prog.branch_label(found.register, Succ(names)), file, placement,
                         Succ(Succ(names)))),
             },
+        Lend(_, _, _, _) => λ prog file placement names => trivial,
         Call(_, _, _) => λ prog file placement names => trivial,
         Loop(_, _, _, _, _, _, _, _, _) => λ prog file placement names => trivial,
     }
@@ -541,6 +544,9 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
         Sequence(prefix, continuation) => reads_of(prefix.nodes, continuation.reads()),
         Compose(prefix, continuation) => prefix.reads() ++ continuation.reads(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.reads() ++ when_false.reads()),
+        // A call over views is to the planner its views' nodes, then a call on
+        // the views' homes.
+        Lend(views, _, arguments, _) => reads_of(views_nodes(views), views_homes(views) ++ arguments),
         Call(_, arguments, _) => arguments,
         Loop(inputs, bound, _, _, _, _, _, _, _) => Cons(bound, inputs),
     }
@@ -552,6 +558,7 @@ fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
         Sequence(_, continuation) => continuation.calls(),
         Compose(prefix, continuation) => prefix.calls() || continuation.calls(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.calls() || when_false.calls(),
+        Lend(_, _, _, _) => True,
         Call(_, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
     }
@@ -568,6 +575,7 @@ fn StructuredRegion::read_past_call(self region: StructuredRegion) → List<Nat>
             False => continuation.read_past_call(),
         },
         Conditional(_, _, _, _, when_true, when_false) => when_true.read_past_call() ++ when_false.read_past_call(),
+        Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(_, _, _, _, _, _, _, _, _) => [],
     }
@@ -598,6 +606,7 @@ fn StructuredRegion::register_reads(self region: StructuredRegion) → List<Nat>
         Sequence(prefix, continuation) => register_reads_of(prefix.nodes, continuation.register_reads()),
         Compose(prefix, continuation) => prefix.register_reads() ++ continuation.register_reads(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.register_reads() ++ when_false.register_reads(),
+        Lend(views, _, arguments, _) => register_reads_of(views_nodes(views), views_homes(views) ++ arguments),
         Call(_, arguments, _) => arguments,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Cons(bound, inputs ++ (Cons(exit, next) ++ body.register_reads())),
@@ -611,6 +620,7 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
         Sequence(_, continuation) => continuation.conditions(),
         Compose(prefix, continuation) => prefix.conditions() ++ continuation.conditions(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.conditions() ++ when_false.conditions()),
+        Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.conditions(),
     }
@@ -670,6 +680,7 @@ fn StructuredRegion::folds_in(self region: StructuredRegion, reads, conditions: 
         Sequence(prefix, continuation) => node_folds(prefix.nodes, reads, conditions) ++ continuation.folds_in(reads, conditions),
         Compose(prefix, continuation) => prefix.folds_in(reads, conditions) ++ continuation.folds_in(reads, conditions),
         Conditional(_, _, _, _, when_true, when_false) => when_true.folds_in(reads, conditions) ++ when_false.folds_in(reads, conditions),
+        Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.folds_in(reads, conditions),
     }
@@ -879,6 +890,11 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                     }),
                 }
             }),
+        // The views' nodes as a block the call's words are read after, everything
+        // read after the lend crossing its call; then the call's result in RAX.
+        Lend(views, _, arguments, result) => shared(reads_add(after, views_homes(views) ++ arguments), λ (rest: Reads()) =>
+            shared(plan_block(views_nodes(views), file, reads_add(rest, reads_of(views_nodes(views), [])), entries, registers, pool, folds, after, apart),
+                λ (first: Planned) => first.joined(Planned([], first.file.write(Rax, Some(Held(result, Word))))))),
         Call(_, _, result) => Planned([], file.write(Rax, Some(Held(result, Word)))),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
             let live = Cons(limit, inputs);

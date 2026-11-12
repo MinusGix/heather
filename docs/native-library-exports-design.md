@@ -156,7 +156,7 @@ address held in a word plus a capacity". The answer is yes for the home and
 no for the node: `BufferLoad` keeps naming a buffer, so the IR's meaning,
 its passes and `rt`'s lowering proof stay free of addresses. A view (a
 slice) is a buffer whose home is computed from another's; it costs no copy
-and no new node (§3.1 has what it does take: a region).
+and no new node (§3.1 has what it does take: a leaf, a call over views).
 
 **The surface type** is the specification's: a parameter `source: List<u8>`.
 That an export's byte-list parameter is held as a lent span is the setup's
@@ -169,8 +169,9 @@ contract bounds a span below the canonical boundary.
 
 ### 3.1 Views: lending a part of a buffer (2026-11-12)
 
-*Status: the design, with its list and machine laws built (V1, V2 below).
-The region is not in the IR yet.*
+*Status: the design, with V1 to V4a built. A call over views is in the IR
+and means what this section says; its lowering is V4b and V4c, and until
+then the lowering refuses it by name.*
 
 **What is missing.** At an export's boundary a view is free: Rust slices
 the span and passes the slice's parts. Inside a program it is not
@@ -181,62 +182,124 @@ message, the upper half of a scratch buffer, or its second buffer as the
 callee's first. Each of those is a copy today, or a callee written against
 an offset parameter it should not know about.
 
-**The meaning.** A new region, `Lend(views, body)`. A view names a buffer
-of the scope, two of its words, `start` and `end`, and whether the body may
-write it. The body runs over a file of its own: buffer `k` is the window
-`start` up to `end` of view `k`'s buffer (`List::window`,
-`lib/std/data/list_window.hthr`). When the body is done, each written
-view's window is put back (`List::put_window`) and nothing else of the
-scope's file has changed. The two halves are a lens where the window lies
-inside the buffer: what is put is what is read (`window_put_window`),
-putting back what was read changes nothing (`put_window_window`), the
-buffer keeps its length (`len_put_window`), and a store through the view is
-the store into the buffer at the offset index (`put_window_update`). That
-last law is the done-when's sentence "a store through a view is a store
-into the buffer". No meaning mentions an address, as before: the region's
-`run` is over lists.
+**The meaning.** A new leaf, `Lend(views, callee, arguments, result)`: a
+call of `callee` over views. A view (`View`) names a buffer of the scope,
+the value that is that buffer's address there (`home`), two of the scope's
+words, `start` and `end`, whether the callee may write it, and two fresh
+ids, `base` and `length`, which the lend binds by two nodes a view
+(`views_nodes`: `base = home + start`, `length = end - start`). The callee
+is called on the views' homes and then the arguments, over a file of its
+own (`viewed`): its buffer `k` is the window `start` up to `end` of view
+`k`'s buffer (`List::window`, `lib/std/data/list_window.hthr`). When it
+returns, each written view's window is put back (`put_views`, by
+`List::put_window`) and nothing else of the scope's file has changed. The
+two halves are a lens where the window lies inside the buffer: what is put
+is what is read (`window_put_window`), putting back what was read changes
+nothing (`put_window_window`, of any window), the buffer keeps its length
+(`len_put_window`), and a store through the view is the store into the
+buffer at the offset index (`put_window_update`). That last law is the
+done-when's sentence "a store through a view is a store into the buffer".
+The file's meaning mentions no address, as before: `run` cuts the windows
+from lists. A view's base is a word the lend binds, as a function's own
+homes are words it is passed.
 
-A call inside the body lends the body's file, so `Call` is unchanged and a
-callee stays written against buffers `0` to `lent - 1`. Renaming is the
-view from `0` to the buffer's length.
+The callee stays written against buffers `0` to `lent - 1`. Renaming is
+the view from `0` to the buffer's length, and two views of one buffer are
+two buffers to the callee (`lib/_tests/native/function_ir/function_ir_views_tests.hthr`:
+a store through a window, a store past the window's end that is none though
+the buffer goes on, a view lent to read left as it was, the first half of a
+buffer carried into the second).
 
-**Why a region.** The other shapes were weighed against the code as built.
-A view declared by the callee over its parameters makes every callee take
-an offset, which is the thing to remove. A view in the link table cannot
-carry an offset that is a run-time word. Index arithmetic in the caller
-over a whole lent buffer does not restrict the callee to the slice, so the
-callee's contract would have to. A node cannot do it: a node's meaning is
-an equation in one file, and a view changes which file the nodes inside it
-read. `BufferLoad` and `BufferStore` do not change, which is what §3 meant
-by "no new node".
+**Why a call and not a scope.** The other shapes were weighed against the
+code as built. A view declared by the callee over its parameters makes
+every callee take an offset, which is the thing to remove. A view in the
+link table cannot carry an offset that is a run-time word. Index
+arithmetic in the caller over a whole lent buffer does not restrict the
+callee to the slice, so the callee's contract would have to. A node cannot
+do it: a node's meaning is an equation in one file, and a view changes
+which file the callee reads. `BufferLoad` and `BufferStore` do not change,
+which is what §3 meant by "no new node".
 
-**The lowering.** A view has a home in the scope like any buffer (`Lent`):
-two fresh values, the view's base and its length. `Lend` lowers as two
-nodes a view, `base' = base + start` and `length' = end - start`, through
-the node lowering that exists, and then its body under the views' homes.
-The body's case is the induction hypothesis at another list of homes and
-another lending, which the lowering theorem is already stated over because
-a function is compiled under its own. The meaning binds the two values as
-the nodes would, so a valuation still says what every place holds. The
-view's base joins the address ids the placeless check hides
-(`StructuredRegion::placeless`): it reaches a call's address place or a
-deeper view's base and nothing else.
+The first design here was a region, `Lend(views, body)`, with any body run
+over the views' file. Reading the lowering changed it:
+
+- The callee's contract (`Site::CallsOver`) and the region theorem
+  (`emit_calls_runs`) are stated at one lending, fixed for the program: its
+  counts, its addresses, its file, its marks. A body over another file is
+  the induction hypothesis at another lending for everything inside it (a
+  loop's carried homes, a branch's known facts), and a call inside it at a
+  third.
+- Every use in "what is missing" hands a part to a callee. A body would be
+  a callee written inline.
+- A leaf gives each structural recursion over regions a leaf's arm, the
+  views' nodes as a block and then the call's, with no hypothesis at a
+  changed file.
+
+A function that wants to work on a part itself calls a function of its
+program on it, which exports that share a program (§6.3) make cheap.
+
+**The layers over a fixed file cannot say a view.**
+`StructuredRegionHoldsOver` and `eval_over` answer a call from `Callees`
+and `Answers`, which take no file: a callee there reads the one file the
+whole program is evaluated over. A lend in those layers is the call on the
+homes and arguments. That is consistent and is never taken for the
+meaning: `quiet` is `False` of a lend, so no theorem that carries a region
+from the threaded layer to the fixed one (`runs_quiet`, `run_quiet_among`,
+`run_byte_free`) applies to it. The meaning is `run` and
+`StructuredRegionRunsOver`, and `run_holds` relates the two for a lend as
+for a call: the windows and what is put back are read at the lend's own
+nodes' values, where any two valuations of the region agree
+(`viewed_agree`, `put_views_agree`, `function_ir_views.hthr`).
+
+**What a lend may store.** `stores(b)` of a lend is "a written view is of
+`b`" (`views_store`), and `stores_within(marks)` asks every written view to
+be of a marked buffer, so §4.1's rule reads a lend as a store into the
+buffers it lends to write. The rule itself is one set of marks for the
+whole program, read by each function at its own buffer numbers. That is
+coarse once numbers differ between caller and callee: a callee that stores
+into its buffer `0`, called over a view of its caller's buffer `2`, asks
+the marks to have both. Marks a function are the fix
+(`issues/function-ir-store-marks-per-function.md`).
+
+**The lowering** (V4b, V4c). A lend's callee runs under the lending of the
+views: the program's counts, the views' bases as addresses, `viewed` as the
+file, the views' `written` as marks. The contract a region is lowered
+against speaks of one lending, so the first step is the contract at every
+lending with the program's counts whose marks cover what the program
+stores (`Site::CallsLent`), which the program's induction supplies; a
+region's theorem keeps its one lending, and only the function-level
+theorems change. Then a lend lowers as its views' nodes through the leaf
+lowering (`emit_leaf`) and the call as it is (`File::emit_call`), the views'
+homes being the lent arguments. The lender's loan gives the views' loan
+(`Loan::view`), what the callee stored through the views the lender could
+have stored through its spans (`Stack::wrote_in_view`), and the spans after
+the call read with the written windows replaced (`view_written_reads`,
+`view_unwritten_reads`). The view's base joins the address ids the
+placeless check hides (`StructuredRegion::placeless`, V4d): it reaches the
+call's address place and nothing else. Until then `placeless` is `False`
+of a lend.
 
 **What the lowering asks, the meaning does not.** The meaning is total (a
-window past the end is shorter). The lowering accepts a `Lend` where:
+window past the end is shorter). The lowering will accept a lend where:
 
-- the path knows `¬(end < start)` and `¬(length < end)` for each view, the
-  slicing precondition `start <= end <= len`. Both are facts of a
-  conditional's *false* arm, which a file does not record yet (`Known` has
-  `Truth` only): V3;
+- the path knows `start <= end` and `end <= length` for each view
+  (`File::at_most`, V3: a fact of a conditional's false arm, which a file
+  now records as `Known::Falsity`), or the endpoint is the buffer's own
+  length;
+- a view's `home` is the home the scope holds for its buffer;
 - a written view is of a buffer the scope may write, and of a buffer no
-  other view of the same `Lend` is of. The machine law is wider (below):
-  two views of one buffer that share no byte may be lent apart, one of them
-  to write, which is `split_at_mut`. The IR's check can grow to it when a
-  path knows the endpoints ordered.
+  other view of the same lend is of. The machine law is wider (below): two
+  views of one buffer that share no byte may be lent apart, one of them to
+  write, which is `split_at_mut`. The IR's check can grow to it when a path
+  knows the endpoints ordered.
 
 Otherwise it refuses, and the language above writes the checks, as `rt`'s
 `Get` writes its guard.
+
+**A statement does not lend yet.** `StructuredRegion::scoped` refuses a
+lend, so the program compiler (`native_compile`) answers that a call over
+views is a function's to make; its walks over regions read a lend as its
+nodes and then a call. V5.
 
 **The machine laws** (`lib/std/arch/x86_64/x86_64_views.hthr`, built). The
 callee is owed a `Loan` over the views as spans, and the lender's own loan
@@ -258,17 +321,18 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
 - **V2. The loan of views** (`x86_64_views.hthr`). *Built.*
 - **V3. False-arm facts**: `Known::Falsity(id)` recorded in a
   conditional's false arm, and `File::at_most(a, b)` beside
-  `File::bounded`.
-- **V4. `Lend` in the IR**: the constructor, `eval` and `run`, effects and
-  the placeless check, the passes, the lowering and its theorem, the
-  compile theorem. Every structural recursion over regions gains an arm;
-  the arms that are proofs by induction are the cost, and most are the
-  induction hypothesis at the body.
+  `File::bounded`. *Built.*
+- **V4a. `Lend` in the IR**: the constructor, its meaning in each layer,
+  and an arm in every structural recursion over regions (evaluation, the
+  threaded run and its relation, stores and marks, linking, the planner,
+  the program compiler's walks). The lowering refuses it. *Built.*
+- **V4b. The contract at every lending** (`Site::CallsLent`).
+- **V4c. The lowering of a lend and its theorem.**
+- **V4d. The placeless check** with a view's base hidden.
 - **V5. The languages above**: a statement of `Source` that lends, the
   arena's line as a view, `rt`'s `Bytes` held as one so a slice costs no
   copy, and the done-when program of `issues/source-buffers-as-views.md`
-  with its control (a store through a view lent to read is refused,
-  `program_stores_within`).
+  with its control (a store through a view lent to read is refused).
 - **V6. U5's step 5d**: a statement's own byte nodes through the shared
   leaf (`emit_leaf`), the leaf's theorems restated over any stack bound
   first (the log of the issue has the scoping). It comes last because it

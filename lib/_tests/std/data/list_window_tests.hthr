@@ -24,6 +24,12 @@ theorem stored_through<A>(xs: List<A>, start, end, i: Nat, x: A, high: end <= xs
     cong_fn<List<A>, Option<A>>(λ zs => zs.nth(i + start), xs.put_window_update(start, end, i, λ _ => x, high, inside))
 }
 
+// Putting back what was read changes nothing, wherever the window lies:
+// inside the list, past its end, or with its end before its start.
+theorem put_back<A>(xs: List<A>, start, end: Nat): xs.put_window(start, xs.window(start, end)) = xs { xs.put_window_window(start, end) }
+theorem put_back_past_the_end(): five().put_window(3, five().window(3, 9)) = five() { refl }
+theorem put_back_from_past_the_end(): five().put_window(7, five().window(7, 9)) = five() { refl }
+
 // A window written past the list's end is not read back: `window_put_window`
 // needs its `start <= xs.len()`.
 theorem outside_is_not_read_back(): ¬(one().put_window(3, [9]).window(3, 4) = [9]) { decide }

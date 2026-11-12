@@ -12,6 +12,7 @@
 import bitvec;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -749,6 +750,57 @@ fn BlockArgumentsHold(values: Valuation(), arguments: BlockArguments()) → Type
     }
 }
 
+// A view of a buffer of the scope, lent to a callee as a buffer of its own
+// (docs/native-library-exports-design.md §3.1): bytes `start` up to `end`
+// of buffer `buffer`, which the callee may store into when `written`.
+// `home` is the value that is the buffer's address in the scope. `base` and
+// `length` are the two values the lend binds, the view's own home, which
+// the callee takes as its buffer's.
+record View { buffer: Nat, home: Nat, start: Nat, end: Nat, written: Bool, base: Nat, length: Nat }
+
+// The two nodes that bind a view's home: where the view starts, and how
+// long it is.
+fn views_nodes(views: List<View>) → List<Node> {
+    match views {
+        Nil => Nil,
+        Cons(view, rest) => Cons(Add(64, view.base, view.home, view.start), Cons(Sub(64, view.length, view.end, view.start), views_nodes(rest))),
+    }
+}
+
+// The homes a lend passes its callee, view by view: base then length.
+fn views_homes(views: List<View>) → List<Nat> {
+    match views { Nil => Nil, Cons(view, rest) => Cons(view.base, Cons(view.length, views_homes(rest))) }
+}
+
+// The bytes a view is of the file `held`: a window of its buffer
+// (`List::window`), shorter where the window passes the buffer's end.
+fn View::bytes(self view: View, values: Valuation(), held: Buffers()) → List<BitVec(8)> {
+    buffer_bytes(held, view.buffer).window(values(64, view.start).toNat(), values(64, view.end).toNat())
+}
+
+// The file a lend's callee is called over: the views, in order.
+fn viewed(views: List<View>, values: Valuation(), held: Buffers()) → Buffers() {
+    match views { Nil => Nil, Cons(view, rest) => Cons(view.bytes(values, held), viewed(rest, values, held)) }
+}
+
+// The file `held` with `bytes` written over a view's window, where the
+// view may be written; as it was where it may not.
+fn View::put(self view: View, values: Valuation(), bytes: List<BitVec(8)>, held: Buffers()) → Buffers() {
+    match view.written {
+        False => held,
+        True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)),
+    }
+}
+
+// The scope's file after a lend's callee left the views as `after`: each
+// written view's window put back, view `k` being the callee's buffer `k`.
+fn put_views(views: List<View>, values: Valuation(), after, held: Buffers()) → Buffers() {
+    match views {
+        Nil => held,
+        Cons(view, rest) => put_views(rest, values, match after { Nil => Nil, Cons(_, later) => later }, view.put(values, buffer_bytes(after, 0), held)),
+    }
+}
+
 // Flat `Region` remains the scheduled presentation of one pure dataflow
 // graph. `StructuredRegion` composes those leaves with directly recursive
 // control nodes. Direct recursion is intentional: writing branches as
@@ -779,6 +831,19 @@ inductive StructuredRegion {
     // the bit `exhausted` says the passes ran out before `exit` was set.
     Loop(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
         next: List<Nat>, outputs: List<Nat>, exhausted: Nat),
+    // A call of function `callee` over views of the scope's buffers
+    // (docs/native-library-exports-design.md §3.1): the callee's buffer `k`
+    // is view `k`, a window of a buffer of the scope, and what it stores
+    // into a written view is put back into that buffer. The lend binds
+    // each view's home (`views_nodes`) and passes the homes before the
+    // 64-bit `arguments`.
+    Lend(views: List<View>, callee: Nat, arguments: List<Nat>, result: Nat),
+}
+
+// The ids a lend reads besides its arguments: each view's home, start and
+// end.
+fn views_reads(views: List<View>) → List<Nat> {
+    match views { Nil => Nil, Cons(view, rest) => Cons(view.home, Cons(view.start, Cons(view.end, views_reads(rest)))) }
 }
 
 // A call's ports: each a 64-bit word.
@@ -794,6 +859,7 @@ fn structured_inputs(region: StructuredRegion) → Ports {
         Conditional(inputs, _, _, _, _, _) => inputs,
         Call(_, arguments, _) => Ports(word_ports(arguments)),
         Loop(inputs, bound, _, _, _, _, _, _, _) => Ports(word_ports(inputs ++ [bound])),
+        Lend(views, _, arguments, _) => Ports(word_ports(views_reads(views) ++ arguments)),
     }
 }
 
@@ -805,6 +871,7 @@ fn structured_outputs(region: StructuredRegion) → Ports {
         Conditional(_, _, _, outputs, _, _) => outputs,
         Call(_, _, result) => Ports([Port(id := result, width := 64)]),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => Ports(word_ports(outputs) ++ [Port(id := exhausted, width := 1)]),
+        Lend(_, _, _, result) => Ports([Port(id := result, width := 64)]),
     }
 }
 
@@ -878,6 +945,8 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
         Loop(inputs, _, parameters, _, body, _, next, outputs, _) =>
             (inputs.len() = parameters.len()) ∧ ((next.len() = parameters.len()) ∧
                 ((outputs.len() = parameters.len()) ∧ StructuredRegionValid(body))),
+        Lend(views, _, arguments, result) =>
+            (views_homes(views) ++ arguments).len() <= 6 ∧ PortIdAbsent(result, word_ports(views_reads(views) ++ arguments)),
     }
 }
 
@@ -994,6 +1063,7 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopHolds(λ (pass: Valuation()) => StructuredRegionHolds(pass, body), values, inputs, bound, parameters, count, exit,
                 next, outputs, exhausted),
+        Lend(_, _, _, _) => False,
     }
 }
 
@@ -1023,6 +1093,13 @@ fn StructuredRegionHoldsOver(buffers: Buffers(), callees: Callees(), values: Val
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopHolds(λ (pass: Valuation()) => StructuredRegionHoldsOver(buffers, callees, pass, body), values, inputs, bound,
                 parameters, count, exit, next, outputs, exhausted),
+        // Over one file for the whole program a callee has no file of its
+        // own, so this relation cannot say a view: it says the call on the
+        // homes and the arguments. A lend's meaning is the one with the file
+        // threaded (`StructuredRegionRunsOver`, function_ir_writes), and no
+        // theorem takes this one for it: a region with a lend is not `quiet`.
+        Lend(views, callee, arguments, result) => NodesHoldOver(buffers, values, views_nodes(views)) ∧
+            callees(callee, words_of(values, views_homes(views) ++ arguments), values(64, result)),
     }
 }
 
@@ -1051,6 +1128,7 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
                 λ (pass: Valuation()) => StructuredRegionHoldsIn(callees, pass, body), λ pass held => body.holds_in(callees, pass, held),
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
                 values(1, exhausted).head_bit()),
+        Lend(_, _, _, _) => λ never => false_elim(never),
     }
 }
 

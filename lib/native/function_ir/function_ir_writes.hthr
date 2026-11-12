@@ -234,12 +234,23 @@ fn StructuredRegionRunsOver(effects: Effects(), values: Valuation(), region: Str
                 False => StructuredRegionRunsOver(effects, values, when_false, before, after),
                 True => StructuredRegionRunsOver(effects, values, when_true, before, after),
             },
+        // The callee's effect is from the windows to what it left of them, and
+        // the file after is the file with the written windows put back.
+        Lend(views, callee, arguments, result) => Exists<Buffers()>(λ mid => NodesRun(views_nodes(views), values, before, mid) ∧
+            Exists<Buffers()>(λ left => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), values(64, result), left) ∧
+                (after = put_views(views, values, left, mid)))),
         Call(callee, arguments, result) => effects(before, callee, words_of(values, arguments), values(64, result), after),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
                 values(1, exhausted).head_bit(), before, after),
     }
+}
+
+// Whether a call over `views` may leave buffer `b` changed: a written view
+// of it is put back.
+fn views_store(views: List<View>, b: Nat) → Bool {
+    match views { Nil => False, Cons(view, rest) => (view.written && view.buffer.same(b)) || views_store(rest, b) }
 }
 
 // Whether a region stores into no buffer itself. What it calls is the
@@ -250,6 +261,9 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
         Sequence(prefix, continuation) => nodes_quiet(prefix.nodes) && continuation.quiet(),
         Compose(prefix, continuation) => prefix.quiet() && continuation.quiet(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.quiet() && when_false.quiet(),
+        // A call over views is taken for one that stores: what it puts back is
+        // the callee's to say.
+        Lend(_, _, _, _) => False,
         Call(_, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
     }
@@ -262,6 +276,7 @@ fn StructuredRegion::stores(self region: StructuredRegion, b: Nat) → Bool {
         Sequence(prefix, continuation) => nodes_store(prefix.nodes, b) || continuation.stores(b),
         Compose(prefix, continuation) => prefix.stores(b) || continuation.stores(b),
         Conditional(_, _, _, _, when_true, when_false) => when_true.stores(b) || when_false.stores(b),
+        Lend(views, _, _, _) => views_store(views, b),
         Call(_, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores(b),
     }
@@ -291,6 +306,7 @@ theorem StructuredRegion::quiet_stores(self region: StructuredRegion, b: Nat): r
                 Inr(second) => when_false.quiet_stores(b, both.right, second),
             }
         },
+        Lend(_, _, _, _) => λ never _ => never,
         Call(_, _, _) => λ _ never => never,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet_stores(b),
     }
@@ -328,6 +344,7 @@ theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buf
                 True => λ holds => when_true.runs_quiet(callees, file, both.left, values, holds),
             }
         },
+        Lend(_, _, _, _) => λ never _ _ => false_elim(never),
         Call(_, _, _) => λ _ values holds => ⟨holds, refl⟩,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet values =>
             loop_runs_over_quiet(λ (pass: Valuation()) => StructuredRegionHoldsOver(file, callees(file), pass, body),
@@ -363,6 +380,10 @@ theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, we
                 False => λ ran => when_false.runs_weaken(effects, weaker, implies, values, before, after, ran),
                 True => λ ran => when_true.runs_weaken(effects, weaker, implies, values, before, after, ran),
             },
+        Lend(views, callee, arguments, result) => λ values before after ran =>
+            Exists(ran.witness, ⟨ran.proof.left, Exists(ran.proof.right.witness,
+                ⟨implies(viewed(views, values, ran.witness), callee, words_of(values, views_homes(views) ++ arguments), values(64, result),
+                    ran.proof.right.witness, ran.proof.right.proof.left), ran.proof.right.proof.right⟩)⟩),
         Call(callee, arguments, result) => λ values before after ran =>
             implies(before, callee, words_of(values, arguments), values(64, result), after, ran),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values before after =>
@@ -491,6 +512,32 @@ theorem nodes_store_marked(nodes: List<Node>, marks: List<Bool>, b: Nat): nodes_
     }
 }
 
+// Every written view is of a marked buffer.
+fn views_within(views: List<View>, marks: List<Bool>) → Bool {
+    match views { Nil => True, Cons(view, rest) => (view.written.not() || marked(marks, view.buffer)) && views_within(rest, marks) }
+}
+
+theorem views_store_marked(views: List<View>, marks: List<Bool>, b: Nat): views_within(views, marks).IsTrue() → views_store(views, b).IsTrue() →
+    marked(marks, b).IsTrue() {
+    match views {
+        Nil => λ _ never => false_elim(never),
+        Cons(view, rest) => λ within stores => {
+            let both = Bool::is_true_and(view.written.not() || marked(marks, view.buffer), views_within(rest, marks), within);
+            match Bool::is_true_or(view.written && view.buffer.same(b), views_store(rest, b), stores) {
+                Inl(here) => {
+                    let parts = Bool::is_true_and(view.written, view.buffer.same(b), here);
+                    match Bool::is_true_or(view.written.not(), marked(marks, view.buffer), both.left) {
+                        Inl(unwritten) => false_elim(view.written.is_true_not(unwritten, parts.left)),
+                        Inr(is_marked) => j(view.buffer.same_sound(b, eq_true_of_is_true(view.buffer.same(b), parts.right)),
+                            λ x _ => marked(marks, x).IsTrue(), is_marked),
+                    }
+                },
+                Inr(later) => views_store_marked(rest, marks, b, both.right, later),
+            }
+        },
+    }
+}
+
 // Every store the region makes itself is into a marked buffer.
 fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bool>) → Bool {
     match region {
@@ -498,6 +545,7 @@ fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bo
         Sequence(prefix, continuation) => nodes_store_within(prefix.nodes, marks) && continuation.stores_within(marks),
         Compose(prefix, continuation) => prefix.stores_within(marks) && continuation.stores_within(marks),
         Conditional(_, _, _, _, when_true, when_false) => when_true.stores_within(marks) && when_false.stores_within(marks),
+        Lend(views, _, _, _) => views_within(views, marks),
         Call(_, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_within(marks),
     }
@@ -528,6 +576,7 @@ theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: Li
                 Inr(second) => when_false.stores_marked(marks, b, both.right, second),
             }
         },
+        Lend(views, _, _, _) => views_store_marked(views, marks, b),
         Call(_, _, _) => λ _ never => false_elim(never),
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_marked(marks, b),
     }

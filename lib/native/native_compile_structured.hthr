@@ -198,6 +198,15 @@ theorem Env::steps_args(nodes: List<Node>): (env: Env) → env.steps(nodes).args
     match nodes { Nil => λ env => refl, Cons(node, rest) => λ env => Env::steps_args(rest, env.computes([node])) }
 }
 
+// The ports a call over views writes are the words it touches.
+theorem views_touched(views: List<View>, result: Nat):
+    port_ids(nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)]) = nodes_writes(views_nodes(views)) ++ [result] {
+    match views {
+        Nil => refl,
+        Cons(view, rest) => cong_fn<List<Nat>, List<Nat>>(λ l => Cons(view.base, Cons(view.length, l)), views_touched(rest, result)),
+    }
+}
+
 // A region's meaning writes only the words it touches, and keeps the
 // command line.
 theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Writers()): (env: Env) → (x: Nat) →
@@ -218,6 +227,11 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
                 False => when_false.meaning_frame(call, env, x, parts.right),
                 True => when_true.meaning_frame(call, env, x, parts.left),
             }
+        },
+        Lend(views, callee, arguments, result) => λ env x h => {
+            let after = Lend(views, callee, arguments, result).run(call, env.valuation(), env.buffers);
+            Env::settle_frame(nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)], Env(env.words, after.buffers, env.args), after.values, x,
+                j(sym(views_touched(views, result)), λ l _ => absent(x, l).IsTrue(), h))
         },
         Call(callee, arguments, result) => λ env x h => {
             let after = Call(callee, arguments, result).run(call, env.valuation(), env.buffers);
@@ -281,6 +295,7 @@ fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
         Sequence(prefix, continuation) => nodes_wide(prefix.nodes).IsTrue() ∧ continuation.Ok(),
         Compose(prefix, continuation) => prefix.Ok() ∧ continuation.Ok(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.Ok() ∧ when_false.Ok(),
+        Lend(_, _, _, _) => False,
         Call(_, _, _) => True,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
@@ -315,6 +330,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
                 }))
             },
         }),
+        Lend(_, _, _, _) => λ s t none => absurd(none),
         Call(_, _, _) => λ s t _ => trivial,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
@@ -459,6 +475,7 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
                                     n.prog.within_label(Succ(Succ(names))))))))
             })))
         },
+        Lend(_, _, _, _) => λ p out names c none => absurd(none),
         Call(callee, arguments, result) => λ p out names c emitted => {
             let fc = p.function_call(layout, out, callee, arguments, result);
             let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = emitted;
@@ -1250,6 +1267,7 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                     })(within))
             })))))
         },
+        Lend(_, _, _, _) => λ never p out names c emitted within live checked => false_elim(never),
         Call(callee, arguments, result) => λ ok p out names c emitted within live checked => {
             let region = Call(callee, arguments, result);
             let fc = p.function_call(layout, out, callee, arguments, result);

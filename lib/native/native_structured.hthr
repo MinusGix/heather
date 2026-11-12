@@ -137,6 +137,7 @@ fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
         Sequence(_, _) => False,
         Compose(_, _) => False,
         Conditional(_, _, _, _, _, _) => False,
+        Lend(_, _, _, _) => False,
         Call(_, _, _) => False,
     }
 }
@@ -160,6 +161,9 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
             False => None,
             True => when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ b => Some(a.join(b)))),
         },
+        // A call over views is a function's to make, not yet a statement's
+        // (docs/native-library-exports-design.md §3.1).
+        Lend(_, _, _, _) => None,
         // A call reads its arguments and leaves a word, whose low bit a
         // conditional may branch on.
         Call(_, arguments, result) => match s.all_defined(arguments) { False => None, True => Some(s.put(result, True)) },

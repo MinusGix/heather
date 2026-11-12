@@ -5,7 +5,7 @@ labels: [native,design,memory,function-ir]
 area: heather-in-heather
 milestone: [nh-library]
 created: 2026-11-10
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 A `Source` buffer is a numbered static slot in the ELF's data region
@@ -54,3 +54,11 @@ a store through a read-only view is refused by the judgment.
     - The program side then proves a byte node from the lending it already gives its callees (`Target::lending`, `loan`, `in_memory`, `based_left`), with a register file and a valuation built by hand at the leaf, R10 named in the file since a leaf keeps only the callee-saved registers. That is longer than `goes_byte_to` and `goes_byte_from` are now: the machine fact shared is one MOVZX and one byte MOV.
     - So the step pays when the home is a value and not a layout constant, which is this issue. Built before it, the bridge is written for immediates and rewritten for words.
 - 2026-11-11: Minus chose (2026-11-11, on the decision card) to do U5's byte-lowering step here, with buffer views, and the export first. The scoping in the entry above is what the step takes; `docs/native-procedures-are-functions-design.md` §3 records the move.
+- 2026-11-12: Views, steps V1 to V4a (docs/native-library-exports-design.md §3.1), on PR #551:
+
+  - V1 `lib/std/data/list_window.hthr`: `List::window` and `List::put_window` with the lens laws; putting back what was read holds of any window.
+  - V2 `lib/std/arch/x86_64/x86_64_views.hthr`: a `Loan` over parts of spans from the lender's (`Loan::view`), a trail in the views as a trail in the spans, and what the spans read after.
+  - V3: a conditional's false arm records `Known::Falsity`, and `File::at_most` reads `a <= b` from it.
+  - V4a: `Lend(views, callee, arguments, result)` in the IR, a call over views, with its meaning in every layer and an arm in every recursion over regions. The lowering refuses it by name; a statement does not lend (`StructuredRegion::scoped`).
+
+  What changed from the first design: a leaf, not a region with a body. The callee's contract and the region theorem are at one lending for the program, so a body over another file would have been the induction hypothesis at another lending for everything in it. Next are the contract at every lending (V4b) and the lowering (V4c). The coarse store rule the views expose is [[function-ir-store-marks-per-function]].

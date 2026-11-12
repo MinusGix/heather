@@ -1,0 +1,142 @@
+// Probes of a call over views (`Lend`,
+// docs/native-library-exports-design.md §3.1): the callee runs on a window
+// of its caller's buffer as a buffer of its own, what it stores is put
+// back where the window lies, it cannot reach a byte outside the window, a
+// view that is not written is left as it was, two views of one buffer are
+// two buffers to the callee, and what the run answers is what the meaning
+// allows at a neutral file. Tests, not library: nothing imports this
+// module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_placeless;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+fn five() → Buffers() { [[b(1), b(2), b(3), b(4), b(5)]] }
+
+// ---------------------------------------------------------------------------
+// One view
+
+// put(address, length, i, v): `v`'s low byte at `i` of its buffer, returning
+// the byte then there.
+fn put() → Function {
+    Function(parameters := [0, 1, 2, 3], body := leaf([BufferStore(output := 4, buffer := 0, index := 2, value := 3)]), result := 4, lent := 1)
+}
+
+// lends(address, length, from, to, i, v): `put(i, v)` over bytes `from` up
+// to `to` of its buffer, which `put` may store into when `written`.
+fn lends(written: Bool) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5],
+        body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := written, base := 6, length := 7)], 0, [4, 5], 8),
+        result := 8, lent := 1)
+}
+fn lending() → List<Function> { [lends(True), put()] }
+fn showing() → List<Function> { [lends(False), put()] }
+
+theorem lending_evaluable(): program_evaluable(lending()).IsTrue() { trivial }
+
+// Byte 1 of the window from 1 up to 4 is byte 2 of the buffer.
+theorem lends_runs(): program_run(lending(), five(), 1, [w(4096), w(5), w(1), w(4), w(1), w(9)]) = Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]) {
+    refl
+}
+
+// The window is three bytes: index 3 is past its end, though byte 4 of the
+// buffer is there. The store is none and the file is as it was.
+theorem lends_past_the_view(): program_run(lending(), five(), 1, [w(4096), w(5), w(1), w(4), w(3), w(9)]) = Ending(w(0), five()) { refl }
+
+// A view that is not written: the callee's store is into its own window,
+// and the file is as it was.
+theorem shows_runs(): program_run(showing(), five(), 1, [w(4096), w(5), w(1), w(4), w(1), w(9)]) = Ending(w(9), five()) { refl }
+
+// The control: the written view does not leave the file as it was.
+theorem lends_changes(same: program_run(lending(), five(), 1, [w(4096), w(5), w(1), w(4), w(1), w(9)]) = Ending(w(9), five())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 2).eq_bit(b(9)), same);
+    absurd(verdict)
+}
+
+// At any file and any words, what the run answers is what the meaning
+// allows (`program_run_effects`).
+theorem lends_allowed(file: Buffers(), address, length, from, to, i, v: BitVec(64)):
+    program_effects(lending())(file, 1, [address, length, from, to, i, v], program_run(lending(), file, 1, [address, length, from, to, i, v]).word,
+        program_run(lending(), file, 1, [address, length, from, to, i, v]).buffers) {
+    program_run_effects(lending(), trivial, file, 1, [address, length, from, to, i, v], trivial)
+}
+
+// What a lend may leave changed is what its written views are of.
+theorem lends_stores(): lends(True).body.stores(0) = True { refl }
+theorem shows_stores_nothing(): lends(False).body.stores(0) = False { refl }
+theorem lends_other_buffer(): lends(True).body.stores(1) = False { refl }
+theorem lends_within(): lends(True).body.stores_within([True]) = True { refl }
+theorem lends_not_within(): lends(True).body.stores_within([False]) = False { refl }
+theorem shows_within(): lends(False).body.stores_within([False]) = True { refl }
+
+// A lend is never taken for one that leaves the file: the layers over a
+// fixed file cannot say a view.
+theorem lends_not_quiet(): program_quiet(showing()) = False { refl }
+
+// A result that is one of the lend's own values is refused.
+fn clashing() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5],
+        body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 6),
+        result := 6, lent := 1)
+}
+theorem clashing_refused(): program_evaluable([clashing(), put()]) = False { refl }
+
+// ---------------------------------------------------------------------------
+// Two views of one buffer
+
+// carry(address, length, address, length, i): the byte at `i` of its
+// buffer 0 stored at `i` of its buffer 1, returning the byte then there.
+fn carry() → Function {
+    Function(parameters := [0, 1, 2, 3, 4],
+        body := leaf([BufferLoad(output := 5, buffer := 0, index := 4), BufferStore(output := 6, buffer := 1, index := 4, value := 5)]),
+        result := 6, lent := 2)
+}
+
+// halves(address, length, mid, i): `carry(i)` over the bytes before `mid`,
+// read, and the bytes from `mid` on, written.
+fn halves() → Function {
+    Function(parameters := [0, 1, 2, 3],
+        body := Sequence(Region(Ports([]), [Const(64, 4, 0)], Ports([])),
+            Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := False, base := 5, length := 6),
+                View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 9)),
+        result := 9, lent := 1)
+}
+fn halving() → List<Function> { [halves(), carry()] }
+fn four() → Buffers() { [[b(1), b(2), b(3), b(4)]] }
+
+theorem halving_evaluable(): program_evaluable(halving()).IsTrue() { trivial }
+
+// Byte 1 of the first half lands at byte 1 of the second.
+theorem halves_runs(): program_run(halving(), four(), 1, [w(4096), w(4), w(2), w(1)]) = Ending(w(2), [[b(1), b(2), b(3), b(2)]]) { refl }
+
+// The halves are where `mid` says: at 1, byte 0 of the first lands at
+// byte 0 of the rest.
+theorem halves_elsewhere(): program_run(halving(), four(), 1, [w(4096), w(4), w(1), w(0)]) = Ending(w(1), [[b(1), b(1), b(3), b(4)]]) { refl }
+
+// The control: the first half is not what is written.
+theorem halves_first_kept(same: program_run(halving(), four(), 1, [w(4096), w(4), w(2), w(1)]) = Ending(w(2), [[b(1), b(4), b(3), b(4)]])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(2)), same);
+    absurd(verdict)
+}
+
+theorem halves_allowed(file: Buffers(), address, length, mid, i: BitVec(64)):
+    program_effects(halving())(file, 1, [address, length, mid, i], program_run(halving(), file, 1, [address, length, mid, i]).word,
+        program_run(halving(), file, 1, [address, length, mid, i]).buffers) {
+    program_run_effects(halving(), trivial, file, 1, [address, length, mid, i], trivial)
+}
+
+// ---------------------------------------------------------------------------
+// The lowering has none yet, and says so
+
+theorem halves_not_placeless(): halves().body.placeless(λ _ => 2, [0]) = False { refl }

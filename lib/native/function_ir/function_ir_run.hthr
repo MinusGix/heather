@@ -18,6 +18,7 @@
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_views;
 import function_ir_writes;
 import nat_map;
 import bitvec;
@@ -252,6 +253,15 @@ theorem StructuredRegion::run_keeps(self region: StructuredRegion, call: Writers
                 True => when_true.run_keeps(call, values, buffers, w, id, parts.left),
             }
         },
+        Lend(views, callee, arguments, result) => λ values buffers w id h => {
+            let nodes = views_nodes(views);
+            let first = run_nodes(nodes, values, buffers);
+            let parts = absent_append(id, nodes_writes(nodes), [result], h);
+            trans(Valuation::set_other(first.values, result,
+                    word_value(call(viewed(views, first.values, first.buffers), callee, words_of(first.values, views_homes(views) ++ arguments)).word), w, id,
+                    id.differs_ne(result, Bool::is_true_and(id.differs(result), True, parts.right).left)),
+                run_nodes_frame(nodes, values, buffers, w, id, parts.left))
+        },
         Call(callee, arguments, result) => λ values buffers w id h =>
             Valuation::set_other(values, result, word_value(call(buffers, callee, words_of(values, arguments)).word), w, id,
                 id.differs_ne(result, Bool::is_true_and(id.differs(result), True, h).left)),
@@ -341,6 +351,39 @@ theorem StructuredRegion::run_holds(self region: StructuredRegion, effects: Effe
                     True => when_true.run(call, values, before).buffers,
                 }),
             }, chosen)
+        },
+        // The windows and what is put back are read at the lend's own nodes'
+        // values, where the two valuations agree.
+        Lend(views, callee, arguments, result) => λ ok values after before agree => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let parts = Bool::is_true_and(nodes_evaluable(nodes),
+                disjoint([result], nodes_mentions(nodes)) && (absent(result, args) && arity_fits(arity(callee), args.len())), ok);
+            let later = Bool::is_true_and(disjoint([result], nodes_mentions(nodes)), absent(result, args) && arity_fits(arity(callee), args.len()),
+                parts.right);
+            let last = Bool::is_true_and(absent(result, args), arity_fits(arity(callee), args.len()), later.right);
+            let first = run_nodes(nodes, values, before);
+            let file = viewed(views, first.values, first.buffers);
+            let words = words_of(first.values, args);
+            let answer = call(file, callee, words);
+            let at_nodes = λ (w: Nat) (id: Nat) (m: Mem(id, nodes_mentions(nodes))) =>
+                trans(agree(w, id, List::mem_append_l(nodes_mentions(nodes), Cons(result, args), id, m)),
+                    Valuation::set_other(first.values, result, word_value(answer.word), w, id, id.differs_ne(result,
+                        Bool::is_true_and(id.differs(result), True, disjoint_mem([result], nodes_mentions(nodes), later.left, id, m)).left)));
+            let at_result: (after(64, result) = answer.word) = trans(agree(64, result, List::mem_append_r(nodes_mentions(nodes), Cons(result, args), result, Inl(refl))),
+                trans(Valuation::set_here(first.values, result, word_value(answer.word), 64), word_value_word(answer.word)));
+            let read: (words_of(after, args) = words) = words_agree(args, first.values, after, λ id m =>
+                trans(agree(64, id, List::mem_append_r(nodes_mentions(nodes), Cons(result, args), id, Inr(m))),
+                    Valuation::set_other(first.values, result, word_value(answer.word), 64, id, λ e => absent_mem(result, args, last.left, id, m, sym(e)))));
+            let fits: arity_fits(arity(callee), words.len()).IsTrue() =
+                j(sym(words_of_len(first.values, args)), λ n _ => arity_fits(arity(callee), n).IsTrue(), last.right);
+            let lent: (viewed(views, after, first.buffers) = file) = viewed_agree(views, first.values, after, first.buffers, λ id m => at_nodes(64, id, m));
+            let put: (put_views(views, after, answer.buffers, first.buffers) = put_views(views, first.values, answer.buffers, first.buffers)) =
+                put_views_agree(views, first.values, after, λ id m => at_nodes(64, id, m), answer.buffers, first.buffers);
+            Exists(first.buffers, ⟨run_nodes_holds(nodes, parts.left, values, after, before, at_nodes),
+                Exists(answer.buffers, ⟨j(sym(lent), λ held _ => effects(held, callee, words_of(after, args), after(64, result), answer.buffers),
+                    j(sym(read), λ ws _ => effects(file, callee, ws, after(64, result), answer.buffers),
+                        j(sym(at_result), λ r _ => effects(file, callee, words, r, answer.buffers), answers(file, callee, words, fits)))), sym(put)⟩)⟩)
         },
         Call(callee, arguments, result) => λ ok values after before agree => {
             let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
@@ -565,6 +608,7 @@ fn StructuredRegion::calls_among(self region: StructuredRegion, among: Nat → B
         Sequence(_, continuation) => continuation.calls_among(among),
         Compose(prefix, continuation) => prefix.calls_among(among) && continuation.calls_among(among),
         Conditional(_, _, _, _, when_true, when_false) => when_true.calls_among(among) && when_false.calls_among(among),
+        Lend(_, callee, _, _) => among(callee),
         Call(callee, _, _) => among(callee),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_among(among),
     }
@@ -606,6 +650,7 @@ theorem StructuredRegion::calls_among_every(self region: StructuredRegion): regi
         Conditional(_, _, _, _, when_true, when_false) =>
             Bool::is_true_and_intro(when_true.calls_among(every_function), when_false.calls_among(every_function),
                 when_true.calls_among_every(), when_false.calls_among_every()),
+        Lend(_, _, _, _) => trivial,
         Call(_, _, _) => trivial,
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_among_every(),
     }
@@ -655,6 +700,7 @@ theorem StructuredRegion::run_quiet_among(self region: StructuredRegion, call: W
                         }, match b { False => buffers, True => t.buffers }) = State(whole, buffers),
                     cong_fn<Buffers(), State>(λ held => State(whole, held), same_either)))
         },
+        Lend(_, _, _, _) => λ never _ _ => false_elim(never),
         Call(callee, arguments, result) => λ _ fits values =>
             cong_fn<Ending, State>(λ answer => State(Valuation::set(values, result, word_value(answer.word)), answer.buffers),
                 still(callee, fits, words_of(values, arguments))),

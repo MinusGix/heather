@@ -584,8 +584,9 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", 7 => "a procedure call", _ => "the program" };
     let reason = match reason {
         0 => format!("a {} region the compiler does not take: a node not at width 64 or reading a word not written before it, \
-            a branch on a bit that may not be its word's low bit, or a loop not in counted form (native_structured)",
-            ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),
+            a branch on a bit that may not be its word's low bit, a loop not in counted form, or a call over views, \
+            which only a function makes (native_structured)",
+            ["", "sequence", "compose", "conditional", "call", "loop", "call over views"].get(first as usize).unwrap_or(&"structured")),
         1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}{NARROW}"),
         2 => format!("the leaf's nodes are not in evaluation order{NARROW}"),
         3 => format!("the leaf writes one of its own inputs{NARROW}"),

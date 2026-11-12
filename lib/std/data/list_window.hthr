@@ -8,8 +8,8 @@
 // `take` is. Where the window lies inside the list (`start <= end` and
 // `end <= xs.len()`) the two are a lens: what is put is what is then read
 // (`window_put_window`), putting back what was read changes nothing
-// (`put_window_window`), and the list keeps its length
-// (`len_put_window`). An update inside the window is the update of the
+// (`put_window_window`, which holds of any window), and the list keeps its
+// length (`len_put_window`). An update inside the window is the update of the
 // list at the same element (`put_window_update`), which is what makes a
 // store through a view a store into the buffer; an element outside the
 // window is the list's own (`nth_put_window_before`, `_after`).
@@ -135,25 +135,24 @@ theorem List::window_put_window<A>(self xs: List<A>): (start: Nat) → (ys: List
     }
 }
 
-// Putting back what was read changes nothing.
-theorem List::put_window_window<A>(self xs: List<A>): (start, end: Nat) → start <= end → end <= xs.len() →
-    xs.put_window(start, xs.window(start, end)) = xs {
+// What a prefix leaves after it, by the prefix's own length.
+theorem List::take_append_drop_taken<A>(self xs: List<A>): (n: Nat) → xs.take(n) ++ xs.drop(xs.take(n).len()) = xs {
     match xs {
-        Nil => λ start end low high => match start {
+        Nil => λ n => refl,
+        Cons(h, t) => λ n => match n {
             Zero => refl,
-            Succ(_) => refl,
-        },
-        Cons(h, t) => λ start end => match start {
-            Zero => λ _ high => trans(Cons(h, t).put_window_from_zero(Cons(h, t).window(0, end)),
-                j(sym(Cons(h, t).window_from_zero(end)), λ w _ => w ++ Cons(h, t).drop(w.len()) = Cons(h, t),
-                    j(sym(Cons(h, t).len_take(end, high)), λ n _ => Cons(h, t).take(end) ++ Cons(h, t).drop(n) = Cons(h, t),
-                        Cons(h, t).take_append_drop(end)))),
-            Succ(s) => match end {
-                Zero => λ no _ => false_elim(no),
-                Succ(e) => λ low high => List::cong_cons(h, t.put_window_window(s, e, low, high)),
-            },
+            Succ(k) => List::cong_cons(h, t.take_append_drop_taken(k)),
         },
     }
+}
+
+// Putting back what was read changes nothing, wherever the window lies: a
+// window past the end is shorter, and what is put back is as short.
+theorem List::put_window_window<A>(self xs: List<A>, start, end: Nat): xs.put_window(start, xs.window(start, end)) = xs {
+    let rest = xs.drop(start);
+    let read = rest.take(end - start);
+    trans(cong_fn<List<A>, List<A>>(λ after => xs.take(start) ++ (read ++ after), sym(xs.drop_drop(start, read.len()))),
+        trans(cong_fn<List<A>, List<A>>(λ back => xs.take(start) ++ back, rest.take_append_drop_taken(end - start)), xs.take_append_drop(start)))
 }
 
 // An update inside a window, put back, is the update of the list.
