@@ -1,0 +1,17 @@
+// Probes of a binding's annotation written as a relation other than `=`
+// (issues/annotated-let-relation-needs-parentheses.md): only `=` collides
+// with the binding's own `=`, so `<=`, `<` and `≠` read bare in a `let`, a
+// `have` and a `def`. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import omega;
+
+theorem let_le(a, b: Nat, h: a <= b): a <= b { let k: a <= b = h; k }
+theorem let_lt(a, b: Nat, h: a < b): a < b { let k: a < b = h; k }
+theorem let_ne(a, b: Nat, h: a ≠ b): a ≠ b { let k: a ≠ b = h; k }
+theorem have_le(a, b: Nat, h: a <= b): a <= b { have k: a <= b = h; k }
+theorem let_conj(a, b: Nat, h: a <= b ∧ b <= b): a <= b ∧ b <= b { let k: a <= b ∧ b <= b = h; k }
+def two_le_three: 2 <= 3 = omega;
+
+// An equation still needs its parentheses: bare, the binder `=` splits it
+// as annotation `a`, value `b = h`.
+theorem let_eq(a, b: Nat, h: a = b): a = b { let k: (a = b) = h; k }

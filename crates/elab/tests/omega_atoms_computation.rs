@@ -99,7 +99,7 @@ fn arguments_computing_to_different_values_stay_two_atoms() {
         "theorem distinct(f: List<Nat> → Nat, h: f(Cons(0, Nil)) = f(list::List::append(Nil, Nil)) + 1): f(Nil) = 0 { omega }",
     );
     assert!(msg.contains("got stuck"), "{msg}");
-    assert!(msg.contains("f(Cons(0, Nil))"), "{msg}");
+    assert!(msg.contains("f(Cons(0, Nil<Nat>))"), "{msg}");
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn int_arguments_computing_to_different_values_stay_two_atoms() {
         "theorem int_apart(g: List<Nat> → int::Int, h: g(Cons(0, Nil)) = g(list::List::append(Nil, Nil)) + int::OfNat(1)): False { omega }",
     );
     assert!(msg.contains("got stuck"), "{msg}");
-    assert!(msg.contains("g(Cons(0, Nil))"), "{msg}");
+    assert!(msg.contains("g(Cons(0, Nil<Nat>))"), "{msg}");
 }
 
 #[test]

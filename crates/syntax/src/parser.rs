@@ -266,6 +266,16 @@ struct Parser {
     /// in the punctuation contexts, and **lifted inside any bracket**, so the
     /// escape hatch is a parenthesis — `let p: (a = b) = pf;`, `a = (b = c)`.
     no_eq: bool,
+    /// Inside a binding's annotation (`let`, `have`, `def`): the comparison
+    /// rung is suppressed **only at `=`**, so `let k: a <= b = h;` reads its
+    /// annotation as `a <= b` (issues/annotated-let-relation-needs-parentheses.md).
+    /// Only `=` is ambiguous there — after an annotation the statement wants
+    /// its binder `=` (or `<-`), so `<=`, `<`, `≈` and `≠` can only be the
+    /// type's own. Meaningful only while [`Parser::no_eq`] is set, and
+    /// cleared by every [`Parser::with_eq`], so a comparison's right operand,
+    /// a bracket, or any other context that sets `no_eq` for itself is
+    /// unaffected.
+    annotation_rel: bool,
     /// `P ↔ Q` suppressed, exactly as [`Parser::no_eq`] suppresses `a = b`.
     /// Set while a function type's **codomain** is read, which is what makes
     /// `↔` looser than `->`: without it the codomain's own `ty()` reaches
@@ -318,7 +328,7 @@ struct Parser {
     /// so there is nothing to memo on that side.
     ///
     /// The flags are part of the key because `ty()` reaches the expression
-    /// grammar, where all four of them change what parses.
+    /// grammar, where all five of them change what parses.
     spec_failed: std::collections::HashSet<(usize, u8)>,
 }
 
@@ -666,6 +676,7 @@ impl Parser {
             section_typarams: Vec::new(),
             no_record_lit: false,
             no_eq: false,
+            annotation_rel: false,
             no_iff: false,
             motive_body: false,
             spec_failed: std::collections::HashSet::new(),
@@ -3212,7 +3223,7 @@ impl Parser {
         // an equation type is written in parentheses.
         let annotated = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
-            Some(self.with_record_lit(true, |p| p.with_eq(true, |p| p.ty()))?)
+            Some(self.with_record_lit(true, |p| p.annotation())?)
         } else {
             None
         };
@@ -3566,7 +3577,8 @@ impl Parser {
     /// **every** `T` (docs/let-and-blocks-design.md §3). An annotation that is
     /// itself an equation is parenthesised — `let p: (a = b) = pf;` — which is
     /// the escape hatch `no_eq`'s doc comment promises and `atom`'s `(` arm
-    /// now delivers.
+    /// now delivers. Every other relation is unambiguous there and reads bare:
+    /// `let k: a <= b = h;` ([`Parser::annotation_rel`]).
     fn let_stmt(&mut self) -> R<Stmt> {
         if self.at_kw("have") {
             return self.have_stmt();
@@ -3625,7 +3637,7 @@ impl Parser {
             // The annotation, and only the annotation: the value is parsed
             // below with the flag restored, so `let x: Type<0> = a = b;` still
             // binds the *proposition*.
-            Some(self.with_eq(true, |p| p.ty())?)
+            Some(self.annotation()?)
         } else {
             None
         };
@@ -3974,7 +3986,7 @@ impl Parser {
         let (name, _) = self.binder_ident("`have` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
-            Some(self.with_eq(true, |p| p.ty())?)
+            Some(self.annotation()?)
         } else {
             None
         };
@@ -4809,6 +4821,8 @@ impl Parser {
              comparisons separately, or parenthesise the one that is meant to be an \
              operand";
         match self.peek() {
+            // An annotation's relation ends at the binding's own `=`.
+            TokKind::Eq if self.annotation_rel => Ok(out),
             TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Eq | TokKind::Ne => self.err(CHAIN),
             TokKind::EqEq => {
                 self.err(format!("{CHAIN} (and `==` is not used in Heather: equality is `=`)"))
@@ -4890,7 +4904,8 @@ impl Parser {
             });
         }
         let lhs = self.expr_bp(0)?;
-        if self.no_eq {
+        let relation = matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne);
+        if self.no_eq && !(self.annotation_rel && relation) {
             Ok(lhs)
         } else {
             self.comparison(lhs)
@@ -5057,9 +5072,21 @@ impl Parser {
     /// [`Parser::with_record_lit`].
     fn with_eq<T>(&mut self, no: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         let saved = std::mem::replace(&mut self.no_eq, no);
+        let saved_rel = std::mem::replace(&mut self.annotation_rel, false);
         let r = f(self);
         self.no_eq = saved;
+        self.annotation_rel = saved_rel;
         r
+    }
+
+    /// Read a binding's annotation: [`Self::ty`] with `=` suppressed but the
+    /// other relations kept ([`Parser::annotation_rel`]), so the binder `=`
+    /// ends it and `let k: a <= b = h;` needs no parentheses.
+    fn annotation(&mut self) -> R<Ty> {
+        self.with_eq(true, |p| {
+            p.annotation_rel = true;
+            p.ty()
+        })
     }
 
     /// Run `f` with `P ↔ Q` suppressed. The codomain rule; see
@@ -5573,6 +5600,7 @@ impl Parser {
             | ((self.no_eq as u8) << 1)
             | ((self.no_iff as u8) << 2)
             | ((self.motive_body as u8) << 3)
+            | ((self.annotation_rel as u8) << 7)
     }
 
     /// Has this exact speculation already been tried here and failed?
@@ -8455,6 +8483,41 @@ mod tests {
         assert_eq!(name, "x");
         assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Univ { level: 0 })));
         assert!(matches!(expr.kind, ExprKind::Eq(..)), "the value is the proposition");
+    }
+
+    /// A relation other than `=` needs no parenthesis in an annotation: only
+    /// `=` collides with the binder, so `<=`, `<`, `≈` and `≠` read as the
+    /// type's own (issues/annotated-let-relation-needs-parentheses.md), in a
+    /// `let`, a `have` and a `def` alike. The binder `=` still ends the
+    /// annotation, so a bare equation keeps its old split and a chain inside
+    /// the annotation is still one.
+    #[test]
+    fn an_annotation_takes_a_relation_other_than_equality_bare() {
+        for (src, sym) in [
+            ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { let k: a <= b = h; 0 }", "<="),
+            ("fn f(a: Nat, b: Nat, h: a < b) -> Nat { let k: a < b = h; 0 }", "<"),
+            ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { have k: a <= b = h; 0 }", "<="),
+            ("fn f(a: Nat, b: Nat, h: a <= b) -> Nat { let k: a <= b ∧ b <= b = h; 0 }", "And"),
+        ] {
+            let d = decl_of(src);
+            let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[0] else { panic!("{src}: a let") };
+            assert_eq!(name, "k", "{src}");
+            assert!(matches!(expr.kind, ExprKind::Var(ref v) if v == "h"), "{src}: the value is `h`");
+            let shown = format!("{:?}", ty.as_ref().expect("annotated"));
+            assert!(shown.contains(sym), "{src}: the annotation is the relation, got {shown}");
+        }
+        let d = decl_of("fn f(a: Nat, b: Nat, h: a ≠ b) -> Nat { let k: a ≠ b = h; 0 }");
+        let Stmt::Let { ty, expr, .. } = &d.body.stmts[0] else { panic!("a let") };
+        assert!(ty.is_some() && matches!(expr.kind, ExprKind::Var(ref v) if v == "h"));
+        assert!(parse_file("def k: 1 <= 2 = p;").is_ok());
+        // Negative controls: the binder `=` still ends the annotation, and a
+        // second relation is still a chain.
+        let d = decl_of("fn f(n: Nat) -> Nat { let x: Type<0> = a <= b; n }");
+        let Stmt::Let { ty, expr, .. } = &d.body.stmts[0] else { panic!("a let") };
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Univ { level: 0 })));
+        assert!(!matches!(expr.kind, ExprKind::Var(_)), "the value is the relation");
+        let e = parse_file("fn f(n: Nat) -> Nat { let k: a <= b <= c = h; n }").expect_err("a chain");
+        assert!(e.msg.contains("comparisons do not chain"), "{}", e.msg);
     }
 
     /// The parenthesis escape hatch `no_eq`'s doc comment promised and did not

@@ -1049,11 +1049,61 @@ impl Speller<'_> {
             return Some(literal);
         }
         let shown: Vec<String> = fields.iter().map(|v| self.tm(v, d + 1)).collect();
+        let head = format!("{}{}", ctor.name, self.ctor_targs(t, &ind, i, d));
         Some(if shown.is_empty() {
-            ctor.name.clone()
+            head
         } else {
-            format!("{}({})", ctor.name, shown.join(", "))
+            format!("{head}({})", shown.join(", "))
         })
+    }
+
+    /// The `<…>` a re-parsed constructor value needs: its declaration's type
+    /// arguments, written only in the source flavour and only when one of
+    /// them is mentioned by none of the constructor's fields, so elaborating
+    /// the arguments could not infer it. `Nil` alone came back as
+    /// `List::len(Nil)` in `omega`'s certificate and did not elaborate
+    /// (issues/omega-certificate-drops-type-arguments.md); `Cons(x, xs)`
+    /// infers and keeps its spelling. Empty when the arguments do not
+    /// recover from the value's type, which leaves the spelling as it was.
+    fn ctor_targs(&self, t: &Term, ind: &crate::inductive::Inductive, i: usize, d: u32) -> String {
+        if !self.qualified || ind.params.is_empty() {
+            return String::new();
+        }
+        let ctor = &ind.ctors[i];
+        let undetermined = ind.params.iter().any(|p| {
+            !ctor.fields.iter().any(|(_, ty)| crate::inductive::occurs(ty, p).is_some())
+        });
+        if !undetermined {
+            return String::new();
+        }
+        let ty: &Type = match t {
+            Term::Supf { shape, .. } => shape,
+            Term::InlAt { ty: Some(ty), .. } | Term::InrAt { ty: Some(ty), .. } => ty,
+            Term::PairAt { ty: Some(ty), .. } => ty,
+            _ => return String::new(),
+        };
+        // Under a binder the walk has entered, `self.cx` does not scope the
+        // arguments, and the complete spelling below needs it to.
+        if self.binders() != 0 {
+            return String::new();
+        }
+        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind, 0) else {
+            return String::new();
+        };
+        // The generated-annotation flavour: an argument at a type with value
+        // parameters must keep them (`Nil<BitVec(8)>`, not `Nil<BitVec>`),
+        // and an argument that does not spell completely leaves the bare name.
+        let mut shown = Vec::with_capacity(args.len());
+        for (arg, _) in &args {
+            if !self.charge(d + 1) {
+                return String::new();
+            }
+            let Some(one) = self.el.spell_type_source(self.cx, arg) else {
+                return String::new();
+            };
+            shown.push(one);
+        }
+        format!("<{}>", shown.join(", "))
     }
 
     /// A lowered constructor value read back: its declaration, the
