@@ -38,8 +38,10 @@ import function_ir;
 import function_ir_eval;
 import runtime;
 
-// T1 = h + Σ1(e) + Ch(e, f, g) + K + W, the complement in Ch an XOR against
-// all ones and each rotation the shift pair.
+// T1 = h + Σ1(e) + Ch(e, f, g) + K + W, with Σ1(e) = ROTR⁶(e) ⊕ ROTR¹¹(e) ⊕
+// ROTR²⁵(e) and Ch(e, f, g) = (e ∧ f) ⊕ (¬e ∧ g) (§4.1.2). The generator
+// reads `~e` as `all_ones ⊕ e` and each rotation as its shift pair
+// (issues/rt-complement-and-rotate.md).
 runtime fn sha256_t1(h, e, f, g, k, w: u64) → u64 {
     let h32 = h.truncate(32, 32);
     let e32 = e.truncate(32, 32);
@@ -47,27 +49,29 @@ runtime fn sha256_t1(h, e, f, g, k, w: u64) → u64 {
     let g32 = g.truncate(32, 32);
     let k32 = k.truncate(32, 32);
     let w32 = w.truncate(32, 32);
-    let big1 = (e32 >> 6 | e32 << 26) ⊕ (e32 >> 11 | e32 << 21) ⊕ (e32 >> 25 | e32 << 7);
-    let ch = (e32 & f32) ⊕ ((e32 ⊕ 0xffffffff) & g32);
+    let big1 = e32.rotr(6) ⊕ e32.rotr(11) ⊕ e32.rotr(25);
+    let ch = (e32 & f32) ⊕ (~e32 & g32);
     (h32 + big1 + ch + k32 + w32).zero_extend(32)
 }
 
-// T2 = Σ0(a) + Maj(a, b, c).
+// T2 = Σ0(a) + Maj(a, b, c), with Σ0(a) = ROTR²(a) ⊕ ROTR¹³(a) ⊕ ROTR²²(a) and
+// Maj(a, b, c) = (a ∧ b) ⊕ (a ∧ c) ⊕ (b ∧ c).
 runtime fn sha256_t2(a, b, c: u64) → u64 {
     let a32 = a.truncate(32, 32);
     let b32 = b.truncate(32, 32);
     let c32 = c.truncate(32, 32);
-    let big0 = (a32 >> 2 | a32 << 30) ⊕ (a32 >> 13 | a32 << 19) ⊕ (a32 >> 22 | a32 << 10);
+    let big0 = a32.rotr(2) ⊕ a32.rotr(13) ⊕ a32.rotr(22);
     let maj = (a32 & b32) ⊕ (a32 & c32) ⊕ (b32 & c32);
     (big0 + maj).zero_extend(32)
 }
 
-// W(t) = σ1(W(t−2)) + W(t−7) + σ0(W(t−15)) + W(t−16).
+// W(t) = σ1(W(t−2)) + W(t−7) + σ0(W(t−15)) + W(t−16), with
+// σ0(x) = ROTR⁷(x) ⊕ ROTR¹⁸(x) ⊕ SHR³(x) and σ1(x) = ROTR¹⁷(x) ⊕ ROTR¹⁹(x) ⊕ SHR¹⁰(x).
 runtime fn sha256_next(w2, w7, w15, w16: u64) → u64 {
     let x = w2.truncate(32, 32);
     let y = w15.truncate(32, 32);
-    let small1 = (x >> 17 | x << 15) ⊕ (x >> 19 | x << 13) ⊕ (x >> 10);
-    let small0 = (y >> 7 | y << 25) ⊕ (y >> 18 | y << 14) ⊕ (y >> 3);
+    let small1 = x.rotr(17) ⊕ x.rotr(19) ⊕ (x >> 10);
+    let small0 = y.rotr(7) ⊕ y.rotr(18) ⊕ (y >> 3);
     (small1 + w7.truncate(32, 32) + small0 + w16.truncate(32, 32)).zero_extend(32)
 }
 
@@ -76,20 +80,20 @@ runtime fn sha256_next(w2, w7, w15, w16: u64) → u64 {
 // function on the low halves of its arguments.
 
 fn sha256_t1_narrow(h, e, f, g, k, w: u32) → u32 {
-    let big1 = (e >> 6 | e << 26) ⊕ (e >> 11 | e << 21) ⊕ (e >> 25 | e << 7);
-    let ch = (e & f) ⊕ ((e ⊕ 0xffffffff) & g);
+    let big1 = e.rotr(6) ⊕ e.rotr(11) ⊕ e.rotr(25);
+    let ch = (e & f) ⊕ (~e & g);
     h + big1 + ch + k + w
 }
 
 fn sha256_t2_narrow(a, b, c: u32) → u32 {
-    let big0 = (a >> 2 | a << 30) ⊕ (a >> 13 | a << 19) ⊕ (a >> 22 | a << 10);
+    let big0 = a.rotr(2) ⊕ a.rotr(13) ⊕ a.rotr(22);
     let maj = (a & b) ⊕ (a & c) ⊕ (b & c);
     big0 + maj
 }
 
 fn sha256_next_narrow(w2, w7, w15, w16: u32) → u32 {
-    let small1 = (w2 >> 17 | w2 << 15) ⊕ (w2 >> 19 | w2 << 13) ⊕ (w2 >> 10);
-    let small0 = (w15 >> 7 | w15 << 25) ⊕ (w15 >> 18 | w15 << 14) ⊕ (w15 >> 3);
+    let small1 = w2.rotr(17) ⊕ w2.rotr(19) ⊕ (w2 >> 10);
+    let small0 = w15.rotr(7) ⊕ w15.rotr(18) ⊕ (w15 >> 3);
     small1 + w7 + small0 + w16
 }
 
@@ -113,16 +117,9 @@ theorem sha256_next_low(w2, w7, w15, w16: u64):
 // ---------------------------------------------------------------------------
 // Each narrow function is the specification's.
 
-theorem sha256_ones(): BitVec::ofNat(0xffffffff, n := 32) = BitVec::all_ones() { refl }
-
 theorem sha256_t1_narrow_spec(s: Sha2State(32), k, w: u32):
     sha256_t1_narrow(s.h, s.e, s.f, s.g, k, w) = Sha2::sha256().t1(s, k, w)
-{
-    let complement: (s.e ⊕ 0xffffffff = ~s.e) =
-        j(sym(sha256_ones()), λ ones _ => s.e ⊕ ones = ~s.e, BitVec::bxor_all_ones(32, s.e));
-    cong_fn(λ (c: u32) => s.h + Sha2::sha256().big1.big(s.e) + ((s.e & s.f) ⊕ (c & s.g)) + k + w,
-        complement)
-}
+{ refl }
 
 theorem sha256_t2_narrow_spec(s: Sha2State(32)): sha256_t2_narrow(s.a, s.b, s.c) = Sha2::sha256().t2(s) { refl }
 
