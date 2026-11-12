@@ -6,9 +6,9 @@
 // here. Each is lowered by evaluation, the pin closes by conversion at any
 // spans, the once-proof `FFun::lower_sound` is instantiated over any file,
 // and the lowered program is what the function compiler accepts. What the
-// lowering refuses, and controls; and a loop that lends, which lowers and
-// runs and which the function compiler has no registers for yet. Tests, not library: nothing imports this
-// module.
+// lowering refuses, and controls; and a loop that lends, whose values past
+// the ninth the function compiler keeps in callee-saved registers. Tests,
+// not library: nothing imports this module.
 import logic;
 import bool;
 import nat;
@@ -35,8 +35,16 @@ import function_ir_writes;
 import function_ir_rows;
 import function_ir_lower;
 import function_ir_lower_calls;
+import function_ir_compile;
 import function_ir_refusal;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
 import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
 
 fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
@@ -303,21 +311,50 @@ fn each_program() → List<Function> { [each_code(), carry_code()] }
 // the read span from 1 on is carried, a pass a byte.
 theorem each_lowers(): each_lowered().is_some() = True { refl }
 theorem each_evaluable(): program_evaluable(each_program()).IsTrue() { trivial }
-theorem each_runs(): program_run(each_program(), [five(), tens()], 1, [w(0), w(5), w(0), w(5), w(1)]) =
+theorem each_runs(a, c: BitVec(64)): program_run(each_program(), [five(), tens()], 1, [a, w(5), c, w(5), w(1)]) =
     Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]) { refl }
 theorem each_runs_short(): program_run(each_program(), [five(), tens()], 1, [w(0), w(5), w(0), w(3), w(0)]) =
     Ending(w(3), [[b(10), b(20), b(30), b(4), b(5)], tens()]) { refl }
 
-// What stops it is registers, and no proof: a pass wants twelve values at
-// the call (the four kept words, the index and the next, the loop's count,
-// the argument and the four words the views bind) and nine registers hold
-// a function's values, so the views' first three words are overwritten
-// before the call that takes them
-// (issues/function-ir-values-in-kept-registers.md: the kept registers
-// would hold the six that live across the call).
-theorem each_refused(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]) = None { refl }
-theorem each_refused_why(): each_code().refused(1, each_code().plan(), 2, [2, 2]) =
-    "in a loop's pass, where 16 is false, where 17 is false, where 18 is false, the call of function 0 over views (buffer 0 from 10 to 15 written, buffer 1 from 10 to 15): the call of function 0 (22, 23, 24, 25, 19): an argument is in no register, where rax holds 25; rcx holds 9; rdx holds 8; rsi holds 7; rdi holds 6; r8 holds 10; r9 holds 15; r10 holds 11; r11 holds 19; " { refl }
+// A pass holds twelve values at the call (the four kept words, the index
+// and the next, the loop's count, the argument and the four words the
+// views bind) and nine caller-saved registers hold a function's values.
+// The planner puts what fits nowhere else in callee-saved registers and
+// says how many the function saves, three here: the function stores them
+// above its spill slots at its entry and loads them back before its
+// return, so its caller finds them kept (`Saving`, `function_runs`). The
+// callee is crowded by nothing and saves none.
+theorem each_saves(): placement_saves(each_code().plan()) = 3 { refl }
+theorem carry_saves(): placement_saves(carry_code().plan()) = 0 { refl }
+theorem each_present(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).is_some().IsTrue() { trivial }
+fn each_machine() → Prog { lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).get(each_present()) }
+theorem each_accepted(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]) = Some(each_machine()) {
+    Option::some_get(lower_program_lent(each_program(), plan_program(each_program()), [2, 2]), each_present())
+}
+theorem each_reports_nothing(): each_code().refused(1, each_code().plan(), 2, [2, 2]) = "nothing: the function has code after no other" { refl }
+theorem each_marked(): program_marked(each_program(), [[True], [True]]) = True { refl }
+
+// So the code, the two spans lent wherever the laws let them lie, the
+// first to be written: it returns 5 and the file in memory has the read
+// span's bytes from 1 on in the written one.
+theorem each_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 2], addresses, [five(), tens()], [True]).spans())):
+    Site<M>(fetch, data, each_machine(), last, origin).Returns(stack, asm_labels(each_machine())(2),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(5), c, w(5), w(1)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+            stack.LentOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), top, 1, [a, w(5), c, w(5), w(1)], [five(), tens()])(i, s),
+        stack.AnsweredOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()])) {
+    compiled_returns_marked<M>(each_program(), plan_program(each_program()), [2, 2], addresses, [[True], [True]], each_machine(),
+        each_accepted(), each_evaluable(), trivial, fetch, data, last, origin, stack, top, [five(), tens()], 1, trivial, loan,
+        [a, w(5), c, w(5), w(1)], trivial, Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]), each_runs(a, c))
+}
+
+// The controls. The same places with no save are refused: a value in a
+// callee-saved register the function does not save is one its caller would
+// lose. So are they with one register fewer saved than they use.
+theorem each_unsaved_refused(): lower_program_lent(each_program(), carry_code().plan() ++ placement_body(each_code().plan()), [2, 2]) = None { refl }
+theorem each_undersaved_refused():
+    lower_program_lent(each_program(), carry_code().plan() ++ Cons(Saving(2), placement_body(each_code().plan())), [2, 2]) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Read from source

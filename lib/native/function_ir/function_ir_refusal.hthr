@@ -55,7 +55,26 @@ fn Gpr::shown(self register: Gpr) → String {
     }
 }
 
-fn Place::shown(self place: Place) → String { match place { Into(register) => register.shown(), Folded => "folded" } }
+fn Place::shown(self place: Place) → String {
+    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count) }
+}
+
+// What is wrong with a place whatever the node: a callee-saved register
+// the function's count of saves does not cover (`body_kept`), or the count
+// itself, which is read at a function's head only.
+fn Place::unsaved(self place: Place, saves: Nat) → String {
+    match place {
+        Into(register) => match register.save_rank() {
+            Zero => "",
+            Succ(below) => match Succ(below).leb(saves) {
+                True => "",
+                False => " (callee-saved, and the function saves " ++ refusal_number(saves) ++ ")",
+            },
+        },
+        Folded => "",
+        Saving(_) => " (a count of saves, which is no node's place)",
+    }
+}
 
 fn binary_shown(name: String, w, o, a, b: Nat) → String {
     refusal_number(o) ++ " = " ++ name ++ refusal_number(w) ++ " " ++ refusal_number(a) ++ ", " ++ refusal_number(b)
@@ -105,7 +124,7 @@ fn File::shown_in(self file: File, registers: List<Gpr>) → String {
     }
 }
 
-fn File::shown(self file: File) → String { file.shown_in(scratch_pool()) }
+fn File::shown(self file: File) → String { file.shown_in(scratch_pool() ++ kept_order()) }
 
 // A call's views: each a window of a buffer, marked where the callee may
 // store into it.
@@ -138,14 +157,17 @@ fn StructuredRegion::shown(self region: StructuredRegion) → String {
 
 // The first node of a block that `emit_leaf` has no code for after the
 // ones `before` it, with its place and the file the ones before it leave.
-fn leaf_refusal(prog: Prog, file: File, before, rest: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → String {
+fn leaf_refusal(saves: Nat, prog: Prog, file: File, before, rest: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → String {
     match rest {
         Nil => "a block of nodes, registers: " ++ file.shown(),
-        Cons(node, later) => match emit_leaf(prog, file, before ++ [node], placement, names, homes) {
-            Some(_) => leaf_refusal(prog, file, before ++ [node], later, placement, names, homes),
+        Cons(node, later) => match emit_leaf(saves, prog, file, before ++ [node], placement, names, homes) {
+            Some(_) => leaf_refusal(saves, prog, file, before ++ [node], later, placement, names, homes),
             None => "the node `" ++ node.shown() ++ "`, placed "
-                ++ (match placement.nth(before.len()) { None => "nowhere (the placement ran out)", Some(place) => "in " ++ place.shown() })
-                ++ ", where " ++ (match emit_leaf(prog, file, before, placement, names, homes) { None => file.shown(), Some(left) => left.file.shown() }),
+                ++ (match placement.nth(before.len()) {
+                    None => "nowhere (the placement ran out)",
+                    Some(place) => "in " ++ place.shown() ++ place.unsaved(saves),
+                })
+                ++ ", where " ++ (match emit_leaf(saves, prog, file, before, placement, names, homes) { None => file.shown(), Some(left) => left.file.shown() }),
         },
     }
 }
@@ -195,11 +217,11 @@ fn views_refusal(views: List<View>, file: File, homes: List<Lent>) → String {
 }
 
 // `File::emit_lend`, saying which of its tests refuses.
-fn File::lend_refusal(self file: File, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
+fn File::lend_refusal(self file: File, saves: Nat, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
     let call = "the call of function " ++ refusal_number(callee) ++ " over views (" ++ views_shown(views) ++ "): ";
-    match emit_leaf(prog, file, views_nodes(views), placement, names, homes) {
-        None => call ++ "where its views' bases and lengths are bound, " ++ leaf_refusal(prog, file, [], views_nodes(views), placement, names, homes),
+    match emit_leaf(saves, prog, file, views_nodes(views), placement, names, homes) {
+        None => call ++ "where its views' bases and lengths are bound, " ++ leaf_refusal(saves, prog, file, [], views_nodes(views), placement, names, homes),
         Some(first) => match views {
             Nil => call ++ "it has no view, and a call over none is written as a call",
             Cons(_, _) => match views_lendable(views, first.file, homes) {
@@ -232,44 +254,44 @@ fn Emitted::close_refusal(self pass: Emitted, registers: LoopRegisters, count, e
 }
 
 // `StructuredRegion::emit_calls`, answering the way to what it refuses.
-fn StructuredRegion::refusal(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
+fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
     counts: List<Nat>, homes: List<Lent>) → String {
     match region {
-        Dataflow(body) => leaf_refusal(prog, file, [], body.nodes, placement, names, homes),
-        Sequence(prefix, continuation) => match emit_leaf(prog, file, prefix.nodes, placement, names, homes) {
-            None => leaf_refusal(prog, file, [], prefix.nodes, placement, names, homes),
-            Some(first) => continuation.refusal(first.prog, first.file, first.placement, first.names, bound, counts, homes),
+        Dataflow(body) => leaf_refusal(saves, prog, file, [], body.nodes, placement, names, homes),
+        Sequence(prefix, continuation) => match emit_leaf(saves, prog, file, prefix.nodes, placement, names, homes) {
+            None => leaf_refusal(saves, prog, file, [], prefix.nodes, placement, names, homes),
+            Some(first) => continuation.refusal(saves, first.prog, first.file, first.placement, first.names, bound, counts, homes),
         },
-        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound, counts, homes) {
-            None => prefix.refusal(prog, file, placement, names, bound, counts, homes),
-            Some(first) => continuation.refusal(first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+        Compose(prefix, continuation) => match prefix.emit_calls(saves, prog, file, placement, names, bound, counts, homes) {
+            None => prefix.refusal(saves, prog, file, placement, names, bound, counts, homes),
+            Some(first) => continuation.refusal(saves, first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => "the branch on " ++ refusal_number(condition) ++ ": its bit is in no register, where " ++ file.shown(),
-            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+            Some(tested) => match when_true.emit_calls(saves, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
                 Succ(Succ(names)), bound, counts, homes) {
-                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(prog.branched(tested.test, Succ(names)),
+                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(saves, prog.branched(tested.test, Succ(names)),
                     file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
-                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
+                Some(yes) => match when_false.emit_calls(saves, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
                     bound, counts, homes) {
-                    None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(
+                    None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(saves,
                         yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes),
                     Some(no) => "where the arms of the branch on " ++ refusal_number(condition) ++ " meet: after the true arm "
                         ++ yes.file.shown() ++ "and after the false arm " ++ no.file.shown(),
                 },
             },
         },
-        Lend(views, callee, arguments, _) => file.lend_refusal(prog, views, callee, arguments, placement, names, bound, counts, homes),
+        Lend(views, callee, arguments, _) => file.lend_refusal(saves, prog, views, callee, arguments, placement, names, bound, counts, homes),
         Call(callee, arguments, _) => file.call_refusal(callee, arguments, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
-            match file.loop_entry(inputs, limit, parameters, count, placement) {
+            match file.loop_entry(saves, inputs, limit, parameters, count, placement) {
                 None => "the entry of a loop: its bound " ++ refusal_number(limit) ++ " or an input (" ++ refusal_numbers(inputs)
                     ++ ") is in no register, or its registers are not apart, where " ++ file.shown(),
-                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                Some(entry) => match body.emit_calls(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
                     Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
-                    None => "in a loop's pass, " ++ body.refusal(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    None => "in a loop's pass, " ++ body.refusal(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
                         Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
-                    Some(pass) => match pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names) {
+                    Some(pass) => match pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names) {
                         None => pass.close_refusal(entry.registers, count, exit, next),
                         Some(_) => "nothing in the loop",
                     },
@@ -286,9 +308,11 @@ fn Function::refused(self function: Function, k: Nat, placement: List<Place>, na
             ++ refusal_number(lent_count(counts, k)),
         True => match input_file(word_ports(function.parameters), argument_registers()) {
             None => "the function has more parameters than argument registers",
-            Some(file) => match function.body.emit_calls(function_opened(Start, k), file, placement, names, k, counts, function.homes()) {
-                None => function.body.refusal(function_opened(Start, k), file, placement, names, k, counts, function.homes()),
-                Some(body) => match function.closing(body) {
+            Some(file) => match function.body.emit_calls(placement_saves(placement), function_opened(Start, k, placement_saves(placement)), file,
+                placement_body(placement), names, k, counts, function.homes()) {
+                None => function.body.refusal(placement_saves(placement), function_opened(Start, k, placement_saves(placement)), file,
+                    placement_body(placement), names, k, counts, function.homes()),
+                Some(body) => match function.closing(placement_saves(placement), body) {
                     None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
                         ++ body.file.shown(),
                     Some(_) => "nothing: the function has code after no other",

@@ -629,7 +629,7 @@ gates passing on the new code.
   - *A refused call has pushed its return address.* The test is in the
     callee, after the CALL. `Target.roomy` asks a word past the levels,
     and `native_compile_correct`'s `deep` is `(depth * (8 * (words + 7)) +
-    80 * functions) + 8 * (words + 1) <= stack`. A program with no calls
+    128 * functions) + 8 * (words + 1) <= stack`. A program with no calls
     carries the word too (cat's theorems), the price of one statement for
     every source.
   - *What a callee keeps.* `Homes::kept` (§2.2). Not R10: saved by the

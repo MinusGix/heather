@@ -558,14 +558,48 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     buffers a region itself loads from or stores into
     (`homes_touched`, `function_ir_lower_calls.hthr`), a home that is
     only lent being read where its view names it. And a *loop* that lends
-    lowers and runs (`each_runs`) and is refused: a pass wants twelve
-    values at the call (four kept words, the index and the next, the
-    loop's count, the argument, the four words the views bind). That is
-    the hash's loop over its blocks, and it waits on a function's
-    long-lived words (homes, a loop's count and state) living in the six
-    callee-saved registers, which hold nothing in compiled functions
-    today (`issues/function-ir-values-in-kept-registers.md`). That is the
-    lowering's and its theorem's, not the planner's.
+    wants twelve values at the call (four kept words, the index and the
+    next, the loop's count, the argument, the four words the views
+    bind), which is the hash's loop over its blocks. It lowers since a
+    function's values may live in the six callee-saved registers
+    (`issues/function-ir-values-in-kept-registers.md`). A function's
+    placement begins by saying how many of them the function saves
+    (`Saving(count)`, a prefix of R12, R13, R14, R15, RBX, RBP); the
+    function stores those above its eight spill slots at its entry and
+    loads them back before its return (`function_opened`,
+    `function_closed`), and its body is checked to leave the stack
+    pointer and the registers the count does not cover
+    (`body_kept(saves)`), so a placement that puts a value in a register
+    the function does not save is refused as it was. The contract is the
+    one a caller already had: `function_runs` proves `Kept(callee_kept())`
+    from the body's own invariant and the loads (`saves_restored`), the
+    save slots being above the body's trail (`Stack::saved_above`). After
+    a call the body's invariant is rebuilt from the callee's contract
+    (`body_kept_of`), so a value in a saved register is read after the
+    call with no store of its own. The planner takes a callee-saved
+    register only where it had none to give: the caller-saved ones all
+    hold live values, and neither RAX nor the register of an operand
+    that dies at the node will do (`Node::fresh`). It writes the count
+    only then (`places_saving`). A branch's meeting register and a
+    loop's registers take a saved one where they used to fall back on
+    RAX with the pool full. Of the linked exports, ten files differ in
+    the frame's size alone and one function of `scan_token`'s program
+    saves R12. The probes pin a leaf
+    and a caller to their instructions with a value in R12, and refuse
+    the same places with no count and a register past it
+    (`lib/_tests/native/function_ir/function_ir_saves_tests.hthr`); the
+    loop that lends has its machine-level theorem (`each_carries`), and
+    a loop over two spans that was refused for a tenth value lowers
+    (`differ_from_lowers`).
+
+    What that costs, and what it does not buy yet. Every function's
+    frame is 112 bytes, whatever it saves, so the stack an export states
+    is 120 bytes a level where it was 72. And a call still stores all
+    eight caller-saved registers round itself, so a value in a saved
+    register is capacity and not fewer stores: storing only what is live
+    across the call is `issues/function-ir-verified-live-spills.md`, and
+    a frame of the size a function uses is
+    `issues/function-frame-sized-by-use.md`.
   - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
     no copy.
   - *V5c, a statement of `Source` that lends*, and the done-when program
@@ -655,7 +689,7 @@ theorem compiled_returns_lent<M>(functions, placement, program, lowered, evaluab
     stack: Stack<M>(fetch, data), f, below, arguments: List<BitVec(64)>, buffers: Buffers(), fits,
     answer: BitVec(64), evaluates: program_run(functions, f, arguments, buffers) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ i s => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i ∧
+        λ i s => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i ∧
             LentAll(stack, i, function_homes(functions, f), arguments, buffers, s.memory),
         λ i s t => read_gpr(Rax, t.gprs) = answer ∧ Kept(callee_kept(), s.gprs, t.gprs) ∧
             stack.Wrote(i, s.memory, t.memory))
@@ -732,10 +766,10 @@ under `lib/_tests`; controls that need a running process are tests of
 |---|---|---|---|
 | 1 | Up to six words arrive in RDI, RSI, RDX, RCX, R8, R9; a span is two of them, pointer then length | `ArgsIn`, `LentAll` | a seventh word is refused by `compile-x86`, as today; an export declared with its span's parts swapped fails the reference test |
 | 2 | One word returns in RAX | `Returns` post | (several results are §8) |
-| 3 | RBX, RBP, R12 to R15 are kept and RSP is back above the return address | `Kept(callee_kept())`, `Returns` | a placement that puts a value in a callee-saved register: `lower_program` is `None` (the lowering checks its own code with `leaves_all`), a theorem by evaluation |
+| 3 | RBX, RBP, R12 to R15 are kept and RSP is back above the return address | `Kept(callee_kept())`, `Returns` | a placement that puts a value in a callee-saved register the function does not save: `lower_program` is `None` (the lowering checks its body's code with `leaves_all` against what the function does not save, `body_kept`), a theorem by evaluation; a function that saves some is run and returns them as it was entered |
 | 4 | The callee stores only into its own room below the return address, and into the bytes of a span lent to write (§7.1) | `Wrote`; `WroteIn` under the lending's marks | a store at or above the return address's offset is shown *not* to satisfy `Unchanged` for a differing word, so no function that made it could meet the post; a program that stores into a buffer its marks leave out has no proof of the certificate's premise; process tests put unmapped pages on both sides of a written span |
 | 5 | The callee reads only its frame and the spans lent | the load's premise, §5 | a load with no known comparison: `lower_program` is `None`; a process test passes a span that ends at an unmapped page and reads at its length, and an empty slice (whose pointer dangles), expecting zero and no fault |
-| 6 | The stack has `72` bytes of room a level of calls | `72 * Succ(f) <= i` | none in the proof's reach; the bound is a constant printed beside the declaration |
+| 6 | The stack has `120` bytes of room a level of calls | `120 * Succ(f) <= i` | none in the proof's reach; the bound is a constant printed beside the declaration |
 | 7 | Stack alignment is neither required nor provided | no premise mentions it; the code calls only compiled code | the process tests enter every export at both alignments |
 | 8 | No red zone is used: the frame is opened by moving RSP first | `frame_allocate`; every store is at or above RSP | covered by clause 4's statement |
 | 9 | The direction flag, x87, SSE and MXCSR are untouched | **not modelled.** Holds because the emitter has no instruction that writes them | an inventory test over `Instruction`; a model of DF is filed only when a string instruction is wanted |
@@ -992,7 +1026,7 @@ program.
   only text to generate; the second needs `compiled_returns_unlent` over
   a lending that lets the root's span be written.
 - The stack an entry's theorem asks for is by its index in the program
-  (`72 * Succ(f)`), as every function's is, not by what it calls. A small
+  (`120 * Succ(f)`), as every function's is, not by what it calls. A small
   function late in a large program is stated with more room than it
   uses: `scan_accept`, a few instructions, is stated with the room of
   every function before it. The bound is sound and loose; tightening it is a change to

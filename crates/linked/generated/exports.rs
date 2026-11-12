@@ -35,23 +35,23 @@ linked!("scan_token.s");
 // (the crate's comment): nothing a caller passes can make the call
 // misbehave, and the unproved part is the platform's, not the callee's.
 unsafe extern "sysv64" {
-    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 216 bytes.
+    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 360 bytes.
     pub safe fn sha512_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 216 bytes.
+    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 360 bytes.
     pub safe fn sha512_t2(a: u64, b: u64, c: u64) -> u64;
-    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 216 bytes.
+    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 360 bytes.
     pub safe fn sha512_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `sha256_t1` of `lib/native/crypto/sha256_round.hthr`. STACK: 72 bytes.
+    /// `sha256_t1` of `lib/native/crypto/sha256_round.hthr`. STACK: 120 bytes.
     pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-    /// `sha256_t2` of `lib/native/crypto/sha256_round.hthr`. STACK: 72 bytes.
+    /// `sha256_t2` of `lib/native/crypto/sha256_round.hthr`. STACK: 120 bytes.
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
-    /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 72 bytes.
+    /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 120 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 1872 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3120 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
-    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 2016 bytes.
+    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3360 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
-    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 2376 bytes.
+    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3960 bytes.
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 
@@ -69,7 +69,7 @@ mod raw {
     }
 }
 
-/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 144 bytes.
+/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 240 bytes.
 pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     // SAFETY (the premises of `count_newlines_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -88,7 +88,7 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     unsafe { raw::count_newlines(text.as_ptr(), text.len() as u64, count) }
 }
 
-/// `raise_span` of `lib/native/native_tool_spans.hthr`. STACK: 144 bytes.
+/// `raise_span` of `lib/native/native_tool_spans.hthr`. STACK: 240 bytes.
 pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
     // SAFETY (the premises of `raise_span_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -114,7 +114,7 @@ pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
     unsafe { raw::raise_span(text.as_mut_ptr(), text.len() as u64, count, from) }
 }
 
-/// `copy_span` of `lib/native/native_tool_spans.hthr`. STACK: 72 bytes.
+/// `copy_span` of `lib/native/native_tool_spans.hthr`. STACK: 120 bytes.
 pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     // SAFETY (the premises of `copy_span_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -140,7 +140,7 @@ pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     unsafe { raw::copy_span(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, count, from) }
 }
 
-/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 144 bytes.
+/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 240 bytes.
 pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     // SAFETY (the premises of `copy_window_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -166,7 +166,7 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
-/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 2448 bytes.
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 4080 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's

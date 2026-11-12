@@ -730,8 +730,8 @@ fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Co
 // own), and nothing else is known to follow.
 fn Node::planned_file(self node: Node, place: Place, file: File) → File {
     match node {
-        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file },
-        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file },
+        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file },
+        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file },
         _ => file,
     }
 }

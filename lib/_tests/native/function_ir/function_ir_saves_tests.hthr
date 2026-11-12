@@ -1,0 +1,217 @@
+// Probes of values in callee-saved registers (`Saving`,
+// lib/native/function_ir/function_ir_lower_calls.hthr;
+// issues/function-ir-values-in-kept-registers.md): a placement that
+// begins by saying how many of them its function saves may put values in
+// those, the function stores them above its spill slots at its entry and
+// loads them back before its return, and the one theorem covers the code
+// as it covers any. Each program here is lowered by evaluation and pinned
+// to its instructions. The controls: the same places with no save, a
+// register past the count, the count where a node's place is read; and
+// what the planner asks to be saved. Tests, not library: nothing imports
+// this module.
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_refusal;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+// A program written forward: an item, an empty block a jump or CALL
+// names, a call's saves and restores, and a function's own.
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+fn Prog::saving(self p: Prog) → Prog { saved_registers().spills(p, 0) }
+fn Prog::restoring(self p: Prog) → Prog { saved_registers().reloads(p, 0) }
+fn Prog::keeping(self p: Prog, registers: List<Gpr>) → Prog { registers.spills(p, 8) }
+fn Prog::kept_back(self p: Prog, registers: List<Gpr>) → Prog { registers.reloads(p, 8) }
+
+// ---------------------------------------------------------------------------
+// What a function saves
+
+// The order is the order they are taken in, and a count is a prefix of it:
+// a function that uses R13 saves R12 too.
+theorem order_is_ranked(): kept_order().map(λ register => register.save_rank()) = [1, 2, 3, 4, 5, 6] { refl }
+theorem two_saved(): function_saves(2) = [R12, R13] { refl }
+theorem none_saved(): function_saves(0) = [] { refl }
+theorem past_six_is_six(): function_saves(9) = kept_order() { refl }
+theorem caller_saved_ranks_nothing(): (scratch_pool() ++ [Rsp]).map(λ register => register.save_rank()) =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// A body with two saved may write those two and must leave the rest, the
+// stack pointer first.
+theorem body_keeps_the_rest(): body_kept(2) = [Rsp, R14, R15, Rbx, Rbp] { refl }
+theorem body_keeps_all(): body_kept(0) = [Rsp, R12, R13, R14, R15, Rbx, Rbp] { refl }
+
+// The frame: eight spill slots and six for the saves, whatever the count.
+theorem frame_is_112(): frame_free() = AddRI8(Rsp, BitVec::ofNat(112)) { refl }
+
+// A placement's head says the count, and no head says none.
+theorem head_is_the_count(): placement_saves([Saving(2), Into(R13), Into(Rax)]) = 2 { refl }
+theorem head_is_not_a_place(): placement_body([Saving(2), Into(R13), Into(Rax)]) = [Into(R13), Into(Rax)] { refl }
+theorem no_head_no_saves(): placement_saves([Into(Rax), Into(Rcx)]) = 0 { refl }
+theorem no_head_all_places(): placement_body([Into(Rax), Into(Rcx)]) = [Into(Rax), Into(Rcx)] { refl }
+
+// The planner's count is the deepest register its places use, and it
+// writes no head where they use none.
+theorem planner_counts_deepest(): places_saving([Into(Rax), Into(R13), Folded, Into(Rcx)]) = [Saving(2), Into(Rax), Into(R13), Folded, Into(Rcx)] {
+    refl
+}
+theorem planner_writes_no_head(): places_saving([Into(Rax), Folded, Into(R11)]) = [Into(Rax), Folded, Into(R11)] { refl }
+
+// ---------------------------------------------------------------------------
+// A leaf function with a value in R12
+
+// twice_more(a, b) = (a + b) + b, function 0, the first sum in R12.
+fn twice_more() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]),
+            nodes := [Add(width := 64, output := 2, left := 0, right := 1), Add(width := 64, output := 3, left := 2, right := 1)],
+            outputs := Ports([word(3)]))),
+        result := 3)
+}
+
+fn leaf_places() → List<Place> { [Saving(1), Into(R12), Into(Rax)] }
+
+// R12 stored at slot 8, above the spill slots, before the body and loaded
+// back after the result is in RAX.
+fn leaf_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()])).keeping([R12])
+        .put(Block([MovRR(R12, Rdi), AddRR(R12, Rsi), MovRR(Rax, R12), AddRR(Rax, Rsi)]))
+        .put(Block([])).kept_back([R12]).put(Block([frame_free()])).put(Ret)
+}
+
+theorem leaf_lowers(): lower_program([twice_more()], leaf_places()) = Some(leaf_program()) { refl }
+
+// The function meets its contract, resident anywhere, with any stack: its
+// caller finds every callee-saved register as it left it.
+theorem leaf_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, leaf_program(), last, origin).Calls(stack, program_callees([twice_more()]), 1) {
+    lower_program_correct<M>([twice_more()], leaf_places(), leaf_program(), leaf_lowers(), fetch, data, last, origin, stack)
+}
+
+// The same places with no save are refused, at the node that writes R12.
+theorem leaf_unsaved_refused(): lower_program([twice_more()], [Into(R12), Into(Rax)]) = None { refl }
+theorem leaf_unsaved_why(): twice_more().refused(0, [Into(R12), Into(Rax)], 1, []) =
+    "the node `2 = add64 0, 1`, placed in r12 (callee-saved, and the function saves 0), where rsi holds 1; rdi holds 0; " { refl }
+
+// A register past the count is refused as one not saved is.
+theorem leaf_past_count_refused(): lower_program([twice_more()], [Saving(1), Into(R13), Into(Rax)]) = None { refl }
+theorem leaf_past_count_why(): twice_more().refused(0, [Saving(1), Into(R13), Into(Rax)], 1, []) =
+    "the node `2 = add64 0, 1`, placed in r13 (callee-saved, and the function saves 1), where rsi holds 1; rdi holds 0; " { refl }
+
+// A place in a register the count covers carries no such note when its
+// node is refused for another reason: the second sum reads a value that is
+// nowhere.
+fn lost() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]),
+            nodes := [Add(width := 64, output := 2, left := 0, right := 1), Add(width := 64, output := 3, left := 9, right := 1)],
+            outputs := Ports([word(3)]))),
+        result := 3)
+}
+theorem saved_place_plain(): lost().refused(0, [Saving(1), Into(Rax), Into(R12)], 1, []) =
+    "the node `3 = add64 9, 1`, placed in r12, where rax holds 2; rsi holds 1; rdi holds 0; " { refl }
+
+// And a larger count than the places use is taken: the function saves what
+// it says.
+fn leaf_two_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()])).keeping([R12, R13])
+        .put(Block([MovRR(R12, Rdi), AddRR(R12, Rsi), MovRR(Rax, R12), AddRR(Rax, Rsi)]))
+        .put(Block([])).kept_back([R12, R13]).put(Block([frame_free()])).put(Ret)
+}
+theorem leaf_two_lowers(): lower_program([twice_more()], [Saving(2), Into(R12), Into(Rax)]) = Some(leaf_two_program()) { refl }
+
+// The count is read at a function's head only: where a node's place is
+// read it is no place.
+theorem count_is_no_place(): lower_program([twice_more()], [Saving(1), Saving(1), Into(Rax)]) = None { refl }
+theorem count_is_no_place_why(): twice_more().refused(0, [Saving(1), Saving(1), Into(Rax)], 1, []) =
+    "the node `2 = add64 0, 1`, placed in saving 1 (a count of saves, which is no node's place), where rsi holds 1; rdi holds 0; " { refl }
+
+// The planner, with registers to spare, asks for no save.
+theorem leaf_planned_plain(): placement_saves(twice_more().plan()) = 0 { refl }
+
+// ---------------------------------------------------------------------------
+// A value in R12 across a call
+
+// double(a) = a + a, function 0.
+fn double() → Function {
+    Function(parameters := [0],
+        body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Add(width := 64, output := 1, left := 0, right := 0)],
+            outputs := Ports([word(1)]))),
+        result := 1)
+}
+
+// add_double(a, b) = double(a) + b, function 1, `b` moved to R12 before
+// the call and read from it after.
+fn add_double() → Function {
+    Function(parameters := [0, 1],
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Move(width := 64, output := 2, source := 1)],
+                outputs := Ports([word(0), word(2)])),
+            Compose(Call(0, [0], 3),
+                Dataflow(Region(inputs := Ports([word(2), word(3)]), nodes := [Add(width := 64, output := 4, left := 3, right := 2)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+fn pair() → List<Function> { [add_double(), double()] }
+fn pair_places() → List<Place> { [Into(Rax), Saving(1), Into(R12), Into(Rax)] }
+
+// The callee saves nothing and writes no callee-saved register, which is
+// what the caller's R12 after the call rests on.
+fn pair_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+        .label(2).put(Block([frame_allocate()])).keeping([R12])
+        .put(Block([MovRR(R12, Rsi)]))
+        .saving().put(Block([])).put(CallTo(1)).restoring()
+        .put(Block([AddRR(Rax, R12)]))
+        .put(Block([])).kept_back([R12]).put(Block([frame_free()])).put(Ret)
+}
+
+theorem pair_lowers(): lower_program(pair(), pair_places()) = Some(pair_program()) { refl }
+
+theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), 2) {
+    lower_program_correct<M>(pair(), pair_places(), pair_program(), pair_lowers(), fetch, data, last, origin, stack)
+}
+
+// add_double's contract: called with `a` and `b` in RDI and RSI on words
+// its body says give `result`, it returns `result` in RAX.
+theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
+    Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, asm_labels(pair_program())(2),
+        CalleePre<M>(program_callees(pair()), 1, [a, b], result), stack.CalleePost(result)) {
+    pair_calls<M>(fetch, data, last, origin, stack)(1, Nat::le_refl(2), [a, b], result)
+}
+
+// With no save, the caller is refused where it writes R12; the callee, at
+// the same places, is not what is refused.
+theorem pair_unsaved_refused(): lower_program(pair(), [Into(Rax), Into(R12), Into(Rax)]) = None { refl }
+theorem pair_unsaved_why(): add_double().refused(1, [Into(R12), Into(Rax)], 2, []) =
+    "the node `2 = move64 1`, placed in r12 (callee-saved, and the function saves 0), where rsi holds 1; rdi holds 0; " { refl }
+theorem pair_callee_plain(): double().refused(0, [Into(Rax)], 2, []) = "nothing: the function has code after no other" { refl }

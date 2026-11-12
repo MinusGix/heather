@@ -218,11 +218,14 @@ theorem differ_sum_lowers(): lower_program_lent(differ_sum::program, plan_progra
     = True { refl }
 
 // The same loop with the index before the sum has its instance and its
-// agreement too. The lowering refuses it with the planner's placement: the
-// next index is made before the bytes are read, so four home words, the
-// index, the sum, the next index, the loop's count and the first byte are
-// in the nine registers a function's values have when the second byte is
-// loaded (issues/function-ir-values-in-kept-registers.md).
+// agreement too. The next index is made before the bytes are read, so
+// four home words, the index, the sum, the next index, the loop's count
+// and the first byte are held when the second byte is loaded: ten values,
+// and nine caller-saved registers hold a function's. The planner puts the
+// tenth in a callee-saved register and the function saves it at its entry
+// (`Saving`, function_ir_lower_calls); with the same places and no save
+// the lowering refuses. The loop above is as crowded at one node and the
+// planner finds it a register that costs nothing, so it saves none.
 runtime fn differ_from(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>, yn: BitVec(64), i, acc: BitVec(64)) → BitVec(64)
     decreases xn.sub(i).toNat()
 {
@@ -241,8 +244,12 @@ theorem differ_from_linked(f: Buffers(), xp, xn, yp, yn, i, acc: BitVec(64)):
     differ_from::agrees_over(f, xp, xn, yp, yn, i, acc)
 }
 theorem differ_from_runs(): program_eval_over([abc(), aba()], differ_from::program, 0, [w(4096), w(3), w(8192), w(3), w(0), w(0)]) = w(4) { refl }
-theorem differ_from_crowded(): lower_program_lent(differ_from::program, plan_program(differ_from::program), program_counts(differ_from::program)).is_some()
-    = False { refl }
+theorem differ_from_lowers(): lower_program_lent(differ_from::program, plan_program(differ_from::program), program_counts(differ_from::program)).is_some()
+    = True { refl }
+theorem differ_from_saves(): placement_saves(plan_program(differ_from::program)) = 1 { refl }
+theorem differ_sum_saves(): placement_saves(plan_program(differ_sum::program)) = 0 { refl }
+theorem differ_from_unsaved(): lower_program_lent(differ_from::program, placement_body(plan_program(differ_from::program)),
+    program_counts(differ_from::program)) = None { refl }
 
 // ---------------------------------------------------------------------------
 // A function lent a span hands it to another: the callee reads the caller's

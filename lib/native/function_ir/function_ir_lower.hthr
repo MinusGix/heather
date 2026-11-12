@@ -2715,7 +2715,13 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // node folded into what reads it. A folded constant is an ADD's immediate
 // (or loaded where something reads it from a register after all); a folded
 // comparison is the flags its branch jumps on. The file knows either.
-inductive Place { Into(register: Gpr), Folded }
+//
+// `Saving` is no node's place. It is what a function's placement begins
+// with where the function saves callee-saved registers to hold values in:
+// how many of them, in `kept_order` (function_ir_lower_reads,
+// `placement_saves` in function_ir_lower_calls). Where a node's place is
+// wanted it is a refusal.
+inductive Place { Into(register: Gpr), Folded, Saving(count: Nat) }
 
 fn Node::fold(self node: Node, file: File) → Option<Lowered> {
     match node {
@@ -2774,7 +2780,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
 }
 
 fn Node::lower_at(self node: Node, place: Place, file: File) → Option<Lowered> {
-    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file) }
+    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None }
 }
 
 theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
@@ -2783,6 +2789,7 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
     match place {
         Into(destination) => node.lower_keeps<M>(values, destination, file),
         Folded => node.fold_keeps<M>(values, file),
+        Saving(_) => trivial,
     }
 }
 
@@ -3338,16 +3345,55 @@ fn File::dying_of(self file: File, operands: List<Nat>, later: Nat → Bool, poo
     }
 }
 
-// Where a node goes when no register of `pool` is free: RAX if nothing
-// live is there and the output is not read after a later call, else the
-// register of an operand that dies at the node and that its code can
-// write over, else RAX, and the lowering will refuse what is lost.
-fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool, pool: List<Gpr>) → Gpr {
+// Where a callee-saved register comes in the order a function saves them
+// (`kept_order`, function_ir_lower_reads), from one; none for a register a
+// function does not save.
+fn Gpr::save_rank(self register: Gpr) → Nat {
+    match register { R12 => 1, R13 => 2, R14 => 3, R15 => 4, Rbx => 5, Rbp => 6, _ => 0 }
+}
+
+// A pool's registers a function need not save, and the ones it must.
+fn pool_unsaved(pool: List<Gpr>) → List<Gpr> {
+    match pool {
+        Nil => [],
+        Cons(register, rest) => match register.save_rank() { Zero => Cons(register, pool_unsaved(rest)), Succ(_) => pool_unsaved(rest) },
+    }
+}
+fn pool_saved(pool: List<Gpr>) → List<Gpr> {
+    match pool {
+        Nil => [],
+        Cons(register, rest) => match register.save_rank() { Zero => pool_saved(rest), Succ(_) => Cons(register, pool_saved(rest)) },
+    }
+}
+
+// Where a node goes at no cost when no register of the pool that needs no
+// save is free: RAX if nothing live is there and the output is not read
+// after a later call, else the register of an operand that dies at the
+// node and that its code can write over.
+fn Node::crowded_in(self node: Node, file: File, live, later, crossed: Nat → Bool, pool: List<Gpr>) → Option<Gpr> {
     match slot_free(file.at(Rax), live) && !crossed(node.output_id()) {
-        True => Rax,
-        False => match file.dying_of(node.overwritable(), later, pool, !crossed(node.output_id())) {
-            None => Rax,
+        True => Some(Rax),
+        False => file.dying_of(node.overwritable(), later, pool, !crossed(node.output_id())),
+    }
+}
+
+// The same as a register: RAX where there is none, and the lowering will
+// refuse what is lost.
+fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool, pool: List<Gpr>) → Gpr {
+    match node.crowded_in(file, live, later, crossed, pool) { None => Rax, Some(register) => register }
+}
+
+// A register for a new value: the first free one of `pool` that a function
+// need not save, none of `kept` when one is free apart from them; else
+// what `crowded_in` finds; else the first free callee-saved register of
+// `pool`, which costs its function a save (`Saving`,
+// function_ir_lower_calls); else RAX.
+fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
+    match file.first_spare(live, pool_unsaved(pool), kept) {
+        Some(register) => register,
+        None => match node.crowded_in(file, live, later, crossed, pool) {
             Some(register) => register,
+            None => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(register) => register },
         },
     }
 }
@@ -3355,16 +3401,14 @@ fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool
 // The output's own register if it is free; else, for arithmetic and moves,
 // the first operand's register when the operand dies here and it is in
 // `pool`, or is RAX and the output is not read after a later call
-// (`crossed`; a call's result lands in RAX); else the first free register
-// of `pool`, none of `kept` when one is free apart from them; else what
-// `crowded` finds.
+// (`crossed`; a call's result lands in RAX); else what `fresh` finds.
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
 fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
     registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = match file.first_spare(live, pool, kept) { None => node.crowded(file, live, later, crossed, pool), Some(r) => r };
+    let fresh = node.fresh(file, live, later, crossed, pool, kept);
     let reuse = match prefers_operand(node) {
         False => fresh,
         True => match node.in_place(file, later) {

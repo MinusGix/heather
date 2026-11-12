@@ -44,19 +44,19 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleePost(answer)) {
     let site = Site<M>(fetch, data, program, last, origin);
     let calls = lower_program_correct<M>(functions, placement, program, lowered, fetch, data, last, origin, stack);
     let computed = program_eval_computes(functions, evaluable, f, arguments, fits);
     let returns = site.returns_weaken(stack, asm_labels(program)(Succ(f)),
         CalleePre<M>(program_callees(functions), f, arguments, program_eval(functions, f, arguments)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleePost(program_eval(functions, f, arguments)),
         calls(f, below, arguments, program_eval(functions, f, arguments)),
         λ i s held => ⟨held.left, ⟨computed, held.right⟩⟩);
     j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleePost(x)), returns)
 }
 
@@ -77,7 +77,7 @@ theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Plac
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
     ran: program_effects(functions)(before, f, arguments, result, after)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after)) {
     let site = Site<M>(fetch, data, program, last, origin);
@@ -85,7 +85,7 @@ theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Plac
         lendless, allowed);
     site.returns_weaken(stack, asm_labels(program)(Succ(f)),
         stack.CalledOver(program_effects(functions), lending, top, f, arguments, result, before, after),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after), calls(f, below, arguments, result, before, after),
         λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
@@ -104,7 +104,7 @@ theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), before: Buffers(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, answer.word, answer.buffers)) {
     compiled_returns_over<M>(functions, placement, lending, program, lowered, lendless, allowed, fetch, data, last, origin, stack, top, loan, f, below,
@@ -128,7 +128,7 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), answer.word, answer.buffers)) {
     compiled_returns_run<M>(functions, placement, Lending::writing(counts, addresses, before, marks), program, lowered, evaluable,
@@ -152,7 +152,7 @@ theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Pla
     arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
     ran: program_effects(functions)(before, f, arguments, result, after)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after)) {
     let site = Site<M>(fetch, data, program, last, origin);
@@ -160,7 +160,7 @@ theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Pla
         stack, top);
     site.returns_weaken(stack, asm_labels(program)(Succ(f)),
         stack.CalledOver(program_effects(functions), lending, top, f, arguments, result, before, after),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after), calls(lending, refl, loan, f, below, allowed, arguments, result, before, after),
         λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
@@ -180,7 +180,7 @@ theorem compiled_returns_marked<M>(functions: List<Function>, placement: List<Pl
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), answer.word, answer.buffers)) {
     compiled_returns_needs<M>(functions, placement, Lending::writing(counts, addresses, before, marks_row(tables, f)), program, lowered,
@@ -203,7 +203,7 @@ theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Plac
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), now: Buffers(), answer: BitVec(64),
     evaluates: program_eval_over(now, functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, now)(i, s),
         stack.AnsweredOver(lending, answer, now)) {
     let value = program_eval_over(now, functions, f, arguments);
@@ -228,7 +228,7 @@ theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Pl
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval_over([], functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleePost(answer)) {
     let lending = Lending::reading(counts, [], []);
     let returns = compiled_returns_lent<M>(functions, placement, lending, program, lowered, evaluable, quiet, fetch, data, last, origin, stack,
@@ -254,10 +254,10 @@ theorem compiled_returns_keeps<M>(functions: List<Function>, placement: List<Pla
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleeKeeps(answer)) {
     Site<M>(fetch, data, program, last, origin).returns_implies(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i,
         stack.CalleePost(answer), stack.CalleeKeeps(answer),
         compiled_returns<M>(functions, placement, program, lowered, evaluable, fetch, data, last, origin, stack, f, below, arguments, fits,
             answer, evaluates),
@@ -540,5 +540,8 @@ theorem lower_program_emitted(functions: List<Function>, placement: List<Place>,
 // The lowered code as numbers (`Prog::numbers`, x86_64_asm), for the
 // compiler to read back and state as a literal; the placement's here.
 
-// A place: its register's index, or 16 folded.
-fn Place::number(self place: Place) → Nat { match place { Into(register) => register.index(), Folded => 16 } }
+// A place: its register's index, or 16 folded; a function's count of saves,
+// 17 and the count.
+fn Place::number(self place: Place) → Nat {
+    match place { Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count }
+}

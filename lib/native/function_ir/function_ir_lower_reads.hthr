@@ -505,15 +505,23 @@ theorem kept_write(registers: List<Gpr>, register: Gpr, value: BitVec(64), gprs:
     }
 }
 
+// The callee-saved registers a function may hold values in, in the order
+// it takes them. A function that saves `saves` of them at its entry and
+// restores them at its exit (`Function::emit_lent`, function_ir_lower_calls)
+// holds values in those, and its body keeps the stack pointer and the rest:
+// what every leaf's code is checked to leave.
+fn kept_order() → List<Gpr> { [R12, R13, R14, R15, Rbx, Rbp] }
+fn body_kept(saves: Nat) → List<Gpr> { Cons(Rsp, kept_order().drop(saves)) }
+
 // From one home: refused unless the path knows the index below the home's
-// length, the address forms, and nothing callee-saved is written.
-fn File::load_at(self file: File, prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
+// length, the address forms, and nothing the body keeps is written.
+fn File::load_at(self file: File, saves: Nat, prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
     Option<Emitted> {
     match file.bounded(load.index, home.length) {
         False => None,
         True => match file.address(destination, home.base, load.index) {
             None => None,
-            Some(address) => match leaves_all(address.code, callee_saved()) && destination.apart(callee_saved()) {
+            Some(address) => match leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
                 False => None,
                 True => Some(Emitted(At(At(prog, 0, Block(address.code)), 0, LoadByte(ByteLoad(destination, destination))),
                     address.file.write(destination, Some(Held(load.output, Word))), placement, names)),
@@ -525,26 +533,27 @@ fn File::load_at(self file: File, prog: Prog, home: Lent, load: Load, destinatio
 // From the first of the buffer's homes that serves: after a loop a buffer
 // has the home the loop left and the one before it, and the file holds
 // one's values.
-fn File::load_from(self file: File, prog: Prog, homes: List<Lent>, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
+fn File::load_from(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
     Option<Emitted> {
     match homes {
         Nil => None,
         Cons(home, rest) => match home.buffer.same(load.buffer) {
-            False => file.load_from(prog, rest, load, destination, placement, names),
-            True => match file.load_at(prog, home, load, destination, placement, names) {
-                None => file.load_from(prog, rest, load, destination, placement, names),
+            False => file.load_from(saves, prog, rest, load, destination, placement, names),
+            True => match file.load_at(saves, prog, home, load, destination, placement, names) {
+                None => file.load_from(saves, prog, rest, load, destination, placement, names),
                 Some(emitted) => Some(emitted),
             },
         },
     }
 }
 
-fn File::emit_load(self file: File, prog: Prog, homes: List<Lent>, load: Load, placement: List<Place>, names: Nat) → Option<Emitted> {
+fn File::emit_load(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, load: Load, placement: List<Place>, names: Nat) → Option<Emitted> {
     match placement {
         Nil => None,
         Cons(place, rest) => match place {
             Folded => None,
-            Into(destination) => file.load_from(prog, homes, load, destination, rest, names),
+            Saving(_) => None,
+            Into(destination) => file.load_from(saves, prog, homes, load, destination, rest, names),
         },
     }
 }
@@ -619,7 +628,7 @@ theorem leaf_store_stores(nodes: List<Node>, store: Store): leaf_store(nodes) = 
 // length, the address forms in the output's register, a register holds the
 // value, and nothing callee-saved is written. The byte is stored over the
 // address and loaded back, which is what the store's output names.
-fn File::store_at(self file: File, prog: Prog, home: Lent, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
+fn File::store_at(self file: File, saves: Nat, prog: Prog, home: Lent, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
     Option<Emitted> {
     match file.bounded(store.index, home.length) {
         False => None,
@@ -627,7 +636,7 @@ fn File::store_at(self file: File, prog: Prog, home: Lent, store: Store, destina
             None => None,
             Some(address) => match address.file.find(Held(store.value, Word)) {
                 None => None,
-                Some(source) => match (leaves_all(address.code, callee_saved()) && destination.apart(callee_saved())) &&
+                Some(source) => match (leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
                     store_base_plain(destination) {
                     False => None,
                     True => Some(Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
@@ -640,26 +649,27 @@ fn File::store_at(self file: File, prog: Prog, home: Lent, store: Store, destina
 }
 
 // Into the first of the buffer's homes that serves, as a load reads from.
-fn File::store_from(self file: File, prog: Prog, homes: List<Lent>, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
+fn File::store_from(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
     Option<Emitted> {
     match homes {
         Nil => None,
         Cons(home, rest) => match home.buffer.same(store.buffer) {
-            False => file.store_from(prog, rest, store, destination, placement, names),
-            True => match file.store_at(prog, home, store, destination, placement, names) {
-                None => file.store_from(prog, rest, store, destination, placement, names),
+            False => file.store_from(saves, prog, rest, store, destination, placement, names),
+            True => match file.store_at(saves, prog, home, store, destination, placement, names) {
+                None => file.store_from(saves, prog, rest, store, destination, placement, names),
                 Some(emitted) => Some(emitted),
             },
         },
     }
 }
 
-fn File::emit_store(self file: File, prog: Prog, homes: List<Lent>, store: Store, placement: List<Place>, names: Nat) → Option<Emitted> {
+fn File::emit_store(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, store: Store, placement: List<Place>, names: Nat) → Option<Emitted> {
     match placement {
         Nil => None,
         Cons(place, rest) => match place {
             Folded => None,
-            Into(destination) => file.store_from(prog, homes, store, destination, rest, names),
+            Saving(_) => None,
+            Into(destination) => file.store_from(saves, prog, homes, store, destination, rest, names),
         },
     }
 }

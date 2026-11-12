@@ -159,7 +159,7 @@ theorem sum_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, abc()).spans())):
     Site<M>(fetch, data, sum_program(), last, origin).Returns(stack, asm_labels(sum_program())(1),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 120 * 1 <= i) ∧
             stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], abc())(i, s),
         stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(294), abc())) {
     compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
@@ -174,7 +174,7 @@ theorem sum_of_now<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, abc()).spans())):
     Site<M>(fetch, data, sum_program(), last, origin).Returns(stack, asm_labels(sum_program())(1),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 120 * 1 <= i) ∧
             stack.LentOver(Lending::reading([1], addresses, abc()), top, 0, [a, w(3)], upper())(i, s),
         stack.AnsweredOver(Lending::reading([1], addresses, abc()), w(198), upper())) {
     compiled_returns_lent<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, abc()), sum_program(), sum_lowers(),
@@ -292,7 +292,7 @@ theorem put_at_x<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<B
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, abc()).spans())):
     Site<M>(fetch, data, put_at_program(), last, origin).Returns(stack, asm_labels(put_at_program())(1),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), w(1), w(88)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), w(1), w(88)], argument_registers(), s.gprs) ∧ 120 * 1 <= i) ∧
             stack.LentOver(writing([1], addresses, abc()), top, 0, [a, w(3), w(1), w(88)], abc())(i, s),
         stack.AnsweredOver(writing([1], addresses, abc()), w(88), axc())) {
     compiled_returns_run<M>([put_at()], plan_program([put_at()]), writing([1], addresses, abc()), put_at_program(), put_at_lowers(),
@@ -384,7 +384,7 @@ theorem bump_of_abc<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Lis
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, abc()).spans())):
     Site<M>(fetch, data, bump_program(), last, origin).Returns(stack, asm_labels(bump_program())(1),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 72 * 1 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3)], argument_registers(), s.gprs) ∧ 120 * 1 <= i) ∧
             stack.LentOver(writing([1], addresses, abc()), top, 0, [a, w(3)], abc())(i, s),
         stack.AnsweredOver(writing([1], addresses, abc()), w(3), bcd())) {
     compiled_returns_run<M>([bump()], plan_program([bump()]), writing([1], addresses, abc()), bump_program(), bump_lowers(),

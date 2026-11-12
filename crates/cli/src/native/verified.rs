@@ -475,6 +475,8 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
         for n in read(&fork, &probe, &format!("plan_{k}"))? {
             placement.push(match n {
                 16 => "Folded".to_string(),
+                // A function's count of saves (`Place::number`).
+                n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });
         }
@@ -706,12 +708,12 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
     stack: Stack<M>(fetch, data), top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
     loan: Loan<M>(fetch, data, stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
     Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 120 * {label} <= i) ∧
             stack.LentOver({prefix}_lending(addresses, Cons(span, rest)), top, {f}, {list}, Cons(span, rest))(i, s),
         stack.AnsweredOver({prefix}_lending(addresses, Cons(span, rest)), {call}.value, Cons({call}.after, rest))) {{
     {returns}
 }}
-", label = f + 1, room = 72 * (f + 1), returns = if program.tables.is_some() {
+", label = f + 1, room = 120 * (f + 1), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
             format!("compiled_returns_marked<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {prefix}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial, loan,
@@ -741,14 +743,14 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
     stack: Stack<M>(fetch, data), top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
     loan: Loan<M>(fetch, data, stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
     Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 120 * {label} <= i) ∧
             stack.LentOver({prefix}_lending(addresses, now), top, {f}, {list}, now)(i, s),
         stack.AnsweredOver({prefix}_lending(addresses, now), {call}, now)) {{
     compiled_returns_lent<M>({prefix}_program(), {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(), {prefix}_lowers(),
         {prefix}_evaluable(), {prefix}_quiet(), fetch, data, last, origin, stack, top, loan, {f}, trivial, {list}, trivial, now, {call},
         {prefix}_agrees(now{comma}{arguments}))
 }}
-", label = f + 1, room = 72 * (f + 1), arguments = parameters.join(", ")));
+", label = f + 1, room = 120 * (f + 1), arguments = parameters.join(", ")));
     } else {
         text.push_str(&format!("
 // Called at its label with its arguments in RDI, RSI, …, a return address
@@ -760,12 +762,12 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data){comma}{typed}):
     Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn({list}, argument_registers(), s.gprs) ∧ 120 * {label} <= i,
         stack.CalleePost({call})) {{
     compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         fetch, data, last, origin, stack, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
-", label = f + 1, room = 72 * (f + 1), arguments = parameters.join(", ")));
+", label = f + 1, room = 120 * (f + 1), arguments = parameters.join(", ")));
     }
     // The program's other exported functions, each at its own label: a
     // function of words, lent nothing, so its contract is the plain one
@@ -798,11 +800,11 @@ theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} 
 theorem {symbol}_native_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data){comma}{typed}):
     Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn({list}, argument_registers(), s.gprs) ∧ 120 * {label} <= i,
         stack.CalleePost({call}({arguments}))) {{
     {proved}
 }}
-", label = g + 1, room = 72 * (g + 1)));
+", label = g + 1, room = 120 * (g + 1)));
     }
     Ok(Compiled { text, bytes, entry, entries })
 }

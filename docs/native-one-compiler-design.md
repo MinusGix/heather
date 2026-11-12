@@ -520,8 +520,9 @@ that neither is needed, and what follows is the form that was built.
   two spans keeps four home words in place, which leaves its body five
   of the nine registers a function's values have: `differ_sum`
   (`runtime_lent_tests.hthr`) compiles with its certificate, and the
-  same loop with its parameters in the other order is one register
-  short (issues/function-ir-values-in-kept-registers.md).
+  same loop with its parameters in the other order holds a tenth
+  value, which the planner puts in a callee-saved register the function
+  saves at its entry (issues/function-ir-values-in-kept-registers.md).
 
   Linking over a file (step 3c, built). The evaluator's two linking
   lemmas are stated over the buffers (`Function::eval_answers_over`,

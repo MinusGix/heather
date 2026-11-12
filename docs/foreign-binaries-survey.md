@@ -418,7 +418,7 @@ Heather as the caller:
 | 3 | RBX, RBP, R12 to R15 kept, RSP back | **proved**: `Kept`, `Returns` (rung 2) |
 | 4 | stores only into its own room | **proved**: `Wrote` (rung 2). This is "does not write over my stack" |
 | 5 | reads only its frame and spans lent | **proved**: the read half of rung 2 |
-| 6 | 72 bytes of stack a level | **proved as a number** about the callee: its maximum depth, from the stack-height invariant and the call graph. The caller's `pre` then asks for that much room |
+| 6 | 120 bytes of stack a level | **proved as a number** about the callee: its maximum depth, from the stack-height invariant and the call graph. The caller's `pre` then asks for that much room |
 | 7 | alignment neither required nor provided | **must be provided**: compiled C assumes RSP is 16-byte aligned at a call and uses aligned SSE moves on its frame. The model needs the fault, or the contract needs the premise |
 | 8 | no red zone used | **reversed**: the callee may store up to 128 bytes below RSP. Harmless to the caller, since that is below the callee's entry RSP, but `Own` must admit it, and a signal handler on the same stack must not run there |
 | 9 | DF, x87, SSE state, MXCSR untouched, by inventory | **must be modelled or premised**: the ABI lets a callee clobber every XMM register and requires DF clear on entry |

@@ -227,7 +227,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
-fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16 }} }}
+fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count }} }}
 fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
 ");
     let mut fork = elab.fork();
@@ -279,6 +279,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let places = if functions == 0 { None } else {
         let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
             16 => Ok("Folded".to_string()),
+            n if n >= 17 => Ok(format!("Saving({})", n - 17)),
             n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
         }).collect::<Result<Vec<_>, String>>()?;
         Some(format!("[{}]", places.join(", ")))
@@ -514,7 +515,7 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + 80 * {src}().functions.len()) + 8 * ({src}().words + 1) <= depth, args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + 128 * {src}().functions.len()) + 8 * ({src}().words + 1) <= depth, args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}

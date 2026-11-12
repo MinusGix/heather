@@ -20,8 +20,8 @@
 // lent buffers as the function left them (`Target::based_left`). RAX then
 // goes to the result's home.
 //
-// Room: each activation keeps 80 bytes a function below its frame
-// (`Target::roomy`), and function `f` asks 72 a level and the CALL a word.
+// Room: each activation keeps 128 bytes a function below its frame
+// (`Target::roomy`), and function `f` asks 120 a level and the CALL a word.
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
@@ -134,7 +134,7 @@ fn Target::lending(self t: Target, held: Buffers(), count: Nat) → Lending {
 // buffers it is lent in memory, and each of them as long as its capacity.
 fn Target::CalledWith(self t: Target, held: Buffers(), f: Nat, words: List<BitVec(64)>) → Nat → MachineState<X86Memory(t.r.profile)> → Type {
     λ i s => ArgsIn(t.passed_homes(program_lent(t.functions, f)) ++ words, argument_registers(), s.gprs) ∧
-        (72 * Succ(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
+        (120 * Succ(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
                 s.memory) ∧
             ((b: Nat) → b < program_lent(t.functions, f) → buffer_bytes(held, b).len() = t.layout().capacity(b))))
 }
@@ -996,7 +996,7 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let a = call(env.buffers, f, words);
         let i0 = t.index - 8;
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
-        let room_f: (72 * Succ(f) <= i0) = omega(t.roomy, below);
+        let room_f: (120 * Succ(f) <= i0) = omega(t.roomy, below);
         let bare = pre.left;
         let v = bare.left.witness;
         let based = bare.left.proof;

@@ -139,3 +139,4 @@ a store through a read-only view is refused by the judgment.
   Found on the way: the kernel runs out of fuel on the probe sentence that a lender and a loop lower together ([[kernel-fuel-lowering-a-lender-and-a-loop]]); the export's certificate is by pieces and does not meet it.
 
   V5a is done but for a loop that lends ([[function-ir-values-in-kept-registers]]). Left of V5: V5b, V5c.
+- 2026-11-12: The loop that lends lowers: a function's values may live in callee-saved registers the function saves ([[function-ir-values-in-kept-registers]], its log has what was built and what was not). `each_refused` became `each_accepted` with the machine-level theorem `each_carries`, and the same places with no save are the control. So V5a is whole, and the hash's loop over its blocks has the registers it wants. Left of V5: V5b, V5c.

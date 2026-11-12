@@ -478,7 +478,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let written = |span: usize| shape.marks.as_ref().is_some_and(|marks| marks.get(span) == Some(&true));
     let mut kinds: Vec<_> = (0..spans).map(|span| if written(span) { heather_cli::linked::Kind::SpanMut } else { heather_cli::linked::Kind::Span }).collect();
     kinds.resize(shape.arity - spans, heather_cli::linked::Kind::Word);
-    let signature = heather_cli::linked::Signature { kinds, stack: 72 * (shape.root as u64 + 1) };
+    let signature = heather_cli::linked::Signature { kinds, stack: 120 * (shape.root as u64 + 1) };
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
@@ -533,7 +533,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // The root, then the program's other entries: each a function of words.
     let mut exported = vec![(symbol.to_string(), signature, compiled.entry)];
     for (entry, at) in shape.entries.iter().zip(&compiled.entries) {
-        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: 72 * (entry.index as u64 + 1) };
+        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: 120 * (entry.index as u64 + 1) };
         exported.push((entry.symbol.clone(), signature, *at));
     }
     write_new(&output, program_assembly(&exported, &compiled.bytes).as_bytes())?;
