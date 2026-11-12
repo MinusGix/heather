@@ -18,3 +18,7 @@ What stops the second short: an instance is keyed by its class and its carrier's
 Not built. The first class is wanted by stage B round 3 whichever way the rest is decided. The second waits on Minus's answer and on the words' instance.
 
 Done when: the accessor class exists with instances for the library's words and the reflector uses it; and either `laid record` declares a `Lay` instance and reads nested fields through it, or this says why types stay found by name.
+
+## Log
+
+- 2026-11-12: The first class is in the library: `Accessor<A>(codec)` in `lib/native/runtime/stored_accessor.hthr`, with instances for `Stored::u32_be()` and `Stored::u64_be()` and the two laws at a part for every codec with an accessor (`Stored::read_at_part`, `Stored::write_at_part`). Probes (`lib/_tests/native/runtime/stored_accessor_tests.hthr`): the call found by resolution is the width's own function by `refl`, the little-endian codec is refused as having no instance, and SHA-256's count and a schedule word are read and stored through the generic laws. The reflector does not use it yet (stage B round 3). The second class, a declared type's layout, waits on Minus's answer and on the words' instance.

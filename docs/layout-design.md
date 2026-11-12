@@ -719,13 +719,19 @@ every codec a lens in the full sense (`put(b, get(b)) = b`,
 ### 9.4 What reads a codec
 
 The expansion has to know which code reads a field: a word of four bytes,
-most significant first, at offset 64. Today that is a `Part` whose codec
-is a term, and a generator can only match its spelling. This is the first
-reader that needs a layout as data
-(`issues/layout-first-order-description.md`), so that round comes before
-the expansion: the table of fields a held function's world holds is then
-a list of (offset, word shape) pairs computed from the description, and
-the simulation's leaf cases are stated over the shape.
+most significant first, at offset 64. A field is a `Part` whose codec is
+a term, and the code for a codec is found by a class keyed by that term
+(`Accessor(codec)`, `lib/native/runtime/stored_accessor.hthr`, §10.2):
+the instance holds the `runtime fn` that reads the codec's value under a
+length word, the one that stores it, the word a value is held as, and
+the two theorems that the calls are the codec's `get` and `put`. The
+simulation's leaf cases are then two theorems for every codec that has
+an accessor, `Stored::read_at_part` and `Stored::write_at_part`, built.
+A field whose codec has no instance is refused by name.
+
+(First written here: this reader needs a layout as data, a closed
+description the expansion interprets. The class is the open form of the
+same thing, and what was learnt trying both is §10.)
 
 Indexing an array field by a word (`ctx.schedule[t]`) is a field read at
 a computed offset. Its record meaning is total only with a bound, so the
@@ -813,12 +819,20 @@ fn width<A: Wide(codec)>(codec: Stored<A>) → Nat { A.bytes }
 
 Checked (`cls2.hthr`): two instances at one type are told apart by the
 codec's term, the instance is found from the codec passed, and a codec
-with none is refused as "no instance". The real class holds the
-`runtime fn` that reads the codec's value, the one that stores it, and
-the two theorems of `stored_words.hthr` that tie them to `get` and `put`.
-Stage B's reflector (§9.4) then finds a field's load and store by
-resolution. It is open: a new codec comes with its accessor and the
-generator does not change.
+with none is refused as "no instance".
+
+**Built** as `Accessor<A>(codec)` (`lib/native/runtime/stored_accessor.hthr`):
+the word a value is held as (`wide`, `narrow`, and that a value is kept
+by its word), the `runtime fn` that reads the codec's value and the one
+that stores it, and the two theorems that tie them to `get` and `put`
+under a length word. Instances for `Stored::u32_be()` and
+`Stored::u64_be()`, which are the words that have compiled code
+(`stored_words.hthr`). Over it, the laws at a part of what a span holds
+for every codec with an accessor (`Stored::read_at_part`,
+`Stored::write_at_part`), which are the four width-specific theorems of
+`stored_words.hthr` as one pair. Stage B's reflector (§9.4) finds a
+field's load and store by resolution. It is open: a new codec comes with
+its accessor and the generator does not change.
 
 **A declared type to its layout**:
 

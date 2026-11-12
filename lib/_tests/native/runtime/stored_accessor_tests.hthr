@@ -1,0 +1,77 @@
+// Probes for `lib/native/runtime/stored_accessor.hthr`: the instance is
+// found from the codec's term, the generic laws at a part are the
+// width's own at each instance, and a codec with no accessor is refused.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import laid;
+import sha256_context;
+
+// What compiled code calls for a codec, by resolution.
+fn read_by<A: Accessor(codec)>(codec: Stored<A>, span: List<u8>, length, i: u64) → u64 { A.read(span, length, i) }
+
+theorem read_by_u32(span: List<u8>, length, i: u64): read_by(Stored::u32_be(), span, length, i) = span.u32_be_within(length, i) { refl }
+
+theorem read_by_u64(span: List<u8>, length, i: u64): read_by(Stored::u64_be(), span, length, i) = span.u64_be_within(length, i) { refl }
+
+// The other byte order is another term at the same type, and has no
+// accessor yet.
+// expect-error: no instance
+theorem read_by_le(span: List<u8>, length, i: u64): read_by(Stored::u32_le(), span, length, i) = 0 { refl }
+
+// The generic law at a field of SHA-256's context: the count, a word of
+// eight bytes, and a schedule word, four bytes read widened.
+theorem count_by_class(ctx: List<u8>, cn, at: u64, place: at.toNat() = Sha256::count_at.toNat(), inside: at.toNat() + 8 <= cn.toNat()):
+    ctx.u64_be_within(cn, at) = Sha256::of(ctx).count {
+    Stored::u64_be().read_at_part(ctx, cn, at, Sha256::count_part(), 0, refl, place, inside)
+}
+
+theorem schedule_by_class(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
+    ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).schedule, i, here).zero_extend(32) {
+    Stored::u32_be().read_at_part(ctx, cn, at, Sha256::schedule_word(i, here), 0, refl, place, inside)
+}
+
+theorem count_put_by_class(ctx: List<u8>, cn, at, count: u64, place: at.toNat() = Sha256::count_at.toNat(), inside: at.toNat() + 8 <= cn.toNat(), own: cn.toNat() <= ctx.len(),
+    fits: SHA256_CONTEXT_BYTES <= ctx.len()):
+    Sha256::of(List::put_u64_be_within(ctx, cn, at, count).after) = (Sha256::of(ctx) with { count = count }) {
+    Stored::u64_be().write_at_part(ctx, cn, at, count, Sha256::count_part(), 0, refl, place, inside, own, fits)
+}
+
+// A value is kept by its word: what is stored and read back is the value.
+theorem kept_u32(w: u32): w.zero_extend(32).truncate(32, 32) = w { BitVec::truncate_zero_extend(32, 32, w) }

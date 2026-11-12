@@ -1,0 +1,112 @@
+// A codec's compiled accessor, as a class (docs/layout-design.md §10.2,
+// issues/layout-classes.md). `lib/std/machine/stored.hthr` says what
+// bytes mean and `stored_words.hthr` has the `runtime fn`s that read and
+// store the library's words; this is the association between the two,
+// found by resolution from the codec's term the way `Compile(f)` is found
+// from `f`. A generator that meets a field stored by `Stored::u32_be()`
+// asks for `Accessor(Stored::u32_be())` and has the function to call and
+// the theorem that the call is the codec's, and a new codec comes with
+// its own instance and changes no generator.
+//
+// The two theorems at the end are the laws at a part of what a span
+// holds, for every codec with an accessor: the leaf cases of a
+// `runtime fn` whose receiver is a laid record (§9.2).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import stored_words;
+
+// What compiled code reads and stores a codec's value with: a word of
+// the machine for the value, the two `runtime fn`s, and that under a
+// span's length word they are the codec's `get` and `put`. Keyed by the
+// codec's term, so `Stored::u32_be()` and `Stored::u32_le()` each have
+// their own, and a codec with none is refused by name where a
+// `runtime fn` reads a field stored by it.
+class Accessor<A>(codec: Stored<A>) {
+    wide: A → u64,
+    narrow: u64 → A,
+    kept: (a: A) → narrow(wide(a)) = a,
+    read: List<u8> → u64 → u64 → u64,
+    write: List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>,
+    reads: (span: List<u8>) → (length, i: u64) → i.toNat() + codec.layout.size <= length.toNat() → read(span, length, i) = wide(codec.get(span, i.toNat())),
+    writes: (span: List<u8>) → (length, i, word: u64) → i.toNat() + codec.layout.size <= length.toNat() → length.toNat() <= span.len() →
+        write(span, length, i, word) = Mutated(codec.put(span, i.toNat(), narrow(word)), word),
+}
+
+instance Accessor<BitVec(32)>(Stored::u32_be()) {
+    wide := λ (w: u32) => w.zero_extend(32),
+    narrow := λ (w: u64) => w.truncate(32, 32),
+    kept := λ w => BitVec::truncate_zero_extend(32, 32, w),
+    read := λ span length i => span.u32_be_within(length, i),
+    write := λ span length i word => List::put_u32_be_within(span, length, i, word),
+    reads := λ span length i inside => span.u32_be_within_stored(length, i, inside),
+    writes := λ span length i word inside own => span.put_u32_be_within_stored(length, i, word, inside, own),
+}
+
+instance Accessor<BitVec(64)>(Stored::u64_be()) {
+    wide := λ (w: u64) => w,
+    narrow := λ (w: u64) => w,
+    kept := λ w => refl,
+    read := λ span length i => span.u64_be_within(length, i),
+    write := λ span length i word => List::put_u64_be_within(span, length, i, word),
+    reads := λ span length i inside => span.u64_be_within_stored(length, i, inside),
+    writes := λ span length i word inside own => span.put_u64_be_within_stored(length, i, word, inside, own),
+}
+
+// A word read by compiled code where a part lies is the part of the
+// whole the span holds, as a word.
+theorem Stored::read_at_part<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, span: List<u8>, length, i: u64, p: Part<A, B>(whole), base: Nat,
+    same: p.codec = codec, place: i.toNat() = p.offset + base, inside: i.toNat() + codec.layout.size <= length.toNat()):
+    B.read(span, length, i) = B.wide(p.of(whole.get(span, base))) {
+    let read: (codec.get(span, i.toNat()) = p.of(whole.get(span, base))) =
+        trans(cong_fn(λ (n: Nat) => codec.get(span, n), place),
+            trans(cong_fn(λ (s: Stored<B>) => s.get(span, p.offset + base), sym(same)), p.reads(span, base)));
+    trans(B.reads(span, length, i, inside), cong_fn(λ (b: B) => B.wide(b), read))
+}
+
+// A word stored by compiled code where a part lies leaves the whole with
+// the part replaced by the word's value.
+theorem Stored::write_at_part<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, span: List<u8>, length, i, word: u64, p: Part<A, B>(whole), base: Nat,
+    same: p.codec = codec, place: i.toNat() = p.offset + base, inside: i.toNat() + codec.layout.size <= length.toNat(), own: length.toNat() <= span.len(),
+    fits: whole.layout.size + base <= span.len()):
+    whole.get(B.write(span, length, i, word).after, base) = p.with(whole.get(span, base), B.narrow(word)) {
+    let stored: (B.write(span, length, i, word).after = p.codec.put(span, p.offset + base, B.narrow(word))) =
+        trans(cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, B.writes(span, length, i, word, inside, own)),
+            trans(cong_fn(λ (n: Nat) => codec.put(span, n, B.narrow(word)), place),
+                cong_fn(λ (s: Stored<B>) => s.put(span, p.offset + base, B.narrow(word)), sym(same))));
+    trans(cong_fn(λ (bytes: List<u8>) => whole.get(bytes, base), stored), p.get_put(span, base, B.narrow(word), fits))
+}
