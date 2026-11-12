@@ -65,10 +65,12 @@ fn linked_exports_are_what_the_compiler_emits() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     let exports: Vec<String> = rows.iter().map(|(_, _, symbol, _)| format!("{symbol}.s")).collect();
     assert!(!exports.is_empty(), "EXPORTS.tsv lists no export");
-    // And nothing is linked that the manifest does not account for.
+    // And nothing is linked that the manifest does not account for (the
+    // two tables and the Rust generated from them are held by
+    // `linked_exports.rs`).
     for entry in std::fs::read_dir(&generated).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
-        assert!(name == "EXPORTS.tsv" || name == "exports.rs" || exports.contains(&name),
+        assert!(["EXPORTS.tsv", "exports.rs", "CONSTANTS.tsv", "constants.rs"].contains(&name.as_str()) || exports.contains(&name),
             "crates/linked/generated/{name} is in no row of EXPORTS.tsv");
     }
     std::fs::remove_dir_all(output).unwrap();

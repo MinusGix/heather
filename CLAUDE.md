@@ -130,6 +130,9 @@
   an independent reference. Run `scripts/linked` before writing the
   wrapper: the compiler links this crate, so a wrapper of a symbol not yet
   generated stops the build that would generate it.
+  A value the Rust reads the linked code's answers with is a `def` of the
+  module (a numeral), a row of `generated/CONSTANTS.tsv`, and Rust's copy
+  is `generated/constants.rs`, written by the same script (`TOKEN_END_BITS`).
   The `heather` binary links these files, so one that lost a symbol (a merge
   conflict taken from the wrong side) fails every build with `undefined
   symbol: scan_token`: restore a complete copy (`git checkout HEAD --

@@ -3,7 +3,9 @@
 # `crates/linked/generated/EXPORTS.tsv`, compiled by `heather compile-x86`
 # (certificate checked, or nothing is written), and then the Rust
 # declarations of them all, `generated/exports.rs`, from the table and the
-# signature each assembly file states (`heather linked-exports`).
+# signature each assembly file states (`heather linked-exports`), and the
+# constants of `generated/CONSTANTS.tsv`, `generated/constants.rs`, from the
+# `def` each row names.
 #
 #   scripts/linked            # rewrite crates/linked/generated/*.s, exports.rs
 #   scripts/linked --check    # exit 1 if a file on disk is not what is emitted

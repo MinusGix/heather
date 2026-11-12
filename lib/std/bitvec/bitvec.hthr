@@ -2247,6 +2247,11 @@ theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
     }
 }
 
+// So such a value is its low `n` bits, zero-extended.
+theorem BitVec::zero_extend_take_low_of_lt(n, m: Nat, x: BitVec(m + n), fits: x.toNat() < Nat::pow(2, n)): x.take_low(n, m).zero_extend(m) = x {
+    j(BitVec::drop_low_zero_of_lt(n, m, x, fits), λ hi _ => x.take_low(n, m).concat(hi) = x, BitVec::concat_split(n, m, x))
+}
+
 // Zero high columns preserve an incoming borrow, so unsigned comparison can
 // use a wider physical word without changing the narrow logical result.
 theorem BitVec::borrow_zero_columns(n: Nat): (borrow: Bool) →

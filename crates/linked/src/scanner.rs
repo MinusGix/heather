@@ -27,6 +27,7 @@
 //! `heather_syntax::lex` is a refusal here, and `tests/scanner.rs` holds the
 //! two to each other on every file of the library.
 
+use crate::constants::TOKEN_END_BITS;
 use crate::exports;
 
 /// What [`step`] is given after the last byte, and for any word that is not
@@ -177,10 +178,6 @@ pub fn tokens(source: &[u8]) -> Result<Vec<Token>, Refused> {
     Scanner::new(source).collect()
 }
 
-/// How many of a token word's low bits are the token's end; its kind is
-/// above them.
-const END_BITS: u32 = 56;
-
 /// The longest token of `source` from `at`, after a token of kind
 /// `previous` (zero at the start of the source): its kind's code and where
 /// it ends. `None` is a refusal: the automaton refused, or stopped having
@@ -191,11 +188,15 @@ const END_BITS: u32 = 56;
 /// given [`END`] once after the last byte. It answers one word, the kind
 /// above the end, and zero for a refusal, which no token's word is (a kind
 /// is not zero). An end fits its bits: a span is lent below 2^47.
+///
+/// The word is read apart as `token_word_kind` and `token_word_end` of
+/// `lexer_span.hthr` read it back, and `token_word_nonzero` is why zero is
+/// only a refusal; [`TOKEN_END_BITS`] is the module's own, generated.
 #[inline]
 pub fn token(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
     let word = exports::scan_token(source, at as u64, previous);
     if word == 0 {
         return None;
     }
-    Some((word >> END_BITS, (word & ((1 << END_BITS) - 1)) as usize))
+    Some((word >> TOKEN_END_BITS, (word & ((1 << TOKEN_END_BITS) - 1)) as usize))
 }
