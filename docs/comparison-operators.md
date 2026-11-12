@@ -114,6 +114,13 @@ message as `<=` and `==`. An equality annotation is parenthesised —
 `let p: (a = b) = pf;` — which is the escape hatch the `CHAIN` message already
 advised and, until that round, did not actually have.
 
+**Relations other than `=` read bare again as of 2026-11-12**
+(issues/annotated-let-relation-needs-parentheses.md): in an annotation only
+`=` collides with the binder, so the annotation keeps `<=`, `<`, `≈` and `≠`
+and stops at `=` (`Parser::annotation_rel`). `let h: n <= m = pf;` binds `h`
+at `n <= m`; the `=` that ends it is the binder, not a chain. Only an
+equation still needs its parentheses.
+
 Worth recording, since this section predicted otherwise: **it was not `:=`
 that removed the exception.** Keeping `=` as the `let` binder and suppressing
 the rung in the annotation delivers the same diagnostic at a sixth of the

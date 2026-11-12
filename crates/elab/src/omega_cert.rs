@@ -843,7 +843,10 @@ impl<'a> ListParser<'a> {
 
     fn list(&mut self, out: &mut Vec<Z>) -> Option<()> {
         if self.token(b"Nil") || self.token(b"list::Nil") {
-            return Some(());
+            // The source speller writes `Nil<int::Int>` where nothing in the
+            // spelling infers the element type
+            // (issues/omega-certificate-drops-type-arguments.md).
+            return self.type_arguments();
         }
         if !(self.token(b"Cons") || self.token(b"list::Cons")) || !self.token(b"(") {
             return None;
@@ -854,6 +857,28 @@ impl<'a> ListParser<'a> {
         }
         self.list(out)?;
         self.token(b")").then_some(())
+    }
+}
+
+impl ListParser<'_> {
+    /// An optional `<…>` after a constructor, skipped: balanced on `<`/`>`,
+    /// with an arrow's `>` not counted.
+    fn type_arguments(&mut self) -> Option<()> {
+        if !self.token(b"<") {
+            return Some(());
+        }
+        let mut depth = 1usize;
+        while depth > 0 {
+            let c = *self.input.get(self.cursor)?;
+            let arrow = c == b'>' && self.cursor > 0 && self.input[self.cursor - 1] == b'-';
+            match c {
+                b'<' => depth += 1,
+                b'>' if !arrow => depth -= 1,
+                _ => {}
+            }
+            self.cursor += 1;
+        }
+        Some(())
     }
 }
 
@@ -5504,6 +5529,9 @@ mod tests {
             Some(vec![3, -1])
         );
         assert_eq!(coefficient_source("Nil"), Some(vec![]));
+        assert_eq!(coefficient_source("Cons(1, Nil<int::Int>)"), Some(vec![1]));
+        assert_eq!(coefficient_source("list::Nil<A -> B>"), Some(vec![]));
+        assert_eq!(coefficient_source("Nil<int::Int"), None);
         assert_eq!(coefficient_source("Cons(x, Nil)"), None);
         assert_eq!(coefficient_source("Cons(1, Nil) junk"), None);
     }
