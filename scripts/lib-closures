@@ -19,15 +19,23 @@ first, each module's imports in the order it writes them, the common
 prelude's ahead of them where the loader adds it. The entries between
 `&[` and `];` are this script's to write.
 
-    scripts/lib-closures            # list the stale lists; exit 1 if any
-    scripts/lib-closures --fix      # rewrite them in place
+    scripts/lib-closures            # list the stale lists and orphans; exit 1 if any
+    scripts/lib-closures --fix      # rewrite the stale lists in place
     scripts/lib-closures --show ROOT… [minus ROOT…]   # print a closure
+    scripts/lib-closures --files ROOT…   # the closure's files, common prelude included
 
 Imports are read with a line pattern, not the parser; `cargo test -p
 heather-cli --test lib_closures` checks every marked list against the CLI's
 own loader, so the two cannot drift apart silently. The common prelude
 itself is never listed: a list is checked module by module, each with its
 explicit imports. Stdlib only, like `scripts/lib-paths`.
+
+It also runs the whole-library gate's orphan lint
+(`every_library_module_is_reached`, `crates/cli/tests/library.rs`) with the
+same reading: a `lib/` module outside `lib/_tests` that no other file imports,
+no Rust source names by path and `KEPT_ROOTS` does not list. The gate runs at
+the end of the suite; here it costs the seconds the import graph does, and
+`scripts/test` runs it before building (issues/orphan-module-check-before-the-gate.md).
 """
 
 import argparse
@@ -113,6 +121,84 @@ class Library:
         return out
 
 
+# The gate this mirrors, and the folder whose modules are roots by design.
+GATE = ROOT / "crates/cli/tests/library.rs"
+TESTS_DIR = ROOT / "lib/_tests"
+KEPT = re.compile(r'\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*,')
+
+
+def kept_roots():
+    """`KEPT_ROOTS`' names, read off the gate so the list has one home."""
+    src = GATE.read_text()
+    start = src.find("const KEPT_ROOTS")
+    if start < 0:
+        raise SystemExit(f"lib-closures: no `const KEPT_ROOTS` in {GATE.relative_to(ROOT)}")
+    end = src.find("\n];", start)
+    body = "\n".join(l for l in src[start:end].split("\n") if not l.lstrip().startswith("//"))
+    return set(KEPT.findall(body))
+
+
+def gate_imports(src):
+    """The gate's `imports`: every `import NAME` not glued to a word before it,
+    comments and Rust strings included (a test's source strings import too)."""
+    out = set()
+    i = src.find("import ")
+    while i >= 0:
+        before = src[i - 1] if i else ""
+        j = i + len("import ")
+        if not (before.isalnum() or before == "_"):
+            k = j
+            while k < len(src) and (src[k].isalnum() or src[k] == "_"):
+                k += 1
+            if k > j:
+                out.add(src[j:k])
+        i = src.find("import ", j)
+    return out
+
+
+def gate_importers():
+    """The gate's `importers`: `lib/`, the showcases, and every crate's
+    `tests`, `src` and `benches` (`.rs` and `.hthr`)."""
+    files = []
+    for top in (ROOT / "lib", ROOT / "docs/showcase"):
+        for dirpath, dirnames, filenames in os.walk(top):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            files += [Path(dirpath, f) for f in filenames if f.endswith(".hthr")]
+    for krate in sorted((ROOT / "crates").iterdir()):
+        for sub in ("tests", "src", "benches"):
+            for dirpath, _, filenames in os.walk(krate / sub):
+                files += [Path(dirpath, f) for f in filenames if f.endswith((".rs", ".hthr"))]
+    out = []
+    for f in files:
+        try:
+            out.append((f, f.read_text(errors="replace")))
+        except OSError:
+            out.append((f, ""))
+    return out
+
+
+def orphans(lib):
+    """The modules `every_library_module_is_reached` would name."""
+    kept = kept_roots()
+    files = gate_importers()
+    imported = {}
+    for path, src in files:
+        for name in gate_imports(src):
+            imported.setdefault(name, set()).add(path)
+    rust = [(path, src) for path, src in files if path.suffix == ".rs"]
+    out = []
+    for name, paths in sorted(lib.where.items()):
+        for module in paths:
+            if module.is_relative_to(TESTS_DIR) or name in kept:
+                continue
+            if imported.get(name, set()) - {module}:
+                continue
+            if any(f"/{name}.hthr" in src for _, src in rust):
+                continue
+            out.append(str(module.relative_to(ROOT)))
+    return sorted(out)
+
+
 def parse_spec(words):
     if "minus" in words:
         i = words.index("minus")
@@ -158,8 +244,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--fix", action="store_true", help="rewrite the stale lists in place")
     ap.add_argument("--show", nargs="+", metavar="ROOT", help="print the closure of ROOT… [minus ROOT…]")
+    ap.add_argument("--files", nargs="+", metavar="ROOT", help="print the files of ROOT…'s closure, the common prelude's included, one per line")
     args = ap.parse_args()
     lib = Library()
+    if args.files:
+        for name in lib.walk(args.files, lib.imports):
+            print(lib.path(name).relative_to(ROOT))
+        return 0
     if args.show:
         roots, minus = parse_spec(args.show)
         print(" ".join(lib.closure(roots, minus)))
@@ -183,7 +274,12 @@ def main():
             file.write_text("\n".join(lines))
     for s in stale:
         print(("rewrote " if args.fix else "stale ") + s)
-    return 0 if args.fix or not stale else 1
+    lost = orphans(lib)
+    if lost:
+        print(f"library modules nothing imports and no test names: {lost}\n"
+              "Delete them, import them, or list them in KEPT_ROOTS (crates/cli/tests/library.rs) "
+              "with the reason they stay.", file=sys.stderr)
+    return 1 if lost or (stale and not args.fix) else 0
 
 
 if __name__ == "__main__":
