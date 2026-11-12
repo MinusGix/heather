@@ -71,9 +71,10 @@ fn laid_lib() → Tac<LaidLib> {
 record LaidField { name: String, ty: Expr, codec: Expr, upto_ty: Expr, upto: Expr }
 
 // The argument of a type applied to one. The matches of this module on a
-// request's answer are written a level at a time and in functions of
-// their own: under `let x <- t;` a nullary constructor inside a pattern
-// is read as a variable (issues/deep-pattern-ctor-unknown-column-type.md).
+// request's answer are a level at a time, in functions of their own. They
+// were written so when a nullary constructor inside a pattern was read as
+// a variable under `let x <- t;`, which is how that was found
+// (issues/deep-pattern-ctor-unknown-column-type.md, fixed since).
 fn laid_one_argument(v: Head) → Option<Handle> {
     match v {
         HGlobal(_, _, args) => match args {

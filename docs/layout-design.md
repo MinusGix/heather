@@ -441,17 +441,18 @@ with its reason: a codec count that is not the field count, a codec that
 does not store its field's type, a type that is not a record, and a
 record declared twice.
 
-Two things the generator works around, both filed. A member of a group
+Two things the generator met, both filed. A member of a group
 cannot cite an earlier member (`generate-group-internal-references`), so
 a part's type spells the record's codec out and not `Header::stored()`;
 the two convert, and a function declared at
 `Part<Header, u16>(Header::stored())` accepts a composition of generated
 parts, but a diagnostic prints the long form and the group's text grows
 with the square of the field count. And a nullary constructor inside a
-pattern is read as a variable where the scrutinee comes from
+pattern was read as a variable where the scrutinee comes from
 `let x <- t;` (`deep-pattern-ctor-unknown-column-type`, found writing
-this generator: a type of two constructors was taken for a record), so
-the generator's matches are written a level at a time.
+this generator, where a type of two constructors was taken for a record,
+and fixed in the same round); the generator's matches are still written
+a level at a time.
 
 Not built of stage A: accessors as `runtime fn`s that name the field
 (`ctx.schedule_put(cn, t, word)`), which would take the offsets out of

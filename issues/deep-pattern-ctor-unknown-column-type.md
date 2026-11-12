@@ -74,3 +74,13 @@ is at risk, and the library's tactics may already hold some.
   constructor in scope and stays a binder.
 - The whole library re-elaborated: every match whose reading changes is
   a bug found, listed in the log.
+
+## Log
+
+- 2026-11-12: Fixed 2026-11-12 on PR #551 (`crates/elab/src/patterns.rs`). The cause was narrower than "not yet known": the scrutinee's type was known but arrived unreduced, `El(app(M, A))` for the variable of a bind, and `Elaborator::pattern_fields_at` read the constructors' spine from the type as written, which has none. It now reads the reduced type where the written one has no spine. A type a function computes (`Maybe(List<Nat>)`) had the same fault and is fixed with it; a type named by a `def` was already read rightly.
+
+  The refusal is in as well (`check_classifiable`): a visible nullary constructor's name in a column whose type cannot be read is an error that names the constructor. No source spelling was found that reaches it after the fix (an unannotated λ is refused before its match is read), so it guards the reader and has no probe.
+
+  Probes: `lib/_tests/lang/deep_pattern_reduced_type_tests.hthr` (a plain recursive field, a payload field, two levels, the same at `Option`'s bind, the binder control, and the old reading as a `¬`-style refusal). The laid generator's matches (`lib/std/machine/laid.hthr`) stay written a level at a time.
+
+  Whole library re-elaborated with the fixed compiler: see the round's verification; a module whose reading changed would be listed here.
