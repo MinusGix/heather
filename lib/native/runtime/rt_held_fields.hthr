@@ -1,0 +1,68 @@
+// What a field's reader and writer owe a held world
+// (`lib/native/runtime/rt_held.hthr`), from the accessor of the field's
+// codec (`stored_accessor.hthr`) and the field's part
+// (`lib/std/machine/part.hthr`): where the span holds a record, the
+// accessor's read where the field lies is the record's field, and its
+// store there leaves the span holding the record with the field replaced.
+//
+// Each is proved once, for every record, field and codec that has an
+// accessor. A world's promise for a marked function (`HWorld::Reads`,
+// `HWorld::Writes`) is one application: the function's meaning in the
+// world's table unfolds to the accessor's call, by conversion.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import omega;
+import bitvec;
+import bitvec_nat;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import rt;
+import rt_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+
+// A field read by its codec's accessor at the span's start, narrowed to
+// the field's own width, is the field of what the span holds.
+theorem Stored::held_read<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, p: Part<A, B>(whole), same: p.codec = codec, i: u64, place: i.toNat() = p.offset,
+    own: List<u8>, n: u64, a: A, holds: whole.Holds(own, n, a)): B.narrow(B.read(own, n, i)) = p.of(a) {
+    let within: (codec.layout.size + p.offset <= whole.layout.size) = j(same, λ c _ => c.layout.size + p.offset <= whole.layout.size, p.within);
+    let lent: (whole.layout.size <= n.toNat()) = holds.left;
+    let inside: (i.toNat() + codec.layout.size <= n.toNat()) = omega;
+    let read: (B.read(own, n, i) = B.wide(p.of(whole.get(own, 0)))) = codec.read_at_part(own, n, i, p, 0, same, place, inside);
+    trans(cong_fn(λ (w: u64) => B.narrow(w), read), trans(B.kept(p.of(whole.get(own, 0))), cong_fn(λ (x: A) => p.of(x), holds.right.right)))
+}
+
+// A value stored there by the accessor, widened to a word, leaves the
+// span holding the record with the field replaced, under the same
+// length word.
+theorem Stored::held_write<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, p: Part<A, B>(whole), same: p.codec = codec, i: u64, place: i.toNat() = p.offset,
+    own: List<u8>, n: u64, a: A, v: B, holds: whole.Holds(own, n, a)): whole.Holds(B.write(own, n, i, B.wide(v)).after, n, p.with(a, v)) {
+    let within: (codec.layout.size + p.offset <= whole.layout.size) = j(same, λ c _ => c.layout.size + p.offset <= whole.layout.size, p.within);
+    let lent: (whole.layout.size <= n.toNat()) = holds.left;
+    let spans: (n.toNat() <= own.len()) = holds.right.left;
+    let inside: (i.toNat() + codec.layout.size <= n.toNat()) = omega;
+    let fits: (whole.layout.size <= own.len()) = omega;
+    let room: (codec.layout.size + i.toNat() <= own.len()) = omega;
+    let stored: (B.write(own, n, i, B.wide(v)).after = codec.put(own, i.toNat(), B.narrow(B.wide(v)))) =
+        cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, B.writes(own, n, i, B.wide(v), inside, spans));
+    let long: (B.write(own, n, i, B.wide(v)).after.len() = own.len()) =
+        trans(cong_fn(λ (bytes: List<u8>) => bytes.len(), stored), codec.len_put(own, i.toNat(), B.narrow(B.wide(v)), room));
+    let got: (whole.get(B.write(own, n, i, B.wide(v)).after, 0) = p.with(whole.get(own, 0), B.narrow(B.wide(v)))) =
+        codec.write_at_part(own, n, i, B.wide(v), p, 0, same, place, inside, spans, fits);
+    let is: (whole.get(B.write(own, n, i, B.wide(v)).after, 0) = p.with(a, v)) =
+        trans(got, trans(cong_fn(λ (b: B) => p.with(whole.get(own, 0), b), B.kept(v)), cong_fn(λ (x: A) => p.with(x, v), holds.right.right)));
+    And(lent, And(j(sym(long), λ k _ => n.toNat() <= k, spans), is))
+}

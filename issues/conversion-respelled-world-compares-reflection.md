@@ -5,7 +5,7 @@ labels: [kernel,conversion,performance,native,runtime-fn]
 area: kernel
 milestone: [nh-front]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Two types that differ only in how one small argument is spelled, with a large
@@ -101,3 +101,6 @@ hides a re-run, so rename the function between runs.
 
 - 2026-11-11: Filed from U3c step 3a. The statement was respelled; the
   kernel was not changed.
+- 2026-11-12: Met again from the other side (2026-11-12, `lib/native/runtime/rt_held.hthr`). A promise about a pure call over a span was first stated of `FTm::value(fw, own, Call(f, [place, length]), g, env)`, with the length word named `FTm::word(fw.w.tys, g, env, length)`. At a `runtime fn`'s own tables the value's operands are cast under `fw.at(own).tys` and the promise's under `fw.w.tys`. Each reduces to `RecInfo::none` alone (both by `refl`), but where the two meet the kernel compares `World::tys(fw.at(own))` with `World::tys(fw.w)` argument first, and telling the world at the file from the world at no file evaluates each callee at both: `OutOfFuel` on a callee that reads eight bytes.
+
+  What bisected it: the same statement with the environment typed at `RecInfo::none` checks, and so does the callee applied to two words. The library's way round is `FTm::read`, the call spelled over `fw.w.tys` with a lemma that it is the value (`FTm::value_read`), proved once at an abstract world where the comparison is cheap. So a statement that will be instantiated at a concrete world should name its type table one way throughout, and `FTm::value` cannot be asked to.
