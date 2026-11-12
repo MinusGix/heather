@@ -3,8 +3,8 @@
 // docs/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
 // generator publishes for a store, for calls of functions that write, and
 // for loops (with a callee that only reads, with one that writes, with a
-// store as a statement, an exit inside and two calls of their own), each
-// stated at every file, and what it refuses. Tests, not library: nothing imports this module.
+// store as a statement, an exit inside, two calls of their own, a plain
+// `if` test), each stated at every file, and what it refuses. Tests, not library: nothing imports this module.
 import logic;
 import bool;
 import nat;
@@ -18,6 +18,7 @@ import derive;
 import bitvec;
 import bitvec_nat;
 import bitvec_omega;
+import algebra;
 import omega;
 import rt;
 import rt_reflect;
@@ -281,6 +282,38 @@ theorem clear_text_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pl
     program_run(clear_text::program, Cons(span, rest), 0, [place, length, i]) = FTm::end_of(rest, clear_text(span, length, i)) {
     clear_text::runs_over(span, rest, place, length, i)
 }
+
+// A test that is a plain `if`, its evidence unnamed: the measure is
+// discharged from the branch's test, and the companions the loop's instance
+// is built from bind the test's equation as `if h:` does
+// (issues/measured-span-loop-plain-if.md). The same program as the `if h:`
+// spelling's.
+runtime fn zero_from(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> decreases (64 - i).toNat() {
+    if i < 64 {
+        let mut ctx = ctx;
+        ctx.put_within(cn, i + 64, 0);
+        zero_from(ctx, cn, i + 1)
+    } else {
+        Mutated(ctx, i)
+    }
+}
+
+runtime fn zero_from_named(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> decreases (64 - i).toNat() {
+    if h: i < 64 {
+        let mut ctx = ctx;
+        ctx.put_within(cn, i + 64, 0);
+        zero_from_named(ctx, cn, i + 1)
+    } else {
+        Mutated(ctx, i)
+    }
+}
+
+theorem zero_from_stated(span: List<u8>, rest: List<List<u8>>, place, cn, i: u64):
+    program_run(zero_from::program, Cons(span, rest), 0, [place, cn, i]) = FTm::end_of(rest, zero_from(span, cn, i)) {
+    zero_from::runs_over(span, rest, place, cn, i)
+}
+
+theorem zero_from_as_named(): zero_from::program = zero_from_named::program { refl }
 
 // The function compiler takes each.
 theorem loops_accepted():

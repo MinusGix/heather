@@ -2183,11 +2183,13 @@ impl<'a> Rewrite<'a> {
     /// A copy whose output is read and whose bookkeeping is thrown away: it
     /// spells a subterm exactly as `f#body` spells it (same obligation
     /// numbering, same transports) without advancing this walk.
-    /// Whether a match is an [`AutoEqs`] candidate: a plain `match`
-    /// without an equation binding, on a computed scrutinee (let-aliased
-    /// by the time it is walked), with an arm that calls a member.
+    /// Whether a match is an [`AutoEqs`] candidate: a plain `match` or an
+    /// `if` without an equation binding, on a computed scrutinee (let-aliased
+    /// by the time it is walked), with an arm that calls a member. An `if`
+    /// is the match on its test's bit, so a plain `if c` gets the equation
+    /// `if h: c` writes (issues/measured-span-loop-plain-if.md).
     fn auto_candidate(&self, form: MatchForm, scrut: &Expr, eqbind: &Option<String>, arms: &[Arm]) -> bool {
-        form == MatchForm::Match
+        matches!(form, MatchForm::Match | MatchForm::If)
             && eqbind.is_none()
             && matches!(&scrut.kind, ExprKind::Var(v) if self.scrut_aliases.iter().any(|(n, _)| n == v))
             && arms.iter().any(|a| self.calls_member(&a.body))
@@ -3500,7 +3502,7 @@ impl Respell<'_> {
         eqbind: Option<&str>,
         arms: &[Arm],
     ) -> Result<Triple, String> {
-        if eqbind.is_none() && form == MatchForm::Match {
+        if eqbind.is_none() && matches!(form, MatchForm::Match | MatchForm::If) {
             if matches!(scrut.kind, ExprKind::Var(_)) {
                 if self.rw.refining_match(scrut, &None).is_some() {
                     return Err("a `match` below another `match`'s arm on a variable the measure mentions".into());
