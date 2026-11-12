@@ -117,3 +117,10 @@ pub mod sha512;
 #[allow(unsafe_code)]
 #[path = "../generated/exports.rs"]
 mod exports;
+
+// The values the Rust here reads the linked code's answers with, each the
+// `def` the code itself uses, written by `scripts/linked` from
+// `generated/CONSTANTS.tsv` and held to the modules by
+// `crates/cli/tests/linked_exports.rs`: none is a hand's.
+#[path = "../generated/constants.rs"]
+pub mod constants;

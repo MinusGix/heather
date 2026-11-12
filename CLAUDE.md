@@ -126,6 +126,9 @@
   function is a function of, and it is then a label in that export's file,
   not a file), a wrapper in `src/`, and tests against
   an independent reference.
+  A value the Rust reads the linked code's answers with is a `def` of the
+  module (a numeral), a row of `generated/CONSTANTS.tsv`, and Rust's copy
+  is `generated/constants.rs`, written by the same script (`TOKEN_END_BITS`).
   The `heather` binary links these files, so one that lost a symbol (a merge
   conflict taken from the wrong side) fails every build with `undefined
   symbol: scan_token`: restore a complete copy (`git checkout HEAD --

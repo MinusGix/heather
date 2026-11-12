@@ -13,8 +13,12 @@
 // `scan_token_longest`, at the end of this file.
 //
 // The answer is one word (`token_word`): the token's kind in the top byte
-// and the offset just past it below, or zero for a refusal, which no token
-// is since no kind is zero.
+// and the offset just past it in the `TOKEN_END_BITS` below, or zero for a
+// refusal, which no token is since no kind is zero. Rust reads the word
+// apart (`heather_linked::scanner::token`) with the shift and the mask
+// `token_word_kind` and `token_word_end` read it back with, and its
+// `TOKEN_END_BITS` is this one, generated (`crates/linked/generated/
+// CONSTANTS.tsv`).
 import bitvec;
 import bool;
 import list;
@@ -37,8 +41,56 @@ import runtime;
 import lexer_scan;
 import lexer_tokens;
 
+// How many of a token word's low bits are where the token ends; its kind
+// is above them. Rust's copy is generated from this one.
+def TOKEN_END_BITS: Nat = 56;
+
 // A token found: its kind above, where it ends below.
-runtime fn token_word(kind, end: u64) → u64 { kind.shift_left(56).bor(end) }
+runtime fn token_word(kind, end: u64) → u64 { kind.shift_left(TOKEN_END_BITS).bor(end) }
+
+// The word read back, as Rust reads it: the shift gives the kind and the
+// mask the end, for a kind of one byte and an end below `2^56`. Each is
+// the word's bits moved, at a kind and an end that are their low bits
+// zero-extended (`BitVec::zero_extend_take_low_of_lt`); the halves are
+// put together with the end's first, so that what each reading keeps is
+// a bit `||` a zero from the left (`BitVec::bor_comm`).
+theorem token_kind_up(k: u8): k.zero_extend(56).shift_left(TOKEN_END_BITS) = BitVec::concat(BitVec::zero(), k, n := 56, m := 8) { refl }
+
+theorem token_word_kind_bits(k: u8, e: BitVec(56)): token_word(k.zero_extend(56), e.zero_extend(8)).shift_right(TOKEN_END_BITS) = k.zero_extend(56) {
+    let end = e.zero_extend(8);
+    trans(cong_fn(λ (w: u64) => w.shift_right(TOKEN_END_BITS), BitVec::bor_comm(64, k.zero_extend(56).shift_left(TOKEN_END_BITS), end)),
+        cong_fn(λ (w: u64) => end.bor(w).shift_right(TOKEN_END_BITS), token_kind_up(k)))
+}
+
+theorem token_word_end_bits(k: u8, e: BitVec(56)):
+    token_word(k.zero_extend(56), e.zero_extend(8)).band(BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1)) = e.zero_extend(8) {
+    BitVec::band_comm(64, token_word(k.zero_extend(56), e.zero_extend(8)), BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1))
+}
+
+theorem token_word_kind(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS)):
+    token_word(kind, end).shift_right(TOKEN_END_BITS) = kind {
+    let k = kind.take_low(8, 56);
+    j(BitVec::zero_extend_take_low_of_lt(8, 56, kind, small), λ x _ => token_word(x, end).shift_right(TOKEN_END_BITS) = x,
+        j(BitVec::zero_extend_take_low_of_lt(56, 8, end, fits), λ y _ => token_word(k.zero_extend(56), y).shift_right(TOKEN_END_BITS) = k.zero_extend(56),
+            token_word_kind_bits(k, end.take_low(56, 8))))
+}
+
+theorem token_word_end(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS)):
+    token_word(kind, end).band(BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1)) = end {
+    let k = kind.take_low(8, 56);
+    let mask: u64 = BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1);
+    j(BitVec::zero_extend_take_low_of_lt(8, 56, kind, small), λ x _ => token_word(x, end).band(mask) = end,
+        j(BitVec::zero_extend_take_low_of_lt(56, 8, end, fits), λ y _ => token_word(k.zero_extend(56), y).band(mask) = y,
+            token_word_end_bits(k, end.take_low(56, 8))))
+}
+
+// A token's word is not zero, so zero is a refusal and nothing else: the
+// kind is read back from it, and no kind the automaton accepts is zero
+// (`scan_last` makes a word only where `scan_accept` is not).
+theorem token_word_nonzero(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS), named: ¬(kind = 0)):
+    ¬(token_word(kind, end) = 0) {
+    λ zero => named(trans(sym(token_word_kind(kind, end, small, fits)), cong_fn(λ (w: u64) => w.shift_right(TOKEN_END_BITS), zero)))
+}
 
 // The state after the byte at `i`, which the loop's test has found below
 // the length.

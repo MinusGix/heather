@@ -1,6 +1,6 @@
 ---
 title: The token word's packing is read apart in Rust and held by tests only
-status: open
+status: closed
 labels: [native,lexer,exports]
 area: heather-in-heather
 milestone: [self-lexer]
@@ -25,3 +25,7 @@ The better end is the write half of the export ([[native-library-exports-design]
 ## Done when
 
 No constant of the packing is written by hand in Rust, and the read-back is a theorem or the packing is gone.
+
+## Log
+
+- 2026-11-12: the read-back and the nonzero word are theorems, and the constant is generated. In `lexer_span.hthr`: `def TOKEN_END_BITS: Nat = 56`, which `token_word` shifts by; `token_word_kind` (`word.shift_right(TOKEN_END_BITS) = kind`) and `token_word_end` (`word.band(ofNat(2^TOKEN_END_BITS - 1)) = end`), for `kind < 256` and `end < 2^TOKEN_END_BITS`; `token_word_nonzero` (`kind ≠ 0` gives `word ≠ 0`). The proofs are the bits moved, not `bv_decide` (there is none): kind and end are their low bits zero-extended (`BitVec::zero_extend_take_low_of_lt`, new in `bitvec.hthr`), and the halves are joined end-first (`bor_comm`, `band_comm`) so each reading keeps `False || bit` and `True && bit`, which compute; a neutral `bit || False` does not. The constant: `crates/linked/generated/CONSTANTS.tsv` names `lexer_span.hthr`'s `TOKEN_END_BITS`, `scripts/linked` (`heather linked-exports`, `heather_cli::linked::constants_rs`) writes `generated/constants.rs` from the `def`, which must be a numeral, and `crates/cli/tests/linked_exports.rs` holds the file to the module; `scanner::token` and the spans test read it from there. The third claim, that an end fits, is a premise of the export and moves to [[scan-token-end-fits-premise]]; the write half that would retire the packing stays [[native-library-exports-design]]'s R4.

@@ -668,7 +668,7 @@ fn the_scanners_loop_at_both_stack_alignments() {
         for at in 0..=text.len() as u64 + 1 {
             for previous in [0, scanner::Kind::Ident.code()] {
                 // The word `scanner::token` reads apart: the kind above the end.
-                let expected = scanner::token(text, at as usize, previous).map_or(0, |(kind, end)| kind << 56 | end as u64);
+                let expected = scanner::token(text, at as usize, previous).map_or(0, |(kind, end)| kind << heather_linked::constants::TOKEN_END_BITS | end as u64);
                 let what = String::from_utf8_lossy(text);
                 assert_eq!(entered!(0, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, the platform's alignment");
                 assert_eq!(entered!(8, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, RSP eight lower");

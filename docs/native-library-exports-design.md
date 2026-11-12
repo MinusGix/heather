@@ -939,9 +939,13 @@ page (clause 5), and the loop entered at both stack alignments with the
 callee-saved registers compared (clauses 3 and 7), which here is code
 that calls compiled code.
 
-**Not done.** The word's packing is read apart in Rust (`>> 56`, a
-mask): that a kind and an end below 2^56 come back from `token_word` is
-not a theorem yet, only tested. The crate held the automaton twice, in
+**Not done.** The word's packing is read apart in Rust (a shift, a
+mask). That a kind and an end below 2^56 come back from `token_word` is
+now a theorem (`token_word_kind`, `token_word_end`, `token_word_nonzero`,
+2026-11-12), and the shift Rust reads with is `lexer_span`'s
+`TOKEN_END_BITS`, generated (`generated/CONSTANTS.tsv`,
+`generated/constants.rs`); that `scan_token`'s own end fits is not yet
+(`issues/scan-token-end-fits-premise.md`). The crate held the automaton twice, in
 `scan_step`'s program and in `scan_token`'s, since an export was a
 program of its own; §6.3 makes them one. The three automaton exports stay
 for the tests that walk its states.

@@ -158,8 +158,10 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
 /// `linked-exports <dir> [--check]`: write `<dir>/exports.rs`, the Rust
 /// declarations of the exports `<dir>/EXPORTS.tsv` lists, from the table and
 /// the signature each `<dir>/<function>.s` states
-/// (`heather_cli::linked::exports_rs`). `--check` writes nothing and fails
-/// where the file on disk is not that. `scripts/linked` runs it after the
+/// (`heather_cli::linked::exports_rs`), and `<dir>/constants.rs`, the
+/// constants `<dir>/CONSTANTS.tsv` lists, from their `def`s
+/// (`heather_cli::linked::constants_rs`). `--check` writes nothing and fails
+/// where a file on disk is not that. `scripts/linked` runs it after the
 /// assembly is rewritten.
 pub fn linked_exports(args: &[String]) -> ExitCode {
     report((|| {
@@ -169,18 +171,24 @@ pub fn linked_exports(args: &[String]) -> ExitCode {
             _ => return Err("usage: heather linked-exports <generated dir> [--check]".to_string()),
         };
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{}: {e}", dir.join(name).display()));
-        let text = heather_cli::linked::exports_rs(&read("EXPORTS.tsv")?, &|function| read(&format!("{function}.s")))?;
-        let path = dir.join("exports.rs");
-        if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == text) {
-            println!("exports.rs: unchanged");
-            Ok(())
-        } else if check {
-            Err(format!("{} is stale: run scripts/linked", path.display()))
-        } else {
-            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-            println!("exports.rs: rewritten");
-            Ok(())
+        let exports = heather_cli::linked::exports_rs(&read("EXPORTS.tsv")?, &|function| read(&format!("{function}.s")))?;
+        // A row's module is named from the repository's root, where
+        // `scripts/linked` runs this.
+        let module = |path: &str| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"));
+        let constants = heather_cli::linked::constants_rs(&read("CONSTANTS.tsv")?, &module)?;
+        let mut stale = Vec::new();
+        for (name, text) in [("exports.rs", exports), ("constants.rs", constants)] {
+            let path = dir.join(name);
+            if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == text) {
+                println!("{name}: unchanged");
+            } else if check {
+                stale.push(format!("{} is stale: run scripts/linked", path.display()));
+            } else {
+                std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+                println!("{name}: rewritten");
+            }
         }
+        if stale.is_empty() { Ok(()) } else { Err(stale.join("\n")) }
     })())
 }
 
