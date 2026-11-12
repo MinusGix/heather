@@ -552,3 +552,42 @@ Its first two rounds are built (2026-11-11): a function's contract states
 the stores it may make, and a `write-elf` program calls functions compiled
 into the same file.
 
+
+**2026-11-12, the compression function whole** (the export round's end,
+`docs/native-library-exports-design.md`). SHA-256's compress is one linked
+function over two spans its caller lends
+(`lib/native/crypto/sha256_block.hthr`, `heather_linked::sha256::block`):
+the schedule, the sixty-four rounds and the final sums are compiled
+Heather, and only the padding is Rust's.
+
+- **The state is bytes of a context**, not words: the hash value, the
+  working variables and the schedule in one span of 320 bytes, each word
+  read and stored most significant byte first. A function passes six
+  words, so the eight working variables could not be values
+  (`issues/function-call-past-six-words.md`); a round reads what it needs
+  from the span and stores two words back after moving seven. That is
+  slower than the word functions under a Rust loop and it is the shape
+  that needed nothing new from the compiler.
+- **The constants are a tree of comparisons**, sixty-four leaves found by
+  halving, held to the specification's table by one evaluated theorem
+  (`lib/_tests/native/crypto/sha256_block_tests.hthr`). A table in the
+  pure fragment is still `issues/rt-fixed-arrays-and-tables.md`.
+- **What it found** was in the generator's link check, not the compiler:
+  two functions of one Heather type were being told apart by evaluating
+  both (`issues/runtime-link-compares-functions.md`). The library now
+  orders what the kernel compares so that data comes first; the rule that
+  would make it not depend on an order is that issue's.
+- **What is not proved**: that the Heather function is `Sha2::compress`.
+  The word functions' theorems are there to compose; the loops over the
+  span are what the proof has to walk, and it is a hand proof, so it
+  waits for a decision (`issues/sha2-compress-native.md`). Until then the
+  claim is the tests': the standard's vectors, an independent
+  implementation at every length through the padding boundaries, and a
+  transcription of the Heather function in Rust compared byte for byte on
+  spans of every shorter length.
+
+Next for this lane: the agreement proof, or SHA-256 behind a switch in
+`crates/cache` with the tests as its evidence
+(`issues/sha256-linked-into-cache.md`); both are Minus's to order, since
+the second puts unproved-against-the-specification code under every cache
+key.

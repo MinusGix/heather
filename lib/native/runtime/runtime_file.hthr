@@ -178,8 +178,10 @@ theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) �
                 rt.lower_sound(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len()), call, agree, own))
 }
 
-fn FFun::compile<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
-    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
+// `f` after the reflection and the tables, for `Setup::compile`'s reason:
+// two writers met in a link are told apart at their reflections.
+fn FFun::compile<F>(rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), f: F, typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
     pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
         FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())).IsTrue()) → CompileSpan<F>(f) {
@@ -216,8 +218,9 @@ theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res:
             FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest), bounded(rest), guarded(rest)))
 }
 
-fn FFun::compile_measured<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
-    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+// `f` after the reflection and the tables, as in `FFun::compile`.
+fn FFun::compile_measured<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), f: F,
     typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)),
     m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat,
     bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
@@ -332,8 +335,14 @@ fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) 
     FTm::source_at(c.world.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed, f, rest)
 }
 
+// `CompileSpan::sem` uncurried and ended. The instance is read by pattern
+// and not through the class's members, for `Compile::uncurried`'s reason
+// (lib/native/runtime/runtime.hthr).
 fn CompileSpan::source<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<BitVec(64)> → Ending {
-    λ own xs => FTm::end_of(rest, FFun::uncurry(c.world.tys, c.reflected.params, c.reflected.result, CompileSpan::sem(f, c, rest), xs, own))
+    match c {
+        CompileSpan(reflected, world, _, _, _, typed, _, _) => λ own xs => FTm::end_of(rest, FFun::uncurry(world.tys,
+            reflected.params, reflected.result, FTm::source_at(world.tys, reflected.lent, reflected.params, reflected.result, typed, f, rest), xs, own)),
+    }
 }
 
 fn CompileSpan::linked<F>(f: F, c: CompileSpan<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }

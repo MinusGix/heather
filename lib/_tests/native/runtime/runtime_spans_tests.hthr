@@ -46,7 +46,7 @@ fn peek_base() → World { World(RecInfo::none, [], trivial) }
 // The instance. The pin is `refl` at every file: the reflection's meaning
 // at the file `f` reads `f`'s span 0, which is what `peek` is handed.
 fn peek_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
-    Setup::compile(peek, Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), λ f => refl, λ f => refl, trivial, refl)
+    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f => refl, trivial, refl)
 }
 
 instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
@@ -143,8 +143,8 @@ theorem count_guarded(): Fun::GuardedBy(count_words(), Word(64), count_body(), �
 // file: the body's meaning stands at one world on both sides, and only the
 // two spellings of the function are compared.
 fn count_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64)>(count_from) {
-    Setup::compile_measured(count_from, Setup::default(), [Word(64), Word(64)], Word(64), [Word(64)], Word(64), count_body(), 1, count_base(),
-        count_callees, λ f => refl, refl, count_measure, λ place length i acc => BitVec::toNat_lt_pow(64, length.sub(i)),
+    Setup::compile_measured(Setup::default(), [Word(64), Word(64)], Word(64), [Word(64)], Word(64), count_body(), 1, count_base(),
+        count_callees, count_from, λ f => refl, refl, count_measure, λ place length i acc => BitVec::toNat_lt_pow(64, length.sub(i)),
         λ f => Fun::guarded_by(count_words(), Word(64), count_body(), λ (g: Buffers()) => count_base().at(count_callees, g),
             λ (g: Buffers()) => count_at(g.span(0)), λ (g: Buffers()) => g.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure,
             λ g ys => refl, count_guarded(), f),

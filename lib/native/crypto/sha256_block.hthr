@@ -1,0 +1,422 @@
+// SHA-256's compression function as compiled code over two spans
+// (issues/sha2-compress-native.md, stage C1 of
+// docs/native-lexer-crypto-roadmap.md): `sha256_compress` takes a context it
+// may store into and a block it only reads, and leaves H(i) where H(i−1)
+// was (FIPS 180-4 §6.2.2).
+//
+// The context is 320 bytes: the hash value's eight words, then the working
+// variables' eight, then the schedule's sixty-four, each word four bytes
+// with the most significant first. Everything a round touches is in the
+// span, because a function passes at most six words and a round has eight
+// working variables, a constant and a schedule word: each step reads the
+// words it needs from the span and stores its results back
+// (issues/function-call-past-six-words.md is what would let the working
+// variables be values). The word functions are `sha256_round`'s, which read
+// the low half of each 64-bit word they are given.
+//
+// The loops are measured recursions on a counter, one function each, and
+// the round is three functions (`sha256_step`, `sha256_turn`, `sha256_set`)
+// so that no one of them holds more than the planner places in registers.
+// Two of those have one Heather type, which is what the generator's link
+// check once could not afford (issues/runtime-link-compares-functions.md):
+// this module is that issue's regression at full size.
+//
+// Not proved here: that the compiled function is `Sha2::compress`. What it
+// computes is held to an independent implementation and to the standard's
+// vectors where it is linked (crates/linked/tests/sha256.rs).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+
+// The four bytes from `i` as a word, the first the most significant, each
+// read under the span's length word.
+runtime fn sha256_word_at(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) {
+    span.byte_within(length, i).zero_extend(56).shift_left(24)
+        .bor(span.byte_within(length, i.add(BitVec::ofNat(1))).zero_extend(56).shift_left(16))
+        .bor(span.byte_within(length, i.add(BitVec::ofNat(2))).zero_extend(56).shift_left(8))
+        .bor(span.byte_within(length, i.add(BitVec::ofNat(3))).zero_extend(56))
+}
+
+// A word's low four bytes stored from `i`, the most significant first.
+runtime fn sha256_put_word(span: List<BitVec(8)>, length, i, word: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let mut span = span;
+    span.put_within(length, i, word.shift_right(24).truncate(8, 56));
+    span.put_within(length, i.add(BitVec::ofNat(1)), word.shift_right(16).truncate(8, 56));
+    span.put_within(length, i.add(BitVec::ofNat(2)), word.shift_right(8).truncate(8, 56));
+    span.put_within(length, i.add(BitVec::ofNat(3)), word.truncate(8, 56));
+    Mutated(span, word)
+}
+
+// The round constant K(t) (FIPS 180-4 §4.2.2), found by halving: compiled
+// code has no table to index (issues/rt-fixed-arrays-and-tables.md).
+runtime fn sha256_k(t: BitVec(64)) → BitVec(64) {
+    match t.unsigned_lt_bit(BitVec::ofNat(32)) {
+        True => match t.unsigned_lt_bit(BitVec::ofNat(16)) {
+            True => match t.unsigned_lt_bit(BitVec::ofNat(8)) {
+                True => match t.unsigned_lt_bit(BitVec::ofNat(4)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(2)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(1)) {
+                            True => BitVec::ofNat(0x428a2f98),
+                            False => BitVec::ofNat(0x71374491),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(3)) {
+                            True => BitVec::ofNat(0xb5c0fbcf),
+                            False => BitVec::ofNat(0xe9b5dba5),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(6)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(5)) {
+                            True => BitVec::ofNat(0x3956c25b),
+                            False => BitVec::ofNat(0x59f111f1),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(7)) {
+                            True => BitVec::ofNat(0x923f82a4),
+                            False => BitVec::ofNat(0xab1c5ed5),
+                        },
+                    },
+                },
+                False => match t.unsigned_lt_bit(BitVec::ofNat(12)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(10)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(9)) {
+                            True => BitVec::ofNat(0xd807aa98),
+                            False => BitVec::ofNat(0x12835b01),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(11)) {
+                            True => BitVec::ofNat(0x243185be),
+                            False => BitVec::ofNat(0x550c7dc3),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(14)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(13)) {
+                            True => BitVec::ofNat(0x72be5d74),
+                            False => BitVec::ofNat(0x80deb1fe),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(15)) {
+                            True => BitVec::ofNat(0x9bdc06a7),
+                            False => BitVec::ofNat(0xc19bf174),
+                        },
+                    },
+                },
+            },
+            False => match t.unsigned_lt_bit(BitVec::ofNat(24)) {
+                True => match t.unsigned_lt_bit(BitVec::ofNat(20)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(18)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(17)) {
+                            True => BitVec::ofNat(0xe49b69c1),
+                            False => BitVec::ofNat(0xefbe4786),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(19)) {
+                            True => BitVec::ofNat(0x0fc19dc6),
+                            False => BitVec::ofNat(0x240ca1cc),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(22)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(21)) {
+                            True => BitVec::ofNat(0x2de92c6f),
+                            False => BitVec::ofNat(0x4a7484aa),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(23)) {
+                            True => BitVec::ofNat(0x5cb0a9dc),
+                            False => BitVec::ofNat(0x76f988da),
+                        },
+                    },
+                },
+                False => match t.unsigned_lt_bit(BitVec::ofNat(28)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(26)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(25)) {
+                            True => BitVec::ofNat(0x983e5152),
+                            False => BitVec::ofNat(0xa831c66d),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(27)) {
+                            True => BitVec::ofNat(0xb00327c8),
+                            False => BitVec::ofNat(0xbf597fc7),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(30)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(29)) {
+                            True => BitVec::ofNat(0xc6e00bf3),
+                            False => BitVec::ofNat(0xd5a79147),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(31)) {
+                            True => BitVec::ofNat(0x06ca6351),
+                            False => BitVec::ofNat(0x14292967),
+                        },
+                    },
+                },
+            },
+        },
+        False => match t.unsigned_lt_bit(BitVec::ofNat(48)) {
+            True => match t.unsigned_lt_bit(BitVec::ofNat(40)) {
+                True => match t.unsigned_lt_bit(BitVec::ofNat(36)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(34)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(33)) {
+                            True => BitVec::ofNat(0x27b70a85),
+                            False => BitVec::ofNat(0x2e1b2138),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(35)) {
+                            True => BitVec::ofNat(0x4d2c6dfc),
+                            False => BitVec::ofNat(0x53380d13),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(38)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(37)) {
+                            True => BitVec::ofNat(0x650a7354),
+                            False => BitVec::ofNat(0x766a0abb),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(39)) {
+                            True => BitVec::ofNat(0x81c2c92e),
+                            False => BitVec::ofNat(0x92722c85),
+                        },
+                    },
+                },
+                False => match t.unsigned_lt_bit(BitVec::ofNat(44)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(42)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(41)) {
+                            True => BitVec::ofNat(0xa2bfe8a1),
+                            False => BitVec::ofNat(0xa81a664b),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(43)) {
+                            True => BitVec::ofNat(0xc24b8b70),
+                            False => BitVec::ofNat(0xc76c51a3),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(46)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(45)) {
+                            True => BitVec::ofNat(0xd192e819),
+                            False => BitVec::ofNat(0xd6990624),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(47)) {
+                            True => BitVec::ofNat(0xf40e3585),
+                            False => BitVec::ofNat(0x106aa070),
+                        },
+                    },
+                },
+            },
+            False => match t.unsigned_lt_bit(BitVec::ofNat(56)) {
+                True => match t.unsigned_lt_bit(BitVec::ofNat(52)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(50)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(49)) {
+                            True => BitVec::ofNat(0x19a4c116),
+                            False => BitVec::ofNat(0x1e376c08),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(51)) {
+                            True => BitVec::ofNat(0x2748774c),
+                            False => BitVec::ofNat(0x34b0bcb5),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(54)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(53)) {
+                            True => BitVec::ofNat(0x391c0cb3),
+                            False => BitVec::ofNat(0x4ed8aa4a),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(55)) {
+                            True => BitVec::ofNat(0x5b9cca4f),
+                            False => BitVec::ofNat(0x682e6ff3),
+                        },
+                    },
+                },
+                False => match t.unsigned_lt_bit(BitVec::ofNat(60)) {
+                    True => match t.unsigned_lt_bit(BitVec::ofNat(58)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(57)) {
+                            True => BitVec::ofNat(0x748f82ee),
+                            False => BitVec::ofNat(0x78a5636f),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(59)) {
+                            True => BitVec::ofNat(0x84c87814),
+                            False => BitVec::ofNat(0x8cc70208),
+                        },
+                    },
+                    False => match t.unsigned_lt_bit(BitVec::ofNat(62)) {
+                        True => match t.unsigned_lt_bit(BitVec::ofNat(61)) {
+                            True => BitVec::ofNat(0x90befffa),
+                            False => BitVec::ofNat(0xa4506ceb),
+                        },
+                        False => match t.unsigned_lt_bit(BitVec::ofNat(63)) {
+                            True => BitVec::ofNat(0xbef9a3f7),
+                            False => BitVec::ofNat(0xc67178f2),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The block's sixty-four bytes stored from byte 64 of the context: the
+// schedule's first sixteen words, a block's words being their bytes.
+runtime fn sha256_take_block(ctx: List<BitVec(8)>, cn: BitVec(64), block: List<BitVec(8)>, bn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(64).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(64)) {
+        False => Mutated(ctx, i),
+        True => {
+            let mut ctx = ctx;
+            ctx.put_within(cn, i.add(BitVec::ofNat(64)), block.byte_within(bn, i));
+            sha256_take_block(ctx, cn, block, bn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(64), h);
+        bv_omega
+    };
+}
+
+// Schedule words `i` to 63, each from the four before it that FIPS 180-4
+// §6.2.2 step 1 names: W(t) is the word at byte 64 + 4t of the context.
+runtime fn sha256_expand(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(64).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(64)) {
+        False => Mutated(ctx, i),
+        True => {
+            let at = i.shift_left(2).add(BitVec::ofNat(64));
+            let word = sha256_next(sha256_word_at(ctx, cn, at.sub(BitVec::ofNat(8))), sha256_word_at(ctx, cn, at.sub(BitVec::ofNat(28))),
+                sha256_word_at(ctx, cn, at.sub(BitVec::ofNat(60))), sha256_word_at(ctx, cn, at.sub(BitVec::ofNat(64))));
+            let put = sha256_put_word(ctx, cn, at, word);
+            sha256_expand(put.after, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(64), h);
+        bv_omega
+    };
+}
+
+// The hash value's thirty-two bytes copied to the working variables, at
+// byte 32 of the context (§6.2.2 step 2).
+runtime fn sha256_begin(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(32).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(32)) {
+        False => Mutated(ctx, i),
+        True => {
+            let mut ctx = ctx;
+            ctx.put_within(cn, i.add(BitVec::ofNat(32)), ctx.byte_within(cn, i));
+            sha256_begin(ctx, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(32), h);
+        bv_omega
+    };
+}
+
+// Seven of the working variables each moved to the next: h takes g first
+// and b takes a last, so that a word is read before it is stored over
+// (§6.2.2 step 3). Pass `i` moves the word at byte 56 − 4i.
+runtime fn sha256_shift(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(7).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(7)) {
+        False => Mutated(ctx, i),
+        True => {
+            let at = BitVec::ofNat(56).sub(i.shift_left(2));
+            let put = sha256_put_word(ctx, cn, at.add(BitVec::ofNat(4)), sha256_word_at(ctx, cn, at));
+            sha256_shift(put.after, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(7), h);
+        bv_omega
+    };
+}
+
+// The working variables after a round, from the two new words: the seven
+// move, then a and e are stored, e over the d that moved there.
+runtime fn sha256_set(ctx: List<BitVec(8)>, cn, first, fifth: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let moved = sha256_shift(ctx, cn, BitVec::ofNat(0));
+    let one = sha256_put_word(moved.after, cn, BitVec::ofNat(32), first);
+    let two = sha256_put_word(one.after, cn, BitVec::ofNat(48), fifth);
+    Mutated(two.after, two.value)
+}
+
+// A round from its T1: T2 is of a, b and c, and the two new words are
+// T1 + T2 and d + T1, both computed before any word is stored.
+runtime fn sha256_turn(ctx: List<BitVec(8)>, cn, t1: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let turned = sha256_set(ctx, cn,
+        t1.add(sha256_t2(sha256_word_at(ctx, cn, BitVec::ofNat(32)), sha256_word_at(ctx, cn, BitVec::ofNat(36)), sha256_word_at(ctx, cn, BitVec::ofNat(40)))),
+        sha256_word_at(ctx, cn, BitVec::ofNat(44)).add(t1));
+    Mutated(turned.after, turned.value)
+}
+
+// Round `t`: T1 is of h, e, f and g, the round's constant and its schedule
+// word, which is the word at byte 64 + 4t.
+runtime fn sha256_step(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let turned = sha256_turn(ctx, cn,
+        sha256_t1(sha256_word_at(ctx, cn, BitVec::ofNat(60)), sha256_word_at(ctx, cn, BitVec::ofNat(48)), sha256_word_at(ctx, cn, BitVec::ofNat(52)),
+            sha256_word_at(ctx, cn, BitVec::ofNat(56)), sha256_k(t), sha256_word_at(ctx, cn, t.shift_left(2).add(BitVec::ofNat(64)))));
+    Mutated(turned.after, turned.value)
+}
+
+// Rounds `i` to 63 on the working variables.
+runtime fn sha256_rounds(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(64).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(64)) {
+        False => Mutated(ctx, i),
+        True => {
+            let turned = sha256_step(ctx, cn, i);
+            sha256_rounds(turned.after, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(64), h);
+        bv_omega
+    };
+}
+
+// Each working variable added into its word of the hash value (§6.2.2
+// step 4).
+runtime fn sha256_end(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases BitVec::ofNat(8).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(8)) {
+        False => Mutated(ctx, i),
+        True => {
+            let at = i.shift_left(2);
+            let put = sha256_put_word(ctx, cn, at, sha256_word_at(ctx, cn, at).add(sha256_word_at(ctx, cn, at.add(BitVec::ofNat(32)))));
+            sha256_end(put.after, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(8), h);
+        bv_omega
+    };
+}
+
+// §6.2.2: H(i) from H(i−1) and a block. The context is the hash value's
+// eight words, then the working variables' eight, then the schedule's
+// sixty-four, each word four bytes with the most significant first: 320
+// bytes, of which the first thirty-two are read and all are written. What
+// the first thirty-two spell after the last block is the digest.
+runtime fn sha256_compress(ctx: List<BitVec(8)>, cn: BitVec(64), block: List<BitVec(8)>, bn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let taken = sha256_take_block(ctx, cn, block, bn, BitVec::ofNat(0));
+    let expanded = sha256_expand(taken.after, cn, BitVec::ofNat(16));
+    let begun = sha256_begin(expanded.after, cn, BitVec::ofNat(0));
+    let ran = sha256_rounds(begun.after, cn, BitVec::ofNat(0));
+    let ended = sha256_end(ran.after, cn, BitVec::ofNat(0));
+    Mutated(ended.after, ended.value)
+}

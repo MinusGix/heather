@@ -69,6 +69,14 @@
 //! one to the oracle that one is held to; nothing shipped calls it yet
 //! (`issues/sha256-linked-into-cache.md`).
 //!
+//! [`sha256::block`]: SHA-256's compression function whole, one linked
+//! function over a context and a block that its caller lends it
+//! (`lib/native/crypto/sha256_block.hthr`). The working variables, the
+//! schedule and the constants are Heather's there, the constants as a tree
+//! of comparisons and the rest as bytes of the context; the padding is
+//! still Rust's. That the Heather function is the specification's is not
+//! proved yet, where the word functions' is.
+//!
 //! [`scanner`]: Heather's own scanner, the automaton that cuts a source file
 //! into tokens (`lib/lang/lexer/lexer_scan.hthr`). Every decision about a
 //! byte is the linked code's; the loop that hands it the bytes is Rust's,

@@ -5,7 +5,7 @@ labels: [cryptography,native,x86,compiler]
 area: heather-in-heather
 milestone: [crypto-hash]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-12
 ---
 
 Stage C1 of `docs/native-lexer-crypto-roadmap.md` §4: SHA-2's compression
@@ -50,3 +50,8 @@ passes.
 ## Log
 
 - 2026-11-10: The arithmetic of both compression functions is compiled and proved; the memory is not. `lib/native/crypto/sha512_round.hthr` and `sha256_round.hthr` each hold three `runtime fn`s (`T1`, `T2`, one schedule word) with theorems taking them to [[sha2-specification]]: `sha512_round_spec` says a round of the specification is `Sha2State::turn` of the two compiled words, and `sha256_round_spec` the same through the 64-bit boundary (the specification's 32-bit word widened in, the low half of the result out). SHA-512's call a helper per Σ and σ; SHA-256's are one body each, since a call saves every live register and at this size that was most of the code. Certified sizes: SHA-512 `t1` 306 bytes with its two callees, SHA-256 `t1` 210 as one function, settles included. Both are linked into Rust and run as whole hashes with the state, schedule and constants held by the Rust caller (`crates/linked`, [[native-differential-harness]]). What this issue still owes is its actual scope: the state and schedule window as arrays, the round as a loop over the constant table, and `compress = spec` as one theorem ([[rt-fixed-arrays-and-tables]], [[native-library-exports-design]]). The bench-probe cases are not added yet.
+- 2026-11-12: SHA-256's compress is whole as compiled code, over memory: `sha256_compress` in `lib/native/crypto/sha256_block.hthr`, a `runtime fn` lent a context it stores into and a block it reads, exported and linked (`heather_linked::sha256::block`). The buffer-held state this issue assumed is how it was done: the context is 320 bytes (hash value, working variables, schedule), since a function passes six words ([[function-call-past-six-words]]), and the constants are a tree of comparisons, since there is no table yet ([[rt-fixed-arrays-and-tables]]). The loops are measured recursions, one function each; the round is three functions so that each fits the planner. It certifies as one program. The harness is `crates/linked/tests/sha256.rs`: the NIST vectors and the long one, the `sha2` crate at every length through three blocks, the rounds written out in Rust from random hash values, and a transcription of the Heather function compared on every byte of the context for spans of every shorter length (nothing stored past an end, a short block read as zero-filled).
+
+  Not done: `compress = spec`. Nothing connects `sha256_compress` to `Sha2::compress` but the tests. The pieces are `sha256_round`'s three theorems and the constants' (`constants_are_the_table`); the proof is an invariant per loop over the context's bytes, and it is hand-proved, so it waits on Minus. SHA-512's compress is not written; it is the same file at eight-byte words.
+
+  Found on the way: [[runtime-link-compares-functions]] (fixed in the library, a rule still owed), [[runtime-measured-reader-heavy-callee]] (open, not on this path), [[bv-omega-binder-captures-t]].

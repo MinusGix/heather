@@ -474,7 +474,12 @@ theorem Setup::plain_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: B
                     Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
 }
 
-fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+// `f` comes after the reflection and the table. Two instances met in a link
+// are two applications of this function, which the kernel compares argument
+// by argument before it unfolds either: two different functions are then
+// told apart at their reflections, which are data, and the functions
+// themselves are never compared (issues/runtime-link-compares-functions.md).
+fn Setup::compile<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
     pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
     ok: s.checked(rt, w).IsTrue(), plain: rt.shape() = Plain) → Compile<F>(f)
@@ -513,8 +518,9 @@ theorem Setup::fuel_agrees<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, 
     }
 }
 
-fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm, w: World,
-    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+// `f` after the reflection and the table, as in `Setup::compile`.
+fn Setup::compile_fuel<F>(s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res)),
     shaped: Setup::fuel_fun(w0, wrest, res, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
     zero_eq: (b: Buffers()) → Fun::FuelZero(Cons(w0, wrest), res, zero, w.at(callees, b),
@@ -614,8 +620,9 @@ theorem Setup::measured_agrees<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: L
     }
 }
 
-fn Setup::compile_measured<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat, w: World,
-    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+// `f` after the reflection and the table, as in `Setup::compile`.
+fn Setup::compile_measured<F>(s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res)),
     shaped: Setup::measured_fun(ks, w0, wrest, res, body, lent).shape() = Measured(ks, w0, wrest, body),
     m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(ks ++ Cons(w0, wrest), m),
@@ -847,9 +854,18 @@ theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → B
 // uncurried. A program is linked at every file at once
 // (docs/native-one-compiler-design.md §2.3): a function lent spans reads
 // the file's, and a function lent nothing is the same at each.
+//
+// The instance is read by pattern and not through the class's members. A
+// member is a function of `F`, `f` and the instance, and where a caller's
+// table meets a callee's source the kernel compares two applications of
+// one member argument by argument before it unfolds either: `f` against
+// the callee, which for two functions of one type it settles only by
+// evaluating both bodies (issues/runtime-link-compares-functions.md).
 fn Compile::uncurried<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<BitVec(64)> → BitVec(64) {
-    λ ws => Ty::uncurry(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
-        Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b), ws)
+    match c {
+        Compile(reflected, world, callees, typed, _, _, _) => λ ws => Ty::uncurry(world.at(callees, b).tys, reflected.params,
+            reflected.result, Ty::lent_at(world.at(callees, b).tys, reflected.lent, reflected.params, reflected.result, typed(b), f, b), ws),
+    }
 }
 
 // A program's word functions at each file, spelled with no binder: the
@@ -876,9 +892,14 @@ theorem link_every_table(x: Buffers() → List<List<BitVec(64)> → BitVec(64)>)
 fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
 
 // An instance's table of meanings at a file, uncurried: what `links` must
-// name.
+// name. Read off the world at the file, as `Compile::uncurried` reads the
+// function's meaning (`World::at`'s one spelling). Spelled at `c.world`,
+// the table of a function lent a span met the function's own source one
+// world apart, at no file against at the file, and the kernel told the two
+// worlds apart by evaluating the function at both
+// (issues/runtime-link-compares-functions.md).
 fn Compile::table<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<List<BitVec(64)> → BitVec(64)> {
-    Sig::uncurried(c.world.tys, c.world.sigs, c.callees(b))
+    c.world.at(c.callees, b).uncurried()
 }
 
 // How many words an instance's function takes.
@@ -1498,8 +1519,8 @@ fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, 
     let ys <- runtime_params(ts.word, ws, Some(r.ref), 0);
     let step_eq = Lam(b1.ref, Lam(r.ref, runtime_lams(ys, ap(rfl, [Blank, ap(Global(f), Cons(ap(succ_g, [Local(r.ref)]),
         runtime_args(count, reprs, ws, runtime_locals(ys))))]))));
-    pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), Ty::quote(res, q), NatLit(c), Tm::quote(zero, q), Tm::quote(succ, q),
-        world_e, table_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h)]))
+    pure(ap(compile, [Blank, setup, Ty::quote(w0, q), Ty::quotes(wrest, q), Ty::quote(res, q), NatLit(c), Tm::quote(zero, q), Tm::quote(succ, q),
+        world_e, table_e, Global(f), typed, shaped, zero_eq, step_eq, Hd(trivial_h)]))
 }
 
 // A function's words with the place of each span it is lent (word `2j` for
@@ -1639,8 +1660,8 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
         Zero => proved,
         Succ(_) => ap(span_g, [Blank, Global(f), NatLit(lent), ws_e, res_e, body_e, world_e, table_e, typed, m_e, proved]),
     };
-    pure(ap(compile, [Blank, Global(f), setup, Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
-        world_e, table_e, typed, shaped, m_e, bounded, guarded, Hd(trivial_h)]))
+    pure(ap(compile, [Blank, setup, Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
+        world_e, table_e, Global(f), typed, shaped, m_e, bounded, guarded, Hd(trivial_h)]))
 }
 
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
@@ -1662,7 +1683,7 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
                 Zero => ap(at_every, [Blank, Global(f)]),
                 Succ(_) => ap(lent_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]),
             };
-            pure(ap(compile, [Blank, Global(f), setup, rt_e, world_e, table_e, typed, pinned, Hd(trivial_h), ap(rfl, [Blank, runtime_at(shapes, 0)])]))
+            pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, Hd(trivial_h), ap(rfl, [Blank, runtime_at(shapes, 0)])]))
         }),
         Fuel(w0, wrest, zero, succ) => match rfun.body {
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
@@ -2164,8 +2185,8 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
         ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_f(Local(own), here, xs).append([lt_n, lt_n])))))))])]));
     // `Guarded` at each rest of the file, through the spans read there.
     let guarded = ap(from_family, [Blank, Global(f), ws_e, res_e, body_e, NatLit(lent), e.world, e.reads, e.fsigs, e.writes, e.typed, m_e, proved]);
-    pure(ap(compile, [Blank, Global(f), Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
-        e.world, e.reads, e.fsigs, e.writes, e.typed, ap(measure_at, [NatLit(lent), m_e]), bounded, guarded, Hd(trivial_h)]))
+    pure(ap(compile, [Blank, Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
+        e.world, e.reads, e.fsigs, e.writes, Global(f), e.typed, ap(measure_at, [NatLit(lent), m_e]), bounded, guarded, Hd(trivial_h)]))
 }
 
 // The program's parts, held once each (`runtime_held`): the functions (the
@@ -2307,7 +2328,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let code_e <- code;
     let instance: Tac<Expr> = match measured {
         False => runtime_span_ref("FFun::compile").bind(λ compile => runtime_span_ref("FFun::source_every").bind(λ every =>
-            pure(ap(compile, [Blank, Global(f), rt_e, world_e, reads_e, fsigs_e, writes_e, e.typed,
+            pure(ap(compile, [Blank, rt_e, world_e, reads_e, fsigs_e, writes_e, Global(f), e.typed,
                 ap(every, [Blank, Global(f), tys_e, NatLit(lent), params_e, res_e, e.typed]), Hd(trivial_h)])))),
         True => runtime_span_measured(name, f, q, ts, e, body_e, rfun.params, rfun.result, lent),
     };
