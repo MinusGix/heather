@@ -278,6 +278,7 @@ impl Elaborator {
             el: self,
             cx,
             names: RefCell::new(cx.names.clone()),
+            crossed: RefCell::new(Vec::new()),
             nodes: Cell::new(SPELL_NODES),
             fallbacks: Cell::new(0),
             qualified: false,
@@ -403,6 +404,10 @@ struct Speller<'a> {
     /// under, so a `Var` under a printed `Π` resolves to the name just chosen
     /// for it.
     names: RefCell<crate::spine::Binders>,
+    /// The types of the binders [`Self::binders`] counts, outermost first,
+    /// each scoped in `cx` plus the ones before it, so [`Self::here`] can
+    /// rebuild the context the walk is standing in.
+    crossed: RefCell<Vec<(Type, crate::Level)>>,
     nodes: Cell<u32>,
     fallbacks: Cell<u32>,
     /// Spell globals so the result can be **re-parsed** rather than only read.
@@ -566,6 +571,38 @@ impl Speller<'_> {
         (self.names.borrow().len() - self.cx.names.len()) as u32
     }
 
+    /// The context the walk is standing in: `cx` extended by the binders it
+    /// has crossed, under the names chosen for them. A reader that has to
+    /// work *at* the walk's position — [`Inductives::display_targs`]
+    /// re-lowers a declaration at arguments that may mention those binders —
+    /// takes this rather than strengthening back out to `cx`
+    /// (issues/type-arguments-under-a-binder-print-elided.md).
+    fn here(&self) -> std::borrow::Cow<'_, Cx> {
+        let crossed = self.crossed.borrow();
+        if crossed.is_empty() {
+            return std::borrow::Cow::Borrowed(self.cx);
+        }
+        let names = self.names.borrow();
+        let mut cx = self.cx.clone();
+        let base = self.cx.names.len();
+        for (k, (ty, level)) in crossed.iter().enumerate() {
+            let name = names.get(base + k).unwrap_or("_").to_string();
+            cx.push(name, ty.clone(), level.clone());
+        }
+        std::borrow::Cow::Owned(cx)
+    }
+
+    /// Enter a binder of type `ty` named `name`; [`Self::leave`] undoes it.
+    fn enter(&self, name: &str, ty: &Type, level: &crate::Level) {
+        self.names.borrow_mut().push(name, None);
+        self.crossed.borrow_mut().push((ty.clone(), level.clone()));
+    }
+
+    fn leave(&self) {
+        self.names.borrow_mut().pop();
+        self.crossed.borrow_mut().pop();
+    }
+
     /// A name for a binder the kernel does not name: the first of a short
     /// preference list not already in scope, else `x{n}`.
     fn fresh(&self) -> String {
@@ -612,11 +649,11 @@ impl Speller<'_> {
         dropped.shift_local(1) != *body
     }
 
-    /// Spell `body` under one binder named `name`.
-    fn under(&self, name: &str, body: &Type, d: u32) -> String {
-        self.names.borrow_mut().push(name, None);
+    /// Spell `body` under one binder of type `dom` named `name`.
+    fn under(&self, name: &str, dom: &Type, level: &crate::Level, body: &Type, d: u32) -> String {
+        self.enter(name, dom, level);
         let s = self.ty(body, d + 1);
-        self.names.borrow_mut().pop();
+        self.leave();
         s
     }
 
@@ -720,7 +757,7 @@ impl Speller<'_> {
             }
             let targs = if ind.params.is_empty() {
                 String::new()
-            } else if let Some(args) = Inductives(self.el).display_targs(self.cx, &shape, &ind, self.binders()) {
+            } else if let Some(args) = Inductives(self.el).display_targs(&self.here(), &shape, &ind) {
                 let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>().join(", ");
                 format!("<{shown}>")
             } else {
@@ -792,7 +829,7 @@ impl Speller<'_> {
                 let named = if ind.valparams.is_empty() { self.named(ind.tag, &[], d) } else { None };
                 named.unwrap_or_else(|| ind.name.clone())
             } else if let Some(args) =
-                Inductives(self.el).display_targs(self.cx, ty, &ind, self.binders())
+                Inductives(self.el).display_targs(&self.here(), ty, &ind)
             {
                 let shown = args
                     .iter()
@@ -825,7 +862,7 @@ impl Speller<'_> {
                 format!("[{}; {}]", self.ty(elem, d + 1), self.tm(len, d))
             }
             Type::Fin { len } => format!("Fin({})", self.tm(len, d)),
-            Type::Pi { dom, cod, .. } => {
+            Type::Pi { dom, dom_level, cod, .. } => {
                 // `->` associates to the right: a function domain is
                 // parenthesized, or `(A -> B) -> C` would read as `A -> B -> C`.
                 let dom_s = match &**dom {
@@ -834,12 +871,12 @@ impl Speller<'_> {
                 };
                 if self.dependent(cod, d) {
                     let name = self.fresh();
-                    let cod_s = self.under(&name, cod, d);
+                    let cod_s = self.under(&name, dom, dom_level, cod, d);
                     format!("({name}: {dom_s}) -> {cod_s}")
                 } else {
                     // The binder is unused, so any name resolves nothing; push
                     // one anyway to keep the index arithmetic honest.
-                    let cod_s = self.under("_", cod, d);
+                    let cod_s = self.under("_", dom, dom_level, cod, d);
                     format!("{dom_s} -> {cod_s}")
                 }
             }
@@ -931,12 +968,12 @@ impl Speller<'_> {
             Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => self
                 .ctor_value(t, d)
                 .unwrap_or_else(|| format!("({}, {})", self.tm(fst, d + 1), self.tm(snd, d + 1))),
-            Term::Lam { dom, body, .. } => {
+            Term::Lam { dom, dom_level, body, .. } => {
                 let dom_s = self.ty(dom, d + 1);
                 let name = self.fresh();
-                self.names.borrow_mut().push(name.as_str(), None);
+                self.enter(name.as_str(), dom, dom_level);
                 let body_s = self.tm(body, d + 1);
-                self.names.borrow_mut().pop();
+                self.leave();
                 format!("λ ({name}: {dom_s}) => {body_s}")
             }
             // A code and the type it encodes are written identically, so a
@@ -994,7 +1031,7 @@ impl Speller<'_> {
             String::new()
         } else {
             match ind.skel.as_ref().and_then(|skel| {
-                Inductives(self.el).display_targs(self.cx, shape, skel, self.binders())
+                Inductives(self.el).display_targs(&self.here(), shape, skel)
             }) {
                 Some(args) => {
                     let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>();
@@ -1087,7 +1124,7 @@ impl Speller<'_> {
         if self.binders() != 0 {
             return String::new();
         }
-        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind, 0) else {
+        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind) else {
             return String::new();
         };
         // The generated-annotation flavour: an argument at a type with value

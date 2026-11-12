@@ -1902,7 +1902,7 @@ impl Linarith<'_> {
         let err = |msg: String| ElabError::Elab { msg, span };
         let sides = self
             .display_tag_of(conj)
-            .and_then(|ind| Inductives(self).display_targs(cx, conj, &ind, 0))
+            .and_then(|ind| Inductives(self).display_targs(cx, conj, &ind))
             .filter(|sides| sides.len() == 2)
             .ok_or_else(|| err(format!("`{tactic}` could not read the two sides of the conjunction it was asked to prove")))?;
         let shown = resugar(&self.spell_type_clean(cx, goal).unwrap_or_else(|| self.display_type(cx, goal)), None);

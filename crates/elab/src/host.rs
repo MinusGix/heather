@@ -3185,7 +3185,7 @@ impl Host<'_> {
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
             && let Some(ind) = self.display_tag_of(ty)
         {
-            let Some(targs) = Inductives(self).display_targs(&run.scopes[at].cx, ty, &ind, 0) else {
+            let Some(targs) = Inductives(self).display_targs(&run.scopes[at].cx, ty, &ind) else {
                 return HeadView::Other;
             };
             let args = targs.into_iter().map(|(t, l)| run.issue(at, Held::Type(t, l))).collect();
