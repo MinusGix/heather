@@ -161,12 +161,26 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
 /// (`heather_cli::linked::exports_rs`). `--check` writes nothing and fails
 /// where the file on disk is not that. `scripts/linked` runs it after the
 /// assembly is rewritten.
+///
+/// `--rows` writes nothing and prints what `scripts/linked` compiles, the
+/// table read as this does: a line for each row that has a file, its module,
+/// its function as Heather names it, its symbol, and the entries compiled
+/// with it as `compile-x86 --entry` names them, separated by spaces.
 pub fn linked_exports(args: &[String]) -> ExitCode {
     report((|| {
         let (dir, check) = match args {
             [dir] => (Path::new(dir), false),
             [dir, flag] if flag == "--check" => (Path::new(dir), true),
-            _ => return Err("usage: heather linked-exports <generated dir> [--check]".to_string()),
+            [dir, flag] if flag == "--rows" => {
+                let path = Path::new(dir).join("EXPORTS.tsv");
+                let rows = heather_cli::linked::exports(&std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?)?;
+                for row in rows.iter().filter(|row| row.within.is_none()) {
+                    let entries: Vec<String> = rows.iter().filter(|entry| entry.within.as_deref() == Some(row.symbol.as_str())).map(|entry| entry.entry()).collect();
+                    println!("{}\t{}\t{}\t{}", row.module, row.function, row.symbol, entries.join(" "));
+                }
+                return Ok(());
+            }
+            _ => return Err("usage: heather linked-exports <generated dir> [--check | --rows]".to_string()),
         };
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{}: {e}", dir.join(name).display()));
         let text = heather_cli::linked::exports_rs(&read("EXPORTS.tsv")?, &|function| read(&format!("{function}.s")))?;
@@ -226,6 +240,8 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let mut cache = None;
     let mut timings = None;
     let mut kernel_workers = None;
+    // The label, where it is not the one the function's name derives.
+    let mut symbol = None;
     // Other functions of the program to export beside the function: each a
     // module and a function in it.
     let mut entries: Vec<(String, String)> = Vec::new();
@@ -239,6 +255,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
                     Some((module, function)) if symbol_ok(module) && symbol_ok(function) => entries.push((module.to_string(), function.to_string())),
                     _ => return Err(format!("--entry `{value}` is not `<module>::<function>`, the function an ASCII C/assembly identifier")),
                 }
+            }
+            "--symbol" => {
+                let value = args.next().ok_or("--symbol needs a name")?;
+                if !symbol_ok(value) { return Err(format!("--symbol `{value}` is not an ASCII C/assembly identifier")); }
+                symbol = Some(value.clone());
             }
             "-o" | "-L" | "--cache-dir" | "--item-timings" | "--timings" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
@@ -267,17 +288,25 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         return Err(if program_only {
             "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]"
         } else {
-            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
+            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
         }.into());
     }
-    if program_only && !entries.is_empty() {
-        return Err("--entry is compile-x86's: a reflected program is named whole".into());
+    if program_only && (!entries.is_empty() || symbol.is_some()) {
+        return Err("--entry and --symbol are compile-x86's: a reflected program is named whole".into());
     }
     let source = Path::new(positional[0]);
-    let symbol = positional[1];
-    if !symbol_ok(symbol) {
-        return Err("function must be an ASCII C/assembly identifier".into());
+    // The function as its module names it: a name, or a method's path
+    // (`List::raise_letters`). Its symbol is the label, and names the
+    // certificate's declarations: the one `--symbol` gives, or the one the
+    // path derives (`list_raise_letters`, `heather_cli::linked::symbol_of`).
+    let function = positional[1];
+    let derived = heather_cli::linked::symbol_of(function)
+        .ok_or("function must be a name or a method's path (`Type::method`), each segment an ASCII C/assembly identifier")?;
+    if program_only && function.contains("::") {
+        return Err("reflect takes a function by its name: a method is compiled by compile-x86".into());
     }
+    let symbol = symbol.unwrap_or(derived);
+    let symbol = symbol.as_str();
     let output = output.unwrap();
     if program_only {
         if output.extension().and_then(|s| s.to_str()) != Some("hthr") || output.file_stem().and_then(|s| s.to_str()).is_none_or(|stem| !symbol_ok(stem)) {
@@ -397,7 +426,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
     }
     let prefix = format!("{symbol}_native");
-    let source_name = format!("{root_name}::{symbol}");
+    let source_name = format!("{root_name}::{function}");
     if program_only {
         let program = verified::reflect(&elab, &source_name)?;
         // The program and its agreement, a module checked as any other
@@ -448,7 +477,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     } else {
         let program = verified::reflect(&elab, &source_name)?;
         if !program.functions.iter().any(|function| function.helped) {
-            return Err(format!("`{symbol}` is not a runtime fn: mark it `runtime fn {symbol}`, and the functions it calls, with `import runtime;` \
+            return Err(format!("`{function}` is not a runtime fn: mark it `runtime fn {function}`, and the functions it calls, with `import runtime;` \
                 (docs/runtime-fn-setups-design.md §16.9)"));
         }
         verified::Shape::reflected(&prefix, &program)
@@ -458,14 +487,14 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // (docs/native-library-exports-design.md §6.3).
     if !entries.is_empty() {
         if shape.marks.is_none() && !published("names") {
-            return Err(format!("`{symbol}` publishes no program of named functions: an entry is another function of a `runtime fn`'s program"));
+            return Err(format!("`{function}` publishes no program of named functions: an entry is another function of a `runtime fn`'s program"));
         }
-        for (module, function) in &entries {
-            if function == symbol { return Err(format!("--entry `{module}::{function}` is the function compiled")); }
+        for (module, entry) in &entries {
+            if entry == symbol { return Err(format!("--entry `{module}::{entry}` is the function compiled")); }
             // The file's own label for the start of the program.
-            if *function == format!("{symbol}_program") { return Err(format!("--entry `{module}::{function}` has the name of the program's label")); }
-            if elab.qualified_global(&format!("{module}::{function}")).is_none() {
-                return Err(format!("--entry `{module}::{function}` is no function `{symbol}`'s module reaches"));
+            if *entry == format!("{symbol}_program") { return Err(format!("--entry `{module}::{entry}` has the name of the program's label")); }
+            if elab.qualified_global(&format!("{module}::{entry}")).is_none() {
+                return Err(format!("--entry `{module}::{entry}` is no function `{function}`'s module reaches"));
             }
         }
         verified::runtime_entries(&elab, &prefix, &root_name, &source_name, &mut shape, &entries)?;

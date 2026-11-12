@@ -27,8 +27,9 @@ fn linked_exports_are_what_the_compiler_emits() {
     }
     // A program for each row that has a file, its other exported functions
     // with it.
-    let rows: Vec<(&str, &str, Vec<String>)> = listed.iter().filter(|row| row.within.is_none()).map(|row| (row.module.as_str(), row.function.as_str(),
-        listed.iter().filter(|entry| entry.within.as_deref() == Some(row.function.as_str())).map(|entry| entry.entry()).collect())).collect();
+    // A row is compiled under its symbol, the label and the file's stem.
+    let rows: Vec<(&str, &str, &str, Vec<String>)> = listed.iter().filter(|row| row.within.is_none()).map(|row| (row.module.as_str(), row.function.as_str(),
+        row.symbol.as_str(), listed.iter().filter(|entry| entry.within.as_deref() == Some(row.symbol.as_str())).map(|entry| entry.entry()).collect())).collect();
     // One compiler per export, four at a time as the library gate runs its
     // folders (`library.rs`): an export costs a certificate, and the
     // scanner alone is two dozen of them.
@@ -37,11 +38,11 @@ fn linked_exports_are_what_the_compiler_emits() {
     std::thread::scope(|scope| {
         for _ in 0..4 {
             scope.spawn(|| loop {
-                let Some((module, function, entries)) = queue.lock().expect("queue").pop_front() else { break };
-                let assembly = output.join(format!("{function}.s"));
+                let Some((module, function, symbol, entries)) = queue.lock().expect("queue").pop_front() else { break };
+                let assembly = output.join(format!("{symbol}.s"));
                 let result = Command::new(env!("CARGO_BIN_EXE_heather"))
                     .current_dir(&root)
-                    .args(["compile-x86", module, function, "-o"]).arg(&assembly)
+                    .args(["compile-x86", module, function, "--symbol", symbol, "-o"]).arg(&assembly)
                     .args(entries.iter().flat_map(|entry| ["--entry", entry.as_str()]))
                     .arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
                     .output().unwrap();
@@ -50,10 +51,10 @@ fn linked_exports_are_what_the_compiler_emits() {
                     continue;
                 }
                 let emitted = std::fs::read_to_string(&assembly).unwrap();
-                match std::fs::read_to_string(generated.join(format!("{function}.s"))) {
-                    Err(_) => failures.lock().expect("failures").push(format!("crates/linked/generated/{function}.s is missing: run scripts/linked")),
+                match std::fs::read_to_string(generated.join(format!("{symbol}.s"))) {
+                    Err(_) => failures.lock().expect("failures").push(format!("crates/linked/generated/{symbol}.s is missing: run scripts/linked")),
                     Ok(linked) if emitted != linked => failures.lock().expect("failures").push(format!(
-                        "crates/linked/generated/{function}.s is not what `compile-x86 {module} {function}` emits: run scripts/linked\n\
+                        "crates/linked/generated/{symbol}.s is not what `compile-x86 {module} {function} --symbol {symbol}` emits: run scripts/linked\n\
                          emitted:\n{emitted}\nlinked:\n{linked}")),
                     Ok(_) => {}
                 }
@@ -62,7 +63,7 @@ fn linked_exports_are_what_the_compiler_emits() {
     });
     let failures = failures.into_inner().expect("failures");
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-    let exports: Vec<String> = rows.iter().map(|(_, function, _)| format!("{function}.s")).collect();
+    let exports: Vec<String> = rows.iter().map(|(_, _, symbol, _)| format!("{symbol}.s")).collect();
     assert!(!exports.is_empty(), "EXPORTS.tsv lists no export");
     // And nothing is linked that the manifest does not account for.
     for entry in std::fs::read_dir(&generated).unwrap() {
@@ -131,6 +132,21 @@ fn what_the_contract_does_not_take_is_refused() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{function} --entry {entry}: {stderr}");
         assert!(!output.exists(), "{function} --entry {entry}: a refused entry wrote assembly");
+    }
+    // A function is a name or a method's path, and a symbol given for it an
+    // identifier; neither is read further than that.
+    for (args, why) in [
+        (&["List::9f"][..], "function must be a name or a method's path (`Type::method`)"),
+        (&["List::raise_letters", "--symbol", "9raise"], "--symbol `9raise` is not an ASCII C/assembly identifier"),
+        (&["raise::"], "function must be a name or a method's path"),
+    ] {
+        let output = dir.join("named.s");
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .arg("compile-x86").arg(&spans).args(args).arg("-o").arg(&output)
+            .output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success() && stderr.contains(why), "{args:?}: {stderr}");
+        assert!(!output.exists(), "{args:?}: a refused name wrote assembly");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

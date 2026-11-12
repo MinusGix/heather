@@ -1,13 +1,21 @@
 # The Heather functions this crate links, one per line: the source module,
 # the `runtime fn` in it, and its parameters as the Rust declaration names
 # them, separated by commas (a word is a bare name, a span of bytes the
-# function reads is `name: span`, one it stores into `name: span mut`).
-# A fourth column makes the function an entry of that export's program: it
-# is compiled with it, once, and is a second label in that export's file
-# (docs/native-library-exports-design.md §6.3); what it shares with that
-# export is then in the crate once.
-# `generated/<function>.s` is what `heather compile-x86 <module> <function>`
-# writes for a row that has no fourth column, checked in so a build of the workspace needs no Heather compiler
+# function reads is `name: span`, one it stores into `name: span mut`; a
+# `mut self` receiver that is a span is one of these).
+# A function is named as its module names it, a method by its path
+# (`List::raise_letters`). Its symbol is the assembly label, the file's stem
+# and the Rust name: a plain function's own name, a method's path in snake
+# case joined by `_` (`List::raise_letters` is `list_raise_letters`,
+# `Sha256::update` is `sha256_update`), or one written before the path as
+# `<symbol> = <path>`. Two rows with one symbol are refused.
+# A fourth column, an export's symbol, makes the function an entry of that
+# export's program: it is compiled with it, once, and is a second label in
+# that export's file (docs/native-library-exports-design.md §6.3); what it
+# shares with that export is then in the crate once.
+# `generated/<symbol>.s` is what `heather compile-x86 <module> <function>
+# --symbol <symbol>` writes for a row that has no fourth column, checked in
+# so a build of the workspace needs no Heather compiler
 # (docs/native-lexer-crypto-roadmap.md §2, piece 7), and
 # `generated/exports.rs` the declarations, written from this table and the
 # signature each file states (docs/native-library-exports-design.md §6,
@@ -29,6 +37,7 @@ lib/lang/lexer/lexer_scan.hthr	scan_accept	state	scan_token
 lib/lang/lexer/lexer_scan.hthr	scan_begin	previous	scan_token
 lib/native/native_tool_spans.hthr	count_newlines	text: span, count
 lib/native/native_tool_spans.hthr	raise_span	text: span mut, count, from
+lib/native/native_tool_spans.hthr	List::raise_letters	text: span mut, count, from
 lib/native/native_tool_spans.hthr	copy_span	out: span mut, text: span, count, from
 lib/native/native_tool_spans.hthr	copy_window	out: span mut, text: span, from, end
 lib/lang/lexer/lexer_span.hthr	scan_token	source: span, at, previous

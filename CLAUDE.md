@@ -122,10 +122,14 @@
   (`generated/exports.rs`, never edited: `tests/linked_exports.rs`); a new
   export is a line in the table (module, function, parameters, a span of
   bytes it reads as `name: span` and one it stores into as
-  `name: span mut`; a fourth column names the export whose program the
+  `name: span mut`; a method is named by its path, `List::f`, and exported
+  under the symbol the path derives, `list_f`, or one written as
+  `sym = List::f`; a fourth column names the export whose program the
   function is a function of, and it is then a label in that export's file,
   not a file), a wrapper in `src/`, and tests against
-  an independent reference.
+  an independent reference. Run `scripts/linked` before writing the
+  wrapper: the compiler links this crate, so a wrapper of a symbol not yet
+  generated stops the build that would generate it.
   The `heather` binary links these files, so one that lost a symbol (a merge
   conflict taken from the wrong side) fails every build with `undefined
   symbol: scan_token`: restore a complete copy (`git checkout HEAD --
