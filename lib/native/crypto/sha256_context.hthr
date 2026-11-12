@@ -63,15 +63,13 @@ import sha256_stream;
 
 // The context as a value: the hash value so far, the working variables
 // of the round being run, the message schedule (whose first sixteen words
-// are the block being assembled), and the count of bytes taken.
-record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
-
-// `n` words, each four bytes with the most significant first.
-fn Sha256::words(n: Nat) → Stored<[u32; n]> { Stored::u32_be().array(n) }
-
-// How a context is bytes (`Sha256::stored()`), and each field as a part
-// of it (`Sha256::hash_part()`, …).
-generate laid(Sha256, [Sha256::words(8), Sha256::words(8), Sha256::words(64), Stored::u64_be()]);
+// are the block being assembled), and the count of bytes taken. It is
+// laid over the bytes SHA-256's functions are lent: each word with its
+// most significant byte first, and the fields where they are written,
+// since those functions' bodies still write the offsets out. The
+// declaration publishes how a context is bytes (`Sha256::stored()`) and
+// each field as a part of it (`Sha256::hash_part()`, …).
+laid(endian := BigEndian, order := AsWritten) record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
 
 // The context a span holds.
 fn Sha256::of(ctx: List<u8>) → Sha256 { Sha256::stored().get(ctx, 0) }

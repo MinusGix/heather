@@ -1,21 +1,21 @@
 # Layout as a library, and records laid over bytes
 
-Status: **2026-11-12: layers 1, 2 and 3 are built on PR #551, and so is
+Status: **2026-11-12: layers 1, 2 and 3 are built on PR #551, and so are
 the first pieces of layer 4: big-endian words read and stored by compiled
 code, proved to be the codec's, which SHA-256's modules now use; fields
 as values with their laws (`Part`, §5.3); the declaration
-`generate laid(T, [codec, …]);`, which writes a record's codec and one
-part per field (§6.2, stage A); and SHA-256's context as a record over
-its span, declared that way. Accessors that name a field in a
-`runtime fn` body, and the record held by a `runtime fn` (stage B), are
-design.**
+`laid record T { … }`, which reads each field's codec off its type and
+publishes the record's codec and one part per field (§6.2, stage A); and
+SHA-256's context as a record over its span, declared that way.
+Accessors that name a field in a `runtime fn` body, and the record held
+by a `runtime fn` (stage B), are design.**
 Minus's direction (2026-11-12, the native thread): SHA-256's context goes
 "straight to laid out fields, we're going to want them very soon
 regardless", and "laying out should be something that's easy to use
 relatively separately as well, similar to how Rust's layout api works …
 so you can do it dynamically too for runtime layouting, etc. But ideally
-better with proofs". Everything below that goes past those words is marked
-**proposed**, and §7 lists the choices that are Minus's.
+better with proofs". What goes past those words was marked **proposed**
+and put to Minus as six choices; §7 has them as decided the same day.
 
 Owners of the seams: `issues/sha256-context-type.md` (the first customer),
 `issues/rt-fixed-arrays-and-tables.md` (arrays of words in `rt`, byte order
@@ -368,7 +368,9 @@ four.
 
 ### 6.2 The declaration
 
-What the source should read as (**proposed**; the spelling is §7's):
+What the source should read as (the first sketch, kept for the stages it
+names; the declaration as built is below, and a byte order per field as
+written here would need the generator to be handed the record's syntax):
 
 ```heather
 laid record Sha256 {
@@ -415,13 +417,13 @@ library's own composition, which checks today for this record (the probe
 padded, and read through the record's constructor by `Stored::map`, whose
 round trip is `refl` because a record is its fields.
 
-**Built: the declaration** (`lib/std/machine/laid.hthr`), in the
-`generate` spelling, which is §7 item 3's first step and needs nothing of
-the compiler:
+**Built: the declaration** (`lib/std/machine/laid.hthr`). It is the
+record's own, under a prefix (§7 item 3, decided: prefix generators
+extended to records, `docs/value-definitions-design.md` §3.5):
 
 ```heather
-record Header { tag: u8, length: u64, flags: [u16; 3] }
-generate laid(Header, [Stored::byte(), Stored::u64_be(), Stored::u16_be().array(3)]);
+laid record Meters { value: u32 }
+laid(endian := BigEndian, order := AsWritten) record Header { tag: u8, length: u64, flags: [u16; 3] }
 ```
 
 It publishes `Header::stored(): Stored<Header>` and, for each field,
@@ -429,17 +431,40 @@ It publishes `Header::stored(): Stored<Header>` and, for each field,
 layout is `Header::stored().layout` (`Layout(24, 3)` by `refl`), an
 offset is `Header::length_part().offset` (8), and the laws for a read and
 a store at a field are the part's own, so the generator proves nothing
-and neither does its caller. One codec is written per field, in the
-fields' order: it says the byte order (§7 item 2's recommended reading)
-and anything else the type does not, and another laid record's
-`R::stored()` is a codec like any other, so records nest and their parts
-compose (`Leg::header_part().then(Header::length_part())` is at the sum
-of the offsets, and its `with` is the nested record update, by `refl`).
-The probes (`lib/_tests/std/machine/laid_tests.hthr`) hold that, the
-bytes of a closed header, a record of one field, and four refusals, each
-with its reason: a codec count that is not the field count, a codec that
-does not store its field's type, a type that is not a record, and a
-record declared twice.
+and neither does its caller.
+
+**Each field's codec is read off its type.** A `u8` is a byte; a word of
+16, 32 or 64 bits is stored in the byte order the declaration names
+(`endian`, the machine's little-endian where none is named), which is
+§7 item 2 as decided: the order is the codec's and a `u32` is one type;
+`[A; n]` is `n` of `A`'s codec; and any other type `R` is stored by
+`R::stored()`, which is what `laid record R` publishes, so records nest
+and their parts compose (`Leg::header_part().then(Header::length_part())`
+is at the sum of the offsets, and its `with` is the nested record update,
+by `refl`). A record whose bytes its types do not say names its codecs,
+one per field: `laid(codecs := [Stored::u32_be(), Stored::u32_le()])`.
+The arguments are named because a parameter with a default has no
+positional slot.
+
+**Where the fields lie is the declaration's choice** (§7 item 4, decided
+against the recommendation here). `order := AnyOrder`, the default, lets
+the declaration place the fields, and nothing may read an offset off the
+source: it is `T::f_part().offset`. `order := AsWritten` is C's rule,
+each field after the one written before it, for bytes that are a format
+someone else reads. Today both give the written order; the rule that
+chooses is `issues/laid-field-order-chosen.md`. SHA-256's context says
+`AsWritten`, because its functions' bodies still write the offsets out.
+
+The probes (`lib/_tests/std/machine/laid_tests.hthr`) hold all of that:
+the bytes of a closed header, a record of one field in the machine's
+order, a record of records, arrays of arrays, codecs named by hand, the
+same call written as `generate laid("Late", endian := BigEndian);` after
+a record declared before, and refusals, each with its reason: a codec
+count that is not the field count, a codec that does not store its
+field's type (after which the record's name is free, the declaration
+being one transaction), a type that is not a record, a field whose type
+has no codec to read off (`Nat`, a word of 24 bits), a record laid out
+twice, and a prefix that is no generator.
 
 Two things the generator met, both filed. A member of a group
 cannot cite an earlier member (`generate-group-internal-references`), so
@@ -461,8 +486,7 @@ costs one in the compression loop, so that waits for stage B or for
 inlining and is not done by default.
 
 **SHA-256's context, declared:** `lib/native/crypto/sha256_context.hthr`.
-`record Sha256 { hash, working, schedule, count }`,
-`generate laid(Sha256, [words(8), words(8), words(64), Stored::u64_be()])`,
+`laid(endian := BigEndian, order := AsWritten) record Sha256 { hash, working, schedule, count }`,
 one part per word of each array as a composition, and `Sha256::of(ctx)`,
 the context a span holds. The offsets the SHA
 modules write in their bodies are theorems by `refl`
@@ -502,34 +526,41 @@ free) and not a comparison per access. That is a fact in the sense of
 `docs/compilation-vision.md` §2.3, and this stage is designed in its own
 section once A is built and shows what the refinements look like.
 
-## 7. Choices that are Minus's
+## 7. The choices, as Minus decided them (2026-11-12)
 
-1. **The name `Layout`.** The program compiler has a record of that name
-   (`native_compile.hthr`: where a program's static words and buffers
-   are). Nothing imports both today. Recommended: the library takes
-   `Layout`, as Rust's does, and the program compiler's record is renamed
-   (`Statics`) in a mechanical commit when a module first needs both.
-2. **Byte order: in the codec or in the type.** Recommended: in the
-   codec, written per field (`be`, `le`), so a `u32` is one type. The
-   other reading is wrapper types (`u32be`), as Rust's `zerocopy` has.
-3. **The declaration's spelling**: `generate laid(Sha256, …);` after an
-   ordinary record (no change to the language, built: §6.2),
-   `laid record Sha256 { … }` (prefix generators extended to records), an
-   attribute, or a `datarepr` clause. Recommended: the `generate` form
-   now, and `laid record` as its sugar once a second record wants it,
-   with the default rule `repr(C)` order and `packed` as an argument.
-4. **Field order is the written order** (Rust reorders by default, C does
-   not). Recommended: written order, always; a reordering rule is a
-   function over the table that a user may call.
-5. **Stage A before stage B**, or B at once. Recommended: A first: it is
-   a library and a generator in Heather, it removes every offset from the
-   SHA-256 source, and B's design can then cite real lemmas.
-6. **The alignment as an exponent** (§3, as built). The other reading is
-   the alignment itself with a `Layout::Valid` premise on the theorems
-   that need a power of two, which reads `Layout(4, 4)` for a `u32` and
-   pays a premise at every use. Recommended: the exponent, with named
-   layouts (`Layout::word(2)`, and constants for the word types once
-   layer 3 names them) so a client seldom writes one.
+1. **The name `Layout`**: the library takes it, as Rust's does. The
+   program compiler's record of that name (`native_compile.hthr`) is
+   renamed (`Statics`) in a mechanical commit when a module first needs
+   both.
+2. **Byte order is the codec's**, not the type's: a `u32` is one type.
+   The declaration names the order of the words it reads codecs off
+   (`endian`), and a record with both orders names its codecs.
+3. **The declaration's spelling is `laid record T { … }`**: prefix
+   generators extended to records. "`generate` is fine now, but not
+   amazing", so the `generate` form stays as the call the prefix makes
+   and is not what a record is declared with.
+4. **Field order is not the written order.** The recommendation here was
+   written order always; Minus: reordering should be "magical" by
+   whatever setup `laid` uses, and the ability to decide is valuable,
+   though nothing complex is needed yet. So the default lets the
+   declaration place the fields and a declaration that needs C's rule
+   asks for it (`order := AsWritten`); the rule that chooses is
+   `issues/laid-field-order-chosen.md`.
+5. **Stage A before stage B**: agreed, and A is built.
+6. **The alignment is held as an exponent**: agreed.
+
+Open, raised in the same message: "the amount of functions as fields",
+with no obvious best way seen. Read here as two things. The declaration
+publishes one function per field (`T::f_part()`), and `Stored` and `Part`
+are themselves records of functions (`read`, `write`, `of`, `with`). What
+could stand beside them is a layout as first-order data: an inductive
+description (a byte, a word of a width and an order, an array, a pair,
+padding) with the type it stores computed from it, one interpreter giving
+its `Stored`, and a field named by a path whose `Part` is computed. A
+record would then publish one value, and the declaration, a rule that
+reorders, and run-time code would all read the same description instead
+of terms. Filed with what it would cost
+(`issues/layout-first-order-description.md`), not built.
 
 ## 8. Order of work
 
@@ -544,8 +575,9 @@ section once A is built and shows what the refinements look like.
    SHA-256's modules read and store through them: `sha256_compress.s`
    is byte for byte what it was, and the three stream files change
    because the count's accessors now call the eight-byte ones, one call
-   deeper). Stage A's generator (`laid.hthr`, built) and SHA-256's
-   context declared with it (`sha256_context.hthr`, built). Left of
+   deeper). Stage A's generator (`laid.hthr`, built, declared as
+   `laid record`) and SHA-256's context declared with it
+   (`sha256_context.hthr`, built). Left of
    stage A: accessors that name a field in a `runtime fn` body. Two probes say what the generator may publish:
    a plain `fn` becomes run-time code afterwards by
    `generate runtime("Name");`, and a `def` numeral is read in a

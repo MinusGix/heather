@@ -691,7 +691,7 @@ fn globals_by_identity() {
         assert!(msg.contains(verdict), "{goal}: {msg}");
     }
     let msg = refused(&format!("{tactics}\ntheorem t(n: Nat): Nat {{ by named(\"Nat\").bind(λ g => Pure(Global(g))) }}"));
-    assert!(msg.contains("is a type or a former, not a term"), "{msg}");
+    assert!(msg.contains("is a kernel former or a type with no code, not a term"), "{msg}");
 }
 
 /// An `At` note is about a term, which the host spells as its diagnostics

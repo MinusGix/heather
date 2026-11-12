@@ -835,7 +835,15 @@ publishes all of them where the generator was invoked, or none.
   identity type, and `Blank`, an argument the application's domain check
   solves (a run-scoped hole, so a generator writes `cong(_, _, f, _, _, p)`
   and lets unification find the implicit arguments). `AsType(e)` checks an
-  `Expr` as a type and answers its handle.
+  `Expr` as a type and answers its handle. A declared type's `GlobalRef`
+  (from `Lookup` of its name, or from a view) stands for the type's code:
+  `Global(g)` of a type with no parameters is the code itself, so
+  `AsType(Global(g))` is the type a name declares, which is how a generator
+  handed a name reaches its type (`laid record T`, 2026-11-12); of a type
+  with parameters it is the code's function of them, which `App` applies.
+  A kernel former (`Nat`, `True`) is still not a term. A fixed array's type
+  `[A; n]` views as `HGlobal(_, "Vec", [A, n])`, under the kernel's name
+  for the former.
 - **Reading a type's shape.** `Ctors(ty)` answers each constructor of an
   inductive type: its name, its fields (name and type), and the constructor as
   a function of its fields. It reuses R3's skeleton technique: an anonymous

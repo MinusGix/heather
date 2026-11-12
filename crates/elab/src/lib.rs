@@ -1862,6 +1862,7 @@ fn item_timing_name(item: &Item) -> String {
         Item::Import(import) => format!("import {}", import.module),
         Item::Generate(g) => format!("generate {}", host::tactic_name(&g.generator)),
         Item::Prefixed(p) => p.decl.name.clone(),
+        Item::PrefixedRecord(p) => format!("record {}", p.record.name),
     }
 }
 

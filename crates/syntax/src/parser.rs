@@ -1174,13 +1174,13 @@ impl Parser {
                             span: g.span,
                         })
                     }
-                    Item::Prefixed(p) => {
+                    Item::Prefixed(PrefixedItem { span, .. }) | Item::PrefixedRecord(PrefixedRecordItem { span, .. }) => {
                         return Err(ParseError {
                             msg: "a prefixed declaration cannot be in a section yet: its \
                                   generator runs at the module's empty context, as a \
                                   `generate` does (docs/value-definitions-design.md §3)"
                                 .into(),
-                            span: p.span,
+                            span: *span,
                         })
                     }
                 }
@@ -1438,9 +1438,9 @@ impl Parser {
                 msg: "a `generate` cannot yet inherit an `assuming` telescope".into(),
                 span: g.span,
             }),
-            Item::Prefixed(p) => Err(ParseError {
+            Item::Prefixed(PrefixedItem { span, .. }) | Item::PrefixedRecord(PrefixedRecordItem { span, .. }) => Err(ParseError {
                 msg: "a prefixed declaration cannot yet inherit an `assuming` telescope".into(),
-                span: p.span,
+                span,
             }),
         }
     }
@@ -1509,15 +1509,16 @@ impl Parser {
         // (docs/value-definitions-design.md §3). A name before a declaration
         // keyword, or a name applied, is not otherwise an item, so this reads
         // nothing that used to parse. The modifier keywords are matched first.
+        // `laid record T { … }`: a `record` takes a prefix too (§3.5).
         if let TokKind::Ident(w) = self.peek()
             && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
             && (matches!(self.nth(1), TokKind::LParen)
-                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()) || PREFIXED_TYPE_WORDS.contains(&k.as_str()))
                 // `a b fn f`: two prefixes, read as one so it is refused as such.
                 || (matches!(self.nth(1), TokKind::Ident(_))
-                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))))
+                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()) || PREFIXED_TYPE_WORDS.contains(&k.as_str()))))
         {
-            return Ok(Item::Prefixed(self.prefixed()?));
+            return self.prefixed();
         }
         Ok(Item::Decl(self.decl()?))
     }
@@ -1556,8 +1557,9 @@ impl Parser {
     /// `P decl` or `P(args) decl` ([`Item::Prefixed`]). One prefix: a second
     /// name before the declaration is refused, since composing generators is
     /// open (issues/scoped-declaration-generators.md). The declaration under
-    /// it is a `fn`, a `theorem` or a `def`.
-    fn prefixed(&mut self) -> R<PrefixedItem> {
+    /// it is a `fn`, a `theorem` or a `def`, or a `record`
+    /// ([`Item::PrefixedRecord`]).
+    fn prefixed(&mut self) -> R<Item> {
         let start = self.peek_span();
         let (name, name_span) = self.ident("a generator's name")?;
         let mut generator = Expr { kind: ExprKind::Var(name.clone()), span: name_span };
@@ -1568,6 +1570,21 @@ impl Parser {
                 kind: ExprKind::App { head: Box::new(generator), args, named, explicit: false, goal_oriented: false },
                 span: name_span.join(close),
             };
+        }
+        if self.at_kw("record") {
+            let record = self.record()?;
+            let span = start.join(record.span);
+            return Ok(Item::PrefixedRecord(PrefixedRecordItem { generator, record, span }));
+        }
+        if let TokKind::Ident(w) = self.peek()
+            && matches!(w.as_str(), "inductive" | "codata" | "class" | "instance")
+        {
+            let w = w.clone();
+            return self.err(&format!(
+                "a generator prefixes a `fn`, a `theorem`, a `def` or a `record`, not \
+                 {} `{w}` (docs/value-definitions-design.md §3)",
+                if w == "inductive" || w == "instance" { "an" } else { "a" }
+            ));
         }
         if let TokKind::Ident(w) = self.peek()
             && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
@@ -1596,7 +1613,7 @@ impl Parser {
             });
         }
         let span = start.join(decl.span);
-        Ok(PrefixedItem { generator, decl, span })
+        Ok(Item::Prefixed(PrefixedItem { generator, decl, span }))
     }
 
     /// `class C<A> extends P<A>, Q<A> { f: T, … }`
@@ -9557,3 +9574,7 @@ mod tests {
 /// The words a declaration (or its modifier) starts with: what may follow a
 /// prefix generator's name ([`Parser::prefixed`]).
 const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom", "interface"];
+/// The type declarations a name may stand before: `record` takes a prefix
+/// generator, and the others are named so that one before them is refused
+/// as a prefix and not as "expected `fn`".
+const PREFIXED_TYPE_WORDS: &[&str] = &["record", "inductive", "codata", "class", "instance"];

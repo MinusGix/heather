@@ -184,11 +184,12 @@ module.exports = grammar({
       optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
     ),
 
-    // `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
-    // prefix generator (docs/value-definitions-design.md §3).
+    // `runtime fn f(…)`, `regex def is_hex = "…";`, `laid record T { … }` —
+    // a declaration under a prefix generator
+    // (docs/value-definitions-design.md §3).
     prefixed_declaration: $ => seq(
       field('generator', $.identifier), optional(field('arguments', $.argument_list)),
-      field('declaration', choice($.function_declaration, $.theorem_declaration, $.value_declaration)),
+      field('declaration', choice($.function_declaration, $.theorem_declaration, $.value_declaration, $.record_declaration)),
     ),
 
     // `generate congruences(Tm);` — a generator's declarations, published

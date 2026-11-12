@@ -166,14 +166,7 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
     }
     match item {
         Item::Decl(d) => decl(d, &mut out),
-        Item::Inductive(i) => {
-            i.valparams.iter().for_each(|p| param(p, &mut out));
-            i.ctors.iter().for_each(|c| {
-                c.fields.iter().for_each(|f| field(f, &mut out));
-                c.result.iter().for_each(|e| expr(e, &mut out));
-            });
-            i.index.iter().for_each(|t| ty(t, &mut out));
-        }
+        Item::Inductive(i) => inductive(i, &mut out),
         Item::Class(c) => {
             c.valparams.iter().for_each(|p| param(p, &mut out));
             c.extends.iter().for_each(|r| class_ref(r, &mut out));
@@ -202,9 +195,22 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
             expr(&p.generator, &mut out);
             decl(&p.decl, &mut out);
         }
+        Item::PrefixedRecord(p) => {
+            expr(&p.generator, &mut out);
+            inductive(&p.record, &mut out);
+        }
         Item::Import(_) => {}
     }
     out
+}
+
+fn inductive(i: &heather_syntax::InductiveDecl, out: &mut Vec<Finding>) {
+    i.valparams.iter().for_each(|p| param(p, out));
+    i.ctors.iter().for_each(|c| {
+        c.fields.iter().for_each(|f| field(f, out));
+        c.result.iter().for_each(|e| expr(e, out));
+    });
+    i.index.iter().for_each(|t| ty(t, out));
 }
 
 fn decl(d: &Decl, out: &mut Vec<Finding>) {

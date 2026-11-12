@@ -1,8 +1,9 @@
-// Probes of `laid`: the declaration over a record with padding inside it
-// and after it, over a record of one field and over a record that holds
-// another; what it publishes agrees with the parts written by hand; and
-// what it refuses, each with its reason. Tests, not library: nothing
-// imports this module.
+// Probes of `laid record`: the declaration over a record with padding
+// inside it and after it, over a record of one field and over a record
+// that holds another, with each codec read off its field's type; codecs
+// named by hand; the same call as a `generate`; what it publishes agrees
+// with the parts written by hand; and what it refuses, each with its
+// reason. Tests, not library: nothing imports this module.
 import logic;
 import bool;
 import nat;
@@ -26,9 +27,7 @@ import laid;
 // ---------------------------------------------------------------------------
 // A record with padding
 
-record Header { tag: u8, length: u64, flags: [u16; 3] }
-
-generate laid(Header, [Stored::byte(), Stored::u64_be(), Stored::u16_be().array(3)]);
+laid(endian := BigEndian, order := AsWritten) record Header { tag: u8, length: u64, flags: [u16; 3] }
 
 theorem header_layout(): Header::stored().layout = Layout(24, 3) { refl }
 theorem tag_offset(): Header::tag_part().offset = 0 { refl }
@@ -71,17 +70,18 @@ theorem header_bytes(): Header::stored().write(Header(7, 258, [1, 2, 3]))
 // ---------------------------------------------------------------------------
 // One field, and a record inside a record
 
-record Meters { value: u32 }
+// With no byte order named, the machine's.
+laid record Meters { value: u32 }
 
-generate laid(Meters, [Stored::u32_le()]);
+theorem meters_codec(bytes: List<u8>, at: Nat): Stored::u32_le().get(bytes, 0 + at) = Meters::stored().get(bytes, at).value { Meters::value_part().reads(bytes, at) }
+theorem meters_bytes(): Meters::stored().write(Meters(258)) = [2, 1, 0, 0] { refl }
 
 theorem meters_layout(): Meters::stored().layout = Layout(4, 2) { refl }
 theorem meters_value(): Meters::value_part().offset = 0 { refl }
 theorem meters_with(m: Meters, v: u32): Meters::value_part().with(m, v) = Meters(v) { refl }
 
-record Leg { from: Meters, to: Meters, header: Header }
-
-generate laid(Leg, [Meters::stored(), Meters::stored(), Header::stored()]);
+// A field that is a laid record is stored as that record is.
+laid(order := AsWritten) record Leg { from: Meters, to: Meters, header: Header }
 
 theorem leg_layout(): Leg::stored().layout = Layout(32, 3) { refl }
 theorem leg_header(): Leg::header_part().offset = 8 { refl }
@@ -93,24 +93,60 @@ theorem leg_length(): Leg::length().offset = 16 { refl }
 theorem leg_length_with(l: Leg, n: u64): Leg::length().with(l, n) = (l with { header = (l.header with { length = n }) }) { refl }
 
 // ---------------------------------------------------------------------------
+// Codecs named, and the call written out
+
+// A record whose bytes its types do not say: one word in each order.
+laid(codecs := [Stored::u32_be(), Stored::u32_le()]) record Mixed { big: u32, little: u32 }
+
+theorem mixed_bytes(): Mixed::stored().write(Mixed(1, 1)) = [0, 0, 0, 1, 1, 0, 0, 0] { refl }
+
+// After a record declared before, the prefix's call as a `generate`.
+record Late { a: u16, b: [u8; 2] }
+
+generate laid("Late", endian := BigEndian);
+
+theorem late_layout(): Late::stored().layout = Layout(4, 1) { refl }
+theorem late_bytes(): Late::stored().write(Late(258, [3, 4])) = [1, 2, 3, 4] { refl }
+
+// Arrays of arrays.
+laid record Grid { cells: [[u16; 2]; 3], tail: u8 }
+
+theorem grid_layout(): Grid::stored().layout = Layout(14, 1) { refl }
+theorem grid_tail(): Grid::tail_part().offset = 12 { refl }
+
+// ---------------------------------------------------------------------------
 // Refused
 
 // A codec for each field.
-// expect-error: laid: `Header` has 3 fields and 2 codecs are given, one is wanted for each
-generate laid(Header, [Stored::byte(), Stored::u64_be()]);
+record Short { a: u8, b: u64 }
+
+// expect-error: laid: `Short` has 2 fields and 1 codecs are given, one is wanted for each
+generate laid("Short", codecs := [Stored::byte()]);
 
 // Each of its field's type.
-record Wrong { a: u8, b: u64 }
-
 // expect-error: laid: the codec given for `b`
-generate laid(Wrong, [Stored::byte(), Stored::u32_be()]);
+laid(codecs := [Stored::byte(), Stored::u32_be()]) record Wrong { a: u8, b: u64 }
+
+// A refused declaration declares nothing, the record included.
+record Wrong { a: u8 }
 
 // A record, not a type of several shapes.
 inductive Shape { Dot, Line(length: u64) }
 
 // expect-error: laid: `Shape` is not a record
-generate laid(Shape, [Stored::u64_be()]);
+generate laid("Shape");
+
+// A type the declaration can read a codec off.
+// expect-error: laid: field `count` is a `Nat`, which has no layout
+laid record Counted { count: Nat }
+
+// expect-error: a word of 24 bits has no codec to derive
+laid record Odd { colour: BitVec(24) }
 
 // Declared once.
 // expect-error: the generated `Meters::stored` was refused
-generate laid(Meters, [Stored::u32_be()]);
+generate laid("Meters");
+
+// A name that is a generator.
+// expect-error: `lade` is not a generator in scope
+lade record Typo { a: u8 }

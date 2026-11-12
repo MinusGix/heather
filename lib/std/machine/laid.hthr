@@ -1,6 +1,11 @@
-// `generate laid(T, [codec, …]);`: the record `T` laid over bytes, its
-// fields in the order written, each stored by the codec given for it
-// (docs/layout-design.md §6.2). It publishes
+// `laid record T { … }`: the record `T` laid over bytes
+// (docs/layout-design.md §6.2). The declaration is the record's own, under
+// the prefix:
+//
+//     laid record Header { tag: u8, length: u64, flags: [u16; 3] }
+//     laid(endian := BigEndian) record Sha256 { hash: [u32; 8], …, count: u64 }
+//
+// and it publishes, beside the record,
 //
 //     fn T::stored() → Stored<T>          // how a `T` is bytes
 //     fn T::f_part() → Part<T, F>(…)      // field `f`, for each field
@@ -12,13 +17,29 @@
 // `part.hthr` for the combinators the generator composes. Nothing is
 // proved per record, by the generator or by its caller.
 //
+// **Each field's codec is read off its type**: a `u8` is a byte, a word of
+// 16, 32 or 64 bits is stored in the byte order the declaration names
+// (`LittleEndian` where it names none, the order of the one machine
+// compiled for), `[A; n]` is `n` of `A`'s codec, and any other type `R` is
+// stored by `R::stored()`, which is what `laid record R` publishes, so a
+// record inside a record is one more field and its parts compose:
+// `Outer::inner_part().then(Inner::f_part())`. A record whose fields want
+// anything else names its codecs, one per field in the order written:
+// `laid(codecs := [Stored::byte(), Stored::u64_be()]) record T { … }`.
+//
+// **Where the fields lie is the declaration's choice**, not the order they
+// are written in (Minus, 2026-11-12: the ability to decide is the
+// declaration's, as it is `repr(Rust)`'s). Nothing may read an offset off
+// the source: it is `T::f_part().offset`. A record whose bytes are a
+// format someone else reads says `order := AsWritten`, which is C's rule: each
+// field at the first place past the one before that its alignment allows.
+// Today `AnyOrder` chooses that order too
+// (issues/laid-field-order-chosen.md).
+//
 // The codec is the fields' codecs joined by `Stored::then`, padded to the
 // alignment and read through the record's constructor
 // (`Stored::record`); field `f` is the path of `Part::fst` and
-// `Part::snd` to it. A codec says the byte order and anything else the
-// field's type does not (`Stored::u32_be()`, an array, another laid
-// record's `R::stored()`), so a record inside a record is one more codec
-// and its fields compose: `Outer::inner_part().then(Inner::f_part())`.
+// `Part::snd` to it.
 //
 // A part's type names the record's codec written out and not
 // `T::stored()`, which a member of a group cannot cite
@@ -26,9 +47,14 @@
 // function declared at `Part<T, B>(T::stored())` accepts a generated
 // part.
 //
-// Refused, each with its reason: a type that is not a record, a codec
-// count that is not the field count, a codec that does not store its
-// field's type, a field whose type mentions an earlier field.
+// `generate laid("T");` after a record declared elsewhere is the same
+// call, which is what the prefix is (docs/value-definitions-design.md
+// §3.5).
+//
+// Refused, each with its reason: a type that is not a record, a field
+// whose type has no codec to derive, a codec count that is not the field
+// count, a codec that does not store its field's type, a field whose type
+// mentions an earlier field.
 import logic;
 import bool;
 import nat;
@@ -47,6 +73,13 @@ import bitvec_bytes;
 import layout;
 import stored;
 import part;
+
+// The byte order of the words a declaration derives codecs for.
+inductive Endian { LittleEndian, BigEndian }
+
+// Who chooses where the fields lie: the declaration (`AnyOrder`), or the
+// source, each field after the one written before it (`AsWritten`).
+inductive FieldOrder { AnyOrder, AsWritten }
 
 // What the generator names from the library.
 record LaidLib { then: Expr, record: Expr, all: Expr, fst: Expr, snd: Expr, part_then: Expr, field: Expr, rfl: Expr }
@@ -120,6 +153,104 @@ fn laid_stores(codec: Expr, what: String) → Tac<Expr> {
     match laid_one_argument(v) {
         Some(a) => pure(Hd(a)),
         None => fail("laid: " ++ what ++ " is not a `Stored<…>`", []),
+    }
+}
+
+fn laid_named(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+// The library's codec of a word of `bits` bits in an order.
+fn laid_word(endian: Endian, bits: Nat) → Option<String> {
+    match bits.same(8) {
+        True => Some("stored::Stored::byte"),
+        False => match bits.same(16) {
+            True => Some(match endian { LittleEndian => "stored::Stored::u16_le", BigEndian => "stored::Stored::u16_be" }),
+            False => match bits.same(32) {
+                True => Some(match endian { LittleEndian => "stored::Stored::u32_le", BigEndian => "stored::Stored::u32_be" }),
+                False => match bits.same(64) {
+                    True => Some(match endian { LittleEndian => "stored::Stored::u64_le", BigEndian => "stored::Stored::u64_be" }),
+                    False => None,
+                },
+            },
+        },
+    }
+}
+
+fn laid_bits(v: Head) → Option<Nat> {
+    match v {
+        HLit(n) => Some(n),
+        _ => None,
+    }
+}
+
+// The two arguments of a type applied to two.
+fn laid_two_arguments(args: List<Handle>) → Option<Pair<Handle, Handle>> {
+    match args {
+        Nil => None,
+        Cons(a, rest) => match rest {
+            Nil => None,
+            Cons(b, more) => match more {
+                Nil => Some(Pair(a, b)),
+                Cons(_, _) => None,
+            },
+        },
+    }
+}
+
+// The codec a field's type names: a word's in the declaration's byte
+// order, an array's from its element's, and for any other type `R` the
+// `R::stored()` that `laid record R` publishes. `depth` bounds the arrays
+// of arrays read.
+fn laid_derive(endian: Endian, field: String, ty: Handle, depth: Nat) → Tac<Expr> {
+    match depth {
+        Zero => fail("laid: field `" ++ field ++ "`: arrays nested too deep to read", []),
+        Succ(d) => {
+            let v <- view(ty);
+            match v {
+                HGlobal(_, name, args) => match laid_named(name, "BitVec") {
+                    True => match laid_one_argument(v) {
+                        None => fail("laid: field `" ++ field ++ "`: a `BitVec` of no width", []),
+                        Some(w) => {
+                            let wv <- view(w);
+                            match laid_bits(wv) {
+                                None => fail("laid: field `" ++ field ++ "`: a word whose width is not a numeral has no codec to derive", []),
+                                Some(bits) => match laid_word(endian, bits) {
+                                    None => fail("laid: field `" ++ field ++ "`: a word of " ++ decimal_name(Succ(bits), bits)
+                                        ++ " bits has no codec to derive (8, 16, 32 and 64 have): name the record's codecs, `laid(codecs := […])`", []),
+                                    Some(codec) => laid_global(codec),
+                                },
+                            }
+                        },
+                    },
+                    False => match laid_named(name, "Vec") {
+                        True => match laid_two_arguments(args) {
+                            None => fail("laid: field `" ++ field ++ "`: an array is of an element type and a length", []),
+                            Some(an) => {
+                                let element <- laid_derive(endian, field, an.fst, d);
+                                let array <- laid_global("stored::Stored::array");
+                                pure(apps(array, [Hd(an.fst), element, Hd(an.snd)]))
+                            },
+                        },
+                        False => lookup(name ++ "::stored").or_fail("laid: field `" ++ field ++ "` is a `" ++ name
+                            ++ "`, which has no layout: declare it `laid record " ++ name ++ "`, or name this record's codecs, `laid(codecs := […])`: ")
+                            .bind(λ g => pure(Global(g))),
+                    },
+                },
+                _ => fail("laid: field `" ++ field ++ "`: its type has no codec to derive: name the record's codecs, `laid(codecs := […])`", []),
+            }
+        },
+    }
+}
+
+fn laid_derived(endian: Endian, names: List<String>, tys: List<Handle>) → Tac<List<Expr>> {
+    match names {
+        Nil => pure([]),
+        Cons(n, ns) => match tys {
+            Nil => pure([]),
+            Cons(t, ts) => {
+                let c <- laid_derive(endian, n, t, 8);
+                laid_derived(endian, ns, ts).bind(λ rest => pure(Cons(c, rest)))
+            },
+        },
     }
 }
 
@@ -232,10 +363,39 @@ fn laid_parts(l: LaidLib, name: String, t: Expr, last: LaidField, of: Expr, to: 
     }
 }
 
-// `generate laid(T, [codec, …]);`: the record `T` stored as its fields in
-// the order written, each by the codec given for it.
-fn laid(t: Expr, codecs: List<Expr>) → Tac<List<Decl>> {
-    let h <- as_type(t).or_fail("laid: not a type: ");
+// The record `h`, named `name`, stored as its fields, each by its codec.
+fn laid_out(h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs: List<Expr>) → Tac<List<Decl>> {
+    let l <- laid_lib();
+    let lf <- laid_fields(l, fs.names, fs.tys, codecs, None);
+    let rev = lf.rev();
+    match rev {
+        Nil => fail("laid: `" ++ name ++ "` has no fields, so there is nothing to lay out", []),
+        Cons(last, _) => {
+            let p <- assume(last.upto_ty, "fields", None).or_fail("laid: ");
+            let ps <- laid_projections(Local(p.ref), lf.len());
+            let of = Lam(p.ref, apps(Hd(mk), ps));
+            let r <- assume(Hd(h), "value", None).or_fail("laid: ");
+            let rf <- fields(Local(r.ref)).or_fail("laid: ");
+            let nested <- laid_pairs(l, lf, laid_field_terms(rf.fields), None);
+            let to = Lam(r.ref, nested);
+            let back = Lam(r.ref, apps(l.rfl, [Hd(h), Local(r.ref)]));
+            let forth = Lam(p.ref, apps(l.rfl, [last.upto_ty, Local(p.ref)]));
+            let whole = apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]);
+            let whole_ty <- infer(whole).or_fail("laid: ");
+            let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
+            laid_parts(l, name, Hd(h), last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
+        },
+    }
+}
+
+// `laid record T { … }`, which calls `laid("T")`: the record laid over
+// bytes. `endian` is the byte order of the words it derives codecs for,
+// `order` says who chooses where the fields lie, and `codecs`, where any
+// are given, are the fields' codecs, one for each in the order written,
+// and nothing is derived.
+fn laid(declared: String, endian: Endian := LittleEndian, order: FieldOrder := AnyOrder, codecs: List<Expr> := []) → Tac<List<Decl>> {
+    let g <- lookup(declared).or_fail("laid: ");
+    let h <- as_type(Global(g)).or_fail("laid: `" ++ declared ++ "` is not a type with no parameters: ");
     let name <- type_named(h);
     let cs <- ctors(h).or_fail("laid: ");
     match laid_only(cs) {
@@ -244,31 +404,12 @@ fn laid(t: Expr, codecs: List<Expr>) → Tac<List<Decl>> {
             None => fail("laid: a field of `" ++ name ++ "` mentions an earlier field", []),
             Some(fs) => match c.ctor {
                 None => fail("laid: `" ++ name ++ "` is not a function of its fields", []),
-                Some(mk) => match fs.names.len().same(codecs.len()) {
-                    False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(Succ(fs.names.len()), fs.names.len()) ++ " fields and "
-                        ++ decimal_name(Succ(codecs.len()), codecs.len()) ++ " codecs are given, one is wanted for each", []),
-                    True => {
-                        let l <- laid_lib();
-                        let lf <- laid_fields(l, fs.names, fs.tys, codecs, None);
-                        let rev = lf.rev();
-                        match rev {
-                            Nil => fail("laid: `" ++ name ++ "` has no fields, so there is nothing to lay out", []),
-                            Cons(last, _) => {
-                                let p <- assume(last.upto_ty, "fields", None).or_fail("laid: ");
-                                let ps <- laid_projections(Local(p.ref), lf.len());
-                                let of = Lam(p.ref, apps(Hd(mk), ps));
-                                let r <- assume(Hd(h), "value", None).or_fail("laid: ");
-                                let rf <- fields(Local(r.ref)).or_fail("laid: ");
-                                let nested <- laid_pairs(l, lf, laid_field_terms(rf.fields), None);
-                                let to = Lam(r.ref, nested);
-                                let back = Lam(r.ref, apps(l.rfl, [Hd(h), Local(r.ref)]));
-                                let forth = Lam(p.ref, apps(l.rfl, [last.upto_ty, Local(p.ref)]));
-                                let whole = apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]);
-                                let whole_ty <- infer(whole).or_fail("laid: ");
-                                let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
-                                laid_parts(l, name, Hd(h), last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
-                            },
-                        }
+                Some(mk) => match codecs {
+                    Nil => laid_derived(endian, fs.names, fs.tys).bind(λ derived => laid_out(h, name, c, fs, mk, derived)),
+                    Cons(_, _) => match fs.names.len().same(codecs.len()) {
+                        False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(Succ(fs.names.len()), fs.names.len()) ++ " fields and "
+                            ++ decimal_name(Succ(codecs.len()), codecs.len()) ++ " codecs are given, one is wanted for each", []),
+                        True => laid_out(h, name, c, fs, mk, codecs),
                     },
                 },
             },

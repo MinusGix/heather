@@ -1,7 +1,8 @@
 # Value definitions and declaration-prefix generators
 
 Status: **built, 2026-11-01** (issues `value-definitions` and
-`declaration-prefix-generators`). Written for the DSL frontends of
+`declaration-prefix-generators`); a prefix over a `record` added
+2026-11-12 (§3.5). Written for the DSL frontends of
 `docs/compilation-vision.md` §3.3 and §6.1, whose motivating line is
 
 ```heather
@@ -108,7 +109,7 @@ P theorem t(…): S { … }        P(args) theorem t(…): S { … }
 P def x = e;                   P(args) def x: T = e;
 ```
 
-An identifier before `fn`, `theorem` or `def` (or before `(`), at an item's
+(And before `record`, §3.5.) An identifier before `fn`, `theorem` or `def` (or before `(`), at an item's
 head, after the keywords (`import`, `inductive`, `class`, `generate`, …) have
 been matched, is a prefix. Nothing that parsed before parses differently: an
 identifier was not otherwise a valid item start. The parser refuses:
@@ -179,6 +180,33 @@ as the instance `class<args…>(index…)`: the host elaborates the instance
 written in source as `{ field := name.field, … }`, so its key, coherence and
 index spelling are the ordinary checks. The type arguments are `Expr`s read
 as types; a function type is spelled as an arrow, so it is keyed as one.
+
+### 3.5 A prefix over a `record` (2026-11-12)
+
+```heather
+P record T { … }               P(args) record T { … }
+```
+
+A name before `record` (or before `(`) is a prefix too. The record is
+**consumed**, as a `fn` is: it is declared as written, and then the
+generator is called with its name in front of the written arguments,
+`P("T", args)`. The generator reaches the type by `lookup(name)` and
+`as_type(Global(g))` (`docs/host-elaboration-interface-design.md` §19: a
+declared type's global stands for its code), and from there reads the
+constructor and the fields with `Ctors`. One transaction: where the
+generator refuses, the record is not declared either, so a name refused
+under a prefix is free again. `generate P("T", args);` after a record
+declared before is the same call.
+
+A prefix before `inductive`, `codata`, `class` or `instance` is refused by
+the parser as what it is; the section and `assuming` refusals are §3.1's.
+Not here: handing the generator the record as syntax, so that it could add
+to a field what the type does not say (a per-field annotation such as a
+byte order). The first customer writes that in its arguments.
+
+The customer is `laid record` (`lib/std/machine/laid.hthr`,
+`docs/layout-design.md` §6.2): the record laid over bytes, each field's
+codec read off its type.
 
 ## 4. The customer: `regex` (`lib/std/text/regex/regex.hthr`)
 

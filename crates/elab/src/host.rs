@@ -3201,6 +3201,20 @@ impl Host<'_> {
             Type::Nat => HeadView::Global(run.global_ref(GlobalKey::Builtin("Nat")), "Nat".into(), Vec::new()),
             Type::Unit { .. } => HeadView::Global(run.global_ref(GlobalKey::Builtin("True")), "True".into(), Vec::new()),
             Type::Empty { .. } => HeadView::Global(run.global_ref(GlobalKey::Builtin("False")), "False".into(), Vec::new()),
+            // `[A; n]`: the fixed array's former by the kernel's name, on
+            // its element type and its length, whether the type is held as
+            // the former or as the decoding of its code.
+            Type::Vec { level, elem, len } => {
+                let a = run.issue(at, Held::Type((**elem).clone(), level.clone()));
+                let n = run.issue(at, Held::Term((**len).clone(), Type::Nat, Level::Zero));
+                HeadView::Global(run.global_ref(GlobalKey::Builtin("Vec")), "Vec".into(), vec![a, n])
+            }
+            Type::El { tm, .. } if matches!(**tm, Term::TmVec { .. }) => {
+                let Term::TmVec { level, elem, len } = &**tm else { unreachable!() };
+                let a = run.issue(at, Held::Type(Type::El { level: level.clone(), tm: elem.clone() }, level.clone()));
+                let n = run.issue(at, Held::Term((**len).clone(), Type::Nat, Level::Zero));
+                HeadView::Global(run.global_ref(GlobalKey::Builtin("Vec")), "Vec".into(), vec![a, n])
+            }
             Type::El { tm, .. } => self.view_term(run, at, tm),
             Type::GlobalTy { var, subst } if subst.terms.is_empty() => {
                 match self.global_abs_of(*var).and_then(|abs| Some((abs, self.global_name_at(abs)?))) {
@@ -3616,10 +3630,16 @@ impl Host<'_> {
                 let key = run.globals.get(*g as usize).cloned().ok_or_else(|| Fault::Protocol(format!("global {g} was not issued by this run")))?;
                 let found = match key {
                     GlobalKey::At(abs) => self.raw_global_at(abs),
-                    GlobalKey::Type(_) | GlobalKey::Builtin(_) => None,
+                    // A declared type stands for its code: the code itself
+                    // where it takes no parameters, so `AsType(Global(g))`
+                    // is the type a name found by `Lookup` declares, and
+                    // the code's function of its parameters where it has
+                    // some, which `App` applies.
+                    GlobalKey::Type(tag) => GeneratedDefs(self).type_code_term(tag),
+                    GlobalKey::Builtin(_) => None,
                 };
                 let Some((term, ty, level)) = found else {
-                    return Err(Fault::Ill(format!("global {g} is a type or a former, not a term")));
+                    return Err(Fault::Ill(format!("global {g} is a kernel former or a type with no code, not a term")));
                 };
                 let n = run.len(at) as u32;
                 Ok(Reified { term: term.shift_local(n).shift_global(m), ty: ty.shift_local(n).shift_global(m), level })
@@ -4266,14 +4286,7 @@ impl HostMut<'_> {
     pub(crate) fn elab_prefixed(&mut self, p: &heather_syntax::ast::PrefixedItem) -> R<()> {
         use heather_syntax::ast::{Block, ExprKind, Stmt, TyKind};
         let d = &p.decl;
-        let prefix = match &p.generator.kind {
-            ExprKind::Var(n) => n.clone(),
-            ExprKind::App { head, .. } => match &head.kind {
-                ExprKind::Var(n) => n.clone(),
-                _ => unreachable!("the parser writes a prefix as a name or a call of one"),
-            },
-            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
-        };
+        let prefix = prefix_name(&p.generator);
         // `register def x: T = e;`: the built-in prefix, unless a generator of
         // that name is in scope (docs/registered-values-design.md).
         if prefix == "register"
@@ -4329,28 +4342,7 @@ impl HostMut<'_> {
             };
             handed.push(value);
         }
-        let generator = match &p.generator.kind {
-            ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
-                kind: ExprKind::App {
-                    head: head.clone(),
-                    args: handed.into_iter().chain(args.iter().cloned()).collect(),
-                    named: named.clone(),
-                    explicit: *explicit,
-                    goal_oriented: *goal_oriented,
-                },
-                span: p.generator.span,
-            },
-            _ => Expr {
-                kind: ExprKind::App {
-                    head: Box::new(p.generator.clone()),
-                    args: handed,
-                    named: Vec::new(),
-                    explicit: false,
-                    goal_oriented: false,
-                },
-                span: p.generator.span,
-            },
-        };
+        let generator = prefix_call(&p.generator, handed);
         self.session_transaction(|me| {
             if !d.value {
                 me.elab_decl(d)?;
@@ -4384,6 +4376,87 @@ impl HostMut<'_> {
             }
             HostMut(me).publish_members(&members, psi, &label, p.span)
         })
+    }
+
+    /// `P record T { … }` or `P(args) record T { … }`
+    /// (docs/value-definitions-design.md §3.5). The record is **consumed**:
+    /// declared as written, and then the generator is called with its name
+    /// in front of the written arguments, `P("T", args)`, and run as
+    /// `generate` runs its generator. A generator reaches the type from the
+    /// name by `lookup` and `as_type(Global(g))`. One transaction: where the
+    /// generator fails, the record is not declared either.
+    pub(crate) fn elab_prefixed_record(&mut self, p: &heather_syntax::ast::PrefixedRecordItem) -> R<()> {
+        use heather_syntax::ast::ExprKind;
+        let prefix = prefix_name(&p.generator);
+        let label = format!("{prefix} record {}", p.record.name);
+        if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
+            return err(
+                format!(
+                    "`{prefix}` is not a generator in scope: a name before `record` is a \
+                     generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                p.generator.span,
+            );
+        }
+        let name = Expr { kind: ExprKind::Str(p.record.name.clone()), span: p.record.span };
+        let generator = prefix_call(&p.generator, vec![name]);
+        self.session_transaction(|me| {
+            me.elab_inductive(&p.record)?;
+            let convention = format!("a generator prefixing a `record` is called as `{prefix}(name, …)`");
+            let (members, psi) = Host(me).run_generator(&generator, &label, p.span).map_err(|e| match e {
+                crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
+                    msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
+                    span,
+                },
+                crate::ElabError::Elab { msg, span } if msg.contains("the generator's call is ill-typed") => {
+                    crate::ElabError::Elab { msg: format!("{msg}; {convention}"), span }
+                }
+                other => other,
+            })?;
+            HostMut(me).publish_members(&members, psi, &label, p.span)
+        })
+    }
+}
+
+/// The name a prefix is written with: `P` of `P` or of `P(args)`.
+fn prefix_name(generator: &Expr) -> String {
+    use heather_syntax::ast::ExprKind;
+    match &generator.kind {
+        ExprKind::Var(n) => n.clone(),
+        ExprKind::App { head, .. } => match &head.kind {
+            ExprKind::Var(n) => n.clone(),
+            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+        },
+        _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+    }
+}
+
+/// A prefix's call: what the declaration hands it, in front of the
+/// arguments written.
+fn prefix_call(generator: &Expr, handed: Vec<Expr>) -> Expr {
+    use heather_syntax::ast::ExprKind;
+    match &generator.kind {
+        ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
+            kind: ExprKind::App {
+                head: head.clone(),
+                args: handed.into_iter().chain(args.iter().cloned()).collect(),
+                named: named.clone(),
+                explicit: *explicit,
+                goal_oriented: *goal_oriented,
+            },
+            span: generator.span,
+        },
+        _ => Expr {
+            kind: ExprKind::App {
+                head: Box::new(generator.clone()),
+                args: handed,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: generator.span,
+        },
     }
 }
 

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use heather_cli::loader;
 use heather_elab::{ElabError, Elaborator, LintProfile, Span, Warning};
-use heather_syntax::{DatareprBody, Decl, DeclKind, InstanceBody, Item, parse_file};
+use heather_syntax::{DatareprBody, Decl, DeclKind, InductiveDecl, InstanceBody, Item, parse_file};
 use serde_json::{Value, json};
 
 fn main() {
@@ -374,12 +374,7 @@ fn document_symbols(uri: &str, source: &str) -> Vec<Value> {
 fn item_symbols(source: &str, items: &[Item]) -> Vec<Value> {
     items.iter().map(|item| match item {
         Item::Decl(decl) => decl_symbol(source, decl),
-        Item::Inductive(inductive) => {
-            let children = inductive.ctors.iter().map(|ctor| {
-                symbol(source, &ctor.name, 9, ctor.span, Vec::new())
-            }).collect();
-            symbol(source, &inductive.name, if inductive.is_record { 23 } else { 10 }, inductive.span, children)
-        }
+        Item::Inductive(inductive) => inductive_symbol(source, inductive),
         Item::Class(class) => {
             let children = class.fields.iter().filter_map(|field| {
                 field.name.as_ref().map(|name| symbol(source, name, 8, field.span, Vec::new()))
@@ -419,7 +414,15 @@ fn item_symbols(source: &str, items: &[Item]) -> Vec<Value> {
             symbol(source, &format!("generate {written}"), 12, generate.span, Vec::new())
         }
         Item::Prefixed(prefixed) => decl_symbol(source, &prefixed.decl),
+        Item::PrefixedRecord(prefixed) => inductive_symbol(source, &prefixed.record),
     }).collect()
+}
+
+fn inductive_symbol(source: &str, inductive: &InductiveDecl) -> Value {
+    let children = inductive.ctors.iter().map(|ctor| {
+        symbol(source, &ctor.name, 9, ctor.span, Vec::new())
+    }).collect();
+    symbol(source, &inductive.name, if inductive.is_record { 23 } else { 10 }, inductive.span, children)
 }
 
 fn decl_symbol(source: &str, decl: &Decl) -> Value {

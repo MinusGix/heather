@@ -149,6 +149,7 @@ impl ModulePassMut<'_> {
             Item::Impl(i) => stats::timed(stats::Timer::Lower, || DataReprMut(self).elab_impl(i)),
             Item::Generate(g) => HostMut(self).elab_generate(g),
             Item::Prefixed(p) => HostMut(self).elab_prefixed(p),
+            Item::PrefixedRecord(p) => HostMut(self).elab_prefixed_record(p),
             Item::Import(_) => Ok(()),
         }
     }

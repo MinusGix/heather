@@ -111,6 +111,29 @@ fn prefixes_are_refused_where_they_have_no_meaning() {
     assert!(why.contains("a prefixed declaration cannot yet inherit an `assuming` telescope"), "{why}");
 }
 
+/// A `record` takes a prefix, with arguments or without; the other type
+/// declarations are refused as what they are, and two prefixes as two.
+#[test]
+fn a_prefix_before_a_record_parses() {
+    let file = heather_syntax::parse_file("laid record P { a: Nat }").expect("parses");
+    let [heather_syntax::Item::PrefixedRecord(p)] = &file.items[..] else { panic!("one prefixed record") };
+    assert!(matches!(&p.generator.kind, heather_syntax::ExprKind::Var(n) if n == "laid"));
+    assert!(p.record.is_record);
+    assert_eq!(p.record.name, "P");
+    let file = heather_syntax::parse_file("laid(endian := Big) record P { a: Nat }\nfn f(n: Nat) -> Nat { n }").expect("parses");
+    let [heather_syntax::Item::PrefixedRecord(p), heather_syntax::Item::Decl(_)] = &file.items[..] else { panic!("a prefixed record, then a fn") };
+    let heather_syntax::ExprKind::App { args, named, .. } = &p.generator.kind else { panic!("a call") };
+    assert_eq!((args.len(), named.len()), (0, 1));
+    let why = parse_refusal("p inductive T { A, B }");
+    assert!(why.contains("a generator prefixes a `fn`, a `theorem`, a `def` or a `record`, not an `inductive`"), "{why}");
+    let why = parse_refusal("p(1) class C<A> { f: A }");
+    assert!(why.contains("not a `class`"), "{why}");
+    let why = parse_refusal("a b record P { a: Nat }");
+    assert!(why.contains("one generator prefixes a declaration"), "{why}");
+    let why = parse_refusal("section(k: Nat) { p record P { a: Nat } }");
+    assert!(why.contains("a prefixed declaration cannot be in a section yet"), "{why}");
+}
+
 /// A prefix's arguments are written after its name, as a call's are.
 #[test]
 fn a_prefix_with_arguments_parses_as_a_call() {

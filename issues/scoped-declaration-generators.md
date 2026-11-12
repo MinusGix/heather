@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,design]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-09-07
-updated: 2026-11-01
+updated: 2026-11-12
 ---
 
 Own a general declaration expansion mechanism whose generators are Heather
@@ -42,3 +42,4 @@ No privileged recognition of every generator name is intended.
 - 2026-10-28: A first invocation exists: `generate g(args);` (docs/host-elaboration-interface-design.md §19, built for [[heather-checked-construction-api]]), a contextual keyword with nothing recognised by name; the generator is an ordinary library function returning `Tac<List<Decl>>`, and its group is checked before any of it is published. Not yet here: structured syntax input (arguments are elaborated terms, a type's name quoted as a type), private helper names, generators inside sections ([[generate-in-sections]]), composition, and the runtime-compile customer.
 - 2026-10-31: 2026-10-31: First syntax-carrying form designed: a declaration prefix that names a generator (`runtime fn f`, `runtime(owned) fn f`), running over the already elaborated declaration ([[declaration-prefix-generators]], `docs/runtime-fn-setups-design.md` §9.1).
 - 2026-11-01: Declaration prefixes built (docs/value-definitions-design.md §3, [[declaration-prefix-generators]]): both modes of this issue's distinction exist, consuming an elaborated `fn`/`theorem` and rewriting a `def`'s value before anything is published (`regex def`). Still open here: structured syntax input (a `fn` body handed over as syntax), private helper names, composition (two prefixes are refused by the parser).
+- 2026-11-12: 2026-11-12, PR #551: a prefix over a `record` is in (`docs/value-definitions-design.md` §3.5), for `laid record T { … }`. The record is consumed as a `fn` is, the generator is called with its name, and it reaches the type by `lookup` and `as_type(Global(g))`, a declared type's global now standing for its code. What it shows of this issue's structured input: the first sketch of the declaration wrote a byte order on each field (`count: u64 be`), which a generator handed only a name cannot read, so `laid` takes the order as an argument and a record with both orders names its codecs. A generator handed the record's syntax, with room for what a field says beyond its type, is the acceptance here.

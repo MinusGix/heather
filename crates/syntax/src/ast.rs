@@ -71,6 +71,9 @@ pub enum Item {
     /// `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
     /// **prefix generator** (docs/value-definitions-design.md §3).
     Prefixed(PrefixedItem),
+    /// `laid record T { … }`, `laid(be) record T { … }` — a `record` under a
+    /// prefix generator (docs/value-definitions-design.md §3.5).
+    PrefixedRecord(PrefixedRecordItem),
     /// `generate g(args);` — run the Heather generator `g(args)`, a
     /// `tactic::Tac<List<tactic::Decl>>`, and publish the declarations it
     /// builds in this module, every one of them or none
@@ -92,6 +95,17 @@ pub enum Item {
 pub struct PrefixedItem {
     pub generator: Expr,
     pub decl: Decl,
+    pub span: Span,
+}
+
+/// `P record T { … }`, `P(args) record T { … }`
+/// ([`Item::PrefixedRecord`]). The record is **consumed**: it is declared as
+/// written first, and the generator is called with its name in front of the
+/// written arguments, as for a prefixed `fn`.
+#[derive(Debug, Clone)]
+pub struct PrefixedRecordItem {
+    pub generator: Expr,
+    pub record: InductiveDecl,
     pub span: Span,
 }
 
@@ -179,6 +193,7 @@ impl Item {
             Item::Import(x) => x.span,
             Item::Generate(x) => x.span,
             Item::Prefixed(x) => x.span,
+            Item::PrefixedRecord(x) => x.span,
         }
     }
 
@@ -204,6 +219,7 @@ impl Item {
             }
             Item::Generate(_) => panic!("expected a declaration, found `generate`"),
             Item::Prefixed(p) => panic!("expected a declaration, found a prefixed `{}`", p.decl.name),
+            Item::PrefixedRecord(p) => panic!("expected a declaration, found a prefixed `record {}`", p.record.name),
         }
     }
 }
