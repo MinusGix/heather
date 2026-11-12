@@ -406,6 +406,21 @@ fn rt_file_reflect(cfuns: List<String>, funs: List<String>) → Tac<List<FFun>> 
 // ---------------------------------------------------------------------------
 // Equality and rendering, for the check and its failures.
 
+fn FView::same(self view: FView, other: FView) → Bool {
+    let starts: Bool = match view.start {
+        None => match other.start { None => True, Some(_) => False },
+        Some(s) => match other.start { None => False, Some(s2) => s.same(s2) },
+    };
+    view.span.same(other.span).and(view.home.same(other.home)).and(starts).and(view.end.same(other.end))
+}
+
+fn FView::all_same(views: List<FView>, others: List<FView>) → Bool {
+    match views {
+        Nil => match others { Nil => True, Cons(_, _) => False },
+        Cons(view, rest) => match others { Nil => False, Cons(other, more) => view.same(other).and(FView::all_same(rest, more)) },
+    }
+}
+
 fn FTm::same(self t: FTm) → FTm → Bool {
     match t {
         Pure(v) => λ u => match u { Pure(v2) => v.same(v2), _ => False },
@@ -418,11 +433,27 @@ fn FTm::same(self t: FTm) → FTm → Bool {
         },
         Call(f, args, body) => λ u => match u { Call(f2, args2, body2) => f.same(f2).and(Tm::nats_same(args, args2)).and(body.same(body2)), _ => False },
         Again(args) => λ u => match u { Again(args2) => Tm::nats_same(args, args2), _ => False },
+        Lend(f, views, args, body) => λ u => match u {
+            Lend(f2, views2, args2, body2) => f.same(f2).and(FView::all_same(views, views2)).and(Tm::nats_same(args, args2)).and(body.same(body2)),
+            _ => False,
+        },
     }
 }
 
 fn FFun::same(self f: FFun, g: FFun) → Bool {
     Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.body.same(g.body)).and(f.lent.same(g.lent))
+}
+
+fn FView::show(self view: FView) → String {
+    let start: String = match view.start { None => "None", Some(s) => "Some(" ++ rt_nat(s) ++ ")" };
+    "FView(" ++ rt_nat(view.span) ++ ", " ++ rt_nat(view.home) ++ ", " ++ start ++ ", " ++ rt_nat(view.end) ++ ")"
+}
+
+fn FView::shows(views: List<FView>) → String {
+    match views {
+        Nil => "",
+        Cons(view, rest) => match rest { Nil => view.show(), Cons(_, _) => view.show() ++ ", " ++ FView::shows(rest) },
+    }
 }
 
 fn FTm::show(self t: FTm) → String {
@@ -434,6 +465,7 @@ fn FTm::show(self t: FTm) → String {
         Put(i, length, v, body) => "Put(" ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ", " ++ rt_nat(v) ++ ", " ++ body.show() ++ ")",
         Call(f, args, body) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
         Again(args) => "Again([" ++ rt_nats(args) ++ "])",
+        Lend(f, views, args, body) => "Lend(" ++ rt_nat(f) ++ ", [" ++ FView::shows(views) ++ "], [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
     }
 }
 

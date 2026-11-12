@@ -1974,15 +1974,38 @@ fn runtime_writes(f: GlobalRef) → Tac<Bool> {
     })
 }
 
-fn FTm::quote(self t: FTm, q: RtQ, cs: List<Expr>) → Expr {
+// The constructors quoting a computation reads: `FTm`'s, the list of
+// views', a view's, and those of where a view starts.
+def runtime_w_views: List<FView> = [];
+def runtime_w_view: FView = FView(0, 0, None, 0);
+def runtime_w_start: Option<Nat> = None;
+
+record FtQ { tm: List<Expr>, views: List<Expr>, view: List<Expr>, start: List<Expr> }
+
+fn runtime_file_quoting() → Tac<FtQ> {
+    let tms <- runtime_type_of("runtime_w_ftm").bind(λ h => runtime_ctors_at(h));
+    let views <- runtime_type_of("runtime_w_views").bind(λ h => runtime_ctors_at(h));
+    let view <- runtime_type_of("runtime_w_view").bind(λ h => runtime_ctors_at(h));
+    let start <- runtime_type_of("runtime_w_start").bind(λ h => runtime_ctors_at(h));
+    pure(FtQ(tms, views, view, start))
+}
+
+fn FView::quote(self view: FView, cs: FtQ) → Expr {
+    let start: Expr = match view.start { None => runtime_at(cs.start, 0), Some(s) => ap(runtime_at(cs.start, 1), [NatLit(s)]) };
+    ap(runtime_at(cs.view, 0), [NatLit(view.span), NatLit(view.home), start, NatLit(view.end)])
+}
+
+fn FTm::quote(self t: FTm, q: RtQ, cs: FtQ) → Expr {
     match t {
-        Pure(v) => ap(runtime_at(cs, 0), [v.quote(q)]),
-        Let(e, body) => ap(runtime_at(cs, 1), [e.quote(q), body.quote(q, cs)]),
-        If(c, yes, no) => ap(runtime_at(cs, 2), [NatLit(c), yes.quote(q, cs), no.quote(q, cs)]),
-        IfEq(c, yes, no) => ap(runtime_at(cs, 3), [NatLit(c), yes.quote(q, cs), no.quote(q, cs)]),
-        Put(i, length, v, body) => ap(runtime_at(cs, 4), [NatLit(i), NatLit(length), NatLit(v), body.quote(q, cs)]),
-        Call(f, args, body) => ap(runtime_at(cs, 5), [NatLit(f), q.nat_list(args), body.quote(q, cs)]),
-        Again(args) => ap(runtime_at(cs, 6), [q.nat_list(args)]),
+        Pure(v) => ap(runtime_at(cs.tm, 0), [v.quote(q)]),
+        Let(e, body) => ap(runtime_at(cs.tm, 1), [e.quote(q), body.quote(q, cs)]),
+        If(c, yes, no) => ap(runtime_at(cs.tm, 2), [NatLit(c), yes.quote(q, cs), no.quote(q, cs)]),
+        IfEq(c, yes, no) => ap(runtime_at(cs.tm, 3), [NatLit(c), yes.quote(q, cs), no.quote(q, cs)]),
+        Put(i, length, v, body) => ap(runtime_at(cs.tm, 4), [NatLit(i), NatLit(length), NatLit(v), body.quote(q, cs)]),
+        Call(f, args, body) => ap(runtime_at(cs.tm, 5), [NatLit(f), q.nat_list(args), body.quote(q, cs)]),
+        Again(args) => ap(runtime_at(cs.tm, 6), [q.nat_list(args)]),
+        Lend(f, views, args, body) => ap(runtime_at(cs.tm, 7),
+            [NatLit(f), RtQ::seq(cs.views, views.map(λ view => view.quote(cs))), q.nat_list(args), body.quote(q, cs)]),
     }
 }
 
@@ -2219,7 +2242,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     write_sigs: List<Pair<Nat, Sig>>, l: Linking) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
-    let ftms <- runtime_type_of("runtime_w_ftm").bind(λ h => runtime_ctors_at(h));
+    let ftms <- runtime_file_quoting();
     let ffun_h <- runtime_type_of("runtime_w_ffun");
     let ffuns <- runtime_ctors_at(ffun_h);
     let bools_h <- runtime_type_of("runtime_w_bools");

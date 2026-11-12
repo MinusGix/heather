@@ -241,6 +241,30 @@ theorem crossed_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last:
         [a, w(3), c, w(4), w(1)], trivial, Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]), crossed_runs(a, c))
 }
 
+// crossing_whole(address, length, address, length, mid): the same with the
+// whole of buffer 1 lent to read, from the constant 0. Ten values are
+// named on the way to the call (four home words, `mid`, the constant and
+// the four words the views bind) and nine registers hold a function's
+// values: it lowers because a home is read where a view names it, as any
+// operand is, and is free after the last view that does
+// (issues/function-homes-live-to-function-end.md).
+fn crossing_whole() → Function {
+    Function(parameters := [0, 1, 2, 3, 5], lent := 2, result := 9,
+        body := then([Const(width := 64, output := 6, value := 0), UnsignedLessThan(width := 64, output := 16, left := 1, right := 5)],
+            when(16, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 1, home := 2, start := 6, end := 3, written := False, base := 11, length := 12),
+                        View(buffer := 0, home := 0, start := 5, end := 1, written := True, base := 13, length := 14)], 0, [5], 15),
+                    leaf([Move(64, 9, 15)])))))
+}
+fn crossed_whole() → List<Function> { [crossing_whole(), carry_at()] }
+
+theorem crossed_whole_evaluable(): program_evaluable(crossed_whole()).IsTrue() { trivial }
+theorem crossed_whole_runs(a, c: BitVec(64)): program_run(crossed_whole(), two(), 1, [a, w(3), c, w(4), w(1)]) =
+    Ending(w(5), [[b(1), b(2), b(5)], [b(4), b(5), b(6), b(7)]]) { refl }
+theorem crossed_whole_past(a, c: BitVec(64)): program_run(crossed_whole(), two(), 1, [a, w(3), c, w(4), w(5)]) = Ending(w(512), two()) { refl }
+theorem crossed_whole_lowers(): lower_program_lent(crossed_whole(), plan_program(crossed_whole()), [2, 2]).is_some().IsTrue() { trivial }
+theorem crossed_whole_marked(): program_marked(crossed_whole(), [[False, True], [True, False]]) = True { refl }
+
 // ---------------------------------------------------------------------------
 // What is refused, and what the report says of each
 // (`Function::refused`, function_ir_refusal)

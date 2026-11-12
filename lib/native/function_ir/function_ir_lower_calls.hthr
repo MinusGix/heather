@@ -3897,32 +3897,68 @@ fn lower_program(functions: List<Function>, placement: List<Place>) → Option<P
 fn call_pool() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
 
 // The values that are a buffer's home somewhere in `region`, entered with
-// `homes`: a load reads its home's base, which no node says, so the
-// planner keeps these.
+// `homes`: a load or a store reads its home's base, which no node says, so
+// the planner keeps the homes of the buffers a region loads from or stores
+// into itself. A buffer the region only lends or hands on is read where
+// the view or the call names its home, as any operand is, and its home is
+// free after the last of them (issues/function-homes-live-to-function-end.md).
 fn homes_ids(homes: List<Lent>) → List<Nat> {
     match homes { Nil => [], Cons(home, rest) => Cons(home.base, Cons(home.length, homes_ids(rest))) }
 }
+
+fn Node::uses_buffer(self node: Node, b: Nat) → Bool {
+    match node { BufferLoad(_, buffer, _) => buffer.same(b), BufferStore(_, buffer, _, _) => buffer.same(b), _ => False }
+}
+
+fn nodes_use_buffer(nodes: List<Node>, b: Nat) → Bool {
+    match nodes { Nil => False, Cons(node, rest) => node.uses_buffer(b) || nodes_use_buffer(rest, b) }
+}
+
+// Whether some leaf of the region loads from buffer `b` or stores into it.
+fn StructuredRegion::uses_buffer(self region: StructuredRegion, b: Nat) → Bool {
+    match region {
+        Dataflow(body) => nodes_use_buffer(body.nodes, b),
+        Sequence(prefix, continuation) => nodes_use_buffer(prefix.nodes, b) || continuation.uses_buffer(b),
+        Compose(prefix, continuation) => prefix.uses_buffer(b) || continuation.uses_buffer(b),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.uses_buffer(b) || when_false.uses_buffer(b),
+        Lend(_, _, _, _) => False,
+        Call(_, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.uses_buffer(b),
+    }
+}
+
+// The homes of the buffers `region` touches.
+fn homes_touched(homes: List<Lent>, region: StructuredRegion) → List<Nat> {
+    match homes {
+        Nil => [],
+        Cons(home, rest) => match region.uses_buffer(home.buffer) {
+            False => homes_touched(rest, region),
+            True => Cons(home.base, Cons(home.length, homes_touched(rest, region))),
+        },
+    }
+}
+
 fn StructuredRegion::home_reads(self region: StructuredRegion, homes: List<Lent>) → List<Nat> {
     match region {
         Dataflow(_) => [],
         Sequence(_, continuation) => continuation.home_reads(homes),
         Compose(prefix, continuation) => prefix.home_reads(homes) ++
-            (homes_ids(prefix.lends(homes)) ++ continuation.home_reads(prefix.lends(homes))),
+            (homes_touched(prefix.lends(homes), continuation) ++ continuation.home_reads(prefix.lends(homes))),
         Conditional(_, _, _, _, when_true, when_false) => when_true.home_reads(homes) ++ when_false.home_reads(homes),
         Lend(_, _, _, _) => [],
         Call(_, _, _) => [],
         Loop(inputs, _, parameters, _, body, _, next, _, _) =>
-            homes_ids(carried_homes(loop_carried(homes, inputs, parameters, next))) ++
+            homes_touched(carried_homes(loop_carried(homes, inputs, parameters, next)), body) ++
                 body.home_reads(carried_homes(loop_carried(homes, inputs, parameters, next))),
     }
 }
 
 // What a function's body is planned to keep to its end: its result, and
-// where it takes buffers, their homes.
+// the homes of the buffers it touches.
 fn Function::kept(self function: Function) → List<Nat> {
     match function.lent {
         Zero => [function.result],
-        Succ(_) => Cons(function.result, homes_ids(function.homes()) ++ function.body.home_reads(function.homes())),
+        Succ(_) => Cons(function.result, homes_touched(function.homes(), function.body) ++ function.body.home_reads(function.homes())),
     }
 }
 

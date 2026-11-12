@@ -15,7 +15,11 @@
 // - `Call(f, args, body)` runs a computation of the program and binds its
 //   value for the rest, which goes on from the span the callee left;
 // - `Again(args)` ends as the function itself does on new arguments, from
-//   the span as it is: the self-call a loop is made of (`rt_file_loop`).
+//   the span as it is: the self-call a loop is made of (`rt_file_loop`);
+// - `Lend(f, views, args, body)` runs a computation of the program over
+//   windows of the function's spans (`FView`) and binds its value: the
+//   callee's written span is a window of the written span, put back where
+//   it was, and the spans it reads are windows of any of the spans.
 //
 // A computation writes one span, span 0 of its file, and its meaning
 // threads that span's bytes: `List<BitVec(8)> → Mutated<List<BitVec(8)>,
@@ -34,6 +38,7 @@ import option;
 import pair;
 import bitvec;
 import nat_map;
+import list_window;
 import rt;
 
 // ---------------------------------------------------------------------------
@@ -52,6 +57,18 @@ fn List::with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: Bi
 fn List::put_within(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → True {
     span := span.with_byte_within(length, i, v);
 }
+
+// ---------------------------------------------------------------------------
+// Views
+
+// A window of one of the function's spans, as a `Lend` hands it to its
+// callee: bytes `start` up to `end` of span `span` of the file, whose place
+// is the word variable `home`. `end` is a word variable. `start` is one
+// too, or none for a window from the span's first byte, which is how a
+// span is handed on whole: under its own length word. The callee takes two
+// words for the window, as it does for any span: where it lies, and how
+// long it is (`FView::base`, `FView::length`).
+record FView { span: Nat, home: Nat, start: Option<Nat>, end: Nat }
 
 // ---------------------------------------------------------------------------
 // Computations
@@ -75,6 +92,11 @@ inductive FTm {
     // is entry 0 of its own table), on variables, its answer the term's:
     // a self-call in tail position.
     Again(args: List<Nat>),
+    // A computation of the program over views: its written span is the
+    // first view, a window of the function's written span, and the spans
+    // it reads are the views after it. `body` sees its value as variable 0
+    // and goes on from the span with the window put back.
+    Lend(f: Nat, views: List<FView>, args: List<Nat>, body: FTm),
 }
 
 // A computation function: `lent` spans, the first the one it writes.
@@ -157,6 +179,7 @@ fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
         Put(_, _, _, body) => body.ty(w, fsigs, g),
         Call(f, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
         Again(_) => Sig::at(fsigs, 0).result,
+        Lend(f, _, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
     }
 }
 
@@ -173,6 +196,88 @@ fn FTm::called(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, args: Lis
     FTm::apply(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
         Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), Sig::at(fw.fsigs, f).params,
         FTm::get(fw.w.tys, fw.fsigs, fw.writers(fw.rest), f, own), args)
+}
+
+// ---------------------------------------------------------------------------
+// What a view is
+
+// A word variable's value.
+fn FTm::word(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), v: Nat) → BitVec(64) {
+    Ty::cast(tys, Ty::at(g, v), Word(64), Env::get(tys, g, env, v))
+}
+
+// The index a view starts at, the word that is where it lies, and the word
+// that is its length, each from where the view starts: a view from the
+// first byte lies at the span's place and is as long as its end.
+fn FView::first(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>) → Nat {
+    match start { None => 0, Some(s) => FTm::word(tys, g, env, s).toNat() }
+}
+
+fn FView::place(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), home: Nat, start: Option<Nat>) → BitVec(64) {
+    match start { None => FTm::word(tys, g, env, home), Some(s) => FTm::word(tys, g, env, home).add(FTm::word(tys, g, env, s)) }
+}
+
+fn FView::size(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>, end: Nat) → BitVec(64) {
+    match start { None => FTm::word(tys, g, env, end), Some(s) => FTm::word(tys, g, env, end).sub(FTm::word(tys, g, env, s)) }
+}
+
+fn FView::from(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → Nat { FView::first(tys, g, env, view.start) }
+
+fn FView::base(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → BitVec(64) { FView::place(tys, g, env, view.home, view.start) }
+
+fn FView::length(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → BitVec(64) { FView::size(tys, g, env, view.start, view.end) }
+
+// The bytes a view is of a file: a window of its span (`List::window`),
+// shorter where the window passes the span's end.
+fn FView::bytes(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), file: List<List<BitVec(8)>>) → List<BitVec(8)> {
+    file.span(view.span).window(view.from(tys, g, env), FTm::word(tys, g, env, view.end).toNat())
+}
+
+// The words a lend's callee takes for its spans, view by view: where the
+// window lies, then its length.
+fn FTm::lent_words(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), views: List<FView>) → List<BitVec(64)> {
+    match views {
+        Nil => Nil,
+        Cons(view, rest) => Cons(view.base(tys, g, env), Cons(view.length(tys, g, env), FTm::lent_words(tys, g, env, rest))),
+    }
+}
+
+// The file a lend's callee runs over: the views, in order.
+fn FTm::lent_file(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), views: List<FView>, file: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    match views { Nil => Nil, Cons(view, rest) => Cons(view.bytes(tys, g, env, file), FTm::lent_file(tys, g, env, rest, file)) }
+}
+
+// A computation's meaning applied to the words of its spans and then to
+// variables (`FTm::apply`); `d` where the words outnumber the operands.
+fn FTm::apply_lent(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), R: Type, d: R, xs: List<BitVec(64)>)
+    → (ps: List<Ty>) → Ty::ArrowsTo(tys, ps, R) → List<Nat> → R {
+    match xs {
+        Nil => λ ps f vs => FTm::apply(tys, g, env, R, d, ps, f, vs),
+        Cons(x, more) => λ ps => match ps {
+            Nil => λ f vs => d,
+            Cons(p, later) => λ f vs => FTm::apply_lent(tys, g, env, R, d, more, later, f(Ty::cast(tys, Word(64), p, x)), vs),
+        },
+    }
+}
+
+// What a `Lend` answers: the callee from the first view's window, over the
+// file of the views after it, on the views' words and the variables; the
+// window it left is put back into the written span (`List::put_window`).
+// The callee's meaning is read at the rest of the file it runs over, which
+// is why the meanings are at every rest (`FWorld`).
+fn FTm::lent(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, views: List<FView>, args: List<Nat>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)> {
+    match views {
+        Nil => Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)),
+        Cons(view, reads) => shared(
+            FTm::apply_lent(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
+                Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), FTm::lent_words(fw.w.tys, g, env, Cons(view, reads)),
+                Sig::at(fw.fsigs, f).params,
+                FTm::get(fw.w.tys, fw.fsigs, fw.writers(FTm::lent_file(fw.w.tys, g, env, reads, Cons(own, fw.rest))), f,
+                    view.bytes(fw.w.tys, g, env, Cons(own, fw.rest))), args),
+            λ (m: Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>) =>
+                Mutated(own.put_window(view.from(fw.w.tys, g, env), m.after), m.value)),
+    }
 }
 
 // The meaning: a function threading the written span's bytes, at the code
@@ -196,6 +301,9 @@ fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → 
             shared(FTm::called(fw, g, env, f, args, own), λ m =>
                 body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
         Again(args) => λ g env own => FTm::called(fw, g, env, 0, args, own),
+        Lend(f, views, args, body) => λ g env own =>
+            shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
+                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
     }
 }
 

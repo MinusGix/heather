@@ -69,6 +69,8 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
         Call(f, args, body) => λ g env own => shared(FTm::called(fw, g, env, f, args, own), λ m =>
             body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
         Again(args) => λ g env own => again(Tm::words(fw.w, g, env, args), own),
+        Lend(f, views, args, body) => λ g env own => shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
+            body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
     }
 }
 
@@ -94,6 +96,8 @@ theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(f
         Call(f, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
             Pair(FTm::called(fw, g, env, f, args, own).value, env), FTm::called(fw, g, env, f, args, own).after),
         Again(args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
+        Lend(f, views, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
+            Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
     }
 }
 
@@ -441,6 +445,9 @@ fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, 
             FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
                 .and_then(λ lb => Tm::compose(lc, lb))),
         Again(args) => Tm::self_args(w, g, ports, args).and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs)),
+        Lend(f, views, args, body) => FTm::lower_lend(w, fsigs, base, g, ports, next, f, views, args).and_then(λ lc =>
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
+                .and_then(λ lb => Tm::compose(lc, lb))),
     }
 }
 
@@ -538,6 +545,23 @@ theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.One
                         FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
         },
         Again(args) => λ g ports next => FTm::tail_again_sound(fw, base, res, flag, kept, nexts, g, ports, next, args),
+        Lend(f, views, args, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => FTm::TailHolds(Lend(f, views, args, body), fw, base, res, flag, kept, nexts, g, ports, next, r);
+            let result = Sig::at(fw.fsigs, f).result;
+            let inner = Cons(result, g);
+            Option::and_then_elim(P, trivial, FTm::lower_lend(fw.w, fw.fsigs, base, g, ports, next, f, views, args),
+                λ lc => FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)
+                    .and_then(λ lb => Tm::compose(lc, lb)),
+                λ lc lowered_lend =>
+            Option::and_then_elim(P, trivial, FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next),
+                λ lb => Tm::compose(lc, lb), λ lb lowered_body =>
+                FTm::tail_bind_sound(fw, base, res, flag, kept, nexts, g, ports, next, result, λ env own => FTm::lent(fw, g, env, f, views, args, own),
+                    λ again env own => body.tail_sem(fw, res, again, inner, env, own), lc, lb,
+                    j(lowered_lend, λ r _ => FTm::StepHolds(fw, base, g, ports, next, result, λ env own => FTm::lent(fw, g, env, f, views, args, own), r),
+                        FTm::lend_sound(fw, base, g, ports, next, f, views, args)),
+                    j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next, r),
+                        FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
+        },
     }
 }
 

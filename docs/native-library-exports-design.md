@@ -485,6 +485,61 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     `issues/runtime-loop-over-several-spans.md`, *built*), and what it
     met is registers, not proofs: two spans are four home words kept in
     place through the loop.
+
+    *The lend, in the file layer* (*built*; reading it from source is
+    owed). The writers' meanings and their link are at every rest of a
+    file (`FWorld.writers` and `FTm::CallsAgree` take the read spans as a
+    parameter), which is what lets a callee be read over windows. The
+    term is `FTm::Lend(f, views, args, body)` with
+    `FView(span, home, start, end)`: the span's number in the file (0 the
+    written one), the variable holding its place, and two word variables
+    for the window, the start absent for a window from the span's first
+    byte. The first view is the span written and the later ones are read
+    (`FTm::own_first`; anything else does not lower). Its meaning
+    (`FTm::lent`) is the callee's meaning at the file of the read windows,
+    applied to the written window, then a place and a length for each
+    view (`place + start` and `end - start`, or the place and `end`
+    themselves for a window from the first byte), then the arguments; the
+    written window comes back by `put_window` at its start and the body
+    goes on with the answer bound. So the source this is the reflection
+    of is
+
+        let r = callee(span.window(a.toNat(), b.toNat()), b.sub(a), …);
+        … span.put_window(a.toNat(), r.after) …
+
+    and for a span under its length word `callee(span.window(0,
+    n.toNat()), n, …)`, put back at 0. The window's ends are *variables*,
+    not terms, because the function compiler's facts are keyed by port: a
+    view is taken where an arm on the way says `end <u start` is false
+    and `length <u end` is false of those very ports (V3), or where the
+    start is the constant 0 and the end the buffer's own length. A form
+    with a start and a length would need the lowering to derive an end
+    the source never compared. The lowering (`FTm::lower_lend`) binds a
+    `Const 0` for each view from the first byte and two home ids per
+    view, and is one `Lend` region; its once-proof is `FTm::lend_sound`,
+    a `StepHolds` like a store's, so `FTm::lower_sound` and the loop's
+    `FTm::tail_sound` each gained one arm. This shape of source is my
+    reading, not a ruling. The probes
+    (`lib/_tests/native/runtime/rt_file_lend_tests.hthr`) are written as
+    terms by hand: a window of each of two spans and a whole written span
+    with a window of the read one, each pinned by conversion, compiled by
+    `FFun::lower_sound` over any file, run on bytes with controls, and
+    accepted by the function compiler under rows it finds.
+
+    Two things the function compiler met, both registers. A lender of two
+    views wanted ten values in nine registers because a function's homes
+    were planned live to its end; the planner now keeps only the homes of
+    buffers a region itself loads from or stores into
+    (`homes_touched`, `function_ir_lower_calls.hthr`), a home that is
+    only lent being read where its view names it. And a *loop* that lends
+    lowers and runs (`each_runs`) and is refused: a pass wants twelve
+    values at the call (four kept words, the index and the next, the
+    loop's count, the argument, the four words the views bind). That is
+    the hash's loop over its blocks, and it waits on a function's
+    long-lived words (homes, a loop's count and state) living in the six
+    callee-saved registers, which hold nothing in compiled functions
+    today (`issues/function-ir-values-in-kept-registers.md`). That is the
+    lowering's and its theorem's, not the planner's.
   - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
     no copy.
   - *V5c, a statement of `Source` that lends*, and the done-when program

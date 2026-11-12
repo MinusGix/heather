@@ -1,6 +1,6 @@
 ---
 title: A function's buffer homes hold registers to its end, and a lend of two views runs out
-status: open
+status: closed
 labels: [native,ir,x86,planner]
 area: heather-in-heather
 milestone: [nh-library]
@@ -26,3 +26,13 @@ The first is small and covers this shape; the second is what a longer body will 
 ## Done when
 
 The `crossing` of the first draft (two views, one from the constant 0, and an index of its own; the shape is in this issue's first paragraph) lowers in `function_ir_lower_views_tests.hthr`, and `scripts/linked --check` shows no generated file moved.
+
+## Log
+
+- 2026-11-12: Fixed on PR #551 by the first way. The planner keeps to a region's end only the homes of buffers the region itself loads from or stores into (`Node::uses_buffer`, `StructuredRegion::uses_buffer`, `homes_touched`, `function_ir_lower_calls.hthr`; `Function::kept` and `home_reads` use it). A buffer that is only lent or handed on has its home read where the view or the call names it, as any operand is. No theorem moved: the planner is search, and the lowering still refuses a plan that lost a home.
+
+  The first draft's shape lowers (`crossing_whole`, `function_ir_lower_views_tests.hthr`: two views, one from the constant 0, an index of its own; ten values named on the way to the call). So do the lenders the file layer lowers ([[source-buffers-as-views]], `rt_file_lend_tests.hthr`).
+
+  The done-when's second clause did not hold as written: one generated file moved. `scan_token.s` chooses other registers in three places of the scanner's loop (five lines of bytes, the same length, no instruction added or removed), because a loop that hands its span to a call no longer pins the span's home through the call. It is held by `native_linked.rs` and the scanner's tests as before. The other exports are byte for byte the same.
+
+  What this does not reach is a loop that lends, which wants more values than there are registers whatever is freed: [[function-ir-values-in-kept-registers]].

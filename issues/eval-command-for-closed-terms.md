@@ -19,3 +19,12 @@ What I did instead: a script that appends `theorem why_k(): report.take(n) = "ca
 ## Done when
 
 `heather eval lib/_tests/native/function_ir/function_ir_lower_views_tests.hthr 'unguarded().refused(1, unguarded().plan(), 2, [1, 1])'` prints the sentence `unguarded_why` pins.
+
+## Log
+
+- 2026-11-12: A better stopgap than guessing candidates, found while reading a refusal of a lowered lend: a tactic that fails with the text prints the text's value.
+
+      fn say(text: String) → Tac<Expr> { fail(text, []) }
+      theorem why(): True { by say(f.refused(1, f.plan(), 2, [2, 2])) }
+
+  The error reads "`by say(…)`: the tactic failed: " and then the evaluated report, whole. It needs `import tactic;` and works for any closed `String` the tactic evaluator can reach, `region.shown()` included; a long one runs the evaluator out of fuel (a loop's region did). It is a probe to delete afterwards, not something to leave in a module. The command is still wanted: this prints strings only and only through an error.
