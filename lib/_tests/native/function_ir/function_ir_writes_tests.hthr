@@ -122,3 +122,41 @@ theorem storer_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec
     computes: program_callees_over(file, [storer()])(0, arguments, result)): program_effects([storer()])(file, 0, arguments, result, file) {
     program_effects_quiet([storer()], trivial, file, 0, arguments, result, computes)
 }
+
+// ---------------------------------------------------------------------------
+// Which buffers a program stores into, as marks
+//
+// What a caller that lends a program its buffers is told
+// (docs/native-library-exports-design.md §7): a list with a mark for each
+// buffer some function stores into. `program_marks` reads it off the
+// program, and `program_stores_within` is the claim a certificate checks.
+
+// A store into buffer 1, beside `storer`'s into buffer 0.
+fn second_storer() → Function {
+    Function(parameters := [0, 1], body := leaf([BufferStore(output := 2, buffer := 1, index := 0, value := 1)]), result := 2)
+}
+
+// A callee's store is the program's: `caller` stores nothing itself.
+theorem caller_marks(): program_marks([caller(), storer()], 0, 2) = [1, 0] { refl }
+theorem both_mark(): program_marks([second_storer(), storer()], 0, 3) = [1, 1, 0] { refl }
+theorem peek_marks(): program_marks([peek()], 0, 2) = [0, 0] { refl }
+
+theorem caller_within(): program_stores_within([caller(), storer()], [True]) = True { refl }
+theorem both_within(): program_stores_within([second_storer(), storer()], [True, True]) = True { refl }
+
+// The controls: a program is not within marks that leave out a buffer it
+// stores into, whichever function stores and wherever the mark is missing.
+theorem caller_not_within_none(): program_stores_within([caller(), storer()], []) = False { refl }
+theorem caller_not_within_another(): program_stores_within([caller(), storer()], [False, True]) = False { refl }
+theorem both_not_within_the_first(): program_stores_within([second_storer(), storer()], [True]) = False { refl }
+theorem both_not_within_the_second(): program_stores_within([second_storer(), storer()], [False, True]) = False { refl }
+
+// A program with no store is within no marks at all, which is
+// `program_quiet`.
+theorem peek_within_none(): program_stores_within([peek()], []) = True { refl }
+
+// What a lender reads off the check, at a neutral buffer: one the program
+// stores into is marked.
+theorem caller_stores_marked(buffer: Nat, stores: program_stores([caller(), storer()], buffer).IsTrue()): marked([True], buffer) = True {
+    program_stores_marked([caller(), storer()], [True], buffer, trivial, stores)
+}

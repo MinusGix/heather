@@ -1,11 +1,11 @@
 ---
 title: No ext, irrel or unfolding for a decreases arm with a mut self call statement before its self-call
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,termination]
 area: language
 milestone: [nh-front]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Found by U4 step 4c-3c of [[native-one-compiler]], making a loop over a
@@ -88,3 +88,7 @@ with the store in the self-call's argument.
 Related: [[decreases-no-companions-nested-match-calls]] (a branch under
 the arm loses the companions too, for a different reason) and
 [[decreases-self-parameter]].
+
+## Log
+
+- 2026-11-12: Fixed on master by #579 (2026-11-12): the companions' walk rebinds the receiver of a `mut self` call statement. On PR #551's branch after merging it: `raise_span` (`lib/native/native_tool_spans.hthr`) is written with its store as a statement, `clear_from` in `lib/_tests/native/runtime/runtime_span_tests.hthr` is a positive probe (it was the `expect-error` for this), and the generator's refusal no longer points here.

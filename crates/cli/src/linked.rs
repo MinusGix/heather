@@ -182,8 +182,8 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
     //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
     //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
     //   borrows for the whole call, so it shares no byte with another
-    //   argument, with the stack or with the program's code. The code
-    //   stores into no other span (the lending's marks).", written.join(", ")) };
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).", written.join(", ")) };
         wrappers.push_str(&format!("
 {doc}
 pub fn {function}({taken}) -> u64 {{

@@ -2,8 +2,9 @@
 // (lib/native/runtime/runtime.hthr's `runtime_span`;
 // docs/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
 // generator publishes for a store, for calls of functions that write, and
-// for a loop with a callee that only reads, each stated at every file, and
-// what it refuses. Tests, not library: nothing imports this module.
+// for loops (with a callee that only reads, with one that writes, with a
+// store as a statement, an exit inside and two calls of their own), each
+// stated at every file, and what it refuses. Tests, not library: nothing imports this module.
 import logic;
 import bool;
 import nat;
@@ -174,6 +175,97 @@ theorem copy_first_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pl
 }
 
 // ---------------------------------------------------------------------------
+// Loops written as a loop is written
+//
+// A `decreases` function's companions (`ext`, `irrel`, the unfold) follow a
+// `mut self` call statement before the loop's own call and a branch under
+// the loop's test, so each of these is a `runtime fn` as it stands
+// (docs/decreases-unfolding-design.md). Before, the first had to make its
+// store in its own call's argument and the others decide after the loop.
+
+// A store as a statement before the loop's own call.
+runtime fn clear_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => {
+            let mut span = span;
+            span.put_within(length, i, BitVec::ofNat(0));
+            clear_from(span, length, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+theorem clear_from_runs(): program_run(clear_from::program, [[b(97), b(98), b(99)], [b(7)]], 0, [w(4096), w(3), w(1)]) =
+    Ending(w(3), [[b(97), b(0), b(0)], [b(7)]]) { refl }
+
+theorem clear_from_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(clear_from::program, Cons(span, rest), 0, [place, length, i]) = FTm::end_of(rest, clear_from(span, length, i)) {
+    clear_from::runs_over(span, rest, place, length, i)
+}
+
+// An exit inside the loop: it stops at the first newline, which it leaves.
+runtime fn clear_line(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            True => Mutated(span, i),
+            False => clear_line(span.with_byte_within(length, i, BitVec::ofNat(0)), length, i.add(BitVec::ofNat(1))),
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+theorem clear_line_runs(): program_run(clear_line::program, [[b(97), b(10), b(99)], [b(7)]], 0, [w(4096), w(3), w(0)]) =
+    Ending(w(1), [[b(0), b(10), b(99)], [b(7)]]) { refl }
+
+theorem clear_line_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(clear_line::program, Cons(span, rest), 0, [place, length, i]) = FTm::end_of(rest, clear_line(span, length, i)) {
+    clear_line::runs_over(span, rest, place, length, i)
+}
+
+// Two calls of its own under a branch: every byte but a newline cleared.
+runtime fn clear_text(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            True => clear_text(span, length, i.add(BitVec::ofNat(1))),
+            False => clear_text(span.with_byte_within(length, i, BitVec::ofNat(0)), length, i.add(BitVec::ofNat(1))),
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+    on ?dec2 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+theorem clear_text_runs(): program_run(clear_text::program, [[b(97), b(10), b(99)], [b(7)]], 0, [w(4096), w(3), w(0)]) =
+    Ending(w(3), [[b(0), b(10), b(0)], [b(7)]]) { refl }
+
+theorem clear_text_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(clear_text::program, Cons(span, rest), 0, [place, length, i]) = FTm::end_of(rest, clear_text(span, length, i)) {
+    clear_text::runs_over(span, rest, place, length, i)
+}
+
+// The function compiler takes each.
+theorem loops_accepted():
+    (lower_program_lent(clear_from::program, plan_program(clear_from::program), program_counts(clear_from::program)).is_some() = True) ∧
+    ((lower_program_lent(clear_line::program, plan_program(clear_line::program), program_counts(clear_line::program)).is_some() = True) ∧
+     (lower_program_lent(clear_text::program, plan_program(clear_text::program), program_counts(clear_text::program)).is_some() = True)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// ---------------------------------------------------------------------------
 // What the generator refuses
 
 // A callee that writes and is not a runtime fn.
@@ -190,22 +282,4 @@ runtime fn List::poke_through(mut self span: List<BitVec(8)>, length, i, v: BitV
 runtime fn List::poke_byte(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → BitVec(64) {
     span.put_within(length, i, v);
     i
-}
-
-// A loop whose store is a statement before its own call: the function
-// checks, and has no `ext` to build the instance from.
-// expect-error: it has no `ext` companion, which a loop's instance is built from
-runtime fn clear_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
-    match h: i.unsigned_lt_bit(length) {
-        False => Mutated(span, i),
-        True => {
-            let mut span = span;
-            span.put_within(length, i, BitVec::ofNat(0));
-            clear_from(span, length, i.add(BitVec::ofNat(1)))
-        },
-    }
-    on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, length, h);
-        bv_omega
-    };
 }

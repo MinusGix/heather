@@ -1,11 +1,11 @@
 ---
 title: No ext, irrel or unfolding for a decreases body that branches under its match h: arm
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,termination]
 area: language
 milestone: [nh-front]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Found by U3c step 2 of [[native-one-compiler]], writing a loop that counts a
@@ -75,3 +75,7 @@ message should also name the case when it still refuses: a branch under a
 Done when `two_var::ext`, `two_var::irrel` and `two_var_unfold` exist, and a
 two-call counting loop over a span has a Heather function beside it in
 `rt_span_loops_tests.hthr`.
+
+## Log
+
+- 2026-11-12: Fixed on master by #579 (2026-11-12): a match in an arm the walk spells out is spelled out again. On PR #551's branch after merging it, the runtime generator takes both forms as they stand: `clear_line` (an exit inside the loop) and `clear_text` (two calls of its own under a branch) in `lib/_tests/native/runtime/runtime_span_tests.hthr`, each stated at every file and accepted by the function compiler. `scan_from` keeps its exit after the loop, since `scan_token_longest` is proved over that form.

@@ -3,12 +3,13 @@
 //!
 //! `heather_linked::spans::count_newlines` is compiled Heather reading the
 //! caller's bytes through a pointer and a length
-//! (docs/native-library-exports-design.md), and `scanner::token` is the
-//! scanner's loop the same way, with calls of compiled code inside it. A
-//! certificate says the code computes the Heather function and reads only
-//! the span it is lent; what it cannot reach is the platform around the
-//! call, and these are the checks on that side (§6 of the design, clauses
-//! 1, 3, 5 and 7):
+//! (docs/native-library-exports-design.md), `scanner::token` is the
+//! scanner's loop the same way, with calls of compiled code inside it, and
+//! `spans::raise_span` stores into the bytes it is lent. A certificate says
+//! the code computes the Heather function, reads only the span it is lent
+//! and stores only into its own stack room and a span lent to write; what
+//! it cannot reach is the platform around the call, and these are the
+//! checks on that side (§6 of the design, clauses 1, 3, 4, 5 and 7):
 //!
 //! - against a reference, on texts of every length and counts on both sides
 //!   of the length, and on every Heather source in the repository (the
@@ -17,6 +18,8 @@
 //!   and past it, and an empty slice, whose pointer dangles: no fault and
 //!   the reference's answer, with the kernel asked to confirm that the byte
 //!   after the span cannot be read;
+//! - a written span with an unmapped page on each side, and one inside a
+//!   larger buffer: nothing is stored outside the span, whatever the count;
 //! - the code entered at both stack alignments, with the callee-saved
 //!   registers compared across the call.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -112,39 +115,52 @@ const MPROTECT: u64 = 10;
 const MUNMAP: u64 = 11;
 const EFAULT: i64 = -14;
 
-/// Two pages, the second one unreadable: a span that ends at `boundary`
-/// has nothing after it.
+/// Three pages, the first and the last neither readable nor writable: a
+/// span that ends at `boundary` has nothing after it, and one that starts
+/// at `start` nothing before it.
 struct Guarded { base: usize }
 
 impl Guarded {
     fn new() -> Guarded {
         // PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS.
-        let base = syscall(MMAP, [0, 2 * PAGE as u64, 3, 0x22, u64::MAX, 0]);
+        let base = syscall(MMAP, [0, 3 * PAGE as u64, 3, 0x22, u64::MAX, 0]);
         assert!(base > 0, "mmap: {base}");
         let guarded = Guarded { base: base as usize };
+        assert_eq!(syscall(MPROTECT, [guarded.base as u64, PAGE as u64, 0, 0, 0, 0]), 0, "mprotect");
         assert_eq!(syscall(MPROTECT, [guarded.boundary() as u64, PAGE as u64, 0, 0, 0, 0]), 0, "mprotect");
         guarded
     }
 
-    fn boundary(&self) -> usize { self.base + PAGE }
+    fn start(&self) -> usize { self.base + PAGE }
+
+    fn boundary(&self) -> usize { self.base + 2 * PAGE }
 
     /// `text` copied so that its last byte is the last readable one.
-    fn ending_at_the_boundary(&mut self, text: &[u8]) -> &[u8] {
+    fn ending_at_the_boundary(&mut self, text: &[u8]) -> &mut [u8] {
         assert!(text.len() <= PAGE);
-        let start = (self.boundary() - text.len()) as *mut u8;
-        // SAFETY: `start..boundary` is inside the first page, which this
-        // owns and mapped writable; an empty text makes an empty slice at a
-        // non-null address.
+        self.holding(self.boundary() - text.len(), text)
+    }
+
+    /// `text` copied so that its first byte is the first readable one.
+    fn starting_at_the_start(&mut self, text: &[u8]) -> &mut [u8] {
+        assert!(text.len() <= PAGE);
+        self.holding(self.start(), text)
+    }
+
+    fn holding(&mut self, at: usize, text: &[u8]) -> &mut [u8] {
+        // SAFETY: `at..at + text.len()` is inside the middle page, which
+        // this owns and mapped writable, and the slice borrows `self`; an
+        // empty text makes an empty slice at a non-null address.
         unsafe {
-            std::ptr::copy_nonoverlapping(text.as_ptr(), start, text.len());
-            std::slice::from_raw_parts(start, text.len())
+            std::ptr::copy_nonoverlapping(text.as_ptr(), at as *mut u8, text.len());
+            std::slice::from_raw_parts_mut(at as *mut u8, text.len())
         }
     }
 }
 
 impl Drop for Guarded {
     fn drop(&mut self) {
-        syscall(MUNMAP, [self.base as u64, 2 * PAGE as u64, 0, 0, 0, 0]);
+        syscall(MUNMAP, [self.base as u64, 3 * PAGE as u64, 0, 0, 0, 0]);
     }
 }
 
@@ -214,9 +230,117 @@ fn a_token_at_an_unmapped_page_is_scanned_to_the_spans_end_only() {
     assert_eq!(scanner::token(span, PAGE, 0), None);
 }
 
+/// What `raise_span` leaves and answers, in plain Rust: the bytes from
+/// `from` to below `count` that the text has, raised, and the index the
+/// loop stopped at.
+fn raised(text: &[u8], count: u64, from: u64) -> (Vec<u8>, u64) {
+    let mut after = text.to_vec();
+    let end = usize::try_from(count).unwrap_or(usize::MAX).min(text.len());
+    let start = usize::try_from(from).unwrap_or(usize::MAX);
+    if start < end { after[start..end].make_ascii_uppercase(); }
+    (after, from.max(count))
+}
+
+// Clause 2 and the write half's post: the word answered and the bytes the
+// span holds after are the reference's, on texts of every length, from
+// every kind of start and to counts on both sides of the length.
+#[test]
+fn raises_as_the_reference() {
+    for length in (0..70).chain([255, 256, 257, 4095, 4096, 4097]) {
+        // Letters of both cases among any bytes.
+        let text: Vec<u8> = bytes(length, 0x7a5e ^ length as u64).iter().enumerate()
+            .map(|(i, byte)| match i % 3 { 0 => b'a' + byte % 26, 1 => b'A' + byte % 26, _ => *byte }).collect();
+        let length = length as u64;
+        for count in [0, 1, length / 2, length.saturating_sub(1), length, length + 1, length + 9, length + 4096] {
+            for from in [0, 1, length / 3, length, length + 2, count, count + 1] {
+                let mut span = text.clone();
+                let answered = spans::raise_span(&mut span, count, from);
+                assert_eq!((span, answered), raised(&text, count, from), "length {length}, count {count}, from {from}");
+            }
+        }
+        let mut span = text.clone();
+        spans::raise(&mut span);
+        assert_eq!(span, text.to_ascii_uppercase(), "length {length}");
+    }
+    // Every byte value: the twenty-six lower-case letters move and nothing
+    // else does.
+    let every: Vec<u8> = (0..=255).collect();
+    let mut span = every.clone();
+    spans::raise(&mut span);
+    assert_eq!(span, every.to_ascii_uppercase());
+    assert_eq!(span.iter().zip(&every).filter(|(after, before)| after != before).count(), 26);
+}
+
+// Clause 4 with a span lent to write: the code stores into the span and
+// nowhere else the caller owns. Here the span is part of a larger buffer,
+// and the bytes on both sides of it are letters a store would raise.
+#[test]
+fn nothing_is_stored_outside_the_span() {
+    for (before, length, after) in [(0, 0, 16), (1, 1, 1), (7, 9, 5), (64, 100, 64), (3, 4096, 3)] {
+        let whole = vec![b'q'; before + length + after];
+        for count in [0, length as u64 / 2, length as u64, length as u64 + 1, (before + length + after) as u64 + 64] {
+            let mut buffer = whole.clone();
+            let answered = spans::raise_span(&mut buffer[before..before + length], count, 0);
+            assert_eq!(answered, count, "length {length}, count {count}");
+            let raised = usize::try_from(count).unwrap().min(length);
+            assert!(buffer[..before].iter().all(|byte| *byte == b'q'), "a byte before the span changed: length {length}, count {count}");
+            assert!(buffer[before..before + raised].iter().all(|byte| *byte == b'Q'), "length {length}, count {count}");
+            assert!(buffer[before + raised..].iter().all(|byte| *byte == b'q'), "a byte past the count changed: length {length}, count {count}");
+        }
+    }
+}
+
+// The same at the edge of what can be written at all: the pages on both
+// sides of the span take no store (the kernel confirms neither can be
+// read, and a store there would be a fault here), and the code is given a
+// count well past the span's end and a start before nothing.
+#[test]
+fn a_written_span_between_unmapped_pages_is_stored_to_its_ends_only() {
+    let mut pages = Guarded::new();
+    let (_reader, writer) = std::io::pipe().expect("pipe");
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&writer) as u64;
+    assert_eq!(syscall(WRITE, [fd, pages.boundary() as u64, 1, 0, 0, 0]), EFAULT, "the page after the span is readable");
+    assert_eq!(syscall(WRITE, [fd, pages.start() as u64 - 1, 1, 0, 0, 0]), EFAULT, "the page before the span is readable");
+    for length in [0, 1, 2, 7, 8, 9, 63, 64, 65, 1000, PAGE] {
+        let text: Vec<u8> = bytes(length, 0xfeed ^ length as u64).iter().map(|byte| b'a' + byte % 26).collect();
+        for count in [0, length as u64 / 2, length as u64, length as u64 + 1, length as u64 + 8, length as u64 + 2 * PAGE as u64] {
+            for from in [0, length as u64 / 2, length as u64, length as u64 + 1] {
+                let expected = raised(&text, count, from);
+                let boundary = pages.boundary();
+                let span = pages.ending_at_the_boundary(&text);
+                assert_eq!(span.as_ptr() as usize + span.len(), boundary);
+                let answered = spans::raise_span(span, count, from);
+                assert_eq!((span.to_vec(), answered), expected, "ending at the boundary: length {length}, count {count}, from {from}");
+                let start = pages.start();
+                let span = pages.starting_at_the_start(&text);
+                assert_eq!(span.as_ptr() as usize, start);
+                let answered = spans::raise_span(span, count, from);
+                assert_eq!((span.to_vec(), answered), expected, "starting at the start: length {length}, count {count}, from {from}");
+            }
+        }
+    }
+    // A whole page between the two, every byte of it stored.
+    let page = [b'z'; PAGE];
+    let span = pages.ending_at_the_boundary(&page);
+    assert_eq!(spans::raise_span(span, 3 * PAGE as u64, 0), 3 * PAGE as u64);
+    assert!(span.iter().all(|byte| *byte == b'Z'));
+}
+
+// An empty slice's pointer is dangling: nothing is stored through it.
+#[test]
+fn an_empty_slice_is_stored_nowhere() {
+    let empty: &mut [u8] = &mut [];
+    for count in [0, 1, 8, 4096] {
+        assert_eq!(spans::raise_span(empty, count, 0), count);
+    }
+    let mut none: Vec<u8> = Vec::new();
+    assert_eq!(spans::raise_span(&mut none, 64, 3), 64);
+}
+
 unsafe extern "sysv64" {
     // The code itself, as `generated/exports.rs` declares it privately.
     fn count_newlines(text: *const u8, length: u64, count: u64) -> u64;
+    fn raise_span(text: *mut u8, length: u64, count: u64, from: u64) -> u64;
     fn scan_token(source: *const u8, length: u64, at: u64, previous: u64) -> u64;
 }
 
@@ -229,14 +353,19 @@ const KEPT: [u64; 4] = [0x1212_1212_1212_1212, 0x1313_1313_1313_1313, 0x1414_141
 /// platform's alignment and `8` the other one. `$text` is the span and
 /// `$third`, `$fourth` the words after it (a function of fewer is given a
 /// word it does not read). Returns the result and the callee-saved
-/// registers as the code left them.
+/// registers as the code left them. The `@at` form takes the span as its
+/// pointer and length, for a span the code stores into.
 macro_rules! entered {
     ($pad:literal, $code:ident, $text:expr, $third:expr, $fourth:expr) => {{
         let text: &[u8] = $text;
+        entered!(@at $pad, $code, text.as_ptr(), text.len() as u64, $third, $fourth)
+    }};
+    (@at $pad:literal, $code:ident, $pointer:expr, $length:expr, $third:expr, $fourth:expr) => {{
+        let (pointer, length) = ($pointer, $length);
         let result: u64;
         let (r12, r13, r14, r15): (u64, u64, u64, u64);
         // SAFETY: the premises of the function's `_native_returns`, as the
-        // generated wrapper states them, for `text`; RSP is moved inside the
+        // generated wrapper states them, for the span; RSP is moved inside the
         // block and put back before it ends, and the block is not `nostack`,
         // so nothing of this function lives below it.
         unsafe {
@@ -245,7 +374,7 @@ macro_rules! entered {
                 "call {code}",
                 concat!("add rsp, ", $pad),
                 code = sym $code,
-                in("rdi") text.as_ptr(), in("rsi") text.len() as u64, in("rdx") $third, in("rcx") $fourth,
+                in("rdi") pointer, in("rsi") length, in("rdx") $third, in("rcx") $fourth,
                 inout("r12") KEPT[0] => r12, inout("r13") KEPT[1] => r13, inout("r14") KEPT[2] => r14, inout("r15") KEPT[3] => r15,
                 out("rax") result,
                 clobber_abi("sysv64"),
@@ -285,6 +414,24 @@ fn the_scanners_loop_at_both_stack_alignments() {
                 assert_eq!(entered!(0, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, the platform's alignment");
                 assert_eq!(entered!(8, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, RSP eight lower");
             }
+        }
+    }
+}
+
+// And of the writer: the bytes it leaves and the word it answers are the
+// reference's at both alignments, with the callee-saved registers back.
+#[test]
+fn the_writer_at_both_stack_alignments() {
+    for length in [0, 1, 17, 300, 5000] {
+        let text: Vec<u8> = bytes(length, 0xa11e ^ length as u64).iter().map(|byte| b'a' + byte % 26).collect();
+        for (count, from) in [(0, 0), (length as u64, 0), (length as u64 + 5, 1), (length as u64 / 2, length as u64)] {
+            let expected = raised(&text, count, from);
+            let mut span = text.clone();
+            let answered = entered!(@at 0, raise_span, span.as_mut_ptr(), span.len() as u64, count, from);
+            assert_eq!((span, answered), (expected.0.clone(), (expected.1, KEPT)), "length {length}, count {count}, the platform's alignment");
+            let mut span = text.clone();
+            let answered = entered!(@at 8, raise_span, span.as_mut_ptr(), span.len() as u64, count, from);
+            assert_eq!((span, answered), (expected.0, (expected.1, KEPT)), "length {length}, count {count}, RSP eight lower");
         }
     }
 }

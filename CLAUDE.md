@@ -121,7 +121,8 @@
   is not recompiled) and the Rust declarations with them
   (`generated/exports.rs`, never edited: `tests/linked_exports.rs`); a new
   export is a line in the table (module, function, parameters, a span of
-  bytes it reads as `name: span`), a wrapper in `src/`, and tests against
+  bytes it reads as `name: span` and one it stores into as
+  `name: span mut`), a wrapper in `src/`, and tests against
   an independent reference.
   When `compile-x86` answers "the verified lowering refused this program
   with the planner's placement", it names the node refused, its place and

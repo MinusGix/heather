@@ -170,9 +170,8 @@ theorem count_compiled(span: List<BitVec(8)>, call: Answers(), agree: Tm::CallsA
 
 // ---------------------------------------------------------------------------
 // Two self-calls under a branch, each handing the home on: the loop lowers
-// and runs as the one-call form does. (No Heather function is set beside
-// it: a `decreases` body of this form has no `ext` today,
-// issues/decreases-no-companions-nested-match-calls.md.)
+// and runs as the one-call form does. (A Heather function of this form
+// through the generator is `clear_text`, runtime_span_tests.)
 
 fn count_split_body() → Tm {
     Let(Prim(Ult(64), [1, 2]), If(0,

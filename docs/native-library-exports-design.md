@@ -321,7 +321,7 @@ under `lib/_tests`; controls that need a running process are tests of
 | 1 | Up to six words arrive in RDI, RSI, RDX, RCX, R8, R9; a span is two of them, pointer then length | `ArgsIn`, `LentAll` | a seventh word is refused by `compile-x86`, as today; an export declared with its span's parts swapped fails the reference test |
 | 2 | One word returns in RAX | `Returns` post | (several results are §8) |
 | 3 | RBX, RBP, R12 to R15 are kept and RSP is back above the return address | `Kept(callee_kept())`, `Returns` | a placement that puts a value in a callee-saved register: `lower_program` is `None` (the lowering checks its own code with `leaves_all`), a theorem by evaluation |
-| 4 | The callee stores only into its own room below the return address | `Wrote` | a store at or above the return address's offset is shown *not* to satisfy `Unchanged` for a differing word, so no function that made it could meet the post; and at the surface a `runtime fn` that writes a lent span is refused |
+| 4 | The callee stores only into its own room below the return address, and into the bytes of a span lent to write (§7.1) | `Wrote`; `WroteIn` under the lending's marks | a store at or above the return address's offset is shown *not* to satisfy `Unchanged` for a differing word, so no function that made it could meet the post; a program that stores into a buffer its marks leave out has no proof of the certificate's premise; process tests put unmapped pages on both sides of a written span |
 | 5 | The callee reads only its frame and the spans lent | the load's premise, §5 | a load with no known comparison: `lower_program` is `None`; a process test passes a span that ends at an unmapped page and reads at its length, and an empty slice (whose pointer dangles), expecting zero and no fault |
 | 6 | The stack has `72` bytes of room a level of calls | `72 * Succ(f) <= i` | none in the proof's reach; the bound is a constant printed beside the declaration |
 | 7 | Stack alignment is neither required nor provided | no premise mentions it; the code calls only compiled code | the process tests enter every export at both alignments |
@@ -423,9 +423,10 @@ offset just past the token, zero for a refusal). Its loop, `scan_from`,
 is a measured `runtime fn` lent the span; a pass calls the automaton's
 step at the span's byte (`scan_at`) and remembers the last accept
 (`scan_last`), and where it stops is decided after the loop
-(`scan_stopped`), so the loop has the one way round the companions of a
-`decreases` function need
-(`issues/decreases-no-companions-nested-match-calls.md`). The compiled
+(`scan_stopped`), so the loop has one way round. When it was written the
+companions of a `decreases` function needed that
+(`issues/decreases-no-companions-nested-match-calls.md`, fixed by #579);
+it is kept because `scan_token_longest` is proved over it. The compiled
 program is the loop with the whole automaton under it, one certificate.
 `heather_linked::scanner::token` is the call; `Scanner` is what is left
 in Rust, the iterator that drops whitespace and comments and hands out
@@ -508,6 +509,84 @@ relation.
   (`issues/function-ir-buffer-state-edges.md`'s scope, unchanged).
 - Byte stores exist as machine forms (`x86_64_store.hthr`).
 
+### 7.1 As built (2026-11-12)
+
+Most of the outline was built by U4 for a program that lends its own
+buffers (`docs/native-one-compiler-design.md` §2.6): the laws of a loan
+(`Loan`), the post over a changing file (`Stack::WroteIn`,
+`Stack::AnsweredOver`), the store leaf, and `compiled_returns_run`, which
+states a function's return over any lending that lets every buffer the
+program stores into be written. What an export added is small, and is
+the part that faces a caller who is not a Heather program.
+
+- **Which buffers are written is data.** `compiled_returns_run` asks for
+  `lending.written(b) = True` at every buffer `b` the program stores into,
+  a premise about a function. A caller is told with a list:
+  `program_stores_within(functions, marks)` says every store of every
+  function is into a buffer `marks` marks, one walk of each function
+  checked by evaluation a function at a time, and `program_stores_marked`
+  turns it into that premise (`function_ir_writes.hthr`).
+  `Lending::writing(counts, addresses, buffers, marks)` is the lending
+  that lets exactly the marked buffers be written, and
+  `compiled_returns_written` the theorem a certificate instantiates
+  (`function_ir_compile.hthr`). `program_quiet` is the case of no marks,
+  and a lending to read the lending with none.
+- **`compile-x86` takes a `runtime fn` that stores into its span.** It
+  reads the marks off the published program (`program_marks`), states
+  them in the certificate (`{prefix}_marks`), proves `{prefix}_within`,
+  and its `{prefix}_returns` is over any file whose first span is `span`:
+  called with the span's address and the function's words, the file in
+  memory under a `Loan` at that lending, the code answers the function's
+  word and leaves the file with the function's span where `span` was and
+  the rest as it was. The run is the generator's `f::runs_over`; nothing
+  about the function is proved for the export.
+- **The signature follows the code, not the type.** The assembly says
+  `span mut` for a span some function of the program stores into
+  (`# signature: raise_span(span mut, word, word) -> word`), and `span`
+  otherwise: a function whose type ends in `Mutated` and that stores
+  nothing is lent its span to read. `EXPORTS.tsv` writes the kind as
+  `name: span mut`, and a row that lends a span the other way from the
+  code is refused, in either direction.
+- **The Rust wrapper takes `&mut [u8]`.** A lending to write asks five
+  laws more of the caller's memory than one to read: the span's bytes are
+  writable, a byte stored reads back, and a store there changes no other
+  byte of any span, no word of the stack below the call and none of the
+  code (`Loan::writable`, `stored`, `apart`, `keeps`, `keeps_code`). An
+  exclusive borrow of initialised bytes gives all five, which the
+  generated `SAFETY` comment says beside the call. What the caller keeps
+  of a span beside the written one is `Loan::unwritten_reads`: a span the
+  lending does not mark reads after the call as before
+  (`unmarked_span_is_kept` in the compile probes).
+- **The first such export is `raise_span`** (`heather_linked::spans`):
+  letters raised to upper case in place, from an index to below a count.
+  Tests in `crates/linked/tests/spans.rs`: against plain Rust on texts of
+  every length with starts and counts on both sides of the length; the
+  span inside a larger buffer whose other bytes a store would change; the
+  span with an unmapped page on each side (the kernel asked to confirm
+  both), ending at the upper one and starting at the lower; an empty
+  slice; both stack alignments with the callee-saved registers compared.
+- **Controls in Heather**: `function_ir_writes_tests.hthr` (the marks of
+  a program whose callee stores, of one that stores into two buffers and
+  of one that stores into none; not within marks that leave a stored
+  buffer out, wherever the gap is) and `function_ir_compile_tests.hthr`
+  (the lending lets the marked and no other; an unmarked span is kept;
+  the certificate's premise has no proof for a hidden store).
+- **Loops are written as loops.** #579 gave a `decreases` function's
+  companions the two forms the generator had been written round, so
+  `raise_span` makes its store as a statement before its own call, and a
+  loop may leave from inside or call itself in two places
+  (`runtime_span_tests.hthr`: `clear_from`, `clear_line`, `clear_text`).
+
+Limits, each refused by name or filed: one span per writer
+(`issues/runtime-loop-over-several-spans.md` for loops; a writer's
+generator takes one span), six words in registers with the span's address
+and length among them, and a byte read before a store and used after it
+(`issues/rt-file-read-before-store.md`). In-place `Set` under `Unique`
+(the third point of the outline) was not needed: a writer's meaning
+threads the span, and the store leaf is proved against the file the run
+leaves. SHA-256's state as a customer waits on
+`issues/rt-fixed-arrays-and-tables.md`, as §10 says.
+
 ## 8. Results, tables, position, artifact
 
 - **Results.** One word. The scanner's token is a kind and an end, packed
@@ -571,7 +650,8 @@ Each is one PR, in this order, and each ends with something that runs.
   repository is the acceptance. *Built 2026-11-12 (§6.2).*
 - **R4. The write half** (§7), with SHA-256's state as its customer, after
   `rt-fixed-arrays-and-tables` gives the schedule and the constants a
-  place.
+  place. *The export is built 2026-11-12 (§7.1), with `raise_span` as its
+  first function; SHA-256's state is not.*
 
 R3's theorem is not a proof about compiled code: it relates two Heather
 functions, one recursing on a list and one indexing it, and is proved once

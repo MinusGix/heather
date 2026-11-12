@@ -29,6 +29,7 @@ linked!("scan_step.s");
 linked!("scan_accept.s");
 linked!("scan_begin.s");
 linked!("count_newlines.s");
+linked!("raise_span.s");
 linked!("scan_token.s");
 
 // Functions of words, declared `safe` on the strength of their certificates
@@ -55,13 +56,14 @@ unsafe extern "sysv64" {
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 
-// Functions that read a span, as the code takes them: each span its address
-// and its length. `unsafe`, because the certificate holds only where the
-// two words are a span of readable bytes; the wrappers below are where
-// that is so.
+// Functions over a span, as the code takes them: each span its address and
+// its length. `unsafe`, because the certificate holds only where the two
+// words are a span of readable bytes, writable where the code stores; the
+// wrappers below are where that is so.
 mod raw {
     unsafe extern "sysv64" {
         pub unsafe fn count_newlines(text: *const u8, text_length: u64, count: u64) -> u64;
+        pub unsafe fn raise_span(text: *mut u8, text_length: u64, count: u64, from: u64) -> u64;
         pub unsafe fn scan_token(source: *const u8, source_length: u64, at: u64, previous: u64) -> u64;
     }
 }
@@ -72,9 +74,9 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     // - the arguments are in their registers (`ArgsIn`): the declaration's
     //   order is the table's, which the gate holds to the code's signature.
     // - each span's two words are its address and its length (`ArgsLent`):
-    //   `as_ptr()` and `len()`, for the span `text`.
+    //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
-    //   a `&[u8]` is live, initialised memory while it is borrowed, and an
+    //   a slice is live, initialised memory while it is borrowed, and an
     //   empty one is read nowhere.
     // - no word the callee stores below this call's return address changes
     //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
@@ -85,15 +87,41 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     unsafe { raw::count_newlines(text.as_ptr(), text.len() as u64, count) }
 }
 
+/// `raise_span` of `lib/native/native_tool_spans.hthr`. STACK: 144 bytes.
+pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
+    // SAFETY (the premises of `raise_span_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the span `text`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `text` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::raise_span(text.as_mut_ptr(), text.len() as u64, count, from) }
+}
+
 /// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 2448 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
     //   order is the table's, which the gate holds to the code's signature.
     // - each span's two words are its address and its length (`ArgsLent`):
-    //   `as_ptr()` and `len()`, for the span `source`.
+    //   its pointer and `len()`, for the span `source`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
-    //   a `&[u8]` is live, initialised memory while it is borrowed, and an
+    //   a slice is live, initialised memory while it is borrowed, and an
     //   empty one is read nowhere.
     // - no word the callee stores below this call's return address changes
     //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):

@@ -87,3 +87,12 @@ a misaligned stack), and the implementation rounds filed against it.
 
   Open here: R3 (`scan_token` as one linked function, the Rust loop reduced to calling it) and R4 (the write half). Clause 7 is exercised for the span export only. The contract has no name yet (`named-abi-contracts`).
 - 2026-11-12: R3 is built: the scanner's loop is one linked function over the caller's span, with its theorem against `Accepted::longest` and the contract's controls on it (the note's new §6.2). What it found on the way: a keyed family for a loop lent a span ([[runtime-measured-instance-conversion-budget]]), `{prefix}_quiet` a function at a time, and the planner's limits in a loop that calls ([[function-ir-planner-register-pressure]]). R4, the write half, is the round left.
+- 2026-11-12: **The write half's export is built (PR #551, design note §7.1).** A `runtime fn` that stores into its span compiles with `compile-x86` and links into Rust behind a wrapper over `&mut [u8]`.
+
+  - Library: which buffers a program stores into as data (`marked`, `program_stores_within`, `program_stores_marked`, `program_marks`, `function_ir_writes.hthr`), `Lending::writing`, and `compiled_returns_written`, an instance of `compiled_returns_run`. Nothing below them changed: U4 had the loan's laws, the post over a changing file and the store leaf.
+  - `compile-x86`: reads the marks off the published program, states `{prefix}_marks` and `{prefix}_within` (a function at a time), and `{prefix}_returns` over any file whose first span is `span`, from the generator's `f::runs_over`. The assembly's signature says `span mut` where the program stores and `span` where it does not, whatever the function's type.
+  - Declarations: `name: span mut` in `EXPORTS.tsv`, a `*mut u8` raw declaration and a `&mut [u8]` wrapper whose `SAFETY` comment adds the five laws a lending to write asks. A row that lends a span the other way from the code is refused in both directions.
+  - First export: `raise_span`. Process tests: a reference on every length, the span inside a larger buffer, unmapped pages on both sides, an empty slice, both stack alignments.
+  - Controls in Heather: `function_ir_writes_tests.hthr`, `function_ir_compile_tests.hthr` (clause 4 where a span is lent to write).
+
+  Left: SHA-256's state as the customer (waits on `rt-fixed-arrays-and-tables`), a writer of more than one span, and the lexer's values written by compiled code (L4 of the roadmap).

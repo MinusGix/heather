@@ -105,15 +105,14 @@ theorem raise_word_is(c: BitVec(64)): raise_word(c) = raise_letter(c) { refl }
 // below `count` put through `raise_word` and stored back, answering the
 // index it stopped at. A byte is read and stored under the span's own
 // length word, so a count past the span's end stores nothing past it.
-//
-// The store is written in the loop's own call: a `mut self` store as a
-// statement before it loses the companions the generator builds a loop's
-// instance from (issues/decreases-mut-call-statement-companions.md).
 runtime fn raise_span(span: List<BitVec(8)>, length, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases count.sub(i).toNat() {
     match h: i.unsigned_lt_bit(count) {
         False => Mutated(span, i),
-        True => raise_span(span.with_byte_within(length, i, raise_word(span.byte_within(length, i).zero_extend(56)).truncate(8, 56)), length, count,
-            i.add(BitVec::ofNat(1))),
+        True => {
+            let mut span = span;
+            span.put_within(length, i, raise_word(span.byte_within(length, i).zero_extend(56)).truncate(8, 56));
+            raise_span(span, length, count, i.add(BitVec::ofNat(1)))
+        },
     }
     on ?dec1 := {
         let below = bitvec_omega::unsigned_true(64, i, count, h);

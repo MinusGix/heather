@@ -1966,7 +1966,7 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     let companion <- lookup(name ++ "::ext");
     let found: Tac<Expr> = match companion {
         Accepted(g) => pure(Global(g)),
-        Refused(_) => runtime_span_refused(name, "it has no `ext` companion, which a loop's instance is built from. A loop loses it where a `mut self` store or call is a statement before the loop's own call (issues/decreases-mut-call-statement-companions.md: write the store in the call's argument, `f(span.with_byte_within(…), …)`, or a callee's span as `List::g(span, …).after`), and where its arm branches around its own call (issues/decreases-no-companions-nested-match-calls.md)"),
+        Refused(_) => runtime_span_refused(name, "it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it (docs/decreases-unfolding-design.md)"),
     };
     let ext <- found;
     let irrel <- runtime_global(name ++ "::irrel");

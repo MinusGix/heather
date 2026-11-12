@@ -589,6 +589,10 @@ branch has no `ext`, so a loop with two ways round has no Heather
 function beside it today, though it lowers and runs (`count_split_body`;
 issues/decreases-no-companions-nested-match-calls.md). The form with one
 self-call and the branch in its arguments is the one proved.
+*Since #579 (2026-11-12)* such a body has its companions, and the
+generator takes it as it stands: `clear_line` (an exit inside the loop)
+and `clear_text` (two calls of its own) in
+`lib/_tests/native/runtime/runtime_span_tests.hthr`.
 
 What it leaves open, on purpose: a span that is written. A write makes
 the buffer a result as well as an input; §2.6 decides that the file
@@ -842,7 +846,8 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   is a `runtime fn` makes its store in the self-call's argument
   (`raise_from(span.with_byte_within(…), …)`, or
   `List::put_within(span, …).after`), until the companions follow the
-  statement.
+  statement. *They do since #579 (2026-11-12):* `raise_span` is written
+  with its store as a statement, and `clear_from` is the probe.
 
   The reflector (`rt_file_reflect.hthr`, built in 4c-3a) reads the
   elaborated body the way the one over `Io` does. Each end of the body
@@ -1349,7 +1354,8 @@ Each is a PR and ends with something that runs.
       certificate and it runs as `tr a-z A-Z`. What a call of it does
       at every buffer is `raise_span_called`. *Found:* a `decreases`
       arm with a `mut self` call statement has no `ext` companion
-      (issues/decreases-mut-call-statement-companions.md); the compile
+      (issues/decreases-mut-call-statement-companions.md, fixed by
+      #579); the compile
       of a tool over a generated program is not one kernel evaluation,
       so the build probe states that the function compiler takes the
       program and leaves the whole compile to `write-elf`.

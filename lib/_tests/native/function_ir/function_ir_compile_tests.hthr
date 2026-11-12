@@ -1,5 +1,6 @@
 // Controls of the contract a compiled function is exported under
-// (function_ir_compile's `compiled_returns` and `compiled_returns_lent`;
+// (function_ir_compile's `compiled_returns`, `compiled_returns_lent` and
+// `compiled_returns_written`;
 // docs/native-library-exports-design.md §6, the clauses by number). Each
 // clause of the contract is a part of those theorems' statements; a control
 // shows the clause has teeth, that something which would break it is
@@ -8,6 +9,7 @@
 // compiler's own refusals `crates/cli/tests/native_linked.rs`.
 import function_ir;
 import function_ir_eval;
+import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_reads;
@@ -80,6 +82,57 @@ theorem store_below_is_wrote<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, 
     stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
     stack.wrote_store(i, memory, k, below, word)
 }
+
+// ---------------------------------------------------------------------------
+// Clause 4, where a span is lent to write
+//
+// A function that stores into a span is exported under a lending that
+// marks the span (`Lending::writing`, `compiled_returns_written`;
+// docs/native-library-exports-design.md §7): the post then allows stores
+// of bytes into the marked spans beside the callee's own room
+// (`Stack::WroteIn`). The marks are the whole of what that adds.
+
+// The lending lets the marked buffers be written and no other, wherever
+// they lie and whatever they hold.
+theorem writing_lets_the_marked(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers()):
+    (Lending::writing(counts, addresses, buffers, [False, True]).written(1) = True) ∧
+    ((Lending::writing(counts, addresses, buffers, [False, True]).written(0) = False) ∧
+     (Lending::writing(counts, addresses, buffers, [False, True]).written(2) = False)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A lending to read is the one with no marks.
+theorem reading_marks_none(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers(), b: Nat):
+    Lending::writing(counts, addresses, buffers, []).written(b) = Lending::reading(counts, addresses, buffers).written(b) {
+    refl
+}
+
+// What a caller keeps of a span beside the written one: whatever the call
+// stored, a span the lending does not mark reads after as it did before.
+// So an export that takes `&mut [u8]` and `&[u8]` leaves the second.
+theorem unmarked_span_is_kept<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), top: Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, buffers: Buffers(),
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, buffers, [True, False]).spans()), i: Nat, low: i <= top,
+    before, after: M, wrote: stack.WroteIn(i, Lending::writing(counts, addresses, buffers, [True, False]).spans(), before, after),
+    reads: Readable(data, before, address_of(addresses, 1), buffer_bytes(buffers, 1))):
+    Readable(data, after, address_of(addresses, 1), buffer_bytes(buffers, 1)) {
+    loan.unwritten_reads(i, low, 1, refl, buffer_bytes(buffers, 1), buffer_bytes(buffers, 1).len().le_refl(), before, after, wrote, reads)
+}
+
+// The certificate's premise is that every store of the program is into a
+// marked buffer (`program_stores_within`, by evaluation). For a program
+// that stores into a buffer the marks leave out it has no proof, so no
+// `_returns` is stated over a lending that hides a store.
+fn storing() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [BufferStore(output := 3, buffer := 0, index := 2, value := 2)], outputs := Ports([word(3)]))),
+        result := 3)
+}
+
+theorem storing_within_its_mark(): program_stores_within([storing()], [True]).IsTrue() { trivial }
+theorem hidden_store_has_no_premise(hidden: program_stores_within([storing()], [False]).IsTrue()): False { hidden }
+theorem unmarked_store_has_no_premise(hidden: program_stores_within([storing()], []).IsTrue()): False { hidden }
 
 // ---------------------------------------------------------------------------
 // Clause 5: the callee reads only its frame and the spans lent
