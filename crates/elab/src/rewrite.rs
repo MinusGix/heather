@@ -895,11 +895,37 @@ const CANDIDATES: usize = 256;
 /// The goal's terms under no binder that `keep` accepts, and — only when the
 /// goal as written has none — its exposed form's.
 fn goal_terms(goal: &Type, keep: impl Fn(&Term) -> bool, exposed: impl FnOnce() -> Option<Type>) -> Vec<Rc<Term>> {
-    let terms: Vec<_> = goal.root_terms().into_iter().filter(|t| keep(t)).collect();
+    let terms: Vec<_> = reachable_terms(goal).into_iter().filter(|t| keep(t)).collect();
     if !terms.is_empty() {
         return terms;
     }
     exposed().map_or_else(Vec::new, |g| g.root_terms().into_iter().filter(|t| keep(t)).collect())
+}
+
+/// The goal's terms under no binder, and those of a stuck match's arms
+/// that read nothing their binder binds (a `Bool` match's, which `simp`
+/// leaves where a definition unfolded into one), lowered past it: the
+/// instance a law is matched at may sit in an arm, which an equation's
+/// transport reaches as it reaches the scrutinee.
+fn reachable_terms(goal: &Type) -> Vec<Rc<Term>> {
+    let mut out = goal.root_terms();
+    let mut i = 0;
+    while i < out.len() && out.len() < 4 * CANDIDATES {
+        if let Term::Case { case_l, case_r, .. } = &*out[i].clone() {
+            for arm in [case_l, case_r] {
+                let outer = arm.inst_top(0, &Term::Zero);
+                if outer.shift_local(1) == **arm {
+                    for t in (Type::El { level: Level::Zero, tm: Rc::new(outer) }).root_terms() {
+                        if !out.contains(&t) {
+                            out.push(t);
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 /// `pat`, scoped in Γ, x₁ … xₖ, with every `x` replaced by its binding

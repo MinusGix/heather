@@ -895,7 +895,13 @@ impl Simps<'_> {
                 _ => None,
             },
         };
-        let shown = |t: &Term| self.spell_term_clean(cx, t).unwrap_or_else(|| "(a term with no surface spelling)".into());
+        // A side the source cannot spell is still shown, roughly: `…` marks
+        // the nodes no surface syntax recovers, which is where to look.
+        let shown = |t: &Term| {
+            self.spell_term_clean(cx, t)
+                .unwrap_or_else(|| format!("{}
+    (no surface spelling: `…` marks what none recovers)", self.display_rough_term(cx, t, &[])))
+        };
         let head = match ends {
             Some((l, r)) => format!(
                 "`simp_only`: the two sides do not meet\n  left:\n    {}\n  right:\n    {}",

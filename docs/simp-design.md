@@ -618,8 +618,52 @@ What counts as a definition: a transparent global (a theorem's proof is
 opaque, so a theorem is always a law) whose type's conclusion is not an
 equation, a relation or a `↔`. A local function is neither a law nor
 unfolded, and is refused as before. An unfolding the source cannot spell is
-not taken: a body that is a match on a non-constructor stays a call
-(`issues/simp-adoption-native-gaps.md`).
+not taken, with one exception: a body that is a match on what the arguments
+do not decide yet (`Tm::leave` on `after(64, flag).eq_bit(1)`, `loop_pass`
+on its exit bit) is taken when its scrutinee spells, so the other laws can
+rewrite the scrutinee until the match selects its arm. A recursive
+definition's body is its recursor, never such a match, so this admits no
+raw recursion.
+
+### 14.1 What the native chains needed besides (2026-11-12, second pass)
+
+Each of these was found by converting a chain in `rt_loop.hthr` and is
+probed in `lib/_tests/std/tactic/simp_tests.hthr` or
+`lib/_tests/native/runtime/rt_loop_tests.hthr`.
+
+- **A comparison of two closed words computes.** A match whose scrutinee is
+  `eq_bit` of two locally closed words (a flag read back from a written
+  `Const`) is run to its constructor with a budget linear in the width, which
+  the split's small budget does not reach when the words are equal.
+- **A match at a literal constructor reads the fields written.** The arm
+  `matched_at_constructor` selects reads a constructor's fields as
+  projections out of its label's payload (`node_output(Const(64, flag, 1))`);
+  when that arm does not spell, it is contracted to the fields. Only then: an
+  arm that already spelled is left as it was, because contracting it changed
+  what `omega` read in `CReal::archimedean`.
+- **A stuck match's arms are computed and rewritten.** For `simp` only, an
+  arm that ignores its constructor's payload (a `Bool` match's) is computed
+  where the match is; a law's instance is searched for there as well
+  (`rewrite::reachable_terms`), and an equation's step crosses the match as
+  the context `λ z. match …`, which every function preserves `=` through
+  (`RelationRewrite::stuck_match`).
+- **β and pair projections under a function literal.** A law's instance can
+  put a λ into a λ (`λ ys => out(again(ys))` at `again := λ ys => into(…)`);
+  the computing step contracts those redexes and projections syntactically,
+  for `simp` only.
+- **An equation's step chains as `=`.** Crossing a consumer by pointwise
+  evidence into the rewrite's own carrier used to ask for `Transitive` at
+  that carrier (instances exist for `Nat`, `Int`, `Bool`); an equation's
+  step now chains by `trans_relid_l`/`_r` at any carrier.
+- **Evidence for a continuation.** `Tm::leave_pointwise` lets `simp` rewrite
+  inside what a pass's continuation does.
+
+Still open, in `issues/simp-adoption-native-gaps.md`: a law whose left side
+has a variable head (`finish(LoopEnd(…))`) is not matched under a binder and
+is passed applied; a side condition proved from a list membership
+(`absent_mem`) has no discharger; `fuel_pass_sound`'s final chain stays,
+because a `Sub` node's value computes through width casts that its proof's
+own `pred` does not have.
 
 Found by the adoption round on the native chains (2026-11-12): a law about
 a definition's body (`Valuation::set_here`, about `Valuation::set`) does not

@@ -803,6 +803,19 @@ fn simplified_binder(elab: &Elaborator, cx: &Cx, dom: &Type, name: &str) -> Opti
     binders.pop()?.ty
 }
 
+/// The steps a match's scrutinee may take to reach its constructor: a
+/// comparison of two closed words (`ofNat(0).eq_bit(ofNat(1))`, what a flag
+/// read back from a written constant leaves, its literal perhaps still a
+/// field of the node that wrote it) is decided by running it over the
+/// width's bits, which a split's small budget does not reach; anything else
+/// gets that small budget.
+fn closed_comparison_steps(elab: &Elaborator, scrut: &Term) -> u64 {
+    let closed = |t: &Rc<Term>| heather_kernel::subst::local_bound(t) == 0;
+    let decided = crate::omega_cert::named_args(elab, scrut, "bitvec::BitVec::eq_bit")
+        .is_some_and(|args| matches!(args.as_slice(), [width, a, b] if closed(width) && closed(a) && closed(b)));
+    if decided { 1 << 18 } else { 64 }
+}
+
 /// A closed word literal's value, `ofNat(w, k)` with both literal and
 /// `k < 2^w`, so its `toNat` is `k` by computation.
 fn literal_word(elab: &Elaborator, term: &Term) -> Option<u64> {
@@ -827,7 +840,7 @@ fn literal_word(elab: &Elaborator, term: &Term) -> Option<u64> {
 /// unfolds to no match that selects an arm, and a recursive definition
 /// selects one whose recursive calls are the raw recursor, which no source
 /// spells (issues/split-all-through-recursive-definitions.md owns that case).
-fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Term> {
+fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term, simp: bool) -> Option<Term> {
     let (head, _) = crate::spelling::app_spine(call);
     if !matches!(head, Term::GlobalTm { .. }) || word_operation(elab, call) {
         return None;
@@ -847,8 +860,21 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         }
         // The arm's reads of the matched constructor's children are the
         // pattern's names where the goal has them (`rest`, not `fst(cs)`).
-        elab.spell_term_source(cx, &selected)?;
-        return Some(selected);
+        if elab.spell_term_source(cx, &selected).is_some() {
+            return Some(selected);
+        }
+        // An arm that reads the constructor's fields (`node_output(Const(64,
+        // flag, 1))` is `Output(64, flag)`) reads them as projections out of
+        // its label's payload, which no source spells: contracted, they are
+        // the fields written. Only for `simp`, and only where the arm as
+        // selected did not spell: either contraction elsewhere changes what
+        // `omega` reads (`CReal::archimedean`'s `Rat` sum).
+        if !simp {
+            return None;
+        }
+        let contracted = contracted(elab, cx, &oracle, &selected, &mut 256);
+        elab.spell_term_source(cx, &contracted)?;
+        return Some(contracted);
     }
     None
 }
@@ -914,8 +940,47 @@ fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -
     let oracle = elab.goal_oracle();
     let unfolded = oracle.unfold(&cx.gamma, call, Unfold::OneStep).next()?;
     let body = contracted(elab, cx, &oracle, &unfolded, &mut 256);
-    elab.spell_term_source(cx, &body)?;
+    // A body that is a match on what its arguments do not decide yet
+    // (`Tm::leave` matching on `after(64, flag).eq_bit(1)`) has no
+    // surface spelling, but its scrutinee does, and that is what the other
+    // laws rewrite until the match selects its arm. A recursive
+    // definition's body is the recursor, never a `Case`, so this admits no
+    // raw recursion.
+    if elab.spell_term_source(cx, &body).is_none() {
+        let Term::Case { scrut, .. } = &body else {
+            return None;
+        };
+        elab.spell_term_source(cx, scrut)?;
+    }
     Some(body)
+}
+
+/// `t` with every β-redex `(λ x. b)(a)` contracted, under binders too, and
+/// nothing else reduced.
+fn beta_below(t: &Term) -> Term {
+    match t {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+            let fun = beta_below(fun);
+            let arg = beta_below(arg);
+            if let Term::Lam { body, .. } = &fun {
+                return beta_below(&body.inst_top(0, &arg));
+            }
+            let mut out = t.clone();
+            if let Term::App { fun: f, arg: a, .. } | Term::AppAt { fun: f, arg: a } = &mut out {
+                *f = Rc::new(fun);
+                *a = Rc::new(arg);
+            }
+            out
+        }
+        Term::Lam { .. } => {
+            let mut out = t.clone();
+            if let Term::Lam { body, .. } = &mut out {
+                *body = Rc::new(beta_below(body));
+            }
+            out
+        }
+        _ => t.clone(),
+    }
 }
 
 /// `t` with the β-redexes and projections of pairs a selected arm leaves
@@ -978,6 +1043,11 @@ fn contracted(elab: &Elaborator, cx: &Cx, oracle: &crate::oracle::SemanticOracle
             *label = Rc::new(contracted(elab, cx, oracle, label, budget));
             *children = Rc::new(contracted(elab, cx, oracle, children, budget));
         }
+        // A match left stuck (a body's `match` on what its arguments do not
+        // decide, `let after = step(…)` read in its scrutinee): its
+        // scrutinee, which is where it is scoped; the arms are below their
+        // binders.
+        Term::Case { scrut, .. } => *scrut = Rc::new(contracted(elab, cx, oracle, scrut, budget)),
         _ => {}
     }
     output
@@ -1051,7 +1121,7 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                 {
                     return term(elab, cx, &reduced, budget);
                 }
-                if let Some(reduced) = matched_at_constructor(elab, cx, &output) {
+                if let Some(reduced) = matched_at_constructor(elab, cx, &output, budget.1) {
                     return term(elab, cx, &reduced, budget);
                 }
                 if budget.1
@@ -1068,6 +1138,13 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                     return term(elab, cx, &reduced, budget);
                 }
             }
+            // A function literal a law's instance put a function literal
+            // into (`λ ys => out(again(ys))` at `again := λ ys => into(…)`),
+            // or a node's value read at its literal (`λ w => ofNat(fst(…))`):
+            // its β-redexes and projections of pairs contracted, so a law
+            // under the binder meets the body as written. Syntactic only:
+            // nothing below a binder is scoped where the oracle is.
+            Term::Lam { body, .. } if budget.1 => *body = crate::spelling::contract_projections(&Rc::new(beta_below(body))),
             Term::Succ(inner) => *inner = Rc::new(term(elab, cx, inner, budget)),
             Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 *val = Rc::new(term(elab, cx, val, budget));
@@ -1137,7 +1214,7 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                 // the scrutinee's value is not
                 // (issues/split-all-nested-if-omega-kernel-refusal.md).
                 if let Term::Case { scrut, .. } = &mut output
-                    && let Ok(whnf) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, scrut)
+                    && let Ok(whnf) = elab.goal_oracle().bounded(closed_comparison_steps(elab, scrut)).whnf_term(&cx.gamma, scrut)
                     && crate::spelling::is_inj(&whnf)
                 {
                     *scrut = Rc::new(whnf);
@@ -1145,6 +1222,25 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                         && reduced != output
                     {
                         return term(elab, cx, &reduced, budget);
+                    }
+                }
+                // A match that stays stuck, for `simp`: an arm that ignores
+                // its constructor's payload (a `Bool` match's) is a term
+                // where the match is, computed there, so the laws meet its
+                // calls as they meet the scrutinee's.
+                if budget.1
+                    && let Term::Case { case_l, case_r, .. } = &mut output
+                {
+                    for arm in [case_l, case_r] {
+                        // Below the arm's own binder: lowered past it when
+                        // nothing reads it.
+                        let outer = arm.inst_top(0, &Term::Zero);
+                        if outer.shift_local(1) == **arm {
+                            let computed = term(elab, cx, &outer, budget);
+                            if computed != outer {
+                                *arm = Rc::new(computed.shift_local(1));
+                            }
+                        }
                     }
                 }
             }

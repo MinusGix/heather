@@ -6,7 +6,7 @@
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
 import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
-import simp_laws; import simp; import list_pointwise;
+import simp_laws; import simp; import list_pointwise; import bitvec;
 
 // ---------------------------------------------------------------------------
 // Equations: both sides normalised, the goal closed where they meet.
@@ -66,6 +66,27 @@ theorem unfolded_by_name(a: Nat): twice(0 + a) = a + a { simp_only(twice, Nat::a
 theorem unfolded_generic<A>(xs: List<A>): twice_list(xs ++ Nil).len() = xs.len() + xs.len() {
     simp_only(twice_list, List::append_nil, List::len_append)
 }
+
+// A definition whose body matches on what its arguments do not decide yet
+// unfolds all the same: the laws rewrite the scrutinee, and the match
+// selects its arm. A comparison of two closed words computes.
+fn leave_like(f: Nat → Bool, n, x, y: Nat) → Nat { match f(n) { False => x, True => y } }
+fn flag_word(v: Nat → BitVec(64), n: Nat) → Nat { match v(n).eq_bit(BitVec::ofNat(1)) { False => 0, True => 1 } }
+
+theorem unfolded_into_a_match(f: Nat → Bool, n, x, y: Nat, h: f(n) = True): leave_like(f, n, x, y) = y { simp_only(leave_like, h) }
+theorem decided_by_equal_words(v: Nat → BitVec(64), n: Nat, h: v(n) = BitVec::ofNat(1)): flag_word(v, n) = 1 { simp_only(flag_word, h) }
+theorem decided_by_unequal_words(v: Nat → BitVec(64), n: Nat, h: v(n) = BitVec::ofNat(0)): flag_word(v, n) = 0 { simp_only(flag_word, h) }
+
+// A match nothing decides keeps its arms, and the laws rewrite inside them.
+fn pick_shifted(f: Nat → Bool, n, a, b: Nat) → Nat { match f(n) { False => 0 + a, True => b } }
+
+theorem inside_the_arms(f: Nat → Bool, n, a, b: Nat): pick_shifted(f, n, a, b) = (match f(n) { False => a, True => b }) {
+    simp_only(pick_shifted, Nat::add_left_zero)
+}
+
+// Nothing decides it: the match is what is left, shown by its scrutinee.
+// expect-error: match eq_bit(v(n), ofNat(1))
+theorem undecided_match(v: Nat → BitVec(64), n: Nat): flag_word(v, n) = 1 { simp_only(flag_word) }
 
 // Not named, a definition stays a call, and a law about its body does not
 // reach inside it.

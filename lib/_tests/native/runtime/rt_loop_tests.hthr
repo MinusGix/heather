@@ -17,6 +17,8 @@ import function_ir;
 import function_ir_eval;
 import rt_lower;
 import rt_loop;
+import tactic;
+import simp;
 
 fn rt_loop_lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
 
@@ -108,4 +110,14 @@ theorem count_down_loops(): Fun::MeasuredHolds([Word(64), Word(64)], Word(64), c
     Fun::lower_measured(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world())) {
     Fun::measured_sound(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), count_down, count_down_measure,
         count_down_bounded(), count_down_guarded())
+}
+
+// ---------------------------------------------------------------------------
+// `simp` on what a pass leaves: the continuation's `λ` is crossed by
+// `Tm::leave`'s pointwise evidence, and a law about the leaving word closes.
+
+theorem leave_continuation_simplified(w: World, res: Ty, er: res.OneWord(w.tys), a: Valuation(), flag: Nat, ns: List<Nat>):
+    words_of(a, ns).head_or(BitVec::zero()) =
+        Tm::leave(a, flag, ns, λ (ys: List<BitVec(64)>) => Tm::out(w.tys, res, Tm::into(w.tys, res, ys.head_or(BitVec::zero())))) {
+    simp_only(Tm::out_into(w.tys, res, er), Tm::leave_first)
 }
