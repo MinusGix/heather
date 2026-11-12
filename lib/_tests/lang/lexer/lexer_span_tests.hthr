@@ -1,0 +1,47 @@
+// The scanner's loop over a span (`lib/lang/lexer/lexer_span.hthr`),
+// evaluated by the kernel: `scan_token` on short sources, from the start,
+// from inside, at the end and past it, as the word the linked code answers
+// (`crates/linked/tests/scanner.rs` holds that code to the Rust lexer and
+// to the loop in Rust). The theorem that it is the specification's scan is
+// in the module; these are what it and the specification both come to on
+// particular bytes, and the refusals.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import bitvec; import bool; import list; import logic; import nat; import option; import string; import utf8;
+import lexer_scan; import lexer_tokens; import lexer_span;
+
+// `scan_token` on a text, its length the text's own.
+fn span_probe(text: String, at, previous: u64) → u64 {
+    scan_token(utf8::encode(text), BitVec::ofNat(utf8::encode(text).len()), at, previous)
+}
+
+// A name runs to the byte that ends it, and to the end of the source.
+theorem span_ident(): span_probe("abc def", 0, 0) = token_word(KIND_IDENT, 3) { refl }
+theorem span_ident_to_the_end(): span_probe("abc def", 4, KIND_SPACE) = token_word(KIND_IDENT, 7) { refl }
+theorem span_space(): span_probe("abc def", 3, KIND_IDENT) = token_word(KIND_SPACE, 4) { refl }
+
+// The longest token wins, and a dead end falls back to the last accept:
+// `1.` is the numeral and then a point.
+theorem span_scaled(): span_probe("1.5e3)", 0, 0) = token_word(KIND_SCALED, 5) { refl }
+theorem span_falls_back(): span_probe("1.m", 0, 0) = token_word(KIND_NUM, 1) { refl }
+theorem span_qualified(): span_probe("nat::Nat::sub(", 0, 0) = token_word(KIND_IDENT, 13) { refl }
+
+// What came before decides whether `>>` is one token.
+theorem span_shift_after_a_gap(): span_probe(">>", 0, KIND_SPACE) = token_word(KIND_SHR, 2) { refl }
+theorem span_no_shift_after_a_name(): span_probe(">>", 0, KIND_IDENT) = token_word(KIND_GT, 1) { refl }
+
+// A comment with no newline ends where the source does.
+theorem span_comment(): span_probe("// c", 0, 0) = token_word(KIND_COMMENT, 4) { refl }
+
+// Refusals are zero: a string never closed, a numeral run into a name,
+// and nothing at all at the end or past it.
+theorem span_unclosed(): span_probe("\"ab", 0, 0) = 0 { refl }
+theorem span_bad_numeral(): span_probe("12abc", 0, 0) = 0 { refl }
+theorem span_at_the_end(): span_probe("ab", 2, KIND_IDENT) = 0 { refl }
+theorem span_past_the_end(): span_probe("ab", 9, 0) = 0 { refl }
+theorem span_empty(): span_probe("", 0, 0) = 0 { refl }
+
+// The specification's scan at the same place, as the same word
+// (`scan_token_longest` says so of every source; this is one).
+theorem span_assign(): span_probe("x := 1", 2, KIND_SPACE) = token_word(KIND_COLON_EQ, 4) { refl }
+theorem span_assign_specified():
+    Accepted::word(Accepted::longest(scan_begin(KIND_SPACE), utf8::encode("x := 1").drop(2), 2, None)) = token_word(KIND_COLON_EQ, 4) { refl }
