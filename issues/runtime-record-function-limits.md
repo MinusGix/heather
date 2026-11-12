@@ -22,3 +22,7 @@ What a `runtime fn` of a laid record does not take yet (docs/layout-design.md §
 Found on the way and fixed in the same round: `laid record` stopped at fourteen fields (what it published grew with the cube of the fields and passed what the host reads of one reply; it now holds each shared term once), and the elaborator's reduction request walked a record updated field by field as a tree (fields to the power of updates; `contract_projections` now visits a shared node once).
 
 Related: [[sha256-context-type]], [[layout-classes]], [[conversion-callee-unfolded-before-the-meet]], [[conversion-proof-compared-at-computed-type]].
+
+## Log
+
+- 2026-11-12: Measured 2026-11-12: under the test profile's binary (the one the whole-library gate runs) the generator takes far longer than under the release binary on the same function, by a factor of tens (a nine-statement function a few seconds against most of a minute; a function of nine read-and-store statements past three minutes, which with the rest of its test file passed the gate's per-module CPU rail). The probes keep `State::init` and drop the longer cases for that reason. Where the factor comes from has not been looked at.

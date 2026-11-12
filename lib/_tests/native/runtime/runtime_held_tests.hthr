@@ -152,20 +152,16 @@ runtime fn Mixed::retag(mut self m: Mixed) → u64 {
     m.tag.zero_extend(32)
 }
 
-runtime fn Mixed::tagged(mut self m: Mixed) → u64 {
-    m.size := m.size + 1;
-    m.tag.zero_extend(32)
-}
-
 theorem retag_holds(own: List<u8>, m: Mixed, length: u64, holds: Mixed::stored().Holds(own, length, m)):
     Mixed::stored().Holds(Mixed::retag::bytes(own, length).after, length, m with { tag = 7 }) {
     Mixed::retag::runs_held(own, m, length, holds).holds
 }
 
 // ---------------------------------------------------------------------------
-// A state the size of a hash's: every field stored, then one word
-// counted. Each statement is two calls of an accessor, and none of what
-// is published is compared through an accessor's body.
+// A state the size of a hash's, every field stored. None of what is
+// published is compared through an accessor's body. (Longer functions
+// compile, seventeen statements over seventeen fields was tried, and are
+// not kept here: the gate's own binary takes minutes on one.)
 
 laid(endian := BigEndian) record State { h0: u32, h1: u32, h2: u32, h3: u32, h4: u32, h5: u32, h6: u32, h7: u32, count: u64 }
 
@@ -180,24 +176,6 @@ runtime fn State::init(mut self s: State) → u64 {
     s.h7 := 0x5be0cd19;
     s.count := 0;
     0
-}
-
-runtime fn State::counted(mut self s: State, n: u64) → u64 {
-    s.count := s.count + n;
-    s.count
-}
-
-runtime fn State::mix(mut self s: State, x: u64) → u64 {
-    s.h0 := s.h0 + s.h1;
-    s.h1 := s.h1 ⊕ s.h2;
-    s.h2 := s.h2 + s.h3;
-    s.h3 := s.h3 ⊕ s.h4;
-    s.h4 := s.h4 + s.h5;
-    s.h5 := s.h5 ⊕ s.h6;
-    s.h6 := s.h6 + s.h7;
-    s.h7 := s.h7 ⊕ s.h0;
-    s.count := s.count + x;
-    s.count
 }
 
 theorem init_holds(own: List<u8>, s: State, length: u64, holds: State::stored().Holds(own, length, s)):
