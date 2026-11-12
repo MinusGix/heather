@@ -845,6 +845,34 @@ impl Checking<'_> {
                     e => e,
                 })
             }
+            // A `decreases` obligation nobody discharges by hand: `omega`,
+            // and where it is stuck on the `toNat` of a word, `bv_omega`
+            // (issues/decreases-word-measures-by-hand.md). `omega`'s refusal
+            // stays the diagnosis: it is what `Obligations::explain` rewords.
+            ExprKind::Var(name) if name == crate::measure::CLOSER => {
+                let tactic = |name: &str| Expr { kind: ExprKind::Var(name.into()), span: e.span };
+                let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
+                let stuck = match self.elab_check(cx, &tactic("omega"), expected, lvl) {
+                    Ok(term) => return Ok(term),
+                    Err(stuck) => stuck,
+                };
+                if self.key_of("bitvec_omega::add_form").is_none() || !bv_omega::mentions_word(self, expected) {
+                    return Err(stuck);
+                }
+                self.pass.warnings.borrow_mut().truncate(mark.0);
+                self.attempt.goal_arena.rollback(mark.1);
+                match self.elab_check(cx, &tactic("bv_omega"), expected, lvl) {
+                    Ok(term) => Ok(term),
+                    Err(ElabError::Elab { msg: words, .. }) => match stuck {
+                        ElabError::Elab { msg, span } => Err(ElabError::Elab {
+                            msg: format!("{msg}; over the words, {}", words.lines().next().unwrap_or_default()),
+                            span,
+                        }),
+                        stuck => Err(stuck),
+                    },
+                    Err(_) => Err(stuck),
+                }
+            }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
             // reconstruction returns an ordinary Heather

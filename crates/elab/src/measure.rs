@@ -87,6 +87,11 @@ impl Obligations {
     }
 }
 
+/// The closer an obligation nobody discharges by hand defaults to: `omega`,
+/// then `bv_omega` where the obligation is over the `toNat` of a word
+/// (`Checking::elab_measure_closer`, issues/decreases-word-measures-by-hand.md).
+pub(crate) const CLOSER: &str = "__measure_closer";
+
 const K: &str = "__dec_k";
 const IH: &str = "__dec_ih";
 const H: &str = "__dec_h";
@@ -1626,7 +1631,7 @@ impl<'a> Rewrite<'a> {
             }
         } else {
             Expr {
-                kind: ExprKind::Var("omega".into()),
+                kind: ExprKind::Var(CLOSER.into()),
                 span,
             }
         };

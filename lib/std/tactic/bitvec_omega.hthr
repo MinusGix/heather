@@ -193,6 +193,27 @@ theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a
     }
 }
 
+// The `<=` bit, `!b.unsigned_lt_bit(a)`, and the propositions `a < b` and
+// `a <= b` at a word, read the same way: what a `match h:` or an `if h:`
+// over a word's test puts in scope.
+theorem unsigned_le_true(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = bool::True): a.toNat() <= b.toNat() {
+    match same: b.unsigned_lt_bit(a) {
+        False => unsigned_false(n, b, a, same),
+        True => absurd(trans(sym(h), @cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::True, same))),
+    }
+}
+
+theorem unsigned_le_false(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = bool::False): b.toNat() < a.toNat() {
+    match same: b.unsigned_lt_bit(a) {
+        True => unsigned_true(n, b, a, same),
+        False => absurd(trans(sym(@cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::False, same)), h)),
+    }
+}
+
+theorem unsigned_lt_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_lt(b)): a.toNat() < b.toNat() { h }
+
+theorem unsigned_le_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_le(b)): a.toNat() <= b.toNat() { h }
+
 // The equality bit, read the same way: what `split_all` states at a split of
 // `a.eq_bit(b)`.
 theorem equal_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::True): a.toNat() = b.toNat() {
