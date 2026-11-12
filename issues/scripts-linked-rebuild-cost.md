@@ -1,6 +1,6 @@
 ---
 title: scripts/linked recompiles every export with the debug binary
-status: open
+status: closed
 labels: [tooling,native,exports]
 area: infrastructure
 created: 2026-11-12
@@ -17,3 +17,7 @@ Two cheap things:
 ## Done when
 
 `scripts/linked --check` with nothing changed is seconds, and after an edit to one linked module only that module's rows are recompiled.
+
+## Log
+
+- 2026-11-12: Done by PR #578 (on master 2026-11-12): `scripts/linked` compiles with the release binary and does not recompile a row whose binary and import closure are unchanged. PR #551's merge keeps that script and adds its `linked-exports` step after the comparison.

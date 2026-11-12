@@ -7,51 +7,102 @@
 #
 #   scripts/linked            # rewrite crates/linked/generated/*.s, exports.rs
 #   scripts/linked --check    # exit 1 if a file on disk is not what is emitted
+#   scripts/linked --debug …  # compile with the debug binary instead
 #
 # `crates/cli/tests/native_linked.rs` is the gate that holds the assembly to
 # the compiler, and `tests/linked_exports.rs` the declarations to their
 # generator; this is how a round that changed a linked module, the table, or
 # the lowering, brings them back. Same discipline as every direct `heather` run:
-# built first (the link reserves address space a cap would refuse), then
-# capped.
+# the release binary, built first (the link reserves address space a cap
+# would refuse), then capped.
+#
+# A row whose inputs did not change is not recompiled
+# (issues/scripts-linked-rebuild-cost.md). Its key is the binary's hash (the
+# lowering, the emitter and the bundled proof library are all in it), the row,
+# and every library file in the module's import closure, path and content
+# (`scripts/lib-closures --files`, the loader's reading of the imports); the
+# value is the `.s` a compile with a checked certificate wrote, stored under
+# `${HEATHER_CACHE_DIR:-target}/linked-exports`. Only a checked compile is
+# stored, so a hit is a certificate that was checked for exactly these
+# inputs. HEATHER_LINKED_NO_CACHE=1 compiles every row anyway.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 check=false
-[[ "${1:-}" == --check ]] && check=true
+profile=release
+for arg in "$@"; do
+  case "$arg" in
+    --check) check=true ;;
+    --debug) profile=debug ;;
+    *) echo "usage: scripts/linked [--check] [--debug]" >&2; exit 2 ;;
+  esac
+done
 
-cargo build -q -p heather-cli
-heather=target/debug/heather
-store="${HEATHER_CACHE_DIR:-target}/native-images"
+if [[ $profile == release ]]; then
+  cargo build -q --release -p heather-cli
+else
+  cargo build -q -p heather-cli
+fi
+heather=target/$profile/heather
+root="${HEATHER_CACHE_DIR:-target}"
+store="$root/native-images"
+memo="$root/linked-exports"
 generated=crates/linked/generated
+mkdir -p "$memo" target
 work=$(mktemp -d "target/linked.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
+binary_hash=$(sha256sum "$heather" | cut -d' ' -f1)
+rows=$(grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' | cut -f1,2)
+
+# The key of every row; the misses go to the compiler.
+declare -A key closure_of
+misses=()
+while IFS=$'\t' read -r module function; do
+  if [[ -z "${closure_of[$module]:-}" ]]; then
+    stem=$(basename "$module" .hthr)
+    closure_of[$module]=$(scripts/lib-closures --files "$stem" | xargs sha256sum | sha256sum | cut -d' ' -f1)
+  fi
+  key[$function]=$(printf '%s\n%s\t%s\n%s\n' "$binary_hash" "$module" "$function" "${closure_of[$module]}" |
+                   sha256sum | cut -d' ' -f1)
+  if [[ -n "${HEATHER_LINKED_NO_CACHE:-}" || ! -f "$memo/${key[$function]}.s" ]]; then
+    misses+=("$module"$'\t'"$function")
+  fi
+done <<< "$rows"
+
 # One compiler per export, four at a time: an export costs a certificate.
 compile() {
-  local module=$1 function=$2
+  local module=$1 function=$2 key=$3
   ( ulimit -v 8388608 -t 1500 -c 0
     "$heather" compile-x86 "$module" "$function" -o "$work/$function.s" --cache-dir "$store" > "$work/$function.log" 2>&1 ) ||
     { cat "$work/$function.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; return 1; }
+  # Published under the key only once whole: a killed run leaves no hit.
+  cp "$work/$function.s" "$memo/$key.s.partial" && mv "$memo/$key.s.partial" "$memo/$key.s"
 }
 export -f compile
-export heather store work
-grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' | cut -f1,2 |
-  xargs -P 4 -L 1 bash -c 'compile "$0" "$1"'
+export heather store work memo
+if (( ${#misses[@]} > 0 )); then
+  for row in "${misses[@]}"; do
+    IFS=$'\t' read -r module function <<< "$row"
+    printf '%s\t%s\t%s\n' "$module" "$function" "${key[$function]}"
+  done | xargs -P 4 -L 1 bash -c 'compile "$0" "$1" "$2"'
+fi
 
 stale=0
-while IFS=$'\t' read -r module function parameters; do
-  [[ -z "$module" || "$module" == \#* ]] && continue
-  if cmp -s "$work/$function.s" "$generated/$function.s"; then
-    echo "$function: unchanged"
+while IFS=$'\t' read -r module function; do
+  emitted="$memo/${key[$function]}.s"
+  how=cached
+  [[ -f "$work/$function.s" ]] && { emitted="$work/$function.s"; how=compiled; }
+  if cmp -s "$emitted" "$generated/$function.s"; then
+    echo "$function: unchanged ($how)"
   elif $check; then
-    echo "$function: $generated/$function.s is stale" >&2
+    echo "$function: $generated/$function.s is stale ($how)" >&2
     stale=1
   else
-    cp "$work/$function.s" "$generated/$function.s"
-    echo "$function: rewritten"
+    cp "$emitted" "$generated/$function.s"
+    echo "$function: rewritten ($how)"
   fi
-done < "$generated/EXPORTS.tsv"
+done <<< "$rows"
 # The declarations follow the assembly on disk: after a rewrite, the new
 # files; under `--check`, the ones the check just compared.
 if $check; then

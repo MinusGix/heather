@@ -1,6 +1,6 @@
 ---
 title: An orphan library module is found only by the whole-library gate
-status: open
+status: closed
 labels: [tooling,testing]
 area: infrastructure
 created: 2026-11-12
@@ -17,3 +17,7 @@ A new library module that nothing imports fails `every_library_module_is_reached
 ## Done when
 
 `scripts/lib-closures` (no `--fix`) fails on an orphan module with the gate's message, in the seconds it takes now.
+
+## Log
+
+- 2026-11-12: Done by PR #578 (on master 2026-11-12): `scripts/lib-closures` runs the gate's orphan lint with the gate's reading, and `scripts/test` runs it before building.
