@@ -97,8 +97,15 @@ record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes> }
 // nothing reads.
 record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
 
-// The field `field` of the local `of` stands for `term`.
-record FieldTerm { of: Nat, field: String, term: Handle }
+// The elements of an array field, each a word its codec's accessor reads:
+// element `i` of `count` lies at the word `base + i * stride`, and a read
+// of it at a literal index stands for `narrow` of `read` at that word
+// (`read` and `narrow` are applied to it, and to the word read).
+record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr }
+
+// What a field `field` of the local `of` stands for: a term, or for an
+// array its elements' terms.
+inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm) }
 
 record Known {
     prims: List<PrimEntry>,
@@ -575,7 +582,85 @@ fn rt_field_at(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, n
 fn Known::named_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Handle> {
     match named {
         Nil => None,
-        Cons(n, rest) => match n.of.same(x) && Known::str_same(n.field, field) { True => Some(n.term), False => Known::named_at(rest, x, field) },
+        Cons(n, rest) => match n {
+            FieldWhole(of, name, term) => match of.same(x) && Known::str_same(name, field) { True => Some(term), False => Known::named_at(rest, x, field) },
+            FieldEach(_, _, _) => Known::named_at(rest, x, field),
+        },
+    }
+}
+
+fn Known::elements_at(named: List<FieldTerm>, x: Nat, field: String) → Option<ElementTerm> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n {
+            FieldWhole(_, _, _) => Known::elements_at(rest, x, field),
+            FieldEach(of, name, each) => match of.same(x) && Known::str_same(name, field) { True => Some(each), False => Known::elements_at(rest, x, field) },
+        },
+    }
+}
+
+// The word element `i` lies at, as a term.
+fn ElementTerm::place(self e: ElementTerm, i: Nat) → Tac<Expr> {
+    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    pure(App(App(Global(of_nat), NatLit(64)), NatLit(e.base + i * e.stride)))
+}
+
+// The accessor's read of element `i`, and that read at the element's type.
+fn ElementTerm::reads(self e: ElementTerm, i: Nat) → Tac<Pair<Handle, Handle>> {
+    let at <- e.place(i);
+    let read <- next_spelling(App(e.read, at)).bind(λ c => rt_accepted("an accessor's read of an element", c));
+    let value <- next_spelling(App(e.narrow, Hd(read))).bind(λ c => rt_accepted("an accessor's read at its element's width", c));
+    pure(Pair(read, value))
+}
+
+// A term that is a field of a local, by the local and the field's name.
+fn rt_field_of_local(h: Handle) → Tac<Option<Pair<Nat, String>>> {
+    let v <- view(h);
+    let read: Option<Pair<Handle, String>> = match v {
+        HGlobal(_, name, args) => match args {
+            Nil => None,
+            Cons(r, more) => match more { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+        },
+        HField(r, name, args) => match args { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+        _ => None,
+    };
+    match read {
+        None => pure(None),
+        Some(p) => view(p.fst).bind(λ rv => {
+            let found: Option<Pair<Nat, String>> = match rv {
+                HLocal(x, args) => match args { Nil => Some(Pair(x.id, rt_base_name(p.snd))), Cons(_, _) => None },
+                _ => None,
+            };
+            pure(found)
+        }),
+    }
+}
+
+// An element of an array field the setup named, read at a literal index:
+// `vector_index(x.f, i, _)` stands for the accessor's read where element
+// `i` lies.
+fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Handle>> {
+    match k.named {
+        Nil => pure(None),
+        Cons(_, _) => match Known::str_same(rt_base_name(name), "vector_index") {
+            False => pure(None),
+            True => match args.nth(0) {
+                None => pure(None),
+                Some(v) => match args.nth(1) {
+                    None => pure(None),
+                    Some(i) => rt_field_of_local(v).bind(λ field => match field {
+                        None => pure(None),
+                        Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
+                            None => pure(None),
+                            Some(e) => rt_literal(i).bind(λ n => match Succ(n).leb(e.count) {
+                                False => rt_refuse("element " ++ decimal_name(Succ(n), n) ++ " of the array field `" ++ p.snd ++ "`, which has fewer"),
+                                True => e.reads(n).bind(λ r => pure(Some(r.snd))),
+                            }),
+                        },
+                    }),
+                },
+            },
+        },
     }
 }
 
@@ -1253,7 +1338,10 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             None => match args {
                                 Cons(r, rest) => match rest {
                                     Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
-                                    Cons(_, _) => rt_unknown(name),
+                                    Cons(_, _) => rt_element(k, name, args).bind(λ element => match element {
+                                        Some(u) => rt_go(f, k, st, u, True).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+                                        None => rt_unknown(name),
+                                    }),
                                 },
                                 Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
                             },
