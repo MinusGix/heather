@@ -3,9 +3,12 @@
 Status: **2026-11-12: layers 1, 2 and 3 are built on PR #551, and so is
 the first pieces of layer 4: big-endian words read and stored by compiled
 code, proved to be the codec's, which SHA-256's modules now use; fields
-as values with their laws (`Part`, §5.3); and SHA-256's context as a
-record over its span, written by hand as the generator will write it
-(§6.2). The generator and the record held by a `runtime fn` are design.**
+as values with their laws (`Part`, §5.3); the declaration
+`generate laid(T, [codec, …]);`, which writes a record's codec and one
+part per field (§6.2, stage A); and SHA-256's context as a record over
+its span, declared that way. Accessors that name a field in a
+`runtime fn` body, and the record held by a `runtime fn` (stage B), are
+design.**
 Minus's direction (2026-11-12, the native thread): SHA-256's context goes
 "straight to laid out fields, we're going to want them very soon
 regardless", and "laying out should be something that's easy to use
@@ -412,11 +415,55 @@ library's own composition, which checks today for this record (the probe
 padded, and read through the record's constructor by `Stored::map`, whose
 round trip is `refl` because a record is its fields.
 
-**Built by hand, as the generator will write it:**
-`lib/native/crypto/sha256_context.hthr`. `record Sha256 { hash, working,
-schedule, count }`, its fields' type and the two maps between them,
-`Sha256::stored()`, one part per field and one per word of each array,
-and `Sha256::of(ctx)`, the context a span holds. The offsets the SHA
+**Built: the declaration** (`lib/std/machine/laid.hthr`), in the
+`generate` spelling, which is §7 item 3's first step and needs nothing of
+the compiler:
+
+```heather
+record Header { tag: u8, length: u64, flags: [u16; 3] }
+generate laid(Header, [Stored::byte(), Stored::u64_be(), Stored::u16_be().array(3)]);
+```
+
+It publishes `Header::stored(): Stored<Header>` and, for each field,
+`Header::length_part(): Part<Header, u64>(…)`, and nothing else. The
+layout is `Header::stored().layout` (`Layout(24, 3)` by `refl`), an
+offset is `Header::length_part().offset` (8), and the laws for a read and
+a store at a field are the part's own, so the generator proves nothing
+and neither does its caller. One codec is written per field, in the
+fields' order: it says the byte order (§7 item 2's recommended reading)
+and anything else the type does not, and another laid record's
+`R::stored()` is a codec like any other, so records nest and their parts
+compose (`Leg::header_part().then(Header::length_part())` is at the sum
+of the offsets, and its `with` is the nested record update, by `refl`).
+The probes (`lib/_tests/std/machine/laid_tests.hthr`) hold that, the
+bytes of a closed header, a record of one field, and four refusals, each
+with its reason: a codec count that is not the field count, a codec that
+does not store its field's type, a type that is not a record, and a
+record declared twice.
+
+Two things the generator works around, both filed. A member of a group
+cannot cite an earlier member (`generate-group-internal-references`), so
+a part's type spells the record's codec out and not `Header::stored()`;
+the two convert, and a function declared at
+`Part<Header, u16>(Header::stored())` accepts a composition of generated
+parts, but a diagnostic prints the long form and the group's text grows
+with the square of the field count. And a nullary constructor inside a
+pattern is read as a variable where the scrutinee comes from
+`let x <- t;` (`deep-pattern-ctor-unknown-column-type`, found writing
+this generator: a type of two constructors was taken for a record), so
+the generator's matches are written a level at a time.
+
+Not built of stage A: accessors as `runtime fn`s that name the field
+(`ctx.schedule_put(cn, t, word)`), which would take the offsets out of
+SHA-256's bodies. A generated accessor is a call, and with no inliner it
+costs one in the compression loop, so that waits for stage B or for
+inlining and is not done by default.
+
+**SHA-256's context, declared:** `lib/native/crypto/sha256_context.hthr`.
+`record Sha256 { hash, working, schedule, count }`,
+`generate laid(Sha256, [words(8), words(8), words(64), Stored::u64_be()])`,
+one part per word of each array as a composition, and `Sha256::of(ctx)`,
+the context a span holds. The offsets the SHA
 modules write in their bodies are theorems by `refl`
 (`Sha256::schedule_at(i)`: `i * 4 + 64`; `count_at`: 320; the layout is
 `Layout(328, 3)`), and each access is tied to the record:
@@ -465,7 +512,7 @@ section once A is built and shows what the refinements look like.
    codec, written per field (`be`, `le`), so a `u32` is one type. The
    other reading is wrapper types (`u32be`), as Rust's `zerocopy` has.
 3. **The declaration's spelling**: `generate laid(Sha256, …);` after an
-   ordinary record (no change to the language, built first either way),
+   ordinary record (no change to the language, built: §6.2),
    `laid record Sha256 { … }` (prefix generators extended to records), an
    attribute, or a `datarepr` clause. Recommended: the `generate` form
    now, and `laid record` as its sugar once a second record wants it,
@@ -496,10 +543,9 @@ section once A is built and shows what the refinements look like.
    SHA-256's modules read and store through them: `sha256_compress.s`
    is byte for byte what it was, and the three stream files change
    because the count's accessors now call the eight-byte ones, one call
-   deeper). SHA-256's context as a record, written by hand
-   (`sha256_context.hthr`, built). Then stage A's generator, which writes
-   that module's contents from the record, and SHA-256's modules over
-   generated accessors. Two probes say what the generator may publish:
+   deeper). Stage A's generator (`laid.hthr`, built) and SHA-256's
+   context declared with it (`sha256_context.hthr`, built). Left of
+   stage A: accessors that name a field in a `runtime fn` body. Two probes say what the generator may publish:
    a plain `fn` becomes run-time code afterwards by
    `generate runtime("Name");`, and a `def` numeral is read in a
    `runtime fn` body, so an offset can be a published constant.

@@ -1,0 +1,116 @@
+// Probes of `laid`: the declaration over a record with padding inside it
+// and after it, over a record of one field and over a record that holds
+// another; what it publishes agrees with the parts written by hand; and
+// what it refuses, each with its reason. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import list_window;
+import omega;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import layout;
+import stored;
+import part;
+import laid;
+
+// ---------------------------------------------------------------------------
+// A record with padding
+
+record Header { tag: u8, length: u64, flags: [u16; 3] }
+
+generate laid(Header, [Stored::byte(), Stored::u64_be(), Stored::u16_be().array(3)]);
+
+theorem header_layout(): Header::stored().layout = Layout(24, 3) { refl }
+theorem tag_offset(): Header::tag_part().offset = 0 { refl }
+theorem length_offset(): Header::length_part().offset = 8 { refl }
+theorem flags_offset(): Header::flags_part().offset = 16 { refl }
+theorem tag_of(h: Header): Header::tag_part().of(h) = h.tag { refl }
+theorem length_of(h: Header): Header::length_part().of(h) = h.length { refl }
+theorem flags_of(h: Header): Header::flags_part().of(h) = h.flags { refl }
+theorem tag_with(h: Header, t: u8): Header::tag_part().with(h, t) = (h with { tag = t }) { refl }
+theorem length_with(h: Header, n: u64): Header::length_part().with(h, n) = (h with { length = n }) { refl }
+theorem flags_with(h: Header, f: [u16; 3]): Header::flags_part().with(h, f) = (h with { flags = f }) { refl }
+
+// A generated part has the type a hand-written one has, and composes.
+fn Header::flag(i: Nat, inside: i < 3) → Part<Header, u16>(Header::stored()) {
+    Header::flags_part().then(Part::element(Stored::u16_be(), 3, i, inside))
+}
+
+theorem flag_offset(): Header::flag(2, trivial).offset = 20 { refl }
+
+// Both laws, with no proof written for the record.
+theorem length_read(bytes: List<u8>, at: Nat): Stored::u64_be().get(bytes, 8 + at) = Header::stored().get(bytes, at).length {
+    Header::length_part().reads(bytes, at)
+}
+
+theorem length_put(bytes: List<u8>, at: Nat, n: u64, fits: 24 + at <= bytes.len()):
+    Header::stored().get(Stored::u64_be().put(bytes, 8 + at, n), at) = (Header::stored().get(bytes, at) with { length = n }) {
+    Header::length_part().get_put(bytes, at, n, fits)
+}
+
+theorem flag_put(bytes: List<u8>, at, i: Nat, inside: i < 3, w: u16, fits: 24 + at <= bytes.len()):
+    Header::stored().get(Stored::u16_be().put(bytes, (i * 2 + 16) + at, w), at)
+        = (Header::stored().get(bytes, at) with { flags = vector_update(Header::stored().get(bytes, at).flags, i, w) }) {
+    Header::flag(i, inside).get_put(bytes, at, w, fits)
+}
+
+// The record's bytes are its fields' bytes at their offsets.
+theorem header_bytes(): Header::stored().write(Header(7, 258, [1, 2, 3]))
+    = [7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 1, 0, 2, 0, 3, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// One field, and a record inside a record
+
+record Meters { value: u32 }
+
+generate laid(Meters, [Stored::u32_le()]);
+
+theorem meters_layout(): Meters::stored().layout = Layout(4, 2) { refl }
+theorem meters_value(): Meters::value_part().offset = 0 { refl }
+theorem meters_with(m: Meters, v: u32): Meters::value_part().with(m, v) = Meters(v) { refl }
+
+record Leg { from: Meters, to: Meters, header: Header }
+
+generate laid(Leg, [Meters::stored(), Meters::stored(), Header::stored()]);
+
+theorem leg_layout(): Leg::stored().layout = Layout(32, 3) { refl }
+theorem leg_header(): Leg::header_part().offset = 8 { refl }
+
+// A field of a field: the offsets add.
+fn Leg::length() → Part<Leg, u64>(Leg::stored()) { Leg::header_part().then(Header::length_part()) }
+
+theorem leg_length(): Leg::length().offset = 16 { refl }
+theorem leg_length_with(l: Leg, n: u64): Leg::length().with(l, n) = (l with { header = (l.header with { length = n }) }) { refl }
+
+// ---------------------------------------------------------------------------
+// Refused
+
+// A codec for each field.
+// expect-error: laid: `Header` has 3 fields and 2 codecs are given, one is wanted for each
+generate laid(Header, [Stored::byte(), Stored::u64_be()]);
+
+// Each of its field's type.
+record Wrong { a: u8, b: u64 }
+
+// expect-error: laid: the codec given for `b`
+generate laid(Wrong, [Stored::byte(), Stored::u32_be()]);
+
+// A record, not a type of several shapes.
+inductive Shape { Dot, Line(length: u64) }
+
+// expect-error: laid: `Shape` is not a record
+generate laid(Shape, [Stored::u64_be()]);
+
+// Declared once.
+// expect-error: the generated `Meters::stored` was refused
+generate laid(Meters, [Stored::u32_be()]);

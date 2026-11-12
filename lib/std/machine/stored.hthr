@@ -267,6 +267,12 @@ fn Stored::map<A, B>(self s: Stored<A>, to: A → B, from: B → A, back: (b: B)
         λ b => trans(cong_fn<A, B>(to, s.round(from(b))), back(b)))
 }
 
+// A record as its fields: the fields in order, padded to the alignment,
+// read through the record's constructor.
+fn Stored::record<F, R>(self fields: Stored<F>, to: F → R, from: R → F, back: (r: R) → to(from(r)) = r) → Stored<R> {
+    fields.padded().map(to, from, back)
+}
+
 // ---------------------------------------------------------------------------
 // A read and a store, piece by piece
 //

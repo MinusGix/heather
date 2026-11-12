@@ -1,0 +1,276 @@
+// `generate laid(T, [codec, …]);`: the record `T` laid over bytes, its
+// fields in the order written, each stored by the codec given for it
+// (docs/layout-design.md §6.2). It publishes
+//
+//     fn T::stored() → Stored<T>          // how a `T` is bytes
+//     fn T::f_part() → Part<T, F>(…)      // field `f`, for each field
+//
+// and nothing else: the layout is `T::stored().layout`, a field's offset
+// is `T::f_part().offset` (a numeral by evaluation at closed codecs, as
+// Rust's `offset_of!` is), and the laws of a read and of a store at a
+// field are the part's own (`reads`, `Part::get_put`), proved once in
+// `part.hthr` for the combinators the generator composes. Nothing is
+// proved per record, by the generator or by its caller.
+//
+// The codec is the fields' codecs joined by `Stored::then`, padded to the
+// alignment and read through the record's constructor
+// (`Stored::record`); field `f` is the path of `Part::fst` and
+// `Part::snd` to it. A codec says the byte order and anything else the
+// field's type does not (`Stored::u32_be()`, an array, another laid
+// record's `R::stored()`), so a record inside a record is one more codec
+// and its fields compose: `Outer::inner_part().then(Inner::f_part())`.
+//
+// A part's type names the record's codec written out and not
+// `T::stored()`, which a member of a group cannot cite
+// (issues/generate-group-internal-references.md); the two convert, and a
+// function declared at `Part<T, B>(T::stored())` accepts a generated
+// part.
+//
+// Refused, each with its reason: a type that is not a record, a codec
+// count that is not the field count, a codec that does not store its
+// field's type, a field whose type mentions an earlier field.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import list_window;
+import omega;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import layout;
+import stored;
+import part;
+
+// What the generator names from the library.
+record LaidLib { then: Expr, record: Expr, all: Expr, fst: Expr, snd: Expr, part_then: Expr, field: Expr, rfl: Expr }
+
+fn laid_global(name: String) → Tac<Expr> { lookup(name).or_fail("laid: `" ++ name ++ "`: ").bind(λ g => pure(Global(g))) }
+
+fn laid_lib() → Tac<LaidLib> {
+    let then <- laid_global("stored::Stored::then");
+    let record <- laid_global("stored::Stored::record");
+    let all <- laid_global("part::Part::all");
+    let fst <- laid_global("part::Part::fst");
+    let snd <- laid_global("part::Part::snd");
+    let part_then <- laid_global("part::Part::then");
+    let field <- laid_global("part::Part::field");
+    let rfl <- laid_global("tactic::rfl");
+    pure(LaidLib(then, record, all, fst, snd, part_then, field, rfl))
+}
+
+// One field as the generator carries it: its name, its type, its codec,
+// and beside them the type of the fields up to it (`Pair<…, ty>`) and
+// their codec (`….then(codec)`).
+record LaidField { name: String, ty: Expr, codec: Expr, upto_ty: Expr, upto: Expr }
+
+// The argument of a type applied to one. The matches of this module on a
+// request's answer are written a level at a time and in functions of
+// their own: under `let x <- t;` a nullary constructor inside a pattern
+// is read as a variable (issues/deep-pattern-ctor-unknown-column-type.md).
+fn laid_one_argument(v: Head) → Option<Handle> {
+    match v {
+        HGlobal(_, _, args) => match args {
+            Nil => None,
+            Cons(a, rest) => match rest {
+                Nil => Some(a),
+                Cons(_, _) => None,
+            },
+        },
+        _ => None,
+    }
+}
+
+// The one constructor of a type that has one.
+fn laid_only(cs: List<CtorInfo>) → Option<CtorInfo> {
+    match cs {
+        Nil => None,
+        Cons(c, rest) => match rest {
+            Nil => Some(c),
+            Cons(_, _) => None,
+        },
+    }
+}
+
+// The two projections of a pair.
+fn laid_two(ps: List<FieldProj>) → Option<Pair<Handle, Handle>> {
+    match ps {
+        Nil => None,
+        Cons(a, rest) => match rest {
+            Nil => None,
+            Cons(b, more) => match more {
+                Nil => Some(Pair(a.term, b.term)),
+                Cons(_, _) => None,
+            },
+        },
+    }
+}
+
+// The type a codec stores: `A` of a `Stored<A>`.
+fn laid_stores(codec: Expr, what: String) → Tac<Expr> {
+    let h <- infer(codec).or_fail("laid: " ++ what ++ ": ");
+    let v <- view(h);
+    match laid_one_argument(v) {
+        Some(a) => pure(Hd(a)),
+        None => fail("laid: " ++ what ++ " is not a `Stored<…>`", []),
+    }
+}
+
+fn laid_fields(l: LaidLib, names: List<String>, tys: List<Handle>, codecs: List<Expr>, before: Option<LaidField>) → Tac<List<LaidField>> {
+    match names {
+        Nil => pure([]),
+        Cons(n, ns) => match tys {
+            Nil => pure([]),
+            Cons(t, ts) => match codecs {
+                Nil => pure([]),
+                Cons(c, cs) => match before {
+                    None => {
+                        let f = LaidField(n, Hd(t), c, Hd(t), c);
+                        laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                    },
+                    Some(b) => {
+                        let upto = apps(l.then, [b.upto_ty, Hd(t), b.upto, c]);
+                        let upto_ty <- laid_stores(upto, "the codec given for `" ++ n ++ "`");
+                        let f = LaidField(n, Hd(t), c, upto_ty, upto);
+                        laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The part of the fields up to the last of `rev` (the fields, last first)
+// that is field `k` counted from the last.
+fn laid_path(l: LaidLib, rev: List<LaidField>, k: Nat) → Expr {
+    match rev {
+        Nil => NatLit(0),
+        Cons(last, before) => match before {
+            Nil => apps(l.all, [last.ty, last.codec]),
+            Cons(prev, earlier) => match k {
+                Zero => apps(l.snd, [prev.upto_ty, last.ty, prev.upto, last.codec]),
+                Succ(j) => {
+                    let first = apps(l.fst, [prev.upto_ty, last.ty, prev.upto, last.codec]);
+                    match earlier {
+                        Nil => first,
+                        Cons(_, _) => match before.nth(j) {
+                            None => NatLit(0),
+                            Some(target) => apps(l.part_then, [last.upto_ty, prev.upto_ty, target.ty, last.upto, first, laid_path(l, before, j)]),
+                        },
+                    }
+                },
+            },
+        },
+    }
+}
+
+// `e`'s projections as the `n` fields it is nested pairs of, first first.
+fn laid_projections(e: Expr, n: Nat) → Tac<List<Expr>> {
+    match n {
+        Zero => pure([]),
+        Succ(m) => match m {
+            Zero => pure([e]),
+            Succ(_) => {
+                let p <- fields(e).or_fail("laid: ");
+                match laid_two(p.fields) {
+                    Some(ab) => laid_projections(Hd(ab.fst), m).bind(λ front => pure(front ++ [Hd(ab.snd)])),
+                    None => fail("laid: a pair has two fields", []),
+                }
+            },
+        },
+    }
+}
+
+fn laid_field_terms(ps: List<FieldProj>) → List<Expr> {
+    match ps {
+        Nil => [],
+        Cons(p, rest) => Cons(Hd(p.term), laid_field_terms(rest)),
+    }
+}
+
+// The values `vs` as nested pairs, typed as `fs` says.
+fn laid_pairs(l: LaidLib, fs: List<LaidField>, vs: List<Expr>, before: Option<Expr>) → Tac<Expr> {
+    match fs {
+        Nil => match before { None => fail("laid: a record with no fields has no layout to give", []), Some(v) => pure(v) },
+        Cons(f, rest) => match vs {
+            Nil => fail("laid: a field has no projection", []),
+            Cons(v, vr) => match before {
+                None => laid_pairs(l, rest, vr, Some(v)),
+                Some(b) => {
+                    let h <- as_type(f.upto_ty).or_fail("laid: ");
+                    let cs <- ctors(h).or_fail("laid: ");
+                    match laid_only(cs) {
+                        None => fail("laid: `Pair` has one constructor", []),
+                        Some(c) => match c.ctor {
+                            None => fail("laid: `Pair` is not a function of its fields", []),
+                            Some(mk) => laid_pairs(l, rest, vr, Some(apps(Hd(mk), [b, v]))),
+                        },
+                    }
+                },
+            },
+        },
+    }
+}
+
+fn laid_parts(l: LaidLib, name: String, t: Expr, last: LaidField, of: Expr, to: Expr, back: Expr, forth: Expr, rev: List<LaidField>, all: List<LaidField>) → Tac<List<Decl>> {
+    match rev {
+        Nil => pure([]),
+        Cons(f, before) => {
+            let k = all.len() - Succ(before.len());
+            let part = apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]);
+            let ty <- infer(part).or_fail("laid: field `" ++ f.name ++ "`: ");
+            let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", [], Hd(ty), part);
+            laid_parts(l, name, t, last, of, to, back, forth, before, all).bind(λ ds => pure(ds ++ [d]))
+        },
+    }
+}
+
+// `generate laid(T, [codec, …]);`: the record `T` stored as its fields in
+// the order written, each by the codec given for it.
+fn laid(t: Expr, codecs: List<Expr>) → Tac<List<Decl>> {
+    let h <- as_type(t).or_fail("laid: not a type: ");
+    let name <- type_named(h);
+    let cs <- ctors(h).or_fail("laid: ");
+    match laid_only(cs) {
+        None => fail("laid: `" ++ name ++ "` is not a record: it does not have one constructor", []),
+        Some(c) => match fields_from(c.fields, 0) {
+            None => fail("laid: a field of `" ++ name ++ "` mentions an earlier field", []),
+            Some(fs) => match c.ctor {
+                None => fail("laid: `" ++ name ++ "` is not a function of its fields", []),
+                Some(mk) => match fs.names.len().same(codecs.len()) {
+                    False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(Succ(fs.names.len()), fs.names.len()) ++ " fields and "
+                        ++ decimal_name(Succ(codecs.len()), codecs.len()) ++ " codecs are given, one is wanted for each", []),
+                    True => {
+                        let l <- laid_lib();
+                        let lf <- laid_fields(l, fs.names, fs.tys, codecs, None);
+                        let rev = lf.rev();
+                        match rev {
+                            Nil => fail("laid: `" ++ name ++ "` has no fields, so there is nothing to lay out", []),
+                            Cons(last, _) => {
+                                let p <- assume(last.upto_ty, "fields", None).or_fail("laid: ");
+                                let ps <- laid_projections(Local(p.ref), lf.len());
+                                let of = Lam(p.ref, apps(Hd(mk), ps));
+                                let r <- assume(Hd(h), "value", None).or_fail("laid: ");
+                                let rf <- fields(Local(r.ref)).or_fail("laid: ");
+                                let nested <- laid_pairs(l, lf, laid_field_terms(rf.fields), None);
+                                let to = Lam(r.ref, nested);
+                                let back = Lam(r.ref, apps(l.rfl, [Hd(h), Local(r.ref)]));
+                                let forth = Lam(p.ref, apps(l.rfl, [last.upto_ty, Local(p.ref)]));
+                                let whole = apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]);
+                                let whole_ty <- infer(whole).or_fail("laid: ");
+                                let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
+                                laid_parts(l, name, Hd(h), last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
+                            },
+                        }
+                    },
+                },
+            },
+        },
+    }
+}

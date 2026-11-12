@@ -14,8 +14,9 @@
 // field of `Sha256::of(ctx)`, and a word it stores there leaves
 // `Sha256::of(ctx) with { … }`.
 //
-// What is written by hand here (the fields' type, the two maps, one part
-// per field) is what the `laid` declaration will write (§6.2).
+// The codec and the four fields' parts are the `laid` declaration's
+// (`lib/std/machine/laid.hthr`); the words of the three arrays are parts
+// of those.
 import logic;
 import bool;
 import nat;
@@ -37,6 +38,7 @@ import list_window;
 import layout;
 import stored;
 import part;
+import laid;
 import rt;
 import rt_reflect;
 import rt_lower;
@@ -64,47 +66,15 @@ import sha256_stream;
 // are the block being assembled), and the count of bytes taken.
 record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
 
-def Sha256Fields: Type = Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>;
-
 // `n` words, each four bytes with the most significant first.
 fn Sha256::words(n: Nat) → Stored<[u32; n]> { Stored::u32_be().array(n) }
 
-fn Sha256::fields() → Stored<Sha256Fields> { Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)).then(Stored::u64_be()) }
-
-fn Sha256::of_fields(p: Sha256Fields) → Sha256 { Sha256(p.fst.fst.fst, p.fst.fst.snd, p.fst.snd, p.snd) }
-fn Sha256::to_fields(c: Sha256) → Sha256Fields { Pair(Pair(Pair(c.hash, c.working), c.schedule), c.count) }
-
-// How a context is bytes.
-fn Sha256::stored() → Stored<Sha256> { Sha256::fields().record(Sha256::of_fields, Sha256::to_fields, λ c => refl) }
+// How a context is bytes (`Sha256::stored()`), and each field as a part
+// of it (`Sha256::hash_part()`, …).
+generate laid(Sha256, [Sha256::words(8), Sha256::words(8), Sha256::words(64), Stored::u64_be()]);
 
 // The context a span holds.
 fn Sha256::of(ctx: List<u8>) → Sha256 { Sha256::stored().get(ctx, 0) }
-
-fn Sha256::part<B>(p: Part<Sha256Fields, B>(Sha256::fields())) → Part<Sha256, B>(Sha256::stored()) {
-    p.field(Sha256::of_fields, Sha256::to_fields, λ c => refl, λ p => refl)
-}
-
-// The four fields.
-fn Sha256::hash_part() → Part<Sha256, [u32; 8]>(Sha256::stored()) {
-    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
-        .then(Part::fst(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64)))
-        .then(Part::fst(Sha256::words(8), Sha256::words(8))))
-}
-
-fn Sha256::working_part() → Part<Sha256, [u32; 8]>(Sha256::stored()) {
-    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
-        .then(Part::fst(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64)))
-        .then(Part::snd(Sha256::words(8), Sha256::words(8))))
-}
-
-fn Sha256::schedule_part() → Part<Sha256, [u32; 64]>(Sha256::stored()) {
-    Sha256::part(Part::fst(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be())
-        .then(Part::snd(Sha256::words(8).then(Sha256::words(8)), Sha256::words(64))))
-}
-
-fn Sha256::count_part() → Part<Sha256, u64>(Sha256::stored()) {
-    Sha256::part(Part::snd(Sha256::words(8).then(Sha256::words(8)).then(Sha256::words(64)), Stored::u64_be()))
-}
 
 // One word of each array.
 fn Sha256::hash_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::hash_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }

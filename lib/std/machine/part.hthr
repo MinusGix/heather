@@ -197,12 +197,6 @@ fn Part::element<A>(s: Stored<A>, n, i: Nat, inside: i < n) → Part<[A; n], A>(
         })
 }
 
-// A record as its fields: the fields in order, padded to the alignment,
-// read through the record's constructor.
-fn Stored::record<F, R>(self fields: Stored<F>, to: F → R, from: R → F, back: (r: R) → to(from(r)) = r) → Stored<R> {
-    fields.padded().map(to, from, back)
-}
-
 // A part of the fields is a part of the record.
 fn Part::field<F, R, B>({fields: Stored<F>}, self p: Part<F, B>(fields), to: F → R, from: R → F, back: (r: R) → to(from(r)) = r, forth: (f: F) → from(to(f)) = f) →
     Part<R, B>(fields.record(to, from, back)) {
