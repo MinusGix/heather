@@ -122,3 +122,54 @@ theorem List::entries_vector_of<A>(k: Nat, pad: A): (xs: List<A>) → xs.len() =
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A vector from the middle of a list
+
+// The `k` entries of `xs` from `at` as a vector, `pad` past its end.
+fn List::vector_at<A>(self xs: List<A>, at, k: Nat, pad: A) → [A; k] {
+    (match k as λ j => Nat → [A; j] {
+        Zero => λ at => [],
+        Succ(_, ih) => λ at => cons(xs.nth(at).unwrap_or(pad), ih(Succ(at))),
+    })(at)
+}
+
+// A list's first entries as a vector are its first and then the rest's.
+theorem List::vector_of_succ<A>(k: Nat, pad: A): (xs: List<A>) →
+    xs.vector_of(Succ(k), pad) = cons(xs.nth(0).unwrap_or(pad), xs.drop(1).vector_of(k, pad)) {
+    λ xs => match xs {
+        Nil => refl,
+        Cons(h, t) => {
+            let inner: (cons(h, t.vector_of(k, pad)) = cons(h, t.drop(0).vector_of(k, pad))) = rewrite(t.drop_zero(), refl);
+            inner
+        },
+    }
+}
+
+// What is left after `at` entries, as a vector, is the vector from `at`.
+theorem List::vector_of_drop<A>(self xs: List<A>, pad: A): (k, at: Nat) → xs.drop(at).vector_of(k, pad) = xs.vector_at(at, k, pad) {
+    λ k => match k as λ j => (at: Nat) → xs.drop(at).vector_of(j, pad) = xs.vector_at(at, j, pad) {
+        Zero => λ at => refl,
+        Succ(j, ih) => λ at => {
+            let first: (xs.drop(at).vector_of(Succ(j), pad) = cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad))) =
+                List::vector_of_succ(j, pad, xs.drop(at));
+            let rest: (cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad)) = cons(xs.nth(at).unwrap_or(pad), xs.vector_at(Succ(at), j, pad))) =
+                rewrite(sym(xs.nth_drop(at)), rewrite(sym(xs.drop_succ(at)), rewrite(ih(Succ(at)), refl)));
+            trans(first, rest)
+        },
+    }
+}
+
+// A vector of `k` entries reads no more than `k` of them.
+theorem List::vector_of_take<A>(k: Nat, pad: A): (xs: List<A>) → xs.take(k).vector_of(k, pad) = xs.vector_of(k, pad) {
+    match k as λ j => (xs: List<A>) → xs.take(j).vector_of(j, pad) = xs.vector_of(j, pad) {
+        Zero => λ xs => refl,
+        Succ(j, ih) => λ xs => match xs as λ ys => ys.take(Succ(j)).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+            Nil => refl,
+            Cons(h, t) => {
+                let inner: (cons(h, t.take(j).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t), refl);
+                inner
+            },
+        },
+    }
+}

@@ -105,7 +105,7 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     unsafe { raw::sha256_compress(ctx.as_mut_ptr(), ctx.len() as u64, block.as_ptr(), block.len() as u64) }
 }
 
-/// `sha256_init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 360 bytes.
+/// `sha256_init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 480 bytes.
 pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_init_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -131,7 +131,7 @@ pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     unsafe { raw::sha256_init(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
-/// `sha256_update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2520 bytes.
+/// `sha256_update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2760 bytes.
 pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_update_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -157,7 +157,7 @@ pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     unsafe { raw::sha256_update(ctx.as_mut_ptr(), ctx.len() as u64, message.as_ptr(), message.len() as u64) }
 }
 
-/// `sha256_finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2400 bytes.
+/// `sha256_finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2520 bytes.
 pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_finish_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's

@@ -315,7 +315,7 @@ theorem Layout::fits_within(self whole: Layout, fields: List<Field>):
 {
     match fields {
         Nil => λ _ i f at => absurd(at),
-        Cons(g, rest) => λ fits i => match i {
+        Cons(_, rest) => λ fits i => match i {
             Zero => λ f at => j(inj(at), λ x _ => x.Within(whole), fits.left),
             Succ(k) => λ f at => whole.fits_within(rest, fits.right.right, k, f, at),
         },

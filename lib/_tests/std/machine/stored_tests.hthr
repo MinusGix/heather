@@ -87,12 +87,40 @@ theorem padded_write(): Stored::u32_be().then(Stored::byte()).padded().write(Pai
 // is the one `Layout::in_order` computes (layout_tests).
 record Sha256 { hash: [u32; 8], working: [u32; 8], block: [u32; 64], count: u64 }
 
+fn Sha256::fields() → Stored<Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>> {
+    Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).then(Stored::u64_be())
+}
+
 fn Sha256::stored() → Stored<Sha256> {
-    Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).then(Stored::u64_be()).padded()
+    Sha256::fields().padded()
         .map(λ p => Sha256(p.fst.fst.fst, p.fst.fst.snd, p.fst.snd, p.snd), λ (c: Sha256) => Pair(Pair(Pair(c.hash, c.working), c.block), c.count), λ c => refl)
 }
 
 theorem sha256_stored_layout(): Sha256::stored().layout = Layout(328, 3) { refl }
+
+// A field is read by its own codec at its own offset, by the codecs' laws
+// and never by unfolding the record's: the count at byte 320, and
+// schedule word `i` at byte `4 * i + 64`. These are the statements a
+// generated accessor is proved against.
+// The count is the big-endian word at byte 320.
+theorem sha256_count_at(bytes: List<u8>, at: Nat): Sha256::stored().get(bytes, at).count = Stored::u64_be().get(bytes, 320 + at) {
+    let fields = Sha256::fields();
+    let unpadded: (fields.padded().get(bytes, at).snd = fields.get(bytes, at).snd) = cong_fn(λ (p: Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>) => p.snd, fields.get_padded(bytes, at));
+    trans(unpadded, Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).get_then_snd(Stored::u64_be(), bytes, at))
+}
+
+// Schedule word `i` is the big-endian word at byte `4 * i + 64`.
+theorem sha256_block_at(bytes: List<u8>, at, i: Nat, inside: i < 64):
+    vector_entries(Sha256::stored().get(bytes, at).block).nth(i) = Some(Stored::u32_be().get(bytes, i * 4 + (64 + at))) {
+    let fields = Sha256::fields();
+    let three = Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64));
+    let two = Stored::u32_be().array(8).then(Stored::u32_be().array(8));
+    let unpadded: (fields.padded().get(bytes, at).fst.snd = fields.get(bytes, at).fst.snd) = cong_fn(λ (p: Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>) => p.fst.snd, fields.get_padded(bytes, at));
+    let third: (fields.get(bytes, at).fst.snd = three.get(bytes, at).snd) = cong_fn(λ (p: Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>) => p.snd, three.get_then_fst(Stored::u64_be(), bytes, at));
+    let block: (three.get(bytes, at).snd = Stored::u32_be().array(64).get(bytes, 64 + at)) = two.get_then_snd(Stored::u32_be().array(64), bytes, at);
+    let whole: (Sha256::stored().get(bytes, at).block = Stored::u32_be().array(64).get(bytes, 64 + at)) = trans(unpadded, trans(third, block));
+    trans(cong_fn(λ (v: [u32; 64]) => vector_entries(v).nth(i), whole), Stored::u32_be().get_array_nth(64, bytes, 64 + at, i, inside))
+}
 
 // The laws at an open codec: an array of any stored value reads back.
 theorem array_back<A>(s: Stored<A>, n: Nat, xs: [A; n], bytes: List<u8>, at: Nat, inside: at <= bytes.len()):

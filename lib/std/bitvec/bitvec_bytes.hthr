@@ -9,8 +9,11 @@
 // big-endian forms are the little-endian ones read through `reverse`.
 
 import bitvec;
+import bool;
+import list;
 import logic;
 import nat;
+import option;
 import vector;
 
 fn BitVec::bytes_le(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] {
@@ -66,4 +69,34 @@ theorem BitVec::of_bytes_be_bytes_be(k: Nat, w: BitVec(8 * k)): BitVec::of_bytes
 
 theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_bytes_be(bytes).bytes_be(k) = bytes {
     trans(rewrite(BitVec::bytes_le_of_bytes_le(k, reverse(bytes)), refl), reverse_reverse(k, bytes))
+}
+
+// ---------------------------------------------------------------------------
+// Bytes joined and split by shifts, as compiled code does both
+
+// Four bytes joined by shifts, the first the most significant, as
+// compiled code joins them, are the big-endian word of them.
+theorem BitVec::be_join_32(b0, b1, b2, b3: u8):
+    (b0.zero_extend(56) << 24 | b1.zero_extend(56) << 16 | b2.zero_extend(56) << 8 | b3.zero_extend(56))
+        = BitVec::of_bytes_be([b0, b1, b2, b3]).zero_extend(32) {
+    let w0: BitVec(40) = b0.concat(BitVec::zero(n := 32));
+    let w1: BitVec(48) = b1.concat(w0);
+    let w2: BitVec(56) = b2.concat(w1);
+    let s1: ((b0.zero_extend(56) << 24 | b1.zero_extend(56) << 16) = BitVec::concat(BitVec::zero(), w1, n := 16, m := 48)) = BitVec::bor_concat_above(16, 8, 40, b1, w0);
+    let s2: ((BitVec::concat(BitVec::zero(), w1, n := 16, m := 48) | b2.zero_extend(56) << 8) = BitVec::concat(BitVec::zero(), w2, n := 8, m := 56)) = BitVec::bor_concat_above(8, 8, 48, b2, w1);
+    let s3: ((BitVec::concat(BitVec::zero(), w2, n := 8, m := 56) | b3.zero_extend(56)) = BitVec::concat(b3, w2, n := 8, m := 56)) = BitVec::bor_concat_above(0, 8, 56, b3, w2);
+    trans(cong_fn<u64, u64>(λ t => t | b2.zero_extend(56) << 8 | b3.zero_extend(56), s1),
+        trans(cong_fn<u64, u64>(λ t => t | b3.zero_extend(56), s2), s3))
+}
+
+// A word's low four bytes, the most significant first, are its shifts
+// truncated.
+theorem BitVec::be_split_32(word: u64): vector_entries(word.truncate(32, 32).bytes_be(4))
+    = [(word >> 24).truncate(8, 56), (word >> 16).truncate(8, 56), (word >> 8).truncate(8, 56), word.truncate(8, 56)] { refl }
+
+// Two big-endian halves, the first shifted up, are the whole.
+theorem BitVec::be_join_64(b0, b1, b2, b3, b4, b5, b6, b7: u8):
+    (BitVec::of_bytes_be([b0, b1, b2, b3]).zero_extend(32) << 32 | BitVec::of_bytes_be([b4, b5, b6, b7]).zero_extend(32))
+        = BitVec::of_bytes_be([b0, b1, b2, b3, b4, b5, b6, b7]) {
+    BitVec::bor_concat_above(0, 32, 32, BitVec::of_bytes_be([b4, b5, b6, b7]), BitVec::of_bytes_be([b0, b1, b2, b3]))
 }

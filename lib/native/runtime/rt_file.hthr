@@ -52,6 +52,14 @@ fn List::with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: Bi
     match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }
 }
 
+// Below the length word, the store under it is the plain one.
+theorem List::with_byte_within_inside(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8), inside: i.toNat() < length.toNat()):
+    xs.with_byte_within(length, i, v) = xs.with_byte(i, v) {
+    let below: (i.unsigned_lt_bit(length) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, length, inside);
+    let stored: ((match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }) = xs.with_byte(i, v)) = rewrite(below, refl);
+    stored
+}
+
 // The same as a statement on a span a body threads: `span.put_within(length,
 // i, v);`, which rebinds `span` to the span with the byte stored.
 fn List::put_within(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → True {

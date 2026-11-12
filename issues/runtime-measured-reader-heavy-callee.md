@@ -56,3 +56,7 @@ Nothing checked in needs it: SHA-256's compress is writers throughout, and the l
 ## Done when
 
 The function above is a `runtime fn`, and the table's rows all pass, at a cost that is a sum over the calls and not a product over the uses.
+
+## Log
+
+- 2026-11-12: The callee named `sha256_word_at` above is now `List::u32_be_within` (`lib/native/runtime/stored_words.hthr`), so the reproduction reads `ctx.u32_be_within(cn, i)` where it says `sha256_word_at(ctx, cn, i)`. Nothing else about the case changed.

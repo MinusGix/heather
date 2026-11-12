@@ -12,7 +12,10 @@
 // words it needs from the span and stores its results back
 // (issues/function-call-past-six-words.md is what would let the working
 // variables be values). The word functions are `sha256_round`'s, which read
-// the low half of each 64-bit word they are given.
+// the low half of each 64-bit word they are given. A word is read and
+// stored by the library's accessors (`List::u32_be_within`,
+// `List::put_u32_be_within`, `lib/native/runtime/stored_words.hthr`),
+// which are proved to be the big-endian codec's `get` and `put`.
 //
 // The loops are measured recursions on a counter, one function each, and
 // the round is three functions (`sha256_step`, `sha256_turn`, `sha256_set`)
@@ -57,24 +60,7 @@ import runtime;
 import runtime_file;
 import sha2;
 import sha256_round;
-
-// The four bytes from `i` as a word, the first the most significant, each
-// read under the span's length word.
-runtime fn sha256_word_at(span: List<u8>, length, i: u64) → u64 {
-    span.byte_within(length, i).zero_extend(56) << 24
-        | span.byte_within(length, i + 1).zero_extend(56) << 16
-        | span.byte_within(length, i + 2).zero_extend(56) << 8
-        | span.byte_within(length, i + 3).zero_extend(56)
-}
-
-// A word's low four bytes stored from `i`, the most significant first.
-runtime fn List::sha256_put_word(mut self span: List<u8>, length, i, word: u64) → u64 {
-    span.put_within(length, i, (word >> 24).truncate(8, 56));
-    span.put_within(length, i + 1, (word >> 16).truncate(8, 56));
-    span.put_within(length, i + 2, (word >> 8).truncate(8, 56));
-    span.put_within(length, i + 3, word.truncate(8, 56));
-    word
-}
+import stored_words;
 
 // The round constant K(t) (FIPS 180-4 §4.2.2), found by halving: compiled
 // code has no table to index (issues/rt-fixed-arrays-and-tables.md).
@@ -160,9 +146,9 @@ runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (64 - i).toNat() {
     if h: i < 64 {
         let at = (i << 2) + 64;
-        let word = sha256_next(sha256_word_at(ctx, cn, at - 8), sha256_word_at(ctx, cn, at - 28),
-            sha256_word_at(ctx, cn, at - 60), sha256_word_at(ctx, cn, at - 64));
-        ctx.sha256_put_word(cn, at, word);
+        let word = sha256_next(ctx.u32_be_within(cn, at - 8), ctx.u32_be_within(cn, at - 28),
+            ctx.u32_be_within(cn, at - 60), ctx.u32_be_within(cn, at - 64));
+        ctx.put_u32_be_within(cn, at, word);
         ctx.sha256_expand(cn, i + 1)
     } else {
         i
@@ -188,7 +174,7 @@ runtime fn List::sha256_shift(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (7 - i).toNat() {
     if h: i < 7 {
         let at = 56 - (i << 2);
-        ctx.sha256_put_word(cn, at + 4, sha256_word_at(ctx, cn, at));
+        ctx.put_u32_be_within(cn, at + 4, ctx.u32_be_within(cn, at));
         ctx.sha256_shift(cn, i + 1)
     } else {
         i
@@ -199,24 +185,24 @@ runtime fn List::sha256_shift(mut self ctx: List<u8>, cn, i: u64) → u64
 // move, then a and e are stored, e over the d that moved there.
 runtime fn List::sha256_set(mut self ctx: List<u8>, cn, first, fifth: u64) → u64 {
     ctx.sha256_shift(cn, 0);
-    ctx.sha256_put_word(cn, 32, first);
-    ctx.sha256_put_word(cn, 48, fifth)
+    ctx.put_u32_be_within(cn, 32, first);
+    ctx.put_u32_be_within(cn, 48, fifth)
 }
 
 // A round from its T1: T2 is of a, b and c, and the two new words are
 // T1 + T2 and d + T1, both computed before any word is stored.
 runtime fn List::sha256_turn(mut self ctx: List<u8>, cn, t1: u64) → u64 {
     ctx.sha256_set(cn,
-        t1 + sha256_t2(sha256_word_at(ctx, cn, 32), sha256_word_at(ctx, cn, 36), sha256_word_at(ctx, cn, 40)),
-        sha256_word_at(ctx, cn, 44) + t1)
+        t1 + sha256_t2(ctx.u32_be_within(cn, 32), ctx.u32_be_within(cn, 36), ctx.u32_be_within(cn, 40)),
+        ctx.u32_be_within(cn, 44) + t1)
 }
 
 // Round `t`: T1 is of h, e, f and g, the round's constant and its schedule
 // word, which is the word at byte 64 + 4t.
 runtime fn List::sha256_step(mut self ctx: List<u8>, cn, t: u64) → u64 {
     ctx.sha256_turn(cn,
-        sha256_t1(sha256_word_at(ctx, cn, 60), sha256_word_at(ctx, cn, 48), sha256_word_at(ctx, cn, 52),
-            sha256_word_at(ctx, cn, 56), sha256_k(t), sha256_word_at(ctx, cn, (t << 2) + 64)))
+        sha256_t1(ctx.u32_be_within(cn, 60), ctx.u32_be_within(cn, 48), ctx.u32_be_within(cn, 52),
+            ctx.u32_be_within(cn, 56), sha256_k(t), ctx.u32_be_within(cn, (t << 2) + 64)))
 }
 
 // Rounds `i` to 63 on the working variables.
@@ -236,7 +222,7 @@ runtime fn List::sha256_end(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
         let at = i << 2;
-        ctx.sha256_put_word(cn, at, sha256_word_at(ctx, cn, at) + sha256_word_at(ctx, cn, at + 32));
+        ctx.put_u32_be_within(cn, at, ctx.u32_be_within(cn, at) + ctx.u32_be_within(cn, at + 32));
         ctx.sha256_end(cn, i + 1)
     } else {
         i

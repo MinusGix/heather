@@ -20,7 +20,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("linux_x86_64_entry", include_str!("../../../../lib/std/os/linux/linux_x86_64_entry.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
     ("result", include_str!("../../../../lib/std/core/result.hthr")),
-    ("vector", include_str!("../../../../lib/std/data/vector.hthr")),
     ("bitvec_bytes", include_str!("../../../../lib/std/bitvec/bitvec_bytes.hthr")),
     ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),
     ("span_set", include_str!("../../../../lib/std/data/set/span_set.hthr")),

@@ -26,6 +26,7 @@ import nat;
 import list;
 import option;
 import omega;
+import vector;
 
 // The elements of `xs` from `start` up to `end`.
 fn List::window<A>(self xs: List<A>, start, end: Nat) → List<A> { xs.drop(start).take(end - start) }
@@ -304,4 +305,83 @@ theorem List::window_put_window_after<A>(self xs: List<A>, start: Nat, ys: List<
     cong_fn<List<A>, List<A>>(λ zs => zs.take(b - a),
         j(Nat::sub_add_cancel(ys.len() + start, a, after), λ x _ => xs.put_window(start, ys).drop(x) = xs.drop(x),
             xs.drop_put_window_after(start, ys, a - (ys.len() + start), inside)))
+}
+
+// ---------------------------------------------------------------------------
+// Windows of windows
+
+// A window of a window is a window of the list.
+theorem List::window_window<A>(self xs: List<A>, a, b, c, d: Nat, inside: d + a <= b): xs.window(a, b).window(c, d) = xs.window(c + a, d + a) {
+    let rest = xs.drop(a);
+    let lengths: (d - c = (d + a) - (c + a)) = omega;
+    calc {
+        rest.take(b - a).drop(c).take(d - c)
+            = rest.drop(c).take((b - a) - c).take(d - c) := cong_fn<List<A>, List<A>>(λ ys => ys.take(d - c), rest.drop_take(b - a, c)),
+            = rest.drop(c).take(d - c) := rest.drop(c).take_take((b - a) - c, d - c, omega),
+            = xs.drop(c + a).take(d - c) := cong_fn<List<A>, List<A>>(λ ys => ys.take(d - c), xs.drop_drop(a, c)),
+            = xs.drop(c + a).take((d + a) - (c + a)) := cong_fn<Nat, List<A>>(λ n => xs.drop(c + a).take(n), lengths),
+    }
+}
+
+// The front of a window is the window that ends sooner.
+theorem List::take_window<A>(self xs: List<A>, a, b, k: Nat, inside: k + a <= b): xs.window(a, b).take(k) = xs.window(a, k + a) {
+    trans(sym(xs.window(a, b).window_from_zero(k)),
+        trans(xs.window_window(a, b, 0, k, inside), cong_fn<Nat, List<A>>(λ n => xs.window(n, k + a), a.add_left_zero())))
+}
+
+// `k` entries from `c` of a window are the list's from there.
+theorem List::take_drop_window<A>(self xs: List<A>, a, b, c, k: Nat, inside: (k + c) + a <= b): xs.window(a, b).drop(c).take(k) = xs.window(c + a, k + (c + a)) {
+    let cut: (xs.window(a, b).drop(c).take(k) = xs.window(a, b).window(c, k + c)) =
+        cong_fn<Nat, List<A>>(λ n => xs.window(a, b).drop(c).take(n), sym(k.add_sub_cancel(c)));
+    trans(cut, trans(xs.window_window(a, b, c, k + c, inside), cong_fn<Nat, List<A>>(λ n => xs.window(c + a, n), k.add_assoc(c, a))))
+}
+
+// ---------------------------------------------------------------------------
+// A window as a vector, and a window written one entry at a time
+
+// A window's entries as a vector are the list's from its start.
+theorem List::vector_of_window<A>(self xs: List<A>, at, k: Nat, pad: A): xs.window(at, k + at).vector_of(k, pad) = xs.vector_at(at, k, pad) {
+    let cut: (xs.drop(at).take((k + at) - at).vector_of(k, pad) = xs.drop(at).take(k).vector_of(k, pad)) =
+        cong_fn(λ (n: Nat) => xs.drop(at).take(n).vector_of(k, pad), k.add_sub_cancel(at));
+    trans(cut, trans(List::vector_of_take(k, pad, xs.drop(at)), xs.vector_of_drop(pad, k, at)))
+}
+
+// A window's first entry is an update, and the rest a window one on.
+theorem List::put_window_cons<A>(self xs: List<A>): (at: Nat) → (y: A) → (ys: List<A>) → at < xs.len() →
+    xs.put_window(at, Cons(y, ys)) = xs.update(at, λ _ => y).put_window(Succ(at), ys) {
+    match xs {
+        Nil => λ at y ys inside => false_elim(inside),
+        Cons(h, t) => λ at => match at {
+            Zero => λ y ys inside => {
+                let rest: (Cons(y, t.put_window(0, ys)) = Cons(y, ys ++ t.drop(ys.len()))) = List::cong_cons(y, t.put_window_from_zero(ys));
+                sym(rest)
+            },
+            Succ(k) => λ y ys inside => List::cong_cons(h, t.put_window_cons(k, y, ys, inside)),
+        },
+    }
+}
+
+theorem List::put_window_nil<A>(self xs: List<A>, at: Nat): xs.put_window(at, Nil) = xs {
+    trans(cong_fn<Nat, List<A>>(λ n => xs.take(at) ++ xs.drop(n), at.add_left_zero()), xs.take_append_drop(at))
+}
+
+// `ys` stored over `xs` from `at`, one entry at a time.
+fn List::update_from<A>(self xs: List<A>, at: Nat, ys: List<A>) → List<A> {
+    match ys {
+        Nil => xs,
+        Cons(y, rest) => xs.update(at, λ _ => y).update_from(Succ(at), rest),
+    }
+}
+
+// A window written inside a list is its entries stored one at a time.
+theorem List::put_window_update_from<A>(ys: List<A>): (xs: List<A>) → (at: Nat) → ys.len() + at <= xs.len() →
+    xs.put_window(at, ys) = xs.update_from(at, ys) {
+    match ys as λ zs => (xs: List<A>) → (at: Nat) → zs.len() + at <= xs.len() → xs.put_window(at, zs) = xs.update_from(at, zs) {
+        Nil => λ xs at fits => xs.put_window_nil(at),
+        Cons(y, rest) => λ xs at fits => {
+            let stored = xs.update(at, λ _ => y);
+            let same: (stored.len() = xs.len()) = xs.len_update(at, λ _ => y);
+            trans(xs.put_window_cons(at, y, rest, omega), List::put_window_update_from(rest, stored, Succ(at), omega))
+        },
+    }
 }

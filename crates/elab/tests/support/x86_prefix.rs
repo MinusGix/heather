@@ -30,6 +30,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("certified_lookup", include_str!("../../../../lib/std/data/certified_lookup.hthr")),
     ("x86_64", include_str!("../../../../lib/std/arch/x86_64/x86_64.hthr")),
     ("x86_64_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_block.hthr")),
+    ("vector", include_str!("../../../../lib/std/data/vector.hthr")),
     ("list_window", include_str!("../../../../lib/std/data/list_window.hthr")),
     ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
 ];

@@ -6,6 +6,7 @@
 // library: nothing imports this module.
 import sha256_stream;
 import sha256_block;
+import stored_words;
 import sha2;
 import rt;
 import rt_file;
@@ -28,7 +29,7 @@ fn ones() → List<BitVec(8)> { List::replicate(b(0xff), 328) }
 fn words_from(ctx: List<BitVec(8)>, words: List<Nat>, at: Nat) → Bool {
     match words {
         Nil => True,
-        Cons(word, rest) => sha256_word_at(ctx, w(328), w(at)).eq_bit(w(word)) && words_from(ctx, rest, at + 4),
+        Cons(word, rest) => List::u32_be_within(ctx, w(328), w(at)).eq_bit(w(word)) && words_from(ctx, rest, at + 4),
     }
 }
 
@@ -39,7 +40,7 @@ theorem count_round_trip(): sha256_count(List::sha256_put_count(blank(), w(328),
 // Most significant first, at byte 320.
 theorem count_bytes(): words_from(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, [0x01234567, 0x89abcdef], 320) = True { refl }
 // And nothing before it.
-theorem count_alone(): sha256_word_at(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, w(328), w(316)) = w(0) { refl }
+theorem count_alone(): List::u32_be_within(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, w(328), w(316)) = w(0) { refl }
 
 // ---------------------------------------------------------------------------
 // The start
@@ -48,22 +49,22 @@ theorem count_alone(): sha256_word_at(List::sha256_put_count(blank(), w(328), w(
 theorem init_is_the_initial_value(): words_from(sha256_init(ones(), w(328)).after, Sha2::sha256().initial, 0) = True { refl }
 theorem init_counts_none(): sha256_count(sha256_init(ones(), w(328)).after, w(328)) = w(0) { refl }
 // The working area is left as it was.
-theorem init_leaves_the_rest(): sha256_word_at(sha256_init(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
+theorem init_leaves_the_rest(): List::u32_be_within(sha256_init(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
 
 // ---------------------------------------------------------------------------
 // Bytes into the block
 
 // A byte lands at `fill` in the block, which is byte 64 of the context,
 // and the block is one fuller.
-theorem push_lands(): sha256_word_at(List::sha256_push(blank(), w(328), w(5), w(0xab)).after, w(328), w(68)) = w(0x00ab0000) { refl }
+theorem push_lands(): List::u32_be_within(List::sha256_push(blank(), w(328), w(5), w(0xab)).after, w(328), w(68)) = w(0x00ab0000) { refl }
 theorem push_counts(): List::sha256_push(blank(), w(328), w(5), w(0xab)).value = w(6) { refl }
 
 // Three bytes of a message from an empty block.
-theorem absorb_three(): sha256_word_at(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
+theorem absorb_three(): List::u32_be_within(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
     w(0x61626300) { refl }
 theorem absorb_fills(): List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).value = w(3) { refl }
 // From a block that holds two already, they follow them.
-theorem absorb_follows(): sha256_word_at(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(2)).after, w(328), w(64)) =
+theorem absorb_follows(): List::u32_be_within(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(2)).after, w(328), w(64)) =
     w(0x00006162) { refl }
 // The length word is the bound: a count past the message's end takes
 // nothing from past it.
@@ -83,5 +84,5 @@ theorem zero_to_the_end(): words_from(List::sha256_zero(ones(), w(328), w(60)).a
 // After three bytes: 0x80 at the fourth, zeros after it, the three as
 // they were, and no block run.
 theorem pad_short(): words_from(List::sha256_pad(ones(), w(328), w(3)).after, [0xffffff80, 0x00000000], 64) = True { refl }
-theorem pad_short_to_the_end(): sha256_word_at(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(124)) = w(0) { refl }
-theorem pad_short_runs_nothing(): sha256_word_at(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(0)) = w(0xffffffff) { refl }
+theorem pad_short_to_the_end(): List::u32_be_within(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(124)) = w(0) { refl }
+theorem pad_short_runs_nothing(): List::u32_be_within(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(0)) = w(0xffffffff) { refl }

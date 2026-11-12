@@ -285,6 +285,14 @@ theorem toNat_add(n: Nat, a, b: BitVec(n),
     trans(BitVec::toNat_add_mod(n, a, b), (a.toNat() + b.toNat()).mod_of_lt(Nat::pow(2, n), bounded))
 }
 
+// A literal added to a word that stays below another word does not wrap.
+theorem BitVec::toNat_add_below(n: Nat, a, bound: BitVec(n), k: Nat, inside: a.toNat() + k < bound.toNat()): a.add(BitVec::ofNat(k)).toNat() = a.toNat() + k {
+    let top: (a.toNat() + k < Nat::pow(2, n)) = Nat::lt_trans(a.toNat() + k, bound.toNat(), Nat::pow(2, n), inside, BitVec::toNat_lt_pow(n, bound));
+    let small: (k < Nat::pow(2, n)) = Nat::le_trans(Succ(k), Succ(a.toNat() + k), Nat::pow(2, n), a.toNat().le_add_r(k), top);
+    let literal: (BitVec::ofNat(k, n := n).toNat() = k) = BitVec::toNat_ofNat(n, k, small);
+    trans(toNat_add(n, a, BitVec::ofNat(k), rewrite(literal, top)), rewrite(literal, refl))
+}
+
 // The machine's unsigned test decides the same strict bound as Nat.
 theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
     a.unsigned_lt_bit(b) = Succ(a.toNat()).leb(b.toNat()) {

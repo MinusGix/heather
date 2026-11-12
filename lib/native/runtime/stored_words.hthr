@@ -1,0 +1,208 @@
+// Stored words as compiled code (docs/layout-design.md §4 and §6): what a
+// `runtime fn` does to read a word from a span and to store one, each
+// proved to be the codec's `get` or `put` (`lib/std/machine/stored.hthr`).
+// The codec says what the bytes mean; these say what the machine does, a
+// byte at a time under the span's length word, and the theorems are why a
+// body may be read as the first.
+//
+// A word in compiled code is 64 bits, so a `u32` is read widened and
+// stored from a word's low half. The bound each theorem carries is the
+// one a caller has: the index and the word's size are inside the length
+// word, and for a store the length word is inside the span.
+//
+// Big-endian words of four and eight bytes are here because SHA-256's
+// context is made of them (`lib/native/crypto/sha256_block.hthr`). The
+// other widths and the other byte order follow the same two steps: the
+// bytes joined by shifts are the codec's word (`BitVec::be_join_32`), and
+// the span's entries at `at`, `at + 1`, … are the window's
+// (`List::vector_of_window`, `List::put_window_update_from`).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+
+// ---------------------------------------------------------------------------
+// A byte some way on from an index
+
+// The read `k` bytes on, where that is still below the length word.
+theorem List::byte_within_at(self xs: List<u8>, length, i: u64, k: Nat, inside: i.toNat() + k < length.toNat()):
+    xs.byte_within(length, i + BitVec::ofNat(k)) = xs.nth(i.toNat() + k).unwrap_or(BitVec::ofNat(0)) {
+    let sum: ((i + BitVec::ofNat(k)).toNat() = i.toNat() + k) = BitVec::toNat_add_below(64, i, length, k, inside);
+    trans(xs.byte_within_inside(length, i + BitVec::ofNat(k), rewrite(sum, inside)),
+        cong_fn(λ (n: Nat) => xs.nth(n).unwrap_or(BitVec::ofNat(0, n := 8)), sum))
+}
+
+// The store `k` bytes on.
+theorem List::with_byte_within_at(self xs: List<u8>, length, i: u64, k: Nat, v: u8, inside: i.toNat() + k < length.toNat()):
+    xs.with_byte_within(length, i + BitVec::ofNat(k), v) = xs.update(i.toNat() + k, λ _ => v) {
+    let sum: ((i + BitVec::ofNat(k)).toNat() = i.toNat() + k) = BitVec::toNat_add_below(64, i, length, k, inside);
+    trans(xs.with_byte_within_inside(length, i + BitVec::ofNat(k), v, rewrite(sum, inside)),
+        cong_fn(λ (n: Nat) => xs.update(n, λ _ => v), sum))
+}
+
+// ---------------------------------------------------------------------------
+// Big-endian words of four bytes
+
+// The four bytes from `i` as a word, the first the most significant, each
+// read under the span's length word.
+runtime fn List::u32_be_within(self span: List<u8>, length, i: u64) → u64 {
+    span.byte_within(length, i).zero_extend(56) << 24
+        | span.byte_within(length, i + 1).zero_extend(56) << 16
+        | span.byte_within(length, i + 2).zero_extend(56) << 8
+        | span.byte_within(length, i + 3).zero_extend(56)
+}
+
+// A word's low four bytes stored from `i`, the most significant first.
+runtime fn List::put_u32_be_within(mut self span: List<u8>, length, i, word: u64) → u64 {
+    span.put_within(length, i, (word >> 24).truncate(8, 56));
+    span.put_within(length, i + 1, (word >> 16).truncate(8, 56));
+    span.put_within(length, i + 2, (word >> 8).truncate(8, 56));
+    span.put_within(length, i + 3, word.truncate(8, 56));
+    word
+}
+
+// Inside the length word, the read is the four entries joined.
+theorem List::u32_be_within_entries(self span: List<u8>, length, i: u64, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_be_within(length, i) = BitVec::of_bytes_be(span.vector_at(i.toNat(), 4, BitVec::ofNat(0))).zero_extend(32) {
+    let at = i.toNat();
+    let zero: u8 = BitVec::ofNat(0);
+    let e0: (span.byte_within(length, i) = span.nth(at).unwrap_or(zero)) = span.byte_within_inside(length, i, omega);
+    let e1: (span.byte_within(length, i + 1) = span.nth(at + 1).unwrap_or(zero)) = span.byte_within_at(length, i, 1, omega);
+    let e2: (span.byte_within(length, i + 2) = span.nth(at + 2).unwrap_or(zero)) = span.byte_within_at(length, i, 2, omega);
+    let e3: (span.byte_within(length, i + 3) = span.nth(at + 3).unwrap_or(zero)) = span.byte_within_at(length, i, 3, omega);
+    let read: ((span.byte_within(length, i).zero_extend(56) << 24 | span.byte_within(length, i + 1).zero_extend(56) << 16
+            | span.byte_within(length, i + 2).zero_extend(56) << 8 | span.byte_within(length, i + 3).zero_extend(56))
+        = (span.nth(at).unwrap_or(zero).zero_extend(56) << 24 | span.nth(at + 1).unwrap_or(zero).zero_extend(56) << 16
+            | span.nth(at + 2).unwrap_or(zero).zero_extend(56) << 8 | span.nth(at + 3).unwrap_or(zero).zero_extend(56))) =
+        rewrite(e0, rewrite(e1, rewrite(e2, rewrite(e3, refl))));
+    trans(read, BitVec::be_join_32(span.nth(at).unwrap_or(zero), span.nth(at + 1).unwrap_or(zero), span.nth(at + 2).unwrap_or(zero), span.nth(at + 3).unwrap_or(zero)))
+}
+
+// The run-time read of a big-endian `u32` is the codec's, widened to a word.
+theorem List::u32_be_within_stored(self span: List<u8>, length, i: u64, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_be_within(length, i) = Stored::u32_be().get(span, i.toNat()).zero_extend(32) {
+    trans(span.u32_be_within_entries(length, i, inside),
+        cong_fn(λ (w: u32) => w.zero_extend(32), sym(Stored::get_be_bytes(4, span, i.toNat()))))
+}
+
+// Inside the length word, the store is the word's low four bytes stored
+// one at a time.
+theorem List::put_u32_be_within_entries(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat()):
+    List::put_u32_be_within(span, length, i, word) = Mutated(span.update_from(i.toNat(), vector_entries(word.truncate(32, 32).bytes_be(4))), word) {
+    let at = i.toNat();
+    let v0: u8 = (word >> 24).truncate(8, 56);
+    let v1: u8 = (word >> 16).truncate(8, 56);
+    let v2: u8 = (word >> 8).truncate(8, 56);
+    let v3: u8 = word.truncate(8, 56);
+    let s1 = span.update(at, λ _ => v0);
+    let s2 = s1.update(at + 1, λ _ => v1);
+    let s3 = s2.update(at + 2, λ _ => v2);
+    let e0: (span.with_byte_within(length, i, v0) = s1) = span.with_byte_within_inside(length, i, v0, omega);
+    let e1: (s1.with_byte_within(length, i + 1, v1) = s2) = s1.with_byte_within_at(length, i, 1, v1, omega);
+    let e2: (s2.with_byte_within(length, i + 2, v2) = s3) = s2.with_byte_within_at(length, i, 2, v2, omega);
+    let e3: (s3.with_byte_within(length, i + 3, v3) = s3.update(at + 3, λ _ => v3)) = s3.with_byte_within_at(length, i, 3, v3, omega);
+    let stores: (span.with_byte_within(length, i, v0).with_byte_within(length, i + 1, v1).with_byte_within(length, i + 2, v2).with_byte_within(length, i + 3, v3)
+        = span.update_from(at, [v0, v1, v2, v3])) = rewrite(e0, rewrite(e1, rewrite(e2, e3)));
+    cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), stores)
+}
+
+// The run-time store of a big-endian `u32` is the codec's, of the word's
+// low half, where the length word is within the span.
+theorem List::put_u32_be_within_stored(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u32_be_within(span, length, i, word) = Mutated(Stored::u32_be().put(span, i.toNat(), word.truncate(32, 32)), word) {
+    trans(span.put_u32_be_within_entries(length, i, word, inside),
+        cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), sym(Stored::put_be_bytes(4, span, i.toNat(), word.truncate(32, 32), omega))))
+}
+
+// ---------------------------------------------------------------------------
+// Big-endian words of eight bytes
+
+// The eight bytes from `i` as a word, the first the most significant.
+runtime fn List::u64_be_within(self span: List<u8>, length, i: u64) → u64 {
+    span.u32_be_within(length, i) << 32 | span.u32_be_within(length, i + 4)
+}
+
+// A word's eight bytes stored from `i`, the most significant first.
+runtime fn List::put_u64_be_within(mut self span: List<u8>, length, i, word: u64) → u64 {
+    span.put_u32_be_within(length, i, word >> 32);
+    span.put_u32_be_within(length, i + 4, word);
+    word
+}
+
+// The run-time read of a big-endian `u64` is the codec's.
+theorem List::u64_be_within_stored(self span: List<u8>, length, i: u64, inside: i.toNat() + 8 <= length.toNat()):
+    span.u64_be_within(length, i) = Stored::u64_be().get(span, i.toNat()) {
+    let at = i.toNat();
+    let zero: u8 = BitVec::ofNat(0);
+    let next: ((i + 4).toNat() = at + 4) = BitVec::toNat_add_below(64, i, length, 4, omega);
+    let high: (span.u32_be_within(length, i) = BitVec::of_bytes_be(span.vector_at(at, 4, zero)).zero_extend(32)) = span.u32_be_within_entries(length, i, omega);
+    let room: (at + 4 + 4 <= length.toNat()) = omega;
+    let low: (span.u32_be_within(length, i + 4) = BitVec::of_bytes_be(span.vector_at(at + 4, 4, zero)).zero_extend(32)) =
+        j(next, λ n _ => span.u32_be_within(length, i + 4) = BitVec::of_bytes_be(span.vector_at(n, 4, zero)).zero_extend(32),
+            span.u32_be_within_entries(length, i + 4, j(sym(next), λ n _ => n + 4 <= length.toNat(), room)));
+    let read: ((span.u32_be_within(length, i) << 32 | span.u32_be_within(length, i + 4))
+        = (BitVec::of_bytes_be(span.vector_at(at, 4, zero)).zero_extend(32) << 32 | BitVec::of_bytes_be(span.vector_at(at + 4, 4, zero)).zero_extend(32))) =
+        rewrite(high, rewrite(low, refl));
+    let joined = BitVec::be_join_64(span.nth(at).unwrap_or(zero), span.nth(at + 1).unwrap_or(zero), span.nth(at + 2).unwrap_or(zero), span.nth(at + 3).unwrap_or(zero),
+        span.nth(at + 4).unwrap_or(zero), span.nth(at + 5).unwrap_or(zero), span.nth(at + 6).unwrap_or(zero), span.nth(at + 7).unwrap_or(zero));
+    trans(read, trans(joined, sym(Stored::get_be_bytes(8, span, at))))
+}
+
+// Inside the length word, the store is the word's eight bytes stored one
+// at a time.
+theorem List::put_u64_be_within_entries(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 8 <= length.toNat()):
+    List::put_u64_be_within(span, length, i, word) = Mutated(span.update_from(i.toNat(), vector_entries(word.bytes_be(8))), word) {
+    let at = i.toNat();
+    let next: ((i + 4).toNat() = at + 4) = BitVec::toNat_add_below(64, i, length, 4, omega);
+    let high_bytes = vector_entries((word >> 32).truncate(32, 32).bytes_be(4));
+    let low_bytes = vector_entries(word.truncate(32, 32).bytes_be(4));
+    let half = span.update_from(at, high_bytes);
+    let first: (List::put_u32_be_within(span, length, i, word >> 32) = Mutated(half, word >> 32)) = span.put_u32_be_within_entries(length, i, word >> 32, omega);
+    let room: (at + 4 + 4 <= length.toNat()) = omega;
+    let second: (List::put_u32_be_within(half, length, i + 4, word) = Mutated(half.update_from(at + 4, low_bytes), word)) =
+        j(next, λ n _ => List::put_u32_be_within(half, length, i + 4, word) = Mutated(half.update_from(n, low_bytes), word),
+            half.put_u32_be_within_entries(length, i + 4, word, j(sym(next), λ n _ => n + 4 <= length.toNat(), room)));
+    let stores: (Mutated(List::put_u32_be_within(List::put_u32_be_within(span, length, i, word >> 32).after, length, i + 4, word).after, word)
+        = Mutated(half.update_from(at + 4, low_bytes), word)) = rewrite(first, rewrite(second, refl));
+    stores
+}
+
+// The run-time store of a big-endian `u64` is the codec's, where the
+// length word is within the span.
+theorem List::put_u64_be_within_stored(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 8 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u64_be_within(span, length, i, word) = Mutated(Stored::u64_be().put(span, i.toNat(), word), word) {
+    trans(span.put_u64_be_within_entries(length, i, word, inside),
+        cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), sym(Stored::put_be_bytes(8, span, i.toNat(), word, omega))))
+}

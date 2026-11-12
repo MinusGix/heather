@@ -53,29 +53,24 @@ import runtime_file;
 import sha2;
 import sha256_round;
 import sha256_block;
+import stored_words;
 
 // The count of bytes taken, from its eight bytes.
-runtime fn sha256_count(ctx: List<u8>, cn: u64) → u64 {
-    sha256_word_at(ctx, cn, 320) << 32 | sha256_word_at(ctx, cn, 324)
-}
+runtime fn sha256_count(ctx: List<u8>, cn: u64) → u64 { ctx.u64_be_within(cn, 320) }
 
-runtime fn List::sha256_put_count(mut self ctx: List<u8>, cn, count: u64) → u64 {
-    ctx.sha256_put_word(cn, 320, count >> 32);
-    ctx.sha256_put_word(cn, 324, count);
-    count
-}
+runtime fn List::sha256_put_count(mut self ctx: List<u8>, cn, count: u64) → u64 { ctx.put_u64_be_within(cn, 320, count) }
 
 // The initial hash value (§5.3.3) and a count of zero.
 runtime fn sha256_init(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
     let mut ctx = ctx;
-    ctx.sha256_put_word(cn, 0, 0x6a09e667);
-    ctx.sha256_put_word(cn, 4, 0xbb67ae85);
-    ctx.sha256_put_word(cn, 8, 0x3c6ef372);
-    ctx.sha256_put_word(cn, 12, 0xa54ff53a);
-    ctx.sha256_put_word(cn, 16, 0x510e527f);
-    ctx.sha256_put_word(cn, 20, 0x9b05688c);
-    ctx.sha256_put_word(cn, 24, 0x1f83d9ab);
-    ctx.sha256_put_word(cn, 28, 0x5be0cd19);
+    ctx.put_u32_be_within(cn, 0, 0x6a09e667);
+    ctx.put_u32_be_within(cn, 4, 0xbb67ae85);
+    ctx.put_u32_be_within(cn, 8, 0x3c6ef372);
+    ctx.put_u32_be_within(cn, 12, 0xa54ff53a);
+    ctx.put_u32_be_within(cn, 16, 0x510e527f);
+    ctx.put_u32_be_within(cn, 20, 0x9b05688c);
+    ctx.put_u32_be_within(cn, 24, 0x1f83d9ab);
+    ctx.put_u32_be_within(cn, 28, 0x5be0cd19);
     let count = ctx.sha256_put_count(cn, 0);
     Mutated(ctx, count)
 }
@@ -149,8 +144,8 @@ runtime fn List::sha256_pad(mut self ctx: List<u8>, cn, fill: u64) → u64 {
 // parameter for `sha256_take`'s reason.
 runtime fn List::sha256_close(mut self ctx: List<u8>, cn, count: u64) → u64 {
     ctx.sha256_pad(cn, count & 63);
-    ctx.sha256_put_word(cn, 120, count >> 29);
-    ctx.sha256_put_word(cn, 124, count << 3);
+    ctx.put_u32_be_within(cn, 120, count >> 29);
+    ctx.put_u32_be_within(cn, 124, count << 3);
     ctx.sha256_run(cn)
 }
 

@@ -14,6 +14,7 @@
 // (issues/runtime-measured-reader-heavy-callee.md). Tests, not library:
 // nothing imports this module.
 import sha256_block;
+import stored_words;
 import sha256_round;
 import sha2;
 import bitvec;
@@ -45,27 +46,6 @@ import function_ir_placeless;
 import runtime;
 
 fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
-fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
-
-fn six() → List<BitVec(8)> { [b(0x01), b(0x23), b(0x45), b(0x67), b(0x89), b(0xab)] }
-
-// ---------------------------------------------------------------------------
-// Words in a span
-
-// Four bytes, the most significant first.
-theorem word_at_start(): sha256_word_at(six(), w(6), w(0)) = w(0x01234567) { refl }
-theorem word_at_two(): sha256_word_at(six(), w(6), w(2)) = w(0x456789ab) { refl }
-// A byte past the end, or past the length word, is read as zero and
-// nowhere.
-theorem word_past_end(): sha256_word_at(six(), w(6), w(4)) = w(0x89ab0000) { refl }
-theorem word_under_length(): sha256_word_at(six(), w(2), w(0)) = w(0x01230000) { refl }
-
-// A word's low four bytes are stored, and what is above them is not.
-theorem put_stores_four(): List::sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
-theorem put_low_half_only(): List::sha256_put_word(six(), w(6), w(1), w(0x7deadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
-theorem put_then_read(): sha256_word_at(List::sha256_put_word(six(), w(6), w(1), w(0xdeadbeef)).after, w(6), w(1)) = w(0xdeadbeef) { refl }
-// Nothing is stored past the end.
-theorem put_at_end(): List::sha256_put_word(six(), w(6), w(4), w(0xdeadbeef)).after = [b(0x01), b(0x23), b(0x45), b(0x67), b(0xde), b(0xad)] { refl }
 
 // ---------------------------------------------------------------------------
 // The round constants
@@ -89,13 +69,13 @@ theorem constant_past_table(): sha256_k(w(64)) = w(0xc67178f2) { refl }
 
 // T1 of round `t` from the context, as `sha256_step` computes it.
 runtime fn probe_t1(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → BitVec(64) {
-    sha256_t1(sha256_word_at(ctx, cn, BitVec::ofNat(60)), sha256_word_at(ctx, cn, BitVec::ofNat(48)), sha256_word_at(ctx, cn, BitVec::ofNat(52)),
-        sha256_word_at(ctx, cn, BitVec::ofNat(56)), sha256_k(t), sha256_word_at(ctx, cn, t.shift_left(2).add(BitVec::ofNat(64))))
+    sha256_t1(List::u32_be_within(ctx, cn, BitVec::ofNat(60)), List::u32_be_within(ctx, cn, BitVec::ofNat(48)), List::u32_be_within(ctx, cn, BitVec::ofNat(52)),
+        List::u32_be_within(ctx, cn, BitVec::ofNat(56)), sha256_k(t), List::u32_be_within(ctx, cn, t.shift_left(2).add(BitVec::ofNat(64))))
 }
 
 // Its caller, of the same type. That the two are `runtime fn`s at all is
 // the probe: each instance's link check is run by the generator.
 runtime fn probe_sum(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → BitVec(64) {
-    probe_t1(ctx, cn, t).add(sha256_t2(sha256_word_at(ctx, cn, t), sha256_word_at(ctx, cn, t.add(BitVec::ofNat(4))),
-        sha256_word_at(ctx, cn, t.add(BitVec::ofNat(8)))))
+    probe_t1(ctx, cn, t).add(sha256_t2(List::u32_be_within(ctx, cn, t), List::u32_be_within(ctx, cn, t.add(BitVec::ofNat(4))),
+        List::u32_be_within(ctx, cn, t.add(BitVec::ofNat(8)))))
 }

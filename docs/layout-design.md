@@ -1,7 +1,9 @@
 # Layout as a library, and records laid over bytes
 
-Status: **2026-11-12: layers 1 and 2 are built on PR #551, layer 3 is
-begun, and layer 4 is design.**
+Status: **2026-11-12: layers 1, 2 and 3 are built on PR #551, and so is
+the first piece of layer 4: big-endian words read and stored by compiled
+code, proved to be the codec's, which SHA-256's modules now use. The
+generator and the record held by a `runtime fn` are design.**
 Minus's direction (2026-11-12, the native thread): SHA-256's context goes
 "straight to laid out fields, we're going to want them very soon
 regardless", and "laying out should be something that's easy to use
@@ -200,8 +202,8 @@ theorem Layout::in_order_fits(items: List<Layout>): Layout::in_order(items).Fits
 ### 5.2 Layer 3, what is stored
 
 **Built** (`lib/std/machine/stored.hthr`): the record, `get` and `put`,
-three laws, and the codecs. What is left is what a field of a stored
-record reads as (the projection laws, below).
+three laws, the codecs, and what a field of a stored record reads as
+(the projection laws, below).
 
 ```heather
 // How an `A` is bytes.
@@ -226,11 +228,27 @@ fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8
   of the type, as `rt-fixed-arrays-and-tables` asks: SHA-2 is big-endian,
   ChaCha20 little-endian, and both hold a `u32`. Padding is written as
   zeros and not read.
-- **Not built: the projection laws.** That a field read out of a stored
+- **The projection laws**, for reads: a field read out of a stored
   record is the field's own codec at the field's offset, and element `i`
-  of a stored array the element's codec at `i` strides. They are what a
-  generated accessor is proved against (§6), and they want an index and
-  an update on `[A; n]`, which `vector.hthr` does not have.
+  of a stored array is the element's codec `i` strides on.
+  `get_then_fst` and `get_then_snd` (the second at
+  `s.layout.offset_of(t.layout) + at`), `get_padded`, `get_map` (which is
+  `refl`), and `get_array_nth`, stated through the array's entries as a
+  list (`vector_entries(…).nth(i) = Some(s.get(bytes, i * stride + at))`)
+  because `[A; n]` has no index of its own and the specifications these
+  meet hold lists (`Sha2::schedule`). They rest on one list law, a window
+  of a window (`List::window_window`). The probes prove SHA-256's count
+  to be `Stored::u64_be().get(bytes, 320 + at)` and schedule word `i` to
+  be `Stored::u32_be().get(bytes, i * 4 + (64 + at))` by these laws alone,
+  which is the statement a generated accessor is proved against (§6).
+  **Not built:** the same for stores (a store into a field is the
+  record's `put` of the record with that field replaced), which wants an
+  update on `[A; n]`.
+- **A word is its bytes at their indices**: `get_be_bytes`, `get_le_bytes`
+  (the word of `bytes.vector_at(at, k, 0)`, the `k` entries from `at`) and
+  `put_be_bytes`, `put_le_bytes` (`bytes.update_from(at, …)`, the entries
+  stored one at a time). This is the form compiled code meets: it reads
+  and stores a byte at a time (§6.1).
 - The laws a program uses, each proved once for any codec: `get` after
   `put` at the same place is the value (`get_put`); `get` at one place
   after `put` at a place apart from it is unchanged (`get_put_apart`,
@@ -251,6 +269,41 @@ allocator are about) and not for these laws, which are about bytes of a
 list. It comes back where a machine load wants it (§6).
 
 ## 6. Layer 4: a record laid over a span
+
+### 6.1 Built: words as compiled code
+
+`lib/native/runtime/stored_words.hthr` has the run-time half of a word
+codec: `List::u32_be_within(length, i)` and `List::u64_be_within`, which
+read a big-endian word from a span under its length word, and
+`put_u32_be_within`, `put_u64_be_within`, which store one. Each is a
+`runtime fn` (they were SHA-256's `sha256_word_at` and `sha256_put_word`,
+moved and renamed) with a theorem that it is the codec's:
+
+```heather
+theorem List::u32_be_within_stored(self span: List<u8>, length, i: u64, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_be_within(length, i) = Stored::u32_be().get(span, i.toNat()).zero_extend(32)
+
+theorem List::put_u32_be_within_stored(self span: List<u8>, length, i, word: u64,
+    inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u32_be_within(span, length, i, word) = Mutated(Stored::u32_be().put(span, i.toNat(), word.truncate(32, 32)), word)
+```
+
+A word in compiled code is 64 bits, so the read is the `u32` widened and
+the store takes a word's low half. The bounds are the caller's: the word
+is inside the length word, and for a store the length word is inside the
+span. The proofs are two steps that any width and either byte order
+repeat: bytes joined by shifts and `|` are the codec's word
+(`BitVec::be_join_32`, over `BitVec::bor_concat`), and the span's entries
+at `at`, `at + 1`, … are the window's (`get_be_bytes`, `put_be_bytes`).
+With §5.2's laws a body that stores a word and reads another is reasoned
+about as `Stored::get` and `Stored::put` (the probes `put_then_get`,
+`put_leaves_the_other` in `lib/_tests/native/runtime/stored_words_tests.hthr`).
+
+So what the generator of stage A has left to publish per field is small:
+an offset, an accessor that is one of these at that offset, and the
+projection law instantiated.
+
+### 6.2 The declaration
 
 What the source should read as (**proposed**; the spelling is §7's):
 
@@ -349,10 +402,18 @@ section once A is built and shows what the refinements look like.
 ## 8. Order of work
 
 1. Layer 1 with its theorems (built), and the run-time twins of §4 with
-   theirs (after `issues/bitvec-shift-mask-arithmetic.md`, whose laws
-   their agreement theorems are).
+   theirs (the laws their agreement theorems are landed with
+   `issues/bitvec-shift-mask-arithmetic.md`; the twins are not built).
 2. Layer 2 (built): `Fits`, the in-order rule, the check by evaluation.
-   Layer 3: `Stored` for words, arrays and records, and its laws.
-3. Stage A's generator; SHA-256's modules over generated accessors, the
-   linked assembly unchanged or its change explained.
+   Layer 3 (built): `Stored` for words, arrays and records, its laws, and
+   the projection laws for reads. Left: the projection laws for stores.
+3. Words as compiled code (§6.1, built for big-endian `u32` and `u64`;
+   SHA-256's modules read and store through them: `sha256_compress.s`
+   is byte for byte what it was, and the three stream files change
+   because the count's accessors now call the eight-byte ones, one call
+   deeper). Then stage A's generator, and SHA-256's modules over
+   generated accessors. Two probes say what the generator may publish:
+   a plain `fn` becomes run-time code afterwards by
+   `generate runtime("Name");`, and a `def` numeral is read in a
+   `runtime fn` body, so an offset can be a published constant.
 4. Stage B's design section, then its rounds.
