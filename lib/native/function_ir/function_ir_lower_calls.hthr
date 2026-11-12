@@ -4155,6 +4155,22 @@ theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.lai
         functions, program_needs_all(functions, λ (b: Nat) => lending.written(b), lendless, allowed)))
 }
 
+// At one lending, of any program: every function under a lending that
+// lets each write what it needs. A program that calls over views is given
+// to a caller outside it so, with the rows of marks its functions need
+// (`program_marked_needs`).
+theorem emit_functions_after_lent_calls_needs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), start: Prog, placement: List<Place>,
+    names: Nat, functions: List<Function>, needs: Nat → Nat → Bool, needed: ProgramNeeds(functions, needs)):
+    ((f: Nat) → (b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True) →
+    MayCallOver<M>(site, stack, top, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
+    λ allowed => (match emit_functions_after_lent(start, functions, placement, names, lending.counts) as λ e =>
+            MayCallLent<M>(site, stack, top, lending.counts, needs, functions, e) → MayCallOver<M>(site, stack, top, lending, functions, e) {
+        None => λ _ => trivial,
+        Some(emitted) => λ lent within f below => lent(within)(lending, refl, loan, f, below, allowed(f)),
+    })(emit_functions_calls_lent<M>(site, laid, stack, top, lending.counts, needs, start, placement, names, functions, needed))
+}
+
 theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>):
     Grows(prog, function.emit_lent(prog, k, placement, names, counts)) {
     let opened = function_opened(prog, k);

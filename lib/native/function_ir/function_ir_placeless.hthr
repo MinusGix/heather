@@ -17,6 +17,12 @@
 // `program_eval_placeless` is the theorem
 // (docs/native-one-compiler-design.md §2.3).
 //
+// A call over views computes addresses of its own: a view's base is its
+// buffer's address plus its start. The base is hidden from there on as the
+// address it is made from is, and reaches the callee at an address place;
+// the view's bounds are read, so they are no address
+// (docs/native-library-exports-design.md §3.1, V4d).
+//
 // A function that writes its buffer is placeless by the same check: a
 // store reads its index and its value, neither of them an address id, and
 // the file it leaves is a function of those. `program_run_placeless` is
@@ -33,6 +39,7 @@ import nat_map;
 import bitvec;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -381,6 +388,108 @@ theorem loop_eval_apart(step: Valuation() → Valuation(), parameters: List<Nat>
 }
 
 // ---------------------------------------------------------------------------
+// Views
+
+// What a lend hides beside what was hidden: each view's base.
+fn views_taints(views: List<View>, hidden: List<Nat>) → List<Nat> {
+    match views { Nil => hidden, Cons(view, rest) => views_taints(rest, Cons(view.base, hidden)) }
+}
+
+// No view starts or ends at a hidden id.
+fn views_clear(views: List<View>, hidden: List<Nat>) → Bool {
+    match views {
+        Nil => True,
+        Cons(view, rest) => (absent(view.start, hidden) && absent(view.end, hidden)) && views_clear(rest, hidden),
+    }
+}
+
+theorem views_taints_keeps(views: List<View>, id: Nat): (hidden: List<Nat>) → absent(id, views_taints(views, hidden)).IsTrue() →
+    absent(id, hidden).IsTrue() {
+    match views {
+        Nil => λ hidden h => h,
+        Cons(view, rest) => λ hidden h =>
+            Bool::is_true_and(id.differs(view.base), absent(id, hidden), views_taints_keeps(rest, id, Cons(view.base, hidden), h)).right,
+    }
+}
+
+// A view's two nodes: its base is hidden, whatever it is, and its length
+// is the same where its bounds are.
+theorem View::bound_apart(self view: View, hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other),
+    from: absent(view.start, Cons(view.base, hidden)).IsTrue(), upto: absent(view.end, Cons(view.base, hidden)).IsTrue()):
+    Valuation::Apart(Cons(view.base, hidden), Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(values)),
+        Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(other))) {
+    let based = Add(64, view.base, view.home, view.start).step(values);
+    let based2 = Add(64, view.base, view.home, view.start).step(other);
+    let first: Valuation::Apart(Cons(view.base, hidden), based, based2) = Valuation::set_hidden(hidden, values, other, apart, view.base,
+        Add(64, view.base, view.home, view.start).value(values), Add(64, view.base, view.home, view.start).value(other));
+    let length = Sub(64, view.length, view.end, view.start);
+    Valuation::set_apart(Cons(view.base, hidden), based, based2, first, view.length, length.value(based), length.value(based2),
+        length.value_reads(Nil, based, based2, λ w id m => match m {
+            Inl(is_end) => j(sym(is_end), λ x _ => based2(w, x) = based(w, x), first(w, view.end, upto)),
+            Inr(more) => match more {
+                Inl(is_start) => j(sym(is_start), λ x _ => based2(w, x) = based(w, x), first(w, view.start, from)),
+                Inr(never) => false_elim(never),
+            },
+        }))
+}
+
+// The views' nodes evaluate alike off the bases, where the bounds are clear.
+theorem views_eval_apart(views: List<View>, buffers: Buffers()): (hidden: List<Nat>) →
+    views_clear(views, views_taints(views, hidden)).IsTrue() → (values, other: Valuation()) → Valuation::Apart(hidden, values, other) →
+    Valuation::Apart(views_taints(views, hidden), eval_nodes_over(buffers, views_nodes(views), values),
+        eval_nodes_over(buffers, views_nodes(views), other)) {
+    match views {
+        Nil => λ hidden _ values other apart => apart,
+        Cons(view, rest) => λ hidden clear values other apart => {
+            let later = views_taints(rest, Cons(view.base, hidden));
+            let parts = Bool::is_true_and(absent(view.start, later) && absent(view.end, later), views_clear(rest, later), clear);
+            let bounds = Bool::is_true_and(absent(view.start, later), absent(view.end, later), parts.left);
+            views_eval_apart(rest, buffers, Cons(view.base, hidden), parts.right,
+                Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(values)),
+                Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(other)),
+                view.bound_apart(hidden, values, other, apart, views_taints_keeps(rest, view.start, Cons(view.base, hidden), bounds.left),
+                    views_taints_keeps(rest, view.end, Cons(view.base, hidden), bounds.right)))
+        },
+    }
+}
+
+// The windows are the same windows where the bounds are the same words.
+theorem viewed_apart(views: List<View>, hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other),
+    held: Buffers()): views_clear(views, hidden).IsTrue() → viewed(views, other, held) = viewed(views, values, held) {
+    match views {
+        Nil => λ _ => refl,
+        Cons(view, rest) => λ clear => {
+            let parts = Bool::is_true_and(absent(view.start, hidden) && absent(view.end, hidden), views_clear(rest, hidden), clear);
+            let bounds = Bool::is_true_and(absent(view.start, hidden), absent(view.end, hidden), parts.left);
+            let bytes = buffer_bytes(held, view.buffer);
+            eq2(λ (window: List<BitVec(8)>) (tail: Buffers()) => Cons(window, tail),
+                eq2<BitVec(64), BitVec(64), List<BitVec(8)>>(λ s e => bytes.window(s.toNat(), e.toNat()), apart(64, view.start, bounds.left),
+                    apart(64, view.end, bounds.right)),
+                viewed_apart(rest, hidden, values, other, apart, held, parts.right))
+        },
+    }
+}
+
+// And what is put back is put back at the same places.
+theorem put_views_apart(views: List<View>, hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other)):
+    views_clear(views, hidden).IsTrue() → (after, held: Buffers()) → put_views(views, other, after, held) = put_views(views, values, after, held) {
+    match views {
+        Nil => λ _ after held => refl,
+        Cons(view, rest) => λ clear after held => {
+            let parts = Bool::is_true_and(absent(view.start, hidden) && absent(view.end, hidden), views_clear(rest, hidden), clear);
+            let bounds = Bool::is_true_and(absent(view.start, hidden), absent(view.end, hidden), parts.left);
+            let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+            let put: (BitVec(64) → Buffers()) = λ s => match view.written {
+                False => held,
+                True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(s.toNat(), buffer_bytes(after, 0))),
+            };
+            trans(cong_fn<BitVec(64), Buffers()>(λ s => put_views(rest, other, later, put(s)), apart(64, view.start, bounds.left)),
+                put_views_apart(rest, hidden, values, other, apart, parts.right, later, view.put(values, buffer_bytes(after, 0), held)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Regions
 
 // A lent buffer's address place is free; every other word of a call must
@@ -398,7 +507,7 @@ fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) �
         Sequence(_, continuation) => continuation.taints(hidden),
         Compose(prefix, continuation) => continuation.taints(prefix.taints(hidden)),
         Conditional(_, _, _, _, when_true, when_false) => when_true.taints(hidden) ++ when_false.taints(hidden),
-        Lend(_, _, _, _) => hidden,
+        Lend(views, _, _, _) => views_taints(views, hidden),
         Call(_, _, _) => hidden,
         Loop(inputs, _, _, _, _, _, _, outputs, _) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
     }
@@ -406,8 +515,10 @@ fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) �
 
 // The check. A hidden id is read by no node and tested by no branch; a
 // call passes one only at a lent buffer's address place (`lent` says how
-// many buffers each callee is lent); a loop does not count by one, carries
-// one only where it came in hidden, and does not leave by one.
+// many buffers each callee is lent); a call over views starts and ends no
+// view at one, and passes its views' bases as a call passes any hidden id;
+// a loop does not count by one, carries one only where it came in hidden,
+// and does not leave by one.
 fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat, hidden: List<Nat>) → Bool {
     match region {
         Dataflow(body) => nodes_clear(body.nodes, hidden),
@@ -415,9 +526,8 @@ fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat,
         Compose(prefix, continuation) => prefix.placeless(lent, hidden) && continuation.placeless(lent, prefix.taints(hidden)),
         Conditional(_, condition, _, _, when_true, when_false) => absent(condition, hidden)
             && (when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden)),
-        // Not yet: a view's base is an address the lend computes, which this
-        // check has no place for (docs/native-library-exports-design.md §3.1).
-        Lend(_, _, _, _) => False,
+        Lend(views, callee, arguments, _) => views_clear(views, views_taints(views, hidden))
+            && mask_covers(mask_of(views_homes(views) ++ arguments, views_taints(views, hidden)), base_mask(lent(callee))),
         Call(callee, arguments, _) => mask_covers(mask_of(arguments, hidden), base_mask(lent(callee))),
         Loop(inputs, bound, parameters, _, body, exit, next, _, _) => absent(bound, hidden)
             && (body.placeless(lent, taint_onto(parameters, mask_of(inputs, hidden), []))
@@ -473,7 +583,20 @@ theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buf
                     True => when_true.eval_over(buffers, call, values)(w, id),
                 }), aligned)
         },
-        Lend(_, _, _, _) => λ hidden never values other apart => false_elim(never),
+        Lend(views, callee, arguments, result) => λ hidden ok values other apart => {
+            let hid = views_taints(views, hidden);
+            let passed = views_homes(views) ++ arguments;
+            let parts = Bool::is_true_and(views_clear(views, hid), mask_covers(mask_of(passed, hid), base_mask(lent(callee))), ok);
+            let bound = eval_nodes_over(buffers, views_nodes(views), values);
+            let bound2 = eval_nodes_over(buffers, views_nodes(views), other);
+            let alike: Valuation::Apart(hid, bound, bound2) = views_eval_apart(views, buffers, hidden, parts.left, values, other, apart);
+            let words = words_of(bound, passed);
+            let others = words_of(bound2, passed);
+            let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
+                mask_of(passed, hid), parts.right, words, others, words_of_apart(passed, hid, bound, bound2, alike));
+            Valuation::set_apart(hid, bound, bound2, alike, result, word_value(call(callee, words)), word_value(call(callee, others)),
+                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answers(callee, words, others, read)))
+        },
         Call(callee, arguments, result) => λ hidden ok values other apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);
@@ -554,49 +677,6 @@ fn program_lent(functions: List<Function>) → Nat → Nat {
 
 fn program_placeless(functions: List<Function>) → Bool {
     match functions { Nil => True, Cons(last, earlier) => last.placeless(program_lent(earlier)) && program_placeless(earlier) }
-}
-
-// A placeless region makes no call over views, which the check has no
-// place for yet.
-theorem StructuredRegion::placeless_lendless(self region: StructuredRegion, lent: Nat → Nat): (hidden: List<Nat>) →
-    region.placeless(lent, hidden).IsTrue() → region.lendless().IsTrue() {
-    match region {
-        Dataflow(_) => λ hidden _ => trivial,
-        Sequence(prefix, continuation) => λ hidden ok => continuation.placeless_lendless(lent, hidden,
-            Bool::is_true_and(nodes_clear(prefix.nodes, hidden), continuation.placeless(lent, hidden), ok).right),
-        Compose(prefix, continuation) => λ hidden ok => {
-            let both = Bool::is_true_and(prefix.placeless(lent, hidden), continuation.placeless(lent, prefix.taints(hidden)), ok);
-            Bool::is_true_and_intro(prefix.lendless(), continuation.lendless(), prefix.placeless_lendless(lent, hidden, both.left),
-                continuation.placeless_lendless(lent, prefix.taints(hidden), both.right))
-        },
-        Conditional(_, condition, _, _, when_true, when_false) => λ hidden ok => {
-            let arms = Bool::is_true_and(when_true.placeless(lent, hidden), when_false.placeless(lent, hidden),
-                Bool::is_true_and(absent(condition, hidden), when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden), ok).right);
-            Bool::is_true_and_intro(when_true.lendless(), when_false.lendless(), when_true.placeless_lendless(lent, hidden, arms.left),
-                when_false.placeless_lendless(lent, hidden, arms.right))
-        },
-        Lend(_, _, _, _) => λ hidden never => never,
-        Call(_, _, _) => λ hidden _ => trivial,
-        Loop(inputs, bound, parameters, _, body, exit, next, _, _) => λ hidden ok => {
-            let carried = taint_onto(parameters, mask_of(inputs, hidden), []);
-            let leaves = absent(exit, body.taints(carried)) && mask_covers(mask_of(next, body.taints(carried)), mask_of(inputs, hidden));
-            let inner = Bool::is_true_and(absent(bound, hidden), body.placeless(lent, carried) && leaves, ok).right;
-            body.placeless_lendless(lent, carried, Bool::is_true_and(body.placeless(lent, carried), leaves, inner).left)
-        },
-    }
-}
-
-theorem program_placeless_lendless(functions: List<Function>): program_placeless(functions).IsTrue() → program_lendless(functions).IsTrue() {
-    match functions {
-        Nil => λ _ => trivial,
-        Cons(last, earlier) => λ ok => {
-            let both = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
-            let body = Bool::is_true_and(last.body.placeless(program_lent(earlier), last.addresses()),
-                absent(last.result, last.body.taints(last.addresses())), both.left);
-            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier),
-                last.body.placeless_lendless(program_lent(earlier), last.addresses(), body.left), program_placeless_lendless(earlier, both.right))
-        },
-    }
 }
 
 // The theorem for programs: a placeless program's functions answer alike
@@ -686,6 +766,26 @@ theorem run_nodes_apart(nodes: List<Node>, hidden: List<Nat>): nodes_clear(nodes
             State::then_apart(hidden, hidden, λ (v: Valuation()) (file: Buffers()) => run_nodes(rest, v, file),
                 λ v o file a => run_nodes_apart(rest, hidden, parts.right, v, o, file, a), node.run(values, buffers),
                 node.run(other, buffers), node.run_apart(buffers, hidden, values, other, apart, parts.left))
+        },
+    }
+}
+
+// The views' nodes run alike off the bases, over one file that they leave
+// as it was.
+theorem views_run_apart(views: List<View>, buffers: Buffers()): (hidden: List<Nat>) →
+    views_clear(views, views_taints(views, hidden)).IsTrue() → (values, other: Valuation()) → Valuation::Apart(hidden, values, other) →
+    State::Apart(views_taints(views, hidden), run_nodes(views_nodes(views), values, buffers), run_nodes(views_nodes(views), other, buffers)) {
+    match views {
+        Nil => λ hidden _ values other apart => ⟨apart, refl⟩,
+        Cons(view, rest) => λ hidden clear values other apart => {
+            let later = views_taints(rest, Cons(view.base, hidden));
+            let parts = Bool::is_true_and(absent(view.start, later) && absent(view.end, later), views_clear(rest, later), clear);
+            let bounds = Bool::is_true_and(absent(view.start, later), absent(view.end, later), parts.left);
+            views_run_apart(rest, buffers, Cons(view.base, hidden), parts.right,
+                Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(values)),
+                Sub(64, view.length, view.end, view.start).step(Add(64, view.base, view.home, view.start).step(other)),
+                view.bound_apart(hidden, values, other, apart, views_taints_keeps(rest, view.start, Cons(view.base, hidden), bounds.left),
+                    views_taints_keeps(rest, view.end, Cons(view.base, hidden), bounds.right)))
         },
     }
 }
@@ -819,7 +919,32 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
                         True => when_true.run(call, values, buffers).buffers,
                     })), aligned)
         },
-        Lend(_, _, _, _) => λ hidden never values other buffers apart => false_elim(never),
+        Lend(views, callee, arguments, result) => λ hidden ok values other buffers apart => {
+            let hid = views_taints(views, hidden);
+            let passed = views_homes(views) ++ arguments;
+            let parts = Bool::is_true_and(views_clear(views, hid), mask_covers(mask_of(passed, hid), base_mask(lent(callee))), ok);
+            let bound = run_nodes(views_nodes(views), values, buffers);
+            let bound2 = run_nodes(views_nodes(views), other, buffers);
+            let alike: State::Apart(hid, bound, bound2) = views_run_apart(views, buffers, hidden, parts.left, values, other, apart);
+            let words = words_of(bound.values, passed);
+            let others = words_of(bound2.values, passed);
+            let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
+                mask_of(passed, hid), parts.right, words, others, words_of_apart(passed, hid, bound.values, bound2.values, alike.left));
+            let file = viewed(views, bound.values, bound.buffers);
+            let file2 = viewed(views, bound2.values, bound2.buffers);
+            let one_file: (file2 = file) = trans(cong_fn<Buffers(), Buffers()>(λ held => viewed(views, bound2.values, held), alike.right),
+                viewed_apart(views, hid, bound.values, bound2.values, alike.left, bound.buffers, parts.left));
+            let answer = call(file, callee, words);
+            let answer2 = call(file2, callee, others);
+            let same: (answer2 = answer) = trans(cong_fn<Buffers(), Ending>(λ held => call(held, callee, others), one_file),
+                answers(file, callee, words, others, read));
+            let put: (put_views(views, bound2.values, answer2.buffers, bound2.buffers) =
+                put_views(views, bound.values, answer.buffers, bound.buffers)) =
+                trans(eq2(λ (a: Ending) (held: Buffers()) => put_views(views, bound2.values, a.buffers, held), same, alike.right),
+                    put_views_apart(views, hid, bound.values, bound2.values, alike.left, parts.left, answer.buffers, bound.buffers));
+            ⟨Valuation::set_apart(hid, bound.values, bound2.values, alike.left, result, word_value(answer.word), word_value(answer2.word),
+                λ w => cong_fn(λ (a: Ending) => word_value(a.word, w), same)), put⟩
+        },
         Call(callee, arguments, result) => λ hidden ok values other buffers apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);

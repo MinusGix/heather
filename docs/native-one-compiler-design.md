@@ -254,7 +254,9 @@ stricter than it must be in one way a lowered function never meets: a
 value computed from an address and then discarded is refused. Probes:
 `function_ir_placeless_tests` (the guarded load, the summing loop, the
 call handing a home on; eight refusals, among them the function that
-returns its address, with its two different answers).
+returns its address, with its two different answers). A call over views
+makes addresses of its own, its views' bases, which the check hides from
+the lend on (`docs/native-library-exports-design.md` §3.1, V4d).
 
 **A program's call, built.** Three pieces, each where the note said.
 
@@ -276,8 +278,10 @@ returns its address, with its two different answers).
   registers after the homes'. A call fits (`Layout::function_fits`) when
   the function takes the words after its homes, six registers hold them
   all, and the file has the buffers. `Prog::links` checks the functions
-  placeless and emits each under its count of lent buffers
-  (`program_counts`). A function lent nothing is called by the code it
+  placeless, with rows of marks that hold (`program_linkable`; the rows
+  matter once a function calls over views,
+  `docs/native-library-exports-design.md` §3.1), and emits each under its
+  count of lent buffers (`program_counts`). A function lent nothing is called by the code it
   was.
 - *The proof* (`native_compile_function.hthr`). The function's contract
   (`Site::CallsOver`, at every address, over every buffers and under any

@@ -1,0 +1,93 @@
+// Probes of `function_ir_rows`: the rows of marks the search finds for a
+// program, each checked to hold (`program_rowed`), and the programs no
+// rows hold for: a callee that stores through a view lent to read.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_writes;
+import function_ir_rows;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+
+theorem marks_with_past(): marks_with([True], 2) = [True, False, True] { refl }
+theorem marks_with_inside(): marks_with([False, False], 0) = [True, False] { refl }
+theorem marks_or_longer(): marks_or([False, True], [True, False, True]) = [True, True, True] { refl }
+
+// stores(buffer): a store into buffer `buffer`, which it is lent with
+// those before it.
+fn stores(buffer: Nat) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := Succ(buffer), result := 9,
+        body := leaf([BufferStore(output := 9, buffer := buffer, index := 4, value := 5)]))
+}
+
+// reads(): a load from buffer 0.
+fn reads() → Function {
+    Function(parameters := [0, 1, 4], lent := 1, result := 9, body := leaf([BufferLoad(output := 9, buffer := 0, index := 4)]))
+}
+
+// calls(callee): its buffers handed on to `callee`.
+fn calls(callee: Nat) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 9, body := Call(callee, [0, 1, 2, 3, 4, 5], 9))
+}
+
+// lends(callee, written): the whole of its buffer 1 as `callee`'s buffer 0.
+fn lends(callee: Nat, written: Bool) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 9,
+        body := Sequence(Region(Ports([]), [Const(width := 64, output := 6, value := 0)], Ports([])),
+            Lend([View(buffer := 1, home := 2, start := 6, end := 3, written := written, base := 7, length := 8)], callee, [4, 5], 9)))
+}
+
+// A function's own stores.
+theorem stores_rows(): program_rows([stores(1)]) = [[False, True]] { refl }
+theorem stores_rowed(): program_rowed([stores(1)]) = True { refl }
+theorem reads_rows(): program_rows([reads()]) = [[]] { refl }
+theorem reads_rowed(): program_rowed([reads()]) = True { refl }
+
+// A caller takes its callee's row on, along a chain of calls.
+theorem chain_rows(): program_rows([calls(1), calls(0), stores(1)]) = [[False, True], [False, True], [False, True]] { refl }
+theorem chain_rowed(): program_rowed([calls(1), calls(0), stores(1)]) = True { refl }
+
+// And where the callee comes later in the program, or the two call each
+// other: the passes carry a row both ways.
+theorem forward_rows(): program_rows([stores(1), calls(2), calls(1)]) = [[False, True], [False, True], [False, True]] { refl }
+theorem forward_rowed(): program_rowed([stores(1), calls(2), calls(1)]) = True { refl }
+theorem mutual_rows(): program_rows([calls(0), calls(1)]) = [[], []] { refl }
+theorem mutual_rowed(): program_rowed([calls(0), calls(1)]) = True { refl }
+
+// A lender needs written the buffer its written view is of, whatever
+// number the callee knows it by: the callee stores into its buffer 0,
+// which is the lender's buffer 1.
+theorem lends_rows(): program_rows([lends(0, True), stores(0)]) = [[True], [False, True]] { refl }
+theorem lends_rowed(): program_rowed([lends(0, True), stores(0)]) = True { refl }
+
+// A view lent to read asks nothing of the lender, where the callee reads.
+theorem lends_read_rows(): program_rows([lends(0, False), reads()]) = [[], []] { refl }
+theorem lends_read_rowed(): program_rowed([lends(0, False), reads()]) = True { refl }
+
+// The control: a callee that stores through a view lent to read. The
+// rows found do not hold, and no rows do: the callee's row must mark its
+// buffer 0, and the lend asks that view 0 then be lent to write.
+theorem lends_read_stored_rows(): program_rows([lends(0, False), stores(0)]) = [[True], []] { refl }
+theorem lends_read_stored_refused(): program_rowed([lends(0, False), stores(0)]) = False { refl }
+theorem lends_read_stored_no_rows(tables: List<List<Bool>>): program_marked([lends(0, False), stores(0)], tables).IsTrue() → False {
+    λ holds => {
+        let callee = marks_row(tables, 0);
+        let lender = marks_row(tables, 1);
+        let both = Bool::is_true_and(lends(0, False).body.stores_within(lender) && lends(0, False).body.calls_within(tables, lender),
+            program_marked([stores(0)], tables), holds);
+        let asked = Bool::is_true_and(lends(0, False).body.stores_within(lender), lends(0, False).body.calls_within(tables, lender), both.left).right;
+        let here = Bool::is_true_and(stores(0).body.stores_within(callee) && stores(0).body.calls_within(tables, callee), True, both.right).left;
+        let stored = Bool::is_true_and(stores(0).body.stores_within(callee), stores(0).body.calls_within(tables, callee), here).left;
+        absurd(marks_within_marked(callee, [False], 0, asked, Bool::is_true_and(marked(callee, 0), True, stored).left))
+    }
+}
+
+// And through a caller between them: the callee's need reaches the lend
+// by the call's row.
+theorem lends_read_called_refused(): program_rowed([lends(1, False), calls(0), stores(0)]) = False { refl }
+theorem lends_called_rowed(): program_rowed([lends(1, True), calls(0), stores(0)]) = True { refl }

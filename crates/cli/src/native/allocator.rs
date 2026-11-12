@@ -115,6 +115,22 @@ impl Reader<'_> {
                 let outputs = self.ids()?;
                 Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted: self.next()? }
             }
+            // A call over views (`spell_views`: seven numbers a view). Only a
+            // function makes one, and a function's region is read here to
+            // get past it, so it is kept as the call it ends in: the words
+            // it reads (each view's home and bounds, then the arguments)
+            // and its result.
+            6 => {
+                let count = self.next()? as usize;
+                let mut arguments = Vec::new();
+                for _ in 0..count {
+                    let f = self.take(7)?;
+                    arguments.extend([f[1], f[2], f[3]]);
+                }
+                self.next()?;
+                arguments.extend(self.ids()?);
+                Region::Call { arguments, result: self.next()? }
+            }
             _ => return None,
         })
     }

@@ -169,12 +169,14 @@ contract bounds a span below the canonical boundary.
 
 ### 3.1 Views: lending a part of a buffer (2026-11-12)
 
-*Status: the design, with V1 to V4c built. A call over views is in the IR
+*Status: the design, with V1 to V4d built. A call over views is in the IR
 and means what this section says, the lowering's contract is stated at
-every lending, a function at a time, and the function compiler lowers the
-call and proves it (`File::emit_lend`, `File::emit_lend_runs`). The
-placeless check, the languages above and the program compiler's own
-statements do not lend yet (V4d, V5, V6).*
+every lending, a function at a time, the function compiler lowers the
+call and proves it (`File::emit_lend`, `File::emit_lend_runs`), and a
+program links functions that lend (`Prog::links`: placeless with a view's
+base hidden, under rows of marks a search finds and the compiler checks).
+The languages above and the program compiler's own statements do not lend
+yet (V5, V6).*
 
 **What is missing.** At an export's boundary a view is free: Rust slices
 the span and passes the slice's parts. Inside a program it is not
@@ -277,8 +279,9 @@ As data it is a row of marks a function, checked by evaluation
 is the instance for a program with no call over views
 (`program_needs_all`), and that is what the theorems stated with one list
 of marks or with `program_stores` are: `program_stores_within` now also
-says the program lends no views, `program_quiet` says so already, and a
-placeless program lends none until V4d.
+says the program lends no views, and `program_quiet` says so already. A
+program's functions are linked under rows (`program_rowed`, below), so a
+placeless program may lend.
 
 **The lowering** (V4b, V4c). A lend's callee runs under the lending of the
 views: the program's counts, the views' bases as addresses, `viewed` as the
@@ -327,9 +330,42 @@ not the lengths of the file at the call. So the callee's loan and the
 homes it is passed are known before any of the call's code has run, and
 the file at the call enters only as the callee's file.
 
-The view's base joins the address ids the placeless check hides
-(`StructuredRegion::placeless`, V4d): it reaches the call's address place
-and nothing else. Until then `placeless` is `False` of a lend.
+**Placeless with views** (V4d, `function_ir_placeless.hthr`). A program
+states a call of a function with no address, so the function's answer may
+not depend on where its buffers lie (`program_run_placeless`). A lend
+makes addresses of its own: a view's base is its buffer's address plus
+its start. The check hides each base from the lend on
+(`views_taints`), as it hides the address the base is made from, and
+accepts a lend where no view starts or ends at a hidden id
+(`views_clear`) and the homes and arguments it passes reach the callee as
+a call's do: a hidden id only at an address place of the callee
+(`mask_covers` against `base_mask`). So a base returned, read by a node,
+or passed as a word is refused, and so is a callee lent fewer buffers
+than there are views. A view's length is its bounds' difference and is
+no address. The two theorems have the arm (`StructuredRegion::eval_apart`,
+`run_apart`): the views' nodes run alike off the bases
+(`views_run_apart`), the windows are the same windows where the bounds
+are the same words (`viewed_apart`), and what is put back is put back at
+the same places (`put_views_apart`).
+
+**Rows found by search** (V4d, `function_ir_rows.hthr`). A program's
+functions are linked under one lending that lets every buffer be written
+(`Target::lending`), so any rows are met; the linker still needs rows
+that hold, because that is what makes each lend's views cover its
+callee's needs. `program_rows` finds them: each function's own stores as
+marks, then its callees' rows joined in, a pass for each function. Nothing
+is proved of the search. `Prog::links` checks its answer
+(`program_linkable` has `program_rowed`, which is `program_marked` on
+the rows found) and the contract is the check's
+(`emit_functions_after_lent_calls_needs`, `Prog::links_calls`). The rows
+found are the least that hold every store and every call's row, so where
+they fail no rows hold: the failure is a callee storing through a view
+lent to read, and the program is refused as not linking. That is the
+control of `issues/source-buffers-as-views.md`, at the functions' door:
+`view_source(False)` in `lib/_tests/native/native_compile_tests.hthr`,
+beside `view_source(True)`, a program whose statement calls a function
+that lends its second buffer whole as its callee's first, which
+`write-elf` writes and which exits with the byte stored through the view.
 
 A program with a lend is stated a function at a time
 (`compiled_returns_needs`, and by evaluation with rows of marks
@@ -403,7 +439,8 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
   (`Site::CallsLent`, `ProgramNeeds`). *Built.*
 - **V4c. The lowering of a lend and its theorem** (`File::emit_lend`,
   `File::emit_lend_runs`, `function_ir_lower_views.hthr`). *Built.*
-- **V4d. The placeless check** with a view's base hidden.
+- **V4d. The placeless check** with a view's base hidden, and linking
+  under rows of marks found by search (`program_rows`). *Built.*
 - **V5. The languages above**: a statement of `Source` that lends, the
   arena's line as a view, `rt`'s `Bytes` held as one so a slice costs no
   copy, and the done-when program of `issues/source-buffers-as-views.md`

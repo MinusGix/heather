@@ -1,0 +1,125 @@
+// The rows of marks a program needs, found by a search.
+//
+// What each function needs lent to write is a row of marks a function
+// (`program_marked`, function_ir_writes): the buffers it stores into, a
+// written view's buffer among them, and what the functions it calls need,
+// a call passing its caller's buffers on by number. `program_rows` finds
+// rows for a program: each function's own stores, then what its callees'
+// rows hold, a pass for each function, which is as far as a need can
+// travel along calls.
+//
+// Nothing is proved of the search. Its answer is checked
+// (`program_marked(functions, program_rows(functions))`), and the theorems
+// are the check's (`program_marked_needs`). Where the check fails on these
+// rows no rows pass: they are the least that hold every store and every
+// callee's row, and the one thing rows can have too much of is a callee's
+// row at a call over views, which asks that the views be lent to write
+// where the callee needs them so
+// (docs/native-library-exports-design.md §3.1).
+
+import function_ir;
+import function_ir_writes;
+import nat_map;
+import bool;
+import list;
+import nat;
+import option;
+
+// `marks` with buffer `b` marked.
+fn marks_with(marks: List<Bool>, b: Nat) → List<Bool> {
+    match marks {
+        Nil => match b { Zero => Cons(True, Nil), Succ(k) => Cons(False, marks_with(marks, k)) },
+        Cons(mark, rest) => match b { Zero => Cons(True, rest), Succ(k) => Cons(mark, marks_with(rest, k)) },
+    }
+}
+
+// The marks of either.
+fn marks_or(left, right: List<Bool>) → List<Bool> {
+    match left {
+        Nil => right,
+        Cons(mark, rest) => match right {
+            Nil => left,
+            Cons(other, others) => Cons(mark || other, marks_or(rest, others)),
+        },
+    }
+}
+
+fn nodes_stored(nodes: List<Node>, marks: List<Bool>) → List<Bool> {
+    match nodes {
+        Nil => marks,
+        Cons(node, rest) => nodes_stored(rest, match node { BufferStore(_, buffer, _, _) => marks_with(marks, buffer), _ => marks }),
+    }
+}
+
+fn views_stored(views: List<View>, marks: List<Bool>) → List<Bool> {
+    match views {
+        Nil => marks,
+        Cons(view, rest) => views_stored(rest, match view.written { False => marks, True => marks_with(marks, view.buffer) }),
+    }
+}
+
+// The buffers a region stores into itself, as marks, onto `marks`.
+fn StructuredRegion::stored(self region: StructuredRegion, marks: List<Bool>) → List<Bool> {
+    match region {
+        Dataflow(body) => nodes_stored(body.nodes, marks),
+        Sequence(prefix, continuation) => continuation.stored(nodes_stored(prefix.nodes, marks)),
+        Compose(prefix, continuation) => continuation.stored(prefix.stored(marks)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.stored(when_true.stored(marks)),
+        Lend(views, _, _, _) => views_stored(views, marks),
+        Call(_, _, _) => marks,
+        Loop(_, _, _, _, body, _, _, _, _) => body.stored(marks),
+    }
+}
+
+// The functions a region calls with its own buffers, onto `callees`. A
+// call over views passes none of them on.
+fn StructuredRegion::passes_on(self region: StructuredRegion, callees: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(_) => callees,
+        Sequence(_, continuation) => continuation.passes_on(callees),
+        Compose(prefix, continuation) => continuation.passes_on(prefix.passes_on(callees)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.passes_on(when_true.passes_on(callees)),
+        Lend(_, _, _, _) => callees,
+        Call(callee, _, _) => Cons(callee, callees),
+        Loop(_, _, _, _, body, _, _, _, _) => body.passes_on(callees),
+    }
+}
+
+// What one function's row is made of: its own stores, and whose rows it
+// takes on.
+record Wants { own: List<Bool>, callees: List<Nat> }
+
+// A program's functions, in the order of their numbers.
+fn program_wants(functions: List<Function>) → List<Wants> {
+    match functions {
+        Nil => [],
+        Cons(last, earlier) => program_wants(earlier) ++ [Wants(last.body.stored([]), last.body.passes_on([]))],
+    }
+}
+
+fn callees_rows(callees: List<Nat>, tables: List<List<Bool>>, row: List<Bool>) → List<Bool> {
+    match callees { Nil => row, Cons(callee, rest) => callees_rows(rest, tables, marks_or(row, marks_row(tables, callee))) }
+}
+
+// One pass: each function's own stores with its callees' rows as they
+// stand.
+fn rows_pass(wants: List<Wants>, tables: List<List<Bool>>) → List<List<Bool>> {
+    match wants { Nil => [], Cons(want, rest) => Cons(callees_rows(want.callees, tables, want.own), rows_pass(rest, tables)) }
+}
+
+fn rows_passes(wants: List<Wants>, tables: List<List<Bool>>, passes: Nat) → List<List<Bool>> {
+    match passes { Zero => tables, Succ(k) => rows_passes(wants, rows_pass(wants, tables), k) }
+}
+
+// The rows: the functions' own stores, and a pass for each function.
+fn program_rows(functions: List<Function>) → List<List<Bool>> {
+    shared(program_wants(functions), λ (wants: List<Wants>) => rows_passes(wants, rows_pass(wants, []), functions.len()))
+}
+
+// What a program is linked under: rows the search found, which hold.
+fn program_rowed(functions: List<Function>) → Bool { program_marked(functions, program_rows(functions)) }
+
+theorem program_rowed_needs(functions: List<Function>): program_rowed(functions).IsTrue() →
+    ProgramNeeds(functions, λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(functions), f), b)) {
+    program_marked_needs(functions, program_rows(functions))
+}

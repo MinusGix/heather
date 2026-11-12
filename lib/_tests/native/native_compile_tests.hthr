@@ -9,6 +9,10 @@ import native_compile;
 import native_compile_correct;
 import native_alloc;
 import function_ir;
+import function_ir_eval;
+import function_ir_placeless;
+import function_ir_rows;
+import function_ir_lower_calls;
 import function_ir_pass;
 import itree;
 import linux_trees;
@@ -379,3 +383,56 @@ fn calls_outside() → Source {
 theorem calls_missing_refused(): refused(calls_missing()) = [2, 7, 14, 3, 0] { refl }
 theorem calls_wide_refused(): refused(calls_wide()) = [2, 7, 14, 0, 0] { refl }
 theorem calls_outside_refused(): refused(calls_outside()) = [0, 5, 15, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// Functions that call over views (docs/native-library-exports-design.md §3.1)
+
+// view_put(buffer, i, v): `v`'s low byte stored at `i` of its buffer,
+// returning the byte then there, or 256 past the end.
+fn view_put() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 4,
+        body := Sequence(Region(Ports([]), [UnsignedLessThan(width := 64, output := 5, left := 2, right := 1)], Ports([])),
+            Conditional(Ports([]), 5, Ports([]), Ports([Port(id := 4, width := 64)]),
+                Dataflow(Region(Ports([]), [BufferStore(output := 4, buffer := 0, index := 2, value := 3)], Ports([]))),
+                Dataflow(Region(Ports([]), [Const(width := 64, output := 4, value := 256)], Ports([]))))))
+}
+
+// view_lender(buffer, buffer, i, v): `view_put(i, v)` over the whole of
+// its second buffer, lent as the callee's first, to write or to read.
+fn view_lender(written: Bool) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 8,
+        body := Sequence(Region(Ports([]), [Const(width := 64, output := 9, value := 0)], Ports([])),
+            Lend([View(buffer := 1, home := 2, start := 9, end := 3, written := written, base := 6, length := 7)], 0, [4, 5], 8)))
+}
+fn view_functions(written: Bool) → List<Function> { [view_lender(written), view_put()] }
+
+// A program whose statement calls the lender on its two buffers.
+fn view_source(written: Bool) → Source {
+    Source(functions := view_functions(written), buffers := [Buffer(3), Buffer(4)], words := 10,
+        main := Then(ops([Const(64, 0, 3), Const(64, 1, 88)]), Then(Compute(Call(1, [0, 1], 2)), Exit(2))))
+}
+
+// Its functions' values where the function compiler's planner puts them.
+fn view_refused(written: Bool) → List<Nat> {
+    view_source(written).refusal(low(), Homes::slots(view_source(written)).placed(plan_program(view_functions(written))))
+}
+
+// The functions link: placeless, the view's base hidden, and with rows
+// of marks that hold. The lender needs its second buffer written, the
+// callee its first.
+theorem view_functions_linkable(): program_linkable(view_functions(True)) = True { refl }
+theorem view_functions_rows(): program_rows(view_functions(True)) = [[True], [False, True]] { refl }
+theorem view_source_compiles(): view_refused(True) = [] { refl }
+
+// The control: the view lent to read, and the callee stores through it.
+// The functions are evaluable and placeless as before; no rows hold, so
+// they do not link.
+theorem view_functions_read_placeless(): (program_evaluable(view_functions(False)) && program_placeless(view_functions(False))) = True { refl }
+theorem view_functions_read_unrowed(): program_rowed(view_functions(False)) = False { refl }
+theorem view_source_read_refused(): view_refused(False) = [0, 5, 17, 0, 0] { refl }
+
+// The two as programs `write-elf` is asked for
+// (crates/cli/tests/native_cat.rs): the first exits with 88, the byte its
+// callee stored through the view and read back.
+fn view_program() → Source { view_source(True) }
+fn view_program_read() → Source { view_source(False) }

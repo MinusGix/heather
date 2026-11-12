@@ -115,6 +115,17 @@ impl Reader<'_> {
                 let exhausted = self.next()?;
                 (format!("Loop({inputs}, {bound}, {parameters}, {count}, {body}, {exit}, {next}, {outputs}, {exhausted})"), 1 + n)
             }
+            6 => {
+                let count = self.next()? as usize;
+                let views = (0..count).map(|_| {
+                    let f = self.take(7)?;
+                    let written = match f[4] { 0 => "False", 1 => "True", mark => return Err(format!("view mark {mark}")) };
+                    Ok(format!("View({}, {}, {}, {}, {written}, {}, {})", f[0], f[1], f[2], f[3], f[5], f[6]))
+                }).collect::<Result<Vec<_>, String>>()?;
+                let callee = self.next()?;
+                let arguments = self.ids()?;
+                (format!("Lend([{}], {callee}, {arguments}, {})", views.join(", "), self.next()?), 1)
+            }
             tag => return Err(format!("region tag {tag}")),
         })
     }

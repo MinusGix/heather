@@ -78,6 +78,7 @@ import function_ir_lower_calls;
 import function_ir_state;
 import function_ir_writes;
 import function_ir_placeless;
+import function_ir_rows;
 import function_ir_pass;
 import x86_64;
 import x86_64_block;
@@ -1209,18 +1210,26 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
     then(then(p.label(layout.deep_label()), Block([MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))])), Syscall)
 }
 
+// What functions are linked under: evaluable, and placeless, so a call's
+// answer is the one the program states with no address
+// (`program_writers`), wherever its buffers lie; and with rows of marks
+// that hold (`program_rowed`), so a function that calls over views lends
+// to write each view its callee stores through
+// (docs/native-library-exports-design.md §3.1).
+fn program_linkable(functions: List<Function>) → Bool {
+    (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
+}
+
 // The functions the regions call, after the program's own code `p`, their
 // values where `places` proposes; their inner labels from `names`. Checked
-// evaluable first, and placeless: a call's answer is then the one the
-// program states with no address (`program_writers`), wherever its buffers
-// lie. A function may store into the buffers it is lent: the program lends
-// them to write (docs/native-one-compiler-design.md §2.6). Each function
-// is emitted under the count of buffers it says it is lent
-// (`program_counts`).
+// first (`program_linkable`). A function may store into the buffers it is
+// lent: the program lends them to write
+// (docs/native-one-compiler-design.md §2.6). Each function is emitted
+// under the count of buffers it says it is lent (`program_counts`).
 fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
-        Cons(_, _) => match program_evaluable(functions) && program_placeless(functions) {
+        Cons(_, _) => match program_linkable(functions) {
             False => None,
             True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions)) {
                 None => None,

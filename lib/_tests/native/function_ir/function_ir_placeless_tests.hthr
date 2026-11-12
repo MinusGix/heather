@@ -3,7 +3,8 @@
 // each way an address could reach an answer is refused by the check. The
 // same of functions that write the span: the word they return and the file
 // they leave (`program_run_placeless`), and a program's call of one
-// (`program_writers`).
+// (`program_writers`). And of a function that lends a view: the view's
+// base is an address the lend makes, hidden as the buffer's own is.
 
 import function_ir;
 import function_ir_eval;
@@ -337,3 +338,109 @@ theorem stores_address_anywhere(file: Buffers(), address, length, i: BitVec(64))
     program_run_placeless([stores_address()], trivial, file, 0, [BitVec::zero(), length, i], [address, length, i],
         ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
 }
+
+// ---------------------------------------------------------------------------
+// A call over views: a view's base is an address the lend makes
+
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+fn then(nodes: List<Node>, rest: StructuredRegion) → StructuredRegion { Sequence(Region(Ports([]), nodes, Ports([])), rest) }
+fn when(flag, output: Nat, yes, no: StructuredRegion) → StructuredRegion {
+    Conditional(Ports([]), flag, Ports([]), Ports([word(output)]), yes, no)
+}
+
+// The call of function 0 over the window `from` (2) up to `to` (3) of the
+// buffer, where that is a window of it, and 512 where it is not;
+// `after` is what follows the call, and `result` what is returned.
+fn lends_with(view: View, arguments: List<Nat>, after: List<Node>, result: Nat) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 1, result := result,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 1, right := 3)],
+            when(10, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 11, left := 3, right := 2)],
+                    when(11, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                        Compose(Lend([view], 0, arguments, 9), leaf(Cons(Move(64, 8, 9), after))))))))
+}
+
+// lends(buffer, from, to, i, v): `put(i, v)` over the window.
+fn lends() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [], 8)
+}
+fn lenders() → List<Function> { [lends(), put()] }
+
+theorem lenders_placeless(): program_placeless(lenders()) = True { refl }
+
+// What the lend hides: the base it made, beside the address it came from.
+theorem lend_taints(): Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 9).taints([0]) =
+    [6, 0] {
+    refl
+}
+
+// The theorem, used: over any file, the word returned and the file left
+// are those stated at address zero.
+theorem lends_anywhere(file: Buffers(), address, length, from, to, i, v: BitVec(64)):
+    program_run(lenders(), file, 1, [address, length, from, to, i, v]) =
+    program_run(lenders(), file, 1, [BitVec::zero(), length, from, to, i, v]) {
+    program_run_placeless(lenders(), trivial, file, 1, [BitVec::zero(), length, from, to, i, v], [address, length, from, to, i, v],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// So at a literal file it is one evaluation, whatever the address: 9 put
+// at 1 of the window from 1 to 4 is put at 2 of the buffer.
+theorem lends_runs(address: BitVec(64)):
+    program_run(lenders(), [[b(1), b(2), b(3), b(4), b(5)]], 1, [address, w(5), w(1), w(4), w(1), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]) {
+    trans(lends_anywhere([[b(1), b(2), b(3), b(4), b(5)]], address, w(5), w(1), w(4), w(1), w(9)), refl)
+}
+
+// A program's call of it, stated with the words alone.
+theorem lends_called(): program_writers(lenders())([[b(1), b(2), b(3), b(4), b(5)], [b(7)]], 1, [w(1), w(4), w(1), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)], [b(7)]]) {
+    refl
+}
+
+// Refused: the view's base returned. Its answer is the address word plus
+// the start.
+fn returns_base() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [], 6)
+}
+
+theorem returns_base_refused(): program_placeless([returns_base(), put()]) = False { refl }
+theorem returns_base_at_one(): program_eval([returns_base(), put()], 1, [w(1), w(5), w(1), w(4), w(1), w(9)]) = w(2) { refl }
+theorem returns_base_at_two(): program_eval([returns_base(), put()], 1, [w(2), w(5), w(1), w(4), w(1), w(9)]) = w(3) { refl }
+
+// A node after the call reads the base.
+fn reads_base() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [Move(64, 12, 6)], 8)
+}
+
+theorem reads_base_refused(): program_placeless([reads_base(), put()]) = False { refl }
+
+// The view's length is no address: a node may read it.
+fn reads_length() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [Move(64, 8, 7)], 8)
+}
+
+theorem reads_length_placeless(): program_placeless([reads_length(), put()]) = True { refl }
+
+// A view that starts at the address.
+fn starts_at_address() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 0, end := 3, written := True, base := 6, length := 7), [4, 5], [], 8)
+}
+
+theorem starts_at_address_refused(): program_placeless([starts_at_address(), put()]) = False { refl }
+
+// The address passed as a word, beside the view.
+fn passes_address() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 0], [], 8)
+}
+
+theorem passes_address_refused(): program_placeless([passes_address(), put()]) = False { refl }
+
+// Two views for a callee lent one buffer: the second view's base would be
+// a word of the callee's.
+fn lends_two() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7),
+                View(buffer := 0, home := 0, start := 2, end := 3, written := False, base := 12, length := 13)], 0, [], 9))
+}
+
+theorem lends_two_refused(): program_placeless([lends_two(), put()]) = False { refl }

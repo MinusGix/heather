@@ -243,6 +243,30 @@ fn procedures_run() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A function that calls over views links and runs
+/// (docs/native-library-exports-design.md §3.1, step V4d): the program's
+/// statement calls a function that lends its second buffer whole as its
+/// callee's first, and exits with the byte the callee stored through the
+/// view and read back. With the view lent to read the program is refused:
+/// no rows of marks hold of a store through it.
+#[test]
+fn a_function_lending_a_view_runs() {
+    let dir = scratch("views");
+    let binary = dir.join("view_program");
+    let result = write_elf(PROBES, "view_program", &binary);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let (code, out) = run(&binary, b"", Stdio::piped());
+    assert_eq!((code, out.len()), (Some(88), 0), "the byte stored through the view comes back");
+    let output = dir.join("view_program_read");
+    let result = write_elf(PROBES, "view_program_read", &output);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "`view_program_read` is refused");
+    let reason = "`view_program_read` is refused: the functions it calls do not link";
+    assert!(stderr.contains(reason) && stderr.contains("no rows of marks hold of them"), "its refusal says `{reason}`:\n{stderr}");
+    assert!(!output.exists(), "and nothing is written for it");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Structured regions compile inside a leaf: `tr a-z A-Z` maps the bytes it
 /// read with one loop region, a conditional in its body, and writes them
 /// back; regions the compile does not take are refused with their reason
