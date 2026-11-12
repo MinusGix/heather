@@ -50,7 +50,7 @@ fn a_row_the_code_does_not_take_is_refused() {
             Kind::Word => name.clone(),
         }).collect();
         for parameters in [words, turned] {
-            let manifest = format!("{}\t{}\t{}\n", row.module, row.function, parameters.join(", "));
+            let manifest = format!("{}\t{} = {}\t{}\n", row.module, row.symbol, row.function, parameters.join(", "));
             let refused = heather_cli::linked::exports_rs(&manifest, &|function| read(&format!("{function}.s"))).unwrap_err();
             assert!(refused.contains("its compiled code takes"), "{refused}");
         }

@@ -128,6 +128,16 @@ theorem raise_stores_first_only(): program_stores(raise_span_program(), 1) = Fal
 theorem raise_lowers(): lower_program_lent(raise_span_program(), plan_program(raise_span_program()),
     program_counts(raise_span_program())).is_some().IsTrue() { trivial }
 
+// The same loop as a method of its span, `List::raise_letters`, exported by
+// its path (issues/linked-export-of-a-method.md): its program is
+// `raise_span`'s, so what is linked under `list_raise_letters` is the same
+// code.
+theorem raise_letters_program(): List::raise_letters::program = raise_span::program { refl }
+theorem raise_letters_runs(place: BitVec(64)):
+    program_run(List::raise_letters::program, mixed(), 1, [place, w(4), w(4), w(0)]) = Ending(w(4), mixed_raised()) {
+    refl
+}
+
 // A program's call: the buffers it holds and the count, no address. The
 // first buffer comes back raised, the second as it was.
 theorem raise_called(): program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed_raised()) { refl }

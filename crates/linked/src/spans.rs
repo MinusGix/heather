@@ -19,6 +19,11 @@
 //! length word as a read is, so a count past the end stores nothing past
 //! it.
 //!
+//! `raise_letters` is the same loop written as a `mut self` method of its
+//! span, `List::raise_letters`: the first export named by a method's path,
+//! linked under the symbol the path derives, `list_raise_letters`. Its
+//! program is `raise_span`'s, so the code is the same.
+//!
 //! `copy_span` is lent two spans, one to write and one to read: it stores
 //! into the first what it reads of the second, index by index. Its
 //! certificate asks that the two lie apart, which a `&mut [u8]` beside a
@@ -60,6 +65,13 @@ pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
 #[inline]
 pub fn raise(text: &mut [u8]) {
     exports::raise_span(text, text.len() as u64, 0);
+}
+
+/// [`raise_span`], through the method `List::raise_letters`: the same bytes
+/// raised and the same index answered.
+#[inline]
+pub fn raise_letters(text: &mut [u8], count: u64, from: u64) -> u64 {
+    exports::list_raise_letters(text, count, from)
 }
 
 /// `text`'s bytes from `from` to below `count` stored at their own indices

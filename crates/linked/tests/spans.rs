@@ -5,7 +5,9 @@
 //! caller's bytes through a pointer and a length
 //! (docs/native-library-exports-design.md), `scanner::token` is the
 //! scanner's loop the same way, with calls of compiled code inside it, and
-//! `spans::raise_span` stores into the bytes it is lent. A certificate says
+//! `spans::raise_span` stores into the bytes it is lent (and
+//! `spans::raise_letters`, the same loop as a `mut self` method, exported by
+//! its path). A certificate says
 //! the code computes the Heather function, reads only the span it is lent
 //! and stores only into its own stack room and a span lent to write; what
 //! it cannot reach is the platform around the call, and these are the
@@ -262,6 +264,10 @@ fn raises_as_the_reference() {
                 let mut span = text.clone();
                 let answered = spans::raise_span(&mut span, count, from);
                 assert_eq!((span, answered), raised(&text, count, from), "length {length}, count {count}, from {from}");
+                // The method exported by its path, `List::raise_letters`.
+                let mut span = text.clone();
+                let answered = spans::raise_letters(&mut span, count, from);
+                assert_eq!((span, answered), raised(&text, count, from), "raise_letters: length {length}, count {count}, from {from}");
             }
         }
         let mut span = text.clone();
@@ -285,13 +291,15 @@ fn nothing_is_stored_outside_the_span() {
     for (before, length, after) in [(0, 0, 16), (1, 1, 1), (7, 9, 5), (64, 100, 64), (3, 4096, 3)] {
         let whole = vec![b'q'; before + length + after];
         for count in [0, length as u64 / 2, length as u64, length as u64 + 1, (before + length + after) as u64 + 64] {
-            let mut buffer = whole.clone();
-            let answered = spans::raise_span(&mut buffer[before..before + length], count, 0);
-            assert_eq!(answered, count, "length {length}, count {count}");
-            let raised = usize::try_from(count).unwrap().min(length);
-            assert!(buffer[..before].iter().all(|byte| *byte == b'q'), "a byte before the span changed: length {length}, count {count}");
-            assert!(buffer[before..before + raised].iter().all(|byte| *byte == b'Q'), "length {length}, count {count}");
-            assert!(buffer[before + raised..].iter().all(|byte| *byte == b'q'), "a byte past the count changed: length {length}, count {count}");
+            for raise in [spans::raise_span, spans::raise_letters] {
+                let mut buffer = whole.clone();
+                let answered = raise(&mut buffer[before..before + length], count, 0);
+                assert_eq!(answered, count, "length {length}, count {count}");
+                let raised = usize::try_from(count).unwrap().min(length);
+                assert!(buffer[..before].iter().all(|byte| *byte == b'q'), "a byte before the span changed: length {length}, count {count}");
+                assert!(buffer[before..before + raised].iter().all(|byte| *byte == b'Q'), "length {length}, count {count}");
+                assert!(buffer[before + raised..].iter().all(|byte| *byte == b'q'), "a byte past the count changed: length {length}, count {count}");
+            }
         }
     }
 }

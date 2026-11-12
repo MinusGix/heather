@@ -21,6 +21,13 @@
 //! label in that export's file, stated there with a signature of its own
 //! (§6.3). Nothing is linked for such a row but the declaration.
 //!
+//! A row names the function as Heather does, and a method by its path
+//! (`List::raise_letters`, `Sha256::update`); its symbol is the label, the
+//! file stem and the Rust name. A plain function is its own symbol; a
+//! method's is derived ([`symbol_of`]: each segment in snake case, joined by
+//! `_`, so `Sha256::update` is `sha256_update`), or written before the path
+//! as `<symbol> = <path>`. Two rows with one symbol are refused, naming both.
+//!
 //! A parameter list that disagrees with the code's own signature (a span
 //! where the code takes a word, a parameter too few) is refused here, so a
 //! declaration cannot pass a pointer where the certificate says a count.
@@ -84,13 +91,49 @@ impl Signature {
     }
 }
 
-/// A row of `EXPORTS.tsv`: the source module, the `runtime fn` in it, its
-/// parameters as the Rust declaration names them, and for a function
-/// exported from another export's program, that export.
+/// Whether `name` is an ASCII C/assembly identifier: what a symbol, a
+/// parameter's name and each segment of a function's path must be.
+pub fn identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// The symbol a function is exported under when its row writes none: a
+/// plain function's own name, a method's path with each segment in snake
+/// case and joined by `_` (`Sha256::update` is `sha256_update`,
+/// `List::raise_letters` is `list_raise_letters`, `HashMap::get` is
+/// `hash_map_get`). `None` where a segment is not an identifier.
+pub fn symbol_of(function: &str) -> Option<String> {
+    let segments: Vec<&str> = function.split("::").collect();
+    if !segments.iter().all(|segment| identifier(segment)) { return None; }
+    let snake = |segment: &str| {
+        let chars: Vec<char> = segment.chars().collect();
+        let mut out = String::new();
+        for (i, &c) in chars.iter().enumerate() {
+            // A capital starts a word after a lower-case letter or a digit,
+            // and ends a run of capitals where a lower-case letter follows:
+            // `HTTPServer` is `http_server`.
+            let starts = c.is_ascii_uppercase() && i > 0 && (!chars[i - 1].is_ascii_uppercase() && chars[i - 1] != '_'
+                || chars[i - 1].is_ascii_uppercase() && chars.get(i + 1).is_some_and(|next| next.is_ascii_lowercase()));
+            if starts { out.push('_'); }
+            out.push(c.to_ascii_lowercase());
+        }
+        out
+    };
+    Some(segments.iter().map(|segment| snake(segment)).collect::<Vec<_>>().join("_"))
+}
+
+/// A row of `EXPORTS.tsv`: the source module, the `runtime fn` in it and
+/// the symbol it is exported under, its parameters as the Rust declaration
+/// names them, and for a function exported from another export's program,
+/// that export (by its symbol).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Export {
     pub module: String,
+    /// The function as Heather names it in its module: `f`, or a method's
+    /// path, `List::raise_letters`.
     pub function: String,
+    /// The label, the file stem and the Rust name.
+    pub symbol: String,
     pub parameters: Vec<(String, Kind)>,
     /// The export whose program this function is an entry of: its code is a
     /// label in that export's assembly file, and it has no file of its own.
@@ -100,7 +143,7 @@ pub struct Export {
 impl Export {
     /// The export whose assembly file holds this one's code: itself, or the
     /// one it is an entry of.
-    pub fn file(&self) -> &str { self.within.as_deref().unwrap_or(&self.function) }
+    pub fn file(&self) -> &str { self.within.as_deref().unwrap_or(&self.symbol) }
 
     /// The function as `compile-x86 --entry` names it: its module, which is
     /// its file's stem, and its name.
@@ -110,11 +153,13 @@ impl Export {
     }
 }
 
-/// The table's rows. A row is `<module>\t<function>\t<parameters>`, the
-/// parameters separated by commas, each a name, a span's followed by
-/// `: span`, or by `: span mut` where the function stores into it; and a
-/// fourth column where the function is an entry of another row's program,
-/// that row's function.
+/// The table's rows. A row is `<module>\t<function>\t<parameters>`: the
+/// function a plain one's name, a method's path, or `<symbol> = <path>`;
+/// the parameters separated by commas, each a name, a span's followed by
+/// `: span`, or by `: span mut` where the function stores into it (a
+/// `mut self` receiver that is a span is one of these); and a fourth column
+/// where the function is an entry of another row's program, that row's
+/// symbol.
 pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
     let mut rows = Vec::new();
     for line in manifest.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
@@ -123,9 +168,20 @@ pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
         let (Some(module), Some(function), Some(parameters), within, None) = (columns.next(), columns.next(), columns.next(), columns.next(), columns.next()) else {
             return Err(bad());
         };
-        let identifier = |name: &str| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && !name.starts_with(|c: char| c.is_ascii_digit());
-        if !identifier(function) || within.is_some_and(|within| !identifier(within)) { return Err(bad()); }
+        // The symbol written before the path, or the one the path derives.
+        let (symbol, function) = match function.split_once('=') {
+            Some((symbol, path)) => (Some(symbol.trim()).filter(|symbol| identifier(symbol)).map(str::to_string), path.trim()),
+            None => (symbol_of(function), function),
+        };
+        let Some(symbol) = symbol.filter(|_| symbol_of(function).is_some()) else {
+            return Err(format!("EXPORTS.tsv: `{line}`: the function is a name or a method's path (`Type::method`), each segment an \
+                ASCII identifier, and a symbol written before it as `<symbol> = <path>` is one"));
+        };
+        if within.is_some_and(|within| !identifier(within)) { return Err(bad()); }
+        if within.is_some() && function.contains("::") {
+            return Err(format!("EXPORTS.tsv: `{function}` is a method, and an entry of another export's program is a plain function \
+                (`compile-x86 --entry`, issues/linked-program-entries-limits.md)"));
+        }
         let mut named = Vec::new();
         for parameter in parameters.split(',').map(str::trim).filter(|parameter| !parameter.is_empty()) {
             let (name, kind) = match parameter.split_once(':') {
@@ -141,14 +197,19 @@ pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
             }
             named.push((name.to_string(), kind));
         }
-        if rows.iter().any(|row: &Export| row.function == function) { return Err(format!("EXPORTS.tsv lists `{function}` twice")); }
-        rows.push(Export { module: module.to_string(), function: function.to_string(), parameters: named, within: within.map(str::to_string) });
+        if let Some(other) = rows.iter().find(|row: &&Export| row.symbol == symbol) {
+            return Err(if other.function == function && other.module == module { format!("EXPORTS.tsv lists `{function}` twice") } else {
+                format!("EXPORTS.tsv: `{function}` of `{module}` and `{}` of `{}` are both exported as `{symbol}`: write another symbol \
+                    before one of them, as `<symbol> = {function}`", other.function, other.module)
+            });
+        }
+        rows.push(Export { module: module.to_string(), function: function.to_string(), symbol, parameters: named, within: within.map(str::to_string) });
     }
     // An entry is of a program that has a file: a row with no fourth column.
     for row in &rows {
         let Some(within) = &row.within else { continue };
-        match rows.iter().find(|other| other.function == *within) {
-            None => return Err(format!("EXPORTS.tsv: `{}` is an entry of `{within}`, which is no row", row.function)),
+        match rows.iter().find(|other| other.symbol == *within) {
+            None => return Err(format!("EXPORTS.tsv: `{}` is an entry of `{within}`, which is no row's symbol", row.function)),
             Some(other) if other.within.is_some() => return Err(format!("EXPORTS.tsv: `{}` is an entry of `{within}`, which is itself an entry of `{}`: \
                 name the export that has the file", row.function, other.file())),
             Some(_) => {}
@@ -168,7 +229,9 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
     let mut raw = String::new();
     let mut wrappers = String::new();
     for row in &rows {
-        let function = &row.function;
+        // The symbol is the label and the Rust name; the doc names the
+        // function as Heather does.
+        let function = &row.symbol;
         let signature = Signature::read(&assembly(row.file())?, function)?;
         let named: Vec<Kind> = row.parameters.iter().map(|(_, kind)| *kind).collect();
         if named != signature.kinds {
@@ -178,8 +241,8 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
         // An entry's code is in the file of the export it is an entry of.
         if row.within.is_none() { links.push_str(&format!("linked!(\"{function}.s\");\n")); }
         let doc = match &row.within {
-            None => format!("/// `{function}` of `{}`. STACK: {} bytes.", row.module, signature.stack),
-            Some(within) => format!("/// `{function}` of `{}`, a function of `{within}`'s program. STACK: {} bytes.", row.module, signature.stack),
+            None => format!("/// `{}` of `{}`. STACK: {} bytes.", row.function, row.module, signature.stack),
+            Some(within) => format!("/// `{}` of `{}`, a function of `{within}`'s program. STACK: {} bytes.", row.function, row.module, signature.stack),
         };
         if named.iter().all(|kind| *kind == Kind::Word) {
             let parameters: Vec<String> = row.parameters.iter().map(|(name, _)| format!("{name}: u64")).collect();
@@ -405,6 +468,55 @@ mod tests {
             ("m.hthr\tg\ta, a\n", "is one twice"), ("m.hthr\tg\ta\nm.hthr\tg\ta\n", "twice")] {
             let refused = exports_rs(row, &assembly).unwrap_err();
             assert!(refused.contains(why), "{row}: {refused}");
+        }
+    }
+
+    // A method is a row by its path, exported under the symbol its path
+    // derives or the one written before it; the symbol is its label, its
+    // file and its Rust name, and the doc names the method.
+    #[test]
+    fn a_method_is_exported_under_its_symbol() {
+        for (function, symbol) in [("f", "f"), ("Sha256::update", "sha256_update"), ("List::raise_letters", "list_raise_letters"),
+            ("HashMap::get", "hash_map_get"), ("HTTPServer::run", "http_server_run"), ("U8x4::splat", "u8x4_splat"), ("A::B::c", "a_b_c")] {
+            assert_eq!(symbol_of(function).as_deref(), Some(symbol), "{function}");
+        }
+        for function in ["", "List::", "::f", "List::9f", "List:f", "a-b"] { assert_eq!(symbol_of(function), None, "{function}"); }
+        let manifest = "m.hthr\tList::raise_letters\ttext: span mut, count, from\nm.hthr\tlift = Sha256::update\tctx: span mut\n";
+        let rows = exports(manifest).unwrap();
+        assert_eq!((rows[0].function.as_str(), rows[0].symbol.as_str(), rows[0].file()), ("List::raise_letters", "list_raise_letters", "list_raise_letters"));
+        assert_eq!((rows[1].function.as_str(), rows[1].symbol.as_str()), ("Sha256::update", "lift"));
+        let assembly = |symbol: &str| Ok(match symbol {
+            "list_raise_letters" => stated("list_raise_letters", &[Kind::SpanMut, Kind::Word, Kind::Word], 240),
+            "lift" => stated("lift", &[Kind::SpanMut], 120),
+            other => return Err(format!("{other}.s was read")),
+        });
+        let text = exports_rs(manifest, &assembly).unwrap();
+        assert!(text.contains("linked!(\"list_raise_letters.s\");\nlinked!(\"lift.s\");\n"), "{text}");
+        assert!(text.contains("/// `List::raise_letters` of `m.hthr`. STACK: 240 bytes.\npub fn list_raise_letters(text: &mut [u8], count: u64, from: u64) -> u64 {"), "{text}");
+        assert!(text.contains("// SAFETY (the premises of `list_raise_letters_native_returns`, in order):"), "{text}");
+        assert!(text.contains("unsafe { raw::lift(ctx.as_mut_ptr(), ctx.len() as u64) }"), "{text}");
+        // An entry is named by the symbol of the export whose program it is in.
+        let entry = exports("m.hthr\tstep\ta\tlist_scan\nm.hthr\tList::scan\ttext: span\n").unwrap();
+        assert_eq!(entry[0].file(), "list_scan");
+    }
+
+    // Two rows that would be one symbol are refused, naming both and the
+    // symbol; so is a path that is no path, and a method as an entry.
+    #[test]
+    fn a_symbol_two_rows_derive_is_refused() {
+        for (table, why) in [
+            ("m.hthr\tList::raise_letters\ta\nn.hthr\tlist_raise_letters\tb\n",
+                "`list_raise_letters` of `n.hthr` and `List::raise_letters` of `m.hthr` are both exported as `list_raise_letters`"),
+            ("m.hthr\tSha256::update\ta\nm.hthr\tsha256_update = List::sha256_update\ta\n",
+                "`List::sha256_update` of `m.hthr` and `Sha256::update` of `m.hthr` are both exported as `sha256_update`"),
+            ("m.hthr\tList::f\ta\nm.hthr\tList::f\ta\n", "lists `List::f` twice"),
+            ("m.hthr\tList::9f\ta\n", "the function is a name or a method's path"),
+            ("m.hthr\t9s = List::f\ta\n", "the function is a name or a method's path"),
+            ("m.hthr\ts = \ta\n", "the function is a name or a method's path"),
+            ("m.hthr\tList::step\ta\tscan\nm.hthr\tscan\ta\n", "`List::step` is a method, and an entry"),
+        ] {
+            let refused = exports(table).unwrap_err();
+            assert!(refused.contains(why), "{table}: {refused}");
         }
     }
 }

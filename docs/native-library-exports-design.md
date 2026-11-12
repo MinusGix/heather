@@ -1044,6 +1044,43 @@ program.
   every function before it. The bound is sound and loose; tightening it is a change to
   `compiled_returns`'s premise, by the call depth below a function.
 
+### 6.4 A method as an export (2026-11-12)
+
+A function was named in one place by one ASCII identifier that was at once
+the Heather function, the assembly label, the generated file's stem and
+the Rust name, so a method (`List::sha256_update`, later
+`Sha256::update`) could not be a row (`issues/linked-export-of-a-method.md`).
+The two names are now apart:
+
+- **The function** is named as its module names it, a method by its path.
+  `compile-x86 <module> List::raise_letters` resolves it in the module
+  as any other function; nothing else about the compile changes. A
+  `mut self` receiver that is a span is the program's first span, so the
+  row writes it as a parameter, `text: span mut`, as for a plain function
+  that takes the span first.
+- **The symbol** is the label, the file's stem, the Rust name and the
+  prefix of the certificate's declarations. A plain function's is its own
+  name; a method's is derived, each segment of the path in snake case and
+  joined by `_` (`heather_cli::linked::symbol_of`: `Sha256::update` is
+  `sha256_update`, `List::raise_letters` is `list_raise_letters`), or
+  written before the path in the table as `<symbol> = <path>` and given to
+  the compiler as `--symbol`. The table refuses two rows with one symbol,
+  naming both rows and the symbol, whichever way each was arrived at.
+- **One reading of the table.** `heather linked-exports --rows` prints
+  the rows that have a file as the compiler reads them (module, function,
+  symbol, entries), and `scripts/linked` compiles from that rather than
+  splitting the columns itself; the gate (`native_linked.rs`) passes the
+  same `--symbol`.
+- **Entries stay plain functions.** A fourth column names an export by its
+  symbol; a method as an entry is refused, since every method an export
+  would want is lent its span, which an entry is not yet (§6.3).
+
+The first such row is `List::raise_letters` (`native_tool_spans`),
+`raise_span` written as a method of its span; its program is
+`raise_span`'s (`raise_letters_program` in the module's probes), so its
+file is the same code under the label `list_raise_letters`, and
+`crates/linked/tests/spans.rs` holds it to the same reference.
+
 ## 7. The write half, in outline
 
 Not built by the read rounds; here to show they do not have to be redone.

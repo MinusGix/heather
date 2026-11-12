@@ -11,10 +11,11 @@
 // docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
 // span what it reads of another: the span after the written one is lent to
 // read, and the statement is at every file, the span read being the file's
-// next. `copy_window` calls `copy_span` over a window of each of its
-// spans (docs/native-library-exports-design.md §3.1): the loop runs from
-// its own index 0 over two windows and is told nothing of where in the
-// spans they lie.
+// next. `List::raise_letters` is `raise_span` as a method of its span, the
+// one export named by a method's path. `copy_window` calls `copy_span` over
+// a window of each of its spans (docs/native-library-exports-design.md
+// §3.1): the loop runs from its own index 0 over two windows and is told
+// nothing of where in the spans they lie.
 // The probes are lib/_tests/native/native_tool_spans_tests.hthr.
 import logic;
 import bool;
@@ -29,6 +30,7 @@ import tactic;
 import bitvec;
 import bitvec_nat;
 import bitvec_omega;
+import algebra;
 import omega;
 import rt;
 import rt_lower;
@@ -134,6 +136,20 @@ theorem raise_span_called(bytes: List<BitVec(8)>, rest: Buffers(), count, i: Bit
             Cons(raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).after, rest)) {
     cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(bytes, rest))),
         raise_span::runs_over(bytes, [], BitVec::zero(), BitVec::ofNat(bytes.len()), count, i))
+}
+
+// `raise_span` as a method of the span it stores into: the store is a call
+// on the receiver and the loop's own call ends the branch, so nothing
+// threads the span by hand. It is exported by its path
+// (crates/linked/generated/EXPORTS.tsv), under the symbol the path derives,
+// `list_raise_letters` (issues/linked-export-of-a-method.md).
+runtime fn List::raise_letters(mut self text: List<u8>, length, count, i: u64) → u64 decreases (count - i).toNat() {
+    if h: i < count {
+        text.put_within(length, i, raise_word(text.byte_within(length, i).zero_extend(56)).truncate(8, 56));
+        text.raise_letters(length, count, i + 1)
+    } else {
+        i
+    }
 }
 
 // copy_span(out, length, text, size, count, i): the bytes of `text` from
