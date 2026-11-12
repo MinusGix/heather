@@ -803,6 +803,19 @@ fn simplified_binder(elab: &Elaborator, cx: &Cx, dom: &Type, name: &str) -> Opti
     binders.pop()?.ty
 }
 
+/// The steps a match's scrutinee may take to reach its constructor: a
+/// comparison of two closed words (`ofNat(0).eq_bit(ofNat(1))`, what a flag
+/// read back from a written constant leaves, its literal perhaps still a
+/// field of the node that wrote it) is decided by running it over the
+/// width's bits, which a split's small budget does not reach; anything else
+/// gets that small budget.
+fn closed_comparison_steps(elab: &Elaborator, scrut: &Term) -> u64 {
+    let closed = |t: &Rc<Term>| heather_kernel::subst::local_bound(t) == 0;
+    let decided = crate::omega_cert::named_args(elab, scrut, "bitvec::BitVec::eq_bit")
+        .is_some_and(|args| matches!(args.as_slice(), [width, a, b] if closed(width) && closed(a) && closed(b)));
+    if decided { 1 << 18 } else { 64 }
+}
+
 /// A closed word literal's value, `ofNat(w, k)` with both literal and
 /// `k < 2^w`, so its `toNat` is `k` by computation.
 fn literal_word(elab: &Elaborator, term: &Term) -> Option<u64> {
@@ -914,7 +927,18 @@ fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -
     let oracle = elab.goal_oracle();
     let unfolded = oracle.unfold(&cx.gamma, call, Unfold::OneStep).next()?;
     let body = contracted(elab, cx, &oracle, &unfolded, &mut 256);
-    elab.spell_term_source(cx, &body)?;
+    // A body that is a match on what its arguments do not decide yet
+    // (`Tm::leave` matching on `after(64, flag).eq_bit(1)`) has no
+    // surface spelling, but its scrutinee does, and that is what the other
+    // laws rewrite until the match selects its arm. A recursive
+    // definition's body is the recursor, never a `Case`, so this admits no
+    // raw recursion.
+    if elab.spell_term_source(cx, &body).is_none() {
+        let Term::Case { scrut, .. } = &body else {
+            return None;
+        };
+        elab.spell_term_source(cx, scrut)?;
+    }
     Some(body)
 }
 
@@ -1137,7 +1161,7 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                 // the scrutinee's value is not
                 // (issues/split-all-nested-if-omega-kernel-refusal.md).
                 if let Term::Case { scrut, .. } = &mut output
-                    && let Ok(whnf) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, scrut)
+                    && let Ok(whnf) = elab.goal_oracle().bounded(closed_comparison_steps(elab, scrut)).whnf_term(&cx.gamma, scrut)
                     && crate::spelling::is_inj(&whnf)
                 {
                     *scrut = Rc::new(whnf);

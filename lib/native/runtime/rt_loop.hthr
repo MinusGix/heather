@@ -338,19 +338,15 @@ theorem Tm::lower_again_sound(t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, ne
             let apart = Bool::is_true_and(absent(flag, nexts), distinct(nexts), parts.left);
             let shifted = eval_nodes(Tm::moves_to(nexts, qs), values);
             let after = Valuation::set(shifted, flag, λ wd => BitVec::ofNat(0));
-            let at_flag: (after(64, flag) = BitVec::ofNat(0)) = Valuation::set_here(shifted, flag, λ wd => BitVec::ofNat(0), 64);
             // The flag is none of `nexts`.
             let kept: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
                 Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, λ e => absent_mem(flag, nexts, apart.left, y, m, sym(e))));
-            let moved: (words_of(after, nexts) = Tm::words(w, g, env, args)) = simp_only(kept,
+            // The pass's region run: the flag reads back 0, and `nexts` hold
+            // the call's arguments.
+            ⟨next.le_refl(), λ again => simp_only(Tm::leave, Tm::again_region, nodes_region, Region::eval, Node::step, Valuation::set_here, kept,
                 Tm::moves_to_words(nexts, qs, values, apart.right, Tm::disjoint_tail(flag, nexts, qs, rest.left),
                     nexts.len().matches_eq(qs.len(), rest.right)),
-                Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs));
-            ⟨next.le_refl(), λ again => trans(
-                eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => match x.eq_bit(BitVec::ofNat(1)) {
-                        False => Tm::out(w.tys, res, again(ws)), True => ws.head_or(BitVec::zero()) },
-                    at_flag, moved),
-                cong_fn(λ (v: res.sem(w.tys)) => Tm::out(w.tys, res, v), sym(means(again, env))))⟩
+                Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs), means(again, env))⟩
         }))
 }
 
@@ -379,23 +375,17 @@ theorem Tm::lower_leaf_sound(t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWor
                     let pf = Bool::is_true_and(flag.differs(n0), absent(flag, rest), p1.left);
                     let pn = Bool::is_true_and(absent(n0, rest), distinct(rest), p1.right);
                     let mid = l.region.eval(call, values);
-                    let moved = Valuation::set(mid, n0, λ wd => mid(wd, l.result));
-                    let copies = Tm::moves_to(rest, Tm::copies(rest, n0));
-                    let copied = eval_nodes(copies, moved);
-                    let after = Valuation::set(copied, flag, λ wd => BitVec::ofNat(1));
-                    let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(copied, flag, λ wd => BitVec::ofNat(1), 64);
                     let not_flag: (n0 ≠ flag) = λ same => Nat::differs_ne(flag, n0, pf.left, sym(same));
                     let untouched = Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left);
-                    let at_n0: (after(64, n0) = mid(64, l.result)) =
-                        simp_only(Valuation::set_other, eval_nodes_frame(copies), Valuation::set_here);
                     let held_one: t.ty(w, g).OneWord(w.tys) = j(sym(e), λ x _ => x.OneWord(w.tys), er);
                     let value: (mid(64, l.result) = Tm::out(w.tys, res, Tm::leaf(t, w, res, g, env))) =
                         trans(Ty::one_word_reads(w.tys, mid, l.result, t.ty(w, g), held_one, t.sem(w, g, env), ran.right.right.right),
                             sym(Tm::out_cast(w.tys, t.ty(w, g), res, e, t.sem(w, g, env))));
-                    ⟨ran.left, λ again => trans(
-                        cong_fn(λ (x: BitVec(64)) => match x.eq_bit(BitVec::ofNat(1)) {
-                            False => Tm::out(w.tys, res, again(words_of(after, ns))), True => words_of(after, ns).head_or(BitVec::zero()) }, at_flag),
-                        trans(at_n0, trans(value, cong_fn(λ (v: res.sem(w.tys)) => Tm::out(w.tys, res, v), sym(means(again, env))))))⟩
+                    // The pass's region run, the flag read back as 1 and the
+                    // first of `nexts` as the leaf's word.
+                    ⟨ran.left, λ again => simp_only(Tm::leave, Tm::leave_region, nodes_region, Region::eval, Node::step,
+                        Valuation::set_here, Valuation::set_other, eval_nodes_frame(Tm::moves_to(rest, Tm::copies(rest, n0))),
+                        value, means(again, env))⟩
                 })))
         },
     }
