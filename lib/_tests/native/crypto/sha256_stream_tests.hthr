@@ -46,10 +46,10 @@ theorem count_alone(): List::u32_be_within(List::sha256_put_count(blank(), w(328
 // The start
 
 // §5.3.3, as the specification holds it, and no bytes taken.
-theorem init_is_the_initial_value(): words_from(sha256_init(ones(), w(328)).after, Sha2::sha256().initial, 0) = True { refl }
-theorem init_counts_none(): sha256_count(sha256_init(ones(), w(328)).after, w(328)) = w(0) { refl }
+theorem init_is_the_initial_value(): words_from(Sha256::init::bytes(ones(), w(328)).after, Sha2::sha256().initial, 0) = True { refl }
+theorem init_counts_none(): sha256_count(Sha256::init::bytes(ones(), w(328)).after, w(328)) = w(0) { refl }
 // The working area is left as it was.
-theorem init_leaves_the_rest(): List::u32_be_within(sha256_init(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
+theorem init_leaves_the_rest(): List::u32_be_within(Sha256::init::bytes(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
 
 // ---------------------------------------------------------------------------
 // Bytes into the block
@@ -71,7 +71,7 @@ theorem absorb_follows(): List::u32_be_within(List::sha256_absorb(blank(), w(328
 theorem absorb_under_length(): List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(2), w(0), w(0)).value = w(2) { refl }
 
 // A part taken: the count moves by its length.
-theorem update_counts(): sha256_count(sha256_update(sha256_init(blank(), w(328)).after, w(328), [b(0x61), b(0x62), b(0x63)], w(3)).after, w(328)) = w(3) {
+theorem update_counts(): sha256_count(sha256_update(Sha256::init::bytes(blank(), w(328)).after, w(328), [b(0x61), b(0x62), b(0x63)], w(3)).after, w(328)) = w(3) {
     refl
 }
 

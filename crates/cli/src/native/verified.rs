@@ -215,14 +215,18 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
     /// `{prefix}_marked` (`program_marked`): each function's stores are
     /// into buffers its own row marks, and each call over views is of a
     /// callee whose row the views meet.
-    pub fn runtime_written(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>,
+    ///
+    /// `over` is the function over the span the theorem is stated at: the
+    /// source function itself, or for a function of a laid record the
+    /// function over the span that holds the record (`{source}::bytes`).
+    pub fn runtime_written(prefix: &str, owner: &str, source: &str, over: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>,
         tables: Option<Vec<Vec<bool>>>) -> Shape {
         let parameters = arguments(arity);
         let spans = counts[functions - 1] as usize;
         let own = (1..arity).map(|i| if i % 2 == 0 && i < 2 * spans { format!("Setup::span_at(rest, {})", i / 2 - 1) } else { parameters[i].clone() })
             .collect::<Vec<_>>().join(", ");
         let comma = if own.is_empty() { "" } else { ", " };
-        let answer = format!("{source}(span{comma}{own})");
+        let answer = format!("{over}(span{comma}{own})");
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
         for name in LENT_IMPORTS.iter().chain(WRITTEN_IMPORTS) { definitions.push_str(&format!("import {name};\n")); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
@@ -348,7 +352,11 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) â
                 return Err(format!("`{source}` stores into its span and its program is lent {spans} buffers, marked {marks:?}: compile-x86 exports a \
                     writer of its first span, which may read the spans after it"));
             }
-            Ok(Shape::runtime_written(prefix, owner, source, functions as usize, arity as usize, counts.to_vec(), marks, tables))
+            // A function of a laid record is compiled as the function
+            // over the span that holds the record, which its generator
+            // publishes beside the record-level theorem.
+            let over = if elab.qualified_global(&format!("{source}::runs_held")).is_some() { format!("{source}::bytes") } else { source.to_string() };
+            Ok(Shape::runtime_written(prefix, owner, source, &over, functions as usize, arity as usize, counts.to_vec(), marks, tables))
         }
         _ => Err(format!("`{source}::program` did not read back")),
     }

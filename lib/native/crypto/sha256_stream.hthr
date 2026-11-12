@@ -1,6 +1,6 @@
 // SHA-256 over a message that arrives in parts, as compiled code
 // (issues/sha2-compress-native.md, stage C2 of
-// docs/native-lexer-crypto-roadmap.md): `sha256_init`, `sha256_update` and
+// docs/native-lexer-crypto-roadmap.md): `Sha256::init`, `sha256_update` and
 // `sha256_finish` over a context their caller lends, with the padding of
 // FIPS 180-4 §5.1.1 done here and not by the caller.
 //
@@ -63,25 +63,34 @@ import stored;
 import part;
 import laid;
 import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
 
 // The count of bytes taken, from its eight bytes.
 runtime fn sha256_count(ctx: List<u8>, cn: u64) → u64 { ctx.u64_be_within(cn, Sha256::count_at) }
 
 runtime fn List::sha256_put_count(mut self ctx: List<u8>, cn, count: u64) → u64 { ctx.put_u64_be_within(cn, Sha256::count_at, count) }
 
-// The initial hash value (§5.3.3) and a count of zero.
-runtime fn sha256_init(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
-    let mut ctx = ctx;
-    ctx.put_u32_be_within(cn, Sha256::hash_at, 0x6a09e667);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 4, 0xbb67ae85);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 8, 0x3c6ef372);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 12, 0xa54ff53a);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 16, 0x510e527f);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 20, 0x9b05688c);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 24, 0x1f83d9ab);
-    ctx.put_u32_be_within(cn, Sha256::hash_at + 28, 0x5be0cd19);
-    let count = ctx.sha256_put_count(cn, 0);
-    Mutated(ctx, count)
+// The initial hash value (§5.3.3) and a count of zero: a function of the
+// context, compiled over the span that holds it. Its code is eight stores
+// of a word and one of the count, each where the declaration lays the
+// field, and it is exported as `sha256_init`.
+runtime fn Sha256::init(mut self s: Sha256) → u64 {
+    s.hash := [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    s.count := 0;
+    0
+}
+
+// What the compiled code leaves: where the span held a context, it holds
+// that context with the initial hash value and no bytes taken. The
+// generator's theorem, nothing here by hand.
+theorem Sha256::init_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::init::bytes(span, length).after, length,
+        s with { hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], count = 0 }) {
+    Sha256::init::runs_held(span, s, length, holds).holds
 }
 
 // One byte into the block at `fill`, and the block run when that fills
