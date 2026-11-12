@@ -1,6 +1,6 @@
 ---
 title: A runtime fn cannot call complement or a rotate: ~e and e.rotr(6) are refused by the generator
-status: open
+status: closed
 labels: [native,runtime-fn,bitvec,ergonomics]
 area: heather-in-heather
 milestone: [nh-front]
@@ -32,3 +32,16 @@ A more general form of 1, to weigh: the reflector unfolds any transparent ordina
 ## Done when
 
 `sha256_round.hthr`'s functions are written with `~` and `rotr`, its `sha256_ones` lemma is gone, and `scripts/linked --check` holds (same assembly under route 1).
+
+## Log
+
+- 2026-11-12: Built route 1, without composing an equation: each rewriting's right side *converts* to its left at a literal width, so the pin (`f::reflects`, by conversion) holds as it is and nothing in the certificate changed. The table gains `PComplement` and `PRotate(kind)` (`rt_reflect.hthr`), looked up only where they are in scope (`rt_derived_names`: a module without `bitvec_rotate` has no `rotr`).
+
+  - `~x` is reflected as `all_ones ⊕ x`, the literal on the **left**: `Bool::xor` matches on its left operand, so `ofNat(2^w − 1).bxor(x)` computes bit by bit to `complement(x)`'s `!b`, while `x.bxor(ones)` is stuck on the neutral bit (that is why the old proofs needed `bxor_all_ones` and a `j`).
+  - `x.rotr(k)` is `x >> k | x << (w − k)` and `x.rotl(k)` its mirror, the definitions (`bitvec_rotate.hthr`), the second count computed by the reflector; the shifts are value-numbered, so `x.rotr(8) ⊕ x.rotl(56)` binds each shift once. A count that is not a literal is refused as a shift's is ("expected a numeral").
+  - `sha256_round` and `sha512_round` now read as FIPS 180-4 writes them (`e.rotr(6) ⊕ e.rotr(11) ⊕ e.rotr(25)`, `(e & f) ⊕ (~e & g)`); `sha256_ones`, `sha512_ones` and their `j` steps are gone, and every spec theorem about a word function is `refl`. SHA-512's also moved to `u64` and operators.
+  - Probes: `flip`, `flip_low`, `spin`, `spin_low` and the refused `spin_by` in `lib/_tests/native/runtime/runtime_tests.hthr`.
+
+  Assembly (`scripts/linked`): every rotation compiles to the same bytes as the shift pairs did (`sha256_t2`, `sha256_next`, `sha512_t2`, `sha512_next` unchanged). The complement moved one register: with the literal now the XOR's left operand, the emitter writes the result into the literal's register (`xor rdx, rsi` where it was `xor rsi, rdx`), and the AND and XOR after it name the other register. Same instructions, same length; `sha256_t1`, `sha512_t1` and the three programs containing `sha256_t1` (`sha256_compress`, `sha256_update`, `sha256_finish`) were rewritten for that.
+
+  Route 2 (`not`/`ror` in the machine model) is [[x86-narrow-and-rotate-forms]], for when an optimiser or benchmark asks: a rotation is still three instructions.

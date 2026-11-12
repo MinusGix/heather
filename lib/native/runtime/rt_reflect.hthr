@@ -44,7 +44,16 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin }
+//
+// Two are not operations of `rt` but rewritings into them
+// (issues/rt-complement-and-rotate.md), which the pin accepts because each
+// right side converts to its left at a literal width: `PComplement` is
+// `~x` read as `all_ones ⊕ x` (`Bool::xor` matches on its left operand, so
+// a literal of all ones on the left computes to `!b` bit by bit, where on
+// the right it would be stuck on the neutral bit), and `PRotate(kind)` is
+// `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
+// defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat) }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -449,6 +458,17 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
             },
         },
+    }
+}
+
+// A node no source handle stands for (a part of a rewriting, `PRotate`'s
+// shifts), as a variable: numbered like `finish`'s, bound by a `Let` unless
+// an equal node is bound already.
+fn RSt::node(self st: RSt, node: Tm) → Pair<RSt, Nat> {
+    match (match node { Lit(_, _) => None, _ => rt_memo(st.memo, node) }) {
+        Some(l) => Pair(st, l),
+        None => Pair(RSt(Succ(st.depth), Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
+            st.handles, st.locals, st.funs), st.depth),
     }
 }
 
@@ -1078,6 +1098,31 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 })),
                             _ => rt_refuse("`byte_within` without its span, length word and index"),
                         },
+                        // `~x`: all ones, then `all_ones ⊕ x` (the literal on
+                        // the left, where `Bool::xor` reads it).
+                        PComplement => match args {
+                            Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => rt_go(f, k, st, x, True).bind(λ r => {
+                                    let ones = r.fst.node(Lit(Word(w), Nat::pow(2, w) - 1));
+                                    pure(ones.fst.finish(h, operand, Prim(Bxor(w), [ones.snd, RSt::level(r.snd)])))
+                                }),
+                                _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                            }),
+                            Nil => rt_refuse("`" ++ name ++ "` without its operand"),
+                        },
+                        // `x.rotr(c)` is `x >> c | x << (w - c)`, `x.rotl(c)`
+                        // the mirror, the count a literal.
+                        PRotate(kind) => match args {
+                            Cons(x, Cons(count, _)) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => rt_literal(count).bind(λ c => rt_go(f, k, st, x, True).bind(λ r => {
+                                    let first = r.fst.node(Prim(Known::shift_op(1 - kind, w, c), [RSt::level(r.snd)]));
+                                    let second = first.fst.node(Prim(Known::shift_op(kind, w, w - c), [RSt::level(r.snd)]));
+                                    pure(second.fst.finish(h, operand, Prim(Bor(w), [first.snd, second.snd])))
+                                })),
+                                _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                            }),
+                            _ => rt_refuse("`" ++ name ++ "` without its operand and count"),
+                        },
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
@@ -1313,6 +1358,23 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::arithmetic_shift_right", PShift(2)), Pair("List::byte_within", PWithin)]
 }
 
+// The rewritings among the primitives (`PComplement`, `PRotate`), each
+// known where its operation is in scope: a module that does not import
+// `bitvec_rotate` has no `rotr` to call.
+fn rt_derived_names() → List<Pair<String, Prim>> {
+    [Pair("BitVec::complement", PComplement), Pair("BitVec::rotr", PRotate(0)), Pair("BitVec::rotl", PRotate(1))]
+}
+
+fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
+    match ps {
+        Nil => pure([]),
+        Cons(p, rest) => lookup(p.fst).bind(λ c => rt_prims_present(rest).bind(λ es => match c {
+            Accepted(g) => pure(Cons(PrimEntry(g.id, p.snd), es)),
+            Refused(_) => pure(es),
+        })),
+    }
+}
+
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
     match ps {
         Nil => pure([]),
@@ -1330,14 +1392,15 @@ fn rt_recs(names: List<String>) → Tac<List<RecEntry>> {
 // What the reflector knows, for a program of the functions `funs` (by
 // name, in order) reading the records `recs`.
 fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<Known> {
-    rt_prims(rt_prim_names()).bind(λ ps =>
+    rt_prims(rt_prim_names()).bind(λ base =>
+    rt_prims_present(rt_derived_names()).bind(λ derived =>
     rt_globals(funs).bind(λ gs =>
     rt_recs(recs).bind(λ rs =>
     rt_global("BitVec").bind(λ bv =>
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None)))))))))
+    pure(Known(base ++ derived, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None))))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }
