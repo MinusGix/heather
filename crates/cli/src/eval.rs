@@ -13,10 +13,12 @@
 //! cap (`--limit`) without evaluating the rest, and what was cut is printed
 //! as `…`.
 //!
-//! The types read are `Nat`, `Bool`, `Char`, `String`, and `List` and
-//! `Option` of those, nested; anything else is refused by its type. A
-//! `String` at the top is printed as its text, so a report reads as written;
-//! inside a list or an option it is quoted.
+//! The types read that way are `Nat`, `Bool`, `Char`, `String`, and `List`
+//! and `Option` of those, nested. A `String` at the top is printed as its
+//! text, so a report reads as written; inside a list or an option it is
+//! quoted. A value of any other type is read a layer at a time by its
+//! constructors (`heather_elab::show_global`): `R(f := 1, g := [C(2)])` as
+//! the declarations name them, with `--limit` counting the layers read.
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -126,10 +128,21 @@ fn eval(args: &[String]) -> Result<(), String> {
     let value_text = format!("{head}{term}\n);\n");
     elab.elab_module_source(VALUE_MODULE, &value_text).map_err(|e| term_error(e, &value_text, head.len(), term))?;
     let value = format!("{VALUE_MODULE}::eval_value");
-    let spelled = heather_elab::global_type_source(&elab, &value)
-        .ok_or("the term's type has no spelling to read it at")?;
-    let shape = Shape::parse(&spelled).ok_or_else(|| format!(
-        "`eval` reads a `Nat`, `Bool`, `Char`, `String`, and a `List` or `Option` of those; the term is a `{spelled}`"))?;
+    let spelled = heather_elab::global_type_source(&elab, &value);
+    let label = |ty: &str| eprintln!("evaluating `{}` : {ty} (an evaluation: untrusted, it proves nothing and is not a check)", term.trim());
+    // Any other type is read a layer at a time, by its constructors
+    // (`heather_elab::show_global`): slower, as each layer is a weak head
+    // of its own, but it reads whatever the display can spell.
+    let Some(shape) = spelled.as_deref().and_then(Shape::parse) else {
+        label(spelled.as_deref().unwrap_or("(a type with no spelling)"));
+        let (shown, cut) = heather_elab::show_global(&elab, &value, limit).map_err(|e| format!("evaluation: {e}"))?;
+        println!("{shown}");
+        if cut {
+            eprintln!("cut at {limit} nodes (`--limit`)");
+        }
+        return Ok(());
+    };
+    let spelled = spelled.unwrap_or_default();
 
     let mut read_text = format!("import {VALUE_MODULE};\n");
     for module in IMPORTS { read_text.push_str(&format!("import {module};\n")); }
@@ -140,7 +153,7 @@ fn eval(args: &[String]) -> Result<(), String> {
     elab.elab_module_source(READ_MODULE, &read_text)
         .map_err(|e| format!("the encoder for `{spelled}` was refused (a defect of `heather eval`):\n{}", e.render(&read_text)))?;
 
-    eprintln!("evaluating `{}` : {spelled} (an evaluation: untrusted, it proves nothing and is not a check)", term.trim());
+    label(&spelled);
     let (numbers, cut) = function_ir_source::with_reads(&elab, |reads| reads.numbers_up_to(&format!("{READ_MODULE}::eval_read"), limit))
         .map_err(|e| format!("evaluation: {e}"))?;
     let mut numbers = numbers.into_iter();
