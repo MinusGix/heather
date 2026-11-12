@@ -391,6 +391,52 @@ fn a_module_means_the_same_whatever_else_its_process_loaded() {
     let _ = std::fs::remove_dir_all(cache);
 }
 
+/// A session that planned on an image and then finds it gone elaborates
+/// the module again (`issues/image-sweep-removes-planned-image.md`). A
+/// module replayed straight into the caller's world keeps no canonical
+/// delta; a later module checked out of place needs its canonical world and
+/// decodes it from the store again. Another process's sweep may have removed
+/// the image between the two (here, the test removes every image), and that
+/// is an ordinary miss: the module is rebuilt with the identity its
+/// dependents were keyed by and published again, and the client checks.
+#[test]
+fn a_planned_image_swept_from_the_store_is_elaborated_again() {
+    let cache = temp("swept");
+    let mut cold = Elaborator::with_prelude().unwrap();
+    let mut first = SemanticSession::new(Some(cache.clone()));
+    let out = first.check(&mut cold, &module("shades", SHADES), LintProfile::Default);
+    assert!(out.errors.is_empty() && !out.replayed);
+
+    let mut beside = Elaborator::with_prelude().unwrap();
+    let mut second = SemanticSession::new(Some(cache.clone()));
+    let out = second.check(&mut beside, &module("unrelated", UNRELATED), LintProfile::Default);
+    assert!(out.errors.is_empty());
+    // Out of place behind `unrelated`: moved into the caller's world from
+    // its image, its canonical delta not kept.
+    let out = second.check(&mut beside, &module("shades", SHADES), LintProfile::Default);
+    assert!(out.errors.is_empty() && out.replayed);
+
+    let images = cache.join("modules-v1");
+    for entry in std::fs::read_dir(&images).unwrap().flatten() {
+        if entry.path().extension().and_then(|x| x.to_str()) == Some("hmi") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+
+    // A client nothing has published, checked out of place: its world is
+    // `shades`'s canonical one, whose image is gone.
+    let client = module("picker", PICKER);
+    let out = second.check(&mut beside, &client, LintProfile::Default);
+    let text = out.errors.iter().map(|e| e.render(&client.src)).collect::<Vec<_>>().join("\n");
+    assert!(out.errors.is_empty(), "{text}");
+    assert!(!out.replayed);
+    assert_eq!(second.hits(), 1, "the rebuild counted as one of the caller's modules");
+    let key = ModuleCacheKey::for_source("shades", SHADES, &ModuleDependencyIdentity::default(), LintProfile::Default);
+    assert!(ModuleImageCache::new(cache.clone()).path(key).exists(), "the rebuilt image was not published again");
+
+    let _ = std::fs::remove_dir_all(cache);
+}
+
 const MAG: &str = "class Mag<A> { op: A -> A -> A }\nfn combine<A> requires m: Mag<A> (x: A, y: A) -> A { m.op(x, y) }\n";
 const MAG_NAT: &str = "import mag;\ninstance Mag<Nat> { fn op(x: Nat, y: Nat) -> Nat { y } }\n";
 const TWICE: &str = "fn twice(x: Nat) -> Nat { combine(x, x) }\ntheorem second(): twice(3) = 3 { refl }\n";

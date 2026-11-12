@@ -481,3 +481,53 @@ fn the_sweep_evicts_old_images_and_never_the_ones_a_pointer_names() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The sweep evicts the least recently *used* images, not the least recently
+/// written: reading an image renews it
+/// (`issues/image-sweep-removes-planned-image.md`). An image every run
+/// replays and no run rewrites, like the library's `char`, was otherwise
+/// among the oldest in a store at its budget, so it went first and the runs
+/// that had planned on it lost it.
+#[test]
+fn the_sweep_spares_an_old_image_that_was_read_since() {
+    let dir = temp("recently-read");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dependencies = ModuleDependencyIdentity::default();
+    let elab = |module: &str, src: &str| {
+        Elaborator::with_prelude().unwrap().elab_module_delta(module, src, dependencies.clone()).unwrap()
+    };
+    // One module from four sources: its pointer names the last, so the first
+    // three are unreferenced and the sweep may take any of them.
+    let keys: Vec<ModuleCacheKey> = (100..104)
+        .map(|n| {
+            let src = format!("fn value() -> Nat {{ {n} }}");
+            let key = ModuleCacheKey::for_source("m", &src, &dependencies, LintProfile::Default);
+            ModuleImageCache::new(dir.clone()).publish(key, &elab("m", &src), &[]).unwrap();
+            key
+        })
+        .collect();
+    // Written hours apart, oldest first, without sleeping.
+    let cache = ModuleImageCache::new(dir.clone());
+    let now = std::time::SystemTime::now();
+    for (i, key) in keys.iter().take(3).enumerate() {
+        let file = std::fs::OpenOptions::new().write(true).open(cache.path(*key)).unwrap();
+        file.set_modified(now - std::time::Duration::from_secs(3600 * (4 - i as u64))).unwrap();
+    }
+    // The oldest is read: a run planned on it.
+    let prefix = Elaborator::with_prelude().unwrap().psi().clone();
+    assert!(cache.load(keys[0], prefix.clone(), usize::MAX, ImageFreshness::Exact).unwrap().is_some());
+
+    // A publication over a budget of about four images: two of the five go.
+    let one_image = std::fs::metadata(cache.path(keys[1])).unwrap().len();
+    let src = "fn value() -> Nat { 777 }";
+    let last = ModuleCacheKey::for_source("last", src, &dependencies, LintProfile::Default);
+    ModuleImageCache::new(dir.clone())
+        .with_retention(one_image * 3 + one_image / 2)
+        .publish(last, &elab("last", src), &[])
+        .unwrap();
+    let present = |key: ModuleCacheKey| cache.path(key).exists();
+    assert!(present(keys[0]), "the sweep evicted the image read most recently, for being written first");
+    assert!(!present(keys[1]) && !present(keys[2]), "the sweep kept images nothing read");
+    assert!(present(keys[3]) && present(last), "the sweep evicted an image a pointer names");
+    let _ = std::fs::remove_dir_all(dir);
+}

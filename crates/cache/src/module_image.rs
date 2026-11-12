@@ -459,7 +459,11 @@ impl ModuleImageCache {
         self
     }
 
-    /// Evict published images, oldest first, until the store fits its budget.
+    /// Evict published images, least recently used first, until the store
+    /// fits its budget. An image's time is its file's modification time,
+    /// which [`Self::load`] sets to the time it was read, so an image every
+    /// run replays and none rewrites (a module low in the library, like
+    /// `char`) is among the newest rather than the oldest.
     ///
     /// Never evicts an image a `.latest` pointer names: those are the replay
     /// set, and losing one costs a full re-elaboration rather than a slice.
@@ -468,9 +472,13 @@ impl ModuleImageCache {
     ///
     /// Best-effort by construction. A concurrent run may publish between the
     /// listing and the unlink, and an image this sweep removes may be one
-    /// another process was about to load: both outcomes are an ordinary cache
-    /// miss, which the reader already handles by rebuilding. Nothing here can
-    /// produce a wrong answer, only a slower run.
+    /// another process was about to load, or had read and planned to read
+    /// again: both outcomes are an ordinary cache miss, which every reader
+    /// handles by rebuilding (a semantic session that planned on an image
+    /// elaborates the module again, `SemanticSession::rebuild` in the CLI).
+    /// Nothing here can produce a wrong answer, only a slower run; and since
+    /// reading an image renews it, a run's own images go only once the store
+    /// has taken in a whole budget's worth of newer ones while it ran.
     fn sweep(&self) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
         let mut pinned: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -720,6 +728,10 @@ impl ModuleImageCache {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        // Renew it for the sweep, which evicts the least recently used
+        // first. Best-effort: a store this process cannot retime still
+        // reads, and is swept by publication time as before.
+        let _ = file.set_modified(std::time::SystemTime::now());
         let max_file = self.limits.max_bytes.saturating_add(HEADER + CHECKSUM);
         // A metadata preflight alone has a TOCTOU hole: the file can grow
         // before the read. Cap the read itself and reject the sentinel byte.
