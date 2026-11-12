@@ -43,6 +43,11 @@ Case kinds (cases.tsv `kind`):
   certificate's verdicts are stored: the floor every write-elf pays.
 - `elf-cold` (heavy): `write-elf` over a fresh copy of the store each sample,
   so the certificate is kernel-checked cold, as on a fresh box.
+- `cert`: the certificate `write-elf FILE SYMBOL` writes today, then `only`
+  over its items whose names match a glob (target `SYMBOL:GLOB`). The
+  write-elf is unmeasured and runs once per symbol; the certificate lands
+  under target/bench-probes, so the case follows the library and cannot go
+  stale the way a frozen copy did (issues/bench-probe-cases-stale-2026-11.md).
 
 Counters (evaluator steps, conversion queries, substitution nodes, gated
 terms) are exact for one tree and must agree across samples; seconds are the
@@ -52,8 +57,10 @@ scripts/timings.
 
 import argparse
 import csv
+import fnmatch
 import os
 import platform
+import re
 import resource
 import shutil
 import socket
@@ -260,11 +267,47 @@ def pick_rows(case, rows):
     return [r for r in rows if r["scope"] == "run"] or None
 
 
+# The certificates `cert` cases have written, by (file, symbol): one write-elf
+# serves every case over the same symbol.
+CERTIFICATES = {}
+
+
+def certificate_case(binary, store, case, log):
+    """A `cert` case as the `only` case it stands for: write the symbol's
+    certificate (once), and name its items matching the glob."""
+    symbol, _, pattern = case["target"].partition(":")
+    key = (case["file"], symbol)
+    if key not in CERTIFICATES:
+        out = WORK / "out" / "certificates" / symbol
+        out.parent.mkdir(parents=True, exist_ok=True)
+        for old in out.parent.glob(out.name + "*"):
+            old.unlink()
+        cmd = [str(binary), "write-elf", case["file"], symbol, "-o", str(out), "--cache-dir", str(store), "--world", "lib"]
+        code, _, _ = run(cmd, log, workers=os.environ.get("HEATHER_KERNEL_WORKERS", "8"))
+        written = out.with_suffix(".certificate.hthr")
+        if code != 0 or not written.exists():
+            return {"error": f"write-elf {symbol} failed (exit {code}), see {log}"}
+        # A module is named by its file stem, which must be an identifier.
+        certificate = out.parent / f"{symbol}_elf_certificate.hthr"
+        shutil.copyfile(written, certificate)
+        CERTIFICATES[key] = certificate
+    certificate = CERTIFICATES[key]
+    names = re.findall(r"^(?:fn|theorem|def)\s+(\w+)", certificate.read_text(), re.M)
+    items = [n for n in dict.fromkeys(names) if fnmatch.fnmatchcase(n, pattern)]
+    if not items:
+        return {"error": f"no item of {certificate} matches `{pattern}`"}
+    return dict(case, kind="only", file=str(certificate), target=",".join(items))
+
+
 def measure(binary, store, case, samples):
     name = case["name"]
     out = WORK / "out" / name.replace("/", "_")
     out.mkdir(parents=True, exist_ok=True)
     tsv, log = out / "timings.tsv", out / "run.log"
+    if case["kind"] == "cert":
+        case = certificate_case(binary, store, case, log)
+        if "error" in case:
+            return case
     if case["kind"] == "elf-warm":
         # Its own copy: the priming run stores the certificate's verdicts.
         own = out / "warm-store"
@@ -280,8 +323,9 @@ def measure(binary, store, case, samples):
             code, _, _ = run(case_command(binary, case, store, out / "elf", tsv), log)
             if code != 0:
                 return {"error": f"priming run failed, see {log}"}
-    if case["kind"] == "only" and case["file"].startswith("perf/"):
-        # A fixture root has no image until it has been checked once.
+    if case["kind"] == "only" and not case["file"].startswith("lib/"):
+        # A root outside the library (a fixture, a written certificate) has no
+        # image until it has been checked once.
         run([str(binary), "check", "--cache", "--cache-dir", str(store), "--world", "lib", case["file"]], log)
     taken = []
     for _ in range(samples):
@@ -374,7 +418,8 @@ def main():
     # The library's images and verdicts, which no case writes to: an elf-*
     # case copies it, so its certificate is cold, and the other cases run
     # over a copy taken here, because priming a fixture publishes its
-    # verdicts (and the frozen certificate's are the live one's).
+    # verdicts, and a `cert` case's write-elf publishes its certificate's
+    # (which are the ones an elf-* case must check cold).
     library = WORK / "store"
     print(f"warming {library} (untimed)…", flush=True)
     warm(binary, library, cases)
@@ -414,7 +459,9 @@ def main():
     if args.save:
         if args.samples < 3:
             print("⚠ fewer than three samples saved: the minimum is a weak estimate")
-        rows = {} if not comparable else dict(old)
+        # Rows of cases the list no longer names go with them.
+        listed = {c["name"] for c in read_cases()}
+        rows = {} if not comparable else {n: r for n, r in old.items() if n in listed}
         for name, m in results.items():
             rows[name] = {k: (f"{m[k]:.3f}" if k in SECONDS or k == "spread" else str(m[k])) for k in SECONDS + ["spread"] + COUNTERS}
         if not comparable and old:

@@ -1,5 +1,5 @@
 # Probe benchmark cases for scripts/bench-probes (docs/cloud-benchmarks.md; why each: perf/bench/targets.md).
-# kind: only = --only the target items (comma list) | warm = check after a priming run | elf-warm / elf-cold = write-elf the target symbol
+# kind: only = --only the target items (comma list) | cert = --only over today's write-elf certificate of SYMBOL, its items matching GLOB (target SYMBOL:GLOB) | warm = check after a priming run | elf-warm / elf-cold = write-elf the target symbol
 name	kind	file	target	flags	why
 native/world-replay	warm	perf/bench/fixtures/native_world.hthr	-		fixed cost of loading the native world warm: every native process pays it
 native/elf-floor-yes	elf-warm	lib/native/native_tools.hthr	yes_tool		a fully warm write-elf of the smallest tool (the PR lane's native smoke): no kernel work left
@@ -7,13 +7,13 @@ native/elf-cold-yes	elf-cold	lib/native/native_tools.hthr	yes_tool		the smoke co
 native/elf-cold-head-n	elf-cold	lib/native/native_tools.hthr	head_n_tool		a mid-sized tool cold: certificate kernel work grows with the code
 native/elf-cold-sort	elf-cold	lib/native/native_heap_tools.hthr	sort_tool		the heaviest native tool test (a heap tool: arena, procedures, a sort loop), cold
 native/elf-cold-tac	elf-cold	lib/native/native_heap_tools.hthr	tac_tool		the second heaviest, cold: the heap tools' shared cost shows where the two agree
-cert/yes-pieces	only	perf/bench/fixtures/yes_tool_elf_certificate.hthr	yes_tool_elf_piece_0_is,yes_tool_elf_piece_1_is,yes_tool_elf_piece_2_is,yes_tool_elf_piece_3_is,yes_tool_elf_piece_4_is,yes_tool_elf_piece_5_is,yes_tool_elf_piece_6_is		piece_N_is: the assembler evaluated by the kernel, one per code piece; the largest certificate family
-cert/yes-labels	only	perf/bench/fixtures/yes_tool_elf_certificate.hthr	yes_tool_elf_at_2,yes_tool_elf_at_8,yes_tool_elf_at_18,yes_tool_elf_at_28,yes_tool_elf_at_29,yes_tool_elf_at_31,yes_tool_elf_at_32,yes_tool_elf_at_48,yes_tool_elf_at_62,yes_tool_elf_at_64,yes_tool_elf_at_81,yes_tool_elf_at_83,yes_tool_elf_at_89,yes_tool_elf_at_91		at_N: the label prefixes of the program, gated as Prog literals; the second certificate family
+cert/yes-pieces	cert	lib/native/native_tools.hthr	yes_tool:yes_tool_elf_piece_*_is		piece_N_is: the assembler evaluated by the kernel, one per code piece; the largest certificate family
+cert/yes-labels	cert	lib/native/native_tools.hthr	yes_tool:yes_tool_elf_at_*		at_N: the label prefixes of the program, gated as Prog literals; the second certificate family
 native/goes-arg-found	only	lib/native/native_compile_args.hthr	Target::goes_arg_found		the heaviest kernel item of lib/native alone: a lemma at a neutral Target that runs millions of steps
 native/call-step	only	lib/native/function_ir/function_ir_lower_calls.hthr	call_step		the second: one kernel check of millions of steps
 native/arg-cells-store	only	lib/native/native_compile_args.hthr	Target::arg_cells_store		a small kernel-and-omega item of the same module, the fast inner-loop case
-native/emit-extends	only	lib/native/native_compile_correct.hthr	Stmt::emit_extends		compiler-correctness lemma whose cost is the elaborator (whnf), not the kernel
+native/perform-call	only	lib/native/native_compile_correct.hthr	Target::perform_call		the heaviest declaration of the cold library (2026-11-11): a compiler-correctness lemma over a call's whole sequence, and the library's peak memory
 x86/moves-spills	only	lib/std/arch/x86_64/x86_64_stack_runs.hthr	Site::moves_spills		the heaviest x86 machine item: omega over stack layouts
-tactic/attempt-from	only	lib/std/tactic/tactic.hthr	attempt_from		one kernel check of hundreds of thousands of conversion queries
-algebra/pos-of-mul-pos-nonneg	only	lib/std/algebra/ordered_field.hthr	OrderedField::pos_of_mul_pos_nonneg		class-carrier lemma whose cost is projection_subst in the elaborator
+analysis/below-located	only	lib/std/analysis/supremum.hthr	OrderComplete::below_located		one of the heaviest declarations of the cold library (2026-11-11): the points a Cauchy sequence stays above are located: linarith and the half lemmas over an ordered field's carrier
+itree/split-bind	only	lib/std/itree/itree_trace.hthr	IsTrace::split_bind		one of the heaviest declarations of the cold library (2026-11-11): the converse of IsTrace::bind, a dependent match over the tree and the trace's three shapes
 lexer/scan-choose-link	only	lib/lang/lexer/lexer_scan.hthr	scan_choose		a runtime fn linking two dozen callees: the generator and the linking proof, which must follow the count of callees and not their code
