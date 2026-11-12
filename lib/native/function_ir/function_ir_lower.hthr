@@ -957,9 +957,13 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
 // ---------------------------------------------------------------------------
 // Constants and copies
 
+// A constant loaded: the register holds it, and the file knows its value as
+// it knows a folded one's (`Node::fold`). So what asks for a constant
+// (`known_value`: an ADD's immediate once the register is gone, a view from
+// its buffer's start, `File::zero`) reads it wherever the placement put it.
 fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
     Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
-        file.write(destination, Some(Held(output, Word)))))
+        file.write(destination, Some(Held(output, Word))).know(Constant(output, value))))
 }
 
 theorem File::constant_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
@@ -968,8 +972,10 @@ theorem File::constant_keeps<M>(self file: File, values: Valuation(), destinatio
         file.constant(destination, output, value))
 {
     λ s represents holds =>
-        file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-            BitVec::ofNat(value), represents, holds)
+        file.write(destination, Some(Held(output, Word))).represents_know(values, write_gpr(destination, BitVec::ofNat(value), s.gprs),
+            Constant(output, value),
+            file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
+                BitVec::ofNat(value), represents, holds), holds)
 }
 
 fn File::copy_found(self file: File, destination: Gpr, output, source: Nat, found: Found(file, Held(source, Word)),

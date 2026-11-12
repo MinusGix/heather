@@ -5,7 +5,7 @@
 // `heather compile-x86` evaluates `Function::refused` when its emission of
 // a function is `None`, so that its refusal says where. Nothing here is
 // part of a theorem: these functions mirror the emitter's tests
-// (`StructuredRegion::emit_calls`, `File::emit_call`, `Emitted::loop_close`)
+// (`StructuredRegion::emit_calls`, `File::emit_call`, `File::emit_lend`, `Emitted::loop_close`)
 // and answer text. The lowering is right to refuse a placement it cannot
 // check, and the placement is untrusted search (`Node::choose_by`,
 // `StructuredRegion::plan_in`), so what is found is usually the planner's
@@ -18,6 +18,7 @@ import function_ir_state;
 import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_reads;
+import function_ir_lower_views;
 import function_ir_lower_calls;
 import function_ir_compile;
 import function_ir_writes;
@@ -170,6 +171,51 @@ fn File::call_refusal(self file: File, callee: Nat, arguments: List<Nat>, bound:
     }
 }
 
+// The first view of a call over views the scope cannot lend
+// (`View::lendable`), and which of its tests says so.
+fn views_refusal(views: List<View>, file: File, homes: List<Lent>) → String {
+    match views {
+        Nil => "no view is refused",
+        Cons(view, rest) => match view.lendable(file, homes) {
+            True => views_refusal(rest, file, homes),
+            False => {
+                let named = "its view of buffer " ++ refusal_number(view.buffer) ++ " from " ++ refusal_number(view.start) ++ " to "
+                    ++ refusal_number(view.end);
+                match homes_length(homes, view.buffer, view.home) {
+                    None => named ++ ": the scope has no home of that buffer at " ++ refusal_number(view.home),
+                    Some(length) => match file.zero(view.start) || file.at_most(view.start, view.end) {
+                        False => named ++ ": no arm taken on the way here says that its start is at most its end, and its start is not the constant 0",
+                        True => named ++ ": no arm taken on the way here says that its end is at most the buffer's length "
+                            ++ refusal_number(length) ++ ", and its end is not that length",
+                    },
+                }
+            },
+        },
+    }
+}
+
+// `File::emit_lend`, saying which of its tests refuses.
+fn File::lend_refusal(self file: File, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
+    names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
+    let call = "the call of function " ++ refusal_number(callee) ++ " over views (" ++ views_shown(views) ++ "): ";
+    match emit_leaf(prog, file, views_nodes(views), placement, names, homes) {
+        None => call ++ "where its views' bases and lengths are bound, " ++ leaf_refusal(prog, file, [], views_nodes(views), placement, names, homes),
+        Some(first) => match views {
+            Nil => call ++ "it has no view, and a call over none is written as a call",
+            Cons(_, _) => match views_lendable(views, first.file, homes) {
+                False => call ++ views_refusal(views, first.file, homes),
+                True => match views_alone(views) {
+                    False => call ++ "a view to write shares its buffer with another view",
+                    True => match Succ(callee).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
+                        True => call ++ "the callee is lent more buffers than the call has views",
+                        False => call ++ first.file.call_refusal(callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
+                    },
+                },
+            },
+        },
+    }
+}
+
 // `Emitted::loop_close`, saying which of its tests refuses.
 fn Emitted::close_refusal(self pass: Emitted, registers: LoopRegisters, count, exit: Nat, next: List<Nat>) → String {
     let held = ", where " ++ pass.file.shown();
@@ -213,7 +259,7 @@ fn StructuredRegion::refusal(self region: StructuredRegion, prog: Prog, file: Fi
                 },
             },
         },
-        Lend(_, callee, _, _) => "the call of function " ++ refusal_number(callee) ++ " over views: a call over views has no lowering yet",
+        Lend(views, callee, arguments, _) => file.lend_refusal(prog, views, callee, arguments, placement, names, bound, counts, homes),
         Call(callee, arguments, _) => file.call_refusal(callee, arguments, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(inputs, limit, parameters, count, placement) {

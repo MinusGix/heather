@@ -33,6 +33,10 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         // The lending laws the calls module's contract is stated under.
         ("x86_64_lending", include_str!("../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
+        // A call over views: the machine's laws of a lent window, and what the
+        // lowering checks of a view before it lends it.
+        ("x86_64_views", include_str!("../../../lib/std/arch/x86_64/x86_64_views.hthr")),
+        ("function_ir_lower_views", include_str!("../../../lib/native/function_ir/function_ir_lower_views.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ]);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_calls_examples", EXAMPLES) {

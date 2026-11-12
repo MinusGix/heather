@@ -169,10 +169,12 @@ contract bounds a span below the canonical boundary.
 
 ### 3.1 Views: lending a part of a buffer (2026-11-12)
 
-*Status: the design, with V1 to V4b built. A call over views is in the IR
-and means what this section says, and the lowering's contract is stated
-at every lending, a function at a time; the lowering of the call itself is
-V4c, and until then the lowering refuses it by name.*
+*Status: the design, with V1 to V4c built. A call over views is in the IR
+and means what this section says, the lowering's contract is stated at
+every lending, a function at a time, and the function compiler lowers the
+call and proves it (`File::emit_lend`, `File::emit_lend_runs`). The
+placeless check, the languages above and the program compiler's own
+statements do not lend yet (V4d, V5, V6).*
 
 **What is missing.** At an export's boundary a view is free: Rust slices
 the span and passes the slice's parts. Inside a program it is not
@@ -290,33 +292,82 @@ theorem keeps its one lending and takes what its calls ask of it, a call's
 code is proved against its one callee's contract (`call_step`), and the
 statements at one lending are corollaries. So a function that only reads
 is called under a lending to read whatever the functions beside it store,
-which one list of marks could not say. Then a lend lowers as its views'
-nodes through the leaf lowering (`emit_leaf`) and the call as it is (`File::emit_call`), the views'
-homes being the lent arguments. The lender's loan gives the views' loan
-(`Loan::view`), what the callee stored through the views the lender could
-have stored through its spans (`Stack::wrote_in_view`), and the spans after
-the call read with the written windows replaced (`view_written_reads`,
-`view_unwritten_reads`). The view's base joins the address ids the
-placeless check hides (`StructuredRegion::placeless`, V4d): it reaches the
-call's address place and nothing else. Until then `placeless` is `False`
-of a lend.
+which one list of marks could not say.
+
+Then a lend lowers (`File::emit_lend`, V4c) as its views' nodes through
+the leaf lowering (`emit_leaf`) and the call as it is (`File::emit_call`),
+the views' homes being the lent arguments and the homes the call is
+checked against the views' (`views_lents`). No new instruction is emitted:
+the code is two leaves the lowering already had. The proof is the call's
+with one step changed. A call's code is spills, argument moves, the CALL
+and reloads, and only the CALL speaks of the callee's contract, so the
+call's theorems take the CALL's step as a premise (`call_returns`,
+`call_emits`, `File::emit_call_steps`), and the step (`call_step`) is
+stated for a callee entered under any lending `inner` over any file, given
+what relates it to the caller's: the caller's file in memory is the
+callee's (`enters`), and what the callee stored and left is stored under
+the caller's spans and leaves the caller's file (`leaves`). A call is the
+instance at the caller's own lending, where both are the identity
+(`File::emit_call_runs`). A lend is the instance at the views' lending
+(`Lending::lend`, `lend_step`): the lender's loan gives the views' loan
+(`Loan::view`, then `Loan::onto` to the views as the callee's buffers
+`0, 1, …`), the file in memory read through the windows is the callee's
+file (`Lendable::reads`), what the callee stored through the views the
+lender could have stored through its spans (`Stack::wrote_in_view`,
+`Lendable::wrote`), and the spans after the call read with the written
+windows replaced (`view_written_reads`, `view_unwritten_reads`,
+`Lendable::put_reads`), which is `put_views`. `Lendable`
+(`function_ir_lower_views.hthr`) is what the lowering's checks, the
+views' nodes and the scope's homes give together
+(`views_lendable_sound`).
+
+The views' lending has the windows' lengths of the lending's own buffers
+(`viewed(views, values, lending.buffers)`), which no store changes, and
+not the lengths of the file at the call. So the callee's loan and the
+homes it is passed are known before any of the call's code has run, and
+the file at the call enters only as the callee's file.
+
+The view's base joins the address ids the placeless check hides
+(`StructuredRegion::placeless`, V4d): it reaches the call's address place
+and nothing else. Until then `placeless` is `False` of a lend.
+
+A program with a lend is stated a function at a time
+(`compiled_returns_needs`, and by evaluation with rows of marks
+`compiled_returns_marked`, `function_ir_compile.hthr`): function `f`, lent
+its buffers with those its row marks to write, returns the word its run
+ends in and leaves the file the run leaves.
 
 **What the lowering asks, the meaning does not.** The meaning is total (a
-window past the end is shorter). The lowering will accept a lend where:
+window past the end is shorter). The lowering accepts a lend
+(`views_lent`) where:
 
-- the path knows `start <= end` and `end <= length` for each view
-  (`File::at_most`, V3: a fact of a conditional's false arm, which a file
-  now records as `Known::Falsity`), or the endpoint is the buffer's own
-  length;
-- a view's `home` is the home the scope holds for its buffer;
-- a written view is of a buffer the scope may write, and of a buffer no
-  other view of the same lend is of. The machine law is wider (below): two
-  views of one buffer that share no byte may be lent apart, one of them to
-  write, which is `split_at_mut`. The IR's check can grow to it when a path
-  knows the endpoints ordered.
+- it has a view (a call over none is written as a call);
+- the path knows `start <= end` for each view (`File::at_most`, V3: a fact
+  of a conditional's false arm, which a file records as `Known::Falsity`),
+  or the start is the constant 0 (`File::zero`: the file knows a constant
+  it loaded as it knows one it folded, `File::constant`);
+- the path knows `end <= length`, or the end is the buffer's own length.
+  So the whole of a buffer, from the constant 0 to its length, which is
+  renaming, needs no comparison;
+- a view's `home` is a home the scope holds for its buffer
+  (`homes_length`);
+- a written view is of a buffer no other view of the same lend is of
+  (`views_alone`). That it is of a buffer the scope may write is not the
+  lowering's to check: it is what the function needs (`stores`), which its
+  row of marks answers. The machine law is wider (below): two views of one
+  buffer that share no byte may be lent apart, one of them to write, which
+  is `split_at_mut`. The IR's check can grow to it now that a path knows
+  endpoints ordered (`issues/views-of-one-buffer-apart.md`);
+- the callee takes no more buffers than there are views
+  (`args_lend` against `views_lents`).
 
-Otherwise it refuses, and the language above writes the checks, as `rt`'s
-`Get` writes its guard.
+Otherwise it refuses, and `Function::refused` says which test and of which
+view (`File::lend_refusal`, `views_refusal`). The language above writes
+the checks, as `rt`'s `Get` writes its guard. The probes
+(`lib/_tests/native/function_ir/function_ir_lower_views_tests.hthr`) lower
+a function that lends a window to write and one that lends its second
+buffer as its callee's first, state each against a run, and pin each
+refusal's report.
 
 **A statement does not lend yet.** `StructuredRegion::scoped` refuses a
 lend, so the program compiler (`native_compile`) answers that a call over
@@ -350,7 +401,8 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
   the program compiler's walks). The lowering refuses it. *Built.*
 - **V4b. The contract at every lending, a function at a time**
   (`Site::CallsLent`, `ProgramNeeds`). *Built.*
-- **V4c. The lowering of a lend and its theorem.**
+- **V4c. The lowering of a lend and its theorem** (`File::emit_lend`,
+  `File::emit_lend_runs`, `function_ir_lower_views.hthr`). *Built.*
 - **V4d. The placeless check** with a view's base hidden.
 - **V5. The languages above**: a statement of `Source` that lends, the
   arena's line as a view, `rt`'s `Bytes` held as one so a slice costs no

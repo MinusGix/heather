@@ -136,6 +136,61 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
         arguments, fits, before, answer, runs)
 }
 
+// A program some of whose calls are over views
+// (docs/native-library-exports-design.md §3.1): what each function needs
+// to write is said a function at a time (`needs`, right for the program
+// by `ProgramNeeds`), since a callee over views writes the views and not
+// its caller's buffers. Function `f`, lent its buffers with the ones it
+// needs to be written, returns a result and leaves a file the program's
+// meaning says it may.
+theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
+    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), needs: Nat → Nat → Bool,
+    needed: ProgramNeeds(functions, needs),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()),
+    f: Nat, below: Succ(f) <= functions.len(), allowed: (b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True,
+    arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
+    ran: program_effects(functions)(before, f, arguments, result, after)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.LentOver(lending, top, f, arguments, before)(i, s),
+        stack.AnsweredOver(lending, result, after)) {
+    let site = Site<M>(fetch, data, program, last, origin);
+    let calls = lower_program_lent_needs<M>(functions, placement, lending.counts, program, lowered, needs, needed, fetch, data, last, origin,
+        stack, top);
+    site.returns_weaken(stack, asm_labels(program)(Succ(f)),
+        stack.CalledOver(program_effects(functions), lending, top, f, arguments, result, before, after),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.LentOver(lending, top, f, arguments, before)(i, s),
+        stack.AnsweredOver(lending, result, after), calls(lending, refl, loan, f, below, allowed, arguments, result, before, after),
+        λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
+}
+
+// The same by evaluation, the needs as rows of marks (`program_marked`):
+// function `f`, lent its buffers with those its row marks to write,
+// returns the word its run over the file ends in and leaves the file the
+// run leaves. This is what an export that lends views of a span is stated
+// with.
+theorem compiled_returns_marked<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
+    tables: List<List<Bool>>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+    evaluable: program_evaluable(functions).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), f: Nat, below: Succ(f) <= functions.len(),
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks_row(tables, f)).spans()),
+    arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: Ending,
+    runs: program_run(functions, before, f, arguments) = answer):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), answer.word, answer.buffers)) {
+    compiled_returns_needs<M>(functions, placement, Lending::writing(counts, addresses, before, marks_row(tables, f)), program, lowered,
+        λ (g: Nat) (b: Nat) => marked(marks_row(tables, g), b), program_marked_needs(functions, tables, marks), fetch, data, last, origin,
+        stack, top, loan, f, below, λ b need => eq_true_of_is_true(marked(marks_row(tables, f), b), need), arguments, answer.word, before,
+        answer.buffers,
+        j(runs, λ x _ => program_effects(functions)(before, f, arguments, x.word, x.buffers),
+            program_run_effects(functions, evaluable, before, f, arguments, fits)))
+}
+
 // A program that stores into no buffer (`quiet`) does what it evaluates to
 // over the file: the code returns what the program evaluates `f` to over
 // `now` and leaves `now` in memory, lent to read or to write.

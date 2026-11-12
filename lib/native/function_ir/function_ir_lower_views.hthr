@@ -1,0 +1,936 @@
+// Lowering a call over views: what the lowering checks of the views, and
+// what the checks give (docs/native-library-exports-design.md §3.1).
+//
+// A lend's callee runs under a lending of its own: its buffer `v` is view
+// `v`, a window of a buffer of the scope, lying where the view's base says
+// and as long as the window. Three things make the scope's loan a loan of
+// the views (`Loan::view`, x86_64_views):
+//
+// - a view lies inside its buffer: its `home` is a home of the buffer the
+//   scope holds, `start <= end` and `end` is at most the home's length,
+//   each known of the path taken (`File::at_most`) or by what the value is
+//   (the constant 0, the buffer's own length). The lowering checks it
+//   (`views_lendable`);
+// - a view to write shares its buffer with no other view. The lowering
+//   checks it (`views_alone`; `views_lent` is the two checks and that there
+//   is a view at all);
+// - a view to write is of a buffer the scope may write. That is not a
+//   check of the lowering's: a lend stores into its written views' buffers
+//   (`views_store`), and the region's theorem asks that the lending lets
+//   the region's stores be written.
+//
+// `Lendable` is those facts of a valuation, and from it follow the loan of
+// the views (`Lendable::loan`), that what the callee stored it stored in
+// the scope's buffers (`Lendable::wrote`), that the views read as windows
+// of the file (`Lendable::reads`), the homes the callee is passed
+// (`Lendable::homes`), and the file afterwards: the written windows put
+// back (`Lendable::put_reads`).
+//
+// A view is found by number through `views.nth`, and what is said of it is
+// said of the `Option` found, so a fact about view `v` is one case split
+// and no induction.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_reads;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_views;
+import memory;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The view at a number
+
+fn view_buffer(found: Option<View>) → Nat { match found { None => 0, Some(view) => view.buffer } }
+
+fn view_from(found: Option<View>, values: Valuation()) → Nat { match found { None => 0, Some(view) => values(64, view.start).toNat() } }
+
+fn view_bytes(found: Option<View>, values: Valuation(), held: Buffers()) → List<BitVec(8)> {
+    match found { None => [], Some(view) => view.bytes(values, held) }
+}
+
+fn view_written(found: Option<View>) → Bool { match found { None => False, Some(view) => view.written } }
+
+fn view_base(found: Option<View>, values: Valuation()) → BitVec(64) {
+    match found { None => BitVec::zero(), Some(view) => values(64, view.base) }
+}
+
+// Where each view lies: the values of the views' bases.
+fn views_addresses(views: List<View>, values: Valuation()) → List<BitVec(64)> {
+    match views { Nil => [], Cons(view, rest) => Cons(values(64, view.base), views_addresses(rest, values)) }
+}
+
+theorem viewed_at(views: List<View>, values: Valuation(), held: Buffers()):
+    (v: Nat) → buffer_bytes(viewed(views, values, held), v) = view_bytes(views.nth(v), values, held) {
+    match views {
+        Nil => λ v => refl,
+        Cons(view, rest) => λ v => match v { Zero => refl, Succ(k) => viewed_at(rest, values, held, k) },
+    }
+}
+
+theorem views_marks_at(views: List<View>): (v: Nat) → marked(views_marks(views), v) = view_written(views.nth(v)) {
+    match views {
+        Nil => λ v => refl,
+        Cons(view, rest) => λ v => match v { Zero => refl, Succ(k) => views_marks_at(rest, k) },
+    }
+}
+
+theorem views_addresses_at(views: List<View>, values: Valuation()):
+    (v: Nat) → address_of(views_addresses(views, values), v) = view_base(views.nth(v), values) {
+    match views {
+        Nil => λ v => refl,
+        Cons(view, rest) => λ v => match v { Zero => refl, Succ(k) => views_addresses_at(rest, values, k) },
+    }
+}
+
+// A view found to write is a view.
+theorem view_written_present(found: Option<View>, none: found = None, written: view_written(found) = True): False {
+    absurd(trans(sym(cong_fn<Option<View>, Bool>(λ f => view_written(f), none)), written))
+}
+
+// ---------------------------------------------------------------------------
+// Which views share a buffer
+
+// No view is of buffer `b`.
+fn views_miss(views: List<View>, b: Nat) → Bool {
+    match views { Nil => True, Cons(view, rest) => !view.buffer.same(b) && views_miss(rest, b) }
+}
+
+// A view to write shares its buffer with no other view: none after it is
+// of its buffer, and no view to write after a view to read is of that
+// one's.
+fn views_alone(views: List<View>) → Bool {
+    match views {
+        Nil => True,
+        Cons(view, rest) => (match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }) &&
+            views_alone(rest),
+    }
+}
+
+theorem views_miss_at(views: List<View>, b: Nat): views_miss(views, b).IsTrue() → (v: Nat) →
+    (view_buffer(views.nth(v)) ≠ b) ∨ (views.nth(v) = None) {
+    match views {
+        Nil => λ _ v => Inr(refl),
+        Cons(view, rest) => λ miss v => {
+            let both = Bool::is_true_and(!view.buffer.same(b), views_miss(rest, b), miss);
+            match v {
+                Zero => Inl(λ same => view.buffer.same(b).is_true_not(both.left,
+                    Bool::is_true_of_eq(j(same, λ c _ => view.buffer.same(c) = True, view.buffer.same_self())))),
+                Succ(k) => views_miss_at(rest, b, both.right, k),
+            }
+        },
+    }
+}
+
+theorem views_miss_unstored(views: List<View>, b: Nat): views_miss(views, b).IsTrue() → ¬views_store(views, b).IsTrue() {
+    match views {
+        Nil => λ _ no => no,
+        Cons(view, rest) => λ miss stores => {
+            let both = Bool::is_true_and(!view.buffer.same(b), views_miss(rest, b), miss);
+            match Bool::is_true_or(view.written && view.buffer.same(b), views_store(rest, b), stores) {
+                Inl(here) => view.buffer.same(b).is_true_not(both.left, Bool::is_true_and(view.written, view.buffer.same(b), here).right),
+                Inr(later) => views_miss_unstored(rest, b, both.right, later),
+            }
+        },
+    }
+}
+
+// A buffer the views store into is some view's to write.
+theorem views_store_at(views: List<View>, c: Nat): views_store(views, c).IsTrue() →
+    Exists<Nat>(λ k => (view_written(views.nth(k)) = True) ∧ (view_buffer(views.nth(k)) = c)) {
+    match views {
+        Nil => λ no => false_elim(no),
+        Cons(view, rest) => λ stores => match Bool::is_true_or(view.written && view.buffer.same(c), views_store(rest, c), stores) {
+            Inl(here) => {
+                let both = Bool::is_true_and(view.written, view.buffer.same(c), here);
+                Exists(0, ⟨eq_true_of_is_true(view.written, both.left), view.buffer.same_sound(c, eq_true_of_is_true(view.buffer.same(c), both.right))⟩)
+            },
+            Inr(later) => {
+                let found = views_store_at(rest, c, later);
+                Exists(Succ(found.witness), found.proof)
+            },
+        },
+    }
+}
+
+// And a view to write's buffer is one the views store into.
+theorem views_stored(views: List<View>): (v: Nat) → view_written(views.nth(v)) = True → views_store(views, view_buffer(views.nth(v))).IsTrue() {
+    match views {
+        Nil => λ v no => absurd(no),
+        Cons(view, rest) => λ v => match v {
+            Zero => λ written => Bool::is_true_or_l(view.written && view.buffer.same(view.buffer), views_store(rest, view.buffer),
+                Bool::is_true_and_intro(view.written, view.buffer.same(view.buffer), Bool::is_true_of_eq(written),
+                    Bool::is_true_of_eq(view.buffer.same_self()))),
+            Succ(k) => λ written => Bool::is_true_or_r(view.written && view.buffer.same(view_buffer(rest.nth(k))),
+                views_store(rest, view_buffer(rest.nth(k))), views_stored(rest, k, written)),
+        },
+    }
+}
+
+theorem views_unstored_at(views: List<View>, c: Nat, unstored: ¬views_store(views, c).IsTrue(), v: Nat,
+    written: view_written(views.nth(v)) = True): view_buffer(views.nth(v)) ≠ c {
+    λ same => unstored(j(same, λ b _ => views_store(views, b).IsTrue(), views_stored(views, v, written)))
+}
+
+// A view to write and another view: of two buffers, or the other is none.
+theorem views_alone_at(views: List<View>): views_alone(views).IsTrue() → (v, u: Nat) → view_written(views.nth(v)) = True → v ≠ u →
+    (view_buffer(views.nth(v)) ≠ view_buffer(views.nth(u))) ∨ (views.nth(u) = None) {
+    match views {
+        Nil => λ _ v u no _ => absurd(no),
+        Cons(view, rest) => λ alone v u => {
+            let both = Bool::is_true_and(match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) },
+                views_alone(rest), alone);
+            match v {
+                Zero => match u {
+                    Zero => λ _ differ => false_elim(differ(refl)),
+                    Succ(k) => λ written _ => {
+                        let miss: views_miss(rest, view.buffer).IsTrue() = j(written,
+                            λ w _ => (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue(), both.left);
+                        match views_miss_at(rest, view.buffer, miss, k) {
+                            Inl(other) => Inl(λ same => other(sym(same))),
+                            Inr(none) => Inr(none),
+                        }
+                    },
+                },
+                Succ(i) => match u {
+                    Zero => λ written _ => Inl((match view.written as λ w =>
+                        (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue() →
+                        view_buffer(rest.nth(i)) ≠ view.buffer {
+                        False => λ unstored same => views_store(rest, view.buffer).is_true_not(unstored,
+                            j(same, λ b _ => views_store(rest, b).IsTrue(), views_stored(rest, i, written))),
+                        True => λ miss => match views_miss_at(rest, view.buffer, miss, i) {
+                            Inl(other) => other,
+                            Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
+                        },
+                    })(both.left)),
+                    Succ(k) => λ written differ => views_alone_at(rest, both.right, i, k, written, λ same => differ(cong_fn<Nat, Nat>(λ n => Succ(n), same))),
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The file with the written windows put back, buffer by buffer
+
+theorem buffer_bytes_update_other(held: Buffers(), b: Nat, f: List<BitVec(8)> → List<BitVec(8)>, c: Nat, differs: b ≠ c):
+    buffer_bytes(held.update(b, f), c) = buffer_bytes(held, c) {
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    cong_fn(read, held.nth_update_other(b, f, c, λ same => differs(sym(same))))
+}
+
+theorem buffer_bytes_update_here(held: Buffers(), b: Nat, f: List<BitVec(8)> → List<BitVec(8)>, inside: b < held.len()):
+    buffer_bytes(held.update(b, f), b) = f(buffer_bytes(held, b)) {
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    match held.nth_present(b, inside) {
+        ⟨bytes, at⟩ => trans(cong_fn(read, held.nth_update_here(b, f, bytes, at)),
+            sym(cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ found => f(read(found)), at))),
+    }
+}
+
+theorem buffer_bytes_past(held: Buffers(), c: Nat, past: held.len() <= c): buffer_bytes(held, c) = [] {
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    cong_fn(read, held.nth_past_end(c, past))
+}
+
+theorem buffer_bytes_later(after: Buffers(), k: Nat):
+    buffer_bytes(match after { Nil => Nil, Cons(_, later) => later }, k) = buffer_bytes(after, Succ(k)) {
+    match after { Nil => refl, Cons(_, _) => refl }
+}
+
+theorem View::put_written(self view: View, values: Valuation(), bytes: List<BitVec(8)>, held: Buffers(), written: view.written = True):
+    view.put(values, bytes, held) = held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)) {
+    cong_fn<Bool, Buffers()>(λ w => match w {
+        False => held,
+        True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)),
+    }, written)
+}
+
+theorem View::put_len(self view: View, values: Valuation(), bytes: List<BitVec(8)>, held: Buffers()):
+    view.put(values, bytes, held).len() = held.len() {
+    match view.written as λ w => (match w {
+            False => held,
+            True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)),
+        }).len() = held.len() {
+        False => refl,
+        True => held.len_update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)),
+    }
+}
+
+// A view put back leaves every buffer but its own, where it is to write.
+theorem View::put_other(self view: View, values: Valuation(), bytes: List<BitVec(8)>, held: Buffers(), c: Nat,
+    other: view.written = True → view.buffer ≠ c): buffer_bytes(view.put(values, bytes, held), c) = buffer_bytes(held, c) {
+    (match view.written as λ w => view.written = w → buffer_bytes(match w {
+            False => held,
+            True => held.update(view.buffer, λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes)),
+        }, c) = buffer_bytes(held, c) {
+        False => λ _ => refl,
+        True => λ written => buffer_bytes_update_other(held, view.buffer,
+            λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), bytes), c, other(written)),
+    })(refl)
+}
+
+theorem put_views_len(views: List<View>, values: Valuation()): (after, held: Buffers()) →
+    put_views(views, values, after, held).len() = held.len() {
+    match views {
+        Nil => λ after held => refl,
+        Cons(view, rest) => λ after held => {
+            let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+            trans(put_views_len(rest, values, later, view.put(values, buffer_bytes(after, 0), held)),
+                view.put_len(values, buffer_bytes(after, 0), held))
+        },
+    }
+}
+
+// A buffer the views do not store into is as it was.
+theorem put_views_unstored(views: List<View>, values: Valuation(), c: Nat): ¬views_store(views, c).IsTrue() → (after, held: Buffers()) →
+    buffer_bytes(put_views(views, values, after, held), c) = buffer_bytes(held, c) {
+    match views {
+        Nil => λ _ after held => refl,
+        Cons(view, rest) => λ unstored after held => {
+            let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+            trans(put_views_unstored(rest, values, c,
+                    λ stores => unstored(Bool::is_true_or_r(view.written && view.buffer.same(c), views_store(rest, c), stores)), later,
+                    view.put(values, buffer_bytes(after, 0), held)),
+                view.put_other(values, buffer_bytes(after, 0), held, c,
+                    λ written same => unstored(Bool::is_true_or_l(view.written && view.buffer.same(c), views_store(rest, c),
+                        Bool::is_true_and_intro(view.written, view.buffer.same(c), Bool::is_true_of_eq(written),
+                            Bool::is_true_of_eq(j(same, λ b _ => view.buffer.same(b) = True, view.buffer.same_self())))))))
+        },
+    }
+}
+
+// The buffer of view `k`, a view to write alone in its buffer: the
+// buffer's bytes with the view's window replaced by what the callee left
+// of its buffer `k`.
+theorem put_views_stored(views: List<View>, values: Valuation()): views_alone(views).IsTrue() → (k: Nat) →
+    view_written(views.nth(k)) = True → (after, held: Buffers()) → view_buffer(views.nth(k)) < held.len() →
+    buffer_bytes(put_views(views, values, after, held), view_buffer(views.nth(k))) =
+        buffer_bytes(held, view_buffer(views.nth(k))).put_window(view_from(views.nth(k), values), buffer_bytes(after, k)) {
+    match views {
+        Nil => λ _ k no after held _ => absurd(no),
+        Cons(view, rest) => λ alone k => {
+            let both = Bool::is_true_and(match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) },
+                views_alone(rest), alone);
+            match k {
+                Zero => λ written after held inside => {
+                    let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+                    let miss: views_miss(rest, view.buffer).IsTrue() = j(written,
+                        λ w _ => (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue(), both.left);
+                    trans(put_views_unstored(rest, values, view.buffer, views_miss_unstored(rest, view.buffer, miss), later,
+                            view.put(values, buffer_bytes(after, 0), held)),
+                        trans(cong_fn<Buffers(), List<BitVec(8)>>(λ put => buffer_bytes(put, view.buffer),
+                                view.put_written(values, buffer_bytes(after, 0), held, written)),
+                            buffer_bytes_update_here(held, view.buffer,
+                                λ (was: List<BitVec(8)>) => was.put_window(values(64, view.start).toNat(), buffer_bytes(after, 0)), inside)))
+                },
+                Succ(i) => λ written after held inside => {
+                    let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
+                    let c = view_buffer(rest.nth(i));
+                    let put = view.put(values, buffer_bytes(after, 0), held);
+                    let other: (view.written = True → view.buffer ≠ c) = λ head =>
+                        match views_alone_at(Cons(view, rest), alone, 0, Succ(i), head, λ same => absurd(same)) {
+                            Inl(differs) => differs,
+                            Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
+                        };
+                    let kept: (buffer_bytes(put, c) = buffer_bytes(held, c)) = view.put_other(values, buffer_bytes(after, 0), held, c, other);
+                    let still: (c < put.len()) = j(sym(view.put_len(values, buffer_bytes(after, 0), held)), λ n _ => c < n, inside);
+                    trans(put_views_stored(rest, values, both.right, i, written, later, put, still),
+                        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ was => was.put_window(view_from(rest.nth(i), values), buffer_bytes(later, i)), kept),
+                            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => buffer_bytes(held, c).put_window(view_from(rest.nth(i), values), ys),
+                                buffer_bytes_later(after, i))))
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A view that lies in its buffer
+
+// Where no borrow comes out of the top, a difference of words is the
+// difference of their values.
+theorem BitVec::sub_within(n: Nat, a, b: BitVec(n), le: b.toNat() <= a.toNat()): a.sub(b) = BitVec::ofNat(a.toNat() - b.toNat()) {
+    let w = Nat::pow(2, n);
+    let rest = a.toNat() - b.toNat();
+    let parts: (a.toNat() + w - b.toNat() = rest + w) = omega(le);
+    trans(BitVec::sub_eq_ofNat(n, a, b),
+        trans(BitVec::ofNat_cong(n, parts),
+            BitVec::ofNat_modeq(n, trans(Nat::cong(λ (y: Nat) => (rest + y).mod(w), sym(w.mul_left_one())), rest.modeq_add_mul(w, 1)))))
+}
+
+// A view's `home` is its buffer's address, and its window lies inside the
+// buffer as the scope was lent it.
+fn View::Fits(self view: View, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    (values(64, view.home) = address_of(addresses, view.buffer)) ∧
+        ((values(64, view.start).toNat() <= values(64, view.end).toNat()) ∧
+            (values(64, view.end).toNat() <= buffer_bytes(buffers, view.buffer).len()))
+}
+
+fn ViewsFit(views: List<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match views { Nil => True, Cons(view, rest) => view.Fits(values, addresses, buffers) ∧ ViewsFit(rest, values, addresses, buffers) }
+}
+
+// What holds of the view at a number: it fits, and its two nodes hold.
+fn ViewIs(found: Option<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match found {
+        None => True,
+        Some(view) => view.Fits(values, addresses, buffers) ∧
+            ((values(64, view.base) = values(64, view.home).add(values(64, view.start))) ∧
+                (values(64, view.length) = values(64, view.end).sub(values(64, view.start)))),
+    }
+}
+
+theorem views_are(views: List<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers, over: Buffers()):
+    ViewsFit(views, values, addresses, buffers) → NodesHoldOver(over, values, views_nodes(views)) → (v: Nat) →
+    ViewIs(views.nth(v), values, addresses, buffers) {
+    match views {
+        Nil => λ _ _ v => trivial,
+        Cons(view, rest) => λ fit bound v => match v {
+            Zero => ⟨fit.left, ⟨bound.left, bound.right.left⟩⟩,
+            Succ(k) => views_are(rest, values, addresses, buffers, over, fit.right, bound.right.right, k),
+        },
+    }
+}
+
+theorem views_nodes_quiet(views: List<View>): nodes_quiet(views_nodes(views)).IsTrue() {
+    match views { Nil => trivial, Cons(_, rest) => views_nodes_quiet(rest) }
+}
+
+theorem views_nodes_store(views: List<View>, b: Nat): nodes_store(views_nodes(views), b).IsTrue() → False {
+    match views { Nil => λ no => no, Cons(_, rest) => views_nodes_store(rest, b) }
+}
+
+// A view lies at its buffer's address plus its start.
+theorem View::lies(self view: View, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    is: ViewIs(Some(view), values, addresses, buffers)):
+    values(64, view.base) = next_rip(address_of(addresses, view.buffer), values(64, view.start).toNat()) {
+    trans(is.right.left,
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(values(64, view.start)), is.left.left),
+            sym(BitVec::iter_add_eq_add(64, address_of(addresses, view.buffer), values(64, view.start)))))
+}
+
+// Its bytes are as many as its bounds say, of any file shaped as the
+// buffers are.
+theorem View::len_bytes(self view: View, values: Valuation(), addresses: List<BitVec(64)>, buffers, held: Buffers(),
+    shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(), is: ViewIs(Some(view), values, addresses, buffers)):
+    view.bytes(values, held).len() = values(64, view.end).toNat() - values(64, view.start).toNat() {
+    buffer_bytes(held, view.buffer).len_window(values(64, view.start).toNat(), values(64, view.end).toNat(), is.left.right.left,
+        omega(is.left.right.right, shaped(view.buffer)))
+}
+
+theorem view_len_bytes(values: Valuation(), addresses: List<BitVec(64)>, buffers, held: Buffers(),
+    shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) → view_bytes(found, values, held).len() = view_bytes(found, values, buffers).len() {
+    match found {
+        None => λ _ => refl,
+        Some(view) => λ is => trans(view.len_bytes(values, addresses, buffers, held, shaped, is),
+            sym(view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is))),
+    }
+}
+
+theorem zero_least(n: Nat): 0 + 0 <= n { omega() }
+
+theorem view_inside(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) →
+    view_from(found, values) + view_bytes(found, values, buffers).len() <= buffer_bytes(buffers, view_buffer(found)).len() {
+    match found {
+        None => λ _ => zero_least(buffer_bytes(buffers, 0).len()),
+        Some(view) => λ is => {
+            let len = view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is);
+            let low: (values(64, view.start).toNat() <= values(64, view.end).toNat()) = is.left.right.left;
+            let high: (values(64, view.end).toNat() <= buffer_bytes(buffers, view.buffer).len()) = is.left.right.right;
+            let fits: (values(64, view.start).toNat() + view.bytes(values, buffers).len() <= buffer_bytes(buffers, view.buffer).len()) =
+                omega(len, low, high);
+            fits
+        },
+    }
+}
+
+theorem view_lies(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) → (found = None → False) →
+    view_base(found, values) = next_rip(address_of(addresses, view_buffer(found)), view_from(found, values)) {
+    match found {
+        None => λ _ present => false_elim(present(refl)),
+        Some(view) => λ is _ => view.lies(values, addresses, buffers, is),
+    }
+}
+
+theorem view_canonical(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    canonical: (b: Nat) → address_of(addresses, b).toNat() + buffer_bytes(buffers, b).len() <= Nat::pow(2, 47), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) → view_base(found, values).toNat() + view_bytes(found, values, buffers).len() <= Nat::pow(2, 47) {
+    match found {
+        None => λ _ => {
+            let nothing: (BitVec::zero(n := 64).toNat() = 0) = BitVec::zero_toNat(64);
+            let fits: (BitVec::zero(n := 64).toNat() + 0 <= Nat::pow(2, 47)) = omega(nothing);
+            fits
+        },
+        Some(view) => λ is => {
+            let address = address_of(addresses, view.buffer);
+            let start = values(64, view.start).toNat();
+            let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+            let len = view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is);
+            let low: (start <= values(64, view.end).toNat()) = is.left.right.left;
+            let high: (values(64, view.end).toNat() <= buffer_bytes(buffers, view.buffer).len()) = is.left.right.right;
+            let whole: (address.toNat() + buffer_bytes(buffers, view.buffer).len() <= Nat::pow(2, 47)) = canonical(view.buffer);
+            let value: (next_rip(address, start).toNat() = address.toNat() + start) = BitVec::offset_toNat(64, address, start, omega(whole, low, high, wide));
+            let fits: (next_rip(address, start).toNat() + view.bytes(values, buffers).len() <= Nat::pow(2, 47)) = omega(value, len, low, high, whole);
+            j(sym(view.lies(values, addresses, buffers, is)), λ a _ => a.toNat() + view.bytes(values, buffers).len() <= Nat::pow(2, 47), fits)
+        },
+    }
+}
+
+// A view reads its window of any file in memory shaped as the buffers are.
+theorem view_reads<M>(data: ByteReadAccess<M>, memory: M, values: Valuation(), addresses: List<BitVec(64)>, buffers, held: Buffers(),
+    shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(),
+    reads: (b: Nat) → Readable(data, memory, address_of(addresses, b), buffer_bytes(held, b)), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) → Readable(data, memory, view_base(found, values), view_bytes(found, values, held)) {
+    match found {
+        None => λ _ => {
+            let nothing: (BitVec::zero(n := 64).toNat() = 0) = BitVec::zero_toNat(64);
+            let fits: (BitVec::zero(n := 64).toNat() + 0 <= Nat::pow(2, 47)) = omega(nothing);
+            ⟨fits, λ k short => false_elim(short)⟩
+        },
+        Some(view) => λ is => j(sym(view.lies(values, addresses, buffers, is)), λ a _ => Readable(data, memory, a, view.bytes(values, held)),
+            readable_window(data, memory, address_of(addresses, view.buffer), buffer_bytes(held, view.buffer), reads(view.buffer),
+                values(64, view.start).toNat(), values(64, view.end).toNat(), is.left.right.left,
+                omega(is.left.right.right, shaped(view.buffer)))),
+    }
+}
+
+// The home a view's callee is passed for it: where it lies and how long
+// it is.
+fn ViewHome(found: Option<View>, values: Valuation(), address: BitVec(64), bytes: List<BitVec(8)>) → Type {
+    match found {
+        None => True,
+        Some(view) => (values(64, view.base) = address) ∧ (values(64, view.length) = BitVec::ofNat(bytes.len())),
+    }
+}
+
+theorem view_home(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), found: Option<View>, address: BitVec(64),
+    bytes: List<BitVec(8)>): ViewIs(found, values, addresses, buffers) → view_base(found, values) = address →
+    view_bytes(found, values, buffers) = bytes → ViewHome(found, values, address, bytes) {
+    match found {
+        None => λ _ _ _ => trivial,
+        Some(view) => λ is at same => ⟨at, j(same, λ xs _ => values(64, view.length) = BitVec::ofNat(xs.len()),
+            trans(is.right.right,
+                trans(BitVec::sub_within(64, values(64, view.end), values(64, view.start), is.left.right.left),
+                    cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), sym(view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is))))))⟩,
+    }
+}
+
+// The views' homes as the callee numbers them: view `k` is its buffer `k`.
+fn views_lents_from(views: List<View>, k: Nat) → List<Lent> {
+    match views { Nil => [], Cons(view, rest) => Cons(Lent(k, view.base, view.length), views_lents_from(rest, Succ(k))) }
+}
+
+fn views_lents(views: List<View>) → List<Lent> { views_lents_from(views, 0) }
+
+theorem views_lents_hold(views: List<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()): (k: Nat) →
+    ((i: Nat) → ViewHome(views.nth(i), values, address_of(addresses, k + i), buffer_bytes(buffers, k + i))) →
+    HomesHold(views_lents_from(views, k), values, addresses, buffers) {
+    match views {
+        Nil => λ k _ => trivial,
+        Cons(view, rest) => λ k each => ⟨each(0), views_lents_hold(rest, values, addresses, buffers, Succ(k), λ i => {
+            let shift: (k + Succ(i) = Succ(k) + i) = omega();
+            j(shift, λ n _ => ViewHome(rest.nth(i), values, address_of(addresses, n), buffer_bytes(buffers, n)), each(Succ(i)))
+        })⟩,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Views a scope can lend
+
+// The buffers as spans of memory (`Lending::spans`, function_ir_lower_calls).
+fn buffer_spans(addresses: List<BitVec(64)>, buffers: Buffers(), written: Nat → Bool) → Spans {
+    Spans(λ (b: Nat) => address_of(addresses, b), λ (b: Nat) => buffer_bytes(buffers, b).len(), written)
+}
+
+// The views as parts of the scope's spans (`Views`, x86_64_views).
+fn lend_views(views: List<View>, values: Valuation(), buffers: Buffers()) → Views {
+    Views(of := λ (v: Nat) => view_buffer(views.nth(v)), start := λ (v: Nat) => view_from(views.nth(v), values),
+        size := λ (v: Nat) => view_bytes(views.nth(v), values, buffers).len(), written := λ (v: Nat) => view_written(views.nth(v)))
+}
+
+// And as the callee's buffers: view `v` lies at its base, as long as its
+// window of the buffers, to write where it is marked.
+fn lend_spans(views: List<View>, values: Valuation(), buffers: Buffers()) → Spans {
+    buffer_spans(views_addresses(views, values), viewed(views, values, buffers), λ (v: Nat) => marked(views_marks(views), v))
+}
+
+// What makes views lendable by a scope lent `buffers` at `addresses`, to
+// write where `written`: each fits and is bound by its nodes, a view to
+// write is alone in its buffer, and the scope may write what the views do.
+record Lendable(views: List<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), written: Nat → Bool) {
+    each: (v: Nat) → ViewIs(views.nth(v), values, addresses, buffers),
+    alone: views_alone(views).IsTrue(),
+    allowed: (b: Nat) → views_store(views, b).IsTrue() → written(b) = True,
+}
+
+theorem Lendable::parts({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written)):
+    Viewed(lend_views(views, values, buffers), buffer_spans(addresses, buffers, written)) {
+    Viewed(
+        inside := λ v => view_inside(values, addresses, buffers, views.nth(v), lendable.each(v)),
+        allowed := λ v marks => lendable.allowed(view_buffer(views.nth(v)), views_stored(views, v, marks)),
+        alone := λ v u marks differ => match views_alone_at(views, lendable.alone, v, u, marks, differ) {
+            Inl(other) => Inl(other),
+            Inr(none) => Inr(Inr(j(sym(none), λ f _ => view_from(f, values) + view_bytes(f, values, buffers).len() <= view_from(views.nth(v), values),
+                zero_least(view_from(views.nth(v), values))))),
+        },
+    )
+}
+
+theorem lend_size(views: List<View>, values: Valuation(), held: Buffers(), v: Nat):
+    buffer_bytes(viewed(views, values, held), v).len() = view_bytes(views.nth(v), values, held).len() {
+    cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), viewed_at(views, values, held, v))
+}
+
+// The callee's spans lie in the views: no longer, written only where the
+// view is, and at the view's place wherever they have a byte.
+theorem Lendable::size_within({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written), v: Nat):
+    lend_spans(views, values, buffers).size(v) <= lend_views(views, values, buffers).size(v) {
+    let same: (buffer_bytes(viewed(views, values, buffers), v).len() = view_bytes(views.nth(v), values, buffers).len()) =
+        lend_size(views, values, buffers, v);
+    let within: (buffer_bytes(viewed(views, values, buffers), v).len() <= view_bytes(views.nth(v), values, buffers).len()) = omega(same);
+    within
+}
+
+theorem Lendable::at_view({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written), v: Nat, present: views.nth(v) = None → False):
+    address_of(views_addresses(views, values), v) = next_rip(address_of(addresses, view_buffer(views.nth(v))), view_from(views.nth(v), values)) {
+    trans(views_addresses_at(views, values, v), view_lies(values, addresses, buffers, views.nth(v), lendable.each(v), present))
+}
+
+theorem Lendable::at_same({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written), v: Nat,
+    some: 0 < lend_spans(views, values, buffers).size(v)):
+    lend_spans(views, values, buffers).at(v) = lend_views(views, values, buffers).spans(buffer_spans(addresses, buffers, written)).at(v) {
+    lendable.at_view(v, λ none => {
+        let has: (0 < view_bytes(views.nth(v), values, buffers).len()) = j(lend_size(views, values, buffers, v), λ n _ => 0 < n, some);
+        j(sym(none), λ f _ => 0 < view_bytes(f, values, buffers).len() → False, λ no => no)(has)
+    })
+}
+
+theorem Lendable::written_within({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written), v: Nat,
+    marks: lend_spans(views, values, buffers).written(v) = True): lend_views(views, values, buffers).written(v) = True {
+    trans(sym(views_marks_at(views, v)), marks)
+}
+
+// The scope's loan is a loan of the views as the callee's buffers.
+theorem Lendable::loan<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()}, {written: Nat → Bool},
+    self lendable: Lendable(views, values, addresses, buffers, written),
+    loan: Loan<M>(fetch, data, stack, top, buffer_spans(addresses, buffers, written))):
+    Loan<M>(fetch, data, stack, top, lend_spans(views, values, buffers)) {
+    loan.view(lend_views(views, values, buffers), lendable.parts()).onto(lend_spans(views, values, buffers),
+        λ v => lendable.size_within(v), λ v marks => lendable.written_within(v, marks), λ v some => lendable.at_same(v, some),
+        λ v => j(sym(views_addresses_at(views, values, v)), λ a _ => a.toNat() + buffer_bytes(viewed(views, values, buffers), v).len() <= Nat::pow(2, 47),
+            j(sym(lend_size(views, values, buffers, v)), λ n _ => view_base(views.nth(v), values).toNat() + n <= Nat::pow(2, 47),
+                view_canonical(values, addresses, buffers, λ b => loan.canonical(b), views.nth(v), lendable.each(v)))))
+}
+
+// What was stored under the callee's spans was stored under the views,
+// and so under the scope's spans.
+theorem Lendable::wrote_views<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {views: List<View>}, {values: Valuation()},
+    {addresses: List<BitVec(64)>}, {buffers: Buffers()}, {written: Nat → Bool},
+    self lendable: Lendable(views, values, addresses, buffers, written), stack: Stack<M>(fetch, data), i: Nat, before, after: M,
+    wrote: stack.WroteIn(i, lend_spans(views, values, buffers), before, after)):
+    stack.WroteIn(i, lend_views(views, values, buffers).spans(buffer_spans(addresses, buffers, written)), before, after) {
+    stack.wrote_in_onto(i, lend_views(views, values, buffers).spans(buffer_spans(addresses, buffers, written)),
+        lend_spans(views, values, buffers), λ v => lendable.size_within(v), λ v marks => lendable.written_within(v, marks),
+        λ v some => lendable.at_same(v, some), before, after, wrote)
+}
+
+theorem Lendable::wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {views: List<View>}, {values: Valuation()},
+    {addresses: List<BitVec(64)>}, {buffers: Buffers()}, {written: Nat → Bool},
+    self lendable: Lendable(views, values, addresses, buffers, written), stack: Stack<M>(fetch, data), i: Nat, before, after: M,
+    wrote: stack.WroteIn(i, lend_spans(views, values, buffers), before, after)):
+    stack.WroteIn(i, buffer_spans(addresses, buffers, written), before, after) {
+    stack.wrote_in_view(i, buffer_spans(addresses, buffers, written), lend_views(views, values, buffers), lendable.parts(), before, after,
+        lendable.wrote_views(stack, i, before, after, wrote))
+}
+
+// A file in memory, shaped as the buffers are: its views are in memory as
+// the callee's buffers, shaped as the views of the buffers are.
+theorem Lendable::reads<M>({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written), data: ByteReadAccess<M>, memory: M,
+    held: Buffers(), shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(),
+    reads: (b: Nat) → Readable(data, memory, address_of(addresses, b), buffer_bytes(held, b)), v: Nat):
+    (buffer_bytes(viewed(views, values, held), v).len() = buffer_bytes(viewed(views, values, buffers), v).len()) ∧
+        Readable(data, memory, address_of(views_addresses(views, values), v), buffer_bytes(viewed(views, values, held), v)) {
+    ⟨trans(lend_size(views, values, held, v),
+        trans(view_len_bytes(values, addresses, buffers, held, shaped, views.nth(v), lendable.each(v)), sym(lend_size(views, values, buffers, v)))),
+     j(sym(views_addresses_at(views, values, v)), λ a _ => Readable(data, memory, a, buffer_bytes(viewed(views, values, held), v)),
+        j(sym(viewed_at(views, values, held, v)), λ xs _ => Readable(data, memory, view_base(views.nth(v), values), xs),
+            view_reads(data, memory, values, addresses, buffers, held, shaped, reads, views.nth(v), lendable.each(v))))⟩
+}
+
+// The homes the callee is passed hold of the views as its buffers.
+theorem Lendable::homes({views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()},
+    {written: Nat → Bool}, self lendable: Lendable(views, values, addresses, buffers, written)):
+    HomesHold(views_lents(views), values, views_addresses(views, values), viewed(views, values, buffers)) {
+    views_lents_hold(views, values, views_addresses(views, values), viewed(views, values, buffers), 0, λ i => {
+        let at: (i = 0 + i) = omega();
+        j(at, λ n _ => ViewHome(views.nth(i), values, address_of(views_addresses(views, values), n), buffer_bytes(viewed(views, values, buffers), n)),
+            view_home(values, addresses, buffers, views.nth(i), address_of(views_addresses(views, values), i),
+                buffer_bytes(viewed(views, values, buffers), i), lendable.each(i), sym(views_addresses_at(views, values, i)),
+                sym(viewed_at(views, values, buffers, i))))
+    })
+}
+
+// After the callee: buffer `view_buffer(views.nth(k))`, of which view `k`
+// is the view to write, reads its bytes with the view's window replaced
+// by what the callee left of its buffer `k`.
+theorem Lendable::put_reads_at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()}, {written: Nat → Bool},
+    self lendable: Lendable(views, values, addresses, buffers, written),
+    loan: Loan<M>(fetch, data, stack, top, buffer_spans(addresses, buffers, written)), i: Nat, low: i <= top, held, left: Buffers(),
+    shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(),
+    same: (v: Nat) → buffer_bytes(left, v).len() = buffer_bytes(viewed(views, values, buffers), v).len(), before, after: M,
+    wrote: stack.WroteIn(i, lend_views(views, values, buffers).spans(buffer_spans(addresses, buffers, written)), before, after),
+    was: (b: Nat) → Readable(data, before, address_of(addresses, b), buffer_bytes(held, b)),
+    now: (v: Nat) → Readable(data, after, address_of(views_addresses(views, values), v), buffer_bytes(left, v)), k: Nat,
+    marks: view_written(views.nth(k)) = True):
+    (buffer_bytes(put_views(views, values, left, held), view_buffer(views.nth(k))).len() = buffer_bytes(buffers, view_buffer(views.nth(k))).len()) ∧
+        Readable(data, after, address_of(addresses, view_buffer(views.nth(k))), buffer_bytes(put_views(views, values, left, held), view_buffer(views.nth(k)))) {
+    let spans = buffer_spans(addresses, buffers, written);
+    let lent = lend_views(views, values, buffers);
+    let b = view_buffer(views.nth(k));
+    let start = view_from(views.nth(k), values);
+    let xs = buffer_bytes(held, b);
+    let ys = buffer_bytes(left, k);
+    let same_len: (ys.len() = view_bytes(views.nth(k), values, buffers).len()) = trans(same(k), lend_size(views, values, buffers, k));
+    let inside: (start + view_bytes(views.nth(k), values, buffers).len() <= buffer_bytes(buffers, b).len()) =
+        view_inside(values, addresses, buffers, views.nth(k), lendable.each(k));
+    let whole: (xs.len() = buffer_bytes(buffers, b).len()) = shaped(b);
+    match b.lt_or_ge(held.len()) {
+        Inl(in_file) => {
+            let put = put_views_stored(views, values, lendable.alone, k, marks, left, held, in_file);
+            let only: ((u: Nat) → view_written(views.nth(u)) = True → view_buffer(views.nth(u)) = b → u = k) = λ u marks_u same_buffer =>
+                match u.eq_dec(k) {
+                    Inl(same_u) => same_u,
+                    Inr(differ) => match views_alone_at(views, lendable.alone, k, u, marks, λ eq => differ(sym(eq))) {
+                        Inl(other) => false_elim(other(sym(same_buffer))),
+                        Inr(none) => false_elim(view_written_present(views.nth(u), none, marks_u)),
+                    },
+                };
+            let now_k: Readable(data, after, next_rip(address_of(addresses, b), start), ys) =
+                j(lendable.at_view(k, λ none => view_written_present(views.nth(k), none, marks)), λ a _ => Readable(data, after, a, ys), now(k));
+            let reads: Readable(data, after, address_of(addresses, b), xs.put_window(start, ys)) =
+                loan.view_written_reads(lent, lendable.parts(), i, low, k, only, xs, ys, whole, same_len, before, after, wrote, was(b), now_k);
+            let fits: (ys.len() + start <= xs.len()) = omega(same_len, inside, whole);
+            j(sym(put), λ zs _ => (zs.len() = buffer_bytes(buffers, b).len()) ∧ Readable(data, after, address_of(addresses, b), zs),
+                ⟨trans(xs.len_put_window(start, ys, fits), whole), reads⟩)
+        },
+        Inr(past) => {
+            let empty: (buffer_bytes(put_views(views, values, left, held), b) = []) = buffer_bytes_past(put_views(views, values, left, held), b,
+                j(sym(put_views_len(views, values, left, held)), λ n _ => n <= b, past));
+            let none: (xs = []) = buffer_bytes_past(held, b, past);
+            let canonical: (address_of(addresses, b).toNat() + buffer_bytes(buffers, b).len() <= Nat::pow(2, 47)) = loan.canonical(b);
+            let fits: (address_of(addresses, b).toNat() + 0 <= Nat::pow(2, 47)) = omega(canonical);
+            let nothing: (0 = buffer_bytes(buffers, b).len()) = trans(sym(cong_fn<List<BitVec(8)>, Nat>(λ zs => zs.len(), none)), whole);
+            j(sym(empty), λ zs _ => (zs.len() = buffer_bytes(buffers, b).len()) ∧ Readable(data, after, address_of(addresses, b), zs),
+                ⟨nothing, ⟨fits, λ t short => false_elim(short)⟩⟩)
+        },
+    }
+}
+
+// After the callee, every buffer of the scope: the file with the written
+// windows put back is the one in memory, shaped as the buffers are.
+theorem Lendable::put_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {views: List<View>}, {values: Valuation()}, {addresses: List<BitVec(64)>}, {buffers: Buffers()}, {written: Nat → Bool},
+    self lendable: Lendable(views, values, addresses, buffers, written),
+    loan: Loan<M>(fetch, data, stack, top, buffer_spans(addresses, buffers, written)), i: Nat, low: i <= top, held, left: Buffers(),
+    shaped: (b: Nat) → buffer_bytes(held, b).len() = buffer_bytes(buffers, b).len(),
+    same: (v: Nat) → buffer_bytes(left, v).len() = buffer_bytes(viewed(views, values, buffers), v).len(), before, after: M,
+    wrote: stack.WroteIn(i, lend_spans(views, values, buffers), before, after),
+    was: (b: Nat) → Readable(data, before, address_of(addresses, b), buffer_bytes(held, b)),
+    now: (v: Nat) → Readable(data, after, address_of(views_addresses(views, values), v), buffer_bytes(left, v)), c: Nat):
+    (buffer_bytes(put_views(views, values, left, held), c).len() = buffer_bytes(buffers, c).len()) ∧
+        Readable(data, after, address_of(addresses, c), buffer_bytes(put_views(views, values, left, held), c)) {
+    let wrote_views = lendable.wrote_views(stack, i, before, after, wrote);
+    match views_store(views, c).is_true_dec() {
+        Inl(stored) => {
+            let found = views_store_at(views, c, stored);
+            j(found.proof.right, λ b _ => (buffer_bytes(put_views(views, values, left, held), b).len() = buffer_bytes(buffers, b).len()) ∧
+                    Readable(data, after, address_of(addresses, b), buffer_bytes(put_views(views, values, left, held), b)),
+                lendable.put_reads_at(loan, i, low, held, left, shaped, same, before, after, wrote_views, was, now, found.witness, found.proof.left))
+        },
+        Inr(unstored) => {
+            let fits: (buffer_bytes(held, c).len() <= buffer_bytes(buffers, c).len()) = omega(shaped(c));
+            j(sym(put_views_unstored(views, values, c, unstored, left, held)),
+                λ zs _ => (zs.len() = buffer_bytes(buffers, c).len()) ∧ Readable(data, after, address_of(addresses, c), zs),
+                ⟨shaped(c), loan.view_unwritten_reads(lend_views(views, values, buffers), lendable.parts(), i, low, c,
+                    λ v marks => views_unstored_at(views, c, unstored, v, marks), buffer_bytes(held, c), fits, before, after, wrote_views, was(c))⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the lowering checks
+
+// The length of the home of buffer `buffer` at `base` among `homes`.
+fn homes_length(homes: List<Lent>, buffer, base: Nat) → Option<Nat> {
+    match homes {
+        Nil => None,
+        Cons(home, rest) => match home.buffer.same(buffer) && home.base.same(base) {
+            False => homes_length(rest, buffer, base),
+            True => Some(home.length),
+        },
+    }
+}
+
+theorem homes_length_holds(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), buffer, base, length: Nat, homes: List<Lent>):
+    homes_length(homes, buffer, base) = Some(length) → HomesHold(homes, values, addresses, buffers) →
+    (values(64, base) = address_of(addresses, buffer)) ∧ (values(64, length) = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) {
+    match homes {
+        Nil => λ absent _ => absurd(absent),
+        Cons(home, rest) => (match same: home.buffer.same(buffer) && home.base.same(base) {
+            False => λ found held => homes_length_holds(values, addresses, buffers, buffer, base, length, rest, found, held.right),
+            True => λ found held => {
+                let both = Bool::and_true_parts(home.buffer.same(buffer), home.base.same(base), same);
+                let at_buffer = home.buffer.same_sound(buffer, both.left);
+                let at_base = home.base.same_sound(base, both.right);
+                j(found, λ o _ => o.All(λ (l: Nat) => (values(64, base) = address_of(addresses, buffer)) ∧
+                        (values(64, l) = BitVec::ofNat(buffer_bytes(buffers, buffer).len()))),
+                    j(at_buffer, λ b _ => (values(64, base) = address_of(addresses, b)) ∧
+                            (values(64, home.length) = BitVec::ofNat(buffer_bytes(buffers, b).len())),
+                        ⟨j(at_base, λ i _ => values(64, i) = address_of(addresses, home.buffer), held.left.left), held.left.right⟩))
+            },
+        }),
+    }
+}
+
+// The file knows `id` is the constant zero.
+fn File::zero(self file: File, id: Nat) → Bool {
+    match known_value(file.known, id) { None => False, Some(value) => value.same(0) }
+}
+
+theorem File::zero_sound(self file: File, values: Valuation(), gprs: Gprs, id: Nat, represents: file.Represents(values, gprs)):
+    file.zero(id).IsTrue() → values(64, id).toNat() = 0 {
+    (match known_value(file.known, id) as λ found => known_value(file.known, id) = found →
+        (match found { None => False, Some(value) => value.same(0) }).IsTrue() → values(64, id).toNat() = 0 {
+        None => λ _ no => false_elim(no),
+        Some(value) => λ found ok => {
+            let known: (values(64, id) = BitVec::ofNat(0)) = trans(known_value_holds(values, id, value, file.known, found, represents.right),
+                cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), value.same_sound(0, eq_true_of_is_true(value.same(0), ok))));
+            let small: (BitVec::ofNat(0, n := 64).toNat() <= 0) = BitVec::toNat_ofNat_le(64, 0);
+            let none: (BitVec::ofNat(0, n := 64).toNat() = 0) = omega(small);
+            j(sym(known), λ w _ => w.toNat() = 0, none)
+        },
+    })(refl)
+}
+
+// A view the scope can lend: its `home` is a home the scope has of its
+// buffer, its start is at most its end (known of the path, or the start is
+// zero), and its end is at most the home's length (known of the path, or
+// the end is the length).
+fn View::lendable(self view: View, file: File, homes: List<Lent>) → Bool {
+    match homes_length(homes, view.buffer, view.home) {
+        None => False,
+        Some(length) => (file.zero(view.start) || file.at_most(view.start, view.end)) &&
+            (view.end.same(length) || file.at_most(view.end, length)),
+    }
+}
+
+fn views_lendable(views: List<View>, file: File, homes: List<Lent>) → Bool {
+    match views { Nil => True, Cons(view, rest) => view.lendable(file, homes) && views_lendable(rest, file, homes) }
+}
+
+theorem View::lendable_fits(self view: View, file: File, homes: List<Lent>, values: Valuation(), gprs: Gprs, addresses: List<BitVec(64)>,
+    buffers: Buffers(), represents: file.Represents(values, gprs), held: HomesHold(homes, values, addresses, buffers)):
+    view.lendable(file, homes).IsTrue() → view.Fits(values, addresses, buffers) {
+    (match homes_length(homes, view.buffer, view.home) as λ found => homes_length(homes, view.buffer, view.home) = found →
+        (match found {
+            None => False,
+            Some(length) => (file.zero(view.start) || file.at_most(view.start, view.end)) &&
+                (view.end.same(length) || file.at_most(view.end, length)),
+        }).IsTrue() → view.Fits(values, addresses, buffers) {
+        None => λ _ no => false_elim(no),
+        Some(length) => λ found ok => {
+            let home = homes_length_holds(values, addresses, buffers, view.buffer, view.home, length, homes, found, held);
+            let both = Bool::is_true_and(file.zero(view.start) || file.at_most(view.start, view.end),
+                view.end.same(length) || file.at_most(view.end, length), ok);
+            let whole = buffer_bytes(buffers, view.buffer).len();
+            let top: (values(64, length).toNat() <= whole) = j(sym(home.right), λ w _ => w.toNat() <= whole, BitVec::toNat_ofNat_le(64, whole));
+            let low: (values(64, view.start).toNat() <= values(64, view.end).toNat()) =
+                match Bool::is_true_or(file.zero(view.start), file.at_most(view.start, view.end), both.left) {
+                    Inl(zero) => omega(file.zero_sound(values, gprs, view.start, represents, zero)),
+                    Inr(known) => file.at_most_sound(values, gprs, view.start, view.end, represents, known),
+                };
+            let high: (values(64, view.end).toNat() <= whole) =
+                match Bool::is_true_or(view.end.same(length), file.at_most(view.end, length), both.right) {
+                    Inl(same) => j(sym(view.end.same_sound(length, eq_true_of_is_true(view.end.same(length), same))),
+                        λ id _ => values(64, id).toNat() <= whole, top),
+                    Inr(known) => omega(file.at_most_sound(values, gprs, view.end, length, represents, known), top),
+                };
+            ⟨home.left, ⟨low, high⟩⟩
+        },
+    })(refl)
+}
+
+theorem views_lendable_fit(views: List<View>, file: File, homes: List<Lent>, values: Valuation(), gprs: Gprs, addresses: List<BitVec(64)>,
+    buffers: Buffers(), represents: file.Represents(values, gprs), held: HomesHold(homes, values, addresses, buffers)):
+    views_lendable(views, file, homes).IsTrue() → ViewsFit(views, values, addresses, buffers) {
+    match views {
+        Nil => λ _ => trivial,
+        Cons(view, rest) => λ ok => {
+            let both = Bool::is_true_and(view.lendable(file, homes), views_lendable(rest, file, homes), ok);
+            ⟨view.lendable_fits(file, homes, values, gprs, addresses, buffers, represents, held, both.left),
+             views_lendable_fit(rest, file, homes, values, gprs, addresses, buffers, represents, held, both.right)⟩
+        },
+    }
+}
+
+// The checks, the views' nodes and the scope's homes make the views
+// lendable.
+theorem views_lendable_sound(views: List<View>, file: File, homes: List<Lent>, values: Valuation(), gprs: Gprs,
+    addresses: List<BitVec(64)>, buffers, over: Buffers(), written: Nat → Bool, represents: file.Represents(values, gprs),
+    held: HomesHold(homes, values, addresses, buffers), lendable: views_lendable(views, file, homes).IsTrue(),
+    alone: views_alone(views).IsTrue(), bound: NodesHoldOver(over, values, views_nodes(views)),
+    allowed: (b: Nat) → views_store(views, b).IsTrue() → written(b) = True): Lendable(views, values, addresses, buffers, written) {
+    Lendable(
+        each := views_are(views, values, addresses, buffers, over,
+            views_lendable_fit(views, file, homes, values, gprs, addresses, buffers, represents, held, lendable), bound),
+        alone := alone,
+        allowed := allowed,
+    )
+}
+
+// What a call over views is lowered under: some view (a call over none is
+// a call), each one lendable, a view to write alone in its buffer.
+fn views_lent(views: List<View>, file: File, homes: List<Lent>) → Bool {
+    match views { Nil => False, Cons(_, _) => views_lendable(views, file, homes) && views_alone(views) }
+}
+
+theorem views_lent_parts(views: List<View>, file: File, homes: List<Lent>):
+    views_lent(views, file, homes).IsTrue() → views_lendable(views, file, homes).IsTrue() ∧ views_alone(views).IsTrue() {
+    match views {
+        Nil => λ no => false_elim(no),
+        Cons(view, rest) => λ ok => Bool::is_true_and(views_lendable(Cons(view, rest), file, homes), views_alone(Cons(view, rest)), ok),
+    }
+}
+
+// A scope with no home lends no view.
+theorem views_lent_none(views: List<View>, file: File): views_lent(views, file, []) = False {
+    match views { Nil => refl, Cons(_, _) => refl }
+}
