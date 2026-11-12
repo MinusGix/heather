@@ -502,7 +502,7 @@ pub fn operator_form(sym: &str, fixity: OpFixity) -> Option<OperatorForm> {
             "^" => Some(OperatorForm::Power),
             _ => Parser::infix_binding(sym).map(|(l, r)| OperatorForm::Infix(l, r)),
         },
-        OpFixity::Prefix => matches!(sym, "-" | "!" | "↑").then_some(OperatorForm::Prefix),
+        OpFixity::Prefix => matches!(sym, "-" | "!" | "~" | "↑").then_some(OperatorForm::Prefix),
         OpFixity::Postfix => (sym == "⁻¹").then_some(OperatorForm::Postfix),
     }
 }
@@ -1760,6 +1760,7 @@ impl Parser {
         let sym = match fixity {
             OpFixity::Prefix if matches!(self.peek(), TokKind::Minus) => Some("-"),
             OpFixity::Prefix if matches!(self.peek(), TokKind::Bang) => Some("!"),
+            OpFixity::Prefix if matches!(self.peek(), TokKind::Tilde) => Some("~"),
             OpFixity::Prefix => None,
             OpFixity::Postfix if matches!(self.peek(), TokKind::SupInverse) => Some("⁻¹"),
             OpFixity::Postfix => None,
@@ -5123,8 +5124,10 @@ impl Parser {
     /// (issues/bool-operator-designations.md).
     ///
     /// The bitwise and shift rungs (issues/integer-operator-symbols.md) sit
-    /// between `&&` and `+` in Rust's order: `|` loosest, then `&`, then
-    /// `<<`/`>>`, so `a & b << 1` is `a & (b << 1)` and `x + y << 2` is
+    /// between `&&` and `+` in Rust's order: `|` loosest, then `⊕` (Rust's
+    /// `^`, issues/bitvec-xor-complement-symbols.md), then `&`, then
+    /// `<<`/`>>`, so `a & b << 1` is `a & (b << 1)`, `a ⊕ b & c` is
+    /// `a ⊕ (b & c)` and `x + y << 2` is
     /// `(x + y) << 2`. Rust's C-inherited trap does not exist here, since the
     /// comparison rung is below all of them: `a & m = 0` is `(a & m) = 0`.
     /// `/` and `%` share `*`'s rung, left-associative.
@@ -5141,12 +5144,13 @@ impl Parser {
             "||" => Some((1, 2)),
             "&&" => Some((3, 4)),
             "|" => Some((5, 6)),
-            "&" => Some((7, 8)),
-            "<<" => Some((9, 10)),
-            ">>" => Some((9, 10)),
-            "+" => Some((11, 12)),
-            "-" => Some((11, 12)),
-            "⊔" => Some((11, 12)),
+            "⊕" => Some((7, 8)),
+            "&" => Some((9, 10)),
+            "<<" => Some((11, 12)),
+            ">>" => Some((11, 12)),
+            "+" => Some((13, 14)),
+            "-" => Some((13, 14)),
+            "⊔" => Some((13, 14)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
             // the shape `append`'s recursion unfolds against and the shape
@@ -5154,20 +5158,20 @@ impl Parser {
             // `a` twice and meets no lemma head-on. `::`-style list notation,
             // when it lands, is right-associative by necessity, so the list
             // family reads uniformly (docs/showcase/README.md, friction 2).
-            "++" => Some((12, 11)),
-            "*" => Some((13, 14)),
-            "/" => Some((13, 14)),
-            "%" => Some((13, 14)),
+            "++" => Some((14, 13)),
+            "*" => Some((15, 16)),
+            "/" => Some((15, 16)),
+            "%" => Some((15, 16)),
             // `∙` sits on the multiplicative rung, which is where
             // issues/notation-extensibility.md's precedence-by-class scheme
             // puts a dot-shaped operator (`× ⊗ ∘ ∩`). Nothing in the library
             // mixes it with `+` — it is the *generic* operation, so a file that
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
-            "∙" => Some((13, 14)),
+            "∙" => Some((15, 16)),
             // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
             // two operations read like the semiring's.
-            "⊓" => Some((13, 14)),
+            "⊓" => Some((15, 16)),
             _ => None,
         }
     }
@@ -5187,6 +5191,7 @@ impl Parser {
             TokKind::Percent => Some("%"),
             TokKind::Amp => Some("&"),
             TokKind::Pipe => Some("|"),
+            TokKind::OPlus => Some("⊕"),
             TokKind::Shl => Some("<<"),
             TokKind::Shr => Some(">>"),
             TokKind::Caret => Some("^"),
@@ -5259,6 +5264,7 @@ impl Parser {
         let symbol = match self.peek() {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
+            TokKind::Tilde => "~",
             // A cast, at `-`'s precedence (docs/casting-design.md §5.2):
             // `↑n - 1` subtracts at the target, `↑(n - 1)` casts the
             // difference.
@@ -5929,6 +5935,10 @@ impl Parser {
             TokKind::Num(n) => {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })
+            }
+            TokKind::SuffixedNum(value, suffix) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::SuffixedNum { value, suffix }, span: sp })
             }
             TokKind::Scaled(s) => {
                 let sp = self.bump().span;
@@ -7504,6 +7514,60 @@ mod tests {
         // And above the comparison rung: `a & m = 0` is `(a & m) = 0`.
         let ExprKind::Eq(lhs, _) = body("a & m = 0") else { panic!("not an equation") };
         assert_eq!(as_call(&lhs.kind).0, "&");
+    }
+
+    #[test]
+    fn exclusive_or_sits_between_or_and_and() {
+        // issues/bitvec-xor-complement-symbols.md: Rust's order, `|` below
+        // `⊕` below `&`, and `⊕` left-associative.
+        let k = body("a | b ⊕ c & d");
+        let (or, operands, _) = as_call(&k);
+        assert_eq!(or, "|");
+        let (xor, operands, _) = as_call(&operands[1].kind);
+        assert_eq!(xor, "⊕");
+        assert_eq!(as_call(&operands[1].kind).0, "&");
+        let k = body("a ⊕ b ⊕ c");
+        let (xor, operands, _) = as_call(&k);
+        assert_eq!(xor, "⊕");
+        assert_eq!(as_call(&operands[0].kind).0, "⊕");
+        // A designation reference, as every infix symbol has.
+        let k = body("f(⊕)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊕"));
+        assert_eq!(operator_form("⊕", OpFixity::Infix), Some(OperatorForm::Infix(7, 8)));
+    }
+
+    #[test]
+    fn complement_is_a_prefix_operator() {
+        // `~` binds as `-` and `!` do: tighter than every infix rung, looser
+        // than a postfix application, and it nests.
+        let k = body("~a ⊕ b");
+        let (xor, operands, _) = as_call(&k);
+        assert_eq!(xor, "⊕");
+        let ExprKind::App { head, .. } = &operands[0].kind else { panic!("not a call") };
+        assert!(matches!(&head.kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Prefix } if symbol == "~"));
+        let (_, inner, _) = as_call(&operands[0].kind);
+        assert!(matches!(&inner[0].kind, ExprKind::Var(a) if a == "a"));
+        let k = body("~~x.f()");
+        let (not, inner, _) = as_call(&k);
+        assert_eq!(not, "~");
+        assert_eq!(as_call(&inner[0].kind).0, "~");
+        assert_eq!(operator_form("~", OpFixity::Prefix), Some(OperatorForm::Prefix));
+        let file = parse_file("designation prefix ~ at BitVec(n) := BitVec::complement").unwrap();
+        let Item::Designation(d) = &file.items[0] else { panic!("not a designation") };
+        assert_eq!((d.symbol.as_str(), d.fixity), ("~", OpFixity::Prefix));
+    }
+
+    #[test]
+    fn a_suffixed_numeral_is_one_atom() {
+        // issues/integer-literal-width-suffix.md.
+        let k = body("0x80u8");
+        let ExprKind::SuffixedNum { value, suffix } = &k else { panic!("not a suffixed numeral: {k:?}") };
+        assert_eq!((value.as_u64(), suffix.as_str()), (Some(0x80), "u8"));
+        let k = body("i + 1u64");
+        let (plus, operands, _) = as_call(&k);
+        assert_eq!(plus, "+");
+        assert!(matches!(&operands[1].kind, ExprKind::SuffixedNum { suffix, .. } if suffix == "u64"));
     }
 
     #[test]

@@ -26,7 +26,7 @@ use heather_syntax::lexer::{Tok, TokKind, lex};
 fn kind_of(kind: &TokKind) -> Kind {
     match kind {
         TokKind::Ident(_) => Kind::Ident,
-        TokKind::Num(_) => Kind::Num,
+        TokKind::Num(_) | TokKind::SuffixedNum(..) => Kind::Num,
         TokKind::Scaled(_) => Kind::Scaled,
         TokKind::Char(_) => Kind::Char,
         TokKind::Str(_) => Kind::Str,
@@ -57,6 +57,8 @@ fn kind_of(kind: &TokKind) -> Kind {
         TokKind::RAngle => Kind::RAngle,
         TokKind::Pipe => Kind::Pipe,
         TokKind::Amp => Kind::Amp,
+        TokKind::OPlus => Kind::OPlus,
+        TokKind::Tilde => Kind::Tilde,
         TokKind::Slash => Kind::Slash,
         TokKind::Percent => Kind::Percent,
         TokKind::Shl => Kind::Shl,
@@ -279,7 +281,7 @@ fn the_kinds_are_the_modules() {
         assert_eq!(Kind::of_code(kind.code()), Some(*kind));
     }
     assert_eq!(Kind::of_code(0), None);
-    assert_eq!(Kind::of_code(69), None);
+    assert_eq!(Kind::of_code(71), None);
     let constant = |name: &str| -> u64 {
         let line = module.lines().find(|line| line.starts_with(&format!("def {name}: u64 = "))).expect(name);
         let value = line.split_once(" = ").expect("a definition").1.trim_end_matches(';');
@@ -438,6 +440,11 @@ fn the_longest_token_wins_and_a_dead_end_falls_back() {
     assert_eq!(spans("0xff.fff()"), [(Num, 0, 4), (Dot, 4, 5), (Ident, 5, 8), (LParen, 8, 9), (RParen, 9, 10), (Eof, 10, 10)]);
     assert_eq!(kinds("0xff.f_p"), [Num, Dot, Ident, Eof]);
     assert_eq!(kinds("1e5 1e-5 1_e5 0x1p3 0x1_p+3"), [Scaled, Scaled, Scaled, Scaled, Scaled, Eof]);
+    // A width suffix is part of its numeral, in every radix, and `u`/`i`
+    // are never hexadecimal digits.
+    assert_eq!(spans("42u64 0x1fi8"), [(Num, 0, 5), (Num, 6, 12), (Eof, 12, 12)]);
+    assert_eq!(kinds("0u8 0b1u1 0o7i27 1_0u16 0u0"), [Num, Num, Num, Num, Num, Eof]);
+    assert_eq!(spans("1u8.f"), [(Num, 0, 3), (Dot, 3, 4), (Ident, 4, 5), (Eof, 5, 5)]);
     // Operators.
     assert_eq!(kinds("<-> <- <= << < -> - ++ + => == = |- || | && & := :: :"), [
         Iff, LArrow, LtEq, Shl, Lt, Arrow, Minus, PlusPlus, Plus, FatArrow, EqEq, Eq, Turnstile, PipePipe, Pipe,
@@ -462,9 +469,9 @@ fn a_shift_needs_a_gap_before_it() {
 #[test]
 fn the_symbols_past_ascii() {
     use Kind::*;
-    assert_eq!(kinds("λ ¬ ∙ ≈ ⊔ ⊓ ∧ ∨ ↔ ← ∃ ∑ ∏ ↑ ∀ ≠ ⊢ → ∥ ⟨ ⟩ ⟦ ⟧"), [
-        Lambda, Neg, Bullet, Approx, Join, Meet, Wedge, Vee, Iff, LArrow, Exists, BigSum, BigProd, UpArrow, Forall,
-        Ne, Turnstile, Arrow, NormBar, LAngle, RAngle, LSemantic, RSemantic, Eof
+    assert_eq!(kinds("λ ¬ ∙ ≈ ⊔ ⊓ ⊕ ∧ ∨ ↔ ← ∃ ∑ ∏ ↑ ∀ ≠ ⊢ → ∥ ⟨ ⟩ ⟦ ⟧ ~"), [
+        Lambda, Neg, Bullet, Approx, Join, Meet, OPlus, Wedge, Vee, Iff, LArrow, Exists, BigSum, BigProd, UpArrow,
+        Forall, Ne, Turnstile, Arrow, NormBar, LAngle, RAngle, LSemantic, RSemantic, Tilde, Eof
     ]);
     assert_eq!(spans("x⁻¹"), [(Ident, 0, 1), (SupInverse, 1, 6), (Eof, 6, 6)]);
     // An argument slot takes the subscript digits right behind it and
@@ -522,6 +529,17 @@ fn what_is_refused_and_where() {
         ("1.5x", 0),
         ("1e5x", 0),
         ("1e5_", 0),
+        // A width suffix: a letter with no width, a leading zero, a name
+        // glued on, a separator before it, and after a point.
+        ("42u", 0),
+        ("x 7in", 2),
+        ("42u08", 0),
+        ("42u64x", 0),
+        ("42u64_", 0),
+        ("1_u8", 0),
+        ("0x1_u8", 0),
+        ("1.5u8", 0),
+        ("0bu8", 0),
         ("0x1p", 0),
         ("0x1.8_p3", 0),
         ("0x1.8__1p3", 0),
@@ -593,13 +611,15 @@ const PIECES: &[&str] = &[
     ")", "{", "}", "[", "]", " ", "  ", "\t", "\n", "\r", "\u{c}", "\u{b}", "\"", "'", "\\", "\\n", "\\u", "\\u{",
     "\\u{41}", "\\u{D800}", "\\u{110000}", "\\0", "\\'", "\\\"", "'a'", "\"s\"", "λ", "¬", "·", "₀", "₁", "₉", "⁻",
     "¹", "⁻¹", "∙", "≈", "⊔", "⊓", "∧", "∨", "↔", "←", "∃", "∑", "∏", "↑", "∀", "≠", "⊢", "→", "∥", "⟨", "⟩", "⟦",
-    "⟧", "δ", "é", "²", "₊", "∘", "⟪", "😀", "#", "`", "~", "\u{0}", "\u{7f}", "\u{80}", "\u{2028}",
+    "⟧", "δ", "é", "²", "₊", "∘", "⟪", "😀", "#", "`", "~", "\u{0}", "\u{7f}", "\u{80}", "\u{2028}", "⊕", "i",
+    "u8", "i64", "u0",
 ];
 
 /// Narrower alphabets, so that a long numeral, a long literal or a run of
 /// operator characters is common and not a one-in-a-million draw.
 const THEMES: &[&[&str]] = &[
     &["0", "1", "7", "9", "a", "f", "e", "E", "p", "P", "x", "o", "b", "g", "_", ".", "+", "-", "0x", "0o", "0b", " "],
+    &["0", "1", "9", "0x", "0b", "0o", "f", "u", "i", "u8", "i64", "u0", "_", ".", "e", "p3", "x", " "],
     &["0x", "1", "8", "a", "f", "_", ".", "p", "p3", "p+", "p-1", "P", "(", " "],
     &["\"", "'", "\\", "u", "{", "}", "4", "1", "D800", "n", "q", "a", "é", "→", "😀", "\n", " ", "//"],
     &["<", ">", "-", "=", "|", "&", ":", "+", "!", "/", "?", "a", "_", " ", "(", ",", "\n", "//", "0"],
@@ -631,8 +651,8 @@ fn strings_of_token_pieces_lex_the_same() {
 /// byte the automaton can be left waiting after, one that shares it and is
 /// no token.
 const BEYOND: &[&str] = &[
-    "λ", "¬", "·", "₀", "₁", "₉", "⁻", "¹", "∙", "≈", "⊔", "⊓", "∧", "∨", "↔", "←", "∃", "∑", "∏", "↑", "∀", "≠", "⊢",
-    "→", "∥", "⟨", "⟩", "⟦", "⟧", "ε", "£", "²", "↓", "∂", "≤", "⊕", "⟪", "⁺", "₊", "€", "‖", "δ", "é", "\u{80}",
+    "λ", "¬", "·", "₀", "₁", "₉", "⁻", "¹", "∙", "≈", "⊔", "⊓", "⊕", "∧", "∨", "↔", "←", "∃", "∑", "∏", "↑", "∀", "≠", "⊢",
+    "→", "∥", "⟨", "⟩", "⟦", "⟧", "ε", "£", "²", "↓", "∂", "≤", "⊗", "⟪", "⁺", "₊", "€", "‖", "δ", "é", "\u{80}",
     "\u{7ff}", "\u{800}", "한", "\u{ffff}", "😀", "\u{10ffff}",
 ];
 
@@ -640,7 +660,7 @@ const BEYOND: &[&str] = &[
 /// left open, or to show that it cannot be finished.
 const AFTER: &[&str] = &[
     "", "0", "1", "8", "a", "e", "f", "p", "x", "g", "u", "n", "_", ".", "+", "-", ":", "=", ">", "<", "|", "&", "/",
-    "\"", "'", "\\", "{", "}", " ", "\n", "(", "¹", "₁", "→", "é",
+    "\"", "'", "\\", "{", "}", " ", "\n", "(", "¹", "₁", "→", "é", "i",
 ];
 const AFTER_TWICE: &[&str] = &["1", "a", "e", "p", "_", ".", "+", ":", ">", "'", "\"", "}", " "];
 
@@ -779,6 +799,9 @@ const PROBES: &[&str] = &[
     "\"\\q\"",
     "a # b",
     "1__0",
+    "a ⊕ ~b 42u64 0x1fi8 0u0",
+    "x 42u",
+    "x 1u08",
 ];
 
 /// A Heather string literal for a source.

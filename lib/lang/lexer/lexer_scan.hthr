@@ -158,6 +158,9 @@ def KIND_COLON_COLON: u64 = 65;
 def KIND_EOF: u64 = 66;
 def KIND_SPACE: u64 = 67;
 def KIND_COMMENT: u64 = 68;
+// Added after the two a scanner has, so no code above moves.
+def KIND_OPLUS: u64 = 69;
+def KIND_TILDE: u64 = 70;
 
 // ---------------------------------------------------------------------------
 // States: the number in the low byte, the accepted kind above it.
@@ -203,6 +206,9 @@ def EXP_UNDER: u64 = 0x003d;
 def OCT_START: u64 = 0x0040;
 def OCT: u64 = 0x0241;
 def OCT_UNDER: u64 = 0x0042;
+def SUF_LETTER: u64 = 0x0043;
+def SUF: u64 = 0x0244;
+def SUF_ZERO: u64 = 0x0245;
 def BIN_START: u64 = 0x0048;
 def BIN: u64 = 0x0249;
 def BIN_UNDER: u64 = 0x004a;
@@ -299,6 +305,8 @@ def DONE_NE: u64 = 0x3e01;
 def DONE_EQ_EQ: u64 = 0x3f01;
 def DONE_COLON_EQ: u64 = 0x4001;
 def DONE_COLON_COLON: u64 = 0x4101;
+def DONE_OPLUS: u64 = 0x4501;
+def DONE_TILDE: u64 = 0x4601;
 
 // ---------------------------------------------------------------------------
 // The families: each state's way on, one byte further.
@@ -360,7 +368,8 @@ runtime fn step_start_mid(s, b: u64) → u64 {
 }
 
 // A token's first byte, from 64; `END` comes here too, and begins nothing.
-// Bytes: 95 `_`, 123 `{`, 125 `}`, 91 `[`, 93 `]`, 124 `|`, 64 `@`, 94 `^`.
+// Bytes: 95 `_`, 123 `{`, 125 `}`, 91 `[`, 93 `]`, 124 `|`, 64 `@`, 94 `^`,
+// 126 `~`.
 runtime fn step_start_high(s, b: u64) → u64 {
     if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { IDENT }
     else if b.eq_bit(123) { DONE_LBRACE }
@@ -370,6 +379,7 @@ runtime fn step_start_high(s, b: u64) → u64 {
     else if b.eq_bit(124) { PIPE }
     else if b.eq_bit(64) { DONE_AT }
     else if b.eq_bit(94) { DONE_CARET }
+    else if b.eq_bit(126) { DONE_TILDE }
     else if b.eq_bit(0xe2) { LEAD_E2 }
     else if b.eq_bit(0xce) { LEAD_CE }
     else if b.eq_bit(0xc2) { LEAD_C2 }
@@ -506,7 +516,8 @@ runtime fn step_doubles(s, b: u64) → u64 {
 runtime fn step_decimal(s, b: u64) → u64 {
     if s.eq_bit(ZERO) {
         // After a leading `0`: a radix prefix `x` (120), `o` (111) or
-        // `b` (98), or a decimal numeral going on.
+        // `b` (98), a width suffix's `u` (117) or `i` (105), or a decimal
+        // numeral going on.
         // Bytes: 95 `_`, 46 `.`.
         if b.sub(48).unsigned_lt_bit(10) { DEC }
         else if b.eq_bit(95) { DEC_UNDER }
@@ -514,16 +525,19 @@ runtime fn step_decimal(s, b: u64) → u64 {
         else if b.eq_bit(111) { OCT_START }
         else if b.eq_bit(98) { BIN_START }
         else if b.bor(32).eq_bit(101) { EXP_MARK }
+        else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
         else if b.eq_bit(46) { DEC_DOT }
         else { DEAD }
     } else if s.eq_bit(DEC) {
         // In a decimal numeral. A letter cannot follow a digit, except
-        // `e` or `E` as an exponent; a `.` (46) may begin a fraction.
+        // `e` or `E` as an exponent and `u` (117) or `i` (105) as a width
+        // suffix; a `.` (46) may begin a fraction.
         // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(10) { DEC }
         else if b.eq_bit(95) { DEC_UNDER }
         else if b.bor(32).eq_bit(101) { EXP_MARK }
+        else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
         else if b.eq_bit(46) { DEC_DOT }
         else { DEAD }
@@ -586,7 +600,10 @@ runtime fn step_fraction(s, b: u64) → u64 {
     }
 }
 
-// Octal numerals.
+// Octal numerals, and the width suffix any whole numeral may end in
+// (`42u64`, `0x1fi8`: `u` or `i` and a decimal width without leading zeros,
+// issues/integer-literal-width-suffix.md). The suffix is part of the
+// numeral's token.
 runtime fn step_octal(s, b: u64) → u64 {
     if s.eq_bit(OCT_START) {
         // After `0o`: at least one digit.
@@ -594,15 +611,34 @@ runtime fn step_octal(s, b: u64) → u64 {
         else { FAIL }
     } else if s.eq_bit(OCT) {
         // In an octal numeral.
-        // Bytes: 95 `_`.
+        // Bytes: 95 `_`, 117 `u`, 105 `i`.
         if b.sub(48).unsigned_lt_bit(8) { OCT }
         else if b.eq_bit(95) { OCT_UNDER }
+        else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL }
         else { DEAD }
     } else if s.eq_bit(OCT_UNDER) {
         // After a `_` in an octal numeral.
         if b.sub(48).unsigned_lt_bit(8) { OCT }
         else { FAIL }
+    } else if s.eq_bit(SUF_LETTER) {
+        // After a numeral and a suffix's letter: the width's first digit,
+        // since `42u` is no numeral.
+        if b.eq_bit(48) { SUF_ZERO }
+        else if b.sub(48).unsigned_lt_bit(10) { SUF }
+        else { FAIL }
+    } else if s.eq_bit(SUF) {
+        // In a width. Nothing a name could continue with may follow it.
+        // Bytes: 95 `_`.
+        if b.sub(48).unsigned_lt_bit(10) { SUF }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL }
+        else { DEAD }
+    } else if s.eq_bit(SUF_ZERO) {
+        // A width of `0`, which no digit may follow: a width is written
+        // without leading zeros.
+        // Bytes: 95 `_`.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL }
+        else { DEAD }
     } else {
         DEAD
     }
@@ -616,9 +652,10 @@ runtime fn step_binary(s, b: u64) → u64 {
         else { FAIL }
     } else if s.eq_bit(BIN) {
         // In a binary numeral.
-        // Bytes: 95 `_`.
+        // Bytes: 95 `_`, 117 `u`, 105 `i`.
         if b.sub(48).unsigned_lt_bit(2) { BIN }
         else if b.eq_bit(95) { BIN_UNDER }
+        else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL }
         else { DEAD }
     } else if s.eq_bit(BIN_UNDER) {
@@ -638,12 +675,13 @@ runtime fn step_hex(s, b: u64) → u64 {
         else { FAIL }
     } else if s.eq_bit(HEX) {
         // In a hexadecimal numeral. `p` or `P` is its exponent letter,
-        // and a `.` may begin a fraction, which only an exponent after
-        // it confirms.
-        // Bytes: 95 `_`, 46 `.`.
+        // `u` or `i` (no digit here) begins a width suffix, and a `.` may
+        // begin a fraction, which only an exponent after it confirms.
+        // Bytes: 95 `_`, 46 `.`, 117 `u`, 105 `i`.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { HEX }
         else if b.eq_bit(95) { HEX_UNDER }
         else if b.bor(32).eq_bit(112) { EXP_MARK }
+        else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
         else if b.eq_bit(46) { HEX_DOT }
         else { DEAD }
@@ -905,9 +943,10 @@ runtime fn step_symbols(s, b: u64) → u64 {
         else if b.eq_bit(0xa0) { DONE_NE }
         else { DEAD }
     } else if s.eq_bit(LATTICE) {
-        // After E2 8A: `⊓` 93, `⊔` 94, `⊢` A2.
+        // After E2 8A: `⊓` 93, `⊔` 94, `⊕` 95, `⊢` A2.
         if b.eq_bit(0x93) { DONE_MEET }
         else if b.eq_bit(0x94) { DONE_JOIN }
+        else if b.eq_bit(0x95) { DONE_OPLUS }
         else if b.eq_bit(0xa2) { DONE_TURNSTILE }
         else { DEAD }
     } else if s.eq_bit(BRACKETS) {

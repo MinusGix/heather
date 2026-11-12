@@ -163,6 +163,15 @@ fn prefix_negation_is_written_tight() {
     check("theorem t(P: Type): ¬ P { p }", "theorem t(P: Type): ¬P { p }");
     check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
     check("fn f(n: Nat) -> Rat { ↑ n - 1 }", "fn f(n: Nat) -> Rat { ↑n - 1 }");
+    check("fn f(x: u8) -> u8 { ~ x }", "fn f(x: u8) -> u8 { ~x }");
+}
+
+/// `⊕` is spaced as every infix operator is, and a width suffix stays glued
+/// to its numeral: it is one token (issues/integer-literal-width-suffix.md).
+#[test]
+fn exclusive_or_is_spaced_and_a_suffix_stays() {
+    check("fn f(x: u8) -> u8 { x⊕~x ⊕0x80u8 }", "fn f(x: u8) -> u8 { x ⊕ ~x ⊕ 0x80u8 }");
+    check("fn f() -> u64 { 42u64+7u64 }", "fn f() -> u64 { 42u64 + 7u64 }");
 }
 
 /// `-` is both: subtraction where the parse puts it between two operands,
@@ -270,6 +279,8 @@ fn a_declared_operator_symbol_is_not_a_prefix_operator() {
     for src in [
         "designation prefix - at Int := neg\n",
         "designation prefix ! at Bool := not\n",
+        "designation prefix ~ at BitVec(n) := BitVec::complement\n",
+        "designation ⊕ at BitVec(n) := BitVec::bxor\n",
         "designation<A> ++ at List<A> := append\n",
         "designation < at Int := lt\n",
         "designation postfix ⁻¹ at Rat := inv\n",

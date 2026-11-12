@@ -8,6 +8,12 @@ use crate::ast::{ScaledLit, Span};
 pub enum TokKind {
     Ident(String),
     Num(Numeral),
+    /// `42u64`, `0x80u8`, `7i32`: a whole numeral glued to a width-family
+    /// name, held as its value and the name (issues/integer-literal-width-suffix.md).
+    /// The name is the type: `42u64` means `42` read at `u64`, whatever stands
+    /// around it. A suffix is `u` or `i` and a decimal width, so it is never a
+    /// hexadecimal digit and `0x1fi8` is `0x1f` at `i8`.
+    SuffixedNum(Numeral, String),
     /// `1.5`, `1e-3`, `0x1.8p3`: a numeral with a point or an exponent
     /// (docs/floating-point-design.md §15), held as its value.
     Scaled(ScaledLit),
@@ -75,6 +81,15 @@ pub enum TokKind {
     /// `&` — bitwise and (issues/integer-operator-symbols.md). `&&` is
     /// matched first, so a doubled ampersand is still the Boolean operator.
     Amp,       // &
+    /// `⊕` (U+2295, CIRCLED PLUS) — exclusive or
+    /// (issues/bitvec-xor-complement-symbols.md), on a rung of its own
+    /// between `|` and `&`, as Rust's `^` sits; `^` is power here. Notation
+    /// only: a designation gives it a meaning.
+    OPlus,     // ⊕
+    /// `~` — prefix bitwise complement, beside `-` and `!`. `!` is the
+    /// Boolean negation and `¬` the proposition's, so a word's complement
+    /// has a symbol of its own.
+    Tilde,     // ~
     /// `/` — division. `//` is matched first and is a line comment, so
     /// `a // b` is `a` followed by a comment, exactly as in Rust.
     Slash,     // /
@@ -247,6 +262,9 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
         if digits > 0 && exponent_marker(bytes, i, radix) {
             break;
         }
+        if digits > 0 && !previous_was_separator && width_suffix_at(bytes, i) {
+            break;
+        }
         let digit = match (b as char).to_digit(36) {
             Some(d) if d < radix => u64::from(d),
             _ => {
@@ -274,6 +292,9 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
             msg: format!("`{}` needs at least one {name} digit", &src[start..digits_start]),
             span: Span { start, end: digits_start },
         });
+    }
+    if width_suffix_at(bytes, i) {
+        return lex_width_suffix(src, start, i).map(|(suffix, end)| (Lexed::Suffixed(value, suffix), end));
     }
     let scaled = (radix == 10 || radix == 16)
         && ((bytes.get(i) == Some(&b'.') && fraction_follows(bytes, i, radix)) || exponent_marker(bytes, i, radix));
@@ -336,11 +357,45 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
     Ok((Lexed::Scaled(ScaledLit { mant: value, exp: exp + shift, hex: radix == 16 }), i))
 }
 
-/// What a numeral lexed to: a whole number, or one with a point or an
-/// exponent.
+/// What a numeral lexed to: a whole number, one with a width suffix, or one
+/// with a point or an exponent.
 enum Lexed {
     Num(Numeral),
+    Suffixed(Numeral, String),
     Scaled(ScaledLit),
+}
+
+/// A width suffix starts at `i`: `u` or `i` and then a decimal digit
+/// (issues/integer-literal-width-suffix.md). Neither letter is a digit in
+/// any radix a numeral is written in, so the numeral before it has already
+/// ended: `0x1fi8` is `0x1f` and `i8`.
+fn width_suffix_at(bytes: &[u8], i: usize) -> bool {
+    matches!(bytes.get(i), Some(b'u' | b'i')) && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)
+}
+
+/// The width suffix at `at`, after the numeral that began at `start`: its
+/// name (`u64`) and the offset past it. The width is written as a type name
+/// is, without leading zeros, and the literal ends with it: `42u64x` is
+/// refused as `12abc` is.
+fn lex_width_suffix(src: &str, start: usize, at: usize) -> Result<(String, usize), LexError> {
+    let bytes = src.as_bytes();
+    let mut i = at + 1;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if bytes[at + 1] == b'0' && i > at + 2 {
+        return Err(LexError {
+            msg: format!("a width suffix is written without leading zeros: {}", &src[start..i]),
+            span: Span { start: at, end: i },
+        });
+    }
+    if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        return Err(LexError {
+            msg: format!("invalid character `{}` after the literal `{}`", bytes[i] as char, &src[start..i]),
+            span: Span { start: i, end: i + 1 },
+        });
+    }
+    Ok((src[at..i].to_string(), i))
 }
 
 /// An exponent starts at `i`: `e`/`E` in a decimal numeral, `p`/`P` in a hex
@@ -593,6 +648,7 @@ fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) 
             i = end;
             let kind = match n {
                 Lexed::Num(n) => TokKind::Num(n),
+                Lexed::Suffixed(n, suffix) => TokKind::SuffixedNum(n, suffix),
                 Lexed::Scaled(s) => TokKind::Scaled(s),
             };
             emit!(Tok { kind, span: Span { start, end: i } });
@@ -663,6 +719,7 @@ fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) 
             "≈" => Some(TokKind::Approx),
             "⊔" => Some(TokKind::Join),
             "⊓" => Some(TokKind::Meet),
+            "⊕" => Some(TokKind::OPlus),
             "∧" => Some(TokKind::Wedge),
             "∨" => Some(TokKind::Vee),
             "↔" | "<->" => Some(TokKind::Iff),
@@ -770,6 +827,7 @@ fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) 
                 b']' => (TokKind::RBracket, 1),
                 b'|' => (TokKind::Pipe, 1),
                 b'&' => (TokKind::Amp, 1),
+                b'~' => (TokKind::Tilde, 1),
                 b'/' => (TokKind::Slash, 1),
                 b'%' => (TokKind::Percent, 1),
                 b',' => (TokKind::Comma, 1),
@@ -839,6 +897,48 @@ mod tests {
         assert_eq!(kinds("A>>"), [Ident("A".into()), Gt, Gt, Eof]);
         // The doubles and the comment are matched first.
         assert_eq!(kinds("&& || // c"), [AmpAmp, PipePipe, Eof]);
+    }
+
+    #[test]
+    fn exclusive_or_and_complement_lex() {
+        use TokKind::*;
+        assert_eq!(kinds("a ⊕ ~b"), [Ident("a".into()), OPlus, Tilde, Ident("b".into()), Eof]);
+        assert_eq!(kinds("~~x"), [Tilde, Tilde, Ident("x".into()), Eof]);
+    }
+
+    fn suffixed(src: &str) -> (u64, String) {
+        let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert_eq!(toks.len(), 2, "{src}: one literal then Eof, got {toks:?}");
+        let TokKind::SuffixedNum(n, suffix) = &toks[0].kind else { panic!("{src}: not a suffixed numeral: {:?}", toks[0]) };
+        assert_eq!(toks[0].span, Span { start: 0, end: src.len() });
+        (n.as_u64().expect("fits in 64 bits"), suffix.clone())
+    }
+
+    #[test]
+    fn a_width_suffix_is_part_of_its_numeral() {
+        assert_eq!(suffixed("42u64"), (42, "u64".into()));
+        assert_eq!(suffixed("0x80u8"), (0x80, "u8".into()));
+        assert_eq!(suffixed("7i32"), (7, "i32".into()));
+        assert_eq!(suffixed("1_000u16"), (1000, "u16".into()));
+        assert_eq!(suffixed("0b101u3"), (5, "u3".into()));
+        assert_eq!(suffixed("0o17u27"), (15, "u27".into()));
+        assert_eq!(suffixed("0u0"), (0, "u0".into()));
+        // `f` is a hexadecimal digit and `i` is not: the numeral ends there.
+        assert_eq!(suffixed("0x1fi8"), (0x1f, "i8".into()));
+        assert_eq!(suffixed("0xFFFF_FFFFu32"), (0xFFFF_FFFF, "u32".into()));
+        // A method call after a suffixed literal is a method call on it.
+        assert!(matches!(kinds("1u8.add")[..], [TokKind::SuffixedNum(..), TokKind::Dot, TokKind::Ident(_), TokKind::Eof]));
+        // Without a width the letters are still not part of a numeral.
+        assert!(refused("42u").contains("invalid digit `u`"));
+        assert!(refused("7in").contains("invalid digit `i`"));
+        assert!(refused("1_u8").contains("invalid digit `u`"));
+        assert!(refused("42u64x").contains("invalid character `x` after the literal `42u64`"));
+        assert!(refused("42u64_").contains("after the literal"));
+        assert!(refused("42u08").contains("without leading zeros"));
+        // A point or an exponent is no whole number, so no suffix follows it.
+        assert!(refused("1.5u8").contains("after the literal"));
+        assert!(refused("1e3u8").contains("after the literal"));
+        assert!(refused("0xu8").contains("needs at least one hexadecimal digit") || refused("0xu8").contains("invalid digit"));
     }
 
     #[test]

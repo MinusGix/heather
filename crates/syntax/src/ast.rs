@@ -1007,6 +1007,12 @@ pub enum ExprKind {
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(Numeral),
+    /// `42u64`, `0x80u8`, `7i32`: a numeral with a width suffix
+    /// (issues/integer-literal-width-suffix.md). It is `value` read at the
+    /// type the suffix names, a width-family name (`u64` is `u(64)`), so
+    /// unlike a bare numeral it takes nothing from where it stands: it
+    /// infers that type, and in checking position it is checked against it.
+    SuffixedNum { value: Numeral, suffix: String },
     /// A numeral with a point or an exponent: `1.5`, `1e-3`, `0x1.8p3`
     /// (docs/floating-point-design.md §15). At `Decimal`/`HexFloat` it is the
     /// record of its parts; at another carrier it resolves `DecimalLiteral`

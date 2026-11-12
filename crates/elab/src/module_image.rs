@@ -1453,6 +1453,7 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::OpSymbol { symbol, fixity } => { w.byte(1); w.string(symbol); put_fixity(w, *fixity); }
         ExprKind::Univ { level } => { w.byte(2); w.u64(*level); }
         ExprKind::Num(value) => { w.byte(3); w.numeral(value); }
+        ExprKind::SuffixedNum { value, suffix } => { w.byte(27); w.numeral(value); w.string(suffix); }
         ExprKind::ArgSlot(slot) => { w.byte(4); w.option(slot.as_ref(), |w, n| w.u64(*n)); }
         ExprKind::App { head, args, named, explicit, goal_oriented } => {
             w.byte(5); put_expr(w, head); w.vec(args, put_expr); w.vec(named, put_named_arg);
@@ -1567,6 +1568,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
                     name: r.string()?, expr: get_expr(r)?, span: get_span(r)?,
                 }))?,
             },
+            27 => ExprKind::SuffixedNum { value: r.numeral()?, suffix: r.string()? },
             26 => ExprKind::Scaled(heather_syntax::ScaledLit { mant: r.numeral()?, exp: r.u64()? as i64, hex: r.bool()? }),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
