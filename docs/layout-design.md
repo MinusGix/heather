@@ -690,10 +690,10 @@ What this design costs against the one first written here (two new
 nodes and an expansion to the words' code): a field access is a call in
 the compiled code, where the expansion would have inlined it. Inlining a
 small callee is the lowering's to do for every function and not this
-theory's, and the theory is a third the size without it. What it does
-not yet say: the span's length after, and the bytes past the record
-(`Stored::Holds` speaks of the record alone); both are round 4's, with
-the floor.
+theory's, and without it there is no expansion to prove anything about.
+What it does not yet say: the span's length after, and the bytes past
+the record (`Stored::Holds` speaks of the record alone); both are round
+4's, with the floor.
 
 ### 9.3 The hard part: a span too short to hold the record
 
