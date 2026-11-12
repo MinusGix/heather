@@ -1,6 +1,6 @@
 ---
 title: Shifts and low masks of a word as arithmetic on toNat
-status: open
+status: closed
 labels: [bitvec,library,native]
 area: heather-in-heather
 milestone: [nh-library]
@@ -27,3 +27,7 @@ For `x: BitVec(n)` and `k <= n`, each stated with neutral `n` and `k` and proved
 ## Done when
 
 The laws are theorems in `bitvec_nat.hthr` (or a `bitvec_shift_nat.hthr` beside it if the imports ask), with probes in `lib/_tests/std/bitvec` at a literal and a neutral width, a neutral and a literal shift, and a negative control (`k > n` where a law needs the bound).
+
+## Log
+
+- 2026-11-12: Merged to master as #588: the laws are in `lib/std/bitvec/bitvec_shift_nat.hthr` (`toNat_shift_left`, `toNat_shift_right`, `BitVec::low_mask` with `toNat_band_low_mask`, `toNat_band_complement_low_mask`, and the split `shift_right_shift_left_bor_low_mask`). The layout's run-time functions (`docs/layout-design.md` §4) are their first customer.

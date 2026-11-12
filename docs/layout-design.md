@@ -199,9 +199,9 @@ theorem Layout::in_order_fits(items: List<Layout>): Layout::in_order(items).Fits
 
 ### 5.2 Layer 3, what is stored
 
-**Begun** (`lib/std/machine/stored.hthr`): the record, `get` and `put`,
-three laws and the codec of a byte. The codecs of words, arrays and
-records are next and **proposed**.
+**Built** (`lib/std/machine/stored.hthr`): the record, `get` and `put`,
+three laws, and the codecs. What is left is what a field of a stored
+record reads as (the projection laws, below).
 
 ```heather
 // How an `A` is bytes.
@@ -217,11 +217,20 @@ fn Stored::get<A>(self s: Stored<A>, bytes: List<u8>, at: Nat) → A { s.read(by
 fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8> { bytes.put_window(at, s.write(a)) }
 ```
 
-- `Stored` values: `u8`; `u16`, `u32`, `u64` in each byte order (from
-  `bitvec_bytes`, through a vector as a list); `Stored::array(n, element)`
-  for `[A; n]`; and a record's from its fields'. Byte order is part of the
-  codec and not of the type, as `rt-fixed-arrays-and-tables` asks: SHA-2
-  is big-endian, ChaCha20 little-endian, and both hold a `u32`.
+- `Stored` values: `Stored::byte`; `u16_be`, `u16_le` and so on to
+  `u64` (from `bitvec_bytes`, a vector's entries as a list, which moved
+  to `vector.hthr` from the arena); `s.array(n)` for `[A; n]`, elements a
+  stride apart; `s.then(t)` for a pair, the second at `extend`'s offset;
+  `s.padded()`; and `s.map(to, from, back)`, which is how a record is
+  stored as its fields in order. Byte order is part of the codec and not
+  of the type, as `rt-fixed-arrays-and-tables` asks: SHA-2 is big-endian,
+  ChaCha20 little-endian, and both hold a `u32`. Padding is written as
+  zeros and not read.
+- **Not built: the projection laws.** That a field read out of a stored
+  record is the field's own codec at the field's offset, and element `i`
+  of a stored array the element's codec at `i` strides. They are what a
+  generated accessor is proved against (§6), and they want an index and
+  an update on `[A; n]`, which `vector.hthr` does not have.
 - The laws a program uses, each proved once for any codec: `get` after
   `put` at the same place is the value (`get_put`); `get` at one place
   after `put` at a place apart from it is unchanged (`get_put_apart`,
@@ -259,9 +268,8 @@ runtime fn Sha256::push(mut self ctx: Sha256, byte: u8) → u64 { … ctx.count 
 In two stages, because the first needs nothing new in the runtime
 generator and the second is the generator's own round.
 
-**Stage A: the declaration generates over the library.** A
-declaration-prefix generator (`docs/value-definitions-design.md`) reads
-the record and publishes `Sha256::layout`, the table of fields with its
+**Stage A: the declaration generates over the library.** A generator
+reads the record and publishes `Sha256::layout`, the table of fields with its
 `Fits` by the rule's theorem, `Sha256::stored: Stored<Sha256>`, and per
 field an offset and a pair of accessors over the bytes with their laws
 instantiated. Prove the generator, not the copies: the laws are §5's
@@ -272,6 +280,24 @@ modules stay methods on the span, and their bodies say
 is `sha256-context-type`'s "done when" but for the receiver's type. The
 accessors are `runtime fn`s over a span as today's are, so the programs
 are the ones already linked and tested.
+
+Stage A needs no change to the compiler if it is spelled as a generator
+run after an ordinary record, which is how `congruences` is run today
+(`lib/std/tactic/derive.hthr`):
+
+```heather
+record Sha256 { hash: [u32; 8], working: [u32; 8], block: [u32; 64], count: u64 }
+generate laid(Sha256, …);        // the byte order, and anything a field's type does not say
+```
+
+A prefix generator runs over a `fn`, a `theorem` or a `def` and not over a
+`record` (`docs/value-definitions-design.md` §3.1), so `laid record` as
+written above is that mechanism extended, a change to the language, and
+§7 item 3 is where it is chosen. The codec the generator builds is the
+library's own composition, which checks today for this record (the probe
+`sha256_stored_layout`): the fields' codecs joined by `Stored::then`,
+padded, and read through the record's constructor by `Stored::map`, whose
+round trip is `refl` because a record is its fields.
 
 **Stage B: a `runtime fn` holds the record.** `ctx: Sha256` is the record
 in the source and the span in the code. This is `datarepr` with a carrier
@@ -301,11 +327,12 @@ section once A is built and shows what the refinements look like.
 2. **Byte order: in the codec or in the type.** Recommended: in the
    codec, written per field (`be`, `le`), so a `u32` is one type. The
    other reading is wrapper types (`u32be`), as Rust's `zerocopy` has.
-3. **The declaration's spelling**: `laid record`, an attribute, or a
-   `datarepr` clause. Recommended: a prefix generator named for what it
-   does (`laid record`), since that is the mechanism declaration
-   generators already use, with the default rule `repr(C)` order and
-   `packed` as its argument.
+3. **The declaration's spelling**: `generate laid(Sha256, …);` after an
+   ordinary record (no change to the language, built first either way),
+   `laid record Sha256 { … }` (prefix generators extended to records), an
+   attribute, or a `datarepr` clause. Recommended: the `generate` form
+   now, and `laid record` as its sugar once a second record wants it,
+   with the default rule `repr(C)` order and `packed` as an argument.
 4. **Field order is the written order** (Rust reorders by default, C does
    not). Recommended: written order, always; a reordering rule is a
    function over the table that a user may call.

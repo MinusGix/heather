@@ -1,13 +1,17 @@
 // Probes of `lib/std/machine/stored.hthr`: a byte stored and read back in
-// literal bytes, a store that leaves its neighbour, and the laws at
-// neutral bytes and an open codec. Tests, not library: nothing outside
+// literal bytes, a store that leaves its neighbour, the laws at neutral
+// bytes and an open codec, then words in each byte order, an array, a
+// pair with padding, and SHA-256's context as a record through its fields. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic;
 import bool;
 import nat;
 import option;
+import pair;
 import list;
 import bitvec;
+import vector;
+import bitvec_bytes;
 import list_window;
 import layout;
 import stored;
@@ -51,3 +55,48 @@ theorem fields_apart<A, B>(s: Stored<A>, t: Stored<B>, whole: Layout, at, other:
 // A window that overlaps the store is not claimed to be left: the store
 // shows through it.
 theorem overlap_shows(): Stored::byte().get(Stored::byte().put(four, 2, 0x99), 2) = 0x99 { refl }
+
+// Words in each byte order, read and stored in literal bytes.
+def five: List<u8> = [0x01, 0x02, 0x03, 0x04, 0xaa];
+theorem u32_be_read(): Stored::u32_be().get(five, 0) = 0x01020304 { refl }
+theorem u32_le_read(): Stored::u32_le().get(five, 0) = 0x04030201 { refl }
+theorem u32_be_offset(): Stored::u32_be().get(five, 1) = 0x020304aa { refl }
+theorem u32_be_stored(): Stored::u32_be().put(five, 1, 0xdeadbeef) = [0x01, 0xde, 0xad, 0xbe, 0xef] { refl }
+theorem u16_le_stored(): Stored::u16_le().put(five, 0, 0xbeef) = [0xef, 0xbe, 0x03, 0x04, 0xaa] { refl }
+theorem u32_be_layout(): Stored::u32_be().layout = Layout::word(2) { refl }
+
+// A word past the end of the bytes reads zeros where there are none: a
+// window is total, and the laws carry the bound.
+theorem u32_be_short(): Stored::u32_be().get(five, 3) = 0x04aa0000 { refl }
+
+// An array, its elements a stride apart.
+def eight: List<u8> = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+theorem array_read(): Stored::u32_be().array(2).get(eight, 0) = [0x01020304, 0x05060708] { refl }
+theorem array_layout(): Stored::u32_be().array(8).layout = Layout(32, 2) { refl }
+
+// A byte and then a word: three bytes of padding between, zeros when written.
+theorem pair_read(): Stored::byte().then(Stored::u32_be()).get([0x7f, 0xee, 0xee, 0xee, 0x01, 0x02, 0x03, 0x04], 0) = Pair(0x7f, 0x01020304) { refl }
+theorem pair_write(): Stored::byte().then(Stored::u32_be()).write(Pair(0x7f, 0x01020304)) = [0x7f, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04] { refl }
+theorem pair_layout(): Stored::byte().then(Stored::u32_be()).layout = Layout(8, 2) { refl }
+
+// The other way round the padding is at the end, and `padded` writes it.
+theorem padded_layout(): Stored::u32_be().then(Stored::byte()).padded().layout = Layout(8, 2) { refl }
+theorem padded_write(): Stored::u32_be().then(Stored::byte()).padded().write(Pair(0x01020304, 0x7f)) = [0x01, 0x02, 0x03, 0x04, 0x7f, 0x00, 0x00, 0x00] { refl }
+
+// A record through its fields in order: SHA-256's context, whose layout
+// is the one `Layout::in_order` computes (layout_tests).
+record Sha256 { hash: [u32; 8], working: [u32; 8], block: [u32; 64], count: u64 }
+
+fn Sha256::stored() → Stored<Sha256> {
+    Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).then(Stored::u64_be()).padded()
+        .map(λ p => Sha256(p.fst.fst.fst, p.fst.fst.snd, p.fst.snd, p.snd), λ (c: Sha256) => Pair(Pair(Pair(c.hash, c.working), c.block), c.count), λ c => refl)
+}
+
+theorem sha256_stored_layout(): Sha256::stored().layout = Layout(328, 3) { refl }
+
+// The laws at an open codec: an array of any stored value reads back.
+theorem array_back<A>(s: Stored<A>, n: Nat, xs: [A; n], bytes: List<u8>, at: Nat, inside: at <= bytes.len()):
+    s.array(n).get(s.array(n).put(bytes, at, xs), at) = xs
+{
+    s.array(n).get_put(bytes, at, xs, inside)
+}

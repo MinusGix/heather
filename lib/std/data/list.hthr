@@ -476,6 +476,10 @@ theorem List::take_append_len<A>(self xs: List<A>, ys: List<A>): (xs ++ ys).take
     }
 }
 
+theorem List::take_len<A>(self xs: List<A>): xs.take(xs.len()) = xs {
+    match xs { Nil => refl, Cons(h, t) => List::cong_cons(h, t.take_len()) }
+}
+
 theorem List::len_filter<A>(self xs: List<A>, p: A → Bool): xs.filter(p).len() <= xs.len() {
     match xs {
         Nil => trivial,
