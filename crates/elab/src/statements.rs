@@ -229,6 +229,39 @@ fn elaborate_mut_call(
     Ok(Some(whole))
 }
 
+/// `\0mutated_after(x.m(a))` or `\0mutated_value(x.m(a))`
+/// ([`heather_syntax::MUTATED_AFTER`]) in expression position: one part of a
+/// claimed call, read as [`elaborate_mut_call`] binds it. When `m` returns
+/// `Mutated`, the record's `after` (what the receiver is rebound to) or
+/// `value` (what `let p = …` binds); otherwise the receiver unchanged or the
+/// call itself. `None` when `e` is neither marker.
+pub(crate) fn mut_call_part(elab: &impl StatementElab, cx: &Cx, e: &Expr) -> Option<R<(Term, Type, Level)>> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    let ExprKind::Var(n) = &head.kind else { return None };
+    let after = if n == heather_syntax::MUTATED_AFTER {
+        true
+    } else if n == heather_syntax::MUTATED_VALUE {
+        false
+    } else {
+        return None;
+    };
+    let [call] = args.as_slice() else { return Some(err("a marked call takes one call", e.span)) };
+    let ExprKind::Dot { recv, .. } = &call.kind else { return Some(err("a marked call is a method call", e.span)) };
+    Some((|| {
+        let (term, ty, level) = elab.infer_mut_call(cx, call)?;
+        let record = elab
+            .record_for_destructuring(cx, &ty, e.span)
+            .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+        match record {
+            Some(record) => {
+                elab.project_destructured_field(cx, &record, &ty, Rc::new(term), if after { 0 } else { 1 }, e.span)
+            }
+            None if after => elab.infer_statement_expression(cx, recv),
+            None => Ok((term, ty, level)),
+        }
+    })())
+}
+
 /// A written `let`'s value (a record `let`'s whole right side), kept until
 /// its block is built. Every alias it bound shares `spliced`.
 pub(crate) struct LetValue {
