@@ -480,10 +480,12 @@ that neither is needed, and what follows is the form that was built.
   spellings, the function at its head, and the cost is the body's alone.
 
   In the class this is `Setup::GuardedSpans`, the keyed family at
-  `b ↦ w.at(callees, b)` with key `b.span(0)`, and `Setup::guarded_span`
-  is `Guarded` at every file from it. So a loop is lent one span for
-  now; a loop over two is a family keyed by pairs, built when something
-  needs it.
+  `b ↦ w.at(callees, b)` whose key is the file's first `lent` spans
+  (`Setup::spans_of`), and `Setup::guarded_spans` is `Guarded` at every
+  file from it. It was first built keyed by `b.span(0)` for a loop lent
+  one span; a loop over several is the same family keyed by the list of
+  them, and nothing else changed
+  (issues/runtime-loop-over-several-spans.md).
 
   The reflector decides what is a span (step 3b, built): in the
   generator's mode, each leading parameter of a pure `runtime fn` that
@@ -508,14 +510,18 @@ that neither is needed, and what follows is the form that was built.
   spanless functions it calls after it, and its world is that table at
   the empty file. A function without a loop is pinned at every file
   (`Setup::lent_every`, and `f::reflects` is stated over the file). A
-  loop over one span proves `Setup::GuardedSpans`, the keyed family of
+  loop over its spans proves `Setup::GuardedSpans`, the keyed family of
   §2.3's step 2 (its worlds the files, its recursion keyed by a file's
-  span 0), with the generator's usual proof from `f::ext` and `f::irrel`:
-  the file is the statement's first binder, each ih binds a span, and
-  every recursive answer is asked at the place the loop was entered
-  with. `Setup::guarded_span` is `Guarded` at each file from it, at the
-  world the function is compiled in. A loop over two spans is refused
-  (the family has one key).
+  first spans), with the generator's usual proof from `f::ext` and
+  `f::irrel`: the file is the statement's first binder, each ih binds a
+  list of spans, and every recursive answer is asked at the places the
+  loop was entered with. `Setup::guarded_spans` is `Guarded` at each
+  file from it, at the world the function is compiled in. A loop over
+  two spans keeps four home words in place, which leaves its body five
+  of the nine registers a function's values have: `differ_sum`
+  (`runtime_lent_tests.hthr`) compiles with its certificate, and the
+  same loop with its parameters in the other order is one register
+  short (issues/function-ir-values-in-kept-registers.md).
 
   Linking over a file (step 3c, built). The evaluator's two linking
   lemmas are stated over the buffers (`Function::eval_answers_over`,

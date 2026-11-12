@@ -463,8 +463,12 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     its blocks is the shape to build it against: `compress(state, block)`
     with the state written and the block a window of the message. That is
     two spans before it is a view, and a function that writes is a
-    function of one span today (`FTm::Source`), as a loop is lent one
-    (`issues/runtime-loop-over-several-spans.md`), so that comes first.
+    function of one span today (`FTm::Source`), so that comes first. A
+    loop that only reads is no longer lent one span: the generator's
+    family is keyed by the list of spans (`Setup::GuardedSpans`,
+    `issues/runtime-loop-over-several-spans.md`, *built*), and what it
+    met is registers, not proofs: two spans are four home words kept in
+    place through the loop.
   - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
     no copy.
   - *V5c, a statement of `Source` that lends*, and the done-when program

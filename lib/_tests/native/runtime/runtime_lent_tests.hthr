@@ -172,7 +172,57 @@ runtime fn count_shrinking(span: List<BitVec(8)>, length, i, acc: BitVec(64)) �
     };
 }
 
-// expect-error: a loop over more than one lent span has no instance yet
+// ---------------------------------------------------------------------------
+// A loop over two spans (issues/runtime-loop-over-several-spans.md): the
+// bytes of two spans compared from `i`, their differences added to `acc`.
+// Its recursion is answered at every pair of spans
+// (`Setup::GuardedSpans`), and each span's home stays in place.
+
+runtime fn differ_sum(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>, yn: BitVec(64), acc, i: BitVec(64)) → BitVec(64)
+    decreases xn.sub(i).toNat()
+{
+    match h: i.unsigned_lt_bit(xn) {
+        False => acc,
+        True => differ_sum(xs, xn, ys, yn, acc.add(xs.byte_within(xn, i).bxor(ys.byte_within(yn, i)).zero_extend(56)), i.add(BitVec::ofNat(1))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, xn, h);
+        bv_omega
+    };
+}
+
+theorem differ_sum_shaped(): differ_sum::rt.lent = 2 { refl }
+
+// At every file, wherever the two spans lie.
+theorem differ_sum_linked(f: Buffers(), xp, xn, yp, yn, acc, i: BitVec(64)):
+    program_eval_over(f, differ_sum::program, 0, [xp, xn, yp, yn, acc, i]) = differ_sum(f.span(0), xn, f.span(1), yn, acc, i) {
+    differ_sum::agrees_over(f, xp, xn, yp, yn, acc, i)
+}
+
+fn aba() → List<BitVec(8)> { [b(96), b(98), b(96)] }
+
+// Two of three bytes differ, by 1 and by 3; from 1 on only the second.
+theorem differ_sum_runs(): program_eval_over([abc(), aba()], differ_sum::program, 0, [w(4096), w(3), w(8192), w(3), w(0), w(0)]) = w(4) { refl }
+theorem differ_sum_later(): program_eval_over([abc(), aba()], differ_sum::program, 0, [w(4096), w(3), w(8192), w(3), w(0), w(1)]) = w(3) { refl }
+
+// Each span is read under its own length word: past the second's a byte
+// reads as zero, so the first span's bytes are the differences.
+theorem differ_sum_short(): program_eval_over([abc(), aba()], differ_sum::program, 0, [w(4096), w(3), w(8192), w(1), w(0), w(0)]) = w(198) { refl }
+
+// The spans are not taken for each other: crossed over, the first span's
+// length word of one ends the loop after one byte.
+theorem differ_sum_crossed(): program_eval_over([aba(), abc()], differ_sum::program, 0, [w(4096), w(1), w(8192), w(3), w(0), w(0)]) = w(1) { refl }
+
+theorem differ_sum_placeless(): program_placeless(differ_sum::program) = True { refl }
+theorem differ_sum_lowers(): lower_program_lent(differ_sum::program, plan_program(differ_sum::program), program_counts(differ_sum::program)).is_some()
+    = True { refl }
+
+// The same loop with the index before the sum has its instance and its
+// agreement too. The lowering refuses it with the planner's placement: the
+// next index is made before the bytes are read, so four home words, the
+// index, the sum, the next index, the loop's count and the first byte are
+// in the nine registers a function's values have when the second byte is
+// loaded (issues/function-ir-values-in-kept-registers.md).
 runtime fn differ_from(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>, yn: BitVec(64), i, acc: BitVec(64)) → BitVec(64)
     decreases xn.sub(i).toNat()
 {
@@ -185,6 +235,14 @@ runtime fn differ_from(xs: List<BitVec(8)>, xn: BitVec(64), ys: List<BitVec(8)>,
         bv_omega
     };
 }
+
+theorem differ_from_linked(f: Buffers(), xp, xn, yp, yn, i, acc: BitVec(64)):
+    program_eval_over(f, differ_from::program, 0, [xp, xn, yp, yn, i, acc]) = differ_from(f.span(0), xn, f.span(1), yn, i, acc) {
+    differ_from::agrees_over(f, xp, xn, yp, yn, i, acc)
+}
+theorem differ_from_runs(): program_eval_over([abc(), aba()], differ_from::program, 0, [w(4096), w(3), w(8192), w(3), w(0), w(0)]) = w(4) { refl }
+theorem differ_from_crowded(): lower_program_lent(differ_from::program, plan_program(differ_from::program), program_counts(differ_from::program)).is_some()
+    = False { refl }
 
 // ---------------------------------------------------------------------------
 // A function lent a span hands it to another: the callee reads the caller's

@@ -23,3 +23,9 @@ Smaller, and the planner's alone: a value whose only read is a move into an outp
 ## Done when
 
 `scan_token.s` keeps the loop's state across `scan_step`'s call with no store or load of it, and its stack line says less than it does now.
+
+## Log
+
+- 2026-11-12: A second customer, with no call in it: a loop over two lent spans (`differ_from`, `lib/_tests/native/runtime/runtime_lent_tests.hthr`, [[runtime-loop-over-several-spans]]). A lent span's home is two words kept in place through a loop, so two spans and the loop's count leave a body four of the nine caller-saved registers. The loop that makes its next index before it reads its two bytes has nine values live at the second load (four home words, the index, the sum, the next index, the count, the first byte) and the load's word is a tenth. The same loop with the sum's parameter before the index's compiles. So the kept registers are wanted for a function's long-lived words whether or not it calls: home words and a loop's count are read all through the body and never written, which is what a kept register is for. SHA-256's compression over a state span and a block span will have more live words than this.
+
+  A smaller step that would also have fitted this loop: the loop's count in a frame word, since it is read once a pass.
