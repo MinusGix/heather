@@ -1057,11 +1057,28 @@ impl Speller<'_> {
             Term::PairAt { ty: Some(ty), .. } => ty,
             _ => return String::new(),
         };
-        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind, self.binders()) else {
+        // Under a binder the walk has entered, `self.cx` does not scope the
+        // arguments, and the complete spelling below needs it to.
+        if self.binders() != 0 {
+            return String::new();
+        }
+        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind, 0) else {
             return String::new();
         };
-        let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>().join(", ");
-        format!("<{shown}>")
+        // The generated-annotation flavour: an argument at a type with value
+        // parameters must keep them (`Nil<BitVec(8)>`, not `Nil<BitVec>`),
+        // and an argument that does not spell completely leaves the bare name.
+        let mut shown = Vec::with_capacity(args.len());
+        for (arg, _) in &args {
+            if !self.charge(d + 1) {
+                return String::new();
+            }
+            let Some(one) = self.el.spell_type_source(self.cx, arg) else {
+                return String::new();
+            };
+            shown.push(one);
+        }
+        format!("<{}>", shown.join(", "))
     }
 
     /// A lowered constructor value read back: its declaration, the
