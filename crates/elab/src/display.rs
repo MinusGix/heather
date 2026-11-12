@@ -817,11 +817,22 @@ impl Speller<'_> {
             // that drops it reads as a contradiction
             // (issues/width-specific-method-on-other-width.md). The checked
             // instance matcher recovers it; a type that does not match keeps
-            // the bare name below, as before. Not for the source flavour,
-            // whose spellings are re-elaborated into generated annotations:
-            // what it emits stays what it was.
+            // the bare name below, as before.
+            //
+            // The source flavour (omega's and ring's atoms, which are
+            // re-elaborated) needs it more: a bare `BitVec` there is not a
+            // display slip but an atom list that does not elaborate — a
+            // lambda's binder, `λ (x: BitVec(8)) => …`
+            // (issues/omega-atom-lambda-binder-type-spelled-bare.md). It
+            // spells the type arguments too, and declines (counts a
+            // fallback) where it cannot recover either.
+            if !ind.valparams.is_empty() && self.qualified {
+                return match GeneratedDefs(self.el).display_args(self.cx, &ind, ty, self.binders()) {
+                    Some(args) => self.source_instance(&ind, &args, d).unwrap_or_else(|| self.raw_ty(ty)),
+                    None => self.elided(ind.name.clone()),
+                };
+            }
             if !ind.valparams.is_empty()
-                && !self.qualified
                 && let Some(values) = GeneratedDefs(self.el).display_vargs(self.cx, &ind, ty, self.binders())
             {
                 if ind.params.is_empty() && let Some(name) = self.named(ind.tag, &values, d) {
