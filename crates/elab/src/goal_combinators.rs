@@ -845,6 +845,9 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         if selected == reduct || eliminator_headed(&selected) {
             return None;
         }
+        // The arm's reads of the matched constructor's children are the
+        // pattern's names where the goal has them (`rest`, not `fst(cs)`).
+        let selected = contracted(elab, cx, &oracle, &selected, &mut 256);
         elab.spell_term_source(cx, &selected)?;
         return Some(selected);
     }
@@ -893,6 +896,27 @@ fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<T
         return Some(arm);
     }
     None
+}
+
+/// A call of a definition named for unfolding: its body at the call's
+/// arguments, with the β-redexes that leaves contracted and no other
+/// definition unfolded. `None` for any other head, or when the source
+/// cannot spell the result.
+fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -> Option<Term> {
+    if unfold.is_empty() {
+        return None;
+    }
+    let Term::GlobalTm { var, .. } = crate::spelling::app_spine(call).0 else {
+        return None;
+    };
+    if !unfold.contains(&elab.global_abs_of(*var)?) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let unfolded = oracle.unfold(&cx.gamma, call, Unfold::OneStep).next()?;
+    let body = contracted(elab, cx, &oracle, &unfolded, &mut 256);
+    elab.spell_term_source(cx, &body)?;
+    Some(body)
 }
 
 /// `t` with the β-redexes and projections of pairs a selected arm leaves
@@ -949,7 +973,12 @@ fn contracted(elab: &Elaborator, cx: &Cx, oracle: &crate::oracle::SemanticOracle
         Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
             *val = Rc::new(contracted(elab, cx, oracle, val, budget));
         }
-        Term::Supf { children, .. } => *children = Rc::new(contracted(elab, cx, oracle, children, budget)),
+        // A constructor's fields ride in its label's payload, its recursive
+        // children in the tuple: both are read where the arm put them.
+        Term::Supf { label, children, .. } => {
+            *label = Rc::new(contracted(elab, cx, oracle, label, budget));
+            *children = Rc::new(contracted(elab, cx, oracle, children, budget));
+        }
         _ => {}
     }
     output
@@ -994,7 +1023,15 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
 /// calls ([`recursion_at_constructor`]): what `simp_only` matches laws
 /// against.
 pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool) -> Type {
-    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool)) -> Term {
+    simplify_goal_unfolding(elab, cx, expected, recursive, &[])
+}
+
+/// [`simplify_goal_with`], and every call of a definition in `unfold` (by
+/// absolute position in Ψ) unfolded where it stands, its body applied to the
+/// call's arguments: what `simp_only` does with a definition named among
+/// its laws (docs/simp-design.md §14).
+pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool, unfold: &[usize]) -> Type {
+    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize])) -> Term {
         if budget.0 == 0 {
             return input.clone();
         }
@@ -1021,6 +1058,14 @@ pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, re
                 if budget.1
                     && let Some(reduced) = recursion_at_constructor(elab, cx, &output)
                 {
+                    return term(elab, cx, &reduced, budget);
+                }
+                if let Some(reduced) = unfolded_by_name(elab, cx, &output, budget.2) {
+                    return term(elab, cx, &reduced, budget);
+                }
+            }
+            Term::GlobalTm { .. } => {
+                if let Some(reduced) = unfolded_by_name(elab, cx, &output, budget.2) {
                     return term(elab, cx, &reduced, budget);
                 }
             }
@@ -1109,7 +1154,7 @@ pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, re
         output
     }
     let mut output = expected.clone();
-    let mut budget = (512, recursive);
+    let mut budget = (512, recursive, unfold);
     match &mut output {
         Type::Id { lhs, rhs, .. } => {
             *lhs = Rc::new(term(elab, cx, lhs, &mut budget));
@@ -1123,7 +1168,7 @@ pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, re
     }
     // A goal that is not an application (a match on a split comparison)
     // simplifies whole.
-    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool)) -> Term {
+    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize])) -> Term {
         let mut output = input.clone();
         match &mut output {
             Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {

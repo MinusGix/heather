@@ -603,3 +603,26 @@ spells: a tail call on an accumulator (`foldl`'s arm is the recursion
 itself, which the check that an arm was selected read as stuck), and a
 recursion on `Nat` (`range`), whose `elim_Nat` the walk did not refold
 (`issues/simp-unfolded-call-loses-spelling.md`).
+
+## 14. Unfolding by name, as built
+
+A definition named among the laws (`simp_only(Node::step, Valuation::set_here)`)
+is unfolded wherever it is called while the goal is computed: its body at
+the call's arguments, the β-redexes that leaves contracted, no other
+definition unfolded (`goal_combinators::simplify_goal_unfolding`). It never
+fires as a rewrite and the route does not list it, as a call computed at a
+constructor is not listed. The goal before and after convert, so the
+unfolding costs no proof term.
+
+What counts as a definition: a transparent global (a theorem's proof is
+opaque, so a theorem is always a law) whose type's conclusion is not an
+equation, a relation or a `↔`. A local function is neither a law nor
+unfolded, and is refused as before. An unfolding the source cannot spell is
+not taken: a body that is a match on a non-constructor stays a call
+(`issues/simp-adoption-native-gaps.md`).
+
+Found by the adoption round on the native chains (2026-11-12): a law about
+a definition's body (`Valuation::set_here`, about `Valuation::set`) does not
+match a call of a definition that is that body (`Node::step(Move(…), v)`)
+until the call is unfolded. Before this, the proof wrote the unfolding as a
+`refl` equation and passed it as a law.

@@ -55,6 +55,29 @@ theorem computed_left_spelled<A, B>(t: List<A>, a: A, f, g: B → A → B, z: B,
     simp_only(h)
 }
 
+// A definition named among the laws is unfolded where it is called, its
+// body at the call's arguments (docs/simp-design.md §14); a law about what
+// it unfolds to then fires. A theorem's proof is opaque and is never
+// unfolded: it is a law.
+fn twice(n: Nat) → Nat { n + n }
+fn twice_list<A>(xs: List<A>) → List<A> { xs ++ xs }
+
+theorem unfolded_by_name(a: Nat): twice(0 + a) = a + a { simp_only(twice, Nat::add_left_zero) }
+theorem unfolded_generic<A>(xs: List<A>): twice_list(xs ++ Nil).len() = xs.len() + xs.len() {
+    simp_only(twice_list, List::append_nil, List::len_append)
+}
+
+// Not named, a definition stays a call, and a law about its body does not
+// reach inside it.
+// expect-error: len(twice_list(xs))
+theorem not_unfolded<A>(xs: List<A>): twice_list(xs ++ Nil).len() = xs.len() + xs.len() {
+    simp_only(List::append_nil, List::len_append)
+}
+
+// A function that is no definition is neither a law nor unfolded.
+// expect-error: is not a law
+theorem a_variable_is_not_unfolded(f: Nat → Nat, a: Nat): f(a) = a { simp_only(f) }
+
 // ---------------------------------------------------------------------------
 // Side conditions: a hypothesis in scope, a `let`, or `discharge :=`.
 
