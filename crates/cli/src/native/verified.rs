@@ -31,6 +31,9 @@ pub(super) struct Compiled {
     pub bytes: Vec<u8>,
     /// Where the exported function starts.
     pub entry: usize,
+    /// Where each of the program's other exported functions starts, as the
+    /// shape lists them.
+    pub entries: Vec<usize>,
 }
 
 const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower", "function_ir_lower_structured",
@@ -77,6 +80,20 @@ pub(super) struct Shape {
     /// into, by buffer. The certificate's lending lets exactly those be
     /// written.
     pub marks: Option<Vec<bool>>,
+    /// The program's other functions exported beside its root
+    /// ([`runtime_entries`]).
+    pub entries: Vec<Entry>,
+}
+
+/// Another function of a program, exported beside the program's root:
+/// `symbol` the name it is linked under, `source` the Heather function,
+/// `index` which of the program's functions it is and `arity` how many
+/// words it takes.
+pub(super) struct Entry {
+    pub symbol: String,
+    pub source: String,
+    pub index: usize,
+    pub arity: usize,
 }
 
 /// What a `runtime fn` does with spans: takes none, reads them
@@ -99,6 +116,7 @@ impl Shape {
             answer: root.answer(&arguments(root.arity)),
             lent: None,
             marks: None,
+            entries: Vec::new(),
         }
     }
 
@@ -128,7 +146,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, entries: Vec::new() }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -172,7 +190,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), quiet = quiet_text(prefix, functions), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, entries: Vec::new() }
     }
 
     /// A `runtime fn` that stores into the span it is lent: its program's
@@ -221,7 +239,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), within = within_text(prefix, functions), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks) }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), entries: Vec::new() }
     }
 }
 
@@ -264,6 +282,86 @@ fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}
         }
         _ => Err(format!("`{source}::program` did not read back")),
     }
+}
+
+/// The program's other functions to export, `wanted` (each a module and a
+/// function in it), found in the program `source`'s generator published and
+/// added to `shape` with their agreements: the program's function there
+/// evaluates to the Heather function, which is the generator's theorem
+/// about every function of the program (`{source}::sourced`) read at that
+/// one. Where a function is comes from the names the generator published
+/// (`{source}::names`), and a name is only where to look: the agreement is
+/// what the kernel checks, so a function found in the wrong place is a
+/// refused certificate, never an export of something else.
+///
+/// What is taken for now, each of the others refused by name
+/// (issues/linked-program-entries-limits.md): a program that stores into
+/// no span, and of it the functions lent none, which are functions of
+/// words whatever the root is lent.
+pub(super) fn runtime_entries(elab: &Elaborator, prefix: &str, owner: &str, source: &str, shape: &mut Shape, wanted: &[(String, String)]) -> Result<(), String> {
+    if wanted.is_empty() { return Ok(()); }
+    if shape.marks.is_some() {
+        return Err(format!("`{source}` stores into its span: compile-x86 exports another function of a program only where the program \
+            stores into no span (issues/linked-program-entries-limits.md)"));
+    }
+    let probe = format!("{prefix}_entries");
+    let text = format!("import {owner};\nimport runtime;\nimport list;\n
+fn {prefix}_names() → List<Nat> {{ {source}::names }}
+fn {prefix}_taken() → List<Nat> {{ {source}::arities }}\n");
+    let mut fork = elab.fork();
+    fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
+    let read = |item: &str| function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_{item}")).map_err(|e| e.to_string());
+    // Each function's name, a zero after it, the first function's first;
+    // and how many words each takes, the last function's first.
+    let codes = read("names")?;
+    let names: Vec<String> = codes.split(|code| *code == 0).take(shape.functions)
+        .map(|name| name.iter().filter_map(|code| u32::try_from(*code).ok().and_then(char::from_u32)).collect()).collect();
+    let taken = read("taken")?;
+    if names.len() != shape.functions || taken.len() != shape.functions || codes.last() != Some(&0) {
+        return Err(format!("`{source}::names` did not read back"));
+    }
+    let mut imports = String::new();
+    for (module, function) in wanted {
+        let named = format!("{module}::{function}");
+        let found: Vec<usize> = names.iter().enumerate().filter(|(_, name)| *name == function).map(|(index, _)| index).collect();
+        let index = match found[..] {
+            [index] => index,
+            [] => return Err(format!("`{named}` is no function of `{source}`'s program, which has: {}", names.join(", "))),
+            _ => return Err(format!("`{function}` names {} functions of `{source}`'s program: an entry is found by its name", found.len())),
+        };
+        if index == shape.root { return Err(format!("`{named}` is the program's own function: an entry is another of its functions")); }
+        if shape.entries.iter().any(|entry| entry.index == index || entry.symbol == *function) {
+            return Err(format!("`{named}` is an entry twice"));
+        }
+        if let Some(spans) = shape.lent.as_ref().map(|counts| counts[index]).filter(|spans| *spans != 0) {
+            return Err(format!("`{named}` is lent {spans} span{}: compile-x86 exports another function of a program only where it is a \
+                function of words (issues/linked-program-entries-limits.md)", if spans == 1 { "" } else { "s" }));
+        }
+        let arity = taken[shape.functions - 1 - index] as usize;
+        if arity > 6 { return Err(format!("`{named}` takes {arity} words: compile-x86 passes at most six, in registers")); }
+        let parameters = arguments(arity);
+        let list = parameters.join(", ");
+        // A program lent nothing is evaluated at no file, which is
+        // `program_eval`; one that is lent spans, at the empty file here:
+        // the function is lent none of them.
+        let evaluated = if shape.lent.is_some() { format!("program_eval_over(Nil, {prefix}_program(), {index}, [{list}])") }
+            else { format!("program_eval({prefix}_program(), {index}, [{list}])") };
+        shape.agreement.push_str(&format!("
+// The program's function {index} evaluates to `{named}`: the generator's
+// theorem about every function of the program, read at this one.
+theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
+    program_linked_files_sources({prefix}_program(), {source}::arities, link_sources_at({source}::sources), {source}::sourced, Nil, {index},
+        [{list}], trivial)
+}}
+", typed = typed(&parameters)));
+        let imported = |text: &str| text.lines().any(|line| line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) == Some(module.as_str()));
+        if !IMPORTS.contains(&module.as_str()) && !imported(&shape.definitions) && !imported(&imports) {
+            imports.push_str(&format!("import {module};\n"));
+        }
+        shape.entries.push(Entry { symbol: function.clone(), source: named, index, arity });
+    }
+    shape.definitions.insert_str(0, &imports);
+    Ok(())
 }
 
 pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
@@ -428,11 +526,14 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
         if bytes.len() as u64 != offsets[cut] { return Err("the items' lengths do not cover the code".into()); }
     }
     drop(fork);
-    let entry = match items.iter().rposition(|(name, _)| *name == f as u64 + 1) {
-        Some(at) => offsets[at] as usize,
-        None => return Err("the exported function's label is not in the code".into()),
+    // Where a function starts: at its label, the one named after it.
+    let starts = |function: usize| match items.iter().rposition(|(name, _)| *name == function as u64 + 1) {
+        Some(at) if (offsets[at] as usize) < bytes.len() => Ok(offsets[at] as usize),
+        Some(_) => Err("the entry is past the code".to_string()),
+        None => Err("the exported function's label is not in the code".to_string()),
     };
-    if entry >= bytes.len() { return Err("the entry is past the code".into()); }
+    let entry = starts(f)?;
+    let entries = program.entries.iter().map(|entry| starts(entry.index)).collect::<Result<Vec<_>, _>>()?;
 
     let agreement = &program.agreement;
     let parameters = arguments(program.arity);
@@ -589,7 +690,44 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 }}
 ", label = f + 1, room = 72 * (f + 1), arguments = parameters.join(", ")));
     }
-    Ok(Compiled { text, bytes, entry })
+    // The program's other exported functions, each at its own label: a
+    // function of words, lent nothing, so its contract is the plain one
+    // whatever the root's is. In a program that is lent spans that is
+    // `compiled_returns_unlent`: the function reads none, and the program
+    // stores into none.
+    for (entry, at) in program.entries.iter().zip(&entries) {
+        let (symbol, g, call) = (&entry.symbol, entry.index, &entry.source);
+        let parameters: Vec<String> = (0..entry.arity).map(|i| format!("a{i}")).collect();
+        let typed = if parameters.is_empty() { String::new() } else { format!("{}: BitVec(64)", parameters.join(", ")) };
+        let list = format!("[{}]", parameters.join(", "));
+        let comma = if parameters.is_empty() { "" } else { ", " };
+        let arguments = parameters.join(", ");
+        let proved = if lent {
+            format!("compiled_returns_unlent<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
+        {prefix}_evaluable(), {prefix}_quiet(), fetch, data, last, origin, stack, {g}, trivial, refl, {list}, trivial, {call}({arguments}),
+        {symbol}_native_agrees({arguments}))")
+        } else {
+            format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+        fetch, data, last, origin, stack, {g}, trivial, {list}, trivial, {call}({arguments}), {symbol}_native_agrees({arguments}))")
+        };
+        text.push_str(&format!("
+theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} {{ refl }}
+
+// `{symbol}` is the program's function {g}, exported at its own label. Called
+// there with its arguments in RDI, RSI, …, a return address at RSP and {room}
+// bytes of stack below it, the code returns `{call}`'s value in RAX, keeps
+// the callee-saved registers and RSP, and leaves memory as it was but for
+// stores into its own room below that address (`Stack::Wrote`).
+theorem {symbol}_native_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data){comma}{typed}):
+    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i,
+        stack.CalleePost({call}({arguments}))) {{
+    {proved}
+}}
+", label = g + 1, room = 72 * (g + 1)));
+    }
+    Ok(Compiled { text, bytes, entry, entries })
 }
 
 /// `{prefix}_evaluable`: the program's functions evaluable, checked by

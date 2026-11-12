@@ -1,6 +1,6 @@
 ---
 title: Exports that share callees should be one program with several entries
-status: open
+status: closed
 labels: [native,exports,linking]
 area: heather-in-heather
 milestone: [nh-library]
@@ -23,3 +23,15 @@ The generator already links by name (`f::program`, `lib/native/runtime/runtime.h
 ## Done when
 
 `scan_step`, `scan_accept`, `scan_begin` and `scan_token` are one program in one `.s` file, and the tests in `crates/linked/tests` pass unchanged.
+
+## Log
+
+- 2026-11-12: Built (2026-11-12, PR #551). `docs/native-library-exports-design.md` §6.3 is the record.
+
+  - `compile-x86 <module> <function> --entry <module>::<function>…` compiles the function's program once and exports each entry at its own label, with its own `_returns` in the one certificate. With no `--entry` the output is byte for byte what it was (the eight other exports' files did not change).
+  - The generator publishes `f::sources`, `f::sourced` and `f::names` beside `f::program`: every function of the program against its source, and which function is where. The certificate reads `f::sourced` at the entry's index.
+  - `compiled_returns_unlent` (`function_ir_compile.hthr`): a function lent nothing, in a program that stores into no span, has the plain contract of a function of words, whatever the root is lent.
+  - `EXPORTS.tsv` has a fourth column, the export whose program the row is a function of. `scripts/linked` and `native_linked.rs` compile such rows with their program; `exports.rs` declares them from the signature the program's file states.
+  - `scan_step`, `scan_accept` and `scan_begin` are entries of `scan_token`. `crates/linked/generated` has one scanner file where it had four, and `scripts/test -p heather-linked` passes unchanged (50 passed).
+
+  Of "what it would take", the route was the first sentence of the last paragraph: the generator already links by name, so entries the root reaches needed no second root. Two roots that do not reach each other, entries lent spans, entries of a writer's program and the stack bound by index are `issues/linked-program-entries-limits.md`.

@@ -141,7 +141,10 @@ directly: `generated/*.s` is `compile-x86`'s output for each line of
 `generated/EXPORTS.tsv`, checked in, and `crates/cli/tests/native_linked.rs`
 recompiles every export and compares. `scripts/linked` rewrites the files
 after a change to a linked module or to the lowering (`--check` only
-compares). The exports today are the word functions of SHA-512 and SHA-256
+compares). Exports that share callees are one program: `compile-x86 … --entry
+<module>::<function>` exports another function of the program at a label of
+its own in the same file, under the same certificate, and a table row's
+fourth column asks for that. The exports today are the word functions of SHA-512 and SHA-256
 (`lib/native/crypto/`), each proved to be the specification's
 (`lib/std/crypto/sha2.hthr`).
 

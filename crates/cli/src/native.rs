@@ -226,10 +226,20 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let mut cache = None;
     let mut timings = None;
     let mut kernel_workers = None;
+    // Other functions of the program to export beside the function: each a
+    // module and a function in it.
+    let mut entries: Vec<(String, String)> = Vec::new();
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--entry" => {
+                let value = args.next().ok_or("--entry needs a function, as `<module>::<function>`")?;
+                match value.split_once("::") {
+                    Some((module, function)) if symbol_ok(module) && symbol_ok(function) => entries.push((module.to_string(), function.to_string())),
+                    _ => return Err(format!("--entry `{value}` is not `<module>::<function>`, the function an ASCII C/assembly identifier")),
+                }
+            }
             "-o" | "-L" | "--cache-dir" | "--item-timings" | "--timings" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
@@ -257,8 +267,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         return Err(if program_only {
             "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]"
         } else {
-            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
+            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
         }.into());
+    }
+    if program_only && !entries.is_empty() {
+        return Err("--entry is compile-x86's: a reflected program is named whole".into());
     }
     let source = Path::new(positional[0]);
     let symbol = positional[1];
@@ -423,7 +436,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // setup does not compile yet, tests through `Bool` helpers; anything
     // else unmarked is refused, naming the marker.
     let published = |member: &str| elab.qualified_global(&format!("{source_name}::{member}")).is_some();
-    let shape = if published("runs_over") {
+    let mut shape = if published("runs_over") {
         // A function that stores into its span publishes its run at every
         // file: the word it answers and the span as it leaves it
         // (docs/native-library-exports-design.md §7).
@@ -440,6 +453,23 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
         verified::Shape::reflected(&prefix, &program)
     };
+    // The program's other functions to export: one program, emitted once,
+    // with a label and a `_returns` for each
+    // (docs/native-library-exports-design.md §6.3).
+    if !entries.is_empty() {
+        if shape.marks.is_none() && !published("names") {
+            return Err(format!("`{symbol}` publishes no program of named functions: an entry is another function of a `runtime fn`'s program"));
+        }
+        for (module, function) in &entries {
+            if function == symbol { return Err(format!("--entry `{module}::{function}` is the function compiled")); }
+            // The file's own label for the start of the program.
+            if *function == format!("{symbol}_program") { return Err(format!("--entry `{module}::{function}` has the name of the program's label")); }
+            if elab.qualified_global(&format!("{module}::{function}")).is_none() {
+                return Err(format!("--entry `{module}::{function}` is no function `{symbol}`'s module reaches"));
+            }
+        }
+        verified::runtime_entries(&elab, &prefix, &root_name, &source_name, &mut shape, &entries)?;
+    }
     // What the code takes, as the certificate's `_returns` states it: a span
     // is an address and a length, the spans first; and the stack its premise
     // asks for below the return address.
@@ -500,8 +530,15 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     checked?;
     write_new(&certificate, proof.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
-    write_new(&output, program_assembly(symbol, &signature, &compiled.bytes, compiled.entry).as_bytes())?;
+    // The root, then the program's other entries: each a function of words.
+    let mut exported = vec![(symbol.to_string(), signature, compiled.entry)];
+    for (entry, at) in shape.entries.iter().zip(&compiled.entries) {
+        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: 72 * (entry.index as u64 + 1) };
+        exported.push((entry.symbol.clone(), signature, *at));
+    }
+    write_new(&output, program_assembly(&exported, &compiled.bytes).as_bytes())?;
     println!("{}: {} certified program bytes, `{symbol}` at offset {}, its RET included", output.display(), compiled.bytes.len(), compiled.entry);
+    for (entry, _, at) in &exported[1..] { println!("  `{entry}`, a function of the same program, at offset {at}"); }
     println!("certificate: {}", certificate.display());
     Ok(())
 }
@@ -533,22 +570,33 @@ fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {
 }
 
 // A whole program from the verified lowering: every function's code, its
-// own frames and RETs included, the exported symbol at its function's label.
-// What it takes is stated first, for whoever declares it
-// (`heather_cli::linked`).
-fn program_assembly(symbol: &str, signature: &heather_cli::linked::Signature, bytes: &[u8], entry: usize) -> String {
-    let mut out = format!("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n{}.text\n.globl {symbol}\n.type {symbol}, @function\n{symbol}_program:\n",
-        heather_cli::linked::header(symbol, signature));
-    // The functions before the entry, the label, then the entry and the
-    // rest. A program whose entry comes first has nothing before it, and the
-    // label is still written once: an assembler refuses a second definition.
-    for (labelled, chunk) in [(false, &bytes[..entry]), (true, &bytes[entry..])] {
-        if labelled { writeln!(out, "{symbol}:").unwrap(); }
-        for line in chunk.chunks(12) {
+// own frames and RETs included, each exported symbol at its function's
+// label: the program's root first in `exported`, then any other of its
+// functions exported beside it. What each takes is stated first, for
+// whoever declares it (`heather_cli::linked`).
+fn program_assembly(exported: &[(String, heather_cli::linked::Signature, usize)], bytes: &[u8]) -> String {
+    let root = &exported[0].0;
+    let mut out = String::from("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n");
+    for (symbol, signature, _) in exported { out.push_str(&heather_cli::linked::header(symbol, signature)); }
+    out.push_str(".text\n");
+    for (symbol, _, _) in exported { writeln!(out, ".globl {symbol}\n.type {symbol}, @function").unwrap(); }
+    writeln!(out, "{root}_program:").unwrap();
+    // The code up to the first label, then each label and the code from it
+    // to the next. A program whose first function is exported has nothing
+    // before that label, and each label is written once: an assembler
+    // refuses a second definition.
+    let mut labels: Vec<(usize, &str)> = exported.iter().map(|(symbol, _, entry)| (*entry, symbol.as_str())).collect();
+    labels.sort();
+    let mut from = 0;
+    for (at, label) in labels.iter().map(|(at, label)| (*at, Some(*label))).chain([(bytes.len(), None)]) {
+        for line in bytes[from..at].chunks(12) {
             writeln!(out, "    .byte {}", line.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ")).unwrap();
         }
+        if let Some(label) = label { writeln!(out, "{label}:").unwrap(); }
+        from = at;
     }
-    writeln!(out, ".size {symbol}, .-{symbol}\n.section .note.GNU-stack,\"\",@progbits").unwrap();
+    for (symbol, _, _) in exported { writeln!(out, ".size {symbol}, .-{symbol}").unwrap(); }
+    out.push_str(".section .note.GNU-stack,\"\",@progbits\n");
     out
 }
 
@@ -577,7 +625,7 @@ mod tests {
         let bytes: Vec<u8> = (0..30).collect();
         for entry in [0, 13, 24] {
             let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word], stack: 72 };
-            let text = program_assembly("f", &signature, &bytes, entry);
+            let text = program_assembly(&[("f".to_string(), signature.clone(), entry)], &bytes);
             assert_eq!(heather_cli::linked::Signature::read(&text, "f"), Ok(signature));
             let lines: Vec<&str> = text.lines().collect();
             assert_eq!(lines.iter().filter(|line| **line == "f:").count(), 1, "entry {entry}:\n{text}");
@@ -587,6 +635,34 @@ mod tests {
             assert_eq!(count(&lines[..label]), entry, "bytes before the label, entry {entry}");
             assert_eq!(count(&lines[label..]), bytes.len() - entry, "bytes from the label, entry {entry}");
         }
+    }
+
+    // A program with several entries: each symbol is global, stated with
+    // its own signature, and defined once at its own offset, whatever order
+    // the entries are named in; the bytes are the program's, in order.
+    #[test]
+    fn every_entry_has_its_label() {
+        use heather_cli::linked::{Kind, Signature};
+        let bytes: Vec<u8> = (0..40).collect();
+        let exported = [("root".to_string(), Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216 }, 25),
+            ("late".to_string(), Signature { kinds: vec![Kind::Word], stack: 144 }, 13),
+            ("first".to_string(), Signature { kinds: vec![], stack: 72 }, 0)];
+        let text = program_assembly(&exported, &bytes);
+        let lines: Vec<&str> = text.lines().collect();
+        let count = |lines: &[&str]| lines.iter().filter(|line| line.trim_start().starts_with(".byte"))
+            .map(|line| line.split(',').count()).sum::<usize>();
+        for (symbol, signature, entry) in &exported {
+            assert_eq!(Signature::read(&text, symbol).as_ref(), Ok(signature), "{symbol}");
+            assert_eq!(lines.iter().filter(|line| **line == format!(".globl {symbol}")).count(), 1, "{symbol}:\n{text}");
+            let label = format!("{symbol}:");
+            assert_eq!(lines.iter().filter(|line| **line == label).count(), 1, "{symbol}:\n{text}");
+            let at = lines.iter().position(|line| *line == label).unwrap();
+            assert_eq!(count(&lines[..at]), *entry, "bytes before `{symbol}`");
+        }
+        assert_eq!(lines.iter().filter(|line| **line == "root_program:").count(), 1, "{text}");
+        let stated: Vec<u8> = lines.iter().filter_map(|line| line.trim_start().strip_prefix(".byte "))
+            .flat_map(|line| line.split(", ").map(|byte| u8::from_str_radix(byte.trim_start_matches("0x"), 16).unwrap())).collect();
+        assert_eq!(stated, bytes);
     }
 
     #[test]

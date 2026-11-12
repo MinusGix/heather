@@ -6,7 +6,8 @@
 //! source module changes, or the lowering does, and the linked bytes are
 //! then certified by nothing. This is the gate on that: every export in
 //! `generated/EXPORTS.tsv` is compiled again, certificate checked, and its
-//! assembly compared byte for byte. A difference is fixed by
+//! assembly compared byte for byte; an export that is a function of another
+//! export's program is compiled with it, as an entry of the one file. A difference is fixed by
 //! `scripts/linked`, which writes the files this test reads, and never by
 //! editing them.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -21,10 +22,13 @@ fn linked_exports_are_what_the_compiler_emits() {
     let output = root.join(format!("target/native-linked-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
     let listed = heather_cli::linked::exports(&manifest).unwrap_or_else(|why| panic!("{why}"));
-    let rows: Vec<(&str, &str)> = listed.iter().map(|row| (row.module.as_str(), row.function.as_str())).collect();
-    for (module, _) in &rows {
-        assert!(root.join(module).is_file(), "EXPORTS.tsv names `{module}`, which is not a file");
+    for row in &listed {
+        assert!(root.join(&row.module).is_file(), "EXPORTS.tsv names `{}`, which is not a file", row.module);
     }
+    // A program for each row that has a file, its other exported functions
+    // with it.
+    let rows: Vec<(&str, &str, Vec<String>)> = listed.iter().filter(|row| row.within.is_none()).map(|row| (row.module.as_str(), row.function.as_str(),
+        listed.iter().filter(|entry| entry.within.as_deref() == Some(row.function.as_str())).map(|entry| entry.entry()).collect())).collect();
     // One compiler per export, four at a time as the library gate runs its
     // folders (`library.rs`): an export costs a certificate, and the
     // scanner alone is two dozen of them.
@@ -33,11 +37,12 @@ fn linked_exports_are_what_the_compiler_emits() {
     std::thread::scope(|scope| {
         for _ in 0..4 {
             scope.spawn(|| loop {
-                let Some((module, function)) = queue.lock().expect("queue").pop_front() else { break };
+                let Some((module, function, entries)) = queue.lock().expect("queue").pop_front() else { break };
                 let assembly = output.join(format!("{function}.s"));
                 let result = Command::new(env!("CARGO_BIN_EXE_heather"))
                     .current_dir(&root)
                     .args(["compile-x86", module, function, "-o"]).arg(&assembly)
+                    .args(entries.iter().flat_map(|entry| ["--entry", entry.as_str()]))
                     .arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
                     .output().unwrap();
                 if !result.status.success() {
@@ -57,7 +62,7 @@ fn linked_exports_are_what_the_compiler_emits() {
     });
     let failures = failures.into_inner().expect("failures");
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-    let exports: Vec<String> = rows.iter().map(|(_, function)| format!("{function}.s")).collect();
+    let exports: Vec<String> = rows.iter().map(|(_, function, _)| format!("{function}.s")).collect();
     assert!(!exports.is_empty(), "EXPORTS.tsv lists no export");
     // And nothing is linked that the manifest does not account for.
     for entry in std::fs::read_dir(&generated).unwrap() {
@@ -72,7 +77,8 @@ fn linked_exports_are_what_the_compiler_emits() {
 // written (docs/native-library-exports-design.md §6, clauses 1 and 4): a
 // seventh word, whether the words are the function's own or a span's
 // address and length among them, for a function that reads its span and for
-// one that stores into it.
+// one that stores into it, and an entry of a program that is not one
+// `compile-x86` exports yet.
 #[test]
 fn what_the_contract_does_not_take_is_refused() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -104,6 +110,27 @@ fn what_the_contract_does_not_take_is_refused() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{function}: {stderr}");
         assert!(!output.exists(), "{function}: a refused function wrote assembly");
+    }
+    // An entry is another function of the program compiled, found by its
+    // name; for now a function of words, in a program that stores into no
+    // span (§6.3). Anything else is refused by name, and nothing is written.
+    let spans = root.join("lib/native/native_tool_spans.hthr");
+    for (function, entry, why) in [
+        ("count_newlines", "native_tool_spans::newlines_from", "`native_tool_spans::newlines_from` is lent 1 span: compile-x86 exports another function of a program only where it is a function of words"),
+        ("count_newlines", "native_tool_spans::raise_word", "`native_tool_spans::raise_word` is no function of `native_tool_spans::count_newlines`'s program, which has: newlines_from, count_newlines"),
+        ("count_newlines", "native_tool_spans::count_newlines", "--entry `native_tool_spans::count_newlines` is the function compiled"),
+        ("count_newlines", "nowhere::step", "--entry `nowhere::step` is no function `count_newlines`'s module reaches"),
+        ("count_newlines", "newlines_from", "--entry `newlines_from` is not `<module>::<function>`"),
+        ("raise_span", "native_tool_spans::raise_word", "stores into its span: compile-x86 exports another function of a program only where the program stores into no span"),
+    ] {
+        let output = dir.join(format!("{function}.s"));
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .arg("compile-x86").arg(&spans).args([function, "--entry", entry, "-o"]).arg(&output)
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success() && stderr.contains(why), "{function} --entry {entry}: {stderr}");
+        assert!(!output.exists(), "{function} --entry {entry}: a refused entry wrote assembly");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -1,6 +1,6 @@
 // Controls of the contract a compiled function is exported under
-// (function_ir_compile's `compiled_returns`, `compiled_returns_lent` and
-// `compiled_returns_written`;
+// (function_ir_compile's `compiled_returns`, `compiled_returns_lent`,
+// `compiled_returns_unlent` and `compiled_returns_written`;
 // docs/native-library-exports-design.md §6, the clauses by number). Each
 // clause of the contract is a part of those theorems' statements; a control
 // shows the clause has teeth, that something which would break it is
@@ -24,6 +24,8 @@ import x86_64_store;
 import x86_64_stack;
 import x86_64_lending;
 import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
 import bitvec;
 import bool;
 import list;
@@ -160,6 +162,35 @@ fn first_byte() → Function {
 theorem first_byte_lowers(): lower_program_lent([first_byte()], plan_program([first_byte()]), [1]).is_some().IsTrue() { trivial }
 theorem first_byte_unlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [0]) = None { refl }
 theorem first_byte_overlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [2]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A function of words in a program that is lent spans
+//
+// An export's program may hold functions lent nothing beside the one that
+// reads a span, and each can be exported at its own label
+// (docs/native-library-exports-design.md §6.3). Such a function's contract
+// is the plain one, `Stack::CalleePost`, with no premise about a span:
+// `compiled_returns_unlent`. Here `sum` under `first_byte`, in a program
+// lent a span at its last function only.
+fn reading_beside() → List<Function> { [first_byte(), sum()] }
+theorem reading_beside_counts(): program_counts(reading_beside()) = [0, 1] { refl }
+theorem reading_beside_lowers(): lower_program_lent(reading_beside(), plan_program(reading_beside()), [0, 1]).is_some().IsTrue() { trivial }
+
+// `sum` is the program's function 0: at its label it is a function of words,
+// whatever lowering of the program is the code.
+theorem sum_beside_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program_lent(reading_beside(), placement, [0, 1]) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), a, b: BitVec(64)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(1),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn([a, b], argument_registers(), s.gprs) ∧ 72 * 1 <= i,
+        stack.CalleePost(program_eval_over(Nil, reading_beside(), 0, [a, b]))) {
+    compiled_returns_unlent<M>(reading_beside(), placement, [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
+        refl, [a, b], trivial, program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)
+}
+
+// The function that reads its span has no such contract: that it is lent
+// nothing has no proof. Its contract is `compiled_returns_lent`, which asks
+// for the span.
+theorem lent_function_is_not_plain(unlent: lent_count([0, 1], 1) = 0): False { Nat::succ_ne_zero(0)(unlent) }
 
 // ---------------------------------------------------------------------------
 // Clause 9: the direction flag, x87, SSE and MXCSR are untouched

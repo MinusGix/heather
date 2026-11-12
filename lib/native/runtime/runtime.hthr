@@ -25,6 +25,13 @@
 //   |               | reaches, callees first, `f` last, each from its instance |
 //   | `f::arities`  | how many words each function of the program takes, the   |
 //   |               | last function's first                                    |
+//   | `f::sources`  | the Heather function each function of the program is, at |
+//   |               | each file                                                |
+//   | `f::sourced`  | every function of the program evaluates to its own of    |
+//   |               | `f::sources` (`program_linked_files`): what a caller of  |
+//   |               | a function other than the last cites                     |
+//   | `f::names`    | which function is where: each function's name as its     |
+//   |               | characters' codes, a zero after each, the first's first  |
 //   | `f::agrees`   | `program_eval(f::program, last, [xs…]) = f(xs…)`          |
 //
 // Nothing in the group is a proof about `f` written for `f`. The instance's
@@ -38,6 +45,8 @@
 // A group's members cannot cite each other yet
 // (issues/generate-group-internal-references.md), so each spells the
 // reflection and the table out again; they are data, and small.
+// `f::agrees` is `f::sourced` read at the last function, and for the same
+// reason carries that proof again.
 
 import logic;
 import bool;
@@ -851,6 +860,10 @@ fn link_sources_at(srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>) �
 // `x(b) = x(b)` at every file, spelled with no binder.
 theorem link_every<A>(x: Buffers() → A): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
 
+// The same at a table of meanings, with no type left to inference: what the
+// generator applies (`runtime_types`).
+theorem link_every_table(x: Buffers() → List<List<BitVec(64)> → BitVec(64)>): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
+
 // An instance's code in a program: its calls renamed by `links`.
 fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
 
@@ -1252,8 +1265,33 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 
 // The program (the last function first, as `program_eval` reads it), the
 // word functions answering its calls at each file, and the proof each
-// function returns its own over every file (`program_linked_files`).
-record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr }
+// function returns its own over every file (`program_linked_files`), with
+// that statement.
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr }
+
+// Each function's type, read once: what `Compile`'s members take first.
+// Spelled, not left to inference (`Blank`), in everything the link applies:
+// an application with nothing left to inference is read once however often
+// it is spelled, and makes no hole, where each hole of a run is a term the
+// host carries through every later reading
+// (issues/runtime-generator-link-cost.md).
+fn runtime_types(insts: List<Pair<Expr, Expr>>) → Tac<List<Expr>> {
+    match insts {
+        Nil => pure([]),
+        Cons(p, rest) => infer(p.fst).or_fail("runtime: a function's type: ").bind(λ t => runtime_types(rest).bind(λ ts => pure(Cons(Hd(t), ts)))),
+    }
+}
+
+// The parts' conjunction, ending in `last`, each `link_both` at its two
+// statements (`runtime_types`' reason).
+fn runtime_conjoined(both: Expr, parts: List<Expr>, last: Expr) → Tac<Expr> {
+    match parts {
+        Nil => pure(last),
+        Cons(p, rest) => runtime_conjoined(both, rest, last).bind(λ acc =>
+            infer(p).or_fail("runtime: a function's link: ").bind(λ tp =>
+            infer(acc).or_fail("runtime: the program's linking: ").bind(λ tq => pure(ap(both, [Hd(tp), Hd(tq), p, acc]))))),
+    }
+}
 
 fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<Linked> {
     let fn_ctors <- runtime_ctors_at(ts.functions);
@@ -1264,25 +1302,43 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let arity_of <- runtime_global("Compile::arity");
     let arity_at <- runtime_global("link_arity");
     let both <- runtime_global("link_both");
-    let every <- runtime_global("link_every");
+    let every <- runtime_global("link_every_table");
     let files_nil <- runtime_global("link_files_nil");
     let files_cons <- runtime_global("link_files_cons");
+    let sources <- runtime_global("link_sources_at");
+    let linked_files <- runtime_global("program_linked_files");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
+    let types <- runtime_types(insts);
+    // Function `i` with its type before it, as `Compile`'s members take it.
+    let of: Nat → List<Expr> = λ i => match insts.nth(i) { None => [], Some(p) => [runtime_at(types, i), p.fst, p.snd] };
+    let indices = List::range(insts.len());
     // Each function at each file: `Compile::uncurried` short of its file.
-    let srcs <- runtime_held(insts.foldr(λ p acc => ap(files_cons, [ap(uncurried, [Blank, p.fst, p.snd]), acc]), files_nil), "the program's sources");
-    let at = λ (i: Nat) => Pair(insts.nth(i).unwrap_or(Pair(Blank, Blank)), runtime_at(links, i));
-    let indices = List::range(insts.len()).rev();
-    let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
-    let program <- runtime_held(RtQ::seq(fn_ctors, codes), "the program");
-    let arities <- runtime_held(RtQ::seq(q.nats, indices.map(λ i => ap(arity_of, [Blank, (at(i)).fst.fst, (at(i)).fst.snd]))),
-        "the program's arities");
+    let srcs <- runtime_held(indices.foldr(λ i acc => ap(files_cons, [ap(uncurried, of(i)), acc]), files_nil), "the program's sources");
+    let last_first = indices.rev();
+    let program <- runtime_held(RtQ::seq(fn_ctors, last_first.map(λ i => ap(linked, of(i) ++ [runtime_at(links, i)]))), "the program");
+    let arities <- runtime_held(RtQ::seq(q.nats, last_first.map(λ i => ap(arity_of, of(i)))), "the program's arities");
     // Function `i` is `insts.len() - 1 - i` from the last, and is linked
     // against the functions before it.
-    let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
-        ap(arity_at, [program, arities, NatLit(insts.len() - i)]),
-        ap(every, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h)]));
-    pure(Linked(program, srcs, arities, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
+    let parts = last_first.map(λ i => ap(part, of(i) ++ [srcs, runtime_at(links, i),
+        ap(arity_at, [program, arities, NatLit(insts.len() - i)]), ap(every, [ap(table, of(i))]), Hd(trivial_h)]));
+    let proof <- runtime_conjoined(both, parts, Hd(trivial_h));
+    // The proof is cited by two members of the group (`f::sourced`, and
+    // `f::agrees` at the last function). Held at its statement, each
+    // mention is one node.
+    let statement <- as_type(ap(linked_files, [program, arities, ap(sources, [srcs])])).or_fail("runtime: the program's linking: ");
+    let held <- hole(statement).or_fail("runtime: the program's linking: ");
+    let solved <- defeq(Hd(held), proof);
+    match solved {
+        True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement))),
+        False => runtime_fail("the program's linking does not prove its statement"),
+    }
+}
+
+// A program's function names as numbers a tool reads: each name's
+// characters' codes, then a zero.
+fn runtime_name_codes(names: List<String>) → List<Nat> {
+    match names { Nil => [], Cons(name, rest) => name.chars.map(λ (c: Char) => c.toNat()) ++ Cons(0, runtime_name_codes(rest)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1754,12 +1810,22 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let insts <- runtime_instances(l.order, l.names, f.id, instance_e);
     let linked <- runtime_linked(q, ts, l, insts);
     let root = NatLit(l.order.len() - 1);
+    let srcs_t <- infer(linked.srcs).or_fail("runtime: `" ++ name ++ "`'s sources: ");
     let linked_decls: List<Decl> = [
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
         // How many words each function of the program takes, as the
         // program lists them: what a certificate checks each function's
         // calls against without reading its callees' code.
-        Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities)];
+        Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities),
+        // Every function of the program against its source, and not the
+        // last alone: what a caller of another of its functions cites (an
+        // export with several entries, docs/native-library-exports-design.md
+        // §6.3). `f::names` is which function is where: each function's
+        // name as its characters' codes, a zero after each, the first
+        // function's first.
+        Decl(AsValue, name ++ "::sources", [], Hd(srcs_t), linked.srcs),
+        Decl(AsTheorem, name ++ "::sourced", [], linked.statement, linked.sourced),
+        Decl(AsValue, name ++ "::names", [], Hd(ts.nats), q.nat_list(runtime_name_codes(l.names)))];
     match rfun.lent {
         Zero => {
             // `f::reflects` and `f::agrees` quantify over the parameters (`f::agrees`

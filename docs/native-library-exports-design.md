@@ -483,10 +483,108 @@ that calls compiled code.
 
 **Not done.** The word's packing is read apart in Rust (`>> 56`, a
 mask): that a kind and an end below 2^56 come back from `token_word` is
-not a theorem yet, only tested. The crate holds the automaton twice, in
-`scan_step`'s program and in `scan_token`'s, since an export is a
-program of its own; the three automaton exports stay for the tests that
-walk its states.
+not a theorem yet, only tested. The crate held the automaton twice, in
+`scan_step`'s program and in `scan_token`'s, since an export was a
+program of its own; §6.3 makes them one. The three automaton exports stay
+for the tests that walk its states.
+
+### 6.3 Exports that share a program (2026-11-12)
+
+An export was a program of its own: `compile-x86` compiled one function
+with everything it reaches and certified that program. So a function
+reached from two exports was in the crate twice, and was checked twice:
+its emission, its `_evaluable`, its `_quiet`. The scanner's automaton was
+the case, under `scan_step` and again under `scan_token`.
+
+**One program, several labels.** `compile-x86 <module> <function> --entry
+<module>::<function>…` compiles the function's program once and exports
+each entry as well, at its own label. Nothing about the lowering or the
+emission changes, because `compiled_returns` was always stated at a
+function index of a program: an entry is a second index. The assembly
+file has a global symbol for each and states each one's signature and
+stack (`# signature:` and `# stack:`, a pair for each symbol). With no
+`--entry` the file is byte for byte what it was.
+
+**What the generator had to publish.** A `runtime fn`'s group stated its
+program's agreement at the last function only (`f::agrees`), though the
+proof under it is about every function (`program_linked_files`). It now
+publishes that too: `f::sources` (the Heather function each function of
+the program is, at each file), `f::sourced` (every function evaluates to
+its own of those) and `f::names` (which function is where, as character
+codes). The certificate reads `f::sourced` at the entry's index with
+`program_linked_files_sources`, and what comes out converts to the
+Heather function applied to its words. A name is only where to look: if
+`f::names` put the compiler at the wrong function, the agreement would
+not convert and nothing would be written.
+
+**What publishing it cost, and the rule that removed the cost.** The
+linking proof is now cited by two members of a group, and the first build
+of this made every `runtime fn` of the scanner's loop several times
+dearer to generate in the test build, enough to put the native gate's
+child past its rail. The cause is in how the host reads a tactic's
+expression (`crates/elab/src/host.rs`): an argument left to inference
+(`Blank`) is a hole of the run, each hole's solution is carried through
+the substitution the host rebuilds at every application it reads
+afterwards, and an application with a `Blank` in it is read again
+wherever it is spelled. The linking spelled the function's type, the
+table's type and both sides of each conjunction as `Blank`, so a program
+of `n` functions made a number of holes linear in `n`, the later ones
+solved by statements about everything linked so far. The generator now
+reads each function's type once (`runtime_types`) and each conjunct's
+statement once (`runtime_conjoined`) and spells them: nothing in the
+linking is left to inference, the host reads each application once, and
+the scanner's loop is cheaper to generate than it was before `f::sourced`
+existed. The span generator (`runtime_span_parts`) still leaves its types
+to inference; `issues/runtime-generator-link-cost.md` has the finding and
+that remainder.
+
+**The entry's contract** is the plain one of a function of words
+(`Stack::CalleePost`: its value in RAX, the kept registers, stores only
+below its own return address), whatever the root's contract is. In a
+program lent nothing that is `compiled_returns` at the entry's index. In
+a program whose root reads spans it is `compiled_returns_unlent`
+(`function_ir_compile.hthr`): a function lent no buffer, in a program
+that stores into none, returns under the plain premises, with no file
+and no `Loan` asked of its caller. It is `compiled_returns_lent` at the
+empty file with the lending's clauses discharged. So `scan_step` is a
+`safe fn` over two words exactly as it was, and its theorem is about the
+same code `scan_token` calls.
+
+**The table** has a fourth column: the export whose program the row is a
+function of. Such a row has no file; its declaration is generated from
+the signature its program's file states for it, and `scripts/linked` and
+the gate compile it with its program (`Export::within`,
+`heather_cli::linked`). `scan_step`, `scan_accept` and `scan_begin` are
+entries of `scan_token`: one file, one certificate, the automaton once.
+
+**Controls.** In Heather
+(`lib/_tests/native/function_ir/function_ir_compile_tests.hthr`): a
+function of words under one that reads a span has the plain contract at
+its label, and the reader has no proof of the premise that it is lent
+nothing. In Rust: a file's symbols each read their own signature and an
+entry is held to it (`heather_cli::linked`'s tests), every symbol has one
+label at its own offset (`native.rs`), and `native_linked.rs` refuses an
+entry that is no function of the program, one that is lent a span, and
+any entry of a program that stores. The crate's tests did not change:
+the scanner against `heather_syntax::lex`, and `token` against the Rust
+loop over the three automaton functions, which now call into the one
+program.
+
+**Limits, each refused by name** (`issues/linked-program-entries-limits.md`):
+
+- An entry is a function the root reaches. Two exports that share
+  callees and do not reach each other need a program with two roots,
+  which the generator does not link yet.
+- An entry lent a span, and any entry of a program that stores into a
+  span. The first is `compiled_returns_lent` at the entry's index and is
+  only text to generate; the second needs `compiled_returns_unlent` over
+  a lending that lets the root's span be written.
+- The stack an entry's theorem asks for is by its index in the program
+  (`72 * Succ(f)`), as every function's is, not by what it calls. A small
+  function late in a large program is stated with more room than it
+  uses: `scan_accept`, a few instructions, is stated with the room of
+  every function before it. The bound is sound and loose; tightening it is a change to
+  `compiled_returns`'s premise, by the call depth below a function.
 
 ## 7. The write half, in outline
 
@@ -652,6 +750,9 @@ Each is one PR, in this order, and each ends with something that runs.
   `rt-fixed-arrays-and-tables` gives the schedule and the constants a
   place. *The export is built 2026-11-12 (§7.1), with `raise_span` as its
   first function; SHA-256's state is not.*
+
+After the rounds: exports that share a program are one program with
+several labels (§6.3, built 2026-11-12).
 
 R3's theorem is not a proof about compiled code: it relates two Heather
 functions, one recursing on a list and one indexing it, and is proved once

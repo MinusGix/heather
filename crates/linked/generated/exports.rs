@@ -25,9 +25,6 @@ linked!("sha512_next.s");
 linked!("sha256_t1.s");
 linked!("sha256_t2.s");
 linked!("sha256_next.s");
-linked!("scan_step.s");
-linked!("scan_accept.s");
-linked!("scan_begin.s");
 linked!("count_newlines.s");
 linked!("raise_span.s");
 linked!("scan_token.s");
@@ -48,11 +45,11 @@ unsafe extern "sysv64" {
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
     /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 72 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`. STACK: 1872 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 1872 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
-    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`. STACK: 72 bytes.
+    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 2016 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
-    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`. STACK: 72 bytes.
+    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 2376 bytes.
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 

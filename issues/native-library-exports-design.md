@@ -96,3 +96,4 @@ a misaligned stack), and the implementation rounds filed against it.
   - Controls in Heather: `function_ir_writes_tests.hthr`, `function_ir_compile_tests.hthr` (clause 4 where a span is lent to write).
 
   Left: SHA-256's state as the customer (waits on `rt-fixed-arrays-and-tables`), a writer of more than one span, and the lexer's values written by compiled code (L4 of the roadmap).
+- 2026-11-12: Exports that share a program are one program with several labels (2026-11-12, §6.3 of the note): `compile-x86 --entry`, the generator's `f::sources`, `f::sourced` and `f::names`, `compiled_returns_unlent`, the table's fourth column. The scanner's four exports are one file and one certificate. `issues/linked-exports-share-one-program.md` is closed by it and `issues/linked-program-entries-limits.md` holds what is left (two roots, entries lent spans, entries of a writer, the stack bound by index).

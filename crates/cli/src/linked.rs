@@ -16,6 +16,11 @@
 //! this function, and `tests/native_linked.rs` the assembly to the
 //! compiler).
 //!
+//! Exports that share callees are one program: a row's fourth column names
+//! the export whose program it is a function of, and its code is a second
+//! label in that export's file, stated there with a signature of its own
+//! (§6.3). Nothing is linked for such a row but the declaration.
+//!
 //! A parameter list that disagrees with the code's own signature (a span
 //! where the code takes a word, a parameter too few) is refused here, so a
 //! declaration cannot pass a pointer where the certificate says a count.
@@ -53,51 +58,74 @@ pub struct Signature {
 }
 
 /// The lines of an assembly file that state `signature`, as `compile-x86`
-/// writes them and [`Signature::read`] reads them.
+/// writes them and [`Signature::read`] reads them: two for each symbol the
+/// file exports, the stack's after the signature's.
 pub fn header(symbol: &str, signature: &Signature) -> String {
     let kinds: Vec<&str> = signature.kinds.iter().map(|kind| kind.name()).collect();
     format!("# signature: {symbol}({}) -> word\n# stack: {} bytes below the return address\n", kinds.join(", "), signature.stack)
 }
 
 impl Signature {
-    /// The signature `assembly` states for `symbol`.
+    /// The signature `assembly` states for `symbol`, one of the symbols it
+    /// exports.
     pub fn read(assembly: &str, symbol: &str) -> Result<Signature, String> {
-        let missing = |what: &str| format!("{symbol}.s states no {what}: it is not what this compiler writes (run scripts/linked)");
-        let line = assembly.lines().find_map(|line| line.strip_prefix("# signature: ")).ok_or_else(|| missing("signature"))?;
+        let missing = |what: &str| format!("the assembly read for `{symbol}` states no {what}: it is not what this compiler writes (run scripts/linked)");
+        let mut lines = assembly.lines().skip_while(|line| line.strip_prefix("# signature: ")
+            .and_then(|rest| rest.strip_prefix(symbol)).is_none_or(|rest| !rest.starts_with('(')));
+        let line = lines.next().and_then(|line| line.strip_prefix("# signature: ")).ok_or_else(|| missing("signature of its own"))?;
         let kinds = line.strip_prefix(symbol).and_then(|rest| rest.strip_prefix('('))
             .and_then(|rest| rest.strip_suffix(") -> word")).ok_or_else(|| missing("signature of its own"))?;
         let kinds = kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty())
-            .map(|kind| Kind::named(kind).ok_or_else(|| format!("{symbol}.s: `{kind}` is no kind of argument")))
+            .map(|kind| Kind::named(kind).ok_or_else(|| format!("`{symbol}`'s signature: `{kind}` is no kind of argument")))
             .collect::<Result<Vec<_>, _>>()?;
-        let stack = assembly.lines().find_map(|line| line.strip_prefix("# stack: "))
+        let stack = lines.next().and_then(|line| line.strip_prefix("# stack: "))
             .and_then(|rest| rest.split(' ').next()).and_then(|bytes| bytes.parse().ok()).ok_or_else(|| missing("stack"))?;
         Ok(Signature { kinds, stack })
     }
 }
 
-/// A row of `EXPORTS.tsv`: the source module, the `runtime fn` in it, and
-/// its parameters as the Rust declaration names them.
+/// A row of `EXPORTS.tsv`: the source module, the `runtime fn` in it, its
+/// parameters as the Rust declaration names them, and for a function
+/// exported from another export's program, that export.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Export {
     pub module: String,
     pub function: String,
     pub parameters: Vec<(String, Kind)>,
+    /// The export whose program this function is an entry of: its code is a
+    /// label in that export's assembly file, and it has no file of its own.
+    pub within: Option<String>,
+}
+
+impl Export {
+    /// The export whose assembly file holds this one's code: itself, or the
+    /// one it is an entry of.
+    pub fn file(&self) -> &str { self.within.as_deref().unwrap_or(&self.function) }
+
+    /// The function as `compile-x86 --entry` names it: its module, which is
+    /// its file's stem, and its name.
+    pub fn entry(&self) -> String {
+        let stem = std::path::Path::new(&self.module).file_stem().and_then(|stem| stem.to_str()).unwrap_or_default();
+        format!("{stem}::{}", self.function)
+    }
 }
 
 /// The table's rows. A row is `<module>\t<function>\t<parameters>`, the
 /// parameters separated by commas, each a name, a span's followed by
-/// `: span`, or by `: span mut` where the function stores into it.
+/// `: span`, or by `: span mut` where the function stores into it; and a
+/// fourth column where the function is an entry of another row's program,
+/// that row's function.
 pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
     let mut rows = Vec::new();
     for line in manifest.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
-        let bad = || format!("EXPORTS.tsv: `{line}` is not `<module>\\t<function>\\t<parameters>`");
+        let bad = || format!("EXPORTS.tsv: `{line}` is not `<module>\\t<function>\\t<parameters>`, with `\\t<export>` after it for an entry of that export's program");
         let mut columns = line.split('\t');
-        let (Some(module), Some(function), Some(parameters), None) = (columns.next(), columns.next(), columns.next(), columns.next()) else {
+        let (Some(module), Some(function), Some(parameters), within, None) = (columns.next(), columns.next(), columns.next(), columns.next(), columns.next()) else {
             return Err(bad());
         };
         let identifier = |name: &str| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             && !name.starts_with(|c: char| c.is_ascii_digit());
-        if !identifier(function) { return Err(bad()); }
+        if !identifier(function) || within.is_some_and(|within| !identifier(within)) { return Err(bad()); }
         let mut named = Vec::new();
         for parameter in parameters.split(',').map(str::trim).filter(|parameter| !parameter.is_empty()) {
             let (name, kind) = match parameter.split_once(':') {
@@ -114,13 +142,25 @@ pub fn exports(manifest: &str) -> Result<Vec<Export>, String> {
             named.push((name.to_string(), kind));
         }
         if rows.iter().any(|row: &Export| row.function == function) { return Err(format!("EXPORTS.tsv lists `{function}` twice")); }
-        rows.push(Export { module: module.to_string(), function: function.to_string(), parameters: named });
+        rows.push(Export { module: module.to_string(), function: function.to_string(), parameters: named, within: within.map(str::to_string) });
+    }
+    // An entry is of a program that has a file: a row with no fourth column.
+    for row in &rows {
+        let Some(within) = &row.within else { continue };
+        match rows.iter().find(|other| other.function == *within) {
+            None => return Err(format!("EXPORTS.tsv: `{}` is an entry of `{within}`, which is no row", row.function)),
+            Some(other) if other.within.is_some() => return Err(format!("EXPORTS.tsv: `{}` is an entry of `{within}`, which is itself an entry of `{}`: \
+                name the export that has the file", row.function, other.file())),
+            Some(_) => {}
+        }
     }
     Ok(rows)
 }
 
 /// `generated/exports.rs`: every export of `manifest` linked and declared,
-/// against the signature its assembly file (`assembly(function)`) states.
+/// against the signature its assembly file states (`assembly(function)`,
+/// the function the one whose program it is: a row's own, or the export it
+/// is an entry of).
 pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
     let rows = exports(manifest)?;
     let mut links = String::new();
@@ -129,14 +169,18 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
     let mut wrappers = String::new();
     for row in &rows {
         let function = &row.function;
-        let signature = Signature::read(&assembly(function)?, function)?;
+        let signature = Signature::read(&assembly(row.file())?, function)?;
         let named: Vec<Kind> = row.parameters.iter().map(|(_, kind)| *kind).collect();
         if named != signature.kinds {
             let list = |kinds: &[Kind]| kinds.iter().map(|kind| kind.name()).collect::<Vec<_>>().join(", ");
             return Err(format!("EXPORTS.tsv declares `{function}({})`, and its compiled code takes `({})`", list(&named), list(&signature.kinds)));
         }
-        links.push_str(&format!("linked!(\"{function}.s\");\n"));
-        let doc = format!("/// `{function}` of `{}`. STACK: {} bytes.", row.module, signature.stack);
+        // An entry's code is in the file of the export it is an entry of.
+        if row.within.is_none() { links.push_str(&format!("linked!(\"{function}.s\");\n")); }
+        let doc = match &row.within {
+            None => format!("/// `{function}` of `{}`. STACK: {} bytes.", row.module, signature.stack),
+            Some(within) => format!("/// `{function}` of `{}`, a function of `{within}`'s program. STACK: {} bytes.", row.module, signature.stack),
+        };
         if named.iter().all(|kind| *kind == Kind::Word) {
             let parameters: Vec<String> = row.parameters.iter().map(|(name, _)| format!("{name}: u64")).collect();
             words.push_str(&format!("    {doc}\n    pub safe fn {function}({}) -> u64;\n", parameters.join(", ")));
@@ -258,6 +302,49 @@ mod tests {
 
     fn stated(symbol: &str, kinds: &[Kind], stack: u64) -> String {
         format!("# a first line\n{}.text\n", header(symbol, &Signature { kinds: kinds.to_vec(), stack }))
+    }
+
+    // A file that exports several symbols states each one's signature, and
+    // each is read as its own: by its whole name, with its own stack.
+    #[test]
+    fn each_symbol_of_a_file_reads_its_own() {
+        let (root, entry, other) = (Signature { kinds: vec![Kind::Span, Kind::Word], stack: 360 }, Signature { kinds: vec![Kind::Word, Kind::Word], stack: 144 },
+            Signature { kinds: vec![Kind::Word], stack: 72 });
+        let text = format!("# a first line\n{}{}{}.text\n", header("scan", &root), header("scan_step", &entry), header("step", &other));
+        assert_eq!(Signature::read(&text, "scan"), Ok(root));
+        assert_eq!(Signature::read(&text, "scan_step"), Ok(entry));
+        assert_eq!(Signature::read(&text, "step"), Ok(other));
+        assert!(Signature::read(&text, "scan_").unwrap_err().contains("states no signature of its own"));
+        // A signature with no stack line after it is not this compiler's.
+        let cut = format!("# signature: f(word) -> word\n{}", header("g", &Signature { kinds: vec![], stack: 72 }));
+        assert!(Signature::read(&cut, "f").unwrap_err().contains("states no stack"));
+    }
+
+    // An entry of another export's program is declared from that export's
+    // file and links nothing of its own.
+    #[test]
+    fn an_entry_is_declared_from_its_program() {
+        let manifest = "m.hthr\tstep\tstate, byte\tscan\nn.hthr\tscan\ttext: span, at\n";
+        let assembly = |function: &str| match function {
+            "scan" => Ok(format!("{}{}.text\n", header("scan", &Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216 }),
+                header("step", &Signature { kinds: vec![Kind::Word, Kind::Word], stack: 72 }))),
+            other => Err(format!("{other}.s was read")),
+        };
+        let text = exports_rs(manifest, &assembly).unwrap();
+        assert!(text.contains("linked!(\"scan.s\");\n") && !text.contains("linked!(\"step.s\")"), "{text}");
+        assert!(text.contains("    /// `step` of `m.hthr`, a function of `scan`'s program. STACK: 72 bytes.\n    pub safe fn step(state: u64, byte: u64) -> u64;\n"), "{text}");
+        assert!(text.contains("pub fn scan(text: &[u8], at: u64) -> u64 {"), "{text}");
+        let rows = exports(manifest).unwrap();
+        assert_eq!((rows[0].file(), rows[0].entry().as_str(), rows[1].file()), ("scan", "m::step", "scan"));
+        // The entry is held to its own signature in that file.
+        let refused = exports_rs("m.hthr\tstep\tstate\tscan\nn.hthr\tscan\ttext: span, at\n", &assembly).unwrap_err();
+        assert!(refused.contains("declares `step(word)`, and its compiled code takes `(word, word)`"), "{refused}");
+        for (table, why) in [("m.hthr\tstep\ta\tscan\n", "which is no row"),
+            ("m.hthr\tstep\ta\tscan\nm.hthr\tscan\ta\tlast\nm.hthr\tlast\ta\n", "which is itself an entry of `last`"),
+            ("m.hthr\tstep\ta\tscan\tmore\n", "is not `<module>"), ("m.hthr\tstep\ta\t9\n", "is not `<module>")] {
+            let refused = exports_rs(table, &assembly).unwrap_err();
+            assert!(refused.contains(why), "{table}: {refused}");
+        }
     }
 
     #[test]

@@ -43,6 +43,13 @@
 //! program, not its type: the assembly's signature says `span mut` exactly
 //! where some function of the program stores.
 //!
+//! Exports that share callees are **one program**: a row of the table may
+//! name the export whose program it is a function of, and it is then a
+//! second label in that export's file, under the one certificate, with a
+//! `_returns` theorem of its own there. The scanner's automaton functions
+//! are entries of the scanning loop's program, so the automaton is linked
+//! once.
+//!
 //! What the theorem does not cover is stated where the compiler states it:
 //! the platform around the call (that `extern "sysv64"` really passes
 //! arguments so, that the stack has room, the assembler and the linker) is

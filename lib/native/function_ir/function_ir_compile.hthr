@@ -158,6 +158,35 @@ theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Plac
         arguments, answer, now, now, j(evaluates, λ x _ => program_effects(functions)(now, f, arguments, x, now), computed))
 }
 
+// A function lent nothing, in a program that reads the buffers its other
+// functions are lent: it takes no buffer, so it asks for no file, and its
+// contract is the one a program without buffers has (`compiled_returns`):
+// its arguments, its room, and stores of its own only. An export that is
+// one function of a larger program, beside functions over spans, is stated
+// with this (docs/native-library-exports-design.md §8.1).
+theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, program: Prog,
+    lowered: lower_program_lent(functions, placement, counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    quiet: program_quiet(functions).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    f: Nat, below: Succ(f) <= functions.len(), unlent: lent_count(counts, f) = 0, arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    evaluates: program_eval_over([], functions, f, arguments) = answer):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(answer)) {
+    let lending = Lending::reading(counts, [], []);
+    let returns = compiled_returns_lent<M>(functions, placement, lending, program, lowered, evaluable, quiet, fetch, data, last, origin, stack,
+        stack.size, stack.loan_nothing(), f, below, arguments, fits, [], answer, evaluates);
+    let lent: ArgsLent(lent_count(counts, f), 0, arguments, [], []) = j(sym(unlent), λ n _ => ArgsLent(n, 0, arguments, [], []), trivial);
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, ⟨held, ⟨lent, ⟨room, stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
+        let post = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨post.left, ⟨post.right.left,
+                stack.wrote_in_none(i, lending.spans(), λ b => refl, s.memory, ran.witness.memory, post.right.right.left)⟩⟩⟩⟩⟩⟩)
+    }
+}
+
 // What the stores leave of the stack: the words from the return address
 // up are as they were. A caller with nothing but stack words to keep cites
 // this; one with data of its own cites `compiled_returns` and what its

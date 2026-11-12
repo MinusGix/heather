@@ -4,7 +4,7 @@ status: open
 labels: [metaprogramming,elaboration]
 area: tactics
 created: 2026-10-28
-updated: 2026-11-01
+updated: 2026-11-12
 ---
 
 A `generate` publishes its declarations only after the generator's run ends
@@ -30,3 +30,4 @@ all-or-nothing publication.
 
 - 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
 - 2026-11-01: A customer (2026-11-01): `regex def is_hex` (lib/std/text/regex/regex.hthr) inlines its term in both `is_hex` and `is_hex::term` because `is_hex` cannot be defined as `is_hex::term.accepts` within one group ([[regex-dfa-compiler]]).
+- 2026-11-12: One more cost of this (2026-11-12): a `runtime fn`'s group now publishes `f::sourced`, the proof that every function of its program evaluates to its source (`docs/native-library-exports-design.md` §6.3). `f::agrees` is that proof read at the last function, and since it cannot cite `f::sourced` it carries the proof again, so the kernel checks the linking proof twice for every `runtime fn`. With references inside a group, `f::agrees` would be one application of `f::sourced`.
