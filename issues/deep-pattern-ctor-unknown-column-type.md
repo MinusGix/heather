@@ -1,6 +1,6 @@
 ---
 title: A constructor in a deep pattern is silently a binder where the column's type is not yet known
-status: open
+status: closed
 labels: [frontend,elaboration,patterns]
 area: language
 created: 2026-11-12
@@ -84,3 +84,4 @@ is at risk, and the library's tactics may already hold some.
   Probes: `lib/_tests/lang/deep_pattern_reduced_type_tests.hthr` (a plain recursive field, a payload field, two levels, the same at `Option`'s bind, the binder control, and the old reading as a `¬`-style refusal). The laid generator's matches (`lib/std/machine/laid.hthr`) stay written a level at a time.
 
   Whole library re-elaborated with the fixed compiler: see the round's verification; a module whose reading changed would be listed here.
+- 2026-11-12: Verified 2026-11-12 (PR #551): every library module (516) was elaborated again by the fixed compiler with no stale images and all check, so no library match changed its reading in a way a theorem observes and none meets the refusal; `scripts/test --pr` is `== suite: 4019 passed, 0 failed, 3 ignored ==`. Acceptance is met but for a probe of the refusal, which no source spelling reaches.
