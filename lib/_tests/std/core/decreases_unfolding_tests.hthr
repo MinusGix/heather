@@ -245,3 +245,103 @@ fn on_measure(m: Nat, acc: Nat) → Nat decreases m {
 theorem on_measure_unfolds(m: Nat, acc: Nat): on_measure(m, acc) = on_measure(m, acc) {
     trans(on_measure_unfold(m, acc), refl)
 }
+
+// A self-call inside a method call's receiver, under a measure that is a
+// chain of method calls (issues/decreases-self-call-in-method-receiver.md):
+// the obligation states the measure twice, at the call's arguments and as
+// written, at one source span, and each copy is its own receiver.
+fn List::keep(self xs: List<Nat>, n: Nat) → List<Nat> { xs }
+fn in_receiver(xs: List<Nat>, n, i: Nat) → Mutated<List<Nat>, Nat> decreases n.sub(i).sub(0) {
+    match h: decide_bit<i < n>() {
+        False => Mutated(xs, i),
+        True => Mutated(in_receiver(xs, n, i + 1).after.keep(i), i),
+    }
+}
+theorem in_receiver_lit(): in_receiver([5], 3, 0) = Mutated([5], 0) { refl }
+
+// Methods (issues/decreases-self-parameter.md). A `self` parameter, the
+// self-call written as a method call on a computed receiver; the unfolding
+// equation reads it as written.
+fn List::count_down(self xs: List<Nat>, m: Nat) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => List::Cons(m, xs).count_down(m - 1),
+    }
+}
+theorem count_down_lit(): List::Nil.count_down(3) = [1, 2, 3] { refl }
+theorem count_down_unfolds(xs: List<Nat>, m: Nat):
+    xs.count_down(m) = (match h: decide_bit<1 <= m>() { False => xs, True => List::Cons(m, xs).count_down(m - 1) }) {
+    List::count_down_unfold(xs, m)
+}
+
+// The self-call by its base name, as a structural method's is.
+fn List::count_named(self xs: List<Nat>, m: Nat) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => count_named(List::Cons(m, xs), m - 1),
+    }
+}
+theorem count_named_lit(): List::Nil.count_named(3) = [1, 2, 3] { refl }
+
+// A member with no `self` marker: its receiver is its first explicit
+// parameter.
+fn List::count_first(xs: List<Nat>, m: Nat) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => List::Cons(m, xs).count_first(m - 1),
+    }
+}
+theorem count_first_lit(): List::Nil.count_first(2) = [1, 2] { refl }
+
+// The receiver at a `self` parameter that is not the first.
+fn List::push_down(m: Nat, self xs: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => List::Cons(m, xs).push_down(m - 1),
+    }
+}
+theorem push_down_lit(): List::Nil.push_down(2) = [1, 2] { refl }
+
+// Another type's member of the same base name, on a receiver of that type,
+// is that member and not a self-call.
+record Crate { k: Nat }
+fn Crate::peek(self b: Crate) → Nat { b.k }
+fn Counter::peek(self c: Counter, m: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => Crate(c.n).peek(),
+        True => Counter(c.n + 1, c.log).peek(m - 1),
+    }
+}
+theorem peek_lit(): Counter(0, []).peek(3) = 3 { refl }
+
+// A `mut self` method recursing on its receiver, the call a statement in a
+// statement `if`: it rebinds the receiver to the call's `after`.
+fn Counter::fill_down(mut self c: Counter, m: Nat) → True decreases m {
+    if 1 <= m {
+        c := Counter(c.n + m, Cons(m, c.log));
+        c.fill_down(m - 1);
+    }
+}
+theorem fill_down_lit(): Counter::fill_down(Counter(0, []), 2).after = Counter(3, [1, 2]) { refl }
+
+// …and with `let k = c.f(…)`, which also binds the call's `value`.
+fn Counter::fill_sum(mut self c: Counter, m: Nat) → Nat decreases m {
+    let mut s = 0;
+    if 1 <= m {
+        c := Counter(c.n + m, Cons(m, c.log));
+        let k = c.fill_sum(m - 1);
+        s := k + m;
+    }
+    s
+}
+theorem fill_sum_lit(): Counter::fill_sum(Counter(0, []), 3) = Mutated(Counter(6, [1, 2, 3]), 6) { refl }
+
+// Negative control: a method self-call that does not decrease is refused
+// at the call, as the function spelling is.
+// expect-error: this recursive call must decrease the measure, and `m + 1 < m` was not proved
+fn List::grows(self xs: List<Nat>, m: Nat) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => xs,
+        True => xs.grows(m + 1),
+    }
+}
