@@ -1023,11 +1023,45 @@ impl Speller<'_> {
             return Some(literal);
         }
         let shown: Vec<String> = fields.iter().map(|v| self.tm(v, d + 1)).collect();
+        let head = format!("{}{}", ctor.name, self.ctor_targs(t, &ind, i, d));
         Some(if shown.is_empty() {
-            ctor.name.clone()
+            head
         } else {
-            format!("{}({})", ctor.name, shown.join(", "))
+            format!("{head}({})", shown.join(", "))
         })
+    }
+
+    /// The `<…>` a re-parsed constructor value needs: its declaration's type
+    /// arguments, written only in the source flavour and only when one of
+    /// them is mentioned by none of the constructor's fields, so elaborating
+    /// the arguments could not infer it. `Nil` alone came back as
+    /// `List::len(Nil)` in `omega`'s certificate and did not elaborate
+    /// (issues/omega-certificate-drops-type-arguments.md); `Cons(x, xs)`
+    /// infers and keeps its spelling. Empty when the arguments do not
+    /// recover from the value's type, which leaves the spelling as it was.
+    fn ctor_targs(&self, t: &Term, ind: &crate::inductive::Inductive, i: usize, d: u32) -> String {
+        if !self.qualified || ind.params.is_empty() {
+            return String::new();
+        }
+        let ctor = &ind.ctors[i];
+        let undetermined = ind.params.iter().any(|p| {
+            let names = std::slice::from_ref(p);
+            !ctor.fields.iter().any(|(_, ty)| crate::datarepr::mentions_free_ty(ty, names, &mut Vec::new()))
+        });
+        if !undetermined {
+            return String::new();
+        }
+        let ty: &Type = match t {
+            Term::Supf { shape, .. } => shape,
+            Term::InlAt { ty: Some(ty), .. } | Term::InrAt { ty: Some(ty), .. } => ty,
+            Term::PairAt { ty: Some(ty), .. } => ty,
+            _ => return String::new(),
+        };
+        let Some(args) = Inductives(self.el).display_targs(self.cx, ty, ind, self.binders()) else {
+            return String::new();
+        };
+        let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>().join(", ");
+        format!("<{shown}>")
     }
 
     /// A lowered constructor value read back: its declaration, the

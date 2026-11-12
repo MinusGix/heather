@@ -30,6 +30,12 @@ theorem checking(n, m: Nat, h: m < n): m < R::at(n).inner.den.pred {
     let k: (m < R::at(n).inner.den.pred) = omega;
     k
 }
+// The same annotation without its parentheses: only `=` collides with the
+// `let`'s binder (issues/annotated-let-relation-needs-parentheses.md).
+theorem checking_bare(n, m: Nat, h: m < n): m < R::at(n).inner.den.pred {
+    let k: m < R::at(n).inner.den.pred = omega;
+    k
+}
 // A field put as a call stuck on a match is that call, so it meets the
 // call's other mentions.
 theorem stuck_call_put(b: Bool, n: Nat): Q::bumped(b, n).den.pred = bump(b, n) { omega }
@@ -430,3 +436,10 @@ theorem field_call_two(nb: NumP<Bool>(3), a, b, top: Nat, h: nb.two(a, b) < top)
 // Two arguments are two atoms.
 // expect-error: `omega` got stuck
 theorem field_call_apart(nb: NumC, a, b: Nat): nb.number(a) = nb.number(b) { omega }
+
+// A hypothesis mentioning a constructor whose fields fix none of its type's
+// arguments: the certificate writes `Nil<Nat>`, since a bare `Nil` does not
+// elaborate where `len` infers its receiver
+// (issues/omega-certificate-drops-type-arguments.md).
+theorem nil_typed(n: Nat, h: n + List::Nil<Nat>.len() = 3): n <= 3 { omega }
+theorem nil_typed_goal(n: Nat): n + List::Nil<Bool>.len() = n { omega }

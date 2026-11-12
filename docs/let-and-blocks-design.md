@@ -327,7 +327,10 @@ test and the doc correction.
   *diagnosable* failure but not a good message, so §9 requires a targeted one
   (see below). Six sites, re-spelled `let p: (a = b) = pf;`.
 - **`let h: n <= m = pf;` likewise**, re-spelled `let h: (n <= m) = pf;`.
-  Zero executable sites; one prose site.
+  Zero executable sites; one prose site. *Reverted 2026-11-12*
+  (issues/annotated-let-relation-needs-parentheses.md): only `=` is
+  ambiguous after an annotation, so the annotation now suppresses the rung
+  at `=` alone and `let h: n <= m = pf;` reads as written.
 - Nothing else. Every annotation in the "ok" half of §2.4's table is either an
   early return from `ty_atom` (unaffected by `no_eq`) or gains parsing it
   never had.
