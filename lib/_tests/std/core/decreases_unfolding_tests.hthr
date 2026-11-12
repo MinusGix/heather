@@ -101,6 +101,19 @@ theorem fill2_unfolds(c: Counter, m: Nat, acc: Nat):
     fill2_unfold(c, m, acc)
 }
 
+// A `mut` parameter updated before the loop test.
+fn param_rec(mut c: Counter, m: Nat) → Nat decreases m {
+    c.tick(m);
+    match h: decide_bit<1 <= m>() {
+        False => c.n,
+        True => param_rec(c, m - 1),
+    }
+}
+theorem param_rec_unfolds(c: Counter, m: Nat):
+    param_rec(c, m) = (match h: decide_bit<1 <= m>() { False => Counter::tick(c, m).after.n, True => param_rec(Counter::tick(c, m).after, m - 1) }) {
+    param_rec_unfold(c, m)
+}
+
 // A method that is not `mut self`, called on a `let mut` local: an ordinary call.
 fn plain(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
     match h: decide_bit<1 <= m>() {
