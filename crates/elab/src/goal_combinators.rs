@@ -860,8 +860,18 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         }
         // The arm's reads of the matched constructor's children are the
         // pattern's names where the goal has them (`rest`, not `fst(cs)`).
-        elab.spell_term_source(cx, &selected)?;
-        return Some(selected);
+        if elab.spell_term_source(cx, &selected).is_some() {
+            return Some(selected);
+        }
+        // An arm that reads the constructor's fields (`node_output(Const(64,
+        // flag, 1))` is `Output(64, flag)`) reads them as projections out of
+        // its label's payload, which no source spells: contracted, they are
+        // the fields written. Only where the arm as selected did not spell:
+        // contracting an arm that did changes what `omega` reads
+        // (`CReal::archimedean`).
+        let contracted = contracted(elab, cx, &oracle, &selected, &mut 256);
+        elab.spell_term_source(cx, &contracted)?;
+        return Some(contracted);
     }
     None
 }
@@ -940,6 +950,34 @@ fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -
         elab.spell_term_source(cx, scrut)?;
     }
     Some(body)
+}
+
+/// `t` with every β-redex `(λ x. b)(a)` contracted, under binders too, and
+/// nothing else reduced.
+fn beta_below(t: &Term) -> Term {
+    match t {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+            let fun = beta_below(fun);
+            let arg = beta_below(arg);
+            if let Term::Lam { body, .. } = &fun {
+                return beta_below(&body.inst_top(0, &arg));
+            }
+            let mut out = t.clone();
+            if let Term::App { fun: f, arg: a, .. } | Term::AppAt { fun: f, arg: a } = &mut out {
+                *f = Rc::new(fun);
+                *a = Rc::new(arg);
+            }
+            out
+        }
+        Term::Lam { .. } => {
+            let mut out = t.clone();
+            if let Term::Lam { body, .. } = &mut out {
+                *body = Rc::new(beta_below(body));
+            }
+            out
+        }
+        _ => t.clone(),
+    }
 }
 
 /// `t` with the β-redexes and projections of pairs a selected arm leaves
@@ -1092,6 +1130,12 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                     return term(elab, cx, &reduced, budget);
                 }
             }
+            // A function literal a law's instance put a function literal
+            // into (`λ ys => out(again(ys))` at `again := λ ys => into(…)`):
+            // its β-redexes contracted, so a law under the binder meets the
+            // body as written. Syntactic only: nothing below a binder is
+            // scoped where the oracle is.
+            Term::Lam { body, .. } if budget.1 => *body = Rc::new(beta_below(body)),
             Term::Succ(inner) => *inner = Rc::new(term(elab, cx, inner, budget)),
             Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 *val = Rc::new(term(elab, cx, val, budget));

@@ -38,12 +38,14 @@ import pair;
 import bitvec;
 import bitvec_nat;
 import rt;
-import function_ir;
+import function_ir::{Compose};
 import function_ir_eval;
 import function_ir_compile;
 import rt_lower;
 import dec_set;
 import set_tactic;
+import relation;
+import relation_props;
 
 // ---------------------------------------------------------------------------
 // The tail meaning.
@@ -811,14 +813,10 @@ theorem Fun::fuel_pass_sound(ws: List<Ty>, res: Ty, succ: Tm, w: World, h: Nat �
     let one_out = Fun::absent_ids(ws, Succ(c), Succ(k), Inr(Nat::le_succ_r(k, k, k.le_refl())));
     let len: (ps.len() = st.len()) = sym(words_of_len(v, ps));
     // The count, the predecessor and the state in the pass's valuation.
-    let pv_c: (pv(64, c) = BitVec::ofNat(Succ(r))) = trans(Valuation::bind_frame(counted, ps, st, 64, c, c_out),
-        Valuation::set_here(Valuation::zero(), c, word_value(BitVec::ofNat(Succ(r))), 64));
-    let pv1_c: (pv1(64, c) = pv(64, c)) = trans(Valuation::set_other(one_set, k, pred, 64, c, Nat::ne_of_lt(c, k, c_k)),
-        Valuation::set_other(pv, Succ(k), λ wd => BitVec::ofNat(1), 64, c, Nat::ne_of_lt(c, Succ(k), c_one)));
-    let pv1_k: (pv1(64, k) = BitVec::ofNat(Succ(r), n := 64).sub(BitVec::ofNat(1))) = trans(Valuation::set_here(one_set, k, pred, 64),
-        eq2(λ (a: BitVec(64)) (b: BitVec(64)) => a.sub(b),
-            trans(Valuation::set_other(pv, Succ(k), λ wd => BitVec::ofNat(1), 64, c, Nat::ne_of_lt(c, Succ(k), c_one)), pv_c),
-            Valuation::set_here(pv, Succ(k), λ wd => BitVec::ofNat(1), 64)));
+    let pv_c: (pv(64, c) = BitVec::ofNat(Succ(r))) = simp_only(Valuation::bind_frame, Valuation::set_here);
+    let pv1_c: (pv1(64, c) = pv(64, c)) = simp_only(Valuation::set_other, discharge := omega(c_k, c_one));
+    let pv1_k: (pv1(64, k) = BitVec::ofNat(Succ(r), n := 64).sub(BitVec::ofNat(1))) =
+        simp_only(Valuation::set_here, Valuation::set_other, pv_c, discharge := omega(c_one));
     let words: Fun::BoundWords(pv1, ps, st) = Fun::bound_frame(pv, pv1, ps, st,
         λ id m => trans(Valuation::set_other(one_set, k, pred, 64, id, λ e => absent_mem(k, ps, k_out, id, m, sym(e))),
             Valuation::set_other(pv, Succ(k), λ wd => BitVec::ofNat(1), 64, id, λ e => absent_mem(Succ(k), ps, one_out, id, m, sym(e)))),
@@ -841,10 +839,7 @@ theorem Fun::fuel_pass_sound(ws: List<Ty>, res: Ty, succ: Tm, w: World, h: Nat �
     let pv3 = Valuation::set(pv2a, Succ(t.next), exit_value);
     let flag_lt: (flag < t.next) = Nat::lt_of_lt_of_le(flag, Succ(flag), t.next, flag.lt_succ_self(), ran.left);
     let exit_bit: (pv3(1, Succ(t.next)).head_bit() = pv2(64, flag).eq_bit(BitVec::ofNat(1))) =
-        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(pv2a, Succ(t.next), exit_value, 1)),
-            eq2(λ (a: BitVec(64)) (b: BitVec(64)) => a.eq_bit(b),
-                Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, flag, Nat::ne_of_lt(flag, t.next, flag_lt)),
-                Valuation::set_here(pv2, t.next, λ wd => BitVec::ofNat(1), 64)));
+        simp_only(Valuation::set_here, bit_value, Valuation::set_other, discharge := omega(flag_lt));
     let ns_out = Fun::absent_ids(ws, Succ(Succ(k)), t.next, Inr(Nat::le_of_lt(flag, t.next, flag_lt)));
     let ns_out2 = Fun::absent_ids(ws, Succ(Succ(k)), Succ(t.next), Inr(Nat::le_succ_r(flag, t.next, Nat::le_of_lt(flag, t.next, flag_lt))));
     let nexts_same: (words_of(pv3, ns) = words_of(pv2, ns)) = words_agree(ns, pv2, pv3, λ id m =>
@@ -893,11 +888,10 @@ theorem Fun::fuel_zero_sound(ws: List<Ty>, res: Ty, zero: Tm, w: World, h: Nat �
         trans(Ty::one_word_reads(tys, after, lz.result, zero.ty(w, ctx), j(sym(ez), λ y _ => y.OneWord(tys), er), zero.sem(w, ctx, env),
                 ran.right.right.right),
             sym(Tm::out_cast(tys, zero.ty(w, ctx), res, ez, zero.sem(w, ctx, env))));
-    trans(Fun::post_exhausted(x, lz.next, Succ(z), Fun::fuel_zero_region(z, lz.next, lz), call, values, os, st),
-        trans(Valuation::set_here(after, lz.next, λ wd => after(wd, lz.result), 64),
-            trans(value, cong_fn(λ (u: res.sem(tys)) => Tm::out(tys, res, u),
-                sym(Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => Ty::apply(tys, ws, res, h(0), xs) =
-                    Tm::leaf(zero, w, res, ctx, Ty::extend(tys, ws, [Count], Pair(0, trivial), xs)), zero_eq, st, len))))))
+    simp_only(Fun::post_exhausted(x, lz.next, Succ(z), Fun::fuel_zero_region(z, lz.next, lz), call, values, os, st), Fun::fuel_zero_region,
+        nodes_region, Region::eval, Node::step, Valuation::set_here, value,
+        Ty::uncurry, Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => Ty::apply(tys, ws, res, h(0), xs) =
+            Tm::leaf(zero, w, res, ctx, Ty::extend(tys, ws, [Count], Pair(0, trivial), xs)), zero_eq, st, len))
 }
 
 // A fuel recursion's loop computes it: on a word `b` and the words, the
@@ -1047,6 +1041,14 @@ theorem Tm::leave_cont(a: Valuation(), flag: Nat, ns: List<Nat>, k1, k2: List<Bi
     cong_fn(λ (k: BitVec(64)) => match a(64, flag).eq_bit(BitVec::ofNat(1)) { False => k, True => words_of(a, ns).head_or(BitVec::zero()) }, same)
 }
 
+// What a pass leaves moves with its continuation, pointwise: `simp` crosses
+// the continuation's `λ` by it.
+evidence theorem Tm::leave_pointwise({a: Valuation()}, {flag: Nat}, {ns: List<Nat>}):
+    PreservesRelation(Pointwise<List<BitVec(64)>, BitVec(64)>(RelId<BitVec(64)>), RelId<BitVec(64)>, λ k => Tm::leave(a, flag, ns, k))
+{
+    λ k1 k2 same => Tm::leave_cont(a, flag, ns, k1, k2, same(words_of(a, ns)))
+}
+
 // The pass's environment: the state bound at `ps` from a valuation that
 // sets the count first.
 theorem Fun::meas_env(ws: List<Ty>, tys: Nat → RecInfo, ok: Ty::OneWords(tys, ws), m: Nat, base: Valuation(), st: List<BitVec(64)>,
@@ -1161,13 +1163,10 @@ theorem Fun::meas_zero_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
             Ty::uncurry(tys, ws, res, h, xs), guarded, st, len);
     let moved: (q2(64, n0) = words_of(q2, ns2).head_or(BitVec::zero())) =
         j(sym(ns_at), λ l _ => q2(64, n0) = words_of(q2, l).head_or(BitVec::zero()), refl);
-    trans(Fun::post_exhausted(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)])), call, values, os, st),
-        trans(Valuation::set_here(q2, t2.next, λ wd => q2(wd, n0), 64),
-            trans(moved, trans(sym(Tm::leave_first(q2, flag2, ns2)),
-                trans(Tm::leave_cont(q2, flag2, ns2, first, λ (ys: List<BitVec(64)>) => Tm::out(tys, res, Tm::into(tys, res, first(ys))),
-                    sym(Tm::out_into(tys, res, er, first(words_of(q2, ns2))))),
-                trans(ran.right(λ (ys: List<BitVec(64)>) => Tm::into(tys, res, first(ys))),
-                at_st(first, λ ys _ lt => false_elim(Nat::lt_of_lt_of_le(m(ys), m(st), 0, lt, hz)))))))))
+    simp_only(Fun::post_exhausted(x, t2.next, o, Compose(t2.region, nodes_region([Move(64, t2.next, n0)])), call, values, os, st),
+        nodes_region, Region::eval, Node::step, Valuation::set_here, moved,
+        sym(at_st(first, λ ys _ lt => false_elim(Nat::lt_of_lt_of_le(m(ys), m(st), 0, lt, hz)))),
+        sym(ran.right(λ (ys: List<BitVec(64)>) => Tm::into(tys, res, first(ys)))), Tm::out_into(tys, res, er), Tm::leave_first)
 }
 
 // A measured recursion's loop computes it, from its bound and `Guarded`.

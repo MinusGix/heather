@@ -845,9 +845,12 @@ impl<'a> RelationRewrite<'a> {
             Plan::Same => Ok(input),
             Plan::Relation { relation, carrier, level, left, right } => {
                 // Each side's relation: `R`, or what a context that left
-                // `R`'s carrier named, at the goal's carrier either way.
+                // `R`'s carrier named, at the goal's carrier either way. `R`
+                // that is `RelId` (an equation walked as a step) chains as
+                // `=` does, with no `Transitive` instance at its carrier.
+                let own = self.identity;
                 let by = |side: &Side| {
-                    side.rel.as_ref().map_or_else(|| (Rc::clone(&self.relation), false), |r| (Rc::clone(&r.head), r.identity))
+                    side.rel.as_ref().map_or_else(|| (Rc::clone(&self.relation), own), |r| (Rc::clone(&r.head), r.identity))
                 };
                 let ((rl, il), (rr, ir)) = (by(left), by(right));
                 let at = (carrier, level);
