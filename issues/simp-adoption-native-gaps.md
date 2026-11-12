@@ -14,10 +14,11 @@ and `words_agree` in one call, its premise discharged from a local),
 `Tm::lower_leaf_sound`'s `at_n0` (`set_other`, the frame lemma and
 `set_here`, unapplied, premises from locals) and
 `Tm::lower_again_sound`'s `moved`. Fixed on the way: a computed
-constructor's fields (a `sup_f`'s label payload) were not contracted, and a
-matched arm's children were not named by their patterns, so the computed
-goal was unspellable; and a definition named among the laws is now
-unfolded (docs/simp-design.md §14).
+constructor's fields (a `sup_f`'s label payload) were not contracted, so
+the computed goal was unspellable; and a definition named among the laws
+is now unfolded (docs/simp-design.md §14). Naming a matched (non-recursive)
+arm's children by their patterns as well was tried and reverted: it
+changed what `omega` read in `CReal::archimedean`.
 
 What still stopped a whole proof from being one call:
 

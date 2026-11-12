@@ -847,7 +847,6 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         }
         // The arm's reads of the matched constructor's children are the
         // pattern's names where the goal has them (`rest`, not `fst(cs)`).
-        let selected = contracted(elab, cx, &oracle, &selected, &mut 256);
         elab.spell_term_source(cx, &selected)?;
         return Some(selected);
     }
