@@ -29,6 +29,7 @@ linked!("scan_step.s");
 linked!("scan_accept.s");
 linked!("scan_begin.s");
 linked!("count_newlines.s");
+linked!("scan_token.s");
 
 // Functions of words, declared `safe` on the strength of their certificates
 // (the crate's comment): nothing a caller passes can make the call
@@ -61,6 +62,7 @@ unsafe extern "sysv64" {
 mod raw {
     unsafe extern "sysv64" {
         pub unsafe fn count_newlines(text: *const u8, text_length: u64, count: u64) -> u64;
+        pub unsafe fn scan_token(source: *const u8, source_length: u64, at: u64, previous: u64) -> u64;
     }
 }
 
@@ -81,4 +83,23 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     // The stack's room is the platform's to give, as for a function of
     // words (the crate's comment).
     unsafe { raw::count_newlines(text.as_ptr(), text.len() as u64, count) }
+}
+
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 2448 bytes.
+pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
+    // SAFETY (the premises of `scan_token_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   `as_ptr()` and `len()`, for the span `source`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a `&[u8]` is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::scan_token(source.as_ptr(), source.len() as u64, at, previous) }
 }

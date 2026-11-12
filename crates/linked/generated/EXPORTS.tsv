@@ -20,3 +20,4 @@ lib/lang/lexer/lexer_scan.hthr	scan_step	state, byte
 lib/lang/lexer/lexer_scan.hthr	scan_accept	state
 lib/lang/lexer/lexer_scan.hthr	scan_begin	previous
 lib/native/native_tool_spans.hthr	count_newlines	text: span, count
+lib/lang/lexer/lexer_span.hthr	scan_token	source: span, at, previous

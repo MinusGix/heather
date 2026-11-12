@@ -5,7 +5,7 @@ labels: [native,design,compiler,memory]
 area: heather-in-heather
 milestone: [nh-library]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Minus (2026-11-11): "Unify first and then export." `write-elf` and
@@ -137,3 +137,4 @@ case and the same premise, and `Source` has one kind of call.
 
     Next is 5d, one byte lowering, then E.
 - 2026-11-11: Round E has begun (PR #551): a function that reads a span its Rust caller owns is exported, the declarations are generated from the certificate's signature, and the contract's controls are in place (docs/native-library-exports-design.md §6.1). The library side is three lemmas (`emit_functions_lent_start`, `emit_functions_lent_next`, `lower_program_lent_emitted`; the three without buffers are their instances). Next in E: the scanner's token loop as one linked function. U5's step 5d is with `source-buffers-as-views` unless Minus picks otherwise on the open card.
+- 2026-11-12: Round E's read half is through: after the span export and its controls, the scanner's loop is `scan_token`, linked and called once a token (docs/native-library-exports-design.md §6.2). §2.3 of the design is revised for the keyed family (`Fun::GuardedBy`). Still ahead: the write half's export, and step 5d with [[source-buffers-as-views]].

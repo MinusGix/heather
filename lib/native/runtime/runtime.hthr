@@ -535,27 +535,45 @@ fn Setup::Guarded<F>(f: F, lent: Nat, ws: List<Ty>, res: Ty, body: Tm, w: World,
     (b: Buffers()) → Fun::Guarded(ws, res, body, w.at(callees, b), Ty::lent_at(w.at(callees, b).tys, lent, ws, res, typed(b), f, b), m)
 }
 
-// The same for a function lent one span, as its generator proves it: at
-// every world of the family of one-span files at once (`Fun::GuardedAt`,
-// the index the span), which is what the function's own `f::ext` can use
-// (it asks its recursions to agree at every span).
-fn Setup::GuardedSpans<F>(f: F, ws: List<Ty>, res: Ty, body: Tm, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, 1, ws, res)), m: List<BitVec(64)> → Nat) → Type {
-    Fun::GuardedAt(ws, res, body, λ (span: List<BitVec(8)>) => w.at(callees, [span]),
-        λ (span: List<BitVec(8)>) => Ty::lent_at(w.at(callees, [span]).tys, 1, ws, res, typed([span]), f, [span]), λ (_: List<BitVec(8)>) => m)
+// A file's span 0: the span a function lent one span reads at that file.
+fn Setup::span_of(b: Buffers()) → List<BitVec(8)> { b.span(0) }
+
+// A function lent one span, at the one-span file of a span, in words: the
+// function at that span, which is what its recursion is.
+fn Setup::at_span<F>(f: F, ws: List<Ty>, res: Ty, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, 1, ws, res)), span: List<BitVec(8)>) → Ty::Arrows(w.tys, ws, res) {
+    Ty::lent_at(w.at(callees, [span]).tys, 1, ws, res, typed([span]), f, [span])
 }
 
-// `Guarded` at the one-span file of each file's span 0. At a function
-// whose body and table read a file only through that span, this is
-// `Setup::Guarded` by conversion, which is how the generator hands it on.
+// The same for a function lent one span, as its generator proves it
+// (`Fun::GuardedBy`): at every file, with the recursion answered at every
+// span, which is what the function's own `f::ext` can use (it asks its
+// recursions to agree at every span). The worlds are the files as they
+// stand, so the body's meaning is spelled once; the function is spelled at
+// the one-span file of the file's span 0, where the hypothesis has it.
+fn Setup::GuardedSpans<F>(f: F, ws: List<Ty>, res: Ty, body: Tm, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, 1, ws, res)), m: List<BitVec(64)> → Nat) → Type {
+    Fun::GuardedBy(ws, res, body, λ (b: Buffers()) => w.at(callees, b),
+        λ (b: Buffers()) => Setup::at_span(f, ws, res, w, callees, typed, Setup::span_of(b)), Setup::span_of,
+        λ (span: List<BitVec(8)>) (ys: List<BitVec(64)>) => Ty::uncurry(w.tys, ws, res, Setup::at_span(f, ws, res, w, callees, typed, span), ys),
+        λ (_: List<BitVec(8)>) => m)
+}
+
+// `Guarded` at each file, of the function at the one-span file of the
+// file's span 0. At a function whose table reads a file only through that
+// span, that function is the one `Setup::Guarded` names (the function at
+// the file) by conversion, which is how the generator hands this on: the
+// two spellings of the function are compared, and the body's meaning, the
+// same term at the same world on both sides, is not unfolded
+// (issues/runtime-measured-instance-conversion-budget.md).
 theorem Setup::guarded_span<F>(f: F, ws: List<Ty>, res: Ty, body: Tm, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, 1, ws, res)), m: List<BitVec(64)> → Nat,
     guarded: Setup::GuardedSpans(f, ws, res, body, w, callees, typed, m)):
-    (b: Buffers()) → Fun::Guarded(ws, res, body, w.at(callees, [b.span(0)]),
-        Ty::lent_at(w.at(callees, [b.span(0)]).tys, 1, ws, res, typed([b.span(0)]), f, [b.span(0)]), m) {
-    λ b => Fun::guarded_at(ws, res, body, λ (span: List<BitVec(8)>) => w.at(callees, [span]),
-        λ (span: List<BitVec(8)>) => Ty::lent_at(w.at(callees, [span]).tys, 1, ws, res, typed([span]), f, [span]), λ (_: List<BitVec(8)>) => m,
-        guarded, b.span(0))
+    (b: Buffers()) → Fun::Guarded(ws, res, body, w.at(callees, b), Setup::at_span(f, ws, res, w, callees, typed, Setup::span_of(b)), m) {
+    λ b => Fun::guarded_by(ws, res, body, λ (c: Buffers()) => w.at(callees, c),
+        λ (c: Buffers()) => Setup::at_span(f, ws, res, w, callees, typed, Setup::span_of(c)), Setup::span_of,
+        λ (span: List<BitVec(8)>) (ys: List<BitVec(64)>) => Ty::uncurry(w.tys, ws, res, Setup::at_span(f, ws, res, w, callees, typed, span), ys),
+        λ (_: List<BitVec(8)>) => m, λ c ys => refl, guarded, b)
 }
 
 theorem Setup::measured_agrees<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm, lent: Nat, w: World,
@@ -1428,8 +1446,9 @@ fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, 
 // A function lent a span (`lent` is 1) takes the span's bytes where its
 // code takes their place, so its own values are the span and then the words
 // after the place; its recursion is answered at every span
-// (`Setup::GuardedSpans`, the span the statement's first binder and each
-// ih's), each call handed the place the loop was entered with
+// (`Setup::GuardedSpans`: the statement's first binder is the file, the
+// pass is at the file's span 0, and each ih's span is its own), each call
+// handed the place the loop was entered with
 // (`lib/_tests/native/runtime/runtime_spans_tests.hthr`'s `count_guarded`).
 fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, count: Expr,
     reprs: List<ReprEntry>, lent: Nat, ws: List<Ty>, res: Ty, body: Tm) → Tac<Expr> {
@@ -1444,6 +1463,7 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let guarded_g <- runtime_global("Setup::Guarded");
     let spans_g <- runtime_global("Setup::GuardedSpans");
     let span_g <- runtime_global("Setup::guarded_span");
+    let span_of <- runtime_global("Setup::span_of");
     let no_span <- runtime_global("runtime_w_bytes");
     let bytes_h <- runtime_type_of("runtime_w_bytes");
     let rec <- runtime_global(name ++ "::rec");
@@ -1489,9 +1509,9 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let mu_b <- runtime_measure_at(rec, at_codes(no_span, bs));
     let word_b <- runtime_measured_word(mu_b);
     let bounded = runtime_lams(bs, ap(lt_pow, [Hd(word_b)]));
-    // `Guarded`: its binders opened off its statement (the file, or the
-    // span of a function lent one; the words; the recursion `again`; and
-    // what `again` agrees with below the measure).
+    // `Guarded`: its binders opened off its statement (the file; the words;
+    // the recursion `again`, keyed by a span where the function is lent
+    // one; and what `again` agrees with below the measure).
     let stated: Expr = match lent {
         Zero => ap(guarded_g, [Blank, Global(f), NatLit(0), ws_e, res_e, body_e, world_e, table_e, typed, m_e]),
         Succ(_) => ap(spans_g, [Blank, Global(f), ws_e, res_e, body_e, world_e, table_e, typed, m_e]),
@@ -1501,11 +1521,14 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let names = Cons("b", words.append(["again", "hyp"]));
     let opened <- runtime_open_n(64, g_t, names);
     let first = lead(opened.fst);
+    // The span this pass is at: the file's span 0, as the statement's key
+    // spells it.
+    let here: Expr = match lent { Zero => Local(first), Succ(_) => ap(span_of, [Local(first)]) };
     let xs = opened.fst.drop(1).take(ws.len());
     let place = Local(lead(xs));
     let again = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
     let hyp = opened.fst.nth(Succ(Succ(ws.len()))).unwrap_or(LocalRef(0));
-    let mu_x <- runtime_measure_at(rec, at_codes(Local(first), xs));
+    let mu_x <- runtime_measure_at(rec, at_codes(here, xs));
     let n_e = Hd(mu_x);
     // `g1 = λ y… p => f::rec(N, y…, p)`.
     let ys1 <- runtime_params_at(typed_params, Some(hyp), 0);
@@ -1528,7 +1551,7 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
     let lt_n = ap(lt_succ, [n_e]);
     let proved = runtime_lams(Cons(first, xs.append([again, hyp])),
-        ap(sym_g, [Blank, Blank, Blank, runtime_cong_out(cong_g, reprs, res, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_codes(Local(first), xs).append([lt_n, lt_n]))))))))]));
+        ap(sym_g, [Blank, Blank, Blank, runtime_cong_out(cong_g, reprs, res, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_codes(here, xs).append([lt_n, lt_n]))))))))]));
     // At a span, the family gives `Guarded` at each file through the file's
     // span 0.
     let guarded: Expr = match lent {

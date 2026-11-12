@@ -402,6 +402,31 @@ fn program_quiet(functions: List<Function>) → Bool {
     match functions { Nil => True, Cons(last, earlier) => last.body.quiet() && program_quiet(earlier) }
 }
 
+// `program_quiet` a function at a time, each its own declaration, as
+// `program_scan_at_drop` proves a program evaluable: the kernel's fuel is
+// per declaration, so a certificate built this way pays for its largest
+// function and not for the sum of them (the scanner's loop is linked with
+// the whole automaton, which no one evaluation walks).
+fn program_quiet_head(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, _) => last.body.quiet() }
+}
+
+theorem program_quiet_drop_zero(functions: List<Function>): program_quiet(functions.drop(0)).IsTrue() → program_quiet(functions).IsTrue() {
+    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
+theorem program_quiet_drop(functions: List<Function>): (n: Nat) → program_quiet_head(functions.drop(n)).IsTrue() →
+    program_quiet(functions.drop(Succ(n))).IsTrue() → program_quiet(functions.drop(n)).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ n => match n as λ i => program_quiet_head(Cons(last, earlier).drop(i)).IsTrue() →
+            program_quiet(Cons(last, earlier).drop(Succ(i))).IsTrue() → program_quiet(Cons(last, earlier).drop(i)).IsTrue() {
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.quiet(), program_quiet(earlier), head, program_quiet_drop_zero(earlier, rest)),
+            Succ(k) => λ head rest => program_quiet_drop(earlier, k, head, rest),
+        },
+    }
+}
+
 // Whether some function of the program stores into buffer `b`: a callee
 // is handed its caller's buffers under their numbers, so the buffers a
 // program may write are the ones its functions store into.

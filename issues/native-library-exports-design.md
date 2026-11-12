@@ -5,7 +5,7 @@ labels: [native,design,compiler,memory]
 area: heather-in-heather
 milestone: [nh-library]
 created: 2026-11-10
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Design round: a `runtime fn` over memory its caller owns, exported under a
@@ -86,3 +86,4 @@ a misaligned stack), and the implementation rounds filed against it.
 - 2026-11-11: The read half's export, first part (PR #551, docs/native-library-exports-design.md §6.1). `compile-x86` takes a `runtime fn` that reads its spans: the program is emitted under its counts of lent buffers and certified by `compiled_returns_lent` at any file lying anywhere under a `Loan`, the value from the generator's `agrees_over`. A function that stores into its span is refused by name. The assembly file states its signature (which arguments are words and which are spans) and the stack its theorem asks for; `EXPORTS.tsv` has a parameters column; `heather linked-exports` writes `crates/linked/generated/exports.rs` from the two (a `safe fn` for words, an `unsafe` declaration and a safe `&[u8]` wrapper with the premises for a span), refusing a row against the code's signature. First export: `count_newlines` (`heather_linked::spans`), with the process controls (reference, a span ending at an unmapped page, an empty slice, both stack alignments with the callee-saved registers compared). The contract's Heather controls are `lib/_tests/native/function_ir/function_ir_compile_tests.hthr`; §6.1 has the table of where each clause's control is.
 
   Open here: R3 (`scan_token` as one linked function, the Rust loop reduced to calling it) and R4 (the write half). Clause 7 is exercised for the span export only. The contract has no name yet (`named-abi-contracts`).
+- 2026-11-12: R3 is built: the scanner's loop is one linked function over the caller's span, with its theorem against `Accepted::longest` and the contract's controls on it (the note's new §6.2). What it found on the way: a keyed family for a loop lent a span ([[runtime-measured-instance-conversion-budget]]), `{prefix}_quiet` a function at a time, and the planner's limits in a loop that calls ([[function-ir-planner-register-pressure]]). R4, the write half, is the round left.

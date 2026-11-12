@@ -3,10 +3,11 @@
 Status: **direction set by Minus 2026-11-11** ("unify first and then
 export"); this note scopes it. U1 to U4 are built (§3), and U5 is designed
 in `docs/native-procedures-are-functions-design.md`, its steps 5a to 5c
-built (one frame, one call, one contract). E has begun: a function
-that reads a span is exported, its declaration generated and its
+built (one frame, one call, one contract). E's read half is built: a
+function that reads a span is exported, its declaration generated and its
 contract's controls in place (`docs/native-library-exports-design.md`
-§6.1); the scanner's loop is next. Owner:
+§6.1), and the scanner's loop is one linked function proved to be the
+specification's (§6.2 there); the write half's export is not. Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -441,28 +442,44 @@ that neither is needed, and what follows is the form that was built.
   two recursions it compares to agree at every span
   (issues/decreases-generalizes-fixed-parameters.md). The loop's
   `again` at one file knows nothing of another. So what such a function
-  proves is `Guarded` at every world of a family at once
-  (`Fun::GuardedAt`, the index being the span): `again` answers at every
-  index and agrees with the function below the measure at every index,
-  which is exactly what `ext` can use. `Fun::guarded_at` brings it back
-  to `Guarded` at one world, by answering with the function wherever
-  the hypothesis speaks and with that world's `again` elsewhere; the
-  body's meaning reads its recursion only at the calls it makes
-  (`Tm::tail_sem_ext`). The loop theorem itself does not change, and
-  `Fun::measured_sound_at` is it at each index. The family is the class
-  at every file seen from one function, so step 3's generator proves
-  `GuardedAt` as it proves `Guarded` today, with the span a binder of
-  each ih. If `decreases` comes to leave fixed parameters outside its
-  recursor, the family is no longer needed and can go.
+  proves is `Guarded` at every world of a family at once: `again`
+  answers at every key and agrees with the function below the measure at
+  every key, which is exactly what `ext` can use. `Fun::guarded_by`
+  brings it back to `Guarded` at one world, by answering with the
+  function wherever the hypothesis speaks and with that world's `again`
+  elsewhere; the body's meaning reads its recursion only at the calls it
+  makes (`Tm::tail_sem_ext`). The loop theorem itself does not change,
+  and `Fun::measured_sound_at` is it at each index. The family is the
+  class at every file seen from one function, so the generator proves it
+  as it proves `Guarded`, with the span a binder of each ih. If
+  `decreases` comes to leave fixed parameters outside its recursor, the
+  family is no longer needed and can go.
 
-  In the class this is `Setup::Guarded`: `Guarded` at every file, each
-  obtained from the family at that file's span 0
-  (`Fun::guarded_at(…, b.span(0))`), which converts because the body
-  and the function read a file only through that span. The family is
-  indexed by the span and not by the file for that reason: `again` at a
-  file and `again` at the one-span file of its span are not convertible.
-  So a loop is lent one span for now; a loop over two is a family over
-  pairs, built when something needs it.
+  The family has two indices, and they are not the same thing
+  (`Fun::GuardedBy`): its worlds are indexed by the *file*, and its
+  recursion is keyed by the *span*. The key is what `ext` quantifies
+  over, and it cannot be the file: `again` at a file and `again` at the
+  one-span file of its span are not convertible. The worlds are indexed
+  by the file because that is where `Guarded` is wanted, at the world
+  the function is compiled in. The family first built had one index, the
+  span, its worlds the one-span files (`Fun::GuardedAt`, which is the
+  keyed family with the key its index); that gave `Guarded` at
+  `[b.span(0)]`, and bringing it to the world at `b` was left to
+  conversion. That is a comparison of the body's meaning at two
+  spellings of one file, which conversion can only settle node by node:
+  the environment at every binder, the callee table at every call. Its
+  cost is the body's size times what the body calls, and it passed the
+  host's conversion budget at the scanner's loop, whose step is the
+  whole automaton
+  (issues/runtime-measured-instance-conversion-budget.md). With the
+  worlds at the file there is one thing compared across the two
+  spellings, the function at its head, and the cost is the body's alone.
+
+  In the class this is `Setup::GuardedSpans`, the keyed family at
+  `b ↦ w.at(callees, b)` with key `b.span(0)`, and `Setup::guarded_span`
+  is `Guarded` at every file from it. So a loop is lent one span for
+  now; a loop over two is a family keyed by pairs, built when something
+  needs it.
 
   The reflector decides what is a span (step 3b, built): in the
   generator's mode, each leading parameter of a pure `runtime fn` that
@@ -487,14 +504,14 @@ that neither is needed, and what follows is the form that was built.
   spanless functions it calls after it, and its world is that table at
   the empty file. A function without a loop is pinned at every file
   (`Setup::lent_every`, and `f::reflects` is stated over the file). A
-  loop over one span proves `Setup::GuardedSpans`, the family of §2.3's
-  step 2 at the one-span files, with the generator's usual proof from
-  `f::ext` and `f::irrel`: the span is the statement's first binder and
-  each ih's, and every recursive answer is asked at the place the loop
-  was entered with. `Setup::guarded_span` brings the family to each
-  file's span 0, and that is `Setup::Guarded` by conversion at the
-  function's own body. A loop over two spans is refused (the family has
-  one index).
+  loop over one span proves `Setup::GuardedSpans`, the keyed family of
+  §2.3's step 2 (its worlds the files, its recursion keyed by a file's
+  span 0), with the generator's usual proof from `f::ext` and `f::irrel`:
+  the file is the statement's first binder, each ih binds a span, and
+  every recursive answer is asked at the place the loop was entered
+  with. `Setup::guarded_span` is `Guarded` at each file from it, at the
+  world the function is compiled in. A loop over two spans is refused
+  (the family has one key).
 
   Linking over a file (step 3c, built). The evaluator's two linking
   lemmas are stated over the buffers (`Function::eval_answers_over`,
@@ -1024,7 +1041,8 @@ Each is a PR and ends with something that runs.
       and the lowered code accepted by the function compiler.
     - *Step 2, built 2026-11-11:* measured loops keep the home words in
       place, and `Guarded` is stated at every file at once
-      (`Fun::GuardedAt`). *Runs:* a newline count over a span, by
+      (`Fun::GuardedAt`; keyed since 2026-11-12, `Fun::GuardedBy`).
+      *Runs:* a newline count over a span, by
       evaluation, proved to compute its Heather function at every span.
     - *Step 3a, built 2026-11-11:* the class at every file, one code
       per function, and the generator's instances for spanless functions
@@ -1379,7 +1397,8 @@ Each is a PR and ends with something that runs.
   scanner's loop linked into Rust
   (`docs/native-library-exports-design.md` §6, §10 R3). Built: the
   declarations and the controls, on a first function that reads a span
-  (§6.1 there). Not yet: the scanner's loop.
+  (§6.1 there), and the scanner's loop, `scan_token`, linked and called
+  once a token (§6.2 there). The write half's export is its own round.
 
 E needs only U1, U3a and U3c. It is last because that is the order asked for;
 it can move up without changing any other round.

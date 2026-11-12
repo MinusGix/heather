@@ -1,0 +1,209 @@
+// A probe, not a library module: where the verified lowering refuses a
+// `runtime fn` ("the verified lowering refused this program with the
+// planner's placement" from `heather compile-x86`).
+//
+// Copy this file next to the module that has the function (so its imports
+// resolve), change the import `lexer_span` and the name `scan_from` in
+// `zq_program` to the function refused, and check it:
+//
+//   (ulimit -v 8388608 -t 900 -c 0; target/release/heather check --cache \
+//       --accept-stale-images <copy>.hthr)
+//
+// It reports three "errors", which are its output:
+//   zq_show_walk: the nodes of the function's first loop body, in order
+//     (change `loop_body` to `zq_fn().body` for a function with no loop);
+//   zq_show_why:  the path to the node or call the emitter refused, the
+//     places the planner gave it and what each register held there;
+//   zq_show_plan: the planner's placement, a register number a node (16 is
+//     folded), loops first their state, counter and flag.
+// Read with `Node::choose_by` (function_ir_lower.hthr) and
+// `StructuredRegion::plan_in` (function_ir_lower_structured.hthr) beside it.
+// Delete the copy afterwards: this file lives under `scripts/` so that no
+// gate reads it as library source. Written for the scanner's loop
+// (issues/function-ir-planner-register-pressure.md has what it found, and
+// asks that `compile-x86` say this itself).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_writes;
+import function_ir_lower_reads;
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_kept;
+import x86_64_block;
+import x86_64_stack;
+import x86_64_lending;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+import tactic;
+import derive;
+import runtime;
+import rt;
+import lexer_span;
+
+fn zq_program() → List<Function> { scan_from::program }
+
+fn num(n: Nat) → String { decimal_name(6, n) }
+fn nums(ns: List<Nat>) → String { match ns { Nil => "", Cons(n, rest) => num(n) ++ " " ++ nums(rest) } }
+
+fn show_node(node: Node) → String {
+    match node {
+        Const(w, o, v) => num(o) ++ "=const" ++ num(w) ++ ":" ++ num(v),
+        Move(w, o, a) => num(o) ++ "=mov " ++ num(a),
+        Add(w, o, a, b) => num(o) ++ "=add " ++ num(a) ++ "," ++ num(b),
+        Sub(w, o, a, b) => num(o) ++ "=sub " ++ num(a) ++ "," ++ num(b),
+        BitAnd(w, o, a, b) => num(o) ++ "=and" ++ num(w) ++ " " ++ num(a) ++ "," ++ num(b),
+        BitOr(w, o, a, b) => num(o) ++ "=or" ++ num(w) ++ " " ++ num(a) ++ "," ++ num(b),
+        BitXor(w, o, a, b) => num(o) ++ "=xor" ++ num(w) ++ " " ++ num(a) ++ "," ++ num(b),
+        ShiftLeft(w, o, a, b) => num(o) ++ "=shl " ++ num(a) ++ "," ++ num(b),
+        LogicalShiftRight(w, o, a, b) => num(o) ++ "=shr " ++ num(a) ++ "," ++ num(b),
+        ArithmeticShiftRight(w, o, a, b) => num(o) ++ "=sar " ++ num(a) ++ "," ++ num(b),
+        UnsignedLessThan(w, o, a, b) => num(o) ++ "=ult" ++ num(w) ++ " " ++ num(a) ++ "," ++ num(b),
+        SignedLessThan(w, o, a, b) => num(o) ++ "=slt " ++ num(a) ++ "," ++ num(b),
+        Equal(w, o, a, b) => num(o) ++ "=eq" ++ num(w) ++ " " ++ num(a) ++ "," ++ num(b),
+        BufferLoad(o, b, i) => num(o) ++ "=load " ++ num(b) ++ "@" ++ num(i),
+        BufferStore(o, b, i, v) => num(o) ++ "=store " ++ num(b) ++ "@" ++ num(i) ++ " " ++ num(v),
+        Resize(f, t, o, a) => num(o) ++ "=resize" ++ num(f) ++ ">" ++ num(t) ++ " " ++ num(a),
+        SignResize(f, t, o, a) => num(o) ++ "=sresize" ++ num(f) ++ ">" ++ num(t) ++ " " ++ num(a),
+    }
+}
+fn show_nodes(nodes: List<Node>) → String { match nodes { Nil => "", Cons(n, rest) => show_node(n) ++ "; " ++ show_nodes(rest) } }
+fn show_kind(kind: Kind) → String { match kind { Word => "w", Bit => "b", Narrow(w) => "n" ++ num(w), Low(w) => "l" ++ num(w) } }
+fn show_at(file: File, register: Gpr) → String {
+    match file.at(register) { None => "-", Some(held) => num(held.id) ++ show_kind(held.kind) }
+}
+fn show_file(file: File) → String {
+    "rax " ++ show_at(file, Rax) ++ " rcx " ++ show_at(file, Rcx) ++ " rdx " ++ show_at(file, Rdx) ++ " rsi " ++ show_at(file, Rsi) ++ " rdi " ++ show_at(file, Rdi)
+        ++ " r8 " ++ show_at(file, R8) ++ " r9 " ++ show_at(file, R9) ++ " r10 " ++ show_at(file, R10) ++ " r11 " ++ show_at(file, R11)
+}
+fn show_places(places: List<Place>) → String { nums(places.take(4).map(λ (place: Place) => place.number())) }
+
+// The nodes and calls of a region in the order they are emitted.
+fn walk(region: StructuredRegion) → String {
+    match region {
+        Dataflow(body) => show_nodes(body.nodes),
+        Sequence(prefix, continuation) => show_nodes(prefix.nodes) ++ walk(continuation),
+        Compose(prefix, continuation) => walk(prefix) ++ walk(continuation),
+        Conditional(_, condition, _, _, when_true, when_false) => "IF " ++ num(condition) ++ " {" ++ walk(when_true) ++ "} ELSE {" ++ walk(when_false) ++ "} ",
+        Call(callee, arguments, result) => num(result) ++ "=call" ++ num(callee) ++ "(" ++ nums(arguments) ++ "); ",
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
+            "LOOP[in " ++ nums(inputs) ++ "; par " ++ nums(parameters) ++ "; next " ++ nums(next) ++ "; count " ++ num(count) ++ "; exit " ++ num(exit) ++ "] {" ++ walk(body) ++ "} ",
+    }
+}
+
+// `File::emit_call`, saying which of its tests refuses.
+fn why_call(file: File, callee: Nat, arguments: List<Nat>, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
+    match Succ(callee).leb(bound) {
+        False => "call: the callee is not below this function",
+        True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
+            False => "call: args_lend",
+            True => match file.move_outputs(ArgumentMove::ports(file.call_moves(arguments)), ArgumentMove::registers(file.call_moves(arguments))) {
+                None => "call: move_outputs, file: " ++ show_file(file),
+                Some(moves) => match moves.file.outputs_check(word_ports(arguments), argument_registers()) {
+                    False => "call: outputs_check, file: " ++ show_file(file),
+                    True => match leaves_all(moves.code, callee_saved()) { False => "call: a callee-saved register", True => "call ok" },
+                },
+            },
+        },
+    }
+}
+
+// `Emitted::loop_close`, saying which of its tests refuses.
+fn why_close(pass: Emitted, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat) → String {
+    match pass.file.find(Held(exit, Bit)) {
+        None => "close: the exit bit is in no register, file: " ++ show_file(pass.file),
+        Some(found) => match pass.file.move_outputs(word_ports(next), registers.state) {
+            None => "close: the moves out, file: " ++ show_file(pass.file),
+            Some(leave) => match pass.file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) {
+                None => "close: the moves back, file: " ++ show_file(pass.file),
+                Some(back) => match leave.file.outputs_check(word_ports(next), registers.state) {
+                    False => "close: the check out",
+                    True => match back.file.outputs_check(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) {
+                        False => "close: the check back",
+                        True => "close: other",
+                    },
+                },
+            },
+        },
+    }
+}
+
+// `StructuredRegion::emit_calls`, answering the path to what it refuses.
+fn why(region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
+    match region {
+        Dataflow(body) => match emit_leaf(prog, file, body.nodes, placement, names, homes) {
+            None => "leaf [" ++ show_nodes(body.nodes) ++ "] places " ++ show_places(placement) ++ " file: " ++ show_file(file),
+            Some(_) => "ok",
+        },
+        Sequence(prefix, continuation) => match emit_leaf(prog, file, prefix.nodes, placement, names, homes) {
+            None => "leaf [" ++ show_nodes(prefix.nodes) ++ "] places " ++ show_places(placement) ++ " file: " ++ show_file(file),
+            Some(first) => "S>" ++ why(continuation, first.prog, first.file, first.placement, first.names, bound, counts, homes),
+        },
+        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound, counts, homes) {
+            None => "first:" ++ why(prefix, prog, file, placement, names, bound, counts, homes),
+            Some(first) => "then>" ++ why(continuation, first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
+            None => "branch_test " ++ num(condition) ++ " file: " ++ show_file(file),
+            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+                Succ(Succ(names)), bound, counts, homes) {
+                None => "true:" ++ why(when_true, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes) {
+                    None => "false:" ++ why(when_false, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound, counts, homes),
+                    Some(no) => "ok",
+                },
+            },
+        },
+        Call(callee, arguments, result) => why_call(file, callee, arguments, bound, counts, homes),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
+            match file.loop_entry(inputs, limit, parameters, count, placement) {
+                None => "loop_entry, file: " ++ show_file(file),
+                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    None => "body:" ++ why(body, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                        Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
+                    Some(pass) => match pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names) {
+                        None => why_close(pass, entry.registers, count, exit, next, outputs, exhausted),
+                        Some(_) => "ok",
+                    },
+                },
+            },
+    }
+}
+
+fn zq_fn() → Function { match zq_program() { Nil => Setup::code_of(None), Cons(function, _) => function } }
+fn zq_k() → Nat { zq_program().len() - 1 }
+
+// `Function::emit_lent` of the program's last function, after no code.
+fn zq_why() → String {
+    let function = zq_fn();
+    match input_file(word_ports(function.parameters), argument_registers()) {
+        None => "input_file",
+        Some(file) => match function.body.emit_calls(function_opened(Start, zq_k()), file, function.plan(), zq_program().len(), zq_k(), program_counts(zq_program()), function.homes()) {
+            None => why(function.body, function_opened(Start, zq_k()), file, function.plan(), zq_program().len(), zq_k(), program_counts(zq_program()), function.homes()),
+            Some(body) => match function.closing(body) { None => "closing: the result into RAX, file: " ++ show_file(body.file), Some(_) => "all ok" },
+        },
+    }
+}
+
+fn loop_body(region: StructuredRegion) → StructuredRegion {
+    match region {
+        Compose(prefix, continuation) => match prefix { Loop(_, _, _, _, body, _, _, _, _) => body, _ => loop_body(continuation) },
+        _ => region,
+    }
+}
+
+// Each a report of its own: one evaluation of all three runs out of fuel.
+theorem zq_show_walk(): False { by fail(walk(loop_body(zq_fn().body)), []) }
+theorem zq_show_why(): False { by fail(zq_why(), []) }
+theorem zq_show_plan(): False { by fail(nums(zq_fn().plan().map(λ (place: Place) => place.number())), []) }

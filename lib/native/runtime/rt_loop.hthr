@@ -1476,43 +1476,72 @@ theorem Fun::pick_same(b: Bool, yes, no: BitVec(64), same: b = True → yes = no
     (match b as λ c => (c = True → yes = no) → (match c { False => no, True => yes }) = no { False => λ _ => refl, True => λ s => s(refl) })(same)
 }
 
-theorem Fun::guarded_at<I>(ws: List<Ty>, res: Ty, body: Tm, worlds: I → World, h: (i: I) → Ty::Arrows(worlds(i).tys, ws, res),
-    m: I → List<BitVec(64)> → Nat, guarded: Fun::GuardedAt(ws, res, body, worlds, h, m), i: I):
-    Fun::Guarded(ws, res, body, worlds(i), h(i), m(i)) {
+// The family with its recursion keyed apart from its worlds. A file is a
+// world, and a function lent a span is one function at each *span*: two
+// files with one span 0 are two worlds and one function. So the worlds are
+// indexed by `I` (the files) and the recursion by `K` (the spans), `key`
+// reading an index's key and `value` being the function at a key, in words;
+// `again` answers at every key, which is what `f::ext` can use, and a
+// pass's own recursion is `again` at its world's key. `Fun::GuardedAt` is
+// this with the worlds their own keys.
+//
+// It is what gives `Guarded` at a file as the file stands, with no
+// comparison of the body's meaning at two spellings of one file
+// (issues/runtime-measured-instance-conversion-budget.md): `meets` is the
+// only place the two indices meet, and it is about the function alone.
+fn Fun::GuardedBy<I, K>(ws: List<Ty>, res: Ty, body: Tm, worlds: I → World, h: (i: I) → Ty::Arrows(worlds(i).tys, ws, res), key: I → K,
+    value: K → List<BitVec(64)> → BitVec(64), m: K → List<BitVec(64)> → Nat) → Type {
+    (i: I) → Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: K → List<BitVec(64)> → BitVec(64)) →
+        ((k: K) → (ys: List<BitVec(64)>) → ys.len() = ws.len() → m(k, ys) < m(key(i), xs) → again(k, ys) = value(k, ys)) →
+        Tm::out(worlds(i).tys, res, body.tail_sem(worlds(i), 0, res, λ (ys: List<BitVec(64)>) => Tm::into(worlds(i).tys, res, again(key(i), ys)),
+            Ty::bind_onto(ws, Nil), Ty::extend(worlds(i).tys, ws, Nil, trivial, xs))) = Ty::uncurry(worlds(i).tys, ws, res, h(i), xs))
+}
+
+theorem Fun::guarded_by<I, K>(ws: List<Ty>, res: Ty, body: Tm, worlds: I → World, h: (i: I) → Ty::Arrows(worlds(i).tys, ws, res), key: I → K,
+    value: K → List<BitVec(64)> → BitVec(64), m: K → List<BitVec(64)> → Nat,
+    meets: (i: I) → (ys: List<BitVec(64)>) → value(key(i), ys) = Ty::uncurry(worlds(i).tys, ws, res, h(i), ys),
+    guarded: Fun::GuardedBy(ws, res, body, worlds, h, key, value, m), i: I):
+    Fun::Guarded(ws, res, body, worlds(i), h(i), m(key(i))) {
     let w = worlds(i);
     let ctx = Ty::bind_onto(ws, Nil);
     Ty::for_words_of(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(i, ys) < m(i, xs) → again(ys) = Ty::uncurry(w.tys, ws, res, h(i), ys)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(key(i), ys) < m(key(i), xs) → again(ys) = Ty::uncurry(w.tys, ws, res, h(i), ys)) →
         Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again(ys)), ctx,
             Ty::extend(w.tys, ws, Nil, trivial, xs))) = Ty::uncurry(w.tys, ws, res, h(i), xs),
         λ xs len again hyp => {
             // Where the family's hypothesis speaks: a state of the words'
             // length, below the measure.
-            let below = λ (i2: I) (ys: List<BitVec(64)>) => ys.len().same(ws.len()) && Succ(m(i2, ys)).leb(m(i, xs));
-            let every = λ (i2: I) (ys: List<BitVec(64)>) => match below(i2, ys) {
+            let below = λ (k: K) (ys: List<BitVec(64)>) => ys.len().same(ws.len()) && Succ(m(k, ys)).leb(m(key(i), xs));
+            let every = λ (k: K) (ys: List<BitVec(64)>) => match below(k, ys) {
                 False => again(ys),
-                True => Ty::uncurry(worlds(i2).tys, ws, res, h(i2), ys),
+                True => value(k, ys),
             };
-            let at_xs = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again2: I → List<BitVec(64)> → BitVec(64)) →
-                ((i2: I) → (ys: List<BitVec(64)>) → ys.len() = ws.len() → m(i2, ys) < m(i, zs) →
-                    again2(i2, ys) = Ty::uncurry(worlds(i2).tys, ws, res, h(i2), ys)) →
-                Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again2(i, ys)), ctx,
+            let at_xs = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again2: K → List<BitVec(64)> → BitVec(64)) →
+                ((k: K) → (ys: List<BitVec(64)>) → ys.len() = ws.len() → m(k, ys) < m(key(i), zs) → again2(k, ys) = value(k, ys)) →
+                Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again2(key(i), ys)), ctx,
                     Ty::extend(w.tys, ws, Nil, trivial, zs))) = Ty::uncurry(w.tys, ws, res, h(i), zs), guarded(i), xs, len);
-            let got = at_xs(every, λ i2 ys len_ys lt =>
-                cong_fn(λ (c: Bool) => match c { False => again(ys), True => Ty::uncurry(worlds(i2).tys, ws, res, h(i2), ys) },
+            let got = at_xs(every, λ k ys len_ys lt =>
+                cong_fn(λ (c: Bool) => match c { False => again(ys), True => value(k, ys) },
                     eq2(λ (p: Bool) (q: Bool) => p && q, j(len_ys, λ n _ => ys.len().same(n) = True, ys.len().same_self()),
-                        Nat::leb_true(Succ(m(i2, ys)), m(i, xs), lt))));
-            let here = λ (ys: List<BitVec(64)>) => Fun::pick_same(below(i, ys), Ty::uncurry(w.tys, ws, res, h(i), ys), again(ys), λ yes => {
-                let both = Bool::is_true_and(ys.len().same(ws.len()), Succ(m(i, ys)).leb(m(i, xs)), j(sym(yes), λ c _ => c.IsTrue(), trivial));
-                sym(hyp(ys, Nat::same_sound(ys.len(), ws.len(), eq_true_of_is_true(ys.len().same(ws.len()), both.left)),
-                    Nat::leb_sound(Succ(m(i, ys)), m(i, xs), both.right)))
+                        Nat::leb_true(Succ(m(k, ys)), m(key(i), xs), lt))));
+            let here = λ (ys: List<BitVec(64)>) => Fun::pick_same(below(key(i), ys), value(key(i), ys), again(ys), λ yes => {
+                let both = Bool::is_true_and(ys.len().same(ws.len()), Succ(m(key(i), ys)).leb(m(key(i), xs)), j(sym(yes), λ c _ => c.IsTrue(), trivial));
+                trans(meets(i, ys), sym(hyp(ys, Nat::same_sound(ys.len(), ws.len(), eq_true_of_is_true(ys.len().same(ws.len()), both.left)),
+                    Nat::leb_sound(Succ(m(key(i), ys)), m(key(i), xs), both.right))))
             });
             trans(cong_fn(λ (v: res.sem(w.tys)) => Tm::out(w.tys, res, v),
-                    sym(Tm::tail_sem_ext(body, w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, every(i, ys)),
+                    sym(Tm::tail_sem_ext(body, w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, every(key(i), ys)),
                         λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again(ys)),
                         λ ys => cong_fn(λ (x: BitVec(64)) => Tm::into(w.tys, res, x), here(ys)), ctx, Ty::extend(w.tys, ws, Nil, trivial, xs)))),
                 got)
         })
+}
+
+theorem Fun::guarded_at<I>(ws: List<Ty>, res: Ty, body: Tm, worlds: I → World, h: (i: I) → Ty::Arrows(worlds(i).tys, ws, res),
+    m: I → List<BitVec(64)> → Nat, guarded: Fun::GuardedAt(ws, res, body, worlds, h, m), i: I):
+    Fun::Guarded(ws, res, body, worlds(i), h(i), m(i)) {
+    Fun::guarded_by(ws, res, body, worlds, h, λ (i2: I) => i2, λ (i2: I) (ys: List<BitVec(64)>) => Ty::uncurry(worlds(i2).tys, ws, res, h(i2), ys), m,
+        λ i2 ys => refl, guarded, i)
 }
 
 // The loop's theorem at each world of the family.

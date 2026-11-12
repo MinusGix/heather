@@ -1,11 +1,11 @@
 ---
 title: A measured runtime fn's instance runs out of the conversion budget when its loop is the scanner's
-status: open
+status: closed
 labels: [native,runtime-fn,performance,lexer]
 area: heather-in-heather
 milestone: [self-lexer,nh-library]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 Found by round E of [[native-one-compiler]], writing the scanner's token loop as a `runtime fn` over a span ([[native-library-exports-design]] §10, R3; [[self-lexer-linked]]). The loop is the one `lexer_tokens`' `Accepted::longest` is, with the source a span and the offsets words:
@@ -53,3 +53,11 @@ So no one construct is refused. The cost follows the size of what is called with
 - What the comparison is, first: which side holds the callee unfolded (the reflection's `tail_sem` at the body, or `f::rec` at the next arguments), by the conversion-miss sampler or by stack samples, before guessing.
 - Whether `Guarded` can be proved without the comparison seeing through the callees: the world's entries are the functions themselves, so a call of one is the same application on both sides, and a comparison that tried the spines before unfolding would stop there.
 - The same proof for a loop lent a span goes through `Setup::guarded_span`; whether the family over spans adds its own copy.
+
+## Log
+
+- 2026-11-12: Cause found and removed, in the library. The comparison that ran out was not of the Heather body with its reflection (that one is small): it was of the reflection with itself at two spellings of one file. `Setup::guarded_span` gave `Fun::Guarded` at the world `w.at(callees, [b.span(0)])`, `Setup::compile_measured` wants it at `w.at(callees, b)`, and the two convert only by walking the body's meaning (`tail_sem`) node by node: the environment at every binder, the callee table at every call, each word's type unfolded on the way. So the cost was the body's size times what it calls, a slope and not a cliff, and the scanner's loop (two connectives in the test, the automaton behind the step) was the first past the budget. Measured with a counter of conversion steps per host comparison (`tools/host-conversion-ladder.patch` in the project folder, not in the tree); the table above reads as that slope, and its "checks" rows at the larger shapes were replays of images, which is why it looked like a cliff.
+
+  The fix: `Fun::GuardedBy` (rt_loop), the family with two indices. Its worlds are indexed by the file and its recursion is keyed by the span, so `Fun::guarded_by` answers `Guarded` at the file's own world and nothing is compared across the two spellings but the function at its head. `Fun::GuardedAt` is the keyed family whose key is its index; `Setup::GuardedSpans` and the generator's `runtime_measured_instance` use the keyed one (the first binder of a lent loop's statement is the file, the ih binds a span). The scanner's loop as first written is accepted with room to spare, and no elaborator or kernel change was needed. Design: docs/native-one-compiler-design.md §2.3.
+
+  What this issue's "where to look" asked beyond that (a comparison that tries spines before unfolding) was not the problem: conversion already does.

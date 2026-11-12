@@ -122,6 +122,11 @@
   export is a line in the table (module, function, parameters, a span of
   bytes it reads as `name: span`), a wrapper in `src/`, and tests against
   an independent reference.
+  When `compile-x86` answers "the verified lowering refused this program
+  with the planner's placement", the function is usually fine and the
+  placement is not: `scripts/lowering-refusal-probe.hthr` names the node
+  refused and what each register held
+  (`issues/function-ir-planner-register-pressure.md`).
   The scanner (`src/scanner.rs`) is held to `heather_syntax::lex` by
   `tests/scanner.rs`; after changing its `PROBES` or the automaton, run
   **`scripts/lexer-probes`** to rewrite the evaluated probes in

@@ -120,30 +120,34 @@ fn count_base() → World { World(RecInfo::none, count_sigs(), count_callees(Nil
 
 fn count_measure(ys: List<BitVec(64)>) → Nat { ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat() }
 
-// `GuardedAt`, at the family of files of one span: `count_from::ext` asks
-// its two recursions to agree at every span, so `again` answers at every
-// span.
-theorem count_guarded(): Fun::GuardedAt(count_words(), Word(64), count_body(),
-    λ (span: List<BitVec(8)>) => count_base().over(count_callees([span]), [span]), count_at, λ (_: List<BitVec(8)>) => count_measure) {
-    λ span place length i acc again hyp => sym(count_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+// The loop's statement as the generator proves it (`Fun::GuardedBy`): the
+// worlds are the files as they stand and the recursion is keyed by the
+// span, since `count_from::ext` asks its two recursions to agree at every
+// span; a pass at a file is at the file's span 0.
+fn count_in_words(span: List<BitVec(8)>, ys: List<BitVec(64)>) → BitVec(64) { Ty::uncurry(RecInfo::none, count_words(), Word(64), count_at(span), ys) }
+
+theorem count_guarded(): Fun::GuardedBy(count_words(), Word(64), count_body(), λ (f: Buffers()) => count_base().at(count_callees, f),
+    λ (f: Buffers()) => count_at(f.span(0)), λ (f: Buffers()) => f.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure) {
+    λ f place length i acc again hyp => sym(count_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
         λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
             count_from::rec(length.sub(i).toNat(), s, y1, y2, y3, p),
         λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) _ => again(s, [place, y1, y2, y3]),
         λ s y1 y2 y3 p q => trans(count_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, y3, p,
                 nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
             sym(hyp(s, [place, y1, y2, y3], refl, p))),
-        span, length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat())))
+        f.span(0), length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat())))
 }
 
-// The instance. `Guarded` at a file `f` is the family's at `f`'s span: the
-// body and the function read a file only through its span 0, so the two
-// statements convert.
+// The instance. `Guarded` at a file is the statement's at that file, with
+// the function spelled at the file's span 0, which is the function at the
+// file: the body's meaning stands at one world on both sides, and only the
+// two spellings of the function are compared.
 fn count_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64)>(count_from) {
     Setup::compile_measured(count_from, Setup::default(), [Word(64), Word(64)], Word(64), [Word(64)], Word(64), count_body(), 1, count_base(),
         count_callees, λ f => refl, refl, count_measure, λ place length i acc => BitVec::toNat_lt_pow(64, length.sub(i)),
-        λ f => Fun::guarded_at(count_words(), Word(64), count_body(),
-            λ (span: List<BitVec(8)>) => count_base().over(count_callees([span]), [span]), count_at, λ (_: List<BitVec(8)>) => count_measure,
-            count_guarded(), f.span(0)),
+        λ f => Fun::guarded_by(count_words(), Word(64), count_body(), λ (g: Buffers()) => count_base().at(count_callees, g),
+            λ (g: Buffers()) => count_at(g.span(0)), λ (g: Buffers()) => g.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure,
+            λ g ys => refl, count_guarded(), f),
         trivial)
 }
 

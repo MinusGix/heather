@@ -147,9 +147,7 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
         let typed = typed(&parameters);
         let agreement = format!("{evaluable}
 
-// No function of the program stores into a buffer: it reads the file it is
-// lent and leaves it.
-theorem {prefix}_quiet(): program_quiet({prefix}_program()).IsTrue() {{ trivial }}
+{quiet}
 
 // Over any file, the program's function {f} evaluates to the source function
 // at the file's spans: the generator's theorem, from each function's
@@ -157,7 +155,8 @@ theorem {prefix}_quiet(): program_quiet({prefix}_program()).IsTrue() {{ trivial 
 theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix}_program(), {f}, [{list}]) = {answer} {{
     {source}::agrees_over(now, {list})
 }}
-", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
+", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), quiet = quiet_text(prefix, functions), f = functions - 1,
+            list = parameters.join(", "));
         Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts) }
     }
 }
@@ -268,7 +267,9 @@ fn {prefix}_read_{k}() → List<Nat> {{
         fork.elab_module_source(&step, &text).map_err(|e| e.render(&text))?;
         let numbers = read(&fork, &step, &format!("read_{k}"))?;
         match numbers[..] {
-            [] => return Err("the verified lowering refused this program with the planner's placement".into()),
+            // Which function, so the search for the node starts there
+            // (issues/function-ir-planner-register-pressure.md).
+            [] => return Err(format!("the verified lowering refused this program with the planner's placement: its function {k} of {m}, callees first")),
             [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
                 let read = read_items(&numbers[3..])?;
                 // The contract's ground for needing no stack alignment and
@@ -486,6 +487,30 @@ theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop(
     }
     text.push_str(&format!("theorem {prefix}_evaluable(): program_evaluable({program}).IsTrue() {{
     program_scan_at_evaluable({program}, {table}, program_scan_at_drop_zero({program}, {table}, {prefix}_scans_{last}()))
+}}", last = functions - 1));
+    text
+}
+
+/// `{prefix}_quiet`: no function of the program stores into a buffer, so
+/// it reads the file it is lent and leaves it. A function at a time, as
+/// [`evaluable_text`] is: the kernel's fuel is per declaration, and a
+/// program with the scanner's automaton in it is past what one evaluation
+/// walks (`program_quiet_drop`).
+fn quiet_text(prefix: &str, functions: usize) -> String {
+    let program = format!("{prefix}_program()");
+    let mut text = format!("// No function of the program stores into a buffer: it reads the file it is
+// lent and leaves it.
+theorem {prefix}_quiet_none(): program_quiet({program}.drop({functions})).IsTrue() {{ trivial }}\n");
+    for k in 0..functions {
+        let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
+        text.push_str(&format!("theorem {prefix}_quiet_head_{k}(): program_quiet_head({program}.drop({d})).IsTrue() {{ trivial }}
+theorem {prefix}_quiet_{k}(): program_quiet({program}.drop({d})).IsTrue() {{
+    program_quiet_drop({program}, {d}, {prefix}_quiet_head_{k}(), {prefix}_quiet_{below}())
+}}
+", d = functions - 1 - k));
+    }
+    text.push_str(&format!("theorem {prefix}_quiet(): program_quiet({program}).IsTrue() {{
+    program_quiet_drop_zero({program}, {prefix}_quiet_{last}())
 }}", last = functions - 1));
     text
 }

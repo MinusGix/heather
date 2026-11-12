@@ -562,6 +562,90 @@ fn a_value_is_refused_by_what_reads_it() {
 }
 
 // ---------------------------------------------------------------------------
+// The loop, which is linked too.
+
+/// The loop of `scanner::token` in Rust, over the automaton's three linked
+/// functions: the longest token from `at`, the last position accepted at
+/// remembered. This is what `Scanner` ran before the loop was one linked
+/// function, and it is the reference that function is held to here at
+/// offsets no scan starts from.
+fn munch(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+    let mut state = scanner::begin(previous);
+    let mut last = None;
+    let mut next = at;
+    loop {
+        let byte = source.get(next).map_or(END, |byte| u64::from(*byte));
+        state = scanner::step(state, byte);
+        if state == FAIL {
+            return None;
+        }
+        if state == DEAD || byte == END {
+            return last;
+        }
+        next += 1;
+        let kind = scanner::accept(state);
+        if kind != 0 {
+            last = Some((kind, next));
+        }
+    }
+}
+
+/// What a token may come after: nothing, each kind a shift may begin
+/// after, one it may not, and a word that is no kind.
+const BEFORE: [u64; 6] = [0, Kind::Space as u64, Kind::LParen as u64, Kind::Comma as u64, Kind::Ident as u64, 1 << 40];
+
+fn assert_token_is_the_loops(source: &[u8], at: usize, what: &str) {
+    for previous in BEFORE {
+        assert_eq!(scanner::token(source, at, previous), munch(source, at, previous), "{what}: from {at}, after {previous}");
+    }
+}
+
+#[test]
+fn the_linked_loop_is_the_loop_over_the_automaton() {
+    // From every offset of every probe, the ones inside a token and inside
+    // a multi-byte character among them, and from past the end, where
+    // nothing is read and nothing is a token.
+    for source in PROBES.iter().chain(BEYOND).chain(PIECES) {
+        let source = source.as_bytes();
+        for at in (0..=source.len() + 2).chain([source.len() + 4096, usize::MAX >> 8, usize::MAX]) {
+            assert_token_is_the_loops(source, at, &String::from_utf8_lossy(source));
+        }
+    }
+    // Bytes that are no text at all: the automaton takes any byte.
+    let mut lcg = Lcg(0x70ce_17);
+    for round in 0..2000 {
+        let bytes: Vec<u8> = (0..lcg.below(40)).map(|_| if lcg.below(3) == 0 { lcg.word() as u8 } else { b"a1 \n\"'/.>:=-"[lcg.below(12)] }).collect();
+        for at in 0..=bytes.len() {
+            assert_token_is_the_loops(&bytes, at, &format!("round {round}"));
+        }
+    }
+    // A token longer than any register of state could count by accident:
+    // the end is a position, not a length.
+    let long = format!("// {}\n{}", "c".repeat(70_000), "a".repeat(70_000));
+    assert_eq!(scanner::token(long.as_bytes(), 0, 0), Some((Kind::Comment as u64, 70_003)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_004, Kind::Space as u64), Some((Kind::Ident as u64, 140_004)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_003, Kind::Comment as u64), Some((Kind::Space as u64, 70_004)));
+}
+
+// Every offset of the scanner's own sources, and every offset a scan of
+// the repository's sources starts from (the oracle below walks those too,
+// through `Scanner`; this is the word itself, kind and end).
+#[test]
+fn the_linked_loop_at_every_offset_of_the_lexer_sources() {
+    let mut offsets = 0;
+    for (path, text) in corpus() {
+        let source = text.as_bytes();
+        if path.components().any(|part| part.as_os_str() == "lexer") {
+            for at in 0..=source.len() {
+                assert_token_is_the_loops(source, at, &path.display().to_string());
+            }
+            offsets += source.len();
+        }
+    }
+    assert!(offsets > 50_000, "only {offsets} offsets: the lexer's sources were not found");
+}
+
+// ---------------------------------------------------------------------------
 // The oracle.
 
 #[test]

@@ -7,8 +7,10 @@ below stands; the rounds of §10 now land in the order
 the export itself last. **Built 2026-11-11, the read half's export**
 (§6.1): `compile-x86` takes a `runtime fn` that reads its spans, the Rust
 declarations are generated, and the first such function is linked and
-tested with the contract's controls; the scanner's loop (R3) and the write
-half (R4) are not. Owner: `issues/native-library-exports-design.md` (milestone
+tested with the contract's controls. **Built 2026-11-12, the scanner's
+loop** (R3, §6.2): `scan_token` is one linked function, proved to be the
+specification's scan of a token, and the Rust scanner calls it once for
+each. The write half (R4) is not built. Owner: `issues/native-library-exports-design.md` (milestone
 `nh-library`), which asks for this note before any code. It extends
 `docs/compilation-vision.md` (§2.5 there points here) and revises
 `docs/native-lexer-crypto-roadmap.md` §2, whose lean on the unit of export
@@ -408,9 +410,71 @@ by `native_linked.rs` as before.
 | 7, 9 | the code calls only compiled code | `compile-x86` refuses an emission holding a system call |
 | 9 | the instruction inventory | `function_ir_compile_tests`, `Instruction::written`: a match with no default arm, so a new instruction is classed before the library checks |
 
-Not done: clause 7 is exercised for the span export only (the word
+Not done: clause 7 is exercised for the span exports only (the word
 exports are entered at the platform's alignment by their own tests), and
 the contract still has no name (`issues/named-abi-contracts.md`).
+
+### 6.2 The scanner's loop (2026-11-12)
+
+**What is linked.** `lib/lang/lexer/lexer_span.hthr`: `scan_token(source,
+length, at, previous)` is the longest token of the span from `at`, after
+a token of kind `previous`, answered as one word (the kind above the
+offset just past the token, zero for a refusal). Its loop, `scan_from`,
+is a measured `runtime fn` lent the span; a pass calls the automaton's
+step at the span's byte (`scan_at`) and remembers the last accept
+(`scan_last`), and where it stops is decided after the loop
+(`scan_stopped`), so the loop has the one way round the companions of a
+`decreases` function need
+(`issues/decreases-no-companions-nested-match-calls.md`). The compiled
+program is the loop with the whole automaton under it, one certificate.
+`heather_linked::scanner::token` is the call; `Scanner` is what is left
+in Rust, the iterator that drops whitespace and comments and hands out
+values, which a compiled function cannot write into its caller's memory
+before the write half.
+
+**The theorem.** `scan_token_longest`: at a source whose length is the
+length word and an offset inside it, `scan_token` is `Accepted::word` of
+`Accepted::longest(scan_begin(previous), source.drop(at), at, None)`,
+which is the call `Scanned::from` makes. It is by recursion on what is
+left of the source (`scan_from_longest`), each step the loop's unfolding
+at a test that is true or false. As §10 said of it, this is a theorem
+about two Heather functions and not about compiled code; the certificate
+is what takes it to the bytes.
+
+**What it took**, each found by the loop and none special to it:
+
+- *The generator's proof of a loop lent a span* compared the body's
+  meaning at two spellings of one file and ran past the conversion
+  budget; the family it proves is now keyed
+  (`Fun::GuardedBy`, `docs/native-one-compiler-design.md` §2.3).
+- *The certificate's `{prefix}_quiet`* was one evaluation of the whole
+  program and ran out of the kernel's fuel with the automaton in it; it
+  is proved a function at a time, as `{prefix}_evaluable` is
+  (`program_quiet_drop`).
+- *The register planner* lost a value in the loop's pass twice, and the
+  source is written round it: the test reads the state before the bound,
+  and the offset is the last parameter
+  (`issues/function-ir-planner-register-pressure.md`, with the probe that
+  names the refused node). `compile-x86`'s refusal now says which
+  function of the program it was.
+
+**Controls.** `tests/scanner.rs`: the scanner through `token` against
+`heather_syntax::lex` on every source in the repository and on its
+generated strings, as before the loop moved; and `token` against the
+loop it replaced, kept in the tests as a Rust function over the three
+linked automaton functions, from every offset of the lexer's sources and
+of the probes, from past the end, and over bytes that are not text.
+`tests/spans.rs`: a token that runs to the last byte before an unmapped
+page (clause 5), and the loop entered at both stack alignments with the
+callee-saved registers compared (clauses 3 and 7), which here is code
+that calls compiled code.
+
+**Not done.** The word's packing is read apart in Rust (`>> 56`, a
+mask): that a kind and an end below 2^56 come back from `token_word` is
+not a theorem yet, only tested. The crate holds the automaton twice, in
+`scan_step`'s program and in `scan_token`'s, since an export is a
+program of its own; the three automaton exports stay for the tests that
+walk its states.
 
 ## 7. The write half, in outline
 
@@ -493,7 +557,7 @@ Each is one PR, in this order, and each ends with something that runs.
   `Accepted::longest` on the suffix at that offset; the Rust loop in
   `crates/linked/src/scanner.rs` reduced to calling it a token at a time.
   The existing test against `heather_syntax::lex` on every source in the
-  repository is the acceptance.
+  repository is the acceptance. *Built 2026-11-12 (§6.2).*
 - **R4. The write half** (§7), with SHA-256's state as its customer, after
   `rt-fixed-arrays-and-tables` gives the schedule and the constants a
   place.
