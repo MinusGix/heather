@@ -1086,7 +1086,7 @@ fn proof_position_bad_resumption_does_not_register_a_theorem() {
     let source = PROOF_OBSERVER
         .replace(", certificate: PreservesRelation(same, same, observe)", "")
         .replace("rel_cong(h)", "rel_cong(h)\n    on ?compatibility := h;");
-    support::assert_refused(&mut e, "bad_resumption", &source, Refusal::Kernel);
+    support::assert_refused(&mut e, "bad_resumption", &source, Refusal::Mismatch);
     // The same module/declaration can be checked afterward with valid evidence.
     check(&mut e, "bad_resumption", PROOF_OBSERVER);
 }
@@ -1756,7 +1756,7 @@ theorem certified<A: Reflexive(same)>(same: A → A → Type, test: A → Bool, 
         "{ rel_derive }",
         "{ rel_derive on ?branch_choice := compatible; }",
     );
-    support::assert_refused(&mut e, "wrong_branch", &wrong, Refusal::Kernel);
+    support::assert_refused(&mut e, "wrong_branch", &wrong, Refusal::Mismatch);
 }
 
 #[test]

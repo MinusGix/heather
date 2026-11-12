@@ -32,10 +32,9 @@ Done when the declaration above is refused as a type mismatch at `w`.
 
 By the time this was worked on, the refusal already landed at `w` as a
 checking mismatch; what was left was the spelling of `w`'s own type, whose
-`∨` under the predicate's binder came out `Or<…>`. A type constructor with
-type parameters only, applied as a code, now spells its arguments as they
-stand (`Speller::tm`, `crates/elab/src/display.rs`), so the declaration
-above is refused with `Exists<…>(λ (x: A) => Or<Mem(x, xs), Mem(x, ys)>)`
-against `Exists<…>(λ (x: A) => Mem(x, xs ++ ys))`. Probed in
-`lib/_tests/lang/mismatch_spelling_tests.hthr`, with the sibling
-type-function case (`Inner()` against `Outer()`).
+`∨` under the predicate's binder came out `Or<…>`. PR #595 spells a type's
+arguments under a binder, so the declaration above is now refused with
+`Exists<…>(λ (x: A) => Or<Mem(x, xs), Mem(x, ys)>)` against
+`Exists<…>(λ (x: A) => Mem(x, xs ++ ys))`. Pinned in
+`lib/_tests/lang/mismatch_spelling_tests.hthr`, beside the sibling
+type-function case (`Inner()` against `Outer()`), fixed in the same round.

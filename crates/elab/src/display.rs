@@ -930,28 +930,6 @@ impl Speller<'_> {
             shown.extend((args.len()..ind.params.len()).map(|_| "·".to_string()));
             return format!("{}<{}>", ind.name, shown.join(", "));
         }
-        // A type constructor with type parameters only, fully applied as a
-        // code (a predicate's body, `λ x => P(x) ∨ Q(x)`): its arguments
-        // *are* the type arguments, so they are spelled as they stand. The
-        // route below recovers them from the decoded lowering instead, and
-        // declines (`Or<…>`) under a binder
-        // (issues/value-parameter-mismatch-reaches-kernel.md).
-        if !self.qualified
-            && !self.annotations
-            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
-            && let Some(ind) = self.el.types.by_tag(tag)
-            && ind.valparams.is_empty()
-            && ind.index.is_none()
-            && !ind.codata
-            && !args.is_empty()
-            && args.len() == ind.params.len()
-        {
-            let shown: Vec<String> = args
-                .iter()
-                .map(|a| self.ty(&Type::El { level: crate::Level::Zero, tm: Rc::clone(a) }, d + 1))
-                .collect();
-            return format!("{}<{}>", ind.name, shown.join(", "));
-        }
         // A fully applied type constructor as a code (a predicate's body,
         // `λ x => P(x) ∨ Q(x)`): the type it decodes to.
         if !self.annotations

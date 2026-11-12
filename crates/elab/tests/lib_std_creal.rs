@@ -97,7 +97,7 @@ fn lemmas_are_cited_at_their_own_statements() {
         "fn bad(x, y, z: CReal, h: x < y) → y + z < x + z { x.add_lt_mono_r(y, z, h) }",
         // Nonnegative factors give a nonnegative product only.
         "fn bad(x, y: CReal, hx: 0 <= x, hy: 0 <= y) → 0 < x * y { CReal::mul_nonneg(hx, hy) }",
-    ], Refusal::Kernel);
+    ], Refusal::Mismatch);
     // A positive product needs both factors positive: a nonnegative one
     // carries no gap to multiply. `hx`'s parameter type mentions the implicit
     // `x`; its own type is compared with it, so the kernel's refusal is
