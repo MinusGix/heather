@@ -846,7 +846,7 @@ impl Speller<'_> {
             Type::Unit { .. } => "True".to_string(),
             Type::Empty { .. } => "False".to_string(),
             Type::Ty(l) => format!("Type<{}>", show_level(l)),
-            Type::El { tm, .. } => self.tm(tm, d),
+            Type::El { tm, .. } => self.nullary_call(tm).unwrap_or_else(|| self.tm(tm, d)),
             Type::Id { lhs, rhs, .. } => {
                 let side = |t: &Term| self.operand_at(t, d, Form::comparand);
                 format!("{} = {}", side(lhs), side(rhs))
@@ -930,6 +930,28 @@ impl Speller<'_> {
             shown.extend((args.len()..ind.params.len()).map(|_| "·".to_string()));
             return format!("{}<{}>", ind.name, shown.join(", "));
         }
+        // A type constructor with type parameters only, fully applied as a
+        // code (a predicate's body, `λ x => P(x) ∨ Q(x)`): its arguments
+        // *are* the type arguments, so they are spelled as they stand. The
+        // route below recovers them from the decoded lowering instead, and
+        // declines (`Or<…>`) under a binder
+        // (issues/value-parameter-mismatch-reaches-kernel.md).
+        if !self.qualified
+            && !self.annotations
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && ind.valparams.is_empty()
+            && ind.index.is_none()
+            && !ind.codata
+            && !args.is_empty()
+            && args.len() == ind.params.len()
+        {
+            let shown: Vec<String> = args
+                .iter()
+                .map(|a| self.ty(&Type::El { level: crate::Level::Zero, tm: Rc::clone(a) }, d + 1))
+                .collect();
+            return format!("{}<{}>", ind.name, shown.join(", "));
+        }
         // A fully applied type constructor as a code (a predicate's body,
         // `λ x => P(x) ∨ Q(x)`): the type it decodes to.
         if !self.annotations
@@ -979,6 +1001,13 @@ impl Speller<'_> {
             // A code and the type it encodes are written identically, so a
             // code former delegates rather than repeating the table.
             Term::TmNat => "Nat".to_string(),
+            // A function type as a code: the unfolding of a type function,
+            // `Nat → List<Nat> → Nat`'s codomain
+            // (issues/type-function-argument-mismatch-only-kernel-refuses.md).
+            Term::TmPi { .. } => {
+                let decoded = crate::inductive::decoded(&Type::El { level: crate::Level::Zero, tm: Rc::new(t.clone()) }).into_owned();
+                if matches!(decoded, Type::Pi { .. }) { self.ty(&decoded, d + 1) } else { self.raw_tm(t) }
+            }
             Term::TmUnit { .. } => "True".to_string(),
             Term::TmEmpty { .. } => "False".to_string(),
             Term::TmTy(level) => format!("Type<{}>", show_level(level)),
@@ -1015,6 +1044,28 @@ impl Speller<'_> {
                 .unwrap_or_else(|| self.raw_tm(t)),
             _ => self.raw_tm(t),
         }
+    }
+
+    /// A nullary `fn` in a type position, spelled as its call, `Inner()`:
+    /// the bare name is not a type there, and does not re-read as one
+    /// (issues/type-function-argument-mismatch-only-kernel-refuses.md). A
+    /// `def` is used by its bare name, so it keeps the ordinary spelling, as
+    /// does anything that is not a declared `fn`.
+    fn nullary_call(&self, t: &Term) -> Option<String> {
+        let Term::GlobalTm { var, subst } = t else { return None };
+        if self.rough.is_some() || self.el.gen_def_of(*var).is_some() {
+            return None;
+        }
+        let (name, _) = self.global(*var, subst)?;
+        let abs = self.el.global_abs_of(*var)?;
+        if !NameLookup(self.el).params_at(abs).is_empty() {
+            return None;
+        }
+        let key = self.el.names.global_name_at(abs as u32)?;
+        let (module, base) = crate::names::split_qual(key)?;
+        let decl = self.el.names.surface_decl_in(module, base)?;
+        (matches!(decl.kind, heather_syntax::DeclKind::Fn) && !decl.value && decl.params.is_empty())
+            .then(|| format!("{name}()"))
     }
 
     /// `D<ā>(e)` for an `IWf`-route family, the type arguments read off the

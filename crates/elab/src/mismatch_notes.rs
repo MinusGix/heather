@@ -173,11 +173,17 @@ impl MismatchNotes<'_> {
         if let Some(msg) = partial.as_ref().and_then(|f| Partial(self).partial_use_note(cx, f, got, expected)) {
             return Some((MismatchNote::Spelled(msg), *span));
         }
-        let got_s = self.display_type_clean(cx, got);
-        let want_s = self.display_type_clean(cx, expected);
+        let (got_s, got_unfolds) = self.check_side(cx, got);
+        let (want_s, want_unfolds) = self.check_side(cx, expected);
+        let unfolds = match (&got_s, got_unfolds, &want_s, want_unfolds) {
+            (Some(g), Some(gu), Some(w), Some(wu)) => format!("; `{g}` unfolds to `{gu}`, and `{w}` to `{wu}`"),
+            (Some(g), Some(gu), _, None) => format!("; `{g}` unfolds to `{gu}`"),
+            (_, None, Some(w), Some(wu)) => format!("; `{w}` unfolds to `{wu}`"),
+            _ => String::new(),
+        };
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}{}{}",
+                "this has type `{g}`, but `{w}` is expected here{unfolds}{}{}{}",
                 clash.as_ref().map(|c| self.slot_clash_note(cx, c)).unwrap_or_default(),
                 self.opaque_equation_note(cx, got, expected),
                 Casts(self).cast_help(cx, got, expected, *span),
@@ -201,6 +207,31 @@ impl MismatchNotes<'_> {
             ),
         };
         Some((note, *span))
+    }
+
+    /// One side of a checking mismatch, spelled, and what it unfolds to when
+    /// that is worth saying. A call of a declared type function (`Inner()`,
+    /// `Readers(b)`) is spelled as written, with its unfolding beside it: the
+    /// display's decoding unfolds it to the first visible type former, which
+    /// read `Nat -> …` against `List<Nat> -> …` where the program wrote
+    /// `Inner()` and `Outer()`
+    /// (issues/type-function-argument-mismatch-only-kernel-refuses.md).
+    fn check_side(&self, cx: &Cx, ty: &Type) -> (Option<String>, Option<String>) {
+        let decoded = self.display_type_clean(cx, ty);
+        let named = match ty {
+            Type::El { tm, .. } => match crate::spelling::app_spine(tm).0 {
+                Term::GlobalTm { var, .. } if self.gen_def_of(*var).is_none() => self.spell_type_clean(cx, ty),
+                _ => None,
+            },
+            _ => None,
+        };
+        match named {
+            Some(named) => {
+                let unfolds = decoded.filter(|d| *d != named);
+                (Some(named), unfolds)
+            }
+            None => (decoded, None),
+        }
     }
 
     /// What an argument's [`application::SlotClash`] adds to its mismatch:
