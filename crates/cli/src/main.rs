@@ -59,7 +59,50 @@ mod native;
 const DEFAULT_LIB: &str = loader::STDLIB_DIR;
 const DEFAULT_LIB_ROOT: &str = "lib";
 
+/// `HEATHER_LEXER=linked` has every source cut into tokens by Heather's own
+/// scanner, compiled from `lib/lang/lexer/lexer_span.hthr` and linked into
+/// this binary, in place of the Rust lexer's own loop
+/// (`heather_syntax::lexer::install_scanner`, `issues/self-lexer-linked.md`).
+/// Off unless asked for. With it on, a token's value is still read by the
+/// Rust lexer from the token's bytes, and a source the scanner refuses is
+/// lexed again by the Rust lexer, so every message is unchanged.
+fn choose_lexer() {
+    match std::env::var("HEATHER_LEXER").as_deref() {
+        Ok("linked") => {
+            #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+            heather_syntax::lexer::install_scanner(heather_linked::scanner::token);
+            #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+            eprintln!("warning: HEATHER_LEXER=linked: the linked scanner is compiled for x86-64 Linux; using the Rust lexer");
+        }
+        Ok("rust" | "") | Err(_) => {}
+        Ok(other) => eprintln!("warning: HEATHER_LEXER={other}: expected `linked` or `rust`; using the Rust lexer"),
+    }
+}
+
+/// `HEATHER_LEXER_REPORT` (set to anything) says on stderr, as the process
+/// ends, how many sources the linked scanner cut and how many were left to
+/// the Rust lexer: the one way to see the switch, since it changes nothing
+/// else.
+fn report_lexer() {
+    if std::env::var_os("HEATHER_LEXER_REPORT").is_none() {
+        return;
+    }
+    if !heather_syntax::lexer::scanner_installed() {
+        eprintln!("lexer: the Rust lexer (no scanner installed)");
+        return;
+    }
+    let (cut, left) = heather_syntax::lexer::scanner_counts();
+    eprintln!("lexer: the linked scanner cut {cut} sources; {left} were left to the Rust lexer");
+}
+
 fn main() -> ExitCode {
+    choose_lexer();
+    let code = run();
+    report_lexer();
+    code
+}
+
+fn run() -> ExitCode {
     let stderr_color = color::stderr_enabled();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {

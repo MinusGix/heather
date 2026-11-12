@@ -22,3 +22,7 @@ This matters for [[self-lexer-linked]]'s last step, the switch in `heather_synta
 ## Done when
 
 The ratio is a number in `perf/`, and the switch's issue says whether it is acceptable or names what must be fixed first.
+
+## Log
+
+- 2026-11-12: The switch exists now ([[self-lexer-linked]], `HEATHER_LEXER=linked`), so the measurement has a second subject: the lexer run by the scanner reads each token twice, once by the scanner for its cut and once by the Rust lexer on the span for its value, with a small vector allocated for each. The tokens that hold no value (most of them: punctuation and symbols) could be made from the scanner's code directly; that is not done, so that the first version checks every cut it can. `HEATHER_LEXER_REPORT` counts sources, which is enough to see the switch and not enough to time it.

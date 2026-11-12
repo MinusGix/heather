@@ -137,6 +137,14 @@
   `tests/scanner.rs`; after changing its `PROBES` or the automaton, run
   **`scripts/lexer-probes`** to rewrite the evaluated probes in
   `lib/_tests/lang/lexer`.
+- **`HEATHER_LEXER=linked`** has the `heather` binary cut every source with
+  Heather's own scanner (compiled, linked; `heather_syntax::lexer::install_scanner`,
+  `issues/self-lexer-linked.md`); values and every refusal stay the Rust
+  lexer's, so output is unchanged, and `HEATHER_LEXER_REPORT=1` prints who cut
+  what. Off by default. A new token kind is three numberings to extend:
+  `lexer_scan.hthr`'s `KIND_*`, `heather_linked::scanner::Kind` and
+  `heather_syntax::lexer::scan_code` (`crates/linked/tests/scanner.rs` holds
+  them to each other).
 - **Never run `cargo fmt`** (any scope): the repo is deliberately not
   rustfmt-formatted (`issues/fmt-not-enforced-decision.md`); a formatting pass
   buries the real diff under thousands of lines of churn. Match the
