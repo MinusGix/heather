@@ -176,7 +176,10 @@ fn elaborate_mut_call(
     let ExprKind::Dot { recv, name: method, .. } = &call.kind else {
         unreachable!("the parser marks method calls only")
     };
-    let ExprKind::Var(receiver) = &recv.kind else { unreachable!("the parser marks calls on a local only") };
+    // The receiver is a local or a field path of one (§20): the local is
+    // what is rebound either way.
+    let direct = matches!(&recv.kind, ExprKind::Var(_));
+    let receiver = &place_text(recv);
     let statement = name.starts_with("#seq");
     let (term, ty, level) = elab.infer_mut_call(cx, call)?;
     let record = elab
@@ -222,11 +225,56 @@ fn elaborate_mut_call(
         }));
         Ok(())
     };
-    bind(cx, receiver, 0)?;
+    if direct {
+        bind(cx, receiver, 0)?;
+    } else {
+        // `x.f.m(a)`: the field after the call under a private name, and
+        // `x` rebound to itself with that field replaced. The private alias
+        // records no splice, so the call is kept by a use of `x`, as it is
+        // for a local.
+        let (term, ty, level) =
+            elab.project_destructured_field(cx, &record, &ty, Rc::clone(&whole.term), 0, span)?;
+        let after = "#after";
+        let outside = cx.aliases.len();
+        cx.aliases.push(Rc::new(Alias {
+            spliced: None,
+            skel: None,
+            name: after.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+        let hole = Expr { kind: ExprKind::Var(after.to_string()), span: recv.span };
+        let (root, update) = heather_syntax::place_update(recv, hole).expect("the parser marks calls on a place only");
+        let updated = elab.infer_statement_expression(cx, &update);
+        cx.aliases.truncate(outside);
+        let (term, ty, level) = updated?;
+        cx.aliases.push(Rc::new(Alias {
+            spliced: Some(Rc::clone(&whole.spliced)),
+            skel: None,
+            name: root,
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+    }
     if !statement {
         bind(cx, name, 1)?;
     }
     Ok(Some(whole))
+}
+
+/// A place as written, `x.f.g`, for a message.
+fn place_text(place: &Expr) -> String {
+    match &place.kind {
+        ExprKind::Var(x) => x.clone(),
+        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", place_text(recv)),
+        _ => "_".to_string(),
+    }
 }
 
 /// `\0mutated_after(x.m(a))`, `\0mutated_value(x.m(a))` or

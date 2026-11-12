@@ -690,6 +690,115 @@ fn Counter::tick_inner(mut self c: Counter, b: Bool) → Nat {
     got + c.n
 }
 
+// An arm that is a bare call of another method on the receiver is bound
+// first, as a block that ends in one is (§8.2).
+fn Counter::tick_bare(mut self c: Counter, b: Bool) → Nat {
+    match b {
+        True => c.tick(1),
+        False => 0,
+    }
+}
+theorem tick_bare_after(c: Counter): Counter::tick_bare(c, True).after = Counter(c.n + 1, Cons(1, c.log)) { refl }
+theorem tick_bare_value(c: Counter): Counter::tick_bare(c, True).value = c.n + 1 { refl }
+theorem tick_bare_not(c: Counter): Counter::tick_bare(c, False) = Mutated(c, 0) { refl }
+
+// ---- A field path as a place (§20, issues/field-path-places.md) ----
+//
+// `x.f := e` assigns `x` the record with that field replaced, and a `mut
+// self` method called on `x.f` updates `x` through it. Each at a neutral
+// receiver, with both parts of the record read.
+record Tally { left: Counter, right: Counter, total: Nat }
+record Board { inner: Tally, seen: Nat }
+
+fn Tally::bump(mut self p: Tally, by: Nat) → Nat {
+    p.total := p.total + by;
+    let was = p.left.tick(by);
+    p.right.tick(was);
+    p.total
+}
+theorem bump_after(p: Tally, by: Nat):
+    Tally::bump(p, by).after
+        = Tally(Counter(p.left.n + by, Cons(by, p.left.log)), Counter(p.right.n + (p.left.n + by), Cons(p.left.n + by, p.right.log)), p.total + by) {
+    refl
+}
+theorem bump_value(p: Tally, by: Nat): Tally::bump(p, by).value = p.total + by { refl }
+theorem bump_lit(): Tally::bump(Tally(Counter(1, []), Counter(2, []), 0), 3) = Mutated(Tally(Counter(4, [3]), Counter(6, [4]), 3), 3) { refl }
+
+// A path of two fields, assigned and called through.
+fn Board::deep(mut self o: Board, by: Nat) → Nat {
+    o.inner.left.tick(by);
+    o.inner.total := 7;
+    o.seen := o.seen + 1;
+    o.inner.left.n
+}
+theorem deep_after(o: Board, by: Nat):
+    Board::deep(o, by).after = Board(Tally(Counter(o.inner.left.n + by, Cons(by, o.inner.left.log)), o.inner.right, 7), o.seen + 1) {
+    refl
+}
+theorem deep_value(o: Board, by: Nat): Board::deep(o, by).value = o.inner.left.n + by { refl }
+
+// A method that is not `mut self`, called on a field of a mutable local,
+// is the ordinary call, and the local is as it was.
+fn Tally::count(mut self p: Tally) → Nat {
+    let n = p.left.log.len();
+    p.total := n;
+    n
+}
+theorem count_after(p: Tally): Tally::count(p).after = Tally(p.left, p.right, p.left.log.len()) { refl }
+
+// In a statement body, and in the arms of the branch that ends the body.
+fn Tally::maybe(mut self p: Tally, b: Bool) → Nat {
+    if b { p.left.tick(1); }
+    match b {
+        True => p.right.tick(2),
+        False => {
+            p.total := 0;
+            5
+        },
+    }
+}
+theorem maybe_true(p: Tally):
+    Tally::maybe(p, True) = Mutated(Tally(Counter(p.left.n + 1, Cons(1, p.left.log)), Counter(p.right.n + 2, Cons(2, p.right.log)), p.total), p.right.n + 2) {
+    refl
+}
+theorem maybe_false(p: Tally): Tally::maybe(p, False) = Mutated(Tally(p.left, p.right, 0), 5) { refl }
+
+// A `let mut` local of a plain function is a place too, at an open type.
+record Held<A> { item: A, times: Nat }
+fn swap_in<A>(h: Held<A>, x: A) → Held<A> {
+    let mut held = h;
+    held.item := x;
+    held.times := held.times + 1;
+    held
+}
+theorem swap_in_is<A>(h: Held<A>, x: A): swap_in(h, x) = Held(x, h.times + 1) { refl }
+
+// Negative controls. A statement on a field that updates nothing says so
+// with the place, and a path call inside a value block is not kept.
+// expect-error: `p.left.log.len(…)` does not update `p.left.log` (`len` is not a `mut self` method)
+fn Tally::idle(mut self p: Tally) → Nat {
+    p.left.log.len();
+    0
+}
+
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and `p.left` cannot be updated here
+fn Tally::inner(mut self p: Tally, b: Bool) → Nat {
+    let got: Nat = if b {
+        p.left.tick(1);
+        1
+    } else {
+        0
+    };
+    got + p.total
+}
+
+// A field that the record does not have is the record update's refusal.
+// expect-error: `Tally` has no field `middle`
+fn Tally::missing(mut self p: Tally) → Nat {
+    p.middle := 3;
+    0
+}
+
 // A `Bool` as a condition (issues/bool-conditions-and-literals.md): `if b`
 // is the match on `b` itself, `if !b` and `if a && b` the match on that
 // Bool, each at a literal and a neutral Bool, at an open result type.

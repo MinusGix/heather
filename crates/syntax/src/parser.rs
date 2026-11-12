@@ -3313,7 +3313,7 @@ impl Parser {
     /// scope: one that may update its receiver (§8.2)?
     fn mut_receiver(&self, e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Dot { recv, args: Some(_), .. }
-            if matches!(&recv.kind, ExprKind::Var(x) if self.mutables.contains(x)))
+            if crate::imperative::place_root(recv).is_some_and(|x| self.mutables.iter().any(|m| m == x)))
     }
 
     /// [`Self::block_body`] before its layer-2 statements and binds are
@@ -3386,7 +3386,21 @@ impl Parser {
                 let span = arm.body.span;
                 let mut body = match std::mem::replace(&mut arm.body.kind, ExprKind::AutoRefl) {
                     ExprKind::Block(b) => *b,
-                    kind => Block { stmts: Vec::new(), result: Box::new(Expr { kind, span }), ons: Vec::new(), span },
+                    kind => {
+                        // An arm that is a bare call on the receiver: bound
+                        // first, as a block's result is (§8.2).
+                        let call = Expr { kind, span };
+                        if crate::imperative::receiver_call(&call, receiver) {
+                            let name = self.hygienic("tail");
+                            let bound = Stmt::Let {
+                                name: name.clone(), ty: None,
+                                expr: crate::imperative::marked(crate::imperative::MUTCALL, call, span), span, opaque: false,
+                            };
+                            Block { stmts: vec![bound], result: Box::new(Expr { kind: ExprKind::Var(name), span }), ons: Vec::new(), span }
+                        } else {
+                            Block { stmts: Vec::new(), result: Box::new(call), ons: Vec::new(), span }
+                        }
+                    }
                 };
                 self.receiver_end(&mut body, receiver);
                 arm.body.kind = ExprKind::Block(Box::new(body));
@@ -3954,16 +3968,18 @@ impl Parser {
             // be left off before the block's `}`, as a statement body's last
             // assignment usually is.
             if matches!(self.peek(), TokKind::ColonEq) {
-                let ExprKind::Var(name) = &expr.kind else {
+                if crate::imperative::place_root(&expr).is_none() {
                     return Err(ParseError {
-                        msg: "only a local is assigned: write `x := e` (a field path, `x.f := e`, is not \
-                              supported yet)".into(),
+                        msg: "only a place is assigned: a local, `x := e`, or a field path of one, \
+                              `x.f := e` (docs/sequencing-surface-design.md §20)".into(),
                         span: expr.span,
                     });
-                };
-                let name = name.clone();
+                }
                 self.bump();
                 let value = self.expr()?;
+                // `x.f := e` assigns `x` the record with that field replaced
+                // (§20): `x := x with { f = e }`.
+                let (name, value) = crate::imperative::place_update(&expr, value).expect("a place");
                 let end = if matches!(self.peek(), TokKind::RBrace) {
                     value.span
                 } else {

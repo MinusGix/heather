@@ -67,7 +67,8 @@ pub const MUTATED: &str = "\0mutated";
 /// The two parts of a claimed call `\0mutated(x.m(a))` as expressions, for
 /// generated code that substitutes a block's statements into its result
 /// (the `decreases` companions, `crates/elab/src/measure.rs`):
-/// `\0mutated_after(x.m(a))` is `x` after the call and
+/// `\0mutated_after(x.m(a))` is `x` after the call (for a call on a field
+/// path, `x.f.m(a)`, the field `x.f` after it, §20) and
 /// `\0mutated_value(x.m(a))` the value `let p = x.m(a);` binds to `p`. Both
 /// read the call as the statement does: the `Mutated` record's fields when
 /// `m` is a `mut self` method, the receiver unchanged and the call itself
@@ -151,13 +152,36 @@ pub(crate) fn ends_in_method_call(b: &Block) -> bool {
             if name == n && (unmark(expr, MUTCALL).is_some() || unmark(expr, MUTATED).is_some()))
 }
 
-/// The receiver a method-call candidate may update.
-fn mut_receiver(call: &Expr) -> Option<&str> {
+/// The local a method-call candidate may update: its receiver, or the local
+/// its receiver is a field path of (`x.f.g.m(a)` updates `x`,
+/// docs/sequencing-surface-design.md §20).
+pub(crate) fn mut_receiver(call: &Expr) -> Option<&str> {
     match &call.kind {
-        ExprKind::Dot { recv, .. } => match &recv.kind {
-            ExprKind::Var(x) => Some(x),
-            _ => None,
-        },
+        ExprKind::Dot { recv, .. } => place_root(recv),
+        _ => None,
+    }
+}
+
+/// The local a place is a field path of: `x` for `x`, `x.f`, `x.f.g`.
+pub fn place_root(place: &Expr) -> Option<&str> {
+    match &place.kind {
+        ExprKind::Var(x) => Some(x),
+        ExprKind::Dot { recv, args: None, tyargs, named, .. } if tyargs.is_empty() && named.is_empty() => place_root(recv),
+        _ => None,
+    }
+}
+
+/// The local a place is a path of, and that local's value once the place
+/// holds `value`: `(x, value)` for `x`, and `(x, x with { f = x.f with { g =
+/// value } })` for `x.f.g` (§20). `None` where `place` is no field path.
+pub fn place_update(place: &Expr, value: Expr) -> Option<(String, Expr)> {
+    match &place.kind {
+        ExprKind::Var(x) => Some((x.clone(), value)),
+        ExprKind::Dot { recv, name, args: None, tyargs, named } if tyargs.is_empty() && named.is_empty() => {
+            let span = place.span;
+            let field = RecordLitField { name: name.clone(), expr: value, span };
+            place_update(recv, Expr { kind: ExprKind::RecordUpdate { base: recv.clone(), fields: vec![field] }, span })
+        }
         _ => None,
     }
 }
@@ -440,9 +464,15 @@ fn touch(e: &Expr, x: &str) -> Touch {
     }
 }
 
-/// Is `e` a method call on the local `x`, `x.m(a)`?
-fn receiver_call(e: &Expr, x: &str) -> bool {
+/// Is `e` a method call on the local `x` or on a field path of it,
+/// `x.m(a)` or `x.f.m(a)`?
+pub(crate) fn receiver_call(e: &Expr, x: &str) -> bool {
     matches!(&e.kind, ExprKind::Dot { args: Some(_), .. }) && mut_receiver(e) == Some(x)
+}
+
+/// Is `e` a method call on the local `x` itself, `x.m(a)`?
+fn direct_call(e: &Expr, x: &str) -> bool {
+    matches!(&e.kind, ExprKind::Dot { recv, args: Some(_), .. } if matches!(&recv.kind, ExprKind::Var(n) if n == x))
 }
 
 /// The method's own call on the receiver `x`, `x.method(a)`, where it ends
@@ -450,7 +480,7 @@ fn receiver_call(e: &Expr, x: &str) -> bool {
 /// parser's `#tail` binding of it ([`ends_in_method_call`]), or an arm that
 /// is the bare call. What is left is the block's statements before it.
 pub(crate) fn take_own_call(b: &mut Block, x: &str, method: &str) -> Option<Expr> {
-    let own = |e: &Expr| receiver_call(e, x) && matches!(&e.kind, ExprKind::Dot { name, .. } if name == method);
+    let own = |e: &Expr| direct_call(e, x) && matches!(&e.kind, ExprKind::Dot { name, .. } if name == method);
     if own(&b.result) {
         let span = b.result.span;
         return Some(std::mem::replace(&mut *b.result, unit(span)));

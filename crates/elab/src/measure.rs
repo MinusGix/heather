@@ -2927,6 +2927,23 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                 span: block.span,
             }))
         }
+        // A record built or updated: a field path assigned in a body is the
+        // second (docs/sequencing-surface-design.md §20).
+        ExprKind::RecordUpdate { base, fields } => ExprKind::RecordUpdate {
+            base: Box::new(go(base, bound)),
+            fields: fields
+                .iter()
+                .map(|f| heather_syntax::RecordLitField { name: f.name.clone(), expr: go(&f.expr, bound), span: f.span })
+                .collect(),
+        },
+        ExprKind::RecordLit { name, tyargs, fields } => ExprKind::RecordLit {
+            name: name.clone(),
+            tyargs: tyargs.clone(),
+            fields: fields
+                .iter()
+                .map(|f| heather_syntax::RecordLitField { name: f.name.clone(), expr: go(&f.expr, bound), span: f.span })
+                .collect(),
+        },
         // A measure is an expression over the parameters; the remaining forms
         // either bind nothing to substitute under or are not measures anyone
         // writes. Left as they are.
@@ -3285,15 +3302,23 @@ impl Respell<'_> {
                     let ExprKind::Dot { recv, .. } = &call.kind else {
                         return Err("a marked call this walk cannot read".into());
                     };
-                    let ExprKind::Var(receiver) = &recv.kind else {
+                    // The local rebound: the receiver, or the local it is a
+                    // field path of, with that field replaced (§20). The
+                    // update is written at a hole so that the call, already
+                    // read in `env`, is not read in it again.
+                    let hole = "#after";
+                    let Some((receiver, update)) = heather_syntax::place_update(recv, var(hole, span)) else {
                         return Err("a marked call this walk cannot read".into());
                     };
                     let call = apply(&env, call);
                     let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
+                    let mut at = env.clone();
+                    bind(&mut at, hole, part(heather_syntax::MUTATED_AFTER));
+                    let after = apply(&at, &update);
                     if !name.starts_with("#seq") {
                         bind(&mut env, name, part(heather_syntax::MUTATED_VALUE));
                     }
-                    bind(&mut env, receiver, part(heather_syntax::MUTATED_AFTER));
+                    bind(&mut env, &receiver, after);
                 }
                 // An unclaimed candidate is an ordinary call.
                 Some((false, call)) => {

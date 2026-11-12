@@ -974,7 +974,7 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
    reason to refuse `f`.
 8. **Not built yet:** `break`/`continue`/`return` (`ForStep`, `List::for_in`; built since, §15),
    ranges, labels, `while` (both kinds), loops in a carrier scope (§6),
-   assignment to field paths, `mut self`, destructuring `for` binders, and
+   assignment to field paths (built since, §20), `mut self`, destructuring `for` binders, and
    loops under a `match` arm that binds. A `for` iterates a `List` only.
    A loop inside a statement `if` that assigns several locals is copied
    into each join, and so lifted once per copy.
@@ -1255,3 +1255,75 @@ own call) is unchanged.
 - An arm that binds (`let x <- e;`) before it updates: the arm's binds are
   lowered when it closes (§13), which puts what follows them under a λ, and
   the update is refused there as it was.
+
+## 20. A field path as a place as built (2026-11-12)
+
+`issues/field-path-places.md`. §4 planned `:=` "with field paths" and
+built the local. A record that holds another could update the inner one
+only by rebuilding itself by hand, which is what stood between methods on
+a span of bytes and methods on a type that wraps the span
+(`issues/sha256-context-type.md`).
+
+A **place** is a mutable local followed by field names: `x`, `x.f`,
+`x.f.g`. A call, an index or a method in the path makes it no place.
+
+```heather
+record Tally { left: Counter, right: Counter, total: Nat }
+
+fn Tally::bump(mut self p: Tally, by: Nat) → Nat {
+    p.total := p.total + by;
+    let was = p.left.tick(by);
+    p.right.tick(was);
+    p.total
+}
+```
+
+### 20.1 Assignment
+
+`x.f := e` is `x := x with { f = e }`, written by the parser where the
+assignment is read (`place_update`, `crates/syntax/src/imperative.rs`),
+and `x.f.g := e` nests: `x := x with { f = x.f with { g = e } }`. From
+there it is the assignment of §4 and §5.1: checked at the local's type,
+threaded by the scopes that thread `x`, refused with "is not mutable"
+where `x` is not. A field the record lacks is the record update's own
+refusal, at the place.
+
+### 20.2 A `mut self` method on a field
+
+`x.f.m(a);` and `let p = x.f.m(a);` are candidates of the local `x`
+(§8.2), claimed by the block that declared it exactly as `x.m(a)` is. The
+elaborator decides, as it does there, by the method's type:
+
+- `m` returns `Mutated`: `p` is the call's `value`, and `x` is rebound to
+  `x with { f = call.after }`, built from the record update as written
+  (`elaborate_mut_call`). Both read the one call.
+- otherwise it is the ordinary call it was, and `x` is not touched. This is
+  why the decision is the elaborator's and not a lowering: a parser that
+  wrote the update for every call on a field would rewrite `x` to itself
+  round every `x.items.len()`.
+
+A `decreases` function's companions follow the receiver through a path
+too: the walk that inlines a body's `let`s (`inline_lets`,
+`crates/elab/src/measure.rs`) rebinds the local to the update with the
+call's `after` in the field, and its substitution reads record updates and
+literals, which it had left as written.
+
+### 20.3 With §19
+
+A tail arm that updates a field of the receiver is an arm that updates the
+receiver, so the body returns it per arm (§19.2). An arm that is a bare
+call on the receiver or on a field of it (`True => p.right.tick(2),`) is
+bound first, as a block that ends in one is; before, only an arm written
+as a block was. The method's own call is the body's result (§19.3) only on
+the receiver itself, never on a field of it.
+
+### 20.4 Not built
+
+- A path through an index (`x.items[i] := e`) or through a constructor's
+  argument of a type with several constructors.
+- A place rooted at something other than a local (`f(x).g := e` has
+  nothing to rebind).
+- Any run-time meaning: a record has no runtime layout yet, so a
+  `runtime fn` cannot hold one. The update is `C(…)` over projections,
+  which is the identity on the other fields by the record's η; the layout
+  work is what makes that a store into one field's bytes.

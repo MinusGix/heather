@@ -377,6 +377,30 @@ theorem fill_carry_unfolds(c: Counter, m, last: Nat):
     Counter::fill_carry_unfold(c, m, last)
 }
 
+// A measured loop whose body updates a field of the receiver, by a method
+// on the field and by an assignment (issues/field-path-places.md): the
+// companions follow the receiver through both.
+record Ledger { count: Counter, rounds: Nat }
+fn Ledger::fill(mut self l: Ledger, m: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => l.rounds,
+        True => {
+            l.count.tick(m);
+            l.rounds := l.rounds + 1;
+            l.fill(m - 1)
+        },
+    }
+}
+theorem ledger_fill_lit(): Ledger::fill(Ledger(Counter(0, []), 0), 2) = Mutated(Ledger(Counter(3, [1, 2]), 2), 2) { refl }
+theorem ledger_fill_unfolds(l: Ledger, m: Nat):
+    Ledger::fill(l, m)
+        = (match h: decide_bit<1 <= m>() {
+            False => Mutated(l, l.rounds),
+            True => Ledger::fill(Ledger(Counter::tick(l.count, m).after, l.rounds + 1), m - 1),
+        }) {
+    Ledger::fill_unfold(l, m)
+}
+
 // Negative control: the method's own call at an arm's end still has to
 // decrease.
 // expect-error: this recursive call must decrease the measure, and `m + 1 < m` was not proved

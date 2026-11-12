@@ -278,3 +278,37 @@ fn a_mut_self_methods_own_call_at_its_end_is_the_whole_result() {
     let elsewhere = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { let mut d = c; d.f(n) }");
     assert!(!elsewhere.contains("\\0mutated_whole"), "{elsewhere}");
 }
+
+#[test]
+fn a_field_path_of_a_mutable_local_is_a_place() {
+    let parsed = |src: &str| format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+    // `x.f := e` assigns `x` the record with the field replaced, and a path
+    // of two fields nests the update.
+    let one = parsed("fn f(p: P) -> P { let mut q = p; q.left := 1; q }");
+    assert_eq!(one.matches("RecordUpdate").count(), 1, "{one}");
+    let two = parsed("fn f(p: P) -> P { let mut q = p; q.inner.left := 1; q }");
+    assert_eq!(two.matches("RecordUpdate").count(), 2, "{two}");
+    // A method called on a field of a mutable local is a candidate its
+    // block claims; on a field of anything else it is an ordinary call.
+    let call = parsed("fn f(p: P) -> P { let mut q = p; q.left.tick(1); q }");
+    assert_eq!(call.matches("\\0mutated").count(), 1, "{call}");
+    let fixed = parsed("fn f(p: P) -> Nat { let n = p.left.tick(1); n }");
+    assert!(!fixed.contains("\\0mut"), "{fixed}");
+    // In a `mut self` body's tail arm, a bare call on a field of the
+    // receiver is bound first, and the arm returns the receiver.
+    let arm = parsed("fn P::f(mut self p: P, b: Bool) -> Nat { match b { True => p.left.tick(1), False => 0 } }");
+    // (The declared result and one per arm.)
+    assert_eq!(arm.matches("\"Mutated\"").count(), 3, "{arm}");
+    assert_eq!(arm.matches("#tail").count(), 2, "{arm}");
+    // The method's own name called on a field is not the body's own call.
+    let field = parsed("fn P::f(mut self p: P, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => p.left.f(k) } }");
+    assert!(!field.contains("\\0mutated_whole"), "{field}");
+    // What is no place: a path through a call or an index, and a place
+    // whose local is not mutable.
+    for src in ["fn f(p: P) -> Nat { let mut q = p; q.left.get() := 1; 0 }", "fn f(p: P) -> Nat { let mut q = p; q.items[0] := 1; 0 }"] {
+        let error = parse_file(src).expect_err(src);
+        assert!(error.msg.contains("only a place is assigned"), "{src}: {}", error.msg);
+    }
+    let error = parse_file("fn f(p: P) -> Nat { p.left := 1; 0 }").expect_err("an immutable local's field");
+    assert!(error.msg.contains("is not mutable"), "{}", error.msg);
+}
