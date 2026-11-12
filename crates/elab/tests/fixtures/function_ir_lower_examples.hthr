@@ -137,9 +137,13 @@ theorem clobbering_placement_refused():
     refl
 }
 
-// The comparison's XOR would clear an operand.
-theorem cleared_operand_refused():
-    below_region().lower([Rdi, Rsi], [Rax], [Into(Rsi)]) = None
+// The comparison's XOR would clear an operand, so a placement that puts the
+// bit over one is lowered in the second form: compare first, then clear with
+// a MOV, which writes no flag. It was a refusal while the XOR form was the
+// only one (issues/function-ir-planner-register-pressure.md).
+theorem compared_over_an_operand():
+    below_region().lower([Rdi, Rsi], [Rax], [Into(Rsi)]) =
+        Some([CmpRR(Rdi, Rsi), MovRI(Rsi, BitVec::zero()), SetBelow(Sil), MovRR(Rax, Rsi)])
 {
     refl
 }

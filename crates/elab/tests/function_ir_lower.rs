@@ -4,9 +4,9 @@ use crate::support;
 // correct once (issues/function-ir-verified-lowering.md, round 1). The
 // module holds the lowering and its theorem; the fixture lowers add64, sum4,
 // mix and a comparison by evaluation, instantiates the theorem for each, and
-// keeps the refusal controls (a clobbering placement, a cleared operand, a
-// narrow port, a narrow signed comparison) beside a region that computes at
-// 32 bits between 64-bit ports.
+// keeps the refusal controls (a clobbering placement, a narrow port, a narrow
+// signed comparison) beside a comparison placed over its own operand and a
+// region that computes at 32 bits between 64-bit ports.
 const FUNCTION_IR_LOWER: &str = include_str!("../../../lib/native/function_ir/function_ir_lower.hthr");
 const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 
