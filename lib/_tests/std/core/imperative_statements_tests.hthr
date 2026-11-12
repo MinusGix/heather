@@ -539,6 +539,157 @@ fn tick_plain_lambda(c: Counter) → Nat {
     0
 }
 
+// ---- A branch that ends a block (§19.1), and a `mut self` body (§19.2) ----
+
+// The arms of a tail `if`/`match` are the block's last statements: they
+// update its `let mut` locals, at a literal and a neutral condition and at
+// an open type.
+fn bump_if(n: Nat, b: Bool) → Nat {
+    let mut acc = n;
+    if b {
+        acc := acc + 1;
+        acc + acc
+    } else {
+        acc
+    }
+}
+theorem bump_if_true(n: Nat): bump_if(n, True) = (n + 1) + (n + 1) { refl }
+theorem bump_if_false(n: Nat): bump_if(n, False) = n { refl }
+theorem bump_if_open(n: Nat, b: Bool): bump_if(n, b) = (match b { True => (n + 1) + (n + 1), False => n }) { refl }
+
+fn kept_or<A>(x: A, o: Option<A>) → A {
+    let mut kept = x;
+    match o {
+        None => kept,
+        Some(z) => {
+            kept := z;
+            kept
+        },
+    }
+}
+theorem kept_or_some<A>(x, z: A): kept_or(x, Some(z)) = z { refl }
+theorem kept_or_none<A>(x: A): kept_or(x, None) = x { refl }
+
+// The update is the arm's: a tail branch inside it reads the local as the
+// arm left it.
+fn bump_twice(n: Nat, a, b: Bool) → Nat {
+    let mut acc = n;
+    if a {
+        acc := acc + 1;
+        if b {
+            acc := acc + 10;
+            acc
+        } else {
+            acc
+        }
+    } else {
+        acc
+    }
+}
+theorem bump_twice_lit(): bump_twice(0, True, True) = 11 { refl }
+theorem bump_twice_open(n: Nat, b: Bool): bump_twice(n, True, b) = (match b { True => (n + 1) + 10, False => n + 1 }) { refl }
+
+// A `mut self` body that ends in a branch returns its receiver at the end
+// of each arm, so an arm updates it: by a call, an assignment, or a call
+// whose value it binds.
+fn Counter::tick_some(mut self c: Counter, m: Nat) → Nat {
+    match m {
+        Zero => 0,
+        Succ(k) => {
+            c.tick(k);
+            k
+        },
+    }
+}
+theorem tick_some_succ(c: Counter, k: Nat): Counter::tick_some(c, Succ(k)) = Mutated(Counter(c.n + k, Cons(k, c.log)), k) { refl }
+theorem tick_some_zero(c: Counter): Counter::tick_some(c, 0) = Mutated(c, 0) { refl }
+theorem tick_some_open(c: Counter, m: Nat):
+    Counter::tick_some(c, m) = (match m { Zero => Mutated(c, 0), Succ(k) => Mutated(Counter(c.n + k, Cons(k, c.log)), k) }) { refl }
+
+fn Counter::reset_if(mut self c: Counter, b: Bool) → Bool {
+    if b {
+        c := Counter(0, []);
+        True
+    } else {
+        False
+    }
+}
+theorem reset_if_true(c: Counter): Counter::reset_if(c, True) = Mutated(Counter(0, []), True) { refl }
+theorem reset_if_false(c: Counter): Counter::reset_if(c, False) = Mutated(c, False) { refl }
+
+fn Counter::tick_and_add(mut self c: Counter, b: Bool) → Nat {
+    if b {
+        let first = c.tick(2);
+        first + c.n
+    } else {
+        c.n
+    }
+}
+theorem tick_and_add_true(c: Counter): Counter::tick_and_add(c, True) = Mutated(Counter(c.n + 2, Cons(2, c.log)), (c.n + 2) + (c.n + 2)) { refl }
+
+// Statements before the branch are the receiver every arm starts from.
+fn Counter::tick_then(mut self c: Counter, b: Bool) → Nat {
+    c.tick(1);
+    if b {
+        c.tick(5);
+        c.n
+    } else {
+        0
+    }
+}
+theorem tick_then_true(c: Counter): Counter::tick_then(c, True).after = Counter((c.n + 1) + 5, Cons(5, Cons(1, c.log))) { refl }
+theorem tick_then_false(c: Counter): Counter::tick_then(c, False) = Mutated(Counter(c.n + 1, Cons(1, c.log)), 0) { refl }
+
+// A branch that leaves the receiver alone is a value: the receiver after
+// the call does not wait on which arm runs.
+fn Counter::tick_pick(mut self c: Counter, m: Nat) → Nat {
+    c.tick(1);
+    match m {
+        Zero => 0,
+        Succ(k) => k,
+    }
+}
+theorem tick_pick_after(c: Counter, m: Nat): Counter::tick_pick(c, m).after = Counter(c.n + 1, Cons(1, c.log)) { refl }
+
+// The value that ends a `mut self` body is checked at the method's result
+// type, in the body and in an arm: a numeral there is one of that type.
+fn Counter::tick_int(mut self c: Counter, b: Bool) → Int {
+    if b {
+        c.tick(1);
+        0
+    } else {
+        7
+    }
+}
+theorem tick_int_false(c: Counter): Counter::tick_int(c, False) = Mutated(c, OfNat(7)) { refl }
+
+// The method's own call that ends an arm is the record the body returns.
+fn Counter::tick_down(mut self c: Counter, m: Nat) → Nat {
+    match m {
+        Zero => c.n,
+        Succ(k) => {
+            c.tick(k);
+            c.tick_down(k)
+        },
+    }
+}
+theorem tick_down_lit(): Counter::tick_down(Counter(0, []), 3) = Mutated(Counter(3, [0, 1, 2]), 3) { refl }
+theorem tick_down_succ(c: Counter, k: Nat):
+    Counter::tick_down(c, Succ(k)) = Counter::tick_down(Counter(c.n + k, Cons(k, c.log)), k) { refl }
+
+// Negative controls. A branch that does not end the body is a value, and
+// its arms do not update the receiver.
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and `c` cannot be updated here
+fn Counter::tick_inner(mut self c: Counter, b: Bool) → Nat {
+    let got: Nat = if b {
+        c.tick(1);
+        1
+    } else {
+        0
+    };
+    got + c.n
+}
+
 // A `Bool` as a condition (issues/bool-conditions-and-literals.md): `if b`
 // is the match on `b` itself, `if !b` and `if a && b` the match on that
 // Bool, each at a literal and a neutral Bool, at an open result type.

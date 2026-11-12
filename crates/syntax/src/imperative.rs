@@ -74,6 +74,14 @@ pub const MUTATED: &str = "\0mutated";
 /// when not. The receiver may be any expression.
 pub const MUTATED_AFTER: &str = "\0mutated_after";
 pub const MUTATED_VALUE: &str = "\0mutated_value";
+/// A `mut self` method's own call on its receiver, where it ends the body
+/// (§19.3): `\0mutated_whole(x.m(a))` is the body's whole result, the
+/// receiver after the call beside its value, which is the call itself. So
+/// the recursion is a tail call, which a `decreases` function's companions
+/// and a `runtime fn`'s loop both need. (Read at a method that turns out
+/// not to return `Mutated`, a same-named one of another type, it is
+/// `Mutated(x, x.m(a))`.)
+pub const MUTATED_WHOLE: &str = "\0mutated_whole";
 /// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
 /// the loop's `Return` value or else the rest.
 pub const AFTER: &str = "\0after";
@@ -322,7 +330,136 @@ fn assigned_by_form(form: &Expr, out: &mut Vec<String>) {
 /// enclosing scope's.
 pub(crate) fn lower_block(b: Block, next: &mut usize) -> R<Block> {
     if !has_markers(&b) { return Ok(b); }
-    lower_in(b, &[], next)
+    let (mut b, env) = lower_in_env(b, &[], next)?;
+    claim_tail(&mut b.result, &env, next)?;
+    Ok(b)
+}
+
+/// A block's result is the last thing it computes, so a branch there may
+/// go on updating the block's mutable locals: nothing after it reads them
+/// (§19.1). Each arm of a tail `if`/`match` is lowered again with those
+/// locals in scope, which claims the residuals its own lowering left for
+/// the scope that declared them (module docs), and so on through the arm's
+/// own tail. A name the arm's pattern binds is the pattern's there.
+fn claim_tail(e: &mut Expr, env: &[String], next: &mut usize) -> R<()> {
+    if env.is_empty() { return Ok(()); }
+    let ExprKind::Match { arms, eqbind, .. } = &mut e.kind else { return Ok(()) };
+    for arm in arms {
+        let ExprKind::Block(body) = &mut arm.body.kind else { continue };
+        let mut bound = Vec::new();
+        arm_names(arm.binders.as_slice(), eqbind.as_deref(), &mut bound);
+        let inner: Vec<String> = env.iter().filter(|n| !bound.contains(n)).cloned().collect();
+        let block = std::mem::replace(&mut **body, Block {
+            stmts: Vec::new(),
+            result: Box::new(unit(arm.body.span)),
+            ons: Vec::new(),
+            span: arm.body.span,
+        });
+        let (mut lowered, inner) = lower_in_env(block, &inner, next)?;
+        claim_tail(&mut lowered.result, &inner, next)?;
+        **body = lowered;
+    }
+    Ok(())
+}
+
+/// The names an arm binds: its pattern's variables and the equation's.
+fn arm_names(pats: &[Pat], eqbind: Option<&str>, out: &mut Vec<String>) {
+    fn go(p: &Pat, out: &mut Vec<String>) {
+        match p {
+            Pat::Var { name, .. } => out.push(name.clone()),
+            Pat::Ctor { args, .. } => args.iter().for_each(|a| go(a, out)),
+            Pat::Named { pat, .. } => go(pat, out),
+        }
+    }
+    pats.iter().for_each(|p| go(p, out));
+    out.extend(eqbind.map(str::to_string));
+}
+
+/// Does the tail of a `mut self` body, a branch with these arms, update the
+/// receiver `x` in some arm (§19.2)? An arm updates it by a residual
+/// assignment or a method-call candidate its own lowering left, in its
+/// statements or its own tail; one that rebinds the name instead (a `let`,
+/// a pattern variable) makes the answer no for the whole branch, since the
+/// name at that arm's end would not be the receiver.
+pub(crate) fn tail_updates(arms: &[Arm], eqbind: Option<&str>, x: &str) -> bool {
+    matches!(touch_arms(arms, eqbind, x), Touch::Updates)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Touch { No, Updates, Shadows }
+
+impl Touch {
+    fn and(self, other: Touch) -> Touch {
+        match (self, other) {
+            (Touch::Shadows, _) | (_, Touch::Shadows) => Touch::Shadows,
+            (Touch::Updates, _) | (_, Touch::Updates) => Touch::Updates,
+            _ => Touch::No,
+        }
+    }
+}
+
+fn touch_arms(arms: &[Arm], eqbind: Option<&str>, x: &str) -> Touch {
+    let mut all = Touch::No;
+    for arm in arms {
+        let mut bound = Vec::new();
+        arm_names(arm.binders.as_slice(), eqbind, &mut bound);
+        all = all.and(if bound.iter().any(|n| n == x) { Touch::Shadows } else { touch(&arm.body, x) });
+    }
+    all
+}
+
+fn touch(e: &Expr, x: &str) -> Touch {
+    match &e.kind {
+        ExprKind::Block(b) => {
+            let mut all = Touch::No;
+            for s in &b.stmts {
+                match s {
+                    Stmt::Let { name, expr, .. } => {
+                        if unmark(expr, MUTCALL).and_then(mut_receiver) == Some(x) {
+                            all = Touch::Updates;
+                        }
+                        if name == x {
+                            if unmark(expr, ASSIGN).is_none() { return Touch::Shadows; }
+                            all = Touch::Updates;
+                        }
+                    }
+                    Stmt::LetRecord { fields, .. } => {
+                        let pats: Vec<Pat> = fields.iter().map(|f| f.pat.clone()).collect();
+                        let mut bound = Vec::new();
+                        arm_names(&pats, None, &mut bound);
+                        if bound.iter().any(|n| n == x) { return Touch::Shadows; }
+                    }
+                    Stmt::LetCode { name, .. } => if name == x { return Touch::Shadows; },
+                }
+            }
+            all.and(touch(&b.result, x))
+        }
+        ExprKind::Match { motive: None, arms, eqbind, .. } => touch_arms(arms, eqbind.as_deref(), x),
+        _ if receiver_call(e, x) => Touch::Updates,
+        _ => Touch::No,
+    }
+}
+
+/// Is `e` a method call on the local `x`, `x.m(a)`?
+fn receiver_call(e: &Expr, x: &str) -> bool {
+    matches!(&e.kind, ExprKind::Dot { args: Some(_), .. }) && mut_receiver(e) == Some(x)
+}
+
+/// The method's own call on the receiver `x`, `x.method(a)`, where it ends
+/// a `mut self` body or one of its tail arms, taken out of the block: the
+/// parser's `#tail` binding of it ([`ends_in_method_call`]), or an arm that
+/// is the bare call. What is left is the block's statements before it.
+pub(crate) fn take_own_call(b: &mut Block, x: &str, method: &str) -> Option<Expr> {
+    let own = |e: &Expr| receiver_call(e, x) && matches!(&e.kind, ExprKind::Dot { name, .. } if name == method);
+    if own(&b.result) {
+        let span = b.result.span;
+        return Some(std::mem::replace(&mut *b.result, unit(span)));
+    }
+    if !ends_in_method_call(b) { return None; }
+    let Some(Stmt::Let { expr, .. }) = b.stmts.last() else { return None };
+    let call = unmark(expr, MUTCALL).filter(|call| own(call))?.clone();
+    b.stmts.pop();
+    Some(call)
 }
 
 fn lower_in(b: Block, outer: &[String], next: &mut usize) -> R<Block> {
@@ -645,8 +782,8 @@ fn find_residue(e: &Expr, error: &mut Option<ParseError>) {
                     span: *span,
                     msg: format!(
                         "`{name}` is not mutable: declare it `let mut {name}` (an assignment reaches a \
-                         `let mut` local of its own block or of a statement body inside it, never \
-                         through a λ or a block in value position)"),
+                         `let mut` local of its own block, of a statement body inside it, or of a branch \
+                         that ends it; never through a λ or another block in value position)"),
                 });
                 return;
             }

@@ -336,6 +336,60 @@ fn Counter::fill_sum(mut self c: Counter, m: Nat) → Nat decreases m {
 }
 theorem fill_sum_lit(): Counter::fill_sum(Counter(0, []), 3) = Mutated(Counter(6, [1, 2, 3]), 6) { refl }
 
+// The loop as a `mut self` method whose body ends in the branch
+// (issues/mut-self-tail-branch-receiver.md): each arm returns the receiver,
+// and the method's own call that ends an arm is the record it returns, so
+// the recursion is the tail call the companions follow. `fill` above is
+// this function with the receiver threaded by hand.
+fn Counter::fill_all(mut self c: Counter, m: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => m,
+        True => {
+            c.tick(m);
+            c.fill_all(m - 1)
+        },
+    }
+}
+theorem fill_all_lit(): Counter::fill_all(Counter(0, []), 2) = Mutated(Counter(3, [1, 2]), 0) { refl }
+theorem fill_all_unfolds(c: Counter, m: Nat):
+    Counter::fill_all(c, m)
+        = (match h: decide_bit<1 <= m>() { False => Mutated(c, m), True => Counter::fill_all(Counter::tick(c, m).after, m - 1) }) {
+    Counter::fill_all_unfold(c, m)
+}
+
+// The call's value bound and used by the next call.
+fn Counter::fill_carry(mut self c: Counter, m, last: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => last,
+        True => {
+            let seen = c.tick(m);
+            c.fill_carry(m - 1, seen)
+        },
+    }
+}
+theorem fill_carry_lit(): Counter::fill_carry(Counter(0, []), 2, 0) = Mutated(Counter(3, [1, 2]), 3) { refl }
+theorem fill_carry_unfolds(c: Counter, m, last: Nat):
+    Counter::fill_carry(c, m, last)
+        = (match h: decide_bit<1 <= m>() {
+            False => Mutated(c, last),
+            True => Counter::fill_carry(Counter::tick(c, m).after, m - 1, Counter::tick(c, m).value),
+        }) {
+    Counter::fill_carry_unfold(c, m, last)
+}
+
+// Negative control: the method's own call at an arm's end still has to
+// decrease.
+// expect-error: this recursive call must decrease the measure, and `m + 1 < m` was not proved
+fn Counter::fill_up(mut self c: Counter, m: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => m,
+        True => {
+            c.tick(m);
+            c.fill_up(m + 1)
+        },
+    }
+}
+
 // Negative control: a method self-call that does not decrease is refused
 // at the call, as the function spelling is.
 // expect-error: this recursive call must decrease the measure, and `m + 1 < m` was not proved

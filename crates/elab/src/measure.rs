@@ -1512,7 +1512,7 @@ impl MethodCalls<'_> {
                 self.block(b);
                 return true;
             }
-            if let Some(call) = self.call(x) {
+            if let Some(call) = self.whole(x).or_else(|| self.call(x)) {
                 *x = call;
                 // The receiver and the arguments may call again.
                 if let ExprKind::App { args, named, .. } = &mut x.kind {
@@ -1593,6 +1593,21 @@ impl MethodCalls<'_> {
         for on in &mut b.ons {
             self.expr(&mut on.expr);
         }
+    }
+
+    /// `\0mutated_whole(x.f(ā))`, a self-call that ends a `mut self` body
+    /// ([`heather_syntax::MUTATED_WHOLE`]): the call, which is the record the
+    /// body returns, so the recursion is a tail call the companions follow.
+    fn whole(&mut self, e: &Expr) -> Option<Expr> {
+        if !self.mutated {
+            return None;
+        }
+        let ExprKind::App { head, args, .. } = &e.kind else { return None };
+        if !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::MUTATED_WHOLE) {
+            return None;
+        }
+        let [inner] = args.as_slice() else { return None };
+        self.call(inner)
     }
 
     /// `\0mutated(x.f(ā))`, a self-call the block declaring `x` claimed:

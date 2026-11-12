@@ -232,6 +232,10 @@ struct Parser {
     /// each as a `let mut` local, and a `mut self` one is returned beside the
     /// result. Taken by the first [`Parser::block_body`].
     pending_mut: Option<Vec<(String, bool)>>,
+    /// The method whose body is being read, by its base name, when it is a
+    /// `mut self` one: a call of that name on the receiver that ends the
+    /// body is the method's own ([`Parser::receiver_end`]).
+    own_method: Option<String>,
     /// The next block opened is the body of a `while` with no measure
     /// (docs/sequencing-surface-design.md §18): its binds stay as markers
     /// until the loop is lowered, because they run inside the loop's step,
@@ -687,6 +691,7 @@ impl Parser {
             elseless_if: false,
             mut_params: Vec::new(),
             pending_mut: None,
+            own_method: None,
             defer_binds: false,
             mutables: Vec::new(),
             range_header: false,
@@ -3166,8 +3171,10 @@ impl Parser {
             let saved = self.propagation_depth;
             self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
             self.pending_mut = (!mut_params.is_empty()).then(|| mut_params.clone());
+            self.own_method = mut_self.is_some().then(|| name.rsplit("::").next().unwrap_or(&name).to_string());
             let body = self.block();
             self.pending_mut = None;
+            self.own_method = None;
             self.propagation_depth = saved;
             body?
         };
@@ -3353,23 +3360,59 @@ impl Parser {
             head.append(&mut block.stmts);
             block.stmts = head;
             if let Some((receiver, _)) = ps.iter().find(|(_, s)| *s) {
-                let span = block.result.span;
-                let value = if crate::imperative::is_unit_result(&block.result) {
-                    Expr { kind: ExprKind::Var("trivial".into()), span }
-                } else {
-                    let name = self.hygienic("value");
-                    let value = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
-                    block.stmts.push(Stmt::Let { name: name.clone(), ty: None, expr: value, span, opaque: false });
-                    Expr { kind: ExprKind::Var(name), span }
-                };
-                let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
-                block.result = Box::new(Expr {
-                    kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
-                    span,
-                });
+                self.receiver_end(&mut block, receiver);
             }
         }
         Ok(block)
+    }
+
+    /// The end of a `mut self` body, where the receiver `x` goes back out
+    /// beside the body's value: `Mutated(x, value)`, the value bound first
+    /// (§8.2).
+    ///
+    /// A body that ends in a branch one of whose arms updates the receiver
+    /// returns it at the end of each arm instead (§19.2), since the
+    /// receiver after the branch is a different one per arm: each arm ends
+    /// as a body does, and [`crate::imperative::lower_block`] gives its
+    /// statements the body's mutable locals. The method's own call on the
+    /// receiver, where it ends the body or such an arm, is the whole result
+    /// ([`crate::imperative::MUTATED_WHOLE`]), so the recursion is a tail
+    /// call.
+    fn receiver_end(&mut self, block: &mut Block, receiver: &str) {
+        if let ExprKind::Match { motive: None, arms, eqbind, .. } = &mut block.result.kind
+            && crate::imperative::tail_updates(arms, eqbind.as_deref(), receiver)
+        {
+            for arm in arms.iter_mut() {
+                let span = arm.body.span;
+                let mut body = match std::mem::replace(&mut arm.body.kind, ExprKind::AutoRefl) {
+                    ExprKind::Block(b) => *b,
+                    kind => Block { stmts: Vec::new(), result: Box::new(Expr { kind, span }), ons: Vec::new(), span },
+                };
+                self.receiver_end(&mut body, receiver);
+                arm.body.kind = ExprKind::Block(Box::new(body));
+            }
+            return;
+        }
+        if let Some(method) = self.own_method.clone()
+            && let Some(call) = crate::imperative::take_own_call(block, receiver, &method)
+        {
+            let span = call.span;
+            block.result = Box::new(crate::imperative::marked(crate::imperative::MUTATED_WHOLE, call, span));
+            return;
+        }
+        // The value stands in the record, where it is checked at the
+        // method's result type: a numeral there is one of that type.
+        let span = block.result.span;
+        let value = if crate::imperative::is_unit_result(&block.result) {
+            Expr { kind: ExprKind::Var("trivial".into()), span }
+        } else {
+            std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var("trivial".into()), span })
+        };
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
+        block.result = Box::new(Expr {
+            kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
+            span,
+        });
     }
 
     /// [`Self::block_body`] after its statements: the result (`parsed` when

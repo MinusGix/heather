@@ -1,6 +1,6 @@
 ---
 title: A mut self method's tail if/match cannot update the receiver in an arm (and asks for a motive)
-status: open
+status: closed
 labels: [frontend,imperative,effects,native]
 area: language
 milestone: [lang-sequencing]
@@ -67,3 +67,7 @@ To settle while building:
 ## Done when
 
 `Counter::tick_all` above elaborates, with `.after` and `.value` probes at a neutral receiver beside the `mut self` probes of `lib/_tests/std/core/imperative_statements_tests.hthr`, and a `runtime fn` loop written as a `mut self` method on its span certifies (`lib/_tests/native/runtime/runtime_loop_tests.hthr`), so the SHA-256 loops can be methods.
+
+## Log
+
+- 2026-11-12: Built on PR #551 as proposed, in three parts (docs/sequencing-surface-design.md §19). (1) A branch that ends a block updates the block's mutable locals in its arms: `lower_block` re-lowers each arm of the result `if`/`match` with those locals in scope (`claim_tail`, `crates/syntax/src/imperative.rs`), names an arm's pattern or equation binds excluded. (2) A `mut self` body that ends in a motive-less branch one of whose arms updates the receiver returns the receiver per arm (`Parser::receiver_end`); a branch whose arms leave it alone is `Mutated(c, match …)` as before, and the end value now stands in the record, so it is checked at the declared result and a tail `match` asks for no motive. (3) The method's own call on its receiver at the body's end or a tail arm's is the whole result (`MUTATED_WHOLE`): the elaborator reads it as the call, so structural recursion, a `decreases` companion and the generator's loop rule all see a tail call. Another method's call there is bound and taken apart as before, which keeps every existing method's term and the generator's end rule ("ends in `Mutated(span, value)`") as they were. Probes: `Counter::tick_some`, `tick_pick`, `tick_down` and the negative control `tick_inner` in `imperative_statements_tests`; `Counter::fill_all`, `fill_carry` and the refused `fill_up` in `decreases_unfolding_tests`; `List::fill_all` in `runtime_span_tests`, whose program is `fill_from`'s by `refl`. `lib/native/crypto`'s loops are methods on the span, the assembly unchanged. Left open, each where it belongs: an inner (non-tail) branch that updates the receiver is still the receiver refusal; a method cannot be exported ([[sha256-context-type]]).

@@ -387,7 +387,8 @@ declarations (§5.4), and `break`/`continue` target it.
 **Scope rules**, each a refusal with its reason (§10):
 
 - `:=` only to a `let mut` local of the same scope, and never from inside a
-  λ (the λ is a separate scope; it may read the local's current value).
+  λ (the λ is a separate scope; it may read the local's current value). The
+  arms of a branch that ends the local's block are of its scope (§19.1).
 - A `mut` local's type may not mention another `mut` local. Assignment
   checks `e` against the declared type, so the type never changes.
 - `break`/`continue` only inside a loop. `return` only in the declaration's
@@ -672,6 +673,7 @@ is also useful outside effects (`out.push(byte)` on a `let mut` list).
 Called on anything that is not a `mut` local, the method is refused, and
 `@Fd::read(fd, n)` gives the pair. The expression statement `out.write(bytes);`
 is legal in a pure scope because it reassigns `out`. It discards nothing.
+A body that ends in a branch, and a method's own call at its end, are §19.
 
 ### 8.3 What belongs to setups
 
@@ -1128,3 +1130,128 @@ does, and what departs from §5.3 and §6:
    tree-sitter grammar has the optional `decreases`; its `parser.c` is
    regenerated with the binding statements
    (`issues/tree-sitter-binding-statements.md`).
+
+## 19. A branch that ends a block as built (2026-11-12)
+
+`issues/mut-self-tail-branch-receiver.md`. A block's last expression is
+the last thing it computes. Two rules had treated a branch there as a value
+like any other, and both made a loop written as a method impossible: its
+arms could not assign the block's locals (§4: an assignment reaches a
+local of its own scope, and an arm that yields a value was a scope of its
+own), and a `mut self` body bound its end to a name before returning the
+receiver beside it (§8.2), so the branch stood in inference position and
+its arms could not reach the receiver. Probes:
+`lib/_tests/std/core/imperative_statements_tests.hthr`,
+`decreases_unfolding_tests.hthr` (the recursions),
+`lib/_tests/native/runtime/runtime_span_tests.hthr` (`List::fill_all`);
+parse-level facts in `crates/syntax/tests/imperative_statements.rs`.
+
+### 19.1 The arms of a tail branch update the block's locals
+
+```heather
+fn bump_if(n: Nat, b: Bool) → Nat {
+    let mut acc = n;
+    if b {
+        acc := acc + 1;
+        acc + acc
+    } else {
+        acc
+    }
+}
+```
+
+Nothing after the branch reads `acc`, so an assignment in an arm is a
+shadowing `let` there and needs no join. When a block closes,
+`imperative::lower_block` lowers each arm of its result again with the
+block's mutable locals in scope (`claim_tail`), which claims the residual
+assignments and method-call candidates the arm's own lowering left, and so
+on through an arm's own tail. A name the arm's pattern or its equation
+binds is the pattern's in that arm. A branch that does not end the block
+that declared the local (`let y = if c { x := 2; x } else { x };`) is a
+value as before, and its assignment is refused.
+
+This is not §5.5's join point: a statement `if` in the middle of a block
+still joins per variable. It is the case where no join is needed.
+
+### 19.2 A `mut self` body that ends in a branch returns its receiver per arm
+
+```heather
+fn Counter::tick_some(mut self c: Counter, m: Nat) → Nat {
+    match m {
+        Zero => 0,
+        Succ(k) => {
+            c.tick(k);
+            k
+        },
+    }
+}
+// match m { Zero => Mutated(c, 0), Succ(k) => { c.tick(k); Mutated(c, k) } }
+```
+
+The receiver after the branch is a different one per arm, so the parser
+ends each arm as it ends a body (`Parser::receiver_end`), and §19.1 gives
+the arm's statements the receiver. The branch is then checked at the
+method's `Mutated<C, R>`, so it needs no motive.
+
+- **Only where an arm updates the receiver.** A branch whose arms leave it
+  alone keeps the lowering it had, `Mutated(c, match … )`: the receiver
+  after the call is then known whichever arm runs, which a proof about
+  `.after` at a neutral scrutinee relies on (`tick_pick_after`). "Updates"
+  is read off the arm: an assignment to the receiver, or a method call on
+  it as a statement, bound by a `let`, or ending the arm. The parser cannot
+  know whether a called method is `mut self`, so a call that turns out not
+  to update is still returned per arm; the term is the same function.
+- **Not where an arm rebinds the receiver's name** (a `let`, a pattern
+  variable): the name at that arm's end is not the receiver, so the branch
+  stays a value and an update in another arm is refused as before.
+- **Not under a written motive**: `match e as λ z => T { … }` states the
+  branch's type, which is the value's.
+- **The value stands in the record.** `Mutated(c, value)` is written with
+  the value in place, no longer bound first, so it is checked at the
+  result type: `0` at the end of a method returning `u64` is a word.
+
+### 19.3 The method's own call that ends its body is the body's result
+
+```heather
+fn Counter::fill_all(mut self c: Counter, m: Nat) → Nat decreases m {
+    match h: decide_bit<1 <= m>() {
+        False => m,
+        True => {
+            c.tick(m);
+            c.fill_all(m - 1)
+        },
+    }
+}
+```
+
+`c.fill_all(m - 1)` returns the receiver and the value both, which is what
+the arm returns. Bound and taken apart (`let w = …; Mutated(w.after,
+w.value)`), the recursion would be a call in a `let`, which a `decreases`
+function's companions do not follow and a `runtime fn`'s loop is not. So
+the parser writes the method's own call on the receiver, where it ends the
+body or a tail arm, as `\0mutated_whole(c.f(ā))`
+(`imperative::MUTATED_WHOLE`), and the elaborator reads it as the call
+itself; under `decreases` the self-call rewrite spells it `f(c, ā)` with
+the others (`measure::MethodCalls::whole`). The equation `fill_all_unfold`
+states is the hand-threaded function's, and a `runtime fn` written this
+way has the program of the one written with `Mutated` by hand
+(`fill_all_is_fill_from`, by `refl`).
+
+"Its own" is the method's base name called on the receiver parameter.
+Another method's call there is bound and taken apart as before: every
+`mut self` method that ended in a call keeps its term, and the generator's
+rule for how a span function ends (a `Mutated`, a branch of them, or its
+own call) is unchanged.
+
+### 19.4 Not built
+
+- A tail call of another `mut self` method as the body's result (it would
+  need the generator to accept a callee's end as the caller's).
+- A branch in the middle of a body whose arms update the receiver and
+  yield a value (`let got = if b { c.tick(1); 1 } else { 0 };`): the
+  statement spelling with a `let mut` for the value works, at the cost
+  `issues/statement-form-join-copies-calls.md` records.
+- `return` outside a loop (§5.5), which this does not touch.
+- An arm that binds (`let x <- e;`) before it updates: the arm's binds are
+  lowered when it closes (§13), which puts what follows them under a λ, and
+  the update is refused there as it was.

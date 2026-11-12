@@ -200,3 +200,81 @@ fn a_method_call_on_a_mutable_local_is_claimed_by_its_block() {
     let parsed = format!("{:?}", parse_file("fn f(c: C) -> Nat { let a = c.tick(1); a }").unwrap());
     assert!(!parsed.contains("\\0mut"), "{parsed}");
 }
+
+#[test]
+fn a_branch_that_ends_a_block_updates_the_blocks_locals() {
+    // The arms of a tail `if`/`match` are the block's last statements, so
+    // they assign its `let mut` locals (docs/sequencing-surface-design.md
+    // §19.1), through an arm's own tail too.
+    for src in [
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { x := 2; x } else { x } }",
+        "fn f(o: O) -> Nat { let mut x = 1; match o { A => { x := 2; x }, B => 0 } }",
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { let y = 3; if d { x := y; x } else { y } } else { x } }",
+        "fn f(c: Bool) -> Nat { let y = { let mut x = 1; if c { x := 2; x } else { x } }; y }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        for marker in ["\\0mut", "\\0assign", "\\0stmt", "\\0unit"] {
+            assert!(!parsed.contains(marker), "{src} keeps {marker}");
+        }
+    }
+    for src in [
+        // The branch does not end the block that declared the local.
+        "fn f(c: Bool) -> Nat { let mut x = 1; let y = if c { x := 2; x } else { x }; y }",
+        // The arm's pattern binds the name: it is the pattern's there.
+        "fn f(o: O) -> Nat { let mut x = 1; match o { A(x) => { x := 2; x }, B => x } }",
+        // So does the equation's name.
+        "fn f(o: O) -> Nat { let mut h = 1; match h: o { A => { h := 2; 0 }, B => 0 } }",
+        // Shadowed by a plain `let` in the arm.
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { let x = 5; x := 2; x } else { x } }",
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains("is not mutable"), "{src}: {}", error.msg);
+    }
+}
+
+#[test]
+fn a_mut_self_body_that_ends_in_a_branch_returns_its_receiver_per_arm() {
+    let count = |src: &str, what: &str| {
+        format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg))).matches(what).count()
+    };
+    // An arm assigns the receiver: each arm ends in its own `Mutated`
+    // (§19.2), beside the one in the result type.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { c := g(c); 1 } else { 0 } }", "\"Mutated\""), 3);
+    // So does a call on it, as a statement or bound.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { c.tick(1); 1 } else { 0 } }", "\"Mutated\""), 3);
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { let a = c.tick(1); a } else { 0 } }", "\"Mutated\""), 3);
+    // And through an arm's own tail: three ends.
+    assert_eq!(
+        count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { if d { c.tick(1); 1 } else { 2 } } else { 0 } }", "\"Mutated\""),
+        4
+    );
+    // No arm touches the receiver: one `Mutated` round the branch, so the
+    // receiver after the call does not wait on which arm runs.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { c.tick(1); if b { 1 } else { 0 } }", "\"Mutated\""), 2);
+    // An arm that rebinds the receiver's name does not return that name.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { let c = 5; c } else { 0 } }", "\"Mutated\""), 2);
+    // A branch with a written motive is a value.
+    assert_eq!(
+        count("fn C::f(mut self c: C, n: Nat) -> Nat { match n as λ z => Nat { Zero => 0, Succ(k) => k } }", "\"Mutated\""),
+        2
+    );
+}
+
+#[test]
+fn a_mut_self_methods_own_call_at_its_end_is_the_whole_result() {
+    let parsed = |src: &str| format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+    // The method's own call on the receiver, where it ends an arm: the
+    // record the body returns, with no `Mutated` round it.
+    let own = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { c.tick(k); c.f(k) } } }");
+    assert_eq!(own.matches("\\0mutated_whole").count(), 1, "{own}");
+    assert_eq!(own.matches("\"Mutated\"").count(), 2, "{own}");
+    // An arm that is the bare call.
+    let bare = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => c.f(k) } }");
+    assert_eq!(bare.matches("\\0mutated_whole").count(), 1, "{bare}");
+    // Another method's call there is bound as before, its two parts read.
+    let other = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { c.tick(k); c.g(k) } } }");
+    assert!(!other.contains("\\0mutated_whole"), "{other}");
+    // So is the method's name called on another local.
+    let elsewhere = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { let mut d = c; d.f(n) }");
+    assert!(!elsewhere.contains("\\0mutated_whole"), "{elsewhere}");
+}
