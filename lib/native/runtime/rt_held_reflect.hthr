@@ -31,6 +31,16 @@
 // that changed. Whether a field changed is read off the term: a field
 // whose new value is the read of that field is not stored.
 //
+// An array field whose elements' codec has an accessor is its elements,
+// each a part of the record (the field's part, then the element's in the
+// array). `vector_index(t.f, i, _)` at a literal `i` stands for the
+// accessor's read where element `i` lies, and a field whose new value is
+// not the field stores the entries that differ from the field's own,
+// which a comparison of the two entries decides. What the walk hands the
+// generator names the elements the function reached, each as a field,
+// and no others: the offsets its accessors are called at are read off
+// the reflection.
+//
 // Untrusted like every producer: what a `runtime fn` of a record
 // publishes is the pin of this reflection's held meaning
 // (`FTm::held`, rt_held.hthr) to the function, by conversion, and a wrong
