@@ -1,0 +1,68 @@
+// Probes of the `Numeral` request
+// (docs/host-elaboration-interface-design.md): the numeral a closed `Nat`
+// term computes to, asked of the host by a tactic or a generator. It is
+// what lets a generator use a library function's answer as a number (a
+// layout's size, a field's offset), where `Whnf` walks the term and is
+// out of its budget at a function that recurses by steps. Tests, not
+// library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import layout;
+
+// `e = k` at a numeral `k`, by asking the host what the closed `e`
+// computes to. The proof is `rfl` at `e`, so the kernel converts the two
+// itself and nothing the host says is trusted; the tactic fails where the
+// host's numeral is not the one stated.
+fn by_numeral() → Tac<Expr> {
+    let g <- goal();
+    let v <- view(g.target);
+    match v {
+        HEq(lhs, rhs) => {
+            let n <- numeral(Hd(lhs)).or_fail("by_numeral: ");
+            let r <- view(rhs);
+            match r {
+                HLit(k) => match n.same(k) {
+                    True => {
+                        let ty <- infer(Hd(lhs)).or_fail("by_numeral: ");
+                        let same <- lookup("tactic::rfl").or_fail("by_numeral: ");
+                        pure(apps(Global(same), [Hd(ty), Hd(lhs)]))
+                    },
+                    False => fail("by_numeral: the term computes to another numeral", [At(NatLit(n), Tried("the host's numeral", "not the one stated"))]),
+                },
+                _ => fail("by_numeral: the right side is not a numeral", []),
+            }
+        },
+        _ => fail("by_numeral: the goal is not an equation", []),
+    }
+}
+
+// A literal, a sum, and functions that recurse by steps: the rounding the
+// layout library is built on, and a layout computed with it.
+theorem a_literal(): 7 = 7 { by by_numeral() }
+theorem a_sum(): 32 + 32 = 64 { by by_numeral() }
+theorem rounded(): Nat::round_up(33, 8) = 40 { by by_numeral() }
+theorem padded(): Nat::padding(321, 8) = 7 { by by_numeral() }
+theorem a_quotient(): 1000 / 7 = 142 { by by_numeral() }
+theorem a_layout_size(): Layout(4, 2).extend(Layout(8, 3)).size = 16 { by by_numeral() }
+theorem an_array_size(): Layout(12, 2).array(5).size = 60 { by by_numeral() }
+
+// The host's numeral is the term's, so a wrong statement is refused by
+// the tactic before the kernel is asked.
+// expect-error: the term computes to another numeral
+theorem rounded_wrongly(): Nat::round_up(33, 8) = 41 { by by_numeral() }
+
+// A term that mentions a local has no numeral.
+// expect-error: it mentions a local, and only a closed term computes to a numeral
+theorem an_open_term(n: Nat): n + 1 = 1 { by by_numeral() }
+
+// Nor has a term of another type.
+// expect-error: and a numeral is a `Nat`
+theorem a_bool(): True = True { by by_numeral() }

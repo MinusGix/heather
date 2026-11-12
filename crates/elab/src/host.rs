@@ -436,6 +436,8 @@ pub enum Request {
     Simp(Vec<RExpr>, u64),
     /// The laws checked as a rewrite system (docs/simp-design.md §4).
     SimpCheck(Vec<RExpr>),
+    /// The numeral a closed term of type `Nat` computes to.
+    Numeral(RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -1009,6 +1011,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     laws.push(self.expr(self.call("host_proof", vec![tree, self.lit(i)])?, &mut budget)?);
                 }
                 Ok(Step::Ask(Request::SimpCheck(laws)))
+            }
+            37 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::Numeral(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1955,6 +1961,7 @@ impl Host<'_> {
                 Request::Revert(h, x) => Answer::Handle(refusable(self.revert_request(run, h, &x))?),
                 Request::Simp(laws, goal) => Answer::Handle(refusable(self.simp_request(run, &laws, goal, span))?),
                 Request::SimpCheck(laws) => Answer::Handle(refusable(self.simp_check_request(run, &laws, span))?),
+                Request::Numeral(e) => Answer::Handle(refusable(self.numeral_request(run, &e))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2498,6 +2505,40 @@ impl Host<'_> {
             }
             Some(_) => Err(Fault::Ill("its head reduces past the walk's budget before a call is at the head again".into())),
         }
+    }
+
+    /// `Numeral(e)`: the numeral a closed term of type `Nat` computes to,
+    /// as a handle `View` shows as `HLit`. The term is run in the kernel's
+    /// value domain, where a tactic's own values are computed
+    /// ([`Reader::nat`]), so a library function over numerals costs its
+    /// steps there. `Whnf` walks the term instead and declines where a
+    /// function that recurses by steps is under the head (`Nat::round_up`
+    /// is past its budget at two digits), which is why a generator that
+    /// asks the library for a number asks here. Refused for a term that is
+    /// not a `Nat`, that mentions a local, or whose value is not a numeral
+    /// within the reader's budget.
+    fn numeral_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(Fault::Ill("it mentions a hole nothing has solved".into()));
+        };
+        let gamma = run.cx(at)?.gamma;
+        if !matches!(self.goal_oracle().whnf_type(&gamma, &ty), Ok(Type::Nat)) {
+            return Err(Fault::Ill(format!("it is a `{}`, and a numeral is a `Nat`", self.shown_ty(run, at, &ty))));
+        }
+        let t = Rc::new(t);
+        if heather_kernel::subst::local_bound(&t) != 0 {
+            return Err(Fault::Ill("it mentions a local, and only a closed term computes to a numeral".into()));
+        }
+        let world = self.goal_psi();
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let n = reader.nat(reader.root((*t).clone())).map_err(|why| Fault::Ill(format!("it does not compute to a numeral: {why}")))?;
+        let n = usize::try_from(n).map_err(|_| Fault::Ill("its numeral is past this machine's word".into()))?;
+        Ok(run.issue(at, Held::Term(crate::inductive::nat_lit(n), Type::Nat, Level::Zero)))
     }
 
     /// `Abstract(h, x)`: `λ y => h[y/x]`, for `x` a local of the goal's

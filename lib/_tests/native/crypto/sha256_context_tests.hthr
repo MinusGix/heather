@@ -47,6 +47,19 @@ import sha256_block;
 import sha256_stream;
 import sha256_context;
 
+// Where the fields lie today, as the words the bodies add to and as the
+// numerals Rust is given. The declaration chooses the order, so these
+// pin what it chose and nothing in the library rests on them.
+theorem hash_at_today(): Sha256::hash_at = 0 { refl }
+theorem working_at_today(): Sha256::working_at = 32 { refl }
+theorem schedule_at_today(): Sha256::schedule_at = 64 { refl }
+theorem count_at_today(): Sha256::count_at = 320 { refl }
+theorem size_today(): Sha256::stored().layout = Layout(328, 3) { refl }
+
+// A published word is its part's offset.
+theorem schedule_at_is_the_part(): Sha256::schedule_at.toNat() = Sha256::schedule_part().offset { refl }
+theorem count_at_is_the_part(): Sha256::count_at.toNat() = Sha256::count_part().offset { refl }
+
 // Where a word is, at a closed index.
 theorem schedule_word_five(): Sha256::schedule_word(5, trivial).offset = 84 { refl }
 theorem working_word_seven(): Sha256::working_word(7, trivial).offset = 60 { refl }
@@ -60,31 +73,31 @@ theorem schedule_word_of(c: Sha256, i: Nat, here: i < 64): Sha256::schedule_word
 
 // A schedule word stored by compiled code is the word the context then
 // has there.
-theorem stored_word_is_there(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem stored_word_is_there(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     vector_index(Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after).schedule, i, here) = word.truncate(32, 32) {
     trans(cong_fn(λ (c: Sha256) => vector_index(c.schedule, i, here), Sha256::schedule_put(ctx, cn, at, word, i, here, place, inside, own, fits)),
         vector_index_update_same(64, Sha256::of(ctx).schedule, i, i, word.truncate(32, 32), here, refl))
 }
 
 // It leaves every other schedule word, the hash value and the count.
-theorem stored_word_leaves_another(ctx: List<u8>, cn, at, word: u64, i, j: Nat, here: i < 64, there: j < 64, apart: ¬(j = i), place: at.toNat() = i * 4 + 64,
-    inside: at.toNat() + 4 <= cn.toNat(), own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem stored_word_leaves_another(ctx: List<u8>, cn, at, word: u64, i, j: Nat, here: i < 64, there: j < 64, apart: ¬(j = i), place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(),
+    inside: at.toNat() + 4 <= cn.toNat(), own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     vector_index(Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after).schedule, j, there) = vector_index(Sha256::of(ctx).schedule, j, there) {
     trans(cong_fn(λ (c: Sha256) => vector_index(c.schedule, j, there), Sha256::schedule_put(ctx, cn, at, word, i, here, place, inside, own, fits)),
         vector_index_update_other(64, Sha256::of(ctx).schedule, i, j, word.truncate(32, 32), there, apart))
 }
 
-theorem stored_word_leaves_hash(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem stored_word_leaves_hash(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after).hash = Sha256::of(ctx).hash {
     cong_fn(λ (c: Sha256) => c.hash, Sha256::schedule_put(ctx, cn, at, word, i, here, place, inside, own, fits))
 }
 
-theorem stored_word_leaves_count(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), whole: 328 <= cn.toNat()):
+theorem stored_word_leaves_count(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), whole: SHA256_CONTEXT_BYTES <= cn.toNat()):
     sha256_count(List::put_u32_be_within(ctx, cn, at, word).after, cn) = sha256_count(ctx, cn) {
-    let fits: (328 <= ctx.len()) = Nat::le_trans(328, cn.toNat(), ctx.len(), whole, own);
+    let fits: (SHA256_CONTEXT_BYTES <= ctx.len()) = Nat::le_trans(SHA256_CONTEXT_BYTES, cn.toNat(), ctx.len(), whole, own);
     let after = List::put_u32_be_within(ctx, cn, at, word).after;
     let same: (Sha256::of(after).count = Sha256::of(ctx).count) =
         cong_fn(λ (c: Sha256) => c.count, Sha256::schedule_put(ctx, cn, at, word, i, here, place, inside, own, fits));
@@ -92,7 +105,7 @@ theorem stored_word_leaves_count(ctx: List<u8>, cn, at, word: u64, i: Nat, here:
 }
 
 // The stream's count stored and read back.
-theorem count_stored_is_read(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.toNat(), own: cn.toNat() <= ctx.len()):
+theorem count_stored_is_read(ctx: List<u8>, cn, count: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat(), own: cn.toNat() <= ctx.len()):
     sha256_count(List::sha256_put_count(ctx, cn, count).after, cn) = count {
     trans(Sha256::count_is(List::sha256_put_count(ctx, cn, count).after, cn, inside),
         cong_fn(λ (c: Sha256) => c.count, Sha256::put_count_is(ctx, cn, count, inside, own)))
@@ -100,13 +113,13 @@ theorem count_stored_is_read(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.to
 
 // The count is not at 324.
 // expect-error(mismatch)
-theorem count_elsewhere(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): ctx.u64_be_within(cn, 324) = Sha256::of(ctx).count {
+theorem count_elsewhere(ctx: List<u8>, cn: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat()): ctx.u64_be_within(cn, 324) = Sha256::of(ctx).count {
     ctx.u64_be_within_part(cn, 324, Sha256::count_part(), 0, refl, refl, inside)
 }
 
 // A schedule word is not read at the working variables' offset.
 // expect-error(mismatch)
-theorem schedule_at_working(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 32, inside: at.toNat() + 4 <= cn.toNat()):
+theorem schedule_at_working(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::working_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
     ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).schedule, i, here).zero_extend(32) {
     ctx.u32_be_within_part(cn, at, Sha256::schedule_word(i, here), 0, refl, place, inside)
 }

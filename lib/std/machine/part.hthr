@@ -61,6 +61,10 @@ record Part<A, B>(whole: Stored<A>) {
         whole.get(changed, at) = with(whole.get(bytes, at), codec.get(changed, offset + at)),
 }
 
+// A part's offset as a function of the part. A generator applies this:
+// a tactic's `Expr` has no form for a field of a record.
+fn Part::place<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole)) → Nat { p.offset }
+
 // The whole is a part of itself.
 fn Part::all<A>(s: Stored<A>) → Part<A, A>(s) {
     Part(0, s, λ a => a, λ _ a => a, Nat::le_refl(s.layout.size),

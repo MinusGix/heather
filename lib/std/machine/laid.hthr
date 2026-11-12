@@ -82,7 +82,7 @@ inductive Endian { LittleEndian, BigEndian }
 inductive FieldOrder { AnyOrder, AsWritten }
 
 // What the generator names from the library.
-record LaidLib { then: Expr, record: Expr, all: Expr, fst: Expr, snd: Expr, part_then: Expr, field: Expr, rfl: Expr }
+record LaidLib { then: Expr, record: Expr, all: Expr, fst: Expr, snd: Expr, part_then: Expr, field: Expr, rfl: Expr, place: Expr, word: Expr }
 
 fn laid_global(name: String) → Tac<Expr> { lookup(name).or_fail("laid: `" ++ name ++ "`: ").bind(λ g => pure(Global(g))) }
 
@@ -95,7 +95,9 @@ fn laid_lib() → Tac<LaidLib> {
     let part_then <- laid_global("part::Part::then");
     let field <- laid_global("part::Part::field");
     let rfl <- laid_global("tactic::rfl");
-    pure(LaidLib(then, record, all, fst, snd, part_then, field, rfl))
+    let place <- laid_global("part::Part::place");
+    let word <- laid_global("bitvec::BitVec::ofNat");
+    pure(LaidLib(then, record, all, fst, snd, part_then, field, rfl, place, word))
 }
 
 // One field as the generator carries it: its name, its type, its codec,
@@ -350,7 +352,7 @@ fn laid_pairs(l: LaidLib, fs: List<LaidField>, vs: List<Expr>, before: Option<Ex
     }
 }
 
-fn laid_parts(l: LaidLib, name: String, t: Expr, last: LaidField, of: Expr, to: Expr, back: Expr, forth: Expr, rev: List<LaidField>, all: List<LaidField>) → Tac<List<Decl>> {
+fn laid_parts(l: LaidLib, name: String, t: Expr, whole: Expr, last: LaidField, of: Expr, to: Expr, back: Expr, forth: Expr, rev: List<LaidField>, all: List<LaidField>) → Tac<List<Decl>> {
     match rev {
         Nil => pure([]),
         Cons(f, before) => {
@@ -358,7 +360,14 @@ fn laid_parts(l: LaidLib, name: String, t: Expr, last: LaidField, of: Expr, to: 
             let part = apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]);
             let ty <- infer(part).or_fail("laid: field `" ++ f.name ++ "`: ");
             let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", [], Hd(ty), part);
-            laid_parts(l, name, t, last, of, to, back, forth, before, all).bind(λ ds => pure(ds ++ [d]))
+            // Where the field lies, as the word compiled code adds to where
+            // the record begins: the part's offset computed here, so the
+            // value is a literal and a `runtime fn` reads it as one.
+            let offset <- numeral(apps(l.place, [t, f.ty, whole, part])).or_fail("laid: the offset of field `" ++ f.name ++ "` is not a numeral: ");
+            let at = apps(l.word, [NatLit(64), NatLit(offset)]);
+            let at_ty <- infer(at).or_fail("laid: field `" ++ f.name ++ "`: ");
+            let a = Decl(AsValue, name ++ "::" ++ f.name ++ "_at", [], Hd(at_ty), at);
+            laid_parts(l, name, t, whole, last, of, to, back, forth, before, all).bind(λ ds => pure(ds ++ [d, a]))
         },
     }
 }
@@ -383,7 +392,7 @@ fn laid_out(h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs
             let whole = apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]);
             let whole_ty <- infer(whole).or_fail("laid: ");
             let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
-            laid_parts(l, name, Hd(h), last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
+            laid_parts(l, name, Hd(h), whole, last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
         },
     }
 }

@@ -1,22 +1,22 @@
 // SHA-256's context as a record laid over its span (docs/layout-design.md
-// §6.2, issues/sha256-context-type.md). `sha256_block` and
-// `sha256_stream` read and store the context by byte offsets written in
-// their bodies; this module says what those bytes are: a `Sha256`, with
-// the hash value, the working variables, the message schedule and the
-// count, stored in that order as big-endian words.
+// §6.2 and §9.5, issues/sha256-context-type.md): a `Sha256`, with the hash
+// value, the working variables, the message schedule and the count, each
+// word stored with its most significant byte first. `sha256_block` and
+// `sha256_stream` read and store the context by the offsets this
+// declaration publishes (`Sha256::schedule_at`, …), so where a field lies
+// is written nowhere but here, and it is the declaration's to choose.
 //
 // Nothing here is proved about SHA-256. The record's codec is its
-// fields' codecs in order (`Stored::record`), each field is a `Part` made
-// by the combinators of `lib/std/machine/part.hthr`, the offsets are
-// computed (`Sha256::schedule_at`: word `i` of the schedule is at
-// `i * 4 + 64`), and the theorems are instances of the four in
-// `stored_words`: a word compiled code reads at a field's offset is that
-// field of `Sha256::of(ctx)`, and a word it stores there leaves
+// fields' codecs (`Stored::record`), each field is a `Part` made by the
+// combinators of `lib/std/machine/part.hthr`, the offsets are computed,
+// and the theorems are instances of the four in `stored_words`: a word
+// compiled code reads at a field's offset is that field of
+// `Sha256::of(ctx)`, and a word it stores there leaves
 // `Sha256::of(ctx) with { … }`.
 //
-// The codec and the four fields' parts are the `laid` declaration's
-// (`lib/std/machine/laid.hthr`); the words of the three arrays are parts
-// of those.
+// The codec, the four fields' parts and their offsets as words are the
+// `laid` declaration's (`lib/std/machine/laid.hthr`); the words of the
+// three arrays are parts of those.
 import logic;
 import bool;
 import nat;
@@ -56,20 +56,27 @@ import function_ir_placeless;
 import runtime;
 import runtime_file;
 import stored_words;
-import sha2;
-import sha256_round;
-import sha256_block;
-import sha256_stream;
 
 // The context as a value: the hash value so far, the working variables
 // of the round being run, the message schedule (whose first sixteen words
 // are the block being assembled), and the count of bytes taken. It is
-// laid over the bytes SHA-256's functions are lent: each word with its
-// most significant byte first, and the fields where they are written,
-// since those functions' bodies still write the offsets out. The
-// declaration publishes how a context is bytes (`Sha256::stored()`) and
-// each field as a part of it (`Sha256::hash_part()`, …).
-laid(endian := BigEndian, order := AsWritten) record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
+// laid over the bytes SHA-256's functions are lent, each word with its
+// most significant byte first. The declaration publishes how a context
+// is bytes (`Sha256::stored()`), each field as a part of it
+// (`Sha256::hash_part()`, …) and where each lies as a word a `runtime fn`
+// adds to (`Sha256::hash_at`, …).
+laid(endian := BigEndian) record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
+
+// What Rust must agree on with the compiled code: how many bytes a
+// context is, and where the digest is once the message has ended (the
+// hash value's thirty-two bytes). Numerals, because Rust's copies are
+// generated from them (`crates/linked/generated/CONSTANTS.tsv`), and each
+// is held to the declaration below.
+def SHA256_CONTEXT_BYTES: Nat = 328;
+def SHA256_DIGEST_AT: Nat = 0;
+
+theorem Sha256::bytes_is(): Sha256::stored().layout.size = SHA256_CONTEXT_BYTES { refl }
+theorem Sha256::digest_at_is(): Sha256::hash_part().offset = SHA256_DIGEST_AT { refl }
 
 // The context a span holds.
 fn Sha256::of(ctx: List<u8>) → Sha256 { Sha256::stored().get(ctx, 0) }
@@ -79,70 +86,60 @@ fn Sha256::hash_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored
 fn Sha256::working_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::working_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }
 fn Sha256::schedule_word(i: Nat, inside: i < 64) → Part<Sha256, u32>(Sha256::stored()) { Sha256::schedule_part().then(Part::element(Stored::u32_be(), 64, i, inside)) }
 
-// Where everything is: the numbers `sha256_block` and `sha256_stream`
-// write in their bodies, computed.
-theorem Sha256::layout_is(): Sha256::stored().layout = Layout(328, 3) { refl }
-theorem Sha256::hash_at(i: Nat, inside: i < 8): Sha256::hash_word(i, inside).offset = i * 4 { refl }
-theorem Sha256::working_at(i: Nat, inside: i < 8): Sha256::working_word(i, inside).offset = i * 4 + 32 { refl }
-theorem Sha256::schedule_at(i: Nat, inside: i < 64): Sha256::schedule_word(i, inside).offset = i * 4 + 64 { refl }
-theorem Sha256::count_at(): Sha256::count_part().offset = 320 { refl }
+// Where a word is: four bytes for each word before it, past where its
+// array begins, which is the word the bodies add to.
+theorem Sha256::hash_word_at(i: Nat, inside: i < 8): Sha256::hash_word(i, inside).offset = i * 4 + Sha256::hash_at.toNat() { refl }
+theorem Sha256::working_word_at(i: Nat, inside: i < 8): Sha256::working_word(i, inside).offset = i * 4 + Sha256::working_at.toNat() { refl }
+theorem Sha256::schedule_word_at(i: Nat, inside: i < 64): Sha256::schedule_word(i, inside).offset = i * 4 + Sha256::schedule_at.toNat() { refl }
+theorem Sha256::count_word_at(): Sha256::count_part().offset = Sha256::count_at.toNat() { refl }
 
 // What compiled code reads and stores there, as the context.
 
-// Schedule word `i`, read by the accessor at byte `4 * i + 64`.
-theorem Sha256::schedule_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat()):
+// Schedule word `i`, read by the accessor four bytes a word past where
+// the schedule begins.
+theorem Sha256::schedule_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
     ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).schedule, i, here).zero_extend(32) {
     ctx.u32_be_within_part(cn, at, Sha256::schedule_word(i, here), 0, refl, place, inside)
 }
 
 // A word stored there: the context with that schedule word replaced.
-theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { schedule = vector_update(Sha256::of(ctx).schedule, i, word.truncate(32, 32)) }) {
     ctx.put_u32_be_within_part(cn, at, word, Sha256::schedule_word(i, here), 0, refl, place, inside, own, fits)
 }
 
-theorem Sha256::working_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + 32, inside: at.toNat() + 4 <= cn.toNat()):
+theorem Sha256::working_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + Sha256::working_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
     ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).working, i, here).zero_extend(32) {
     ctx.u32_be_within_part(cn, at, Sha256::working_word(i, here), 0, refl, place, inside)
 }
 
-theorem Sha256::working_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + 32, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem Sha256::working_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + Sha256::working_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { working = vector_update(Sha256::of(ctx).working, i, word.truncate(32, 32)) }) {
     ctx.put_u32_be_within_part(cn, at, word, Sha256::working_word(i, here), 0, refl, place, inside, own, fits)
 }
 
-theorem Sha256::hash_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4, inside: at.toNat() + 4 <= cn.toNat()):
+theorem Sha256::hash_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + Sha256::hash_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
     ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).hash, i, here).zero_extend(32) {
     ctx.u32_be_within_part(cn, at, Sha256::hash_word(i, here), 0, refl, place, inside)
 }
 
-theorem Sha256::hash_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4, inside: at.toNat() + 4 <= cn.toNat(),
-    own: cn.toNat() <= ctx.len(), fits: 328 <= ctx.len()):
+theorem Sha256::hash_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 8, place: at.toNat() = i * 4 + Sha256::hash_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
+    own: cn.toNat() <= ctx.len(), fits: SHA256_CONTEXT_BYTES <= ctx.len()):
     Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after) = (Sha256::of(ctx) with { hash = vector_update(Sha256::of(ctx).hash, i, word.truncate(32, 32)) }) {
     ctx.put_u32_be_within_part(cn, at, word, Sha256::hash_word(i, here), 0, refl, place, inside, own, fits)
 }
 
-// The count, read and stored by the eight-byte accessors at byte 320.
-theorem Sha256::count_read(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): ctx.u64_be_within(cn, 320) = Sha256::of(ctx).count {
-    ctx.u64_be_within_part(cn, 320, Sha256::count_part(), 0, refl, refl, inside)
+// The count, read and stored by the eight-byte accessors where it lies.
+theorem Sha256::count_read(ctx: List<u8>, cn: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat()): ctx.u64_be_within(cn, Sha256::count_at) = Sha256::of(ctx).count {
+    let ends: (Sha256::count_at.toNat() + 8 <= cn.toNat()) = Nat::le_trans(Sha256::count_at.toNat() + 8, SHA256_CONTEXT_BYTES, cn.toNat(), Sha256::count_part().within, inside);
+    ctx.u64_be_within_part(cn, Sha256::count_at, Sha256::count_part(), 0, refl, refl, ends)
 }
 
-theorem Sha256::count_put(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.toNat(), own: cn.toNat() <= ctx.len()):
-    Sha256::of(List::put_u64_be_within(ctx, cn, 320, count).after) = (Sha256::of(ctx) with { count = count }) {
-    let fits: (328 <= ctx.len()) = Nat::le_trans(328, cn.toNat(), ctx.len(), inside, own);
-    ctx.put_u64_be_within_part(cn, 320, count, Sha256::count_part(), 0, refl, refl, inside, own, fits)
-}
-
-// The stream's own accessors are those: the count `sha256_update` and
-// `sha256_finish` read is the context's, and the one they store is the
-// context with its count replaced.
-theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count {
-    Sha256::count_read(ctx, cn, inside)
-}
-
-theorem Sha256::put_count_is(ctx: List<u8>, cn, count: u64, inside: 328 <= cn.toNat(), own: cn.toNat() <= ctx.len()):
-    Sha256::of(List::sha256_put_count(ctx, cn, count).after) = (Sha256::of(ctx) with { count = count }) {
-    Sha256::count_put(ctx, cn, count, inside, own)
+theorem Sha256::count_put(ctx: List<u8>, cn, count: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat(), own: cn.toNat() <= ctx.len()):
+    Sha256::of(List::put_u64_be_within(ctx, cn, Sha256::count_at, count).after) = (Sha256::of(ctx) with { count = count }) {
+    let fits: (SHA256_CONTEXT_BYTES <= ctx.len()) = Nat::le_trans(SHA256_CONTEXT_BYTES, cn.toNat(), ctx.len(), inside, own);
+    let ends: (Sha256::count_at.toNat() + 8 <= cn.toNat()) = Nat::le_trans(Sha256::count_at.toNat() + 8, SHA256_CONTEXT_BYTES, cn.toNat(), Sha256::count_part().within, inside);
+    ctx.put_u64_be_within_part(cn, Sha256::count_at, count, Sha256::count_part(), 0, refl, refl, ends, own, fits)
 }

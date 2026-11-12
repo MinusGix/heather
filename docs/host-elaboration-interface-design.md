@@ -1091,3 +1091,35 @@ additions serve it, and neither is specific to it:
   with a proof of `True` so that a check is a theorem beside the set
   (`by simp_check([S])`); refused with the law at fault and the route.
   Tag 36.
+
+## 28. A closed term's numeral: `Numeral` (2026-11-12)
+
+- **`Numeral(e: Expr) → Checked<Handle>`**: the numeral the closed term
+  `e` of type `Nat` computes to, as a handle whose `View` is `HLit`
+  (`numeral(e)` in `tactic.hthr` reads it out as a `Nat`). The term is run
+  in the kernel's value domain, where the tactic's own values are computed
+  (`Reader::nat`), under the reader's budget. Tag 37.
+- **Why it is not `Whnf`.** `Whnf` walks the term with the reducer, and a
+  library function that recurses by steps under the head is past its
+  budget at small arguments: `Nat::round_up(33, 8)` does not come back,
+  and so neither does any offset of `lib/std/machine/layout.hthr`. The
+  reflector's own numeral reader (`rt_number`, a successor at a time
+  through `Whnf`) has the same limit. A tactic's own arithmetic never met
+  it because that runs in the value domain already; what was missing was a
+  way to run a *term* there.
+- **What it is for.** A generator that asks the library for a number and
+  writes it down: `laid` computes each field's offset with the layout
+  library's own functions (the part's `offset`, whatever codec the caller
+  named) and publishes it as a literal word, `T::f_at`. The literal is not
+  trusted: it is a declaration like any other, and a statement that it is
+  the part's offset is `refl`. The alternative was a second copy of the
+  layout rule inside the generator, which is what "laying out is a
+  library" is against (`docs/layout-design.md`).
+- **Refusals**: a term that is not a `Nat` ("it is a `Bool`, and a numeral
+  is a `Nat`"), one that mentions a local, and one whose value is not a
+  numeral within the budget. Probes: `lib/_tests/std/tactic/numeral_tests.hthr`
+  (`by_numeral`, a tactic that closes `e = k` by asking, on sums,
+  rounding, a quotient and two layouts, with the three refusals).
+- **Not here**: values of other types. A string or a list computed by the
+  library has no view as one handle; `issues/eval-command-for-closed-terms.md`
+  is where a general reader of closed values would go.

@@ -427,11 +427,24 @@ laid(endian := BigEndian, order := AsWritten) record Header { tag: u8, length: u
 ```
 
 It publishes `Header::stored(): Stored<Header>` and, for each field,
-`Header::length_part(): Part<Header, u64>(…)`, and nothing else. The
-layout is `Header::stored().layout` (`Layout(24, 3)` by `refl`), an
-offset is `Header::length_part().offset` (8), and the laws for a read and
-a store at a field are the part's own, so the generator proves nothing
-and neither does its caller.
+`Header::length_part(): Part<Header, u64>(…)` and
+`Header::length_at: u64`, and nothing else. The layout is
+`Header::stored().layout` (`Layout(24, 3)` by `refl`), an offset is
+`Header::length_part().offset` (8), and the laws for a read and a store
+at a field are the part's own, so the generator proves nothing and
+neither does its caller.
+
+**`T::f_at` is the offset as a word**, for compiled code: a `runtime fn`
+body writes `ctx.u64_be_within(cn, Header::length_at)` and
+`(i << 1) + Header::flags_at`, and the reflector reads the name as the
+literal it is. The generator does not copy the layout rule to get the
+number. It asks the host what the part's own `offset` computes to
+(`Numeral`, `docs/host-elaboration-interface-design.md` §28, new with
+this) and publishes that literal, so whatever codec a field has, derived
+or named by the caller, the word is the library's answer; that it is
+(`Header::length_at.toNat() = Header::length_part().offset`) is `refl`.
+A word and not a `Nat` because that is what a body adds to; sixty-four
+bits because a `runtime fn`'s words are.
 
 **Each field's codec is read off its type.** A `u8` is a byte; a word of
 16, 32 or 64 bits is stored in the byte order the declaration names
@@ -452,8 +465,9 @@ the declaration place the fields, and nothing may read an offset off the
 source: it is `T::f_part().offset`. `order := AsWritten` is C's rule,
 each field after the one written before it, for bytes that are a format
 someone else reads. Today both give the written order; the rule that
-chooses is `issues/laid-field-order-chosen.md`. SHA-256's context says
-`AsWritten`, because its functions' bodies still write the offsets out.
+chooses is `issues/laid-field-order-chosen.md`. SHA-256's context leaves
+the order to the declaration: its functions' bodies name `Sha256::…_at`
+and write no field's offset as a number (§9.5, round 1).
 
 The probes (`lib/_tests/std/machine/laid_tests.hthr`) hold all of that:
 the bytes of a closed header, a record of one field in the machine's
@@ -480,33 +494,52 @@ and fixed in the same round); the generator's matches are still written
 a level at a time.
 
 Not built of stage A: accessors as `runtime fn`s that name the field
-(`ctx.schedule_put(cn, t, word)`), which would take the offsets out of
-SHA-256's bodies. A generated accessor is a call, and with no inliner it
-costs one in the compression loop, so that waits for stage B or for
-inlining and is not done by default.
+(`ctx.schedule_put(cn, t, word)`). A generated accessor is a call, and
+with no inliner it costs one in the compression loop, so that waits for
+stage B or for inlining and is not done by default. The offsets are out
+of SHA-256's bodies without them, by the published words.
 
 **SHA-256's context, declared:** `lib/native/crypto/sha256_context.hthr`.
-`laid(endian := BigEndian, order := AsWritten) record Sha256 { hash, working, schedule, count }`,
+`laid(endian := BigEndian) record Sha256 { hash, working, schedule, count }`,
 one part per word of each array as a composition, and `Sha256::of(ctx)`,
-the context a span holds. The offsets the SHA
-modules write in their bodies are theorems by `refl`
-(`Sha256::schedule_at(i)`: `i * 4 + 64`; `count_at`: 320; the layout is
-`Layout(328, 3)`), and each access is tied to the record:
+the context a span holds. `sha256_block` and `sha256_stream` import it
+and reach every field by its published word:
 
 ```heather
-theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + 64, …):
+runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64 decreases (64 - i).toNat() {
+    if h: i < 64 {
+        let at = (i << 2) + Sha256::schedule_at;
+        …
+```
+
+What a body still writes is a word's place within its array
+(`Sha256::working_at + 16` is the fifth working variable), which is the
+array's own layout and not the record's. Each access is tied to the
+record by a theorem stated at the names:
+
+```heather
+theorem Sha256::schedule_put(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), …):
     Sha256::of(List::put_u32_be_within(ctx, cn, at, word).after)
         = (Sha256::of(ctx) with { schedule = vector_update(Sha256::of(ctx).schedule, i, word.truncate(32, 32)) })
-
-theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: 328 <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count
+theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count
 ```
 
 Each is one application of a `stored_words` theorem, with `refl` for the
-codec and the offset. Nothing in SHA-256's bodies or its assembly
-changes: this is the statement side, which is what stage B's refinements
-will cite. What a correctness proof of `sha256_compress` against the
-specification would do with it is rewrite each store and read of the
-loop into an update or a field of a `Sha256`, and never mention a byte.
+codec and the offset, and the count's bound comes from the part's own
+`within`, so no proof here would change if the fields moved. What Rust
+must agree on is two numerals of the module, `SHA256_CONTEXT_BYTES` (the
+bytes Rust lends) and `SHA256_DIGEST_AT` (where the hash value is), each
+held to the declaration by a `refl` theorem and copied to Rust by
+`scripts/linked` (`generated/CONSTANTS.tsv`). The probes pin today's
+numbers (0, 32, 64, 320; `Layout(328, 3)`) as tests, not as library.
+
+The cost of naming, until the IR folds constants
+(`issues/function-ir-pass-arithmetic-folds.md`): `Sha256::working_at + 16`
+is an addition of two constants at run time, and `i + Sha256::hash_at`
+adds zero. What a correctness proof of `sha256_compress` against the
+specification would do with these theorems is rewrite each store and
+read of the loop into an update or a field of a `Sha256`, and never
+mention a byte.
 
 **Stage B: a `runtime fn` holds the record.** `ctx: Sha256` is the record
 in the source and the span in the code. Its design is §9.
@@ -706,12 +739,16 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
 
 ### 9.5 Rounds
 
-1. **Offsets by name, now** (no theory): `laid record` also publishes
-   each field's offset as a word a `runtime fn` body can read, SHA-256's
-   bodies name them, and its context drops `order := AsWritten`. This is
-   what makes §7 item 4 safe to turn on, and it is all of
-   `sha256-context-type`'s "no layout offsets in their bodies" that does
-   not need the receiver's type.
+1. **Offsets by name** (no theory). **Built** (§6.2): `laid record`
+   also publishes each field's offset as a word a `runtime fn` body
+   reads, SHA-256's bodies name them, and its context drops
+   `order := AsWritten`. This is what makes §7 item 4 safe to turn on,
+   and it is all of `sha256-context-type`'s "no layout offsets in their
+   bodies" that does not need the receiver's type. What it needed that
+   was not foreseen: a generator could not get a number out of the
+   layout library (`Whnf` is out of budget on `Nat::round_up`), so the
+   host has a `Numeral` request, which stage B's reflector will use for
+   the same reason.
 2. **A layout as data** (`layout-first-order-description`), if Minus
    takes it: the description, its codec and parts, and `laid record`
    publishing one.

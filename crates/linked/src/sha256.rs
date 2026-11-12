@@ -11,7 +11,8 @@
 //!
 //! [`stream`] is the hash whole: [`stream::Sha256`] takes a message in
 //! parts and every byte of the work, the padding included, is compiled
-//! Heather. What is Rust's there is the 328 bytes it lends.
+//! Heather. What is Rust's there is the bytes it lends, as many as the
+//! Heather module says a context is.
 //!
 //! # 32-bit words through a 64-bit boundary
 //!
@@ -140,10 +141,15 @@ pub fn digest(message: &[u8]) -> [u8; 32] {
 /// `sha256_compress` of `lib/native/crypto/sha256_block.hthr`.
 ///
 /// It works in a *context* of [`CONTEXT`](block::CONTEXT) bytes that its
-/// caller lends it: the hash value's eight words, then the eight working
-/// variables, then the schedule's sixty-four words, each word four bytes
-/// with the most significant first. It reads the first thirty-two bytes and
-/// the block, and stores everywhere in the context; the hash value after
+/// caller lends it, the `Sha256` record of
+/// `lib/native/crypto/sha256_context.hthr`: the hash value's eight words,
+/// the eight working variables and the schedule's sixty-four words, each
+/// word four bytes with the most significant first, and the stream's
+/// count, which this function leaves alone. Where each lies is that
+/// module's declaration's to say; Rust is told the context's size and
+/// where the hash value is ([`HASH`](block::HASH)), and needs nothing
+/// else. It reads the hash value and the block, and stores the hash
+/// value, the working variables and the schedule; the hash value after
 /// the block is where the one before it was. Nothing of the working area
 /// is read before it is stored, so a caller need not clear it.
 ///
@@ -163,8 +169,14 @@ pub mod block {
     use super::INITIAL;
     use crate::exports;
 
-    /// The bytes of a context: eight, eight and sixty-four words.
-    pub const CONTEXT: usize = 4 * (8 + 8 + 64);
+    /// The bytes of a context: the Heather module's
+    /// `SHA256_CONTEXT_BYTES`, which is its record's size by a theorem
+    /// there.
+    pub const CONTEXT: usize = crate::constants::SHA256_CONTEXT_BYTES as usize;
+
+    /// Where the hash value's thirty-two bytes begin in a context: the
+    /// module's `SHA256_DIGEST_AT`, held to the record the same way.
+    pub const HASH: usize = crate::constants::SHA256_DIGEST_AT as usize;
 
     /// The linked function at its boundary: any two spans. Answers 8, the
     /// count its last loop stops at.
@@ -176,21 +188,21 @@ pub mod block {
     /// §6.2.2: the hash value after one more block.
     pub fn compress(hash: &mut [u32; 8], block: &[u8; 64]) {
         let mut context = [0u8; CONTEXT];
-        for (bytes, word) in context.chunks_exact_mut(4).zip(*hash) {
+        for (bytes, word) in context[HASH..HASH + 32].chunks_exact_mut(4).zip(*hash) {
             bytes.copy_from_slice(&word.to_be_bytes());
         }
         exports::sha256_compress(&mut context, block);
-        for (word, bytes) in hash.iter_mut().zip(context.chunks_exact(4)) {
+        for (word, bytes) in hash.iter_mut().zip(context[HASH..HASH + 32].chunks_exact(4)) {
             *word = u32::from_be_bytes(bytes.try_into().expect("four bytes"));
         }
     }
 
     /// SHA-256 of a message: one context through every block, and the
-    /// digest read off its first thirty-two bytes, which are already the
-    /// hash value's words in the order §6.2.2 spells them.
+    /// digest read off the hash value's thirty-two bytes, which are
+    /// already its words in the order §6.2.2 spells them.
     pub fn digest(message: &[u8]) -> [u8; 32] {
         let mut context = [0u8; CONTEXT];
-        for (bytes, word) in context.chunks_exact_mut(4).zip(INITIAL) {
+        for (bytes, word) in context[HASH..HASH + 32].chunks_exact_mut(4).zip(INITIAL) {
             bytes.copy_from_slice(&word.to_be_bytes());
         }
         let mut blocks = message.chunks_exact(64);
@@ -208,7 +220,7 @@ pub mod block {
         for block in last[..padded].chunks_exact(64) {
             exports::sha256_compress(&mut context, block);
         }
-        context[..32].try_into().expect("thirty-two bytes")
+        context[HASH..HASH + 32].try_into().expect("thirty-two bytes")
     }
 }
 
@@ -216,12 +228,12 @@ pub mod block {
 /// `sha256_init`, `sha256_update` and `sha256_finish` of
 /// `lib/native/crypto/sha256_stream.hthr`.
 ///
-/// The context the three share is [`block`]'s and eight bytes more: the
-/// count of bytes taken, most significant first, after the schedule. A
-/// block is assembled in the schedule's first sixteen words, so a part
-/// that ends inside a block leaves its bytes in the context for the next
-/// part to follow, and the padding of §5.1.1 is the linked code's. The
-/// digest is the first thirty-two bytes after `sha256_finish`.
+/// The context the three share is [`block`]'s, with its count of bytes
+/// taken, most significant first. A block is assembled in the schedule's
+/// first sixteen words, so a part that ends inside a block leaves its
+/// bytes in the context for the next part to follow, and the padding of
+/// §5.1.1 is the linked code's. The digest is the hash value's
+/// thirty-two bytes after `sha256_finish`.
 ///
 /// Each function reads and stores only under the length of the span it is
 /// in, as [`block`]'s does, and what is certified is the same: the code
@@ -230,8 +242,8 @@ pub mod block {
 pub mod stream {
     use crate::exports;
 
-    /// The bytes of a context: [`super::block::CONTEXT`] and the count.
-    pub const CONTEXT: usize = super::block::CONTEXT + 8;
+    /// The bytes of a context: [`super::block::CONTEXT`].
+    pub const CONTEXT: usize = super::block::CONTEXT;
 
     /// The linked functions at their boundary: any spans.
     pub mod spans {
@@ -278,7 +290,7 @@ pub mod stream {
         /// The digest of everything taken.
         pub fn finish(mut self) -> [u8; 32] {
             exports::sha256_finish(&mut self.context);
-            self.context[..32].try_into().expect("thirty-two bytes")
+            self.context[super::block::HASH..super::block::HASH + 32].try_into().expect("thirty-two bytes")
         }
     }
 

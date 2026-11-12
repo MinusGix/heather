@@ -4,12 +4,16 @@
 // may store into and a block it only reads, and leaves H(i) where H(i−1)
 // was (FIPS 180-4 §6.2.2).
 //
-// The context is 320 bytes: the hash value's eight words, then the working
-// variables' eight, then the schedule's sixty-four, each word four bytes
-// with the most significant first. Everything a round touches is in the
-// span, because a function passes at most six words and a round has eight
-// working variables, a constant and a schedule word: each step reads the
-// words it needs from the span and stores its results back
+// The context is a `Sha256` (`sha256_context.hthr`): the hash value's
+// eight words, the working variables' eight and the schedule's
+// sixty-four, each word four bytes with the most significant first, and
+// the stream's count. Where each lies is the declaration's
+// (`Sha256::hash_at`, `Sha256::working_at`, `Sha256::schedule_at`); no
+// body here writes an offset of a field as a number, only a word's place
+// within its array. Everything a round touches is in the span, because a
+// function passes at most six words and a round has eight working
+// variables, a constant and a schedule word: each step reads the words it
+// needs from the span and stores its results back
 // (issues/function-call-past-six-words.md is what would let the working
 // variables be values). The word functions are `sha256_round`'s, which read
 // the low half of each 64-bit word they are given. A word is read and
@@ -61,6 +65,14 @@ import runtime_file;
 import sha2;
 import sha256_round;
 import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
 
 // The round constant K(t) (FIPS 180-4 §4.2.2), found by halving: compiled
 // code has no table to index (issues/rt-fixed-arrays-and-tables.md).
@@ -128,12 +140,12 @@ runtime fn sha256_k(t: u64) → u64 {
     }
 }
 
-// The block's sixty-four bytes stored from byte 64 of the context: the
-// schedule's first sixteen words, a block's words being their bytes.
+// The block's sixty-four bytes stored where the schedule begins: its
+// first sixteen words, a block's words being their bytes.
 runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64
     decreases (64 - i).toNat() {
     if h: i < 64 {
-        ctx.put_within(cn, i + 64, block.byte_within(bn, i));
+        ctx.put_within(cn, i + Sha256::schedule_at, block.byte_within(bn, i));
         ctx.sha256_take_block(cn, block, bn, i + 1)
     } else {
         i
@@ -141,11 +153,12 @@ runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<
 }
 
 // Schedule words `i` to 63, each from the four before it that FIPS 180-4
-// §6.2.2 step 1 names: W(t) is the word at byte 64 + 4t of the context.
+// §6.2.2 step 1 names: W(t) is four bytes a word past where the schedule
+// begins.
 runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (64 - i).toNat() {
     if h: i < 64 {
-        let at = (i << 2) + 64;
+        let at = (i << 2) + Sha256::schedule_at;
         let word = sha256_next(ctx.u32_be_within(cn, at - 8), ctx.u32_be_within(cn, at - 28),
             ctx.u32_be_within(cn, at - 60), ctx.u32_be_within(cn, at - 64));
         ctx.put_u32_be_within(cn, at, word);
@@ -155,12 +168,12 @@ runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64
     }
 }
 
-// The hash value's thirty-two bytes copied to the working variables, at
-// byte 32 of the context (§6.2.2 step 2).
+// The hash value's thirty-two bytes copied to the working variables
+// (§6.2.2 step 2).
 runtime fn List::sha256_begin(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (32 - i).toNat() {
     if h: i < 32 {
-        ctx.put_within(cn, i + 32, ctx.byte_within(cn, i));
+        ctx.put_within(cn, i + Sha256::working_at, ctx.byte_within(cn, i + Sha256::hash_at));
         ctx.sha256_begin(cn, i + 1)
     } else {
         i
@@ -169,11 +182,11 @@ runtime fn List::sha256_begin(mut self ctx: List<u8>, cn, i: u64) → u64
 
 // Seven of the working variables each moved to the next: h takes g first
 // and b takes a last, so that a word is read before it is stored over
-// (§6.2.2 step 3). Pass `i` moves the word at byte 56 − 4i.
+// (§6.2.2 step 3). Pass `i` moves working variable 6 − i.
 runtime fn List::sha256_shift(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (7 - i).toNat() {
     if h: i < 7 {
-        let at = 56 - (i << 2);
+        let at = Sha256::working_at + (24 - (i << 2));
         ctx.put_u32_be_within(cn, at + 4, ctx.u32_be_within(cn, at));
         ctx.sha256_shift(cn, i + 1)
     } else {
@@ -185,24 +198,24 @@ runtime fn List::sha256_shift(mut self ctx: List<u8>, cn, i: u64) → u64
 // move, then a and e are stored, e over the d that moved there.
 runtime fn List::sha256_set(mut self ctx: List<u8>, cn, first, fifth: u64) → u64 {
     ctx.sha256_shift(cn, 0);
-    ctx.put_u32_be_within(cn, 32, first);
-    ctx.put_u32_be_within(cn, 48, fifth)
+    ctx.put_u32_be_within(cn, Sha256::working_at, first);
+    ctx.put_u32_be_within(cn, Sha256::working_at + 16, fifth)
 }
 
 // A round from its T1: T2 is of a, b and c, and the two new words are
 // T1 + T2 and d + T1, both computed before any word is stored.
 runtime fn List::sha256_turn(mut self ctx: List<u8>, cn, t1: u64) → u64 {
     ctx.sha256_set(cn,
-        t1 + sha256_t2(ctx.u32_be_within(cn, 32), ctx.u32_be_within(cn, 36), ctx.u32_be_within(cn, 40)),
-        ctx.u32_be_within(cn, 44) + t1)
+        t1 + sha256_t2(ctx.u32_be_within(cn, Sha256::working_at), ctx.u32_be_within(cn, Sha256::working_at + 4), ctx.u32_be_within(cn, Sha256::working_at + 8)),
+        ctx.u32_be_within(cn, Sha256::working_at + 12) + t1)
 }
 
 // Round `t`: T1 is of h, e, f and g, the round's constant and its schedule
-// word, which is the word at byte 64 + 4t.
+// word.
 runtime fn List::sha256_step(mut self ctx: List<u8>, cn, t: u64) → u64 {
     ctx.sha256_turn(cn,
-        sha256_t1(ctx.u32_be_within(cn, 60), ctx.u32_be_within(cn, 48), ctx.u32_be_within(cn, 52),
-            ctx.u32_be_within(cn, 56), sha256_k(t), ctx.u32_be_within(cn, (t << 2) + 64)))
+        sha256_t1(ctx.u32_be_within(cn, Sha256::working_at + 28), ctx.u32_be_within(cn, Sha256::working_at + 16), ctx.u32_be_within(cn, Sha256::working_at + 20),
+            ctx.u32_be_within(cn, Sha256::working_at + 24), sha256_k(t), ctx.u32_be_within(cn, (t << 2) + Sha256::schedule_at)))
 }
 
 // Rounds `i` to 63 on the working variables.
@@ -222,7 +235,7 @@ runtime fn List::sha256_end(mut self ctx: List<u8>, cn, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
         let at = i << 2;
-        ctx.put_u32_be_within(cn, at, ctx.u32_be_within(cn, at) + ctx.u32_be_within(cn, at + 32));
+        ctx.put_u32_be_within(cn, at + Sha256::hash_at, ctx.u32_be_within(cn, at + Sha256::hash_at) + ctx.u32_be_within(cn, at + Sha256::working_at));
         ctx.sha256_end(cn, i + 1)
     } else {
         i
@@ -240,11 +253,10 @@ runtime fn List::sha256_run(mut self ctx: List<u8>, cn: u64) → u64 {
     ctx.sha256_end(cn, 0)
 }
 
-// §6.2.2: H(i) from H(i−1) and a block. The context is the hash value's
-// eight words, then the working variables' eight, then the schedule's
-// sixty-four, each word four bytes with the most significant first: 320
-// bytes, of which the first thirty-two are read and all are written. What
-// the first thirty-two spell after the last block is the digest.
+// §6.2.2: H(i) from H(i−1) and a block. Of the context the hash value is
+// read, and it, the working variables and the schedule are written. What
+// the hash value's thirty-two bytes spell after the last block is the
+// digest.
 runtime fn sha256_compress(ctx: List<u8>, cn: u64, block: List<u8>, bn: u64) → Mutated<List<u8>, u64> {
     let mut ctx = ctx;
     ctx.sha256_take_block(cn, block, bn, 0);

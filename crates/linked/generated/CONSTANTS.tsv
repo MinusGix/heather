@@ -5,3 +5,5 @@
 # `heather_cli::linked::constants_rs`) and held to the modules by
 # `crates/cli/tests/linked_exports.rs`, so none is written by hand in Rust.
 lib/lang/lexer/lexer_span.hthr	TOKEN_END_BITS
+lib/native/crypto/sha256_context.hthr	SHA256_CONTEXT_BYTES
+lib/native/crypto/sha256_context.hthr	SHA256_DIGEST_AT

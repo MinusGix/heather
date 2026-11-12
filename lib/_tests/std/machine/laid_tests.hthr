@@ -33,6 +33,12 @@ theorem header_layout(): Header::stored().layout = Layout(24, 3) { refl }
 theorem tag_offset(): Header::tag_part().offset = 0 { refl }
 theorem length_offset(): Header::length_part().offset = 8 { refl }
 theorem flags_offset(): Header::flags_part().offset = 16 { refl }
+// The same offsets as words, which compiled code adds to where a header
+// begins: literals the declaration computed, each its part's offset.
+theorem tag_at(): Header::tag_at = 0 { refl }
+theorem length_at(): Header::length_at = 8 { refl }
+theorem flags_at(): Header::flags_at = 16 { refl }
+theorem flags_at_is_the_part(): Header::flags_at.toNat() = Header::flags_part().offset { refl }
 theorem tag_of(h: Header): Header::tag_part().of(h) = h.tag { refl }
 theorem length_of(h: Header): Header::length_part().of(h) = h.length { refl }
 theorem flags_of(h: Header): Header::flags_part().of(h) = h.flags { refl }
@@ -85,6 +91,7 @@ laid(order := AsWritten) record Leg { from: Meters, to: Meters, header: Header }
 
 theorem leg_layout(): Leg::stored().layout = Layout(32, 3) { refl }
 theorem leg_header(): Leg::header_part().offset = 8 { refl }
+theorem leg_header_at(): Leg::header_at = 8 { refl }
 
 // A field of a field: the offsets add.
 fn Leg::length() → Part<Leg, u64>(Leg::stored()) { Leg::header_part().then(Header::length_part()) }

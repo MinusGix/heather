@@ -419,6 +419,15 @@ fn context_of(hash: [u32; 8], rest: &[u8]) -> Vec<u8> {
     context
 }
 
+// The tests below read a context where its fields lie today: the hash
+// value in the first thirty-two bytes, the count in the last eight of 328.
+// The Heather declaration chooses that (`sha256_context.hthr`), so a
+// change there fails here first, by name, and not as a wrong digest.
+#[test]
+fn the_context_lies_where_these_tests_read_it() {
+    assert_eq!((block::HASH, block::CONTEXT, stream::CONTEXT), (0, 328, 328));
+}
+
 #[test]
 fn the_model_is_the_standard_on_whole_spans() {
     let mut lcg = Lcg(8);
