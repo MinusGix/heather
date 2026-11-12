@@ -97,6 +97,13 @@ kind:
 - **`elf-cold`** (with `--heavy`): `write-elf` over a fresh copy of the store
   for every sample, so the certificate is checked cold, as the native gates
   check it on a fresh box.
+- **`cert`**: `only` over the certificate `write-elf FILE SYMBOL` writes
+  today, on the items whose names match a glob (target `SYMBOL:GLOB`, such
+  as `yes_tool:yes_tool_elf_piece_*_is`). The write-elf is unmeasured, runs
+  once per symbol, and leaves its certificate under
+  `target/bench-probes/out/certificates/` as `SYMBOL_elf_certificate.hthr`
+  (a module is named by its file stem, so write-elf's `.certificate.hthr`
+  name is copied to one that is an identifier).
 
 Before measuring, the harness warms `target/bench-probes/store` with one
 `heather check --cache --world lib --expectations` per library folder a case
@@ -105,14 +112,16 @@ images the suite already built. On a fresh box, or after a compiler edit, it
 is the gate's cold build of those folders. It is never timed. No case writes
 to that store: the `elf-*` cases copy it (so the certificate stays cold), and
 the others run over a copy taken at the start, because priming a fixture
-publishes verdicts, and the frozen certificate's verdicts are the live
-certificate's.
+publishes verdicts, and a `cert` case's write-elf publishes the
+certificate's, which the `elf-*` cases must check cold.
 
-A certificate case reads a frozen copy of a certificate `write-elf` wrote
-(`perf/bench/fixtures/yes_tool_elf_certificate.hthr`), for the reason
-`crates/elab/tests/fixtures/ir_v1.hthr` is frozen: the workload stays fixed
-while the code that checks it changes. A change to what `write-elf` emits is
-measured by the `elf-*` cases instead.
+A certificate case reads the certificate the current compiler writes, not a
+frozen copy. A frozen copy kept the workload fixed while the checker
+changed, but it stopped checking once the library renamed what it cited
+(`issues/bench-probe-cases-stale-2026-11.md`). The price is that a change to
+what `write-elf` emits moves the `cert/*` counters too: when a round changes
+the emitter, its moved `cert/*` counters are partly the new certificate, and
+the item names in the case's glob must still match it.
 
 ### Reading a row
 

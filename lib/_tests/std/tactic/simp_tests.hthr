@@ -460,3 +460,16 @@ theorem defaults_below_exists<A>(xs, ys: List<A>):
 theorem below_exists_route<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → False {
     simp_show(List::mem_append_iff)
 }
+
+// The result line spells a type's arguments that mention the bound
+// variable in full, at the binder's own scope
+// (issues/type-arguments-under-a-binder-print-elided.md).
+// expect-error: ((x: A) -> Or<Mem(x, xs), Mem(x, ys)>) -> False
+theorem below_forall_result<A>(xs, ys: List<A>): ((a: A) → Mem(a, xs ++ ys)) → False {
+    simp_show(List::mem_append_iff)
+}
+
+// expect-error: (λ (x: A) => Or<Mem(x, xs), Mem(x, ys)>) -> False
+theorem below_exists_result<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → False {
+    simp_show(List::mem_append_iff)
+}

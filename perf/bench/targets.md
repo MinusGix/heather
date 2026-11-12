@@ -1,8 +1,11 @@
 # Probe targets, ranked (cloud, 2026-10-29)
 
 > A later ranking, after the native floor fell: `issues/performance-overview-2026-11-11.md`.
-> This file stays as the 2026-10-29 entry; three of its probe cases no longer
-> run (`issues/bench-probe-cases-stale-2026-11.md`).
+> This file stays as the 2026-10-29 entry. Since 2026-11-12 the `cert/*` cases
+> read the certificate write-elf writes today instead of a frozen copy, and
+> `native/emit-extends` and `tactic/attempt-from` (under 20 ms by then) gave
+> way to the heaviest declarations of the 2026-11-11 cold library
+> (`issues/bench-probe-cases-stale-2026-11.md`, and T7 below).
 
 Where checking time goes, found without running the suite, and what to
 hillclimb on first. Native first, as asked. The numbers are a dated diary
@@ -107,13 +110,14 @@ Leverage: about 11 `write-elf` processes in `native_tools` alone, plus
 The per-item cost is the same in `yes_tool`'s certificate as in
 `cat_files_tool`'s (a piece costs about 0.1 s in both), so the small
 certificate is a faithful unit. Cases: `cert/yes-pieces` and
-`cert/yes-labels`, over a frozen copy of `yes_tool`'s certificate. Levers:
+`cert/yes-labels`, over `yes_tool`'s certificate (a frozen copy until
+2026-11-12, now the one write-elf writes). Levers:
 fewer steps per assembled instruction (what `asm_code_after` evaluates), or
 kernel per-step cost (about 1.2 µs per step here).
 
 Since the packed vector literal (2026-10-29, `issues/packed-vector-literal-term.md`)
 write-elf's byte literals enter the kernel as one word each: `cert/yes-pieces`
-fell from 607K to 489K steps, and the frozen fixture is that certificate. What
+fell from 607K to 489K steps, and the fixture of the time was that certificate. What
 a piece spends now is the encoder's `ofNat` at closed numerals and `Nat::add`
 in addresses: `issues/native-encoder-ofnat-cost.md`. `ofNat` became one word
 (489K → 327K), and then most of what was left turned out to be fold-class
@@ -174,7 +178,7 @@ part what it generates once, which an `--only` case cannot see. A cold
 module check with a fresh verdict store would show it, and is a follow-up
 case. Cases: `native/goes-arg-found`, `native/call-step`,
 `native/arg-cells-store`, `native/emit-extends` (elaborator-bound, 0.7 s of
-whnf and substitution).
+whnf and substitution; retired 2026-11-12 at 17 steps, see T7).
 
 **2026-10-29, after the spelling fix** (`issues/native-lemma-kernel-steps.md`, closed):
 both items were conversions between a coded declaration's inline lowering
@@ -192,8 +196,8 @@ leads the child now is elaboration: `Stmt::emit_extends`, the
 | item | cost alone | where | case |
 |---|---|---|---|
 | `x86_64_stack_runs::Site::moves_spills` | 4.8 s | elaboration (omega reflection over stack layouts); the heaviest x86 item, 16.7 s cold | `x86/moves-spills` |
-| `tactic::attempt_from` | 4.3 s | one kernel check of 287K conversion queries | `tactic/attempt-from` |
-| `ordered_field::OrderedField::pos_of_mul_pos_nonneg` | 2.3 s | `projection_subst` (2.0 s): class-carrier projections; the module is 31 s cold, 21 of it `projection_subst`, and `linarith` pays 12 s the same way | `algebra/pos-of-mul-pos-nonneg` |
+| `tactic::attempt_from` | 4.3 s | one kernel check of 287K conversion queries | `tactic/attempt-from` (retired 2026-11-12 at 930 steps, see T7) |
+| `ordered_field::OrderedField::pos_of_mul_pos_nonneg` (now `OrderedSemiring::`, retired 2026-11-12 at 485 steps, see T7) | 2.3 s | `projection_subst` (2.0 s): class-carrier projections; the module is 31 s cold, 21 of it `projection_subst`, and `linarith` pays 12 s the same way | `algebra/pos-of-mul-pos-nonneg` |
 
 Not cased yet, because a `lib/_tests` module's image is keyed to its
 folder's world and `--only` on the lone file finds none (a copy into a
@@ -216,6 +220,27 @@ watches is a shape: the cost follows the number of callees and never their
 code (`docs/runtime-fn-setups-design.md` §16.14), so a callee growing must
 not move its counters. No row is saved for it yet; the saved table is
 another box's.
+
+## T7. The heaviest declarations of the cold library (2026-11-12)
+
+Added when `issues/bench-probe-cases-stale-2026-11.md` retired three cases
+that no longer probed a cost: `native/emit-extends` (17 steps),
+`tactic/attempt-from` (930) and `algebra/pos-of-mul-pos-nonneg` (485 steps,
+0.04 s, once the sign rules moved to `OrderedSemiring`). Their replacements
+are the heaviest declarations of the 2026-11-11 cold library
+(`issues/performance-overview-2026-11-11.md`), measured alone with `--only`
+on the cloud box at d64c439:
+
+| item | alone | where | case |
+|---|---|---|---|
+| `native_compile_correct::Target::perform_call` | 26 s | elaboration 18.5 s, kernel 7.2 s; 7.3M steps, 3.1M conversion queries | `native/perform-call` |
+| `supremum::OrderComplete::below_located` | 7.9 s | elaboration 5.1 s (`linarith` and the half lemmas over an ordered field's carrier), kernel 2.8 s | `analysis/below-located` |
+| `itree_trace::IsTrace::split_bind` | 1.3 s | kernel 0.9 s: 306K steps, 139K conversion queries | `itree/split-bind` |
+
+The `cert/*` cases read the certificate write-elf writes on the day
+(`docs/cloud-benchmarks.md`), not a frozen copy: `cert/yes-pieces` 205K
+steps over 7 items and `cert/yes-labels` 29K over 15, close to the last
+rows the frozen copy gave (`issues/native-certificate-pieces-remaining-cost.md`).
 
 ## What was not measured
 

@@ -455,7 +455,7 @@ fn wrong_zext_node(next, width, extra, pa: Nat) → Option<Lowered> {
     Some(Lowered(nodes_region([Move(extra + width, next, pa)]), next, Succ(next)))
 }
 
-// expect-error(kernel): the kernel rejected `wrong_zext_node_sound`: NotConvertible
+// expect-error(mismatch): but `LowerHolds(Prim(Zext(width, extra), [a]), w, g, ports, next, wrong_zext_node(next, width, extra, pa))` is expected here
 theorem wrong_zext_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, width, extra, a, pa: Nat,
     at_a: port_at(ports, a) = Some(pa), ea: Ty::at(g, a) = Word(width)):
     Tm::LowerHolds(Prim(Zext(width, extra), [a]), w, g, ports, next, wrong_zext_node(next, width, extra, pa)) {

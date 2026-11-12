@@ -97,16 +97,16 @@ fn lemmas_are_cited_at_their_own_statements() {
         "fn bad(x, y, z: CReal, h: x < y) → y + z < x + z { x.add_lt_mono_r(y, z, h) }",
         // Nonnegative factors give a nonnegative product only.
         "fn bad(x, y: CReal, hx: 0 <= x, hy: 0 <= y) → 0 < x * y { CReal::mul_nonneg(hx, hy) }",
-    ], Refusal::Kernel);
+    ], Refusal::Mismatch);
     // A positive product needs both factors positive: a nonnegative one
     // carries no gap to multiply. `hx`'s parameter type mentions the implicit
     // `x`; its own type is compared with it, so the kernel's refusal is
     // reported at `hx` with `hx`'s type
-    // (`issues/implicit-argument-mismatch-reaches-kernel.md`). `0 < x` has no
-    // surface spelling, so the note is located rather than a mismatch.
+    // (`issues/implicit-argument-mismatch-reaches-kernel.md`), both types
+    // spelled, each with what it unfolds to.
     refused("creal_mul_pos_of_nonneg", &[
         "fn bad(x, y: CReal, hx: 0 <= x, hy: 0 < y) → 0 < x * y { CReal::mul_pos(hx, hy) }",
-    ], Refusal::Says("which does not convert to the type expected here"));
+    ], Refusal::Says("this has type `0 <= x`, but `0 < x` is expected here; `0 <= x` unfolds to"));
     refused("creal_bad_cite_mismatch", &[
         // Bishop's bound is 2 · 2^-n, not 2^-n.
         "fn bad(x, y: CReal, h: x ≈ y, n: Nat) → (x.at(n) - y.at(n)).abs() <= Rat::inv_pow2(n) { CReal::bishop_of_same(h)(n) }",

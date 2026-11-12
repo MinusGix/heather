@@ -1,10 +1,10 @@
 ---
 title: Refresh the probe benchmark cases: three no longer run, two no longer probe a cost
-status: open
+status: closed
 labels: [performance,tooling]
 area: infrastructure
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 `scripts/bench-probes` no longer measures what its case list says. Found on 2026-11-11 while writing [[performance-overview-2026-11-11]].
@@ -20,3 +20,7 @@ updated: 2026-11-11
 ## Done when
 
 Every case in `perf/bench/cases.tsv` runs, the certificate fixture is regenerated or replaced by a case that cannot go stale (a `write-elf` into a scratch file, then `--only` on its pieces), and the two trivial cases are replaced by today's heaviest declarations: `native_compile_correct::Target::perform_call`, `supremum::OrderComplete::below_located`, `itree_trace::IsTrace::split_bind`.
+
+## Log
+
+- 2026-11-12: Done. `cert/*` are a new case kind, `cert`: the harness runs `write-elf lib/native/native_tools.hthr yes_tool` once (unmeasured), copies the certificate to `yes_tool_elf_certificate.hthr` under `target/bench-probes/out/certificates/` (a module's stem must be an identifier), and runs `--only` on its items matching a glob (`yes_tool:yes_tool_elf_piece_*_is`, `yes_tool:yes_tool_elf_at_*`). The frozen fixture is deleted. `native/emit-extends` and `tactic/attempt-from` gave way to `native/perform-call`, `analysis/below-located` and `itree/split-bind`. `algebra/pos-of-mul-pos-nonneg` ran again once retargeted at `OrderedSemiring::`, but at 485 steps and 0.04 s it no longer probed a cost either, so it is retired too. A `--save` now drops rows of cases the list no longer names. Every case ran on the cloud box at d64c439 (`--heavy` included) and `perf/bench/results.tsv` is re-recorded; the new rows are in `perf/bench/targets.md` T7.

@@ -676,15 +676,26 @@ impl Reads<'_, '_> {
 
     /// A nullary global of type `List<Nat>`, evaluated and read back.
     pub fn numbers(&self, name: &str) -> Result<Vec<u64>, SourceError> {
+        match self.numbers_up_to(name, 1 << 20)? {
+            (numbers, false) => Ok(numbers),
+            (_, true) => unsupported("an implausibly long list"),
+        }
+    }
+
+    /// [`Self::numbers`], stopping after the first `cap`: the numbers read,
+    /// and whether the list went on past them. A cell is forced only when
+    /// it is read, so nothing past the cap is evaluated (`heather eval`'s
+    /// bound on what it prints).
+    pub fn numbers_up_to(&self, name: &str, cap: usize) -> Result<(Vec<u64>, bool), SourceError> {
         let reader = &self.reader;
         let mut cell = reader.global(self.elaborator, name)?;
         let mut numbers = Vec::new();
         loop {
             let (index, fields, children) = reader.ctor(cell)?;
             match (index, fields.first(), children.first()) {
-                (0, _, _) => return Ok(numbers),
+                (0, _, _) => return Ok((numbers, false)),
                 (1, Some(head), Some(tail)) => {
-                    if numbers.len() >= 1 << 20 { return unsupported("an implausibly long list"); }
+                    if numbers.len() >= cap { return Ok((numbers, true)); }
                     numbers.push(reader.nat(head)?);
                     cell = tail;
                 }

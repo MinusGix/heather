@@ -1,10 +1,10 @@
 ---
 title: A record at one value parameter is accepted where another is expected, and the kernel refuses
-status: open
+status: closed
 labels: [elaborator,diagnostics]
 area: language
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 A value of `Exists(P)` checks, in the elaborator, at `Exists(Q)` for a
@@ -27,3 +27,14 @@ Wanted: the elaborator's own check compares the value arguments of a
 value-parameterised former, and the message spells both.
 
 Done when the declaration above is refused as a type mismatch at `w`.
+
+## Resolution (2026-11-12)
+
+By the time this was worked on, the refusal already landed at `w` as a
+checking mismatch; what was left was the spelling of `w`'s own type, whose
+`∨` under the predicate's binder came out `Or<…>`. PR #595 spells a type's
+arguments under a binder, so the declaration above is now refused with
+`Exists<…>(λ (x: A) => Or<Mem(x, xs), Mem(x, ys)>)` against
+`Exists<…>(λ (x: A) => Mem(x, xs ++ ys))`. Pinned in
+`lib/_tests/lang/mismatch_spelling_tests.hthr`, beside the sibling
+type-function case (`Inner()` against `Outer()`), fixed in the same round.

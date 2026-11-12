@@ -50,6 +50,7 @@ use heather_elab::{Elaborator, stats};
 use heather_cli::{expect, loader, semantic::SemanticSession};
 
 mod color;
+mod eval;
 mod fmt;
 mod native;
 
@@ -136,6 +137,7 @@ fn run() -> ExitCode {
             },
             None => usage(),
         },
+        Some((cmd, rest)) if cmd == "eval" => eval::run(rest),
         Some((cmd, rest)) if cmd == "fmt" => fmt::run(rest),
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
         Some((cmd, rest)) if cmd == "reflect" => native::reflect(rest),
@@ -149,6 +151,7 @@ fn run() -> ExitCode {
 const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--meaning-check] [--expectations] [--build-jobs <n> [--build-only] [--build-first <dir>]... [--build-times <file.tsv>]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
+                     \x20      heather eval <file.hthr> <term> [--type <type>] [-L <dir>]... [--cache | --cache-dir <dir>] [--accept-stale-images] [--limit <n>] [--kernel-workers <n>]\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
                      \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\

@@ -201,7 +201,7 @@ impl Statements<'_> {
             "Or" | "logic::Or" => Connective::Or,
             _ => return None,
         };
-        let targs = Inductives(self.0).display_targs(cx, &inline, &ind, 0)?;
+        let targs = Inductives(self.0).display_targs(cx, &inline, &ind)?;
         let [a, b] = <[(Type, Level); 2]>::try_from(targs).ok()?;
         Some((which, [a, b]))
     }

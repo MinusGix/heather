@@ -211,14 +211,14 @@ theorem compare(x: Entry): (y: Entry) → x.second = y.first { ?comparison }
 #[test]
 fn a_parameterized_inductive_under_a_binder_renders_instead_of_aborting() {
     const BOTH: &str = "record Both<P, Q> { left: P, right: Q }\n";
-    // The argument genuinely mentions the binder, so it does not strengthen
-    // back to the context and the honest ellipsis is the answer. What matters
-    // is that there *is* an answer.
+    // The argument mentions the binder, and is recovered in the context the
+    // walk is standing in, under it
+    // (issues/type-arguments-under-a-binder-print-elided.md).
     let msg = rendered(&format!(
         "{BOTH}theorem dep<A>(P: A -> Type, R: Type, h: R): (a: A) -> Both<P(a), R> {{ h }}"
     ));
     assert!(
-        msg.contains("this has type `R`, but `(x: A) -> Both<…>` is expected here"),
+        msg.contains("this has type `R`, but `(x: A) -> Both<P(x), R>` is expected here"),
         "{msg}"
     );
     // …and where the arguments do *not* mention the binder they are recovered

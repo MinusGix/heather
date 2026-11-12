@@ -173,11 +173,10 @@ impl MismatchNotes<'_> {
         if let Some(msg) = partial.as_ref().and_then(|f| Partial(self).partial_use_note(cx, f, got, expected)) {
             return Some((MismatchNote::Spelled(msg), *span));
         }
-        let got_s = self.display_type_clean(cx, got);
-        let want_s = self.display_type_clean(cx, expected);
+        let (got_s, want_s, unfolds) = self.check_sides(cx, got, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}{}{}",
+                "this has type `{g}`, but `{w}` is expected here{unfolds}{}{}{}",
                 clash.as_ref().map(|c| self.slot_clash_note(cx, c)).unwrap_or_default(),
                 self.opaque_equation_note(cx, got, expected),
                 Casts(self).cast_help(cx, got, expected, *span),
@@ -201,6 +200,54 @@ impl MismatchNotes<'_> {
             ),
         };
         Some((note, *span))
+    }
+
+    /// The two sides of a checking mismatch, spelled, and the clause saying
+    /// what they unfold to when that is worth saying. A call of a declared
+    /// type function (`Inner()`, `Readers(b)`) is spelled as written: the
+    /// display's decoding unfolds it to its first visible type former, which
+    /// read `Nat -> …` against `List<Nat> -> …` where the program wrote
+    /// `Inner()` and `Outer()`
+    /// (issues/type-function-argument-mismatch-only-kernel-refuses.md).
+    ///
+    /// The unfolding is added where the names alone may not show the
+    /// difference: not between two calls of one function, whose arguments
+    /// are the difference. Two sides whose unfoldings display alike are
+    /// spelled by those, so the caller's "displays the same" note says so,
+    /// rather than two names that look different for a reason the reader
+    /// cannot see.
+    fn check_sides(&self, cx: &Cx, got: &Type, expected: &Type) -> (Option<String>, Option<String>, String) {
+        let side = |ty: &Type| {
+            let decoded = self.display_type_clean(cx, ty);
+            let named = match ty {
+                Type::El { tm, .. } => match crate::spelling::app_spine(tm).0 {
+                    Term::GlobalTm { var, .. } if self.gen_def_of(*var).is_none() => {
+                        self.spell_type_clean(cx, ty).filter(|n| decoded.as_ref() != Some(n)).map(|n| (n, *var))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            (named, decoded)
+        };
+        let (got_named, got_decoded) = side(got);
+        let (want_named, want_decoded) = side(expected);
+        if got_named.is_none() && want_named.is_none() {
+            return (got_decoded, want_decoded, String::new());
+        }
+        if got_decoded.is_some() && got_decoded == want_decoded {
+            return (got_decoded, want_decoded, String::new());
+        }
+        let same_head = matches!((&got_named, &want_named), (Some((_, a)), Some((_, b))) if a == b);
+        let unfolds = match (&got_named, &got_decoded, &want_named, &want_decoded) {
+            _ if same_head => String::new(),
+            (Some((g, _)), Some(gu), Some((w, _)), Some(wu)) => format!("; `{g}` unfolds to `{gu}`, and `{w}` to `{wu}`"),
+            (Some((g, _)), Some(gu), None, _) => format!("; `{g}` unfolds to `{gu}`"),
+            (None, _, Some((w, _)), Some(wu)) => format!("; `{w}` unfolds to `{wu}`"),
+            _ => String::new(),
+        };
+        let shown = |named: Option<(String, _)>, decoded| named.map(|(n, _)| n).or(decoded);
+        (shown(got_named, got_decoded), shown(want_named, want_decoded), unfolds)
     }
 
     /// What an argument's [`application::SlotClash`] adds to its mismatch:

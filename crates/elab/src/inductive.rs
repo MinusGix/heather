@@ -3375,22 +3375,21 @@ impl Inductives<'_> {
     /// the tag/field telescope, then the complete candidate list is verified
     /// by re-lowering the declaration and comparing the resulting shape.
     /// Anything uncertain declines to the existing `<…>` spelling.
-    /// `under` is the number of binders the display walk has descended
-    /// through since `cx`, so `ty` — and every field type read out of its
-    /// lowering below — is scoped in `cx.gamma` plus that many entries rather
-    /// than in `cx.gamma` alone. It is load-bearing twice over: a recovered
-    /// argument has to be strengthened past those binders *as well as* the Σ
-    /// spine's, or `apply_local` is handed a variable that addresses nothing
-    /// and the kernel aborts the whole process rather than the diagnostic
-    /// (issues/pi-codomain-record-mismatch-panics-kernel.md); and the result
-    /// is handed back to a walk that is still under them, so it is shifted
-    /// back up before it is returned.
+    ///
+    /// `ty` is scoped in `cx`: a display walk below binders passes the
+    /// context it is standing in, the root extended by the binders crossed
+    /// (`Speller::here`), not the root. Strengthening only the Σ spine's
+    /// binders is then exact, and an argument that mentions a crossed binder
+    /// is recovered rather than declined to `<…>`
+    /// (issues/type-arguments-under-a-binder-print-elided.md). Scoping `ty`
+    /// in a shorter context than its own hands `apply_local` a variable that
+    /// addresses nothing, and the kernel aborts the process
+    /// (issues/pi-codomain-record-mismatch-panics-kernel.md).
     pub(crate) fn display_targs(
         &self,
         cx: &Cx,
         ty: &Type,
         ind: &Inductive,
-        under: u32,
     ) -> Option<Vec<(Type, Level)>> {
         if ind.params.is_empty() {
             return Some(Vec::new());
@@ -3438,24 +3437,21 @@ impl Inductives<'_> {
                 else {
                     return None;
                 };
-                learn_targs(cx, ind, written, fst, fst_level, crossed + under, &mut sols);
+                learn_targs(cx, ind, written, fst, fst_level, crossed, &mut sols);
                 fields = Rc::clone(snd);
                 crossed += 1;
             }
         }
         let args: Vec<(Type, Level)> = sols.into_iter().collect::<Option<_>>()?;
-        // The arguments strengthened all the way back to `cx`, which is where
-        // `lower_shape` scopes them, so the re-lowering is the same soundness
-        // check it always was; `shape` is `under` binders further in, so the
-        // comparison meets it there.
+        // The arguments are scoped in `cx`, which is where `lower_shape`
+        // scopes them, so the re-lowering is the soundness check.
         let (rebuilt, _) = self
             .lower_shape(cx, ind, &args, &[], Span { start: 0, end: 0 })
             .ok()?;
-        if rebuilt.shift_local(under) != shape {
+        if rebuilt != shape {
             return None;
         }
-        // Back out to where the caller is standing.
-        Some(args.into_iter().map(|(t, l)| (t.shift_local(under), l)).collect())
+        Some(args)
     }
 
     /// The surface field types of a constructor, for the narrow type-argument

@@ -224,6 +224,10 @@ struct Finished {
     /// The SHA-256 of the stored bytes `delta` was decoded from, when it was
     /// (`replay_key`).
     content: Option<[u8; 32]>,
+    /// The module and the lints it was checked under, while its delta may
+    /// still be needed: what elaborates it again when the store has lost
+    /// its image ([`SemanticSession::rebuild`]). Dropped with the delta.
+    source: Option<(Rc<Module>, LintProfile)>,
     /// The canonical world after it, once built.
     state: Option<SemanticImage>,
 }
@@ -465,6 +469,7 @@ impl SemanticSession {
                 f.delta = None;
                 f.registry = None;
                 f.hashes = None;
+                f.source = None;
             }
         }
     }
@@ -626,7 +631,7 @@ impl SemanticSession {
         // A hit moved straight into the caller's world: the canonical world
         // under the module is needed only to elaborate it.
         if self.process_world && !in_place && self.images_usable && !self.only.contains_key(&module.name) {
-            if let Some(outcome) = self.hit_into_process(elab, module, key, &dependencies, &imports, &canon) {
+            if let Some(outcome) = self.hit_into_process(elab, module, lint_profile, key, &dependencies, &imports, &canon) {
                 return outcome;
             }
         }
@@ -670,6 +675,7 @@ impl SemanticSession {
             hashes: None,
             delta: Some(Rc::new(delta)),
             content: hit.map(|hit| hit.content),
+            source: Some((Rc::new(module.clone()), lint_profile)),
             state,
         };
         self.done.insert(module.name.clone(), finished);
@@ -752,8 +758,14 @@ impl SemanticSession {
     }
 
     /// `name`'s delta over its canonical world: held, or decoded from the
-    /// store against a placeholder prefix of that world's length.
-    fn canonical_delta(&self, name: &str) -> Result<(Rc<ModuleDelta>, Option<[u8; 32]>), String> {
+    /// store against a placeholder prefix of that world's length, or — when
+    /// the store no longer has it — elaborated again over that world, made
+    /// as `template` is ([`Self::rebuild`]).
+    fn canonical_delta(
+        &mut self,
+        template: &Elaborator,
+        name: &str,
+    ) -> Result<(Rc<ModuleDelta>, Option<[u8; 32]>), String> {
         let f = &self.done[name];
         if let Some(delta) = &f.delta {
             return Ok((Rc::clone(delta), f.content));
@@ -762,15 +774,52 @@ impl SemanticSession {
         let psi = placeholder(self.world_len(&f.canon.order));
         match stats::timed(stats::Timer::ImageDecode, || images.load(f.key, psi, f.source_len, self.freshness)) {
             Ok(Some(loaded)) => Ok((Rc::new(loaded.delta), Some(loaded.content))),
-            Ok(None) => Err(format!("the image of `{name}` is gone from the store")),
+            Ok(None) => self.rebuild(template, name),
             Err(e) => Err(format!("the image of `{name}` is unusable: {e}")),
         }
+    }
+
+    /// Elaborate `name` again over its canonical world, for a session that
+    /// planned on its image and found it gone: the store is shared, and
+    /// another process's sweep may remove any image it does not pin between
+    /// this session's plan and its read (`ModuleImageCache::sweep`,
+    /// `issues/image-sweep-removes-planned-image.md`). A miss here is the
+    /// ordinary miss the sweep promises, so it costs an elaboration (which
+    /// publishes the image again) and not the run.
+    ///
+    /// The module was checked once already under this key, so it must come
+    /// out with the identity its dependents were keyed by; anything else is
+    /// reported, never used. The session's own counts and pending hit are
+    /// the caller's module's, so they are put back as they were.
+    fn rebuild(&mut self, template: &Elaborator, name: &str) -> Result<(Rc<ModuleDelta>, Option<[u8; 32]>), String> {
+        let gone = format!("the image of `{name}` is gone from the store");
+        let f = &self.done[name];
+        let Some((module, lint_profile)) = f.source.clone() else { return Err(gone) };
+        let (canon, key, identity) = (f.canon.clone(), f.key, f.identity);
+        let dependencies =
+            ModuleDependencyIdentity::new(canon.order.iter().map(|m| self.done[m].identity).collect());
+        let source = SourceKey::for_source(&module.name, &module.src, lint_profile);
+        let mut world = self.world_before(template, &canon).map_err(|why| format!("{gone}, and its world: {why}"))?;
+        let counts = (self.hits, self.stale_hits, self.relocated);
+        let pending = self.hit.take();
+        let (outcome, delta) = self.check_in(&mut world, &module, lint_profile, key, source, dependencies, &canon);
+        let hit = std::mem::replace(&mut self.hit, pending);
+        (self.hits, self.stale_hits, self.relocated) = counts;
+        let Some(delta) = delta else {
+            let why = outcome.errors.first().map_or_else(|| "no delta".to_string(), |e| e.to_string());
+            return Err(format!("{gone}, and elaborating it again failed: {why}"));
+        };
+        let rebuilt = hit.as_ref().map_or_else(|| ModuleImageCache::interface_hash(&delta), |hit| hit.identity);
+        if rebuilt != identity {
+            return Err(format!("{gone}, and elaborating it again gave another interface"));
+        }
+        Ok((Rc::new(delta), hit.map(|hit| hit.content)))
     }
 
     /// Move `name`'s canonical delta into `world`, whose modules are
     /// `before`, and replay it there (`docs/module-dag-design.md` §4).
     fn load_into(&mut self, world: &mut Elaborator, name: &str, before: &[String]) -> Result<(), String> {
-        let (delta, content) = self.canonical_delta(name)?;
+        let (delta, content) = self.canonical_delta(world, name)?;
         let f = &self.done[name];
         // A replay is vouched for whole over its own canonical world, and a
         // moved one over the pair of worlds the move is computed from (§13).
@@ -897,6 +946,7 @@ impl SemanticSession {
         &mut self,
         elab: &mut Elaborator,
         module: &Module,
+        lint_profile: LintProfile,
         key: ModuleCacheKey,
         dependencies: &ModuleDependencyIdentity,
         imports: &[String],
@@ -927,7 +977,8 @@ impl SemanticSession {
         self.note_stale(&module.name, loaded.stale, &mut notices);
         // The canonical delta is not kept: the caller's world holds the moved
         // copy, and a later elaboration that needs this module's canonical
-        // world decodes it again.
+        // world decodes it again, or elaborates it again if the store has
+        // lost it by then.
         self.done.insert(
             module.name.clone(),
             Finished {
@@ -943,6 +994,7 @@ impl SemanticSession {
                 hashes: None,
                 delta: None,
                 content: None,
+                source: Some((Rc::new(module.clone()), lint_profile)),
                 state: None,
             },
         );
@@ -1579,6 +1631,7 @@ impl Finished {
             hashes: None,
             delta: None,
             content: None,
+            source: None,
             state: None,
         }
     }
