@@ -13,7 +13,13 @@
 // A body threads its span through stores (`span.put_within(length, i, v)`
 // or `span.with_byte_within(length, i, v)`) and through calls of other
 // such functions, whose `.after` is the span the next step takes and whose
-// `.value` is the word the call returned. It ends in `Mutated(span,
+// `.value` is the word the call returned. A call may also be over windows:
+// `callee(span.window(a.toNat(), b.toNat()), b.sub(a), …)`, each span of
+// the callee a window of one of this function's and the word after it the
+// window's length, with what the callee wrote put back
+// (`span.put_window(a.toNat(), r.after)`); a window from the span's first
+// byte is `span.window(0, n.toNat())` with `n` after it, put back at 0. It
+// ends in `Mutated(span,
 // value)`, in a `match` on a `Bool` whose arms end so, or, in a function
 // that `decreases`, in its own call. The reflector:
 //
@@ -22,7 +28,8 @@
 // 2. reflects each one's operands as pure `rt` at the span as it is then
 //    (`rt_go`, the pure walk, with the span now for `byte_within`), binds
 //    them with `Let`s, and emits the `Put` or the `Call`;
-// 3. reads a later `.value` of a call as the variable its `Call` bound;
+// 3. reads a later `.value` of a call as the variable its `Call` or its
+//    `Lend` bound;
 // 4. refuses a read of the span as it was before a store, the span used as
 //    a value, and a span that branches and joins again (a statement `if`
 //    that stores, with code after it): an `FTm` cannot name any of them.
@@ -34,6 +41,7 @@ import logic;
 import bool;
 import nat;
 import list;
+import list_window;
 import option;
 import pair;
 import char;
@@ -45,29 +53,45 @@ import rt_file;
 import rt_reflect;
 
 // The globals the walk knows by name: the record a body ends in, and the
-// two spellings of a store.
-record FileNames { mutated: Nat, put: Nat, with_byte: Nat }
+// two spellings of a store, a window and its putting back. The last two
+// are absent where the body's module does not import `list_window`: it
+// then writes no window, and none is read.
+record FileNames { mutated: Nat, put: Nat, with_byte: Nat, window: Option<Nat>, put_window: Option<Nat> }
+
+fn rt_global_here(name: String) → Tac<Option<Nat>> {
+    lookup(name).bind(λ c => match c { Accepted(g) => pure(Some(g.id)), Refused(_) => pure(None) })
+}
+
+fn FileNames::names(at: Option<Nat>, g: Nat) → Bool { match at { None => False, Some(n) => n.same(g) } }
 
 fn rt_file_names() → Tac<FileNames> {
     let mutated <- rt_global("Mutated");
     let put <- rt_global("List::put_within");
     let with_byte <- rt_global("List::with_byte_within");
-    pure(FileNames(mutated, put, with_byte))
+    let window <- rt_global_here("List::window");
+    let put_window <- rt_global_here("List::put_window");
+    pure(FileNames(mutated, put, with_byte, window, put_window))
 }
 
 // ---------------------------------------------------------------------------
 // The walk
 
 // A computation read so far, the most recent step first: a pure value
-// bound, a store, or a call that writes. Operands are indices at the depth
-// the step is emitted at.
-inductive FSeg { FLet(e: Tm), FPut(i: Nat, length: Nat, v: Nat), FCall(f: Nat, args: List<Nat>) }
+// bound, a store, a call that writes, or one over windows. Operands are
+// indices at the depth the step is emitted at.
+inductive FSeg {
+    FLet(e: Tm),
+    FPut(i: Nat, length: Nat, v: Nat),
+    FCall(f: Nat, args: List<Nat>),
+    FLend(f: Nat, views: List<FView>, args: List<Nat>),
+}
 
 fn FSeg::close(segs: List<FSeg>, last: FTm) → FTm {
     segs.foldl(λ acc s => match s {
         FLet(e) => FTm::Let(e, acc),
         FPut(i, length, v) => FTm::Put(i, length, v, acc),
         FCall(f, args) => FTm::Call(f, args, acc),
+        FLend(f, views, args) => FTm::Lend(f, views, args, acc),
     }, last)
 }
 
@@ -115,7 +139,13 @@ fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List
                     Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
                     Nil => rt_refuse("`" ++ name ++ "` without its span"),
                 },
-                False => rt_refuse("`" ++ name ++ "` makes a span the reflector does not know: a store is `put_within` or `with_byte_within`, and a call that writes hands its span on as `.after`"),
+                False => match FileNames::names(names.put_window, g.id) {
+                    True => match args.rev() {
+                        Cons(_, Cons(_, Cons(prev, _))) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
+                        _ => rt_refuse("`" ++ name ++ "` without its span, start and part"),
+                    },
+                    False => rt_refuse("`" ++ name ++ "` makes a span the reflector does not know: a store is `put_within` or `with_byte_within`, a call that writes hands its span on as `.after`, and a call over a window has its part put back by `put_window`"),
+                },
             },
             HMatch(_) => rt_refuse("the span through a branch that joins again (an `if` that stores, with code after it) is not reflected yet: end each arm in its own result"),
             _ => rt_refuse("a span that is not the function's own, threaded through stores and calls"),
@@ -203,10 +233,187 @@ fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: Globa
     }
 }
 
+// ---------------------------------------------------------------------------
+// A call over windows
+
+// A window as the walk reads it: the function's span it is of and its
+// bounds, as levels (`start` is absent for a window from the first byte).
+record LentView { span: Nat, start: Option<Nat>, end: Nat }
+
+fn LentView::views(st: RSt, vs: List<LentView>) → List<FView> {
+    vs.map(λ v => FView(v.span, st.index(v.span + v.span), v.start.map(λ s => st.index(s)), st.index(v.end)))
+}
+
+fn rt_file_bounds<A>() → Tac<A> {
+    rt_refuse("a window's bounds are `x.toNat()` of 64-bit words (the code compares and passes the words), or the literal 0 for its start")
+}
+
+// A window's bound: `x.toNat()` of a 64-bit word, as that word's variable.
+fn rt_file_bound(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Pair<RSt, Nat>> {
+    view(h).bind(λ v => match v {
+        HGlobal(g, _, args) => match Known::prim(k.prims, g.id) {
+            Some(p) => match p {
+                PToNat => match args {
+                    Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                        Word(n) => match n.same(64) {
+                            True => rt_go(fuel, k, st, x, True).bind(λ r => pure(Pair(r.fst, RSt::level(r.snd)))),
+                            False => rt_file_bounds(),
+                        },
+                        _ => rt_file_bounds(),
+                    }),
+                    Nil => rt_file_bounds(),
+                },
+                _ => rt_file_bounds(),
+            },
+            None => rt_file_bounds(),
+        },
+        _ => rt_file_bounds(),
+    })
+}
+
+// A window's start: a bound, or the literal 0.
+fn rt_file_start(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Pair<RSt, Option<Nat>>> {
+    view(h).bind(λ v => match v {
+        HLit(n) => match n { Zero => pure(Pair(st, None)), Succ(_) => rt_file_bounds() },
+        _ => rt_file_bound(fuel, k, st, h).bind(λ r => pure(Pair(r.fst, Some(r.snd)))),
+    })
+}
+
+fn rt_file_size<A>() → Tac<A> {
+    rt_refuse("the word after a window is the window's length: `end.sub(start)` of the words its bounds are, or the end's word itself for a window from 0")
+}
+
+// The word after a window, held to the window's bounds. Nothing is bound
+// for it: the code passes the length it computes from the bounds.
+fn rt_file_sized(fuel: Nat, k: Known, st: RSt, length: Handle, start: Option<Nat>, end: Nat) → Tac<RSt> {
+    match start {
+        None => rt_go(fuel, k, st, length, True).bind(λ r => match RSt::level(r.snd).same(end) { True => pure(r.fst), False => rt_file_size() }),
+        Some(s) => view(length).bind(λ v => match v {
+            HGlobal(g, _, args) => match Known::prim(k.prims, g.id) {
+                Some(p) => match p {
+                    PWord(op) => match op.same(1) {
+                        False => rt_file_size(),
+                        True => match args {
+                            Cons(a, Cons(b, Nil)) => rt_go(fuel, k, st, a, True).bind(λ ra => rt_go(fuel, k, ra.fst, b, True).bind(λ rb =>
+                                match RSt::level(ra.snd).same(end).and(RSt::level(rb.snd).same(s)) { True => pure(rb.fst), False => rt_file_size() })),
+                            _ => rt_file_size(),
+                        },
+                    },
+                    _ => rt_file_size(),
+                },
+                None => rt_file_size(),
+            },
+            _ => rt_file_size(),
+        }),
+    }
+}
+
+// The span a window is of: the written span as it is now for the callee's
+// first, a span this function only reads for the ones after it.
+fn rt_file_viewed(k: Known, fk: FileKnown, st: RSt, j: Nat, xs: Handle) → Tac<Nat> {
+    match j {
+        Zero => rt_same_span(fk, xs).bind(λ same => match same {
+            True => pure(0),
+            False => rt_refuse("the first window of a call over windows is of the span this function writes, as it is now: the callee writes its first span"),
+        }),
+        Succ(_) => rt_span(k, st, xs).bind(λ n => match n {
+            Zero => rt_refuse("a window to read of the span the call writes: a view to write is the only view of its span (issues/views-of-one-buffer-apart.md)"),
+            Succ(m) => pure(Succ(m)),
+        }),
+    }
+}
+
+fn rt_file_windows<A>() → Tac<A> {
+    rt_refuse("a call whose part is put back by `put_window` takes each of its spans as a window (`span.window(a.toNat(), b.toNat())`) with the window's length word after it")
+}
+
+// The `n` windows a call over windows starts with, and its arguments after
+// them.
+fn rt_file_views(fuel: Nat, k: Known, names: FileNames, fk: FileKnown, st: RSt, j, n: Nat, args: List<Handle>)
+    → Tac<Pair<Pair<RSt, List<LentView>>, List<Handle>>> {
+    match n {
+        Zero => pure(Pair(Pair(st, []), args)),
+        Succ(m) => match args {
+            Cons(bytes, Cons(length, rest)) => view(bytes).bind(λ v => match v {
+                HGlobal(g, _, wargs) => match FileNames::names(names.window, g.id) {
+                    False => rt_file_windows(),
+                    True => match wargs.rev() {
+                        Cons(end, Cons(start, Cons(xs, _))) => {
+                            let span <- rt_file_viewed(k, fk, st, j, xs);
+                            let rs <- rt_file_start(fuel, k, st, start);
+                            let re <- rt_file_bound(fuel, k, rs.fst, end);
+                            let sized <- rt_file_sized(fuel, k, re.fst, length, rs.snd, re.snd);
+                            let more <- rt_file_views(fuel, k, names, fk, sized, Succ(j), m, rest);
+                            pure(Pair(Pair(more.fst.fst, Cons(LentView(span, rs.snd, re.snd), more.fst.snd)), more.snd))
+                        },
+                        _ => rt_file_windows(),
+                    },
+                },
+                _ => rt_file_windows(),
+            }),
+            _ => rt_file_windows(),
+        },
+    }
+}
+
+fn rt_file_parts<A>() → Tac<A> {
+    rt_refuse("`put_window` puts back what a call over windows wrote: `span.put_window(a.toNat(), r.after)` where `r` is the call and `a` its first window's start")
+}
+
+fn LentView::starts(self v: LentView, at: Option<Nat>) → Bool {
+    match v.start {
+        None => match at { None => True, Some(_) => False },
+        Some(s) => match at { None => False, Some(a) => s.same(a) },
+    }
+}
+
+// A call over windows, read from the `put_window` that puts its part
+// back: `span.put_window(at, c.after)` with `c` the call.
+fn rt_file_lend(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, args: List<Handle>) → Tac<FWalk> {
+    match args.rev() {
+        Cons(part, Cons(at, _)) => view(part).bind(λ pv => match pv {
+            HField(c, field, _) => match Known::str_same(field, "after") {
+                False => rt_file_parts(),
+                True => view(c).bind(λ cv => match cv {
+                    HGlobal(g, name, cargs) => {
+                        let found <- rt_file_callee(k, w.cfuns, g, name);
+                        let kk = k.at_file(w.fk);
+                        let n <- rt_call_lent(64, kk, cargs);
+                        let vs <- rt_file_views(fuel, kk, names, w.fk, w.st, 0, n, cargs);
+                        match vs.fst.snd {
+                            Nil => rt_file_windows(),
+                            Cons(own, _) => {
+                                let ra <- rt_file_start(fuel, kk, vs.fst.fst, at);
+                                match own.starts(ra.snd) {
+                                    False => rt_file_parts(),
+                                    True => {
+                                        let r <- RSt::operands(λ s a => rt_go(fuel, kk, s, a, True), ra.fst, vs.snd);
+                                        let st = r.fst;
+                                        pure(FWalk(st.written(Succ(st.depth)),
+                                            Cons(FLend(found.snd, LentView::views(st, vs.fst.snd), st.indices(r.snd)), FSeg::lets(st.lets) ++ w.segs),
+                                            FileKnown(w.fk.span, Some(link), w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
+                                            Succ(w.done), found.fst))
+                                    },
+                                }
+                            },
+                        }
+                    },
+                    _ => rt_file_parts(),
+                }),
+            },
+            _ => rt_file_parts(),
+        }),
+        _ => rt_file_parts(),
+    }
+}
+
 fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) → Tac<FWalk> {
     let v <- view(link);
     match v {
-        HGlobal(_, _, args) => rt_file_store(fuel, k, w, link, args.drop(1)),
+        HGlobal(g, _, args) => match FileNames::names(names.put_window, g.id) {
+            True => rt_file_lend(fuel, k, names, w, link, args),
+            False => rt_file_store(fuel, k, w, link, args.drop(1)),
+        },
         HField(c, _, _) => view(c).bind(λ cv => match cv {
             HGlobal(g, name, args) => match g.id.same(names.put) {
                 True => rt_file_store(fuel, k, w, link, args.drop(1)),

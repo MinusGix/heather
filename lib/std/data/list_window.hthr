@@ -190,7 +190,7 @@ theorem List::nth_put_window_before<A>(self xs: List<A>): (start: Nat) → (ys: 
             Zero => false_elim(before),
             Succ(_) => false_elim(inside),
         },
-        Cons(h, t) => λ start ys k => match start {
+        Cons(_, t) => λ start ys k => match start {
             Zero => λ before _ => false_elim(before),
             Succ(s) => match k {
                 Zero => λ _ _ => refl,

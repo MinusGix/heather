@@ -567,7 +567,7 @@ fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
                 },
                 None => rt_refuse(refused),
             },
-            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => pure(b), False => rt_refuse(refused) },
+            HCtor(ty, _, _, _) => match ty.id.same(k.boolean) { True => pure(b), False => rt_refuse(refused) },
             _ => rt_refuse(refused),
         }),
     })

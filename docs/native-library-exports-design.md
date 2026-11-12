@@ -486,8 +486,7 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     met is registers, not proofs: two spans are four home words kept in
     place through the loop.
 
-    *The lend, in the file layer* (*built*; reading it from source is
-    owed). The writers' meanings and their link are at every rest of a
+    *The lend, in the file layer* (*built*, and read from source, below). The writers' meanings and their link are at every rest of a
     file (`FWorld.writers` and `FTm::CallsAgree` take the read spans as a
     parameter), which is what lets a callee be read over windows. The
     term is `FTm::Lend(f, views, args, body)` with
@@ -519,9 +518,36 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     view, and is one `Lend` region; its once-proof is `FTm::lend_sound`,
     a `StepHolds` like a store's, so `FTm::lower_sound` and the loop's
     `FTm::tail_sound` each gained one arm. This shape of source is my
-    reading, not a ruling. The probes
-    (`lib/_tests/native/runtime/rt_file_lend_tests.hthr`) are written as
-    terms by hand: a window of each of two spans and a whole written span
+    reading, not a ruling. The reflector reads it
+    (`rt_file_lend`, `rt_file_reflect.hthr`): a link of the span's chain
+    that is a `put_window` is a call over windows, its callee's leading
+    byte lists each a `window` of one of this function's spans (the first
+    of the written span as it is now, the others of spans only read), a
+    bound the word whose `toNat` it is, and the word after a window held
+    to the window's bounds so that nothing is bound for it. What it
+    refuses says why: a bound that is no word's `toNat`, a length that is
+    not the bounds' difference, a part put back elsewhere than its
+    window's start, a window to read of the written span, a first window
+    of a span only read, a span handed whole beside windows. The
+    generator needed nothing: a `runtime fn` that lends publishes its
+    program and its statement at every file like any other writer
+    (`lib/_tests/native/runtime/runtime_span_lend_tests.hthr`, one of
+    them lending two windows to a loop). And `compile-x86` exports one:
+    a program that lends is stated by a row of marks for each function
+    (`program_marked`, `compiled_returns_marked`) where a program that
+    does not is stated by one list, so the exporter reads the rows the
+    search finds (`program_rows`, evaluated in the owner's scope, padded
+    to each function's buffers) and writes them into the certificate as
+    a literal the kernel checks in one evaluation
+    (`Shape::runtime_written`, `crates/cli/src/native/verified.rs`). The
+    export is `copy_window(out: span mut, text: span, from, end)`
+    (`native_tool_spans.hthr`, `heather_linked::spans::copy_window`):
+    three comparisons, then `copy_span`'s loop lent the window
+    `from..end` of both spans. It is held to plain Rust at every pairing
+    of lengths with the window's ends on both sides of everything,
+    inside larger buffers, between unmapped pages and at both stack
+    alignments. The hand-written probes
+    (`lib/_tests/native/runtime/rt_file_lend_tests.hthr`) are terms: a window of each of two spans and a whole written span
     with a window of the read one, each pinned by conversion, compiled by
     `FFun::lower_sound` over any file, run on bytes with controls, and
     accepted by the function compiler under rows it finds.

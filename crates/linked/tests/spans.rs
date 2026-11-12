@@ -23,6 +23,9 @@
 //! - a function lent one span to write and one to read (`spans::copy_span`):
 //!   the same of the written span, and the span read ending at an unmapped
 //!   page, read to its length and no further;
+//! - a function that lends windows of its two spans to another
+//!   (`spans::copy_window`): the same again, and no byte of the written
+//!   span outside the window changes;
 //! - the code entered at both stack alignments, with the callee-saved
 //!   registers compared across the call.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -462,8 +465,112 @@ fn a_copy_of_or_into_an_empty_slice() {
     }
 }
 
+/// What `copy_window` leaves in `out` and answers, in plain Rust: where
+/// `from..end` is a window of both, `text`'s bytes there at their own
+/// indices and how many; otherwise `out` as it was and 0.
+fn windowed(out: &[u8], text: &[u8], from: u64, end: u64) -> (Vec<u8>, u64) {
+    let mut after = out.to_vec();
+    if end > out.len() as u64 || end > text.len() as u64 || end < from { return (after, 0); }
+    let (from, end) = (from as usize, end as usize);
+    after[from..end].copy_from_slice(&text[from..end]);
+    (after, (end - from) as u64)
+}
+
+// A window of each of two spans, lent to the loop that copies: the bytes
+// the written span holds after and the word answered are the reference's
+// at every pairing of lengths, with the window's ends on both sides of
+// both lengths and of each other. Outside the window no byte changes,
+// which the comparison with the reference's whole span says.
+#[test]
+fn copies_a_window_as_the_reference() {
+    for out_length in (0..20usize).chain([63, 64, 65, 255, 4096, 4097]) {
+        for text_length in [0, 1, out_length / 2, out_length.saturating_sub(1), out_length, out_length + 1, out_length + 70] {
+            let out = bytes(out_length, 0x71de ^ out_length as u64);
+            let text = bytes(text_length, 0x0a5e ^ (text_length as u64) << 16 ^ out_length as u64);
+            let (long, short) = (out_length.max(text_length) as u64, out_length.min(text_length) as u64);
+            for end in [0, 1, short / 2, short.saturating_sub(1), short, short + 1, long, long + 1, long + 4096, u64::MAX] {
+                for from in [0, 1, short / 3, end / 2, end.saturating_sub(1), end, end.saturating_add(1), u64::MAX] {
+                    let mut span = out.clone();
+                    let read = text.clone();
+                    let answered = spans::copy_window(&mut span, &read, from, end);
+                    assert_eq!((span, answered), windowed(&out, &text, from, end), "out {out_length}, text {text_length}, from {from}, end {end}");
+                    assert_eq!(read, text, "the span read changed: out {out_length}, text {text_length}, from {from}, end {end}");
+                }
+            }
+        }
+    }
+}
+
+// Clause 4 through a call over views: the spans are parts of larger
+// buffers, and the loop is lent parts of those. No byte outside the
+// window changes in the written buffer, and none at all in the one read.
+#[test]
+fn a_window_copy_stores_into_its_window_only() {
+    for (before, length, after) in [(0, 0, 16), (1, 1, 1), (7, 9, 5), (64, 100, 64), (3, 4096, 3)] {
+        let whole = vec![b'q'; before + length + after];
+        let source = vec![b'S'; before + length + after];
+        for (from, end) in [(0, 0), (0, length), (length / 2, length), (length / 3, length / 2), (length, length), (0, length + 1), (1, 0)] {
+            let mut buffer = whole.clone();
+            let read = source.clone();
+            let answered = spans::copy_window(&mut buffer[before..before + length], &read[before..before + length], from as u64, end as u64);
+            let copied = if end <= length && from <= end { end - from } else { 0 };
+            assert_eq!(answered, copied as u64, "length {length}, from {from}, end {end}");
+            let start = before + from.min(length);
+            assert!(buffer[..start].iter().all(|byte| *byte == b'q'), "a byte before the window changed: length {length}, from {from}, end {end}");
+            assert!(buffer[start..start + copied].iter().all(|byte| *byte == b'S'), "length {length}, from {from}, end {end}");
+            assert!(buffer[start + copied..].iter().all(|byte| *byte == b'q'), "a byte past the window changed: length {length}, from {from}, end {end}");
+            assert_eq!(read, source, "the buffer read changed: length {length}, from {from}, end {end}");
+        }
+    }
+}
+
+// Both spans between unmapped pages, as for `copy_span`: a window up to
+// each span's very end is copied with no fault, and an end past either is
+// refused before anything is read.
+#[test]
+fn a_window_copy_between_unmapped_pages_touches_its_spans_only() {
+    let mut written = Guarded::new();
+    let mut read = Guarded::new();
+    for out_length in [0, 1, 7, 8, 9, 64, 1000, PAGE] {
+        for text_length in [0, 1, out_length / 2, out_length, (out_length + 9).min(PAGE)] {
+            let out = bytes(out_length, 0xface ^ out_length as u64);
+            let text = bytes(text_length, 0xd00d ^ text_length as u64);
+            let (long, short) = (out_length.max(text_length) as u64, out_length.min(text_length) as u64);
+            for end in [0, short / 2, short, short + 1, long, long + 1, long + 2 * PAGE as u64] {
+                for from in [0, end / 2, end, end.saturating_add(1)] {
+                    let expected = windowed(&out, &text, from, end);
+                    let source: &[u8] = read.ending_at_the_boundary(&text);
+                    let span = written.ending_at_the_boundary(&out);
+                    let answered = spans::copy_window(span, source, from, end);
+                    assert_eq!((span.to_vec(), answered), expected, "ending at the boundary: out {out_length}, text {text_length}, from {from}, end {end}");
+                    assert_eq!(source, &text[..], "the span read changed: out {out_length}, text {text_length}, from {from}, end {end}");
+                    let source: &[u8] = read.starting_at_the_start(&text);
+                    let span = written.starting_at_the_start(&out);
+                    let answered = spans::copy_window(span, source, from, end);
+                    assert_eq!((span.to_vec(), answered), expected, "starting at the start: out {out_length}, text {text_length}, from {from}, end {end}");
+                }
+            }
+        }
+    }
+}
+
+// Empty slices on either side dangle: the only window of one is the empty
+// one, and nothing is read or stored through it.
+#[test]
+fn a_window_of_an_empty_slice() {
+    let empty: &mut [u8] = &mut [];
+    for (from, end) in [(0, 0), (0, 1), (1, 1), (0, 4096)] {
+        assert_eq!(spans::copy_window(empty, b"text", from, end), 0);
+        assert_eq!(spans::copy_window(empty, &[], from, end), 0);
+        let mut out = *b"four";
+        assert_eq!(spans::copy_window(&mut out, &[], from, end), 0);
+        assert_eq!(&out, b"four", "from {from}, end {end}");
+    }
+}
+
 unsafe extern "sysv64" {
     // The code itself, as `generated/exports.rs` declares it privately.
+    fn copy_window(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, from: u64, end: u64) -> u64;
     fn copy_span(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64, from: u64) -> u64;
     fn count_newlines(text: *const u8, length: u64, count: u64) -> u64;
     fn raise_span(text: *mut u8, length: u64, count: u64, from: u64) -> u64;
@@ -603,6 +710,26 @@ fn the_copy_at_both_stack_alignments() {
             let mut span = out.clone();
             let answered = entered_six!(8, copy_span, span.as_mut_ptr(), span.len() as u64, &text, count, from);
             assert_eq!((span, answered), (expected.0, (expected.1, KEPT)), "length {length}, count {count}, RSP eight lower");
+        }
+    }
+}
+
+// And of the function that lends windows to that one: its code computes
+// four words for the views and calls, so every argument register is
+// written twice over, and the registers the platform keeps come back.
+#[test]
+fn the_window_copy_at_both_stack_alignments() {
+    for length in [0, 1, 17, 300, 5000] {
+        let out = bytes(length, 0x51de ^ length as u64);
+        let text = bytes(length + 3, 0x3e47 ^ length as u64);
+        for (from, end) in [(0, 0), (0, length as u64), (length as u64 / 3, length as u64), (1, length as u64 + 5), (length as u64, length as u64 / 2)] {
+            let expected = windowed(&out, &text, from, end);
+            let mut span = out.clone();
+            let answered = entered_six!(0, copy_window, span.as_mut_ptr(), span.len() as u64, &text, from, end);
+            assert_eq!((span, answered), (expected.0.clone(), (expected.1, KEPT)), "length {length}, from {from}, end {end}, the platform's alignment");
+            let mut span = out.clone();
+            let answered = entered_six!(8, copy_window, span.as_mut_ptr(), span.len() as u64, &text, from, end);
+            assert_eq!((span, answered), (expected.0, (expected.1, KEPT)), "length {length}, from {from}, end {end}, RSP eight lower");
         }
     }
 }

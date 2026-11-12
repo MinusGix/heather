@@ -191,7 +191,7 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
         = Accepted::word(Accepted::longest(state, rest, i.toNat(), Accepted::after(state, rest, i.toNat(), found))) {
     match rest {
         Nil => λ state i found here ends live on => {
-            let past: (length.toNat() <= i.toNat()) = j(ends, λ n _ => n <= i.toNat(), i.toNat().le_refl());
+            let past: length.toNat() <= i.toNat() = omega;
             let stop: ((i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = False) =
                 cong_fn(λ (b: Bool) => b && !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), scan_past(i, length, past));
             trans(scan_from_stops(source, length, state, i, Accepted::word(found), stop),
@@ -203,7 +203,7 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
                     }))
         },
         Cons(byte, tail) => λ state i found here ends live on => {
-            let below: (i.toNat() < length.toNat()) = omega;
+            let below: i.toNat() < length.toNat() = omega;
             let under = scan_below(i, length, below);
             let next = scan_step(state, byte.zero_extend(56));
             let kept = Accepted::after(state, Cons(byte, tail), i.toNat(), found);

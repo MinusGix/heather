@@ -18,11 +18,14 @@ import option;
 import pair;
 import bitvec;
 import string;
+import tactic;
 import rt;
 import rt_lower;
 import rt_file;
 import rt_file_lower;
 import rt_file_loop;
+import rt_reflect;
+import rt_file_reflect;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -92,13 +95,13 @@ theorem carry_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(carry_world(r
 // compiler reads the windows' bounds off.
 fn carry_at(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
     match length.unsigned_lt_bit(end) {
-        True => Mutated(span, w(0)),
+        True => Mutated(span, BitVec::ofNat(0)),
         False => match size.unsigned_lt_bit(end) {
-            True => Mutated(span, w(0)),
+            True => Mutated(span, BitVec::ofNat(0)),
             False => match end.unsigned_lt_bit(from) {
-                True => Mutated(span, w(0)),
+                True => Mutated(span, BitVec::ofNat(0)),
                 False => {
-                    let done = carry(span.window(from.toNat(), end.toNat()), end.sub(from), text.window(from.toNat(), end.toNat()), end.sub(from), w(1));
+                    let done = carry(span.window(from.toNat(), end.toNat()), end.sub(from), text.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
                     Mutated(span.put_window(from.toNat(), done.after), done.value)
                 },
             },
@@ -181,11 +184,11 @@ theorem carry_at_accepted(): lower_program_lent(window_program(), plan_program(w
 // its place.
 fn carry_from(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
     match size.unsigned_lt_bit(end) {
-        True => Mutated(span, w(0)),
+        True => Mutated(span, BitVec::ofNat(0)),
         False => match end.unsigned_lt_bit(from) {
-            True => Mutated(span, w(0)),
+            True => Mutated(span, BitVec::ofNat(0)),
             False => {
-                let done = carry(span.window(0, length.toNat()), length, text.window(from.toNat(), end.toNat()), end.sub(from), w(1));
+                let done = carry(span.window(0, length.toNat()), length, text.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
                 Mutated(span.put_window(0, done.after), done.value)
             },
         },
@@ -315,3 +318,64 @@ theorem each_runs_short(): program_run(each_program(), [five(), tens()], 1, [w(0
 theorem each_refused(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]) = None { refl }
 theorem each_refused_why(): each_code().refused(1, each_code().plan(), 2, [2, 2]) =
     "in a loop's pass, where 16 is false, where 17 is false, where 18 is false, the call of function 0 over views (buffer 0 from 10 to 15 written, buffer 1 from 10 to 15): the call of function 0 (22, 23, 24, 25, 19): an argument is in no register, where rax holds 25; rcx holds 9; rdx holds 8; rsi holds 7; rdi holds 6; r8 holds 10; r9 holds 15; r10 holds 11; r11 holds 19; " { refl }
+
+// ---------------------------------------------------------------------------
+// Read from source
+
+// The reflector reads each of the two functions above as the term written
+// for it by hand: the call over windows from the `put_window` that puts
+// its part back, a window's bounds as the words whose `toNat` they are.
+theorem carry_at_reflected(): True { by reflects_file_as(["carry", "carry_at"], [], [carry_rt(), carry_at_rt()]) }
+theorem carry_from_reflected(): True { by reflects_file_as(["carry", "carry_from"], [], [carry_rt(), carry_from_rt()]) }
+
+// What the reflector refuses of a call over windows, each with its reason.
+
+// A window from a literal other than 0: the code has no word to compare.
+fn from_one(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(1, end.toNat()), end, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(1, done.after), done.value)
+}
+// expect-error: a window's bounds are `x.toNat()` of 64-bit words
+theorem from_one_refused(): True { by reflects_file_as(["carry", "from_one"], [], []) }
+
+// A window's length word that is not its bounds' difference.
+fn wrong_size(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(from.toNat(), end.toNat()), length, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(from.toNat(), done.after), done.value)
+}
+// expect-error: the word after a window is the window's length
+theorem wrong_size_refused(): True { by reflects_file_as(["carry", "wrong_size"], [], []) }
+
+// The part put back somewhere other than where its window started.
+fn put_elsewhere(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(from.toNat(), end.toNat()), end.sub(from), text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: `put_window` puts back what a call over windows wrote
+theorem put_elsewhere_refused(): True { by reflects_file_as(["carry", "put_elsewhere"], [], []) }
+
+// A window to read of the span the call writes.
+fn reads_own(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(0, end.toNat()), end, span.window(0, length.toNat()), length, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: a window to read of the span the call writes
+theorem reads_own_refused(): True { by reflects_file_as(["carry", "reads_own"], [], []) }
+
+// A callee's first span, which it writes, as a window of a span this
+// function only reads.
+fn writes_read(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(text.window(0, size.toNat()), size, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: the first window of a call over windows is of the span this function writes
+theorem writes_read_refused(): True { by reflects_file_as(["carry", "writes_read"], [], []) }
+
+// A span handed whole to a call whose part is put back: the callee's span
+// is then not a window.
+fn whole_text(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(0, length.toNat()), length, text, size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: takes each of its spans as a window
+theorem whole_text_refused(): True { by reflects_file_as(["carry", "whole_text"], [], []) }

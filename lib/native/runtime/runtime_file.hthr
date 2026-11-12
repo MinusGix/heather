@@ -48,6 +48,10 @@ import function_ir;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
+// Not used here: `heather compile-x86` evaluates `program_rows` in the scope
+// of a module that exports a function calling over views, and every such
+// module imports this one.
+import function_ir_rows;
 import function_ir_run;
 import function_ir_link;
 import runtime;

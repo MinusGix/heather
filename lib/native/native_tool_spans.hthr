@@ -11,12 +11,16 @@
 // docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
 // span what it reads of another: the span after the written one is lent to
 // read, and the statement is at every file, the span read being the file's
-// next.
+// next. `copy_window` calls `copy_span` over a window of each of its
+// spans (docs/native-library-exports-design.md §3.1): the loop runs from
+// its own index 0 over two windows and is told nothing of where in the
+// spans they lie.
 // The probes are lib/_tests/native/native_tool_spans_tests.hthr.
 import logic;
 import bool;
 import nat;
 import list;
+import list_window;
 import option;
 import pair;
 import char;
@@ -170,4 +174,40 @@ theorem copy_span_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, fro
     program_run(copy_span_program(), Cons(out, rest), copy_span_entry(), [place, length, from, size, count, i])
         = FTm::end_of(rest, copy_span(out, length, rest.span(0), size, count, i)) {
     copy_span::runs_over(out, rest, place, length, from, size, count, i)
+}
+
+// copy_window(out, length, text, size, from, end): the bytes of `text`
+// from `from` to below `end` stored at their own indices in `out`,
+// answering how many: `end - from`, or 0 with nothing stored where `end`
+// is past either span's length word or before `from`. The three tests
+// are what makes the two windows windows; the copying is `copy_span`'s,
+// lent the windows, with the part it wrote put back where its window
+// starts.
+runtime fn copy_window(out: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match length.unsigned_lt_bit(end) {
+        True => Mutated(out, BitVec::ofNat(0)),
+        False => match size.unsigned_lt_bit(end) {
+            True => Mutated(out, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(out, BitVec::ofNat(0)),
+                False => {
+                    let done = copy_span(out.window(from.toNat(), end.toNat()), end.sub(from), text.window(from.toNat(), end.toNat()), end.sub(from),
+                        end.sub(from), BitVec::ofNat(0));
+                    Mutated(out.put_window(from.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+// Its program is the caller and the loop it lends to. Over any file, at
+// any addresses: the function at the file's first span, reading the
+// second, the rest left.
+fn copy_window_program() → List<Function> { copy_window::program }
+fn copy_window_entry() → Nat { 1 }
+
+theorem copy_window_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, at, size, from, end: BitVec(64)):
+    program_run(copy_window_program(), Cons(out, rest), copy_window_entry(), [place, length, at, size, from, end])
+        = FTm::end_of(rest, copy_window(out, length, rest.span(0), size, from, end)) {
+    copy_window::runs_over(out, rest, place, length, at, size, from, end)
 }

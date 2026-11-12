@@ -80,6 +80,12 @@ pub(super) struct Shape {
     /// into, by buffer. The certificate's lending lets exactly those be
     /// written.
     pub marks: Option<Vec<bool>>,
+    /// For a program that stores into its spans and calls over views of
+    /// them: each function's row of marks, by function, a mark for each
+    /// buffer the function is lent (`program_marked`). One list of marks
+    /// cannot state such a program, since a callee numbers its views and
+    /// not its caller's buffers; the root's row is then `marks`.
+    pub tables: Option<Vec<Vec<bool>>>,
     /// The program's other functions exported beside its root
     /// ([`runtime_entries`]).
     pub entries: Vec<Entry>,
@@ -116,6 +122,7 @@ impl Shape {
             answer: root.answer(&arguments(root.arity)),
             lent: None,
             marks: None,
+            tables: None,
             entries: Vec::new(),
         }
     }
@@ -146,7 +153,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, tables: None, entries: Vec::new() }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -190,7 +197,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), quiet = quiet_text(prefix, functions), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, tables: None, entries: Vec::new() }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -202,7 +209,14 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
     /// span's address, then the function's own, its length parameter first;
     /// a span it only reads is the file's, where the code takes its address
     /// (`Setup::span_at(rest, k)` for the function's span `k + 1`).
-    pub fn runtime_written(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>) -> Shape {
+    ///
+    /// A program that calls over views of its spans is given with `tables`,
+    /// a row of marks for each function, and what is evaluated of it is
+    /// `{prefix}_marked` (`program_marked`): each function's stores are
+    /// into buffers its own row marks, and each call over views is of a
+    /// callee whose row the views meet.
+    pub fn runtime_written(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, counts: Vec<u64>, marks: Vec<bool>,
+        tables: Option<Vec<Vec<bool>>>) -> Shape {
         let parameters = arguments(arity);
         let spans = counts[functions - 1] as usize;
         let own = (1..arity).map(|i| if i % 2 == 0 && i < 2 * spans { format!("Setup::span_at(rest, {})", i / 2 - 1) } else { parameters[i].clone() })
@@ -223,6 +237,14 @@ fn {prefix}_counts() → List<Nat> {{ [{}] }}
 fn {prefix}_marks() → List<Bool> {{ [{}] }}
 ", counts.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "),
             marks.iter().map(|mark| if *mark { "True" } else { "False" }).collect::<Vec<_>>().join(", ")));
+        if let Some(tables) = &tables {
+            definitions.push_str(&format!("
+// Which buffers each function stores into, by function and then by its own
+// buffers: a callee over views numbers its views.
+fn {prefix}_tables() → List<List<Bool>> {{ [{}] }}
+", tables.iter().map(|row| format!("[{}]", row.iter().map(|mark| if *mark { "True" } else { "False" }).collect::<Vec<_>>().join(", ")))
+                .collect::<Vec<_>>().join(", ")));
+        }
         for k in 0..functions {
             definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ {prefix}_program().drop({}) }}
 fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
@@ -241,9 +263,10 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
     program_run({prefix}_program(), Cons(span, rest), {f}, [{list}]) = FTm::end_of(rest, {answer}) {{
     {source}::runs_over(span, rest, {list})
 }}
-", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), within = within_text(prefix, functions), f = functions - 1,
+", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
+            within = if tables.is_some() { marked_text(prefix) } else { within_text(prefix, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new() }
     }
 }
 
@@ -255,15 +278,36 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans) -> Result<Shape, String> {
     let probe = format!("{prefix}_shape");
     let lent = spans != Spans::None;
-    let (imports, counts) = if lent { ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")) }
-        else { ("", "[]".to_string()) };
+    // The rows' search is in a writer's scope: `runtime_file`, which every
+    // module with a `runtime fn` over a span it writes imports, imports it.
+    let (imports, counts) = match spans {
+        Spans::None => ("", "[]".to_string()),
+        Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
+        Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
+            format!("program_counts({source}::program)")),
+    };
     // A writer's marks follow its counts: a one for a buffer some function
     // of the program stores into.
+    // Then whether the program calls over views, and where it does, the rows
+    // of marks it links under (`program_rows`, a search whose answer the
+    // certificate checks), each function's padded to the buffers it is lent.
     let marks = if spans == Spans::Written {
-        format!(" ++ program_marks({source}::program, 0, lent_count(program_counts({source}::program), {source}::program.len() - 1))")
+        format!(" ++ (program_marks({source}::program, 0, lent_count(program_counts({source}::program), {source}::program.len() - 1)) ++
+        match program_lendless({source}::program) {{
+            True => [0],
+            False => Cons(1, {prefix}_rows(program_rows({source}::program), program_counts({source}::program), 0, {source}::program.len())),
+        }})")
+    } else { String::new() };
+    let rows = if spans == Spans::Written {
+        format!("fn {prefix}_row(row: List<Bool>, at, count: Nat) → List<Nat> {{
+    match count {{ Zero => [], Succ(k) => Cons(match marked(row, at) {{ True => 1, False => 0 }}, {prefix}_row(row, Succ(at), k)) }}
+}}
+fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) → List<Nat> {{
+    match functions {{ Zero => [], Succ(k) => {prefix}_row(marks_row(rows, f), 0, lent_count(counts, f)) ++ {prefix}_rows(rows, counts, Succ(f), k) }}
+}}\n")
     } else { String::new() };
     let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport list;\nimport function_ir;\n{imports}
-fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}\n");
+{rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
     let numbers = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?;
@@ -274,18 +318,37 @@ fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
         [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {
-            let (counts, marks) = rest.split_at(functions as usize);
+            let (counts, after) = rest.split_at(functions as usize);
             // The generator states a writer's run over a file whose first
             // span is the function's (`f::runs_over`) and whose other spans
             // it leaves: the written span is lent first, and the spans
             // after it are only read.
             let spans = counts[functions as usize - 1];
-            if spans < 1 || marks.len() as u64 != spans || arity < 2 * spans || marks[1..].iter().any(|mark| *mark != 0) {
+            if (after.len() as u64) < spans + 1 { return Err(format!("`{source}::program` did not read back")); }
+            let (marks, lends) = after.split_at(spans as usize);
+            // A program that calls over views has a row for each function,
+            // and the root's row is what its caller lends to write.
+            let tables = match lends {
+                [0] => None,
+                [1, rows @ ..] if rows.len() as u64 == counts.iter().sum::<u64>() => {
+                    let mut at = 0;
+                    Some(counts.iter().map(|count| {
+                        let row = rows[at..at + *count as usize].iter().map(|mark| *mark != 0).collect::<Vec<bool>>();
+                        at += *count as usize;
+                        row
+                    }).collect::<Vec<_>>())
+                }
+                _ => return Err(format!("`{source}::program` did not read back")),
+            };
+            let marks: Vec<bool> = match &tables {
+                Some(tables) => tables[functions as usize - 1].clone(),
+                None => marks.iter().map(|mark| *mark != 0).collect(),
+            };
+            if spans < 1 || arity < 2 * spans || !marks[0] || marks[1..].iter().any(|mark| *mark) {
                 return Err(format!("`{source}` stores into its span and its program is lent {spans} buffers, marked {marks:?}: compile-x86 exports a \
                     writer of its first span, which may read the spans after it"));
             }
-            Ok(Shape::runtime_written(prefix, owner, source, functions as usize, arity as usize, counts.to_vec(),
-                marks.iter().map(|mark| *mark != 0).collect()))
+            Ok(Shape::runtime_written(prefix, owner, source, functions as usize, arity as usize, counts.to_vec(), marks, tables))
         }
         _ => Err(format!("`{source}::program` did not read back")),
     }
@@ -646,11 +709,18 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
         λ (i: Nat) (s: MachineState<M>) => (ArgsIn({list}, argument_registers(), s.gprs) ∧ 72 * {label} <= i) ∧
             stack.LentOver({prefix}_lending(addresses, Cons(span, rest)), top, {f}, {list}, Cons(span, rest))(i, s),
         stack.AnsweredOver({prefix}_lending(addresses, Cons(span, rest)), {call}.value, Cons({call}.after, rest))) {{
-    compiled_returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
-        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,
-        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))
+    {returns}
 }}
-", label = f + 1, room = 72 * (f + 1), arguments = parameters.join(", ")));
+", label = f + 1, room = 72 * (f + 1), returns = if program.tables.is_some() {
+            // The root's row of the tables is `{prefix}_marks`, by evaluation.
+            format!("compiled_returns_marked<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial, loan,
+        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+        } else {
+            format!("compiled_returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,
+        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+        }));
     } else if lent {
         // The file is any (`now`), lying anywhere (`addresses`) under the
         // lending's laws (`loan`: no buffer reaches the stack below `top`).
@@ -789,6 +859,15 @@ theorem {prefix}_quiet_{k}(): program_quiet({program}.drop({d})).IsTrue() {{
     program_quiet_drop_zero({program}, {prefix}_quiet_{last}())
 }}", last = functions - 1));
     text
+}
+
+/// `{prefix}_marked`: every function's stores are into buffers its own row
+/// of `{prefix}_tables` marks, and every call, over views or not, is of a
+/// callee whose row its caller's meets (`program_marked_needs`). One
+/// evaluation over the program: a call's check reads its callee's row.
+fn marked_text(prefix: &str) -> String {
+    format!("// Each function stores into the buffers its row of `{prefix}_tables` marks, and calls only callees whose rows its own meets.
+theorem {prefix}_marked(): program_marked({prefix}_program(), {prefix}_tables()).IsTrue() {{ trivial }}")
 }
 
 /// `{prefix}_within`: every store of the program is into a buffer

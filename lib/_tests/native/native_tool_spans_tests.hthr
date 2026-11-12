@@ -20,6 +20,7 @@ import function_ir_state;
 import function_ir_placeless;
 import function_ir_run;
 import function_ir_writes;
+import function_ir_rows;
 import function_ir_lower;
 import function_ir_lower_calls;
 import x86_64_asm;
@@ -181,5 +182,47 @@ theorem copy_lowers(): lower_program_lent(copy_span_program(), plan_program(copy
 // "xy" over "aZ" is not copying "aZ" over itself.
 theorem copy_reads_the_second(same: program_run(copy_span_program(), pair(), copy_span_entry(), [w(0), w(4), w(0), w(2), w(2), w(0)]) = Ending(w(2), pair())): False {
     let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(120)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// `copy_window`: a window of one span written from that window of another
+
+// "abcde" and "VWXYZ".
+fn fives() → Buffers() { [[b(97), b(98), b(99), b(100), b(101)], [b(86), b(87), b(88), b(89), b(90)]] }
+
+// The bytes 1 up to 4, and no other: the loop it lends to runs from its
+// own index 0 over two windows three bytes long.
+theorem window_runs(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(1), w(4)]) =
+    Ending(w(3), [[b(97), b(87), b(88), b(89), b(101)], [b(86), b(87), b(88), b(89), b(90)]]) { refl }
+theorem window_whole(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(0), w(5)]) =
+    Ending(w(5), [[b(86), b(87), b(88), b(89), b(90)], [b(86), b(87), b(88), b(89), b(90)]]) { refl }
+theorem window_empty(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(2), w(2)]) =
+    Ending(w(0), fives()) { refl }
+
+// A window past either span's length word, or one that ends before it
+// starts, is no window: nothing is stored.
+theorem window_past_written(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(3), from, w(5), w(1), w(4)]) =
+    Ending(w(0), fives()) { refl }
+theorem window_past_read(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(3), w(1), w(4)]) =
+    Ending(w(0), fives()) { refl }
+theorem window_backwards(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(4), w(1)]) =
+    Ending(w(0), fives()) { refl }
+
+// Both functions are lent two buffers and store into the first alone, the
+// callee's first being a window of the caller's first.
+theorem window_counts(): program_counts(copy_window_program()) = [2, 2] { refl }
+theorem window_rows(): program_rows(copy_window_program()) = [[True], [True]] { refl }
+theorem window_marked(): program_marked(copy_window_program(), [[True, False], [True, False]]) = True { refl }
+theorem window_not_marked(): program_marked(copy_window_program(), [[True, False], [False, True]]) = False { refl }
+// One list of marks is not how a program that lends is stated: its marks
+// are a row for each function (`program_marked`).
+theorem window_one_list(): program_stores_within(copy_window_program(), [True, False]) = False { refl }
+theorem window_evaluable(): program_evaluable(copy_window_program()) = True { refl }
+theorem window_placeless(): program_placeless(copy_window_program()) = True { refl }
+
+// The control: the window read is the second span's.
+theorem window_reads_the_second(same: program_run(copy_window_program(), fives(), copy_window_entry(), [w(0), w(5), w(0), w(5), w(1), w(4)]) = Ending(w(3), fives())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(87)), same);
     absurd(verdict)
 }

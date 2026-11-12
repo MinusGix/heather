@@ -26,4 +26,5 @@ lib/lang/lexer/lexer_scan.hthr	scan_begin	previous	scan_token
 lib/native/native_tool_spans.hthr	count_newlines	text: span, count
 lib/native/native_tool_spans.hthr	raise_span	text: span mut, count, from
 lib/native/native_tool_spans.hthr	copy_span	out: span mut, text: span, count, from
+lib/native/native_tool_spans.hthr	copy_window	out: span mut, text: span, from, end
 lib/lang/lexer/lexer_span.hthr	scan_token	source: span, at, previous

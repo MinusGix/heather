@@ -1,6 +1,6 @@
 ---
 title: omega's certificate re-spells a hypothesis without its type arguments and fails to elaborate
-status: open
+status: closed
 labels: [tactics,omega,certificates,diagnostics]
 area: tactics
 milestone: [tac-arith]
@@ -28,3 +28,7 @@ The certificate's atoms are terms the tactic was handed; they should go back as 
 ## Done when
 
 The theorem above checks, and the `j` in `scan_from_longest`'s `Nil` case is `omega`.
+
+## Log
+
+- 2026-11-12: Fixed on master by PR #580 (the certificate keeps a constructor's type arguments). The last item, on PR #551 after merging master: the `j` in `scan_from_longest`'s `Nil` case is `omega` (`let past: length.toNat() <= i.toNat() = omega;`), and the module checks.

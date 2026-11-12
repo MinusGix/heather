@@ -28,6 +28,7 @@ linked!("sha256_next.s");
 linked!("count_newlines.s");
 linked!("raise_span.s");
 linked!("copy_span.s");
+linked!("copy_window.s");
 linked!("scan_token.s");
 
 // Functions of words, declared `safe` on the strength of their certificates
@@ -63,6 +64,7 @@ mod raw {
         pub unsafe fn count_newlines(text: *const u8, text_length: u64, count: u64) -> u64;
         pub unsafe fn raise_span(text: *mut u8, text_length: u64, count: u64, from: u64) -> u64;
         pub unsafe fn copy_span(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64, from: u64) -> u64;
+        pub unsafe fn copy_window(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, from: u64, end: u64) -> u64;
         pub unsafe fn scan_token(source: *const u8, source_length: u64, at: u64, previous: u64) -> u64;
     }
 }
@@ -136,6 +138,32 @@ pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     // The stack's room is the platform's to give, as for a function of
     // words (the crate's comment).
     unsafe { raw::copy_span(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, count, from) }
+}
+
+/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 144 bytes.
+pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
+    // SAFETY (the premises of `copy_window_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the spans `out`, `text`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `out` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
 /// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 2448 bytes.

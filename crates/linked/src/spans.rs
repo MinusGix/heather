@@ -25,6 +25,12 @@
 //! `&[u8]` is, and says the span read is as it was. Each span has its own
 //! length word: nothing is stored past the end of the written one, and a
 //! byte past the end of the one read is read nowhere and stored as zero.
+//!
+//! `copy_window` is the first that calls over *views*: it lends
+//! `copy_span`'s loop a window of each of its two spans, and the loop runs
+//! from its own index 0 knowing nothing of where in the spans the windows
+//! lie. The three comparisons it makes first are what its certificate
+//! reads the windows' bounds off; where they fail it stores nothing.
 
 use crate::exports;
 
@@ -63,6 +69,15 @@ pub fn raise(text: &mut [u8]) {
 #[inline]
 pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     exports::copy_span(out, text, count, from)
+}
+
+/// `text`'s bytes from `from` to below `end` stored at their own indices in
+/// `out`, where that is a window of both: `end` within both slices and not
+/// before `from`. Answers how many bytes that was, `end - from`; where it
+/// is no window, 0 with nothing stored.
+#[inline]
+pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
+    exports::copy_window(out, text, from, end)
 }
 
 /// As much of `text` as `out` holds, copied to the start of `out`: how many

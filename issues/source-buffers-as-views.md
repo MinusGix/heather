@@ -129,3 +129,13 @@ a store through a read-only view is refused by the judgment.
   - A loop that lends (`each_body`, the same file) lowers and runs, and the function compiler refuses it: twelve values wanted at the call, nine registers. Pinned as `each_refused` with its report; logged on [[function-ir-values-in-kept-registers]]. The hash's loop over its blocks is this shape, so it waits on that issue.
 
   Next: the reflector reads the two source shapes above and the generator publishes them (third stage), then an export that lends.
+- 2026-11-12: V5a, the lend, third stage: read from source, generated and exported.
+
+  - The reflector (`rt_file_lend`, `rt_file_reflect.hthr`) reads a `put_window` link of the span's chain as a call over windows: `span.put_window(a.toNat(), r.after)` with `r = callee(span.window(a.toNat(), b.toNat()), b.sub(a), text.window(…), …, words…)`, and `span.window(0, n.toNat()), n` put back at 0 for a window from the first byte. A bound is the word whose `toNat` it is; the word after a window is held to the bounds and binds nothing. It reads the two hand-written probes' sources as exactly the terms written for them, and six refusals each say why (`rt_file_lend_tests.hthr`).
+  - The generator needed no change: four `runtime fn`s that lend publish their programs and `f::runs_over` at every file (`lib/_tests/native/runtime/runtime_span_lend_tests.hthr`): a window of each span, a store confined to its window, the written span whole, and two windows lent to a loop (`xor_window` over `xor_from`).
+  - `compile-x86` exports one. A program that lends is stated by a row of marks per function (`compiled_returns_marked`), so the exporter reads `program_rows` back (padded to each function's buffers) and writes it as a literal the certificate checks by `program_marked` (`Shape::runtime_written`, `crates/cli/src/native/verified.rs`). `runtime_file.hthr` imports `function_ir_rows` so that the search is in a writer's scope.
+  - The export: `copy_window(out: span mut, text: span, from, end)` in `native_tool_spans.hthr`, `heather_linked::spans::copy_window`: three comparisons, then `copy_span`'s loop lent the window of both spans. 553 certified bytes. Rust tests against a reference at every pairing of lengths with the window's ends on both sides of both and of each other, inside larger buffers, between unmapped pages, on empty slices and at both stack alignments.
+
+  Found on the way: the kernel runs out of fuel on the probe sentence that a lender and a loop lower together ([[kernel-fuel-lowering-a-lender-and-a-loop]]); the export's certificate is by pieces and does not meet it.
+
+  V5a is done but for a loop that lends ([[function-ir-values-in-kept-registers]]). Left of V5: V5b, V5c.

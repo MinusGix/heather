@@ -1,6 +1,6 @@
 ---
 title: A `let` annotated with `<` or `<=` does not parse without parentheses
-status: open
+status: closed
 labels: [frontend,syntax,parser,ergonomics]
 area: language
 created: 2026-11-12
@@ -26,3 +26,7 @@ Either the annotation is parsed as a proposition up to the statement's last top-
 ## Done when
 
 The declaration above checks as written, or its error names the parentheses.
+
+## Log
+
+- 2026-11-12: Fixed on master by PR #580 (a bare relation in a `let` annotation parses). The two annotations that were parenthesised for it in `scan_from_longest` (`lib/lang/lexer/lexer_span.hthr`) are written bare on PR #551.
