@@ -407,6 +407,18 @@ runtime fn sha256_end(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<
     };
 }
 
+// §6.2.2 from a schedule whose first sixteen words are in place: the other
+// forty-eight, the working variables from the hash value, the rounds, and
+// the sums. What a caller that assembles a block in the context itself
+// calls (`sha256_stream`).
+runtime fn sha256_run(ctx: List<BitVec(8)>, cn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let expanded = sha256_expand(ctx, cn, BitVec::ofNat(16));
+    let begun = sha256_begin(expanded.after, cn, BitVec::ofNat(0));
+    let ran = sha256_rounds(begun.after, cn, BitVec::ofNat(0));
+    let ended = sha256_end(ran.after, cn, BitVec::ofNat(0));
+    Mutated(ended.after, ended.value)
+}
+
 // §6.2.2: H(i) from H(i−1) and a block. The context is the hash value's
 // eight words, then the working variables' eight, then the schedule's
 // sixty-four, each word four bytes with the most significant first: 320
@@ -414,9 +426,6 @@ runtime fn sha256_end(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<
 // the first thirty-two spell after the last block is the digest.
 runtime fn sha256_compress(ctx: List<BitVec(8)>, cn: BitVec(64), block: List<BitVec(8)>, bn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
     let taken = sha256_take_block(ctx, cn, block, bn, BitVec::ofNat(0));
-    let expanded = sha256_expand(taken.after, cn, BitVec::ofNat(16));
-    let begun = sha256_begin(expanded.after, cn, BitVec::ofNat(0));
-    let ran = sha256_rounds(begun.after, cn, BitVec::ofNat(0));
-    let ended = sha256_end(ran.after, cn, BitVec::ofNat(0));
-    Mutated(ended.after, ended.value)
+    let ran = sha256_run(taken.after, cn);
+    Mutated(ran.after, ran.value)
 }

@@ -586,8 +586,21 @@ Heather, and only the padding is Rust's.
   transcription of the Heather function in Rust compared byte for byte on
   spans of every shorter length.
 
+**The same day, the hash whole.** `sha256_init`, `sha256_update` and
+`sha256_finish` (`lib/native/crypto/sha256_stream.hthr`,
+`heather_linked::sha256::stream`) take a message in parts over the same
+context and eight bytes more for the count. The streaming buffer C2
+expected in Rust is not there: a block is assembled a byte at a time where
+the compression function reads it, so a part that ends inside a block
+leaves its bytes in the context, and the padding is compiled Heather too.
+What Rust holds is the bytes it lends. Each export is its own program
+until an entry of a shared one can be lent a span
+(`issues/linked-program-entries-limits.md`), so the compression function
+is in the crate once per export that reaches it.
+
 Next for this lane: the agreement proof, or SHA-256 behind a switch in
 `crates/cache` with the tests as its evidence
 (`issues/sha256-linked-into-cache.md`); both are Minus's to order, since
 the second puts unproved-against-the-specification code under every cache
-key.
+key. The linked type has the cache's three calls, so the switch itself is
+small; its speed is unmeasured and will be well below the Rust path's.

@@ -26,6 +26,9 @@ linked!("sha256_t1.s");
 linked!("sha256_t2.s");
 linked!("sha256_next.s");
 linked!("sha256_compress.s");
+linked!("sha256_init.s");
+linked!("sha256_update.s");
+linked!("sha256_finish.s");
 linked!("count_newlines.s");
 linked!("raise_span.s");
 linked!("copy_span.s");
@@ -63,6 +66,9 @@ unsafe extern "sysv64" {
 mod raw {
     unsafe extern "sysv64" {
         pub unsafe fn sha256_compress(ctx: *mut u8, ctx_length: u64, block: *const u8, block_length: u64) -> u64;
+        pub unsafe fn sha256_init(ctx: *mut u8, ctx_length: u64) -> u64;
+        pub unsafe fn sha256_update(ctx: *mut u8, ctx_length: u64, message: *const u8, message_length: u64) -> u64;
+        pub unsafe fn sha256_finish(ctx: *mut u8, ctx_length: u64) -> u64;
         pub unsafe fn count_newlines(text: *const u8, text_length: u64, count: u64) -> u64;
         pub unsafe fn raise_span(text: *mut u8, text_length: u64, count: u64, from: u64) -> u64;
         pub unsafe fn copy_span(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64, from: u64) -> u64;
@@ -71,7 +77,7 @@ mod raw {
     }
 }
 
-/// `sha256_compress` of `lib/native/crypto/sha256_block.hthr`. STACK: 1920 bytes.
+/// `sha256_compress` of `lib/native/crypto/sha256_block.hthr`. STACK: 2040 bytes.
 pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_compress_native_returns`, in order):
     // - the arguments are in their registers (`ArgsIn`): the declaration's
@@ -95,6 +101,84 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     // The stack's room is the platform's to give, as for a function of
     // words (the crate's comment).
     unsafe { raw::sha256_compress(ctx.as_mut_ptr(), ctx.len() as u64, block.as_ptr(), block.len() as u64) }
+}
+
+/// `sha256_init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 360 bytes.
+pub fn sha256_init(ctx: &mut [u8]) -> u64 {
+    // SAFETY (the premises of `sha256_init_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the span `ctx`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `ctx` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::sha256_init(ctx.as_mut_ptr(), ctx.len() as u64) }
+}
+
+/// `sha256_update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2520 bytes.
+pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
+    // SAFETY (the premises of `sha256_update_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the spans `ctx`, `message`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `ctx` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::sha256_update(ctx.as_mut_ptr(), ctx.len() as u64, message.as_ptr(), message.len() as u64) }
+}
+
+/// `sha256_finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 2400 bytes.
+pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
+    // SAFETY (the premises of `sha256_finish_native_returns`, in order):
+    // - the arguments are in their registers (`ArgsIn`): the declaration's
+    //   order is the table's, which the gate holds to the code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the span `ctx`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `ctx` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::sha256_finish(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
 /// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 240 bytes.

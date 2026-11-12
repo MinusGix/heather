@@ -31,3 +31,7 @@ A writer's group publishes `f::runs_over` at its last function and no `sources`,
 ## Done when
 
 Each of the four is either built or decided against, with the refusal messages in `crates/cli/src/native/verified.rs` (`runtime_entries`) updated.
+
+## Log
+
+- 2026-11-12: A second consumer of "an entry lent a span" (2026-11-12): `sha256_init`, `sha256_update` and `sha256_finish` are three exports over one context, and `sha256_compress` a fourth; each is lent a span, so each is its own program and its own file, and the compression function's code is in `crates/linked` three times (about seventy kilobytes of assembly text each for `update` and `finish`). With entries lent spans they are one program with four labels.

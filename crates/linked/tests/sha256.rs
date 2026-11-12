@@ -11,7 +11,7 @@
 //! values in 64-bit registers can make, fails every one of them.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 
-use heather_linked::sha256::{INITIAL, K, block, compress, digest, next, t1, t2, wide};
+use heather_linked::sha256::{INITIAL, K, block, compress, digest, next, stream, t1, t2, wide};
 use sha2::{Digest, Sha256};
 
 fn hex(bytes: &[u8]) -> String {
@@ -513,5 +513,175 @@ fn block_and_the_word_functions_agree_block_by_block() {
         compress(&mut by_words, &block);
         block::compress(&mut by_block, &block);
         assert_eq!(by_words, by_block, "round {round}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The hash whole (`sha256_init`, `sha256_update`, `sha256_finish`,
+// `sha256::stream`)
+
+#[test]
+fn stream_nist_vectors() {
+    let cases: &[(&str, &str)] = &[
+        ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        ("abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        (
+            "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        ),
+        (
+            "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+            "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
+        ),
+    ];
+    for (message, want) in cases {
+        assert_eq!(hex(&stream::digest(message.as_bytes())), *want, "SHA-256({message:?})");
+    }
+}
+
+/// A million `a`s in one part, and in parts of a thousand.
+#[test]
+fn stream_the_million_a_vector() {
+    let want = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+    assert_eq!(hex(&stream::digest(&vec![b'a'; 1_000_000])), want);
+    let mut hash = stream::Sha256::new();
+    for _ in 0..1_000 {
+        hash.update(&[b'a'; 1_000]);
+    }
+    assert_eq!(hex(&hash.finish()), want);
+}
+
+/// Every length from empty through three blocks, in one part: each shape
+/// of the padding (the length fitting the last block, and not, and the
+/// 0x80 as a block's last byte) is the linked code's here.
+#[test]
+fn stream_differential_every_length_through_three_blocks() {
+    let mut lcg = Lcg(21);
+    for length in 0..=3 * 64 + 1 {
+        let message = lcg.bytes(length);
+        assert_eq!(hex(&stream::digest(&message)), hex(&oracle(&message)), "length {length}");
+    }
+}
+
+/// Every split of a message into two parts, for messages round the block
+/// and padding boundaries: a part that ends inside a block leaves its
+/// bytes in the context, and the next follows them.
+#[test]
+fn stream_every_split_in_two() {
+    let mut lcg = Lcg(22);
+    for length in [0usize, 1, 54, 55, 56, 57, 63, 64, 65, 119, 120, 121, 127, 128, 129, 200] {
+        let message = lcg.bytes(length);
+        let want = oracle(&message);
+        for cut in 0..=length {
+            let mut hash = stream::Sha256::new();
+            hash.update(&message[..cut]);
+            hash.update(&message[cut..]);
+            assert_eq!(hash.finish(), want, "length {length}, cut at {cut}");
+        }
+    }
+}
+
+/// Many parts of varied lengths, empty ones among them.
+#[test]
+fn stream_differential_in_varied_parts() {
+    let mut lcg = Lcg(23);
+    for case in 0..200 {
+        let length = (lcg.word() % 5_000) as usize;
+        let message = lcg.bytes(length);
+        let mut hash = stream::Sha256::new();
+        let mut rest = &message[..];
+        while !rest.is_empty() {
+            let part = ((lcg.word() % 150) as usize).min(rest.len());
+            hash.update(&rest[..part]);
+            rest = &rest[part..];
+        }
+        hash.update(&[]);
+        assert_eq!(hex(&hash.finish()), hex(&oracle(&message)), "case {case}, length {length}");
+    }
+}
+
+#[test]
+fn stream_differential_long_messages() {
+    let mut lcg = Lcg(24);
+    for case in 0..32 {
+        let length = (lcg.word() % 40_000) as usize;
+        let message = lcg.bytes(length);
+        assert_eq!(hex(&stream::digest(&message)), hex(&oracle(&message)), "case {case}, length {length}");
+    }
+}
+
+/// A clone taken part way is its own hash: the whole state is the bytes.
+#[test]
+fn stream_clones_part_way() {
+    let mut first = stream::Sha256::new();
+    first.update(b"hello, ");
+    let mut second = first.clone();
+    first.update(b"world");
+    second.update(b"there");
+    assert_eq!(hex(&first.finish()), hex(&oracle(b"hello, world")));
+    assert_eq!(hex(&second.finish()), hex(&oracle(b"hello, there")));
+}
+
+/// The context after each call, where the functions leave things: the
+/// initial value and a zero count; the count as eight bytes after the
+/// schedule and a part's bytes at the block's start; the answers.
+#[test]
+fn stream_the_context_is_where_the_functions_say() {
+    let mut context = [0xeeu8; stream::CONTEXT];
+    assert_eq!(stream::spans::init(&mut context), 0);
+    assert_eq!(context[..32], context_of(INITIAL, &[])[..]);
+    assert_eq!(context[32..320], [0xee; 288], "init stores only the hash value and the count");
+    assert_eq!(context[320..], [0; 8]);
+
+    assert_eq!(stream::spans::update(&mut context, b"abc"), 3);
+    assert_eq!(&context[64..67], b"abc");
+    assert_eq!(context[320..], 3u64.to_be_bytes());
+    assert_eq!(context[..32], context_of(INITIAL, &[])[..], "no block is run before one is full");
+
+    let more = [0x5a; 70];
+    assert_eq!(stream::spans::update(&mut context, &more), 73);
+    assert_eq!(context[320..], 73u64.to_be_bytes());
+    assert_eq!(&context[64..73], &[0x5a; 9], "the bytes past the first block start the next");
+    let mut first_block = [0x5au8; 64];
+    first_block[..3].copy_from_slice(b"abc");
+    assert_eq!(context[..32], context_of(compress_reference(INITIAL, &first_block), &[])[..]);
+}
+
+/// Spans shorter than the functions ask for. Nothing is stored past a
+/// context's end and nothing past a message's end is taken, whatever the
+/// lengths: the buffers here are longer than the spans lent from them,
+/// with a pattern after each end.
+#[test]
+fn stream_keeps_within_short_spans() {
+    let mut lcg = Lcg(25);
+    for context_length in (0..=40).chain([63, 64, 65, 127, 128, 129, 319, 320, 321, 327, 328]) {
+        for message_length in [0usize, 1, 55, 56, 64, 65, 130] {
+            let mut held = lcg.bytes(stream::CONTEXT + 64);
+            let after: Vec<u8> = held[context_length..].to_vec();
+            let mut text = lcg.bytes(message_length + 64);
+            text[message_length..].fill(0xa5);
+            stream::spans::init(&mut held[..context_length]);
+            stream::spans::update(&mut held[..context_length], &text[..message_length]);
+            stream::spans::finish(&mut held[..context_length]);
+            assert_eq!(held[context_length..], after[..], "bytes after a context of {context_length}, message {message_length}");
+            if context_length == stream::CONTEXT {
+                assert_eq!(held[..32], oracle(&text[..message_length])[..], "message {message_length}");
+            }
+        }
+    }
+}
+
+/// The three ways this crate computes SHA-256 agree: the word functions
+/// under Rust's rounds, the compression function under Rust's padding, and
+/// the hash whole.
+#[test]
+fn stream_block_and_words_agree() {
+    let mut lcg = Lcg(26);
+    for case in 0..100 {
+        let length = (lcg.word() % 1_000) as usize;
+        let message = lcg.bytes(length);
+        let whole = stream::digest(&message);
+        assert_eq!(whole, block::digest(&message), "case {case}, length {length}");
+        assert_eq!(whole, digest(&message), "case {case}, length {length}");
     }
 }

@@ -77,6 +77,13 @@
 //! still Rust's. That the Heather function is the specification's is not
 //! proved yet, where the word functions' is.
 //!
+//! [`sha256::stream`]: the hash whole, over a message that arrives in
+//! parts (`lib/native/crypto/sha256_stream.hthr`): three linked functions
+//! over one context, the padding included. Each is its own program, so
+//! the compression function is in the crate once per export that reaches
+//! it, until an entry of a shared program can be lent a span
+//! (`issues/linked-program-entries-limits.md`).
+//!
 //! [`scanner`]: Heather's own scanner, the automaton that cuts a source file
 //! into tokens (`lib/lang/lexer/lexer_scan.hthr`). Every decision about a
 //! byte is the linked code's; the loop that hands it the bytes is Rust's,

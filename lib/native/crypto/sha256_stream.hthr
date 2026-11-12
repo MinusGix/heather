@@ -1,0 +1,176 @@
+// SHA-256 over a message that arrives in parts, as compiled code
+// (issues/sha2-compress-native.md, stage C2 of
+// docs/native-lexer-crypto-roadmap.md): `sha256_init`, `sha256_update` and
+// `sha256_finish` over a context their caller lends, with the padding of
+// FIPS 180-4 §5.1.1 done here and not by the caller.
+//
+// The context is `sha256_block`'s 320 bytes and eight more: the count of
+// bytes taken so far, most significant first, at byte 320. A block is
+// assembled where the compression function wants it, in the schedule's
+// first sixteen words at byte 64, so a part that ends inside a block
+// leaves its bytes there for the next, and how many is the count's low six
+// bits. After `sha256_finish` the first thirty-two bytes are the digest.
+//
+// A byte at a time: each is stored under the context's length and the
+// block is run when the sixty-fourth lands. That is the simplest loop that
+// is right at every split of a message, and a copy of whole blocks is an
+// optimization for a compiler that has one.
+//
+// Not proved here, as in `sha256_block`: that what these compute is
+// `Sha2::digest`. The tests are where they are linked
+// (crates/linked/tests/sha256.rs).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+
+// The count of bytes taken, from its eight bytes.
+runtime fn sha256_count(ctx: List<BitVec(8)>, cn: BitVec(64)) → BitVec(64) {
+    sha256_word_at(ctx, cn, BitVec::ofNat(320)).shift_left(32).bor(sha256_word_at(ctx, cn, BitVec::ofNat(324)))
+}
+
+runtime fn sha256_put_count(ctx: List<BitVec(8)>, cn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let high = sha256_put_word(ctx, cn, BitVec::ofNat(320), count.shift_right(32));
+    let low = sha256_put_word(high.after, cn, BitVec::ofNat(324), count);
+    Mutated(low.after, count)
+}
+
+// The initial hash value (§5.3.3) and a count of zero.
+runtime fn sha256_init(ctx: List<BitVec(8)>, cn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let h0 = sha256_put_word(ctx, cn, BitVec::ofNat(0), BitVec::ofNat(0x6a09e667));
+    let h1 = sha256_put_word(h0.after, cn, BitVec::ofNat(4), BitVec::ofNat(0xbb67ae85));
+    let h2 = sha256_put_word(h1.after, cn, BitVec::ofNat(8), BitVec::ofNat(0x3c6ef372));
+    let h3 = sha256_put_word(h2.after, cn, BitVec::ofNat(12), BitVec::ofNat(0xa54ff53a));
+    let h4 = sha256_put_word(h3.after, cn, BitVec::ofNat(16), BitVec::ofNat(0x510e527f));
+    let h5 = sha256_put_word(h4.after, cn, BitVec::ofNat(20), BitVec::ofNat(0x9b05688c));
+    let h6 = sha256_put_word(h5.after, cn, BitVec::ofNat(24), BitVec::ofNat(0x1f83d9ab));
+    let h7 = sha256_put_word(h6.after, cn, BitVec::ofNat(28), BitVec::ofNat(0x5be0cd19));
+    let counted = sha256_put_count(h7.after, cn, BitVec::ofNat(0));
+    Mutated(counted.after, counted.value)
+}
+
+// One byte into the block at `fill`, and the block run when that fills
+// it. Answers how full the block then is.
+runtime fn sha256_push(ctx: List<BitVec(8)>, cn, fill, byte: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let mut ctx = ctx;
+    ctx.put_within(cn, fill.add(BitVec::ofNat(64)), byte.truncate(8, 56));
+    match fill.eq_bit(BitVec::ofNat(63)) {
+        True => {
+            let ran = sha256_run(ctx, cn);
+            Mutated(ran.after, BitVec::ofNat(0))
+        },
+        False => Mutated(ctx, fill.add(BitVec::ofNat(1))),
+    }
+}
+
+// The message's bytes from `j`, each pushed.
+runtime fn sha256_absorb(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn, j, fill: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases mn.sub(j).toNat() {
+    match h: j.unsigned_lt_bit(mn) {
+        False => Mutated(ctx, fill),
+        True => {
+            let pushed = sha256_push(ctx, cn, fill, message.byte_within(mn, j).zero_extend(56));
+            sha256_absorb(pushed.after, cn, message, mn, j.add(BitVec::ofNat(1)), pushed.value)
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, j, mn, h);
+        bv_omega
+    };
+}
+
+// A part of the message taken into a context that has `count` bytes
+// already. The count is a parameter because it is read before the stores
+// and used after them, and a span that is written is read as it is where
+// the read is used (issues/rt-file-read-before-store.md).
+runtime fn sha256_take(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let absorbed = sha256_absorb(ctx, cn, message, mn, BitVec::ofNat(0), count.band(BitVec::ofNat(63)));
+    let counted = sha256_put_count(absorbed.after, cn, count.add(mn));
+    Mutated(counted.after, counted.value)
+}
+
+// One more part of the message.
+runtime fn sha256_update(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let taken = sha256_take(ctx, cn, message, mn, sha256_count(ctx, cn));
+    Mutated(taken.after, taken.value)
+}
+
+// Zeros in the block from `i` to its end.
+runtime fn sha256_zero(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases BitVec::ofNat(64).sub(i).toNat() {
+    match h: i.unsigned_lt_bit(BitVec::ofNat(64)) {
+        False => Mutated(ctx, i),
+        True => {
+            let mut ctx = ctx;
+            ctx.put_within(cn, i.add(BitVec::ofNat(64)), BitVec::ofNat(0));
+            sha256_zero(ctx, cn, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(64), h);
+        bv_omega
+    };
+}
+
+// §5.1.1's one bit and its zeros after a block filled to `fill`: the byte
+// 0x80, zeros to the block's end, and, where that leaves no room for the
+// eight bytes of the length, the block run and a block of zeros begun.
+runtime fn sha256_pad(ctx: List<BitVec(8)>, cn, fill: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let mut ctx = ctx;
+    ctx.put_within(cn, fill.add(BitVec::ofNat(64)), BitVec::ofNat(0x80));
+    let zeroed = sha256_zero(ctx, cn, fill.add(BitVec::ofNat(1)));
+    match fill.unsigned_lt_bit(BitVec::ofNat(56)) {
+        True => Mutated(zeroed.after, fill),
+        False => {
+            let ran = sha256_run(zeroed.after, cn);
+            let again = sha256_zero(ran.after, cn, BitVec::ofNat(0));
+            Mutated(again.after, fill)
+        },
+    }
+}
+
+// The end of a message of `count` bytes: the padding, the length in bits
+// as the block's last eight bytes, and the last block run. The count is a
+// parameter for `sha256_take`'s reason.
+runtime fn sha256_close(ctx: List<BitVec(8)>, cn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let padded = sha256_pad(ctx, cn, count.band(BitVec::ofNat(63)));
+    let high = sha256_put_word(padded.after, cn, BitVec::ofNat(120), count.shift_right(29));
+    let low = sha256_put_word(high.after, cn, BitVec::ofNat(124), count.shift_left(3));
+    let ran = sha256_run(low.after, cn);
+    Mutated(ran.after, ran.value)
+}
+
+// The message has ended. The digest is then the context's first
+// thirty-two bytes.
+runtime fn sha256_finish(ctx: List<BitVec(8)>, cn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let closed = sha256_close(ctx, cn, sha256_count(ctx, cn));
+    Mutated(closed.after, closed.value)
+}
