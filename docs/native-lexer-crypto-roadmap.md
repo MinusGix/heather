@@ -604,3 +604,25 @@ Next for this lane: the agreement proof, or SHA-256 behind a switch in
 the second puts unproved-against-the-specification code under every cache
 key. The linked type has the cache's three calls, so the switch itself is
 small; its speed is unmeasured and will be well below the Rust path's.
+
+The same day, the switch and the source. `HEATHER_LEXER=linked` has the
+`heather` binary cut every source with Heather's own scanner, compiled and
+linked into it; the Rust lexer still reads each token's value from the
+token's span and still answers alone wherever the scanner refuses, so
+nothing a user sees changes, and `HEATHER_LEXER_REPORT` is the one way to
+see who cut what. The lexer takes the scanner as a function and does not
+depend on the crate that links it (`issues/self-lexer-linked.md`). Off by
+default: the speed is unmeasured and values are still Rust's.
+
+Minus read the SHA-256 modules and asked what would make them elegant. A
+probe showed the generator already takes `u64` and `u8`, numerals, the
+arithmetic, shift and bitwise operators and `if a < b` inside a
+`runtime fn`; the SHA-256 modules were respelled with them. What the language does not have yet is in
+`issues/sha256-context-type.md`: the loops' hand proofs
+(`decreases-word-measures-by-hand`), a symbol for exclusive or (`⊕`, with
+`~` for complement, decided), width-suffixed literals (`42u64`, decided;
+no bare `42u`), measured recursion in a method, and then the larger parts
+that make the context a type: a record laid out over a span, a span as one
+value, 32-bit words, tables, and calls past six words. The context type is
+this route's next step after the switch.
+

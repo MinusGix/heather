@@ -15,3 +15,7 @@ A numeral takes its type from where it stands: `i + 1` at `i: u64` is `BitVec::o
 - Display: a diagnostic that prints a literal at a word type could use the suffix ([[diagnostic-numeral-parameterized-carriers]]).
 
 Done when: `let mut i = 0u64;` elaborates, the three lexers agree on it, and the formatter keeps it.
+
+## Log
+
+- 2026-11-12: Decided by Minus (2026-11-12): `42u64` goes ahead; no bare `42u`.

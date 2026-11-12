@@ -30,3 +30,7 @@ What is in the way, each its own issue:
 A step that needs none of these, taken first: the two modules respelled with what the language already has (`u64`/`u8`, numerals, `+ - << >> & |`, `if a < b` outside the loops, `mut self` methods for the stores), which a probe shows the generator takes. The loops' hand proofs go with [[decreases-word-measures-by-hand]], exclusive or with [[bitvec-xor-complement-symbols]].
 
 Done when: `crates/linked`'s SHA-256 is compiled from a module whose functions are methods of a context type, with no layout offsets in their bodies.
+
+## Log
+
+- 2026-11-12: Decided by Minus (2026-11-12): the context type is built in the native thread, after the lexer switch ([[self-lexer-linked]]).

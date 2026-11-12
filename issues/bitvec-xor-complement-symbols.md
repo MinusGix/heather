@@ -18,3 +18,7 @@ To decide (Minus's, it is surface):
 Each new symbol is a token in three lexers (the Rust lexer, tree-sitter and `lib/lang/lexer`, whose compiled form is linked, so `scripts/linked` and `scripts/lexer-probes` rerun) and a designation slot.
 
 Done when: the round functions of SHA-256 read as FIPS 180-4 §4.1.2 writes them.
+
+## Log
+
+- 2026-11-12: Decided by Minus (2026-11-12): exclusive or is `⊕` and complement is prefix `~`. An ASCII spelling beside `⊕` (`^^` was suggested) was not decided and is left out until it is. Rotates stay methods.

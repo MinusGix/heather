@@ -32,6 +32,7 @@ import derive;
 import bitvec;
 import bitvec_nat;
 import bitvec_omega;
+import algebra;
 import omega;
 import rt;
 import rt_reflect;
@@ -54,52 +55,52 @@ import sha256_round;
 import sha256_block;
 
 // The count of bytes taken, from its eight bytes.
-runtime fn sha256_count(ctx: List<BitVec(8)>, cn: BitVec(64)) → BitVec(64) {
-    sha256_word_at(ctx, cn, BitVec::ofNat(320)).shift_left(32).bor(sha256_word_at(ctx, cn, BitVec::ofNat(324)))
+runtime fn sha256_count(ctx: List<u8>, cn: u64) → u64 {
+    sha256_word_at(ctx, cn, 320) << 32 | sha256_word_at(ctx, cn, 324)
 }
 
-runtime fn sha256_put_count(ctx: List<BitVec(8)>, cn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
-    let high = sha256_put_word(ctx, cn, BitVec::ofNat(320), count.shift_right(32));
-    let low = sha256_put_word(high.after, cn, BitVec::ofNat(324), count);
+runtime fn sha256_put_count(ctx: List<u8>, cn, count: u64) → Mutated<List<u8>, u64> {
+    let high = sha256_put_word(ctx, cn, 320, count >> 32);
+    let low = sha256_put_word(high.after, cn, 324, count);
     Mutated(low.after, count)
 }
 
 // The initial hash value (§5.3.3) and a count of zero.
-runtime fn sha256_init(ctx: List<BitVec(8)>, cn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
-    let h0 = sha256_put_word(ctx, cn, BitVec::ofNat(0), BitVec::ofNat(0x6a09e667));
-    let h1 = sha256_put_word(h0.after, cn, BitVec::ofNat(4), BitVec::ofNat(0xbb67ae85));
-    let h2 = sha256_put_word(h1.after, cn, BitVec::ofNat(8), BitVec::ofNat(0x3c6ef372));
-    let h3 = sha256_put_word(h2.after, cn, BitVec::ofNat(12), BitVec::ofNat(0xa54ff53a));
-    let h4 = sha256_put_word(h3.after, cn, BitVec::ofNat(16), BitVec::ofNat(0x510e527f));
-    let h5 = sha256_put_word(h4.after, cn, BitVec::ofNat(20), BitVec::ofNat(0x9b05688c));
-    let h6 = sha256_put_word(h5.after, cn, BitVec::ofNat(24), BitVec::ofNat(0x1f83d9ab));
-    let h7 = sha256_put_word(h6.after, cn, BitVec::ofNat(28), BitVec::ofNat(0x5be0cd19));
-    let counted = sha256_put_count(h7.after, cn, BitVec::ofNat(0));
+runtime fn sha256_init(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
+    let h0 = sha256_put_word(ctx, cn, 0, 0x6a09e667);
+    let h1 = sha256_put_word(h0.after, cn, 4, 0xbb67ae85);
+    let h2 = sha256_put_word(h1.after, cn, 8, 0x3c6ef372);
+    let h3 = sha256_put_word(h2.after, cn, 12, 0xa54ff53a);
+    let h4 = sha256_put_word(h3.after, cn, 16, 0x510e527f);
+    let h5 = sha256_put_word(h4.after, cn, 20, 0x9b05688c);
+    let h6 = sha256_put_word(h5.after, cn, 24, 0x1f83d9ab);
+    let h7 = sha256_put_word(h6.after, cn, 28, 0x5be0cd19);
+    let counted = sha256_put_count(h7.after, cn, 0);
     Mutated(counted.after, counted.value)
 }
 
 // One byte into the block at `fill`, and the block run when that fills
 // it. Answers how full the block then is.
-runtime fn sha256_push(ctx: List<BitVec(8)>, cn, fill, byte: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+runtime fn sha256_push(ctx: List<u8>, cn, fill, byte: u64) → Mutated<List<u8>, u64> {
     let mut ctx = ctx;
-    ctx.put_within(cn, fill.add(BitVec::ofNat(64)), byte.truncate(8, 56));
-    match fill.eq_bit(BitVec::ofNat(63)) {
+    ctx.put_within(cn, fill + 64, byte.truncate(8, 56));
+    match fill.eq_bit(63) {
         True => {
             let ran = sha256_run(ctx, cn);
-            Mutated(ran.after, BitVec::ofNat(0))
+            Mutated(ran.after, 0)
         },
-        False => Mutated(ctx, fill.add(BitVec::ofNat(1))),
+        False => Mutated(ctx, fill + 1),
     }
 }
 
 // The message's bytes from `j`, each pushed.
-runtime fn sha256_absorb(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn, j, fill: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
-    decreases mn.sub(j).toNat() {
+runtime fn sha256_absorb(ctx: List<u8>, cn: u64, message: List<u8>, mn, j, fill: u64) → Mutated<List<u8>, u64>
+    decreases (mn - j).toNat() {
     match h: j.unsigned_lt_bit(mn) {
         False => Mutated(ctx, fill),
         True => {
             let pushed = sha256_push(ctx, cn, fill, message.byte_within(mn, j).zero_extend(56));
-            sha256_absorb(pushed.after, cn, message, mn, j.add(BitVec::ofNat(1)), pushed.value)
+            sha256_absorb(pushed.after, cn, message, mn, j + 1, pushed.value)
         },
     }
     on ?dec1 := {
@@ -112,30 +113,30 @@ runtime fn sha256_absorb(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<Bit
 // already. The count is a parameter because it is read before the stores
 // and used after them, and a span that is written is read as it is where
 // the read is used (issues/rt-file-read-before-store.md).
-runtime fn sha256_take(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
-    let absorbed = sha256_absorb(ctx, cn, message, mn, BitVec::ofNat(0), count.band(BitVec::ofNat(63)));
-    let counted = sha256_put_count(absorbed.after, cn, count.add(mn));
+runtime fn sha256_take(ctx: List<u8>, cn: u64, message: List<u8>, mn, count: u64) → Mutated<List<u8>, u64> {
+    let absorbed = sha256_absorb(ctx, cn, message, mn, 0, count & 63);
+    let counted = sha256_put_count(absorbed.after, cn, count + mn);
     Mutated(counted.after, counted.value)
 }
 
 // One more part of the message.
-runtime fn sha256_update(ctx: List<BitVec(8)>, cn: BitVec(64), message: List<BitVec(8)>, mn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+runtime fn sha256_update(ctx: List<u8>, cn: u64, message: List<u8>, mn: u64) → Mutated<List<u8>, u64> {
     let taken = sha256_take(ctx, cn, message, mn, sha256_count(ctx, cn));
     Mutated(taken.after, taken.value)
 }
 
 // Zeros in the block from `i` to its end.
-runtime fn sha256_zero(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases BitVec::ofNat(64).sub(i).toNat() {
-    match h: i.unsigned_lt_bit(BitVec::ofNat(64)) {
+runtime fn sha256_zero(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> decreases (64 - i).toNat() {
+    match h: i.unsigned_lt_bit(64) {
         False => Mutated(ctx, i),
         True => {
             let mut ctx = ctx;
-            ctx.put_within(cn, i.add(BitVec::ofNat(64)), BitVec::ofNat(0));
-            sha256_zero(ctx, cn, i.add(BitVec::ofNat(1)))
+            ctx.put_within(cn, i + 64, 0);
+            sha256_zero(ctx, cn, i + 1)
         },
     }
     on ?dec1 := {
-        let below = bitvec_omega::unsigned_true(64, i, BitVec::ofNat(64), h);
+        let below = bitvec_omega::unsigned_true(64, i, 64, h);
         bv_omega
     };
 }
@@ -143,34 +144,33 @@ runtime fn sha256_zero(ctx: List<BitVec(8)>, cn, i: BitVec(64)) → Mutated<List
 // §5.1.1's one bit and its zeros after a block filled to `fill`: the byte
 // 0x80, zeros to the block's end, and, where that leaves no room for the
 // eight bytes of the length, the block run and a block of zeros begun.
-runtime fn sha256_pad(ctx: List<BitVec(8)>, cn, fill: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+runtime fn sha256_pad(ctx: List<u8>, cn, fill: u64) → Mutated<List<u8>, u64> {
     let mut ctx = ctx;
-    ctx.put_within(cn, fill.add(BitVec::ofNat(64)), BitVec::ofNat(0x80));
-    let zeroed = sha256_zero(ctx, cn, fill.add(BitVec::ofNat(1)));
-    match fill.unsigned_lt_bit(BitVec::ofNat(56)) {
-        True => Mutated(zeroed.after, fill),
-        False => {
-            let ran = sha256_run(zeroed.after, cn);
-            let again = sha256_zero(ran.after, cn, BitVec::ofNat(0));
-            Mutated(again.after, fill)
-        },
+    ctx.put_within(cn, fill + 64, 0x80);
+    let zeroed = sha256_zero(ctx, cn, fill + 1);
+    if fill < 56 {
+        Mutated(zeroed.after, fill)
+    } else {
+        let ran = sha256_run(zeroed.after, cn);
+        let again = sha256_zero(ran.after, cn, 0);
+        Mutated(again.after, fill)
     }
 }
 
 // The end of a message of `count` bytes: the padding, the length in bits
 // as the block's last eight bytes, and the last block run. The count is a
 // parameter for `sha256_take`'s reason.
-runtime fn sha256_close(ctx: List<BitVec(8)>, cn, count: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
-    let padded = sha256_pad(ctx, cn, count.band(BitVec::ofNat(63)));
-    let high = sha256_put_word(padded.after, cn, BitVec::ofNat(120), count.shift_right(29));
-    let low = sha256_put_word(high.after, cn, BitVec::ofNat(124), count.shift_left(3));
+runtime fn sha256_close(ctx: List<u8>, cn, count: u64) → Mutated<List<u8>, u64> {
+    let padded = sha256_pad(ctx, cn, count & 63);
+    let high = sha256_put_word(padded.after, cn, 120, count >> 29);
+    let low = sha256_put_word(high.after, cn, 124, count << 3);
     let ran = sha256_run(low.after, cn);
     Mutated(ran.after, ran.value)
 }
 
 // The message has ended. The digest is then the context's first
 // thirty-two bytes.
-runtime fn sha256_finish(ctx: List<BitVec(8)>, cn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+runtime fn sha256_finish(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
     let closed = sha256_close(ctx, cn, sha256_count(ctx, cn));
     Mutated(closed.after, closed.value)
 }
