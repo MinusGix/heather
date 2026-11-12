@@ -779,17 +779,27 @@ fn plan_block(nodes: List<Node>, file: File, live: Reads(), entries: List<Port>,
 }
 
 // Where a conditional's outputs meet: the register the region wants an
-// output in, else one nothing live holds, none of `kept` when one is free
-// apart from them.
-fn pick_targets(entries: List<Port>, file: File, live: Nat → Bool, wanted: List<Port>, registers, pool, kept: List<Gpr>) → List<Gpr> {
+// output in; else a register of `pool` that needs no save and holds
+// nothing live, none of `kept` when one is free apart from them; else RAX
+// where nothing live is there and the output is not read after a later
+// call (`crossed`); else a callee-saved register of `pool`, which costs
+// the function a save; else RAX.
+fn pick_targets(entries: List<Port>, file: File, live: Nat → Bool, wanted: List<Port>, registers, pool, kept: List<Gpr>,
+    crossed: Nat → Bool) → List<Gpr> {
     match entries {
         Nil => [],
         Cons(port, rest) => {
             let register: Gpr = match target_of(port.id, wanted, registers) {
                 Some(target) => target,
-                None => match file.first_spare(live, pool, kept) { None => Rax, Some(free) => free },
+                None => match file.first_spare(live, pool_unsaved(pool), kept) {
+                    Some(free) => free,
+                    None => match slot_free(file.at(Rax), live) && !crossed(port.id) {
+                        True => Rax,
+                        False => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(free) => free },
+                    },
+                },
             };
-            Cons(register, pick_targets(rest, file.write(register, Some(Held(port.id, Word))), live, wanted, registers, pool, kept))
+            Cons(register, pick_targets(rest, file.write(register, Some(Held(port.id, Word))), live, wanted, registers, pool, kept, crossed))
         },
     }
 }
@@ -878,7 +888,7 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
             shared(reads_add(reads_add(reads_add(after, port_ids(outputs.entries)), when_false.reads()), when_true.reads()), λ (live: Reads()) => {
                 let arms = λ (mode: Bool) =>
                     shared(pick_targets(outputs.entries, file, λ (id: Nat) => reads_has(live, id), entries, registers, pool,
-                        kept_clear(mode, registers)), λ (targets: List<Gpr>) =>
+                        kept_clear(mode, registers), λ (id: Nat) => reads_has(crossed, id)), λ (targets: List<Gpr>) =>
                         Planned::met(when_true.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode),
                             when_false.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode),
                             file.known));

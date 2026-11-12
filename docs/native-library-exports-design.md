@@ -579,12 +579,11 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     call with no store of its own. The planner takes a callee-saved
     register only where it had none to give: the caller-saved ones all
     hold live values, and neither RAX nor the register of an operand
-    that dies at the node will do (`Node::fresh`). It writes the count
-    only then (`places_saving`). A branch's meeting register and a
-    loop's registers take a saved one where they used to fall back on
-    RAX with the pool full. Of the linked exports, ten files differ in
-    the frame's size alone and one function of `scan_token`'s program
-    saves R12. The probes pin a leaf
+    that dies at the node will do (`Node::fresh`; the same order for the
+    register a branch's arms meet in, `pick_targets`). It writes the
+    count only then (`places_saving`), so every linked export differs
+    from before in its frames' size alone and none of them saves. The
+    probes pin a leaf
     and a caller to their instructions with a value in R12, and refuse
     the same places with no count and a register past it
     (`lib/_tests/native/function_ir/function_ir_saves_tests.hthr`); the
