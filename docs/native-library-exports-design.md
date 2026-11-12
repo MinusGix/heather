@@ -169,14 +169,17 @@ contract bounds a span below the canonical boundary.
 
 ### 3.1 Views: lending a part of a buffer (2026-11-12)
 
-*Status: the design, with V1 to V4d built. A call over views is in the IR
+*Status: the design, with V1 to V5a built. A call over views is in the IR
 and means what this section says, the lowering's contract is stated at
 every lending, a function at a time, the function compiler lowers the
 call and proves it (`File::emit_lend`, `File::emit_lend_runs`), and a
 program links functions that lend (`Prog::links`: placeless with a view's
 base hidden, under rows of marks a search finds and the compiler checks).
-The languages above and the program compiler's own statements do not lend
-yet (V5, V6).*
+A `runtime fn` lends (V5a), and a program's statement reaches a view by
+calling a function that lends, which is what closed
+`issues/source-buffers-as-views.md`. The program compiler's own
+statements do not lend and keep their own byte lowering; V5b, V5c and V6
+are filed and not built.*
 
 **What is missing.** At an export's boundary a view is free: Rust slices
 the span and passes the slice's parts. Inside a program it is not
@@ -405,10 +408,16 @@ a function that lends a window to write and one that lends its second
 buffer as its callee's first, state each against a run, and pin each
 refusal's report.
 
-**A statement does not lend yet.** `StructuredRegion::scoped` refuses a
-lend, so the program compiler (`native_compile`) answers that a call over
-views is a function's to make; its walks over regions read a lend as its
-nodes and then a call. V5.
+**A statement lends through a function.** `StructuredRegion::scoped`
+refuses a lend, so the program compiler (`native_compile`) answers that a
+call over views is a function's to make; its walks over regions read a
+lend as its nodes and then a call. A statement lends its source's first
+buffers whole to a function, and the function lends on: `tail_c_window`
+(`lib/native/native_tools.hthr`) is `tail -c +K` written that way, each
+read's bytes past the skip a line of its buffer copied by `copy_window`,
+the program Rust links over borrowed spans. What the composition does not
+give (which buffers, how many, a window with no function between) is
+`issues/statement-lends-named-buffers.md`.
 
 **The machine laws** (`lib/std/arch/x86_64/x86_64_views.hthr`, built). The
 callee is owed a `Loan` over the views as spans, and the lender's own loan
@@ -600,17 +609,21 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     a frame of the size a function uses is
     `issues/function-frame-sized-by-use.md`.
   - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
-    no copy.
+    no copy. Not built: it is the arena round's
+    (`issues/runtime-fn-arena-lists.md` has what it meets).
   - *V5c, a statement of `Source` that lends*, and the done-when program
     of `issues/source-buffers-as-views.md`. Its control is built at the
-    functions' door (V4d).
+    functions' door (V4d). The done-when program is built by composition
+    (`tail_c_window`, above) and the issue is closed on it; a statement
+    that lends by itself is `issues/statement-lends-named-buffers.md`.
 - **V6. U5's step 5d**: a statement's own byte nodes through the shared
   leaf (`emit_leaf`), the leaf's theorems restated over any stack bound
   first (the log of the issue has the scoping). It comes last because it
   pays when a statement holds a home as a word. V4 makes that true of a
   function; of a statement it is V5c. Built before it, the bridge is
   written for the layout's literal addresses and is longer than the two
-  proofs it replaces (`goes_byte_to`, `goes_byte_from`).
+  proofs it replaces (`goes_byte_to`, `goes_byte_from`). Not built:
+  `issues/statement-byte-nodes-on-shared-leaf.md`.
 
 ## 4. The theorem
 

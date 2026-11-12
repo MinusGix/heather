@@ -112,6 +112,28 @@ fn head_c(count, capacity: Nat) → Tool {
 fn head_c10_tool() → Tool { head_c(10, 256) }
 
 // ---------------------------------------------------------------------------
+// tail -c +K
+
+// The input from its byte `start` on, counted from 0 (GNU's `+K` is
+// `start + 1`). The bytes of a read past those still to skip are a line of
+// the buffer read into: `copy_window` (native_tool_spans) copies it to the
+// same place of a second buffer, and it is written from there. The
+// statement lends its two buffers whole and the function lends the two
+// windows on to its loop (docs/native-library-exports-design.md §3.1), so
+// this is the tool whose call is over a line of a buffer; `tail` itself
+// needs no copy. A read that ends before the bytes to skip do is a line
+// that ends before it starts, which copies nothing and answers 0.
+fn tail_c_window(start, capacity: Nat) → Tool {
+    program(copy_window_program(), buffer(capacity, λ out => buffer(capacity, λ text => run(
+        local(num(start), λ skip => local(num(0), λ copied => each_read(stdin(), text, λ n =>
+            compute(call(copy_window_entry(), [skip.get(), n.get()], copied))
+                ++ when(copied.get(), write_span(stdout(), out, skip.get(), copied.get(), λ _ => exit(num(1))))
+                ++ skip.set(skip.get() + copied.get() - n.get()))))))))
+}
+
+fn tail_c7_window_tool() → Tool { tail_c_window(6, 256) }
+
+// ---------------------------------------------------------------------------
 // wc -l
 
 // The input's newlines counted, the count the exit status (Linux keeps its

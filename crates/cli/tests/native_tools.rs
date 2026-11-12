@@ -270,6 +270,54 @@ fn compiled_head_runs_as_gnu_head() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `tail -c +7` whose call is over a line of a buffer
+/// (issues/source-buffers-as-views.md): each read's bytes past those still
+/// to skip are copied by `copy_window`, which the statement lends its two
+/// buffers whole and which lends the window of each on to its loop. The
+/// program called is the one `heather_linked::spans::copy_window` links
+/// over spans a Rust caller owns. GNU's bytes for inputs shorter than the
+/// skip, as long, one longer and longer than a buffer, and for an input
+/// that arrives two bytes at a time, where the skip ends in a later read
+/// than the first.
+#[test]
+fn compiled_tail_copying_a_line_through_views_runs_as_gnu_tail() {
+    let dir = scratch("tail-window");
+    let binary = dir.join("tail");
+    write_tool("tail_c7_window_tool", &binary);
+
+    let mut random = Bytes::seeded("tail-window");
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"abc", b"abcdef", b"abcdefg", b"hello, heather\n", &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("tail").args(["-c", "+7"]), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tail exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // The same bytes however the reads fall: two at a time, with a pause.
+    let dripped = b"0123456789abcdefghij";
+    let mut child = Command::new(&binary).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        for pair in dripped.chunks(2) {
+            let _ = stdin.write_all(pair);
+            let _ = stdin.flush();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert_eq!((out.status.code(), &out.stdout[..]), (Some(0), &dripped[6..]), "a skip that ends in a later read");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room for this\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn compiled_wc_counts_lines_as_gnu_wc() {
     let dir = scratch("wc");

@@ -416,6 +416,39 @@ theorem raised_span_past(): raised_span(5).source().tree([], 0) = Ret(BitVec::of
 // crates/cli/tests/native_tools.rs): the generated program's compile is
 // not one evaluation here, as `count_newlines`'s is not.
 
+// A line of one static buffer copied into another through views
+// (issues/source-buffers-as-views.md): the statement calls `copy_window`
+// (native_tool_spans) on its two buffers, each lent whole, and
+// `copy_window` lends the window of each to `copy_span`'s loop. "heather"
+// from 2 to below 5 is "ath" at its own indices of the first buffer: 97,
+// 116 and 104, the byte before them the 46 it was, and the 3 it answers.
+// The program the statement calls is the one Rust links
+// (`heather_linked::spans::copy_window`, over spans a caller owns), so one
+// program reads a static buffer, a line of one and a borrowed span through
+// the same nodes.
+fn line_bytes(codes: List<Nat>) → List<BitVec(8)> { codes.map(λ (code: Nat) => BitVec::ofNat(code)) }
+fn dotted_bytes() → List<BitVec(8)> { line_bytes([46, 46, 46, 46, 46, 46, 46]) }
+fn heather_bytes() → List<BitVec(8)> { line_bytes([104, 101, 97, 116, 104, 101, 114]) }
+fn line_copied(from, end: Nat) → Tool {
+    program(copy_window_program(), buffer_of(dotted_bytes(), λ out => buffer_of(heather_bytes(), λ text => run(local(num(0), λ r =>
+        compute(call(copy_window_entry(), [num(from), num(end)], r))
+            ++ exit(out.at(num(1)) + out.at(num(2)) + out.at(num(3)) + out.at(num(4)) + r.get()))))))
+}
+theorem line_copied_runs(): line_copied(2, 5).source().tree([], 0) = Ret(BitVec::ofNat(366)) { refl }
+// A line past the buffers' end, and one that ends before it starts, copy
+// nothing and answer 0: the four bytes are the dots they were.
+theorem line_copied_past(): line_copied(2, 8).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+theorem line_copied_backwards(): line_copied(5, 2).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+// The empty line at the buffers' end is a line.
+theorem line_copied_empty(): line_copied(7, 7).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+// The source spelled for `write-elf` says the function called is lent two
+// buffers.
+theorem line_copied_spelled(): line_copied(2, 5).source().functions.spell_functions().last() = Some(2) { refl }
+// That the program links is `window_rows` and `window_placeless`
+// (native_tool_spans_tests); a tool that calls it on what it read is
+// compiled and its certificate checked by `write-elf`
+// (`tail_c7_window_tool`, crates/cli/tests/native_tools.rs).
+
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)
 

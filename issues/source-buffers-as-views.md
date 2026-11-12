@@ -1,6 +1,6 @@
 ---
 title: One notion of buffer in Source: static, borrowed, arena and frame storage as views
-status: open
+status: closed
 labels: [native,design,memory,function-ir]
 area: heather-in-heather
 milestone: [nh-library]
@@ -140,3 +140,9 @@ a store through a read-only view is refused by the judgment.
 
   V5a is done but for a loop that lends ([[function-ir-values-in-kept-registers]]). Left of V5: V5b, V5c.
 - 2026-11-12: The loop that lends lowers: a function's values may live in callee-saved registers the function saves ([[function-ir-values-in-kept-registers]], its log has what was built and what was not). `each_refused` became `each_accepted` with the machine-level theorem `each_carries`, and the same places with no save are the control. So V5a is whole, and the hash's loop over its blocks has the registers it wants. Left of V5: V5b, V5c.
+- 2026-11-12: Closed by composition, with the rest filed where it is owed.
+
+    - The done-when program is `copy_window::program` (`lib/native/native_tool_spans.hthr`), two functions: three comparisons, then `copy_span`'s loop lent a window of each span. It is linked two ways. In `tail_c_window` (`lib/native/native_tools.hthr`, `tail -c +7` as `tail_c7_window_tool`) a statement lends its two static buffers whole and the function lends on the line of each that a read left past the bytes to skip; `write-elf` compiles it with its certificate checked and it sends GNU `tail`'s bytes, also when the skip ends in a later read than the first (`crates/cli/tests/native_tools.rs`). In `heather_linked::spans::copy_window` the same program runs over spans a Rust caller owns. So a static buffer, a line of one and a borrowed span are read through the same nodes (`BufferLoad` under a home that is two words) and the same lowering case (`emit_leaf`), and the line's meaning is pinned by evaluation (`line_copied_runs` and three controls, `lib/_tests/native/native_build_tests.hthr`). The negative control is V4d's: a store through a view lent to read has no rows that hold (`lends_read_stored_no_rows`), and the program is refused (`view_source_read_refused`, reason 17).
+    - My reading of "an arena line", not a ruling: a window of a `Source` buffer, which is what the arena is in a source (a buffer and a top word). `rt`'s `Bytes` as such a window (V5b) is not built; it is the arena round's, and is logged on [[runtime-fn-arena-lists]].
+    - Not built, and filed: a statement that lends by itself, naming its buffers and their windows ([[statement-lends-named-buffers]], V5c built directly), and a statement's own byte nodes through the shared leaf ([[statement-byte-nodes-on-shared-leaf]], V6, U5's step 5d). Neither the linked lexer nor the hash needs them: both lend from functions. Two views of one buffer stay with [[views-of-one-buffer-apart]].
+    - What the tool showed: a statement's call lends the source's first buffers in order, so the tool declares `out` before `text` to match its callee; and `copy_window` is exactly the six words a call passes ([[function-call-past-six-words]]).

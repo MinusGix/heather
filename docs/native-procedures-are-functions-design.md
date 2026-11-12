@@ -1,7 +1,8 @@
 # Procedures are functions: one frame, one call, one contract
 
 Status: **proposed 2026-11-11; steps 5a, 5b and 5c built the same day**
-(§3); 5d moves with buffer views, by Minus's choice the same day (§3).
+(§3); 5d moves with buffer views, by Minus's choice the same day, and is
+filed on its own since 2026-11-12 (§3).
 The contract is built as `Target::Callable` (§2.5, "As
 built"). §1 describes the code before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
@@ -695,6 +696,12 @@ gates passing on the new code.
   comparison is longer than the two theorems it replaces. Buffer views
   change what a statement's home is, so the bridge is written once, there.
   The export does not need it: it goes through the function compiler.
+
+  **Filed (2026-11-12):** views are built in the function compiler, and a
+  statement reaches one by calling a function that lends, so a
+  statement's home is still a layout constant and the step still does
+  not pay. It is `issues/statement-byte-nodes-on-shared-leaf.md`, after
+  `issues/statement-lends-named-buffers.md`.
 
 Then **E**, the export, as ordered. The three `rt` items of §2.8 are
 rounds after the unification; they are independent of E and of each
