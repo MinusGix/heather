@@ -919,10 +919,13 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   caller's read spans on as a pure call does (`rt_file_call`). The
   probes are `runtime_span_reads_tests.hthr`: a byte copied from one
   span into another, stated at every file, and a caller of it twice. A
-  loop that writes and reads another span is not built: its recursion
-  must agree at every read span, which asks the writer's family keyed
-  by the rest of the file, as `Fun::GuardedBy` is for a loop that only
-  reads. An instance is the once-proved lowering read
+  loop is the same function at each list of the spans it reads: its
+  `ext` companion asks its recursions to agree at every such span, so
+  the generator proves the keyed family (`FFun::GuardedBy`, as
+  `Fun::GuardedBy` is for a loop that only reads) and
+  `FFun::guarded_by` gives `FFun::Guarded` at each rest of the file;
+  the measure is keyed with it, and may read the spans. An instance is
+  the once-proved lowering read
   at a reflection: `FFun::lower_sound` pinned to `f` by conversion
   where the body has no recursion (`FFun::compile`), and
   `FFun::measured_sound` from `f`'s own recursor where it calls itself

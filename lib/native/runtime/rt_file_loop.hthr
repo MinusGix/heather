@@ -72,6 +72,31 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
     }
 }
 
+// A step's meaning reads its recursion only at the calls it makes: two
+// recursions that answer alike give one meaning.
+theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(fw.w.tys, res),
+    same: (ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → k1(ys, o) = k2(ys, o)): (g: List<Ty>) → (env: Env(fw.w.tys, g)) → (own: List<BitVec(8)>) →
+    t.tail_sem(fw, res, k1, g, env, own) = t.tail_sem(fw, res, k2, g, env, own) {
+    match t {
+        Pure(_) => λ g env own => refl,
+        Let(e, body) => λ g env own =>
+            FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g env own => match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) as λ bit =>
+            (match bit { False => no.tail_sem(fw, res, k1, g, env, own), True => yes.tail_sem(fw, res, k1, g, env, own) }) =
+                (match bit { False => no.tail_sem(fw, res, k2, g, env, own), True => yes.tail_sem(fw, res, k2, g, env, own) }) {
+            False => FTm::tail_sem_ext(no, fw, res, k1, k2, same, g, env, own),
+            True => FTm::tail_sem_ext(yes, fw, res, k1, k2, same, g, env, own),
+        },
+        IfEq(c, yes, no) => λ g env own => eq2(λ (y: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) (n: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) =>
+                Tm::convoy(Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), y, n),
+            FTm::tail_sem_ext(yes, fw, res, k1, k2, same, g, env, own), FTm::tail_sem_ext(no, fw, res, k1, k2, same, g, env, own)),
+        Put(i, length, v, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
+            Pair(FTm::called(fw, g, env, f, args, own).value, env), FTm::called(fw, g, env, f, args, own).after),
+        Again(args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // What a pass leaves
 
@@ -655,6 +680,81 @@ fn FFun::Guarded(ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, h: FTm::Sem(fw.w.
         FTm::recast(fw.w.tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
                 FTm::recast(fw.w.tys, Word(64), res, again(ys, o)), Ty::bind_onto(ws, Nil), Ty::extend(fw.w.tys, ws, Nil, trivial, xs), own)) =
             FFun::uncurry(fw.w.tys, ws, res, h, xs, own))
+}
+
+theorem FFun::pick_same<A>(b: Bool, yes, no: A, same: b = True → yes = no): (match b { False => no, True => yes }) = no {
+    (match b as λ c => (c = True → yes = no) → (match c { False => no, True => yes }) = no { False => λ _ => refl, True => λ s => s(refl) })(same)
+}
+
+// The same as a family with its recursion keyed apart from its worlds, as
+// `Fun::GuardedBy` is for a function that only reads (rt_loop.hthr). A
+// function that writes one span and reads others is one function at each
+// list of the spans it reads, and a world at each rest of the file: the
+// worlds are indexed by `I` and the recursion by `K`, `key` reading an
+// index's key and `value` being the function at a key. `again` answers at
+// every key, which is what the function's own `f::ext` can use (it asks
+// its recursions to agree at every span, read or written), and a pass's own
+// recursion is `again` at its world's key. The measure may read the key.
+fn FFun::GuardedBy<I, K>(ws: List<Ty>, res: Ty, body: FTm, worlds: I → FWorld, h: (i: I) → FTm::Sem(worlds(i).w.tys, Sig(ws, res)), key: I → K,
+    value: K → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>, m: K → List<BitVec(64)> → List<BitVec(8)> → Nat) → Type {
+    (i: I) → Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) →
+        (again: K → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>) →
+        ((k: K) → (ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → ys.len() = ws.len() → m(k, ys, o) < m(key(i), xs, own) →
+            again(k, ys, o) = value(k, ys, o)) →
+        FTm::recast(worlds(i).w.tys, res, Word(64), body.tail_sem(worlds(i), res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                FTm::recast(worlds(i).w.tys, Word(64), res, again(key(i), ys, o)), Ty::bind_onto(ws, Nil),
+                Ty::extend(worlds(i).w.tys, ws, Nil, trivial, xs), own)) =
+            FFun::uncurry(worlds(i).w.tys, ws, res, h(i), xs, own))
+}
+
+theorem FFun::guarded_by<I, K>(ws: List<Ty>, res: Ty, body: FTm, worlds: I → FWorld, h: (i: I) → FTm::Sem(worlds(i).w.tys, Sig(ws, res)), key: I → K,
+    value: K → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>, m: K → List<BitVec(64)> → List<BitVec(8)> → Nat,
+    meets: (i: I) → (ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → value(key(i), ys, o) = FFun::uncurry(worlds(i).w.tys, ws, res, h(i), ys, o),
+    guarded: FFun::GuardedBy(ws, res, body, worlds, h, key, value, m), i: I):
+    FFun::Guarded(ws, res, body, worlds(i), h(i), m(key(i))) {
+    let fw = worlds(i);
+    let ctx = Ty::bind_onto(ws, Nil);
+    Ty::for_words_of(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) →
+        (again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>) →
+        ((ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → ys.len() = ws.len() → m(key(i), ys, o) < m(key(i), xs, own) →
+            again(ys, o) = FFun::uncurry(fw.w.tys, ws, res, h(i), ys, o)) →
+        FTm::recast(fw.w.tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                FTm::recast(fw.w.tys, Word(64), res, again(ys, o)), ctx, Ty::extend(fw.w.tys, ws, Nil, trivial, xs), own)) =
+            FFun::uncurry(fw.w.tys, ws, res, h(i), xs, own),
+        λ xs len own again hyp => {
+            // Where the family's hypothesis speaks: a state of the words'
+            // length, below the measure.
+            let below = λ (k: K) (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => ys.len().same(ws.len()) && Succ(m(k, ys, o)).leb(m(key(i), xs, own));
+            let every = λ (k: K) (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => match below(k, ys, o) {
+                False => again(ys, o),
+                True => value(k, ys, o),
+            };
+            let at_xs = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (own2: List<BitVec(8)>) →
+                (again2: K → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>) →
+                ((k: K) → (ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → ys.len() = ws.len() → m(k, ys, o) < m(key(i), zs, own2) →
+                    again2(k, ys, o) = value(k, ys, o)) →
+                FTm::recast(fw.w.tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                        FTm::recast(fw.w.tys, Word(64), res, again2(key(i), ys, o)), ctx, Ty::extend(fw.w.tys, ws, Nil, trivial, zs), own2)) =
+                    FFun::uncurry(fw.w.tys, ws, res, h(i), zs, own2), guarded(i), xs, len);
+            let got = at_xs(own, every, λ k ys o len_ys lt =>
+                cong_fn(λ (c: Bool) => match c { False => again(ys, o), True => value(k, ys, o) },
+                    eq2(λ (p: Bool) (q: Bool) => p && q, j(len_ys, λ n _ => ys.len().same(n) = True, ys.len().same_self()),
+                        Nat::leb_true(Succ(m(k, ys, o)), m(key(i), xs, own), lt))));
+            let here = λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                FFun::pick_same(below(key(i), ys, o), value(key(i), ys, o), again(ys, o), λ yes => {
+                    let both = Bool::is_true_and(ys.len().same(ws.len()), Succ(m(key(i), ys, o)).leb(m(key(i), xs, own)),
+                        j(sym(yes), λ c _ => c.IsTrue(), trivial));
+                    trans(meets(i, ys, o), sym(hyp(ys, o, Nat::same_sound(ys.len(), ws.len(), eq_true_of_is_true(ys.len().same(ws.len()), both.left)),
+                        Nat::leb_sound(Succ(m(key(i), ys, o)), m(key(i), xs, own), both.right))))
+                });
+            trans(cong_fn(λ (v: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) => FTm::recast(fw.w.tys, res, Word(64), v),
+                    sym(FTm::tail_sem_ext(body, fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                            FTm::recast(fw.w.tys, Word(64), res, every(key(i), ys, o)),
+                        λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => FTm::recast(fw.w.tys, Word(64), res, again(ys, o)),
+                        λ ys o => cong_fn(λ (x: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(fw.w.tys, Word(64), res, x), here(ys, o)), ctx,
+                        Ty::extend(fw.w.tys, ws, Nil, trivial, xs), own))),
+                got)
+        })
 }
 
 // What the loop's code promises: on as many words as parameters, over any

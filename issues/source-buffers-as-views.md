@@ -101,3 +101,12 @@ a store through a read-only view is refused by the judgment.
   Probes: `lib/_tests/native/runtime/runtime_span_reads_tests.hthr` (`copy_byte`: runs, short read, short write, stated at every file, marks `[True, False]`, placeless, lowers; `copy_pair` calls it twice).
 
   Owed, third part: a loop that writes and reads another span. `FFun::Guarded` is at one fixed `rest` and the loop's `ext` companion asks its recursions to agree at every read span, so the generator refuses it by name. Needed is the family keyed by the rest of the file (`FFun::GuardedBy` and a theorem to `FFun::Guarded` at each rest), as `Fun::GuardedBy`/`Fun::guarded_by` are for a loop that only reads. A copy of one span into another is the probe and the first linked export with a `span mut` and a `span`.
+- 2026-11-12: V5a, third part: a loop that writes one span reads others.
+
+  - `FTm::tail_sem_ext`, `FFun::GuardedBy` and `FFun::guarded_by` (`rt_file_loop.hthr`): the writer's family with its recursion keyed apart from its worlds, and `FFun::Guarded` at each world from it, the analogue of `Fun::GuardedBy`/`Fun::guarded_by`. The measure is keyed too, so it may read the spans read.
+  - `FFun::GuardedSpans`, `FFun::guarded_spans`, `FFun::measure_at` (`runtime_file.hthr`): the worlds are the rests of the file, the key a rest's first `lent - 1` spans. `FFun::compile_measured` takes its measure and its bound at each rest.
+  - `runtime_span_measured` (`runtime.hthr`) is one path at any count of spans; a loop over one span goes through it with no span read, and `raise_span`'s compiled bytes are unchanged (`scripts/linked`).
+  - Probes: `xor_from` and its caller `xor_all` (`runtime_span_reads_tests.hthr`), stated at every file.
+  - Export: `copy_span(out: span mut, text: span, count, from)` in `native_tool_spans.hthr` and `heather_linked::spans`, six words in the six argument registers. Rust tests against a reference at every pairing of lengths, inside larger buffers, between unmapped pages on both spans, on empty slices and at both stack alignments.
+
+  V5a is done as far as spans go: what is left of it is the lend itself (a `runtime fn` calling over a window, through `Lend`).

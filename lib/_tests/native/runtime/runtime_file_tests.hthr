@@ -118,7 +118,7 @@ theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(),
 
 fn raise_from_compile() → CompileSpan<List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>>(raise_from) {
     FFun::compile_measured(raise_from, [Word(64), Word(64)], Word(64), [], Word(64), raise_body(), 1, raise_table(), raise_callees(), [], λ _ => trivial,
-        raise_typed(), raise_measure, raise_bounded(), raise_guarded, trivial)
+        raise_typed(), λ _ => raise_measure, λ _ => raise_bounded(), raise_guarded, trivial)
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,9 @@
 // (`program_writers`, `count_newlines_called`). And `raise_span`, a
 // `runtime fn` that stores into the span: what its program leaves on
 // bytes, at any address, and what a tool's call of it is at every buffer
-// (`raise_span_called`, from `raise_span::runs_over`).
+// (`raise_span_called`, from `raise_span::runs_over`). And `copy_span`,
+// which stores into one span what it reads of the next: what its program
+// leaves on bytes, and which of the two it stores into.
 import native_tool_spans;
 import rt;
 import runtime;
@@ -140,5 +142,44 @@ theorem raise_called_every(bytes, other: List<BitVec(8)>, count, i: BitVec(64)):
 // The control: the call does not leave the file as it was.
 theorem raise_changes(same: program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed())): False {
     let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(65)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// `copy_span`: one span written from another
+
+// "aZz{" and "xy": the second copied over the start of the first.
+fn pair() → Buffers() { [[b(97), b(90), b(122), b(123)], [b(120), b(121)]] }
+
+theorem copy_runs(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(2), w(0)]) =
+    Ending(w(2), [[b(120), b(121), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// From an index on, the bytes before it kept.
+theorem copy_later(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(2), w(1)]) =
+    Ending(w(2), [[b(97), b(121), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// A count past the read span stores zero for what it does not have, and
+// one past the written span stores nothing past it.
+theorem copy_past_read(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(3), w(0)]) =
+    Ending(w(3), [[b(120), b(121), b(0), b(123)], [b(120), b(121)]]) { refl }
+theorem copy_past_written(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(1), from, w(2), w(9), w(0)]) =
+    Ending(w(9), [[b(120), b(90), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// It is lent two buffers and stores into the first alone: the second is
+// lent to read.
+theorem copy_counts(): program_counts(copy_span_program()) = [2] { refl }
+theorem copy_stores(): program_stores(copy_span_program(), 0) = True { refl }
+theorem copy_stores_first_only(): program_stores(copy_span_program(), 1) = False { refl }
+theorem copy_within(): program_stores_within(copy_span_program(), [True, False]) = True { refl }
+theorem copy_not_within(): program_stores_within(copy_span_program(), [False, True]) = False { refl }
+theorem copy_evaluable(): program_evaluable(copy_span_program()) = True { refl }
+theorem copy_placeless(): program_placeless(copy_span_program()) = True { refl }
+theorem copy_lowers(): lower_program_lent(copy_span_program(), plan_program(copy_span_program()),
+    program_counts(copy_span_program())).is_some().IsTrue() { trivial }
+
+// The control: the span read is the file's second, not the first. Copying
+// "xy" over "aZ" is not copying "aZ" over itself.
+theorem copy_reads_the_second(same: program_run(copy_span_program(), pair(), copy_span_entry(), [w(0), w(4), w(0), w(2), w(2), w(0)]) = Ending(w(2), pair())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(120)), same);
     absurd(verdict)
 }

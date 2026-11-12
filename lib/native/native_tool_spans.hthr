@@ -8,7 +8,10 @@
 // stated below from that. `raise_span` stores into the buffer: it is a
 // `runtime fn` over the span it writes, and its program is proved to run
 // to it at every file (`f::runs_over`,
-// docs/native-one-compiler-design.md §2.6).
+// docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
+// span what it reads of another: the span after the written one is lent to
+// read, and the statement is at every file, the span read being the file's
+// next.
 // The probes are lib/_tests/native/native_tool_spans_tests.hthr.
 import logic;
 import bool;
@@ -135,4 +138,36 @@ theorem raise_span_called(bytes: List<BitVec(8)>, rest: Buffers(), count, i: Bit
             Cons(raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).after, rest)) {
     cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(bytes, rest))),
         raise_span::runs_over(bytes, [], BitVec::zero(), BitVec::ofNat(bytes.len()), count, i))
+}
+
+// copy_span(out, length, text, size, count, i): the bytes of `text` from
+// `i` to below `count` stored at their own indices in `out`, answering the
+// index it stopped at. A byte is read under `text`'s length word and stored
+// under `out`'s: past the end of `text` the byte stored is zero, and
+// nothing is stored past the end of `out`.
+runtime fn copy_span(out: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => Mutated(out, i),
+        True => {
+            let mut out = out;
+            out.put_within(length, i, text.byte_within(size, i));
+            copy_span(out, length, text, size, count, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, count, h);
+        bv_omega
+    };
+}
+
+// Its program is the loop alone. Over any file, at any addresses: the
+// function at the file's first span, reading the second, the rest left.
+fn copy_span_program() → List<Function> { copy_span::program }
+fn copy_span_entry() → Nat { 0 }
+
+theorem copy_span_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, from, size, count, i: BitVec(64)):
+    program_run(copy_span_program(), Cons(out, rest), copy_span_entry(), [place, length, from, size, count, i])
+        = FTm::end_of(rest, copy_span(out, length, rest.span(0), size, count, i)) {
+    copy_span::runs_over(out, rest, place, length, from, size, count, i)
 }

@@ -20,6 +20,9 @@
 //!   after the span cannot be read;
 //! - a written span with an unmapped page on each side, and one inside a
 //!   larger buffer: nothing is stored outside the span, whatever the count;
+//! - a function lent one span to write and one to read (`spans::copy_span`):
+//!   the same of the written span, and the span read ending at an unmapped
+//!   page, read to its length and no further;
 //! - the code entered at both stack alignments, with the callee-saved
 //!   registers compared across the call.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -337,8 +340,131 @@ fn an_empty_slice_is_stored_nowhere() {
     assert_eq!(spans::raise_span(&mut none, 64, 3), 64);
 }
 
+/// What `copy_span` leaves in `out` and answers, in plain Rust: each index
+/// from `from` to below `count` that `out` has takes `text`'s byte there,
+/// or zero where `text` has ended.
+fn copied(out: &[u8], text: &[u8], count: u64, from: u64) -> (Vec<u8>, u64) {
+    let mut after = out.to_vec();
+    let end = usize::try_from(count).unwrap_or(usize::MAX).min(out.len());
+    let start = usize::try_from(from).unwrap_or(usize::MAX);
+    if start < end {
+        for (i, byte) in after[start..end].iter_mut().enumerate() { *byte = text.get(start + i).copied().unwrap_or(0); }
+    }
+    (after, from.max(count))
+}
+
+// Two spans, one written and one read: the bytes the written one holds
+// after and the word answered are the reference's, at every pairing of
+// lengths (the read span shorter, equal and longer), counts on both sides
+// of both lengths and starts on both sides of the count. The span read is
+// borrowed shared, so that it is unchanged is the borrow's; it is compared
+// all the same, since the code is the compiler's and not rustc's.
+#[test]
+fn copies_as_the_reference() {
+    for out_length in (0..20usize).chain([63, 64, 65, 255, 4096, 4097]) {
+        for text_length in [0, 1, out_length / 2, out_length.saturating_sub(1), out_length, out_length + 1, out_length + 70] {
+            let out = bytes(out_length, 0xc0de ^ out_length as u64);
+            let text = bytes(text_length, 0x7e87 ^ (text_length as u64) << 16 ^ out_length as u64);
+            let (long, short) = (out_length.max(text_length) as u64, out_length.min(text_length) as u64);
+            for count in [0, 1, short / 2, short, short + 1, long, long + 1, long + 4096] {
+                for from in [0, 1, short / 3, short, count, count + 1] {
+                    let mut span = out.clone();
+                    let read = text.clone();
+                    let answered = spans::copy_span(&mut span, &read, count, from);
+                    assert_eq!((span, answered), copied(&out, &text, count, from), "out {out_length}, text {text_length}, count {count}, from {from}");
+                    assert_eq!(read, text, "the span read changed: out {out_length}, text {text_length}, count {count}, from {from}");
+                }
+            }
+            let mut span = out.clone();
+            let count = spans::copy(&mut span, &text);
+            assert_eq!(count, out_length.min(text_length));
+            assert_eq!(span[..count], text[..count], "out {out_length}, text {text_length}");
+            assert_eq!(span[count..], out[count..], "out {out_length}, text {text_length}");
+        }
+    }
+}
+
+// Clause 4 with two spans: the written one is part of a larger buffer and
+// the one read is part of another; no byte outside the written span
+// changes in either, whatever the count.
+#[test]
+fn a_copy_stores_into_the_written_span_only() {
+    for (before, length, after) in [(0, 0, 16), (1, 1, 1), (7, 9, 5), (64, 100, 64), (3, 4096, 3)] {
+        let whole = vec![b'q'; before + length + after];
+        let source = vec![b'S'; before + length + after];
+        for count in [0, length as u64 / 2, length as u64, length as u64 + 1, (before + length + after) as u64 + 64] {
+            let mut buffer = whole.clone();
+            let read = source.clone();
+            let answered = spans::copy_span(&mut buffer[before..before + length], &read[before..before + length], count, 0);
+            assert_eq!(answered, count, "length {length}, count {count}");
+            let stored = usize::try_from(count).unwrap().min(length);
+            assert!(buffer[..before].iter().all(|byte| *byte == b'q'), "a byte before the span changed: length {length}, count {count}");
+            assert!(buffer[before..before + stored].iter().all(|byte| *byte == b'S'), "length {length}, count {count}");
+            assert!(buffer[before + stored..].iter().all(|byte| *byte == b'q'), "a byte past the count changed: length {length}, count {count}");
+            assert_eq!(read, source, "the buffer read changed: length {length}, count {count}");
+        }
+    }
+}
+
+// Both spans at the edge of what can be touched at all: the written one
+// with an unmapped page on each side, the one read ending where the next
+// page is unmapped (the kernel confirms neither page can be read). A count
+// past both ends stores to the written span's end and reads to the read
+// span's, and a fault would be a fault here.
+#[test]
+fn a_copy_between_unmapped_pages_touches_its_spans_only() {
+    let mut written = Guarded::new();
+    let mut read = Guarded::new();
+    let (_reader, writer) = std::io::pipe().expect("pipe");
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&writer) as u64;
+    for pages in [&written, &read] {
+        assert_eq!(syscall(WRITE, [fd, pages.boundary() as u64, 1, 0, 0, 0]), EFAULT, "the page after the span is readable");
+        assert_eq!(syscall(WRITE, [fd, pages.start() as u64 - 1, 1, 0, 0, 0]), EFAULT, "the page before the span is readable");
+    }
+    for out_length in [0, 1, 7, 8, 9, 64, 1000, PAGE] {
+        for text_length in [0, 1, out_length / 2, out_length, (out_length + 9).min(PAGE)] {
+            let out = bytes(out_length, 0xfeed ^ out_length as u64);
+            let text = bytes(text_length, 0xbeef ^ text_length as u64);
+            let long = out_length.max(text_length) as u64;
+            for count in [0, long / 2, long, long + 1, long + 2 * PAGE as u64] {
+                for from in [0, long / 2, long + 1] {
+                    let expected = copied(&out, &text, count, from);
+                    let boundary = read.boundary();
+                    let source: &[u8] = read.ending_at_the_boundary(&text);
+                    assert_eq!(source.as_ptr() as usize + source.len(), boundary);
+                    let span = written.ending_at_the_boundary(&out);
+                    let answered = spans::copy_span(span, source, count, from);
+                    assert_eq!((span.to_vec(), answered), expected, "ending at the boundary: out {out_length}, text {text_length}, count {count}, from {from}");
+                    assert_eq!(source, &text[..], "the span read changed: out {out_length}, text {text_length}, count {count}, from {from}");
+                    let source: &[u8] = read.starting_at_the_start(&text);
+                    let span = written.starting_at_the_start(&out);
+                    let answered = spans::copy_span(span, source, count, from);
+                    assert_eq!((span.to_vec(), answered), expected, "starting at the start: out {out_length}, text {text_length}, count {count}, from {from}");
+                }
+            }
+        }
+    }
+}
+
+// Empty slices on either side dangle: nothing is read or stored through
+// them.
+#[test]
+fn a_copy_of_or_into_an_empty_slice() {
+    let empty: &mut [u8] = &mut [];
+    for count in [0, 1, 8, 4096] {
+        assert_eq!(spans::copy_span(empty, b"text", count, 0), count);
+        assert_eq!(spans::copy_span(empty, &[], count, 0), count);
+        let mut out = *b"four";
+        assert_eq!(spans::copy_span(&mut out, &[], count, 0), count);
+        // Where the text has ended the byte stored is zero.
+        let stored = (count as usize).min(4);
+        assert!(out[..stored].iter().all(|byte| *byte == 0) && out[stored..] == b"four"[stored..], "count {count}");
+    }
+}
+
 unsafe extern "sysv64" {
     // The code itself, as `generated/exports.rs` declares it privately.
+    fn copy_span(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64, from: u64) -> u64;
     fn count_newlines(text: *const u8, length: u64, count: u64) -> u64;
     fn raise_span(text: *mut u8, length: u64, count: u64, from: u64) -> u64;
     fn scan_token(source: *const u8, length: u64, at: u64, previous: u64) -> u64;
@@ -375,6 +501,32 @@ macro_rules! entered {
                 concat!("add rsp, ", $pad),
                 code = sym $code,
                 in("rdi") pointer, in("rsi") length, in("rdx") $third, in("rcx") $fourth,
+                inout("r12") KEPT[0] => r12, inout("r13") KEPT[1] => r13, inout("r14") KEPT[2] => r14, inout("r15") KEPT[3] => r15,
+                out("rax") result,
+                clobber_abi("sysv64"),
+            );
+        }
+        (result, [r12, r13, r14, r15])
+    }};
+}
+
+/// The same for a function of six words, two spans and two words after
+/// them: every argument register the platform has.
+macro_rules! entered_six {
+    ($pad:literal, $code:ident, $out:expr, $out_length:expr, $text:expr, $count:expr, $from:expr) => {{
+        let (out, out_length) = ($out, $out_length);
+        let text: &[u8] = $text;
+        let result: u64;
+        let (r12, r13, r14, r15): (u64, u64, u64, u64);
+        // SAFETY: as `entered!`; the two spans are apart, the first writable
+        // and the second readable for the call.
+        unsafe {
+            core::arch::asm!(
+                concat!("sub rsp, ", $pad),
+                "call {code}",
+                concat!("add rsp, ", $pad),
+                code = sym $code,
+                in("rdi") out, in("rsi") out_length, in("rdx") text.as_ptr(), in("rcx") text.len() as u64, in("r8") $count, in("r9") $from,
                 inout("r12") KEPT[0] => r12, inout("r13") KEPT[1] => r13, inout("r14") KEPT[2] => r14, inout("r15") KEPT[3] => r15,
                 out("rax") result,
                 clobber_abi("sysv64"),
@@ -431,6 +583,25 @@ fn the_writer_at_both_stack_alignments() {
             assert_eq!((span, answered), (expected.0.clone(), (expected.1, KEPT)), "length {length}, count {count}, the platform's alignment");
             let mut span = text.clone();
             let answered = entered!(@at 8, raise_span, span.as_mut_ptr(), span.len() as u64, count, from);
+            assert_eq!((span, answered), (expected.0, (expected.1, KEPT)), "length {length}, count {count}, RSP eight lower");
+        }
+    }
+}
+
+// And of the function lent two spans, which takes all six argument
+// registers.
+#[test]
+fn the_copy_at_both_stack_alignments() {
+    for length in [0, 1, 17, 300, 5000] {
+        let out = bytes(length, 0x0a11 ^ length as u64);
+        let text = bytes(length + 3, 0x7e47 ^ length as u64);
+        for (count, from) in [(0, 0), (length as u64, 0), (length as u64 + 5, 1), (length as u64 / 2, length as u64)] {
+            let expected = copied(&out, &text, count, from);
+            let mut span = out.clone();
+            let answered = entered_six!(0, copy_span, span.as_mut_ptr(), span.len() as u64, &text, count, from);
+            assert_eq!((span, answered), (expected.0.clone(), (expected.1, KEPT)), "length {length}, count {count}, the platform's alignment");
+            let mut span = out.clone();
+            let answered = entered_six!(8, copy_span, span.as_mut_ptr(), span.len() as u64, &text, count, from);
             assert_eq!((span, answered), (expected.0, (expected.1, KEPT)), "length {length}, count {count}, RSP eight lower");
         }
     }

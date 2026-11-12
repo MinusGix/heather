@@ -78,8 +78,9 @@
 //!
 //! [`spans`]: the first exports over memory their caller owns
 //! (`lib/native/native_tool_spans.hthr`): a count of a text's newlines,
-//! which reads, and a text's letters raised to upper case in place, which
-//! writes. Their tests are the contract's process controls: a span that
+//! which reads, a text's letters raised to upper case in place, which
+//! writes, and one span copied into another, which is lent one to write and
+//! one to read. Their tests are the contract's process controls: a span that
 //! ends at an unmapped page, a written span with unwritable pages on both
 //! sides, an empty slice, and both stack alignments.
 

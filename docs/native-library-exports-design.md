@@ -467,9 +467,19 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     (`FTm::Source` at a count of lent spans, the callees' table at every
     rest of the file, *built*: `copy_byte` in
     `runtime_span_reads_tests.hthr`, which `compile-x86` exports as
-    `(span mut, span, word) -> word`). A loop that writes and reads
-    another span is owed: the writer's family keyed by the rest of the
-    file, then a copy of one span into another as its export. A
+    `(span mut, span, word) -> word`). A loop that writes reads them
+    too (*built*): its recursion must agree at every span read, which
+    one rest of the file cannot say, so the writer's family is keyed by
+    the spans read as the reader's is by its spans (`FFun::GuardedBy`,
+    `FFun::guarded_by`, `rt_file_loop.hthr`; `FFun::GuardedSpans`), the
+    measure may read them, and the generator is one path at any count
+    (`runtime_span_measured`). The probes are an xor of one span into
+    another and its caller (`xor_from`, `xor_all`); the export is
+    `copy_span` (`native_tool_spans.hthr`, `heather_linked::spans`),
+    the first linked function lent one span to write and one to read,
+    held to plain Rust on both spans' lengths, between unmapped pages
+    and at both stack alignments, with all six argument registers
+    taken. A
     loop that only reads is no longer lent one span: the generator's
     family is keyed by the list of spans (`Setup::GuardedSpans`,
     `issues/runtime-loop-over-several-spans.md`, *built*), and what it
@@ -998,11 +1008,10 @@ the part that faces a caller who is not a Heather program.
   loop may leave from inside or call itself in two places
   (`runtime_span_tests.hthr`: `clear_from`, `clear_line`, `clear_text`).
 
-Limits, each refused by name or filed: one span written per function,
-and a loop that writes lent that span alone (a function with no loop may
-read the spans after it, §3.1 V5a), six words in registers with the
-span's address and length among them, and a byte read before a store and
-used after it
+Limits, each refused by name or filed: one span written per function
+(it may read the spans after it, in a loop or out of one, §3.1 V5a), six
+words in registers with each span's address and length among them, and a
+byte read before a store and used after it
 (`issues/rt-file-read-before-store.md`). In-place `Set` under `Unique`
 (the third point of the outline) was not needed: a writer's meaning
 threads the span, and the store leaf is proved against the file the run

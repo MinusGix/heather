@@ -96,3 +96,69 @@ theorem copy_pair_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, 
     program_run(copy_pair::program, Cons(dst, rest), 1, [dp, dn, sp, sn, i]) = FTm::end_of(rest, copy_pair(dst, dn, rest.span(0), sn, i)) {
     copy_pair::runs_over(dst, rest, dp, dn, sp, sn, i)
 }
+
+// ---------------------------------------------------------------------------
+// A loop that writes one span and reads another
+
+// xor_from(dst, dn, src, sn, count, i): each byte of `dst` from `i` to
+// below `count` xored with `src`'s byte at its index and stored back,
+// answering the index it stopped at. A pass reads both spans, each under
+// its own length word, and stores under `dst`'s. The recursion is keyed by
+// the span read (`FFun::GuardedSpans`): the function's `ext` companion
+// asks it at every such span, and a pass is at the file's.
+runtime fn xor_from(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => Mutated(dst, i),
+        True => {
+            let mut dst = dst;
+            dst.put_within(dn, i, dst.byte_within(dn, i).bxor(src.byte_within(sn, i)));
+            xor_from(dst, dn, src, sn, count, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, count, h);
+        bv_omega
+    };
+}
+
+theorem xor_from_shaped(): xor_from::rt.lent = 2 { refl }
+
+fn ones() → List<BitVec(8)> { [b(1), b(2), b(4)] }
+
+theorem xor_from_runs(): program_run(xor_from::program, [abc(), ones()], 0, [w(4096), w(3), w(8192), w(3), w(3), w(1)]) =
+    Ending(w(3), [[b(97), b(96), b(103)], ones()]) { refl }
+
+// A count past both spans: nothing is stored past the written span's
+// length word, and past the read span's the byte xored is zero.
+theorem xor_from_short_write(): program_run(xor_from::program, [abc(), ones()], 0, [w(4096), w(2), w(8192), w(3), w(5), w(0)]) =
+    Ending(w(5), [[b(96), b(96), b(99)], ones()]) { refl }
+theorem xor_from_short_read(): program_run(xor_from::program, [abc(), ones()], 0, [w(4096), w(3), w(8192), w(1), w(5), w(0)]) =
+    Ending(w(5), [[b(96), b(98), b(99)], ones()]) { refl }
+
+// At every file: the program runs to the function at the file's first
+// span, reading the second, and leaves the rest.
+theorem xor_from_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, count, i: BitVec(64)):
+    program_run(xor_from::program, Cons(dst, rest), 0, [dp, dn, sp, sn, count, i]) = FTm::end_of(rest, xor_from(dst, dn, rest.span(0), sn, count, i)) {
+    xor_from::runs_over(dst, rest, dp, dn, sp, sn, count, i)
+}
+
+theorem xor_from_stores(): program_stores_within(xor_from::program, [True, False]) = True { refl }
+theorem xor_from_placeless(): program_placeless(xor_from::program) = True { refl }
+theorem xor_from_lowers(): lower_program_lent(xor_from::program, plan_program(xor_from::program), program_counts(xor_from::program)).is_some()
+    = True { refl }
+
+// A caller of the loop: the span read is passed on, and the caller's
+// statement is at every file through the loop's at every rest.
+runtime fn xor_all(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = xor_from(dst, dn, src, sn, dn, BitVec::ofNat(0));
+    Mutated(done.after, done.value)
+}
+
+theorem xor_all_runs(): program_run(xor_all::program, [abc(), ones()], 1, [w(4096), w(3), w(8192), w(3)]) =
+    Ending(w(3), [[b(96), b(96), b(103)], ones()]) { refl }
+
+theorem xor_all_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn: BitVec(64)):
+    program_run(xor_all::program, Cons(dst, rest), 1, [dp, dn, sp, sn]) = FTm::end_of(rest, xor_all(dst, dn, rest.span(0), sn)) {
+    xor_all::runs_over(dst, rest, dp, dn, sp, sn)
+}

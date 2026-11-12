@@ -196,10 +196,11 @@ fn FFun::measured_code(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm
 // (`FFun::Guarded`, which the function's recursor gives).
 theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
     callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
-    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
-    bounded: FFun::Bounded(ks ++ Cons(w0, wrest), m),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)),
+    m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat,
+    bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
     guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers(rest), rest),
-        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest)),
     ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()):
     (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
@@ -208,18 +209,63 @@ theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res:
     λ rest => FFun::measured_answers(ks ++ Cons(w0, wrest), res, FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(),
         FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent), ok,
         FFun::measured_sound(ks, w0, wrest, body, res, FWorld::of(w, callees, fsigs, writers(rest), rest), w.sigs.len(), lent,
-            FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m, bounded, guarded(rest)))
+            FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest), bounded(rest), guarded(rest)))
 }
 
 fn FFun::compile_measured<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
     callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
-    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
-    bounded: FFun::Bounded(ks ++ Cons(w0, wrest), m),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)),
+    m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat,
+    bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
     guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers(rest), rest),
-        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest)),
     ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)).IsTrue()) → CompileSpan<F>(f) {
     CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
         FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
+}
+
+// The spans a function that writes reads, at a rest of the file, as a rest
+// of their own: the file's next `lent - 1`.
+fn FFun::reads_of(lent: Nat, rest: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { Setup::spans_of(lent.pred(), rest) }
+
+// A measure keyed by the spans read, at a rest of the file.
+fn FFun::measure_at(lent: Nat, m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat)
+    → List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat {
+    λ rest => m(FFun::reads_of(lent, rest))
+}
+
+// `Guarded` as a function's generator proves it (`FFun::GuardedBy`): at
+// every rest of the file, with the recursion answered at every list of
+// read spans. The worlds are the files as they stand, so the body's meaning
+// is spelled once; the function and the measure are spelled at the rest
+// that is just the spans read, where the hypothesis has them
+// (`Setup::GuardedSpans` is this for a function that only reads).
+fn FFun::GuardedSpans<F>(f: F, ws: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ws, res)),
+    m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat) → Type {
+    FFun::GuardedBy(ws, res, body, λ (rest: List<List<BitVec(8)>>) => FWorld::of(w, callees, fsigs, writers(rest), rest),
+        λ (rest: List<List<BitVec(8)>>) => FTm::source_at(w.tys, lent, ws, res, typed, f, FFun::reads_of(lent, rest)),
+        λ (rest: List<List<BitVec(8)>>) => FFun::reads_of(lent, rest),
+        λ (reads: List<List<BitVec(8)>>) (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+            FFun::uncurry(w.tys, ws, res, FTm::source_at(w.tys, lent, ws, res, typed, f, reads), ys, o), m)
+}
+
+// `Guarded` at each rest, of the function and the measure at the spans
+// read there. At a count of spans that is a literal the function is the
+// one the class names (the function at the rest) by conversion, which is
+// how the generator hands this on: two spellings of the function are
+// compared, and the body's meaning, one term at one world, is not unfolded.
+theorem FFun::guarded_spans<F>(f: F, ws: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ws, res)),
+    m: List<List<BitVec(8)>> → List<BitVec(64)> → List<BitVec(8)> → Nat,
+    guarded: FFun::GuardedSpans(f, ws, res, body, lent, w, callees, fsigs, writers, typed, m)):
+    (rest: List<List<BitVec(8)>>) → FFun::Guarded(ws, res, body, FWorld::of(w, callees, fsigs, writers(rest), rest),
+        FTm::source_at(w.tys, lent, ws, res, typed, f, FFun::reads_of(lent, rest)), m(FFun::reads_of(lent, rest))) {
+    λ rest => FFun::guarded_by(ws, res, body, λ (c: List<List<BitVec(8)>>) => FWorld::of(w, callees, fsigs, writers(c), c),
+        λ (c: List<List<BitVec(8)>>) => FTm::source_at(w.tys, lent, ws, res, typed, f, FFun::reads_of(lent, c)),
+        λ (c: List<List<BitVec(8)>>) => FFun::reads_of(lent, c),
+        λ (reads: List<List<BitVec(8)>>) (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+            FFun::uncurry(w.tys, ws, res, FTm::source_at(w.tys, lent, ws, res, typed, f, reads), ys, o), m, λ c ys o => refl, guarded, rest)
 }
 
 // ---------------------------------------------------------------------------
