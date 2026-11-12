@@ -24,4 +24,4 @@ pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 
 pub use try_lower::{expr_children_mut, without_decrease_labels};
 pub use try_lower::{BIND_SEQ, ITERATE_THEN, POINTED_RET};
-pub use imperative::{AFTER, BRK, LOOP, MUTATED, MUTCALL, NEXT, PROJ, RET, STATE, WHILE};
+pub use imperative::{AFTER, BRK, LOOP, MUTATED, MUTATED_AFTER, MUTATED_VALUE, MUTCALL, NEXT, PROJ, RET, STATE, WHILE};

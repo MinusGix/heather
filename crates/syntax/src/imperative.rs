@@ -64,6 +64,16 @@ pub const RET: &str = "\0ret";
 /// through a λ, or shadowed) is an ordinary call.
 pub const MUTCALL: &str = "\0mutcall";
 pub const MUTATED: &str = "\0mutated";
+/// The two parts of a claimed call `\0mutated(x.m(a))` as expressions, for
+/// generated code that substitutes a block's statements into its result
+/// (the `decreases` companions, `crates/elab/src/measure.rs`):
+/// `\0mutated_after(x.m(a))` is `x` after the call and
+/// `\0mutated_value(x.m(a))` the value `let p = x.m(a);` binds to `p`. Both
+/// read the call as the statement does: the `Mutated` record's fields when
+/// `m` is a `mut self` method, the receiver unchanged and the call itself
+/// when not. The receiver may be any expression.
+pub const MUTATED_AFTER: &str = "\0mutated_after";
+pub const MUTATED_VALUE: &str = "\0mutated_value";
 /// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
 /// the loop's `Return` value or else the rest.
 pub const AFTER: &str = "\0after";
