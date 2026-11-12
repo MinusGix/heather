@@ -882,15 +882,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    bytes taken, with nothing proved by hand.
 
    What it does not take yet is
-   `issues/runtime-record-function-limits.md`: a call of another
-   function of the record (which is what keeps the count's update a
-   function of the span: its callers are), a branch before the end with
-   a store in it, operands and results other than 64-bit words, fields
-   with no accessor, an element at an index that is not a literal, and
-   the index spelled `t.f[i]`.
+   `issues/runtime-record-function-limits.md`: a branch before the end
+   with a store in it, operands and results other than 64-bit words,
+   fields with no accessor, an element at an index that is not a
+   literal, and the index spelled `t.f[i]`.
 4. **The floor and loops**: the class's floor, length preservation, the
    loop's equation carried through an exact codec; a call of another
-   function of the record; an element at an index that is a word (a
+   function of the record (**built**, below); an element at an index
+   that is a word (a
    reader marked with a family of parts and a bound the body's test
    gives); and a word array's bytes (`sha256_take_block` and
    `sha256_begin` store bytes where words lie, which is a second part
@@ -898,6 +897,39 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    functions are methods of `Sha256` whole, its entry points are exported
    as methods (`linked-export-of-a-method`, merged), and
    `sha256-context-type` closes.
+
+   **A call of another function of the record** is built
+   (`lib/_tests/native/runtime/runtime_held_call_tests.hthr`). `t.m(x)`
+   in a `runtime fn` of `T`, at a `runtime fn T::m(mut self t: T, …)`
+   declared before it, is a call of the callee's code over the span:
+
+   - *Theory* (`rt_held.hthr`). A computation's mark may be a held
+     function, `Runs(words, run)`: its function of the record at the
+     words it takes. A caller's held meaning then names `T::m` and never
+     its code, so the caller's pin is still a conversion over the
+     record. What the mark owes (`HWorld::Runs`) is the callee's
+     agreement, the statement its own `runs_held` is.
+   - *Reflector* (`rt_held_reflect.hthr`, "The walk"). The elaborator
+     hands a body over with every binding substituted: a call stands
+     wherever its record or its word is read. The walk reads the order
+     back: a record is settled when the span holds it, a call is made
+     once the record it takes is settled, and the stores of a record are
+     made last before the call or the end that needs it. Before each
+     call it makes the reads of the record that the body uses after it,
+     so a value of the record as it was can be used after a call.
+   - *Generator* (`runtime.hthr`). The callee's promise is its
+     published theorem at the words the operands are, read along the
+     call as the caller's world makes it; that the world's call is the
+     callee applied is proved with the callee a parameter, since at the
+     callee itself the kernel advances the newer head, which is the
+     callee, through its whole body before the world's table arrives at
+     its name. `T::m::bytes` is published beside `T::m`
+     (`HWorld::of_record`), and the linker reads there whose tables a
+     callee's are.
+
+   A caller's program is its callee's and itself. Not taken yet: a
+   callee that only reads the record, and what the issue lists beside
+   it.
 5. Later, each its own issue: padding-preserving `put`; loads and stores
    wider than a byte; the comparisons a known size makes unnecessary.
 
