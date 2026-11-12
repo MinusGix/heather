@@ -1,6 +1,6 @@
 ---
 title: lex_while's closing Eof stands past a refused identifier or numeral and before any other refused token
-status: open
+status: closed
 labels: [frontend,lexer,cleanup]
 area: language
 created: 2026-11-12
@@ -15,3 +15,7 @@ updated: 2026-11-12
 The doc comment says "the refused token is the last thing read", which fits both. Nothing is known to read the position (the import pre-scan reads the tokens before it), so this is a wart and not a bug. `lex_into_scanned` copies it on purpose and `the_scanners_run_stops_where_the_lexer_stops` (`crates/linked/tests/scanner.rs`) holds the copy.
 
 To do: one rule (the start, which is where an error's `Eof` already stands), in `lex_into_rust`'s `emit!` and in `lex_into_scanned`, with the test's expectation following. Minor.
+
+## Log
+
+- 2026-11-12: Done: one rule, `Eof` at the refused token's start, in `lex_into_rust`'s `emit!` and `lex_into_scanned`; `the_scanners_run_stops_where_the_lexer_stops` now also checks that position at every stop.

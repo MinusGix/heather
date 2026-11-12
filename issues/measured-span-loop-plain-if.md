@@ -1,6 +1,6 @@
 ---
 title: A measured span loop whose test is a plain if has no ext companion
-status: open
+status: closed
 labels: [native,runtime-fn,diagnostics]
 area: heather-in-heather
 milestone: [nh-front]
@@ -29,3 +29,7 @@ With the evidence named, `if h: i < 64 { … }`, the same function certifies, an
 ## Done when
 
 `zero_from` above certifies, or is refused with a message that names `if h:`, with a probe in `lib/_tests/native/runtime/runtime_span_tests.hthr`.
+
+## Log
+
+- 2026-11-12: Done: the lifted obligation of a plain `if` had lost the test, so it was refused, the companions were declined, and the generator met no `ext`. The body rewrite gave an equation to a `match` on a computed scrutinee (an AutoEqs candidate, `crates/elab/src/measure.rs`) but not to an `if`, which is the same match on its test's bit; it does now, and the companion walk numbers it in step. `zero_from` certifies, its program is `zero_from_named`'s (the `if h:` spelling) by `refl`, both in `lib/_tests/native/runtime/runtime_span_tests.hthr`. Library re-elaborated (plain `scripts/test`).
