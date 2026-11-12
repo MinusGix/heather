@@ -1,0 +1,129 @@
+// Probes for `lib/native/runtime/rt_held.hthr`: a function of a laid
+// record pinned to the held meaning of compiled terms by evaluation, a
+// world's promises from a part's two laws, and the whole statement with
+// nothing proved for the function.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import omega;
+import bitvec;
+import bitvec_nat;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_file;
+import rt_held;
+
+laid record Tally { count: u64, total: u64 }
+
+// What the source says.
+fn Tally::bump(self t: Tally) → Mutated<Tally, u64> { Mutated(t with { count = t.count + 1 }, t.count + 1) }
+
+// The program's two callees as the meanings the world holds: the
+// count's reader over the file, and its writer over the span.
+fn tally_sigs() → List<Sig> { [Sig([], Word(64))] }
+
+fn tally_fsigs() → List<Sig> { [Sig([Word(64)], Word(64))] }
+
+fn tally_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(World(RecInfo::none, tally_sigs(), Pair(BitVec::ofNat(0), trivial)),
+        λ b => Pair(Stored::u64_le().get(b.span(0), Tally::count_part().offset), trivial),
+        tally_fsigs(),
+        λ _ => Pair(λ own => λ (v: BitVec(64)) => Mutated(Stored::u64_le().put(own, Tally::count_part().offset, v), v), trivial),
+        rest)
+}
+
+fn tally_held(rest: List<List<BitVec(8)>>) → HWorld<Tally> {
+    HWorld(tally_world(rest), [Reads(λ (t: Tally) => t.count)], [Writes(λ (t: Tally) v => t with { count = v })])
+}
+
+// `let c = count; let one = 1; let s = c + one; count := s; s`
+fn bump_body() → FTm {
+    Let(Call(0, []), Let(Lit(Word(64), 1), Let(Prim(Add(64), [1, 0]), Call(0, [0], Pure(Var(1))))))
+}
+
+// The pin: the held meaning of the terms is the source function, by
+// evaluation, at every span.
+theorem bump_pinned(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, t: Tally): bump_body().held(tally_held(rest), Nil, trivial, own, t) = Tally::bump(t) { refl }
+
+// The byte meaning is not the function by evaluation: it reads the count
+// from the span, and the function from the record. That they agree where
+// the span holds the record is `FTm::held_runs`.
+// expect-error(kernel)
+theorem bump_bytes(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, t: Tally):
+    bump_body().sem(tally_world(rest), Nil, trivial, own).value = Tally::bump(t).value { refl }
+
+// What the world owes, from the part's two laws: one application for the
+// reader, one for the writer.
+theorem tally_sound(rest: List<List<BitVec(8)>>): Sound<Tally>(tally_held(rest), Tally::stored()) {
+    Sound(
+        And(λ args own a holds g env => trans(Tally::count_part().reads(own, 0), cong_fn(λ (t: Tally) => t.count, holds.right)), trivial),
+        And(λ args own a holds g env => match args {
+            Nil => holds,
+            Cons(v, _) => {
+                let fits: (Stored::u64_le().layout.size + Tally::count_part().offset <= own.len()) =
+                    Nat::le_trans(Stored::u64_le().layout.size + Tally::count_part().offset, Tally::stored().layout.size, own.len(), Tally::count_part().within, holds.left);
+                And(
+                    rewrite(Stored::u64_le().len_put(own, Tally::count_part().offset, FTm::word(RecInfo::none, g, env, v), fits), holds.left),
+                    trans(Tally::count_part().get_put(own, 0, FTm::word(RecInfo::none, g, env, v), holds.left),
+                        cong_fn(λ (t: Tally) => t with { count = FTm::word(RecInfo::none, g, env, v) }, holds.right)))
+            },
+        }, trivial))
+}
+
+// The whole statement, with nothing proved for `bump`: where the span
+// holds a tally, the compiled terms return what the function returns and
+// leave the span holding the tally the function leaves.
+theorem bump_runs(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, t: Tally, holds: Tally::stored().Holds(own, t)):
+    (bump_body().sem(tally_world(rest), Nil, trivial, own).value = Tally::bump(t).value)
+        ∧ Tally::stored().Holds(bump_body().sem(tally_world(rest), Nil, trivial, own).after, Tally::bump(t).after) {
+    let agrees = bump_body().held_runs(tally_held(rest), Tally::stored(), tally_sound(rest), And(trivial, trivial), Nil, trivial, own, t, holds);
+    And(sym(agrees.value), agrees.holds)
+}
+
+// A branch: the count goes up only below the total, and the function's
+// own `match` is the term's.
+fn Tally::bump_below(self t: Tally) → Mutated<Tally, u64> {
+    match t.count.unsigned_lt_bit(t.total) {
+        False => Mutated(t, t.count),
+        True => Mutated(t with { count = t.count + 1 }, t.count + 1),
+    }
+}
+
+fn tally_world2(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(World(RecInfo::none, [Sig([], Word(64)), Sig([], Word(64))], Pair(BitVec::ofNat(0), Pair(BitVec::ofNat(0), trivial))),
+        λ b => Pair(Stored::u64_le().get(b.span(0), Tally::count_part().offset), Pair(Stored::u64_le().get(b.span(0), Tally::total_part().offset), trivial)),
+        tally_fsigs(),
+        λ _ => Pair(λ own => λ (v: BitVec(64)) => Mutated(Stored::u64_le().put(own, Tally::count_part().offset, v), v), trivial),
+        rest)
+}
+
+fn tally_held2(rest: List<List<BitVec(8)>>) → HWorld<Tally> {
+    HWorld(tally_world2(rest), [Reads(λ (t: Tally) => t.count), Reads(λ (t: Tally) => t.total)], [Writes(λ (t: Tally) v => t with { count = v })])
+}
+
+// `let c = count; let n = total; let b = c < n; if b { let one = 1; let s = c + one; count := s; s } else { c }`
+fn bump_below_body() → FTm {
+    Let(Call(0, []), Let(Call(1, []), Let(Prim(Ult(64), [1, 0]),
+        If(0, Let(Lit(Word(64), 1), Let(Prim(Add(64), [3, 0]), Call(0, [0], Pure(Var(1))))), Pure(Var(2))))))
+}
+
+theorem bump_below_pinned(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, t: Tally):
+    bump_below_body().held(tally_held2(rest), Nil, trivial, own, t) = Tally::bump_below(t) { refl }
+
+// A term that stores a byte itself is not a held function's: `Kept` is
+// `False` at it, so the agreement cannot be asked of it.
+theorem put_not_kept(rest: List<List<BitVec(8)>>, kept: FTm::Put(0, 0, 0, Pure(Lit(Word(64), 0))).Kept(tally_held(rest))): False { kept }

@@ -604,8 +604,9 @@ of terms. Filed with what it would cost
 
 ## 9. Stage B: a `runtime fn` that holds the record (design, 2026-11-12)
 
-Nothing in this section is built. It says what the statement is, what is
-proved once, where the hard part is, and the rounds.
+What the statement is, what is proved once, where the hard part is, and
+the rounds. Round 1 and the theory of round 3 are built (§9.5 says which
+part of each); the rest is design.
 
 ### 9.1 What the source reads as, and what is claimed
 
@@ -631,66 +632,93 @@ the record as it was. `Sha256::of` is `T::stored().get(_, 0)`, so this is
 a statement in the library's terms, and a caller in Rust reads it as
 "the 328 bytes I lent hold the context the Heather function returns".
 
-### 9.2 What is proved once: a second meaning, and a simulation
+### 9.2 What is proved once: a second meaning, and that the two agree
 
 The runtime language has one meaning of a computation over a span: bytes
 to bytes (`FTm::sem`, `rt_file.hthr`). A function over a record cannot be
 pinned to that meaning by conversion, which is how every `runtime fn` is
 pinned today, because `r.count` and "eight bytes at 320 joined" are equal
-by a theorem (`Part::reads`) and not by computation. So:
+by a theorem (`Part::reads`) and not by computation. So the same terms
+get a second meaning. **Built**, for bodies without a loop:
+`lib/native/runtime/rt_held.hthr`, probes in
+`lib/_tests/native/runtime/rt_held_tests.hthr`.
 
-- **Held terms.** Computations gain two nodes, a field read and a field
-  store, each naming a field of a table the function's world holds: a
-  `Part<A, B>(whole)` whose codec is a word's. Nothing else is new: `Let`,
-  `If`, calls and `Again` are the ones there are.
-- **Two meanings.** The record meaning threads an `A`: a read is `p.of(a)`
-  and a store is `p.with(a, v)`, which at a generated part reduce to the
-  projection and to `a with { f = v }` by `refl` (§5.3, held by the
-  probes). So the pin of a record-level function to its reflection is by
-  conversion, as every pin is. The byte meaning is the existing one after
-  an expansion that replaces each node with the words' code
-  (`stored_words.hthr`'s bodies at the part's offset, inlined by the
-  expansion, so a field access is not a call).
-- **The simulation**, by induction over the term, once: where the span
-  holds a record (`whole.layout.size <= own.len()`), the byte meaning from
-  `own` and the record meaning from `whole.get(own, 0)` return the same
-  word, and the span the first leaves holds the record the second leaves,
-  has the length it had, and is unchanged past the record. Its two leaf
-  cases exist: `u32_be_within_part` and `put_u32_be_within_part` (§6.1).
-  A call is the induction's hypothesis about the callee, which is the
-  same statement.
+- **One term language.** `FTm` gains no node. A field read is a bound
+  call of a pure function of the program and a field store is a call of
+  one of its computations, as a span's word is read and stored today. A
+  held world (`HWorld<A>`) is the program's world with a mark on some of
+  those functions: `Reads(get)` on a pure one, `Writes(set)` on a
+  computation, where `get: A → u64` and `set: A → u64 → A`.
+- **Two meanings.** `FTm::held` answers `Mutated<A, R>`, the record the
+  computation leaves and its value, which is what a function of the
+  record answers. A bound call of a reader is `get(a)`, a writer's call
+  leaves `set(a, word)`, and every other term is the byte meaning's. The
+  span's bytes are an operand it carries for those other terms and never
+  part of its answer. (An answer holding the bytes too was the first
+  attempt: every branch then sits under a projection, and a projection
+  of a stuck `match` is not the match of the projections, so a function
+  with a branch could not be pinned.)
+- **The pin is by conversion**, as every pin is. With the marks
+  `λ t => t.count` and `λ t v => t with { count = v }`, a function of
+  the record is its reflection's held meaning by `refl`: the probes pin
+  a straight-line function and one with a branch, and hold the same
+  claim against the byte meaning as a kernel refusal.
+- **The agreement**, `FTm::held_runs`, by induction over the term, once:
+  where the span holds a record (`Stored::Holds`: long enough, and the
+  record is what is read at its start) and the world is `Sound`, the
+  held meaning's value is the byte meaning's, and the bytes the byte
+  meaning leaves hold the record the held meaning leaves. `Sound` is a
+  tuple, one proof per marked function, that a reader's call answers the
+  field of what the span holds and that a writer's call leaves the span
+  holding `set` of it. Each is one application of a part's laws
+  (`Part::reads`, `Stored::get_put`), and with the accessor class
+  (§9.4) one generic lemma per kind, so a generator writes the tuple and
+  proves nothing.
+- **What a held body may be** is `FTm::Kept`: every call a marked one,
+  no byte stored but by a writer, no loop, nothing lent. The last three
+  are the rounds still to come, and a body outside it is refused by
+  name and not silently given the byte reading.
 
-The function that is compiled, linked and exported is the byte meaning,
-an ordinary function of bytes for which everything downstream is
+The function that is compiled, linked and exported is the reflection
+itself, an ordinary function of bytes for which everything downstream is
 unchanged (`CompileSpan`, links, lends, `compile-x86`, `scripts/linked`).
-The record-level statement of §9.1 is `f::runs_over` for it, rewritten by
-the simulation. Prove the generator, not the copies: nothing is proved
+The record-level statement of §9.1 is `f::runs_over` for it, rewritten
+by the agreement. Prove the generator, not the copies: nothing is proved
 for `f`.
+
+What this design costs against the one first written here (two new
+nodes and an expansion to the words' code): a field access is a call in
+the compiled code, where the expansion would have inlined it. Inlining a
+small callee is the lowering's to do for every function and not this
+theory's, and the theory is a third the size without it. What it does
+not yet say: the span's length after, and the bytes past the record
+(`Stored::Holds` speaks of the record alone); both are round 4's, with
+the floor.
 
 ### 9.3 The hard part: a span too short to hold the record
 
 The byte meaning is total: a store past a list's end does nothing and a
 read there is zero, and the class states a function's run at **every**
-span (`CompileSpan.runs`, `FFun::Guarded`). The simulation is true only
+span (`CompileSpan.runs`, `FFun::Guarded`). The agreement is true only
 where the span holds the record. Three consequences, in the order they
 bite:
 
 1. **The length word.** Reads and stores are under a length word, and the
-   record-level source has none. The expansion hands the byte operations
-   the record's size as a literal, so the invariant is about the span
+   record-level source has none. The reflector hands a field's reader and
+   writer the record's size as a literal, so the invariant is about the span
    alone (`size <= own.len()`) and the code needs no word for it. (The
    exported function still takes the span as a place and a length, which
    the Rust wrapper gives, and the comparison of a constant offset with a
    constant size is the lowering's to fold: `x86-compare-immediate`.)
 2. **A function without a loop** has its byte meaning at every span, so
-   it is an instance of the class as it is, and the simulation is a
+   it is an instance of the class as it is, and the agreement is a
    theorem beside it. Nothing new is needed.
 3. **A loop** needs a function of bytes that satisfies the loop's own
    equation at every span (`FFun::Guarded`), and for a record-level loop
    the only function there is, is the record-level one. Carried to bytes
    it is `put(own, 0, f(get(own, 0)))` where the span holds the record,
    and there the equation follows from the record-level one and the
-   simulation, provided a span is determined by the record it holds and
+   agreement, provided a span is determined by the record it holds and
    the bytes around it: a codec with `put(b, at, get(b, at)) = b`, which
    holds where no byte is padding. Where the span is too short there is
    no such function to name.
@@ -718,19 +746,19 @@ every codec a lens in the full sense (`put(b, get(b)) = b`,
 
 ### 9.4 What reads a codec
 
-The expansion has to know which code reads a field: a word of four bytes,
+The reflector has to know which code reads a field: a word of four bytes,
 most significant first, at offset 64. A field is a `Part` whose codec is
 a term, and the code for a codec is found by a class keyed by that term
 (`Accessor(codec)`, `lib/native/runtime/stored_accessor.hthr`, §10.2):
 the instance holds the `runtime fn` that reads the codec's value under a
 length word, the one that stores it, the word a value is held as, and
-the two theorems that the calls are the codec's `get` and `put`. The
-simulation's leaf cases are then two theorems for every codec that has
+the two theorems that the calls are the codec's `get` and `put`. A
+marked function's obligation (§9.2) is then one of two theorems for every codec that has
 an accessor, `Stored::read_at_part` and `Stored::write_at_part`, built.
 A field whose codec has no instance is refused by name.
 
 (First written here: this reader needs a layout as data, a closed
-description the expansion interprets. The class is the open form of the
+description the reflector interprets. The class is the open form of the
 same thing, and what was learnt trying both is §10.)
 
 Indexing an array field by a word (`ctx.schedule[t]`) is a field read at
@@ -759,12 +787,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    `layout-first-order-description`), as Minus decides: a codec's
    compiled accessor by a class, a declared type's layout by a class,
    and a layout as data. A prototype of each checks.
-3. **Held terms without loops**: the two nodes, the record meaning, the
-   expansion, the simulation, the reflector reading a record receiver
-   (field reads, `x.f := e`, each field's load and store found by the
-   accessor class of §10.2), and the generator publishing the byte
-   function with `f::runs_held`. First customers: SHA-256's `init` and
-   the count's update.
+3. **A held function without loops.** The theory is **built** (§9.2):
+   the marks, the held meaning, the agreement, a pin by evaluation.
+   Still to build: each field's reader and writer as a `runtime fn`
+   found by the accessor class of §10.2, with its obligation by a
+   generic lemma; the reflector reading a record receiver (field reads,
+   `x.f := e`); the function-level statement composed with
+   `CompileSpan`'s; and the generator publishing `f::runs_held`. First
+   customers: SHA-256's `init` and the count's update.
 4. **The floor and loops**: the class's floor, length preservation, the
    loop's equation carried through an exact codec. Then SHA-256's
    functions are methods of `Sha256` whole, its entry points are exported

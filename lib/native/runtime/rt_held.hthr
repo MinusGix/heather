@@ -1,0 +1,321 @@
+// A computation over a span, read as a computation over what the span
+// holds (docs/layout-design.md §9.2): a second meaning of the terms of
+// `rt_file.hthr`, and the theorem that the two agree.
+//
+// A `runtime fn` whose receiver is a laid record is a function of the
+// record: `t.count` is the record's projection, and `t.count := e` is the
+// record with the field replaced. The code is a function of bytes. The
+// two are equal by a theorem (`Part::reads`, `Part::get_put`) and not by
+// computation, so a function of the record cannot be pinned to the byte
+// meaning by conversion, which is how every `runtime fn` is pinned.
+//
+// So the same terms get a second meaning, `FTm::held`, over a world that
+// marks some of the program's functions: a pure function may be the
+// **reader** of a field (`Reads(get)`), and a computation the **writer**
+// of one (`Writes(set)`). The held meaning answers the record the
+// computation leaves and its value, a `Mutated<A, R>`, which is what a
+// function of the record answers. A bound call of a reader answers `get`
+// of the record, a writer's call leaves `set` of the record and the
+// word, and everything else is the byte meaning's. The span's bytes are
+// an operand it carries for the terms that are not field accesses, and
+// never part of its answer: an answer that held them would put a
+// projection around every branch, and a projection of a stuck `match`
+// is not the match of the projections. Where every field access is a
+// marked call, the record and the value never read the bytes, so a
+// function of the record is its reflection's held meaning by `refl`
+// (the probes pin a straight-line one and one with a branch).
+//
+// `FTm::held_runs` is the agreement, by induction over the term, once:
+// where the span holds a record (`Stored::Holds`) and the world keeps
+// its marks' promises (`Sound`, one proof per marked function, each one
+// application of a part's law), the held meaning's value is the byte
+// meaning's, and the bytes the byte meaning leaves hold the record the
+// held meaning leaves. Nothing is proved per function.
+//
+// Not here yet: a loop (`Again`), a lend, and a call of another held
+// function are refused by `FTm::Kept`; the first needs the floor of
+// docs/layout-design.md §9.3.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import rt;
+import rt_file;
+
+// What a pure function of the program is to a held computation: any
+// function, or the reader of a field of the `A` the span holds.
+inductive Reader<A> { Plain, Reads(get: A → BitVec(64)) }
+
+// What a computation of the program is to one: not held, or the store of
+// a word into a field.
+inductive Writer<A> { Apart, Writes(set: A → BitVec(64) → A) }
+
+// The marks of a program's functions, in the order of its tables; a
+// function past a list's end is the plain kind.
+record HWorld<A> { fw: FWorld, readers: List<Reader<A>>, writers: List<Writer<A>> }
+
+fn Reader::at<A>(rs: List<Reader<A>>, f: Nat) → Reader<A> {
+    match rs { Nil => Plain, Cons(r, rest) => match f { Zero => r, Succ(k) => Reader::at(rest, k) } }
+}
+
+fn Writer::at<A>(ws: List<Writer<A>>, f: Nat) → Writer<A> {
+    match ws { Nil => Apart, Cons(w, rest) => match f { Zero => w, Succ(k) => Writer::at(rest, k) } }
+}
+
+// The computation `f` has a mark.
+fn Writer::Has<A>(ws: List<Writer<A>>, f: Nat) → Type {
+    match ws { Nil => False, Cons(_, rest) => match f { Zero => True, Succ(k) => Writer::Has(rest, k) } }
+}
+
+// The field a bound term reads, where the term is a reader's call.
+fn Tm::field_read<A>(self e: Tm, hw: HWorld<A>) → Option<A → BitVec(64)> {
+    match e {
+        Call(f, _) => match Reader::at(hw.readers, f) { Plain => None, Reads(get) => Some(get) },
+        _ => None,
+    }
+}
+
+// A bound pure term's value: a field's reader answers from what the span
+// holds, every other term from the span.
+fn FTm::held_value<A>(hw: HWorld<A>, own: List<BitVec(8)>, e: Tm, g: List<Ty>, env: Env(hw.fw.w.tys, g), a: A) → e.ty(hw.fw.w, g).sem(hw.fw.w.tys) {
+    match e.field_read(hw) {
+        None => FTm::value(hw.fw, own, e, g, env),
+        Some(get) => Ty::cast(hw.fw.w.tys, Word(64), e.ty(hw.fw.w, g), get(a)),
+    }
+}
+
+// What a computation leaves the span holding: a field's writer stores
+// its first operand's word into the field.
+fn Writer::state<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A) → A {
+    match w {
+        Apart => a,
+        Writes(set) => match args { Nil => a, Cons(v, _) => set(a, FTm::word(tys, g, env, v)) },
+    }
+}
+
+fn FTm::held_state<A>(hw: HWorld<A>, f: Nat, args: List<Nat>, g: List<Ty>, env: Env(hw.fw.w.tys, g), a: A) → A {
+    Writer::at(hw.writers, f).state(hw.fw.w.tys, args, g, env, a)
+}
+
+// A held computation's answer read at another code.
+fn FTm::held_recast<A>(tys: Nat → RecInfo, x, y: Ty, h: Mutated<A, x.sem(tys)>) → Mutated<A, y.sem(tys)> { Mutated(h.after, Ty::cast(tys, x, y, h.value)) }
+
+// The held meaning: what the span holds, threaded through the term. The
+// span's bytes are an operand and not an answer: a pure term is read at
+// them and a call goes on from the bytes its callee leaves, which are the
+// byte meaning's own, so the answer is the record and the value alone and
+// a function of the record is this by `refl`.
+fn FTm::held<A>(self t: FTm, hw: HWorld<A>) → (g: List<Ty>) → Env(hw.fw.w.tys, g) → List<BitVec(8)> → A
+    → Mutated<A, t.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)> {
+    match t {
+        Pure(v) => λ g env own a => Mutated(a, FTm::value(hw.fw, own, v, g, env)),
+        Let(e, body) => λ g env own a => body.held(hw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
+        If(c, yes, no) => λ g env own a =>
+            match Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)) {
+                False => FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a)),
+                True => yes.held(hw, g, env, own, a),
+            },
+        IfEq(c, yes, no) => λ g env own a =>
+            Tm::convoy(Mutated<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>,
+                Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)), yes.held(hw, g, env, own, a),
+                FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a))),
+        Put(i, length, v, body) => λ g env own a => body.held(hw, g, env, FTm::put(hw.fw.w.tys, g, env, i, length, v, own), a),
+        Call(f, args, body) => λ g env own a =>
+            shared(FTm::called(hw.fw, g, env, f, args, own), λ m =>
+                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, FTm::held_state(hw, f, args, g, env, a))),
+        Again(args) => λ g env own a => Mutated(a, FTm::called(hw.fw, g, env, 0, args, own).value),
+        Lend(f, views, args, body) => λ g env own a =>
+            shared(FTm::lent(hw.fw, g, env, f, views, args, own), λ m =>
+                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, a)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The two meanings agree
+
+// The span holds `a`: it is long enough, and `a` is what is read at its
+// start.
+fn Stored::Holds<A>(self whole: Stored<A>, own: List<BitVec(8)>, a: A) → Type { (whole.layout.size <= own.len()) ∧ (whole.get(own, 0) = a) }
+
+// What a reader owes: called on anything, it answers the field of what
+// the span holds.
+fn HWorld::Reads<A>(self hw: HWorld<A>, whole: Stored<A>, f: Nat, get: A → BitVec(64)) → Type {
+    (args: List<Nat>) → (own: List<BitVec(8)>) → (a: A) → whole.Holds(own, a) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+        FTm::value(hw.fw, own, Call(f, args), g, env) = Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.w.sigs, f).result, get(a))
+}
+
+// What a computation owes: it leaves the span holding what its mark says.
+fn HWorld::Writes<A>(self hw: HWorld<A>, whole: Stored<A>, f: Nat, w: Writer<A>) → Type {
+    (args: List<Nat>) → (own: List<BitVec(8)>) → (a: A) → whole.Holds(own, a) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+        whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, w.state(hw.fw.w.tys, args, g, env, a))
+}
+
+// Each mark's obligation, in the tables' order: a tuple, one proof per
+// function, which is what a generator writes.
+fn Reader::Owes<A>(self r: Reader<A>, P: (A → BitVec(64)) → Type) → Type {
+    match r { Plain => True, Reads(get) => P(get) }
+}
+
+fn Reader::All<A>(rs: List<Reader<A>>, P: Nat → (A → BitVec(64)) → Type) → Type {
+    match rs {
+        Nil => True,
+        Cons(r, rest) => r.Owes(P(Zero)) ∧ Reader::All(rest, λ (k: Nat) => P(Succ(k))),
+    }
+}
+
+fn Writer::All<A>(ws: List<Writer<A>>, P: Nat → Writer<A> → Type) → Type {
+    match ws { Nil => True, Cons(w, rest) => P(Zero, w) ∧ Writer::All(rest, λ (k: Nat) => P(Succ(k))) }
+}
+
+theorem Reader::all_at<A>(rs: List<Reader<A>>): (P: Nat → (A → BitVec(64)) → Type) → Reader::All(rs, P) → (f: Nat) →
+    Reader::at(rs, f).Owes(P(f)) {
+    match rs {
+        Nil => λ P all f => trivial,
+        Cons(r, rest) => λ P all f => match f {
+            Zero => all.left,
+            Succ(k) => Reader::all_at(rest, λ (j: Nat) => P(Succ(j)), all.right, k),
+        },
+    }
+}
+
+theorem Writer::all_at<A>(ws: List<Writer<A>>): (P: Nat → Writer<A> → Type) → Writer::All(ws, P) → (f: Nat) → Writer::Has(ws, f) → P(f, Writer::at(ws, f)) {
+    match ws {
+        Nil => λ P all f has => false_elim(has),
+        Cons(w, rest) => λ P all f => match f {
+            Zero => λ _ => all.left,
+            Succ(k) => λ has => Writer::all_at(rest, λ (j: Nat) => P(Succ(j)), all.right, k, has),
+        },
+    }
+}
+
+// What a held world owes, whole.
+record Sound<A>(hw: HWorld<A>, whole: Stored<A>) {
+    readers: Reader::All(hw.readers, λ (f: Nat) (get: A → BitVec(64)) => hw.Reads(whole, f, get)),
+    writers: Writer::All(hw.writers, λ (f: Nat) (w: Writer<A>) => hw.Writes(whole, f, w)),
+}
+
+// The computations a held function is made of: no byte stored but by a
+// field's writer, every call a marked one, no loop, nothing lent.
+fn FTm::Kept<A>(self t: FTm, hw: HWorld<A>) → Type {
+    match t {
+        Pure(_) => True,
+        Let(_, body) => body.Kept(hw),
+        If(_, yes, no) => yes.Kept(hw) ∧ no.Kept(hw),
+        IfEq(_, yes, no) => yes.Kept(hw) ∧ no.Kept(hw),
+        Put(_, _, _, _) => False,
+        Call(f, _, body) => Writer::Has(hw.writers, f) ∧ body.Kept(hw),
+        Again(_) => False,
+        Lend(_, _, _, _) => False,
+    }
+}
+
+// The held meaning beside the byte meaning: the same value, and the
+// bytes the second leaves hold the record the first leaves.
+record Agrees<A, R>(whole: Stored<A>, h: Mutated<A, R>, m: Mutated<List<BitVec(8)>, R>) {
+    value: h.value = m.value,
+    holds: whole.Holds(m.after, h.after),
+}
+
+theorem Agrees::recast<A>(whole: Stored<A>, tys: Nat → RecInfo, x, y: Ty, h: Mutated<A, x.sem(tys)>, m: Mutated<List<BitVec(8)>, x.sem(tys)>, agrees: Agrees<A, x.sem(tys)>(whole, h, m)):
+    Agrees<A, y.sem(tys)>(whole, FTm::held_recast(tys, x, y, h), FTm::recast(tys, x, y, m)) {
+    Agrees(cong_fn(λ (v: x.sem(tys)) => Ty::cast(tys, x, y, v), agrees.value), agrees.holds)
+}
+
+// A term that reads a field is a reader's call, and answers the field.
+theorem Tm::field_read_ok<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), get: A → BitVec(64), is: e.field_read(hw) = Some(get),
+    own: List<BitVec(8)>, a: A, holds: whole.Holds(own, a), g: List<Ty>, env: Env(hw.fw.w.tys, g)):
+    FTm::value(hw.fw, own, e, g, env) = Ty::cast(hw.fw.w.tys, Word(64), e.ty(hw.fw.w, g), get(a)) {
+    let P: Tm → Type = λ (x: Tm) => (FTm::value(hw.fw, own, x, g, env) = Ty::cast(hw.fw.w.tys, Word(64), x.ty(hw.fw.w, g), get(a)));
+    match e {
+        Var(i) => Option::none_ne_some(get, is, P(Var(i))),
+        Lit(c, n) => Option::none_ne_some(get, is, P(Lit(c, n))),
+        Prim(op, xs) => Option::none_ne_some(get, is, P(Prim(op, xs))),
+        Let(x, body) => Option::none_ne_some(get, is, P(Let(x, body))),
+        If(c, yes, no) => Option::none_ne_some(get, is, P(If(c, yes, no))),
+        IfEq(c, yes, no) => Option::none_ne_some(get, is, P(IfEq(c, yes, no))),
+        Make(i, xs) => Option::none_ne_some(get, is, P(Make(i, xs))),
+        Field(i, k, of) => Option::none_ne_some(get, is, P(Field(i, k, of))),
+        Call(f, args) => {
+            let by_case: ((r: Reader<A>) → r.Owes(λ (got: A → BitVec(64)) => hw.Reads(whole, f, got)) → (match r { Plain => None, Reads(got) => Some(got) }) = Some(get) → P(Call(f, args))) =
+                λ r => match r {
+                    Plain => λ _ none => Option::none_ne_some(get, none, P(Call(f, args))),
+                    Reads(got) => λ reads some => rewrite(sym(Option::some_inj(got, get, some)), reads(args, own, a, holds, g, env)),
+                };
+            by_case(Reader::at(hw.readers, f), Reader::all_at(hw.readers, λ (f: Nat) (get: A → BitVec(64)) => hw.Reads(whole, f, get), sound.readers, f), is)
+        },
+        Fold(over, init, step) => Option::none_ne_some(get, is, P(Fold(over, init, step))),
+        Case(c, zero, succ) => Option::none_ne_some(get, is, P(Case(c, zero, succ))),
+        Byte(k, i, length) => Option::none_ne_some(get, is, P(Byte(k, i, length))),
+    }
+}
+
+// A bound term's two values are one where the span holds the state.
+theorem FTm::held_value_is<A>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), own: List<BitVec(8)>, e: Tm, g: List<Ty>, env: Env(hw.fw.w.tys, g), a: A,
+    holds: whole.Holds(own, a)): FTm::held_value(hw, own, e, g, env, a) = FTm::value(hw.fw, own, e, g, env) {
+    let by_case: ((o: Option<A → BitVec(64)>) → e.field_read(hw) = o →
+        (match o { None => FTm::value(hw.fw, own, e, g, env), Some(get) => Ty::cast(hw.fw.w.tys, Word(64), e.ty(hw.fw.w, g), get(a)) }) = FTm::value(hw.fw, own, e, g, env)) =
+        λ o => match o {
+            None => λ _ => refl,
+            Some(get) => λ is => sym(e.field_read_ok(hw, whole, sound, get, is, own, a, holds, g, env)),
+        };
+    by_case(e.field_read(hw), refl)
+}
+
+theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole)): t.Kept(hw) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) → (own: List<BitVec(8)>) → (a: A) →
+    whole.Holds(own, a) → Agrees<A, t.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole, t.held(hw, g, env, own, a), t.sem(hw.fw, g, env, own)) {
+    match t {
+        Pure(v) => λ _ g env own a holds => Agrees(refl, holds),
+        Let(e, body) => λ kept g env own a holds => {
+            let same = FTm::held_value_is(hw, whole, sound, own, e, g, env, a, holds);
+            let ran = body.held_runs(hw, whole, sound, kept, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::value(hw.fw, own, e, g, env), env), own, a, holds);
+            let goal: Agrees<A, body.ty(hw.fw.w, hw.fw.fsigs, Cons(e.ty(hw.fw.w, g), g)).sem(hw.fw.w.tys)>(whole, body.held(hw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
+                body.sem(hw.fw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::value(hw.fw, own, e, g, env), env), own)) = rewrite(same, ran);
+            goal
+        },
+        If(c, yes, no) => λ kept g env own a holds => {
+            let by_case: ((b: Bool) → Agrees<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole,
+                match b {
+                    False => FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a)),
+                    True => yes.held(hw, g, env, own, a),
+                },
+                match b {
+                    False => FTm::recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.sem(hw.fw, g, env, own)),
+                    True => yes.sem(hw.fw, g, env, own),
+                })) =
+                λ b => match b {
+                    False => Agrees::recast(whole, hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a), no.sem(hw.fw, g, env, own),
+                        no.held_runs(hw, whole, sound, kept.right, g, env, own, a, holds)),
+                    True => yes.held_runs(hw, whole, sound, kept.left, g, env, own, a, holds),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        IfEq(c, yes, no) => λ kept g env own a holds => {
+            let by_case: ((b: Bool) → Agrees<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole,
+                Tm::convoy(Mutated<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>, b, yes.held(hw, g, env, own, a),
+                    FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a))),
+                Tm::convoy(Mutated<List<BitVec(8)>, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>, b, yes.sem(hw.fw, g, env, own),
+                    FTm::recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.sem(hw.fw, g, env, own))))) =
+                λ b => match b {
+                    False => Agrees::recast(whole, hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a), no.sem(hw.fw, g, env, own),
+                        no.held_runs(hw, whole, sound, kept.right, g, env, own, a, holds)),
+                    True => yes.held_runs(hw, whole, sound, kept.left, g, env, own, a, holds),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        Put(_, _, _, _) => λ kept => false_elim(kept),
+        Call(f, args, body) => λ kept g env own a holds =>
+            body.held_runs(hw, whole, sound, kept.right, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
+                FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a),
+                Writer::all_at(hw.writers, λ (f: Nat) (w: Writer<A>) => hw.Writes(whole, f, w), sound.writers, f, kept.left, args, own, a, holds, g, env)),
+        Again(_) => λ kept => false_elim(kept),
+        Lend(_, _, _, _) => λ kept => false_elim(kept),
+    }
+}
