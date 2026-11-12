@@ -1375,6 +1375,11 @@ designation prefix - at BitVec(n) := BitVec::neg
 // Division and remainder are `bitvec_div`'s.
 designation & at BitVec(n) := BitVec::band
 designation | at BitVec(n) := BitVec::bor
+// Exclusive or is `⊕`, on its rung between `|` and `&` (Rust's `^`, which is
+// power here), and the complement is prefix `~`: `!` is Boolean negation
+// (issues/bitvec-xor-complement-symbols.md).
+designation ⊕ at BitVec(n) := BitVec::bxor
+designation prefix ~ at BitVec(n) := BitVec::complement
 designation << at BitVec(n) := BitVec::shift_left
 designation >> at BitVec(n) := BitVec::shift_right
 instance(n: Nat) Numeral<BitVec(n)> { ofNat := λ (k: Nat) => BitVec::ofNat(k) }

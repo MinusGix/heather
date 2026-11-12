@@ -96,6 +96,8 @@ fn SInt::logical_shift_right({n: Nat}, self a: SInt(n), count: Nat) → SInt(n) 
 // `>>` is the arithmetic shift, as at Rust's `i64`.
 designation & at SInt(n) := SInt::band
 designation | at SInt(n) := SInt::bor
+designation ⊕ at SInt(n) := SInt::bxor
+designation prefix ~ at SInt(n) := SInt::complement
 designation << at SInt(n) := SInt::shift_left
 designation >> at SInt(n) := SInt::shift_right
 

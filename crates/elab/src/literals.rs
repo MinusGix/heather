@@ -19,7 +19,8 @@ use heather_kernel::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, Term, Type};
-use heather_syntax::{Expr, ExprKind, ScaledLit, Span};
+use heather_numeral::Numeral;
+use heather_syntax::{Expr, ExprKind, ScaledLit, Span, Ty, TyKind};
 
 use crate::oracle::Unfold;
 use crate::{application, Cx, ElabError, Elaborator, R};
@@ -558,6 +559,21 @@ impl Literals<'_> {
         self.goal_oracle()
             .convert_term(&cx.gamma, heather_kernel::layer::Layer::Prog, bit, &no, &ty, &level)
             .is_ok()
+    }
+
+    /// `42u64`, `0x80u8`, `7i32` (issues/integer-literal-width-suffix.md):
+    /// the numeral checked at the type its suffix names, which is the type it
+    /// infers. The suffix is a type name and nothing more: `u64` resolves as
+    /// a width family wherever a type is written, so `42u64` is the term
+    /// `let x: u64 = 42` binds, and an expected type around it is met by the
+    /// ordinary inference fallback rather than read by the numeral.
+    pub(crate) fn elab_suffixed_infer(&self, cx: &Cx, value: &Numeral, suffix: &str, e: &Expr) -> R<(Term, Type, Level)> {
+        let named = Span { start: e.span.end - suffix.len(), end: e.span.end };
+        let written = Ty { kind: TyKind::Named { name: suffix.to_string(), args: Vec::new() }, span: named };
+        let (ty, level) = self.elab_ty(cx, &written)?;
+        let numeral = Expr { kind: ExprKind::Num(value.clone()), span: e.span };
+        let term = self.elab_check(cx, &numeral, &ty, &level)?;
+        Ok((term, ty, level))
     }
 
     /// A decimal or hex float literal in inference position: the `Rat` it

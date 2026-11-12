@@ -76,6 +76,7 @@ pub(crate) fn rename_expr(e: &mut Expr, from: &str, to: &str) {
         ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
@@ -349,6 +350,7 @@ impl Deshadow {
             | ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::SuffixedNum { .. }
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
@@ -452,6 +454,7 @@ pub(crate) fn walk_expr_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr) -> bool) 
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::SuffixedNum { .. }
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
