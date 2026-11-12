@@ -1,0 +1,86 @@
+// What is stored in bytes: a value of `A` as bytes of a `Layout`, read and
+// written through a window of a list (docs/layout-design.md §5.2). The
+// third layer over `lib/std/machine/layout.hthr`: a `Stored<A>` says how
+// an `A` is bytes, `get` and `put` read and store one at an offset, and
+// the laws are proved once for every codec: what is put is read back
+// (`get_put`), a store leaves what is apart from it (`get_put_apart`,
+// whose premise is what `Layout::fits_apart` gives two fields of a sound
+// table), and a store keeps the length (`len_put`).
+//
+// Nothing here is undefined: a window past the end of the bytes is
+// shorter, and each law carries the bound it needs as a hypothesis.
+// Alignment is the layout's and no law asks for it; it matters to where a
+// value is placed, not to what its bytes are.
+
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import omega;
+import bitvec;
+import list_window;
+import layout;
+
+// How a value of `A` is bytes of a layout: a writer whose output is the
+// layout's size, and a reader that gives back what was written.
+record Stored<A> {
+    layout: Layout,
+    read: List<u8> → A,
+    write: A → List<u8>,
+    sized: (a: A) → write(a).len() = layout.size,
+    round: (a: A) → read(write(a)) = a,
+}
+
+// The value at `at` of `bytes`.
+fn Stored::get<A>(self s: Stored<A>, bytes: List<u8>, at: Nat) → A { s.read(bytes.window(at, s.layout.size + at)) }
+
+// `bytes` with the value stored at `at`.
+fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8> { bytes.put_window(at, s.write(a)) }
+
+// What is put is what is then read.
+theorem Stored::get_put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A, inside: at <= bytes.len()):
+    s.get(s.put(bytes, at, a), at) = a
+{
+    trans(cong_fn<List<u8>, A>(λ w => s.read(w),
+            j(s.sized(a), λ n _ => bytes.put_window(at, s.write(a)).window(at, n + at) = s.write(a),
+                bytes.window_put_window(at, s.write(a), inside))),
+        s.round(a))
+}
+
+// A store keeps the length.
+theorem Stored::len_put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A, fits: s.layout.size + at <= bytes.len()):
+    s.put(bytes, at, a).len() = bytes.len()
+{
+    bytes.len_put_window(at, s.write(a), j(sym(s.sized(a)), λ n _ => n + at <= bytes.len(), fits))
+}
+
+// A store leaves what is apart from it: a value read from bytes the store
+// did not touch is the value that was there.
+theorem Stored::get_put_apart<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at, other: Nat, a: A,
+    apart: t.layout.size + other <= at ∨ s.layout.size + at <= other, inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    cong_fn<List<u8>, B>(λ w => t.read(w), match apart {
+        Inl(before) => bytes.window_put_window_before(at, s.write(a), other, t.layout.size + other, before, inside),
+        Inr(after) => bytes.window_put_window_after(at, s.write(a), other, t.layout.size + other,
+            j(sym(s.sized(a)), λ n _ => n + at <= other, after), inside),
+    })
+}
+
+// The same of two fields: a value read at one field after a store into
+// another that shares no byte with it.
+theorem Stored::get_put_fields<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at, other: Nat, a: A,
+    apart: Field(other, t.layout).Apart(Field(at, s.layout)), inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    s.get_put_apart(t, bytes, at, other, a, apart, inside)
+}
+
+// ---------------------------------------------------------------------------
+// Codecs
+
+// A byte as itself.
+fn Stored::byte() → Stored<u8> {
+    Stored(Layout::word(0), λ (bytes: List<u8>) => bytes.head_or(BitVec::ofNat(0)), λ (b: u8) => [b], λ _ => refl, λ _ => refl)
+}

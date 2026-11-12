@@ -1,0 +1,53 @@
+// Probes of `lib/std/machine/stored.hthr`: a byte stored and read back in
+// literal bytes, a store that leaves its neighbour, and the laws at
+// neutral bytes and an open codec. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import list_window;
+import layout;
+import stored;
+
+def four: List<u8> = [0x10, 0x20, 0x30, 0x40];
+
+// By computation at literal bytes.
+theorem byte_read(): Stored::byte().get(four, 2) = 0x30 { refl }
+theorem byte_stored(): Stored::byte().put(four, 2, 0x99) = [0x10, 0x20, 0x99, 0x40] { refl }
+theorem byte_past_end(): Stored::byte().get(four, 7) = 0x00 { refl }
+
+// The laws at neutral bytes: read back, a neighbour left, the length kept.
+theorem byte_back(bytes: List<u8>, at: Nat, b: u8, inside: at <= bytes.len()):
+    Stored::byte().get(Stored::byte().put(bytes, at, b), at) = b
+{
+    Stored::byte().get_put(bytes, at, b, inside)
+}
+
+theorem byte_neighbour(bytes: List<u8>, at: Nat, b: u8, inside: 1 + at <= bytes.len()):
+    Stored::byte().get(Stored::byte().put(bytes, 1 + at, b), at) = Stored::byte().get(bytes, at)
+{
+    Stored::byte().get_put_apart(Stored::byte(), bytes, 1 + at, at, b, Inl((1 + at).le_refl()), inside)
+}
+
+theorem byte_length(bytes: List<u8>, at: Nat, b: u8, inside: 1 + at <= bytes.len()):
+    Stored::byte().put(bytes, at, b).len() = bytes.len()
+{
+    Stored::byte().len_put(bytes, at, b, inside)
+}
+
+// At an open codec, two fields of a sound table: a store into one leaves
+// the other, the premise read off the table by index.
+theorem fields_apart<A, B>(s: Stored<A>, t: Stored<B>, whole: Layout, at, other: Nat,
+    fits: whole.Fits([Field(at, s.layout), Field(other, t.layout)]), bytes: List<u8>, a: A, inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    s.get_put_fields(t, bytes, at, other, a,
+        whole.fits_apart([Field(at, s.layout), Field(other, t.layout)], fits, 1, 0, refl, refl, λ same => absurd(same)), inside)
+}
+
+// A window that overlaps the store is not claimed to be left: the store
+// shows through it.
+theorem overlap_shows(): Stored::byte().get(Stored::byte().put(four, 2, 0x99), 2) = 0x99 { refl }

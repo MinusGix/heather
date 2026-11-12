@@ -1585,6 +1585,118 @@ theorem Nat::add_lt_of_lt_sub(self a, b, c: Nat, h: b < c - a): a + b < c {
 }
 
 // ---------------------------------------------------------------------------
+// Divisibility: the few closure facts, each from the remainder laws.
+
+theorem Nat::dvd_refl(self a: Pos<Nat>): a.Divides(a) { a.mod_self() }
+
+theorem Nat::dvd_zero(self a: Nat): a.Divides(0) { match a { Zero => refl, Succ(_) => refl } }
+
+theorem Nat::dvd_mul_left(self a: Pos<Nat>, k: Nat): a.Divides(k * a) { k.mul_mod_self(a) }
+
+// A multiple is its quotient times the divisor.
+theorem Nat::div_mul_of_dvd(self n, a: Nat, h: a.Divides(n)): n.div(a) * a = n {
+    j(h, λ r _ => n.div(a) * a + r = n, n.div_mul_add_mod(a))
+}
+
+theorem Nat::dvd_add(self a: Pos<Nat>, {n, m: Nat}, hn: a.Divides(n), hm: a.Divides(m)): a.Divides(n + m) {
+    calc {
+        (n + m).mod(a)
+            = (n.mod(a) + m.mod(a)).mod(a) := n.add_mod(m, a),
+            = (0 + m.mod(a)).mod(a) := Nat::cong(λ (r: Nat) => (r + m.mod(a)).mod(a), hn),
+            = (0 + 0).mod(a) := Nat::cong(λ (r: Nat) => (0 + r).mod(a), hm),
+            = 0 := (0).mod_of_lt(a, a_pos),
+    }
+}
+
+theorem Nat::dvd_trans(self a: Pos<Nat>, {b, c: Nat}, hb: a.Divides(b), hc: b.Divides(c)): a.Divides(c) {
+    calc {
+        c.mod(a)
+            = c.mod(b).mod(a) := sym(c.mod_mod_of_dvd(b, a, hb)),
+            = (0).mod(a) := Nat::cong(λ (r: Nat) => r.mod(a), hc),
+            = 0 := (0).mod_of_lt(a, a_pos),
+    }
+}
+
+theorem Nat::dvd_mul_right(self a: Pos<Nat>, {n: Nat}, k: Nat, h: a.Divides(n)): a.Divides(k * n) {
+    calc {
+        (k * n).mod(a)
+            = (k * n.mod(a)).mod(a) := sym(k.mul_mod_right(n, a)),
+            = (k * 0).mod(a) := Nat::cong(λ (r: Nat) => (k * r).mod(a), h),
+            = 0 := (0).mod_of_lt(a, a_pos),
+    }
+}
+
+// Two multiples less than a divisor apart are in order.
+theorem Nat::le_of_dvd_of_lt_add(self n, m: Nat, a: Pos<Nat>, hn: a.Divides(n), hm: a.Divides(m), near: n < m + a): n <= m {
+    let scaled: n.div(a) * a < Succ(m.div(a)) * a = (Nat::lt_congr_iff(n, n.div(a) * a, m + a, Succ(m.div(a)) * a,
+        sym(n.div_mul_of_dvd(a, hn)),
+        calc {
+            m + a
+                = m.div(a) * a + a := Nat::cong(λ (x: Nat) => x + a, sym(m.div_mul_of_dvd(a, hm))),
+                = a + m.div(a) * a := (m.div(a) * a).add_comm(a),
+                = Succ(m.div(a)) * a := sym(m.div(a).mul_succ_left(a)),
+        })).mp(near);
+    let quotients: n.div(a) <= m.div(a) = n.div(a).lt_of_mul_lt_mul_r(Succ(m.div(a)), a, scaled);
+    (Nat::le_congr_iff(n.div(a) * a, n, m.div(a) * a, m, n.div_mul_of_dvd(a, hn), m.div_mul_of_dvd(a, hm)))
+        .mp(a.mul_le_mono_r(n.div(a), m.div(a), quotients))
+}
+
+// ---------------------------------------------------------------------------
+// Rounding up to a multiple.
+
+// How far `n` is below the next multiple of `a`: what is added to `n` to
+// align it. Nothing where `a` is zero.
+fn Nat::padding(self n, a: Nat) → Nat { (a - n.mod(a)).mod(a) }
+
+// The least multiple of `a` that is at least `n`.
+fn Nat::round_up(self n, a: Nat) → Nat { n + n.padding(a) }
+
+theorem Nat::padding_lt(self n: Nat, a: Pos<Nat>): n.padding(a) < a { (a - n.mod(a)).mod_lt(a) }
+
+theorem Nat::padding_of_dvd(self n: Nat, a: Pos<Nat>, h: a.Divides(n)): n.padding(a) = 0 {
+    calc {
+        (a - n.mod(a)).mod(a)
+            = (a - 0).mod(a) := Nat::cong(λ (r: Nat) => (a - r).mod(a), h),
+            = a.mod(a) := Nat::cong(λ (x: Nat) => x.mod(a), Nat::sub_zero(a)),
+            = 0 := a.mod_self(),
+    }
+}
+
+theorem Nat::le_round_up(self n, a: Nat): n <= n.round_up(a) { n.le_add_l(n.padding(a)) }
+
+theorem Nat::round_up_lt(self n: Nat, a: Pos<Nat>): n.round_up(a) < n + a {
+    n.add_le_mono_l(Succ(n.padding(a)), a, n.padding_lt(a))
+}
+
+theorem Nat::round_up_dvd(self n: Nat, a: Pos<Nat>): a.Divides(n.round_up(a)) {
+    calc {
+        (n + (a - n.mod(a)).mod(a)).mod(a)
+            = (n + (a - n.mod(a))).mod(a) := n.add_mod_mod(a - n.mod(a), a),
+            = (n.mod(a) + (a - n.mod(a))).mod(a) := sym(n.mod_add_mod(a - n.mod(a), a)),
+            = a.mod(a) := Nat::cong(λ (x: Nat) => x.mod(a), n.mod(a).le_add(a, n.mod(a).le_of_lt(a, n.mod_lt(a)))),
+            = 0 := a.mod_self(),
+    }
+}
+
+theorem Nat::round_up_of_dvd(self n: Nat, a: Pos<Nat>, h: a.Divides(n)): n.round_up(a) = n {
+    Nat::cong(λ (p: Nat) => n + p, n.padding_of_dvd(a, h))
+}
+
+// No multiple of `a` is between `n` and `n.round_up(a)`.
+theorem Nat::round_up_least(self n: Nat, a: Pos<Nat>, {m: Nat}, hm: a.Divides(m), above: n <= m): n.round_up(a) <= m {
+    n.round_up(a).le_of_dvd_of_lt_add(m, a, n.round_up_dvd(a), hm,
+        n.round_up(a).lt_of_lt_of_le(n + a, m + a, n.round_up_lt(a), a.add_le_mono_r(n, m, above)))
+}
+
+theorem Nat::round_up_round_up(self n: Nat, a: Pos<Nat>): n.round_up(a).round_up(a) = n.round_up(a) {
+    n.round_up(a).round_up_of_dvd(a, n.round_up_dvd(a))
+}
+
+theorem Nat::round_up_mono(self n: Nat, a: Pos<Nat>, {m: Nat}, h: n <= m): n.round_up(a) <= m.round_up(a) {
+    n.round_up_least(a, m.round_up_dvd(a), n.le_trans(m, m.round_up(a), h, m.le_round_up(a)))
+}
+
+// ---------------------------------------------------------------------------
 
 fn Nat::pow(self a: Nat, b: Nat) → Nat { match b { Zero => 1, Succ(k) => a.pow(k) * a } }
 // `a ^ b`, the spelling a diagnostic shows a power by
@@ -1763,6 +1875,11 @@ theorem Nat::modeq_pow(m: Pos<Nat>, k: Nat, {a, b: Nat}, h: Nat::ModEq(m, a, b))
 // A power divides every higher power of the same base.
 theorem Nat::pow_dvd_pow_add(self b: Pos<Nat>, n, k: Nat): b.pow(n).Divides(b.pow(k + n)) {
     trans(Nat::cong(λ (x: Nat) => x.mod(b.pow(n)), b.pow_add(k, n)), b.pow(k).mul_mod_self(b.pow(n)))
+}
+
+// A power divides every later power of its base.
+theorem Nat::pow_dvd_pow_of_le(self b: Pos<Nat>, {n, m: Nat}, h: n <= m): b.pow(n).Divides(b.pow(m)) {
+    j(n.sub_add_cancel(m, h), λ e _ => b.pow(n).Divides(b.pow(e)), b.pow_dvd_pow_add(n, m - n))
 }
 
 // The power-of-two fact words truncate by: the low `n` digits of the low

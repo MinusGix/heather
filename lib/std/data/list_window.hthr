@@ -12,7 +12,10 @@
 // length (`len_put_window`). An update inside the window is the update of the
 // list at the same element (`put_window_update`), which is what makes a
 // store through a view a store into the buffer; an element outside the
-// window is the list's own (`nth_put_window_before`, `_after`).
+// window is the list's own (`nth_put_window_before`, `_after`), and so is a
+// window apart from it (`window_put_window_before`, `_after`), which is what
+// a store into one field of a record leaves of the others
+// (`lib/std/machine/layout.hthr`).
 //
 // Offsets are written `i + start`, the window's index first: `+` recurses
 // on its second argument, so a `Succ` start steps by evaluation.
@@ -238,4 +241,67 @@ theorem List::nth_put_window_after<A>(self xs: List<A>): (start: Nat) → (ys: L
             Succ(s) => λ fits => t.nth_put_window_after(s, ys, k, fits),
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// A window apart from the one replaced
+
+// A prefix that ends at or before the replaced window is the list's own.
+theorem List::take_put_window_before<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → (n: Nat) → n <= start → start <= xs.len() →
+    xs.put_window(start, ys).take(n) = xs.take(n) {
+    match xs {
+        Nil => λ start ys n before inside => match start {
+            Zero => match n {
+                Zero => List::put_window<A>(Nil, 0, ys).take_zero(),
+                Succ(_) => false_elim(before),
+            },
+            Succ(_) => false_elim(inside),
+        },
+        Cons(h, t) => λ start ys n => match start {
+            Zero => match n {
+                Zero => λ _ _ => Cons(h, t).put_window(0, ys).take_zero(),
+                Succ(_) => λ before _ => false_elim(before),
+            },
+            Succ(s) => match n {
+                Zero => λ _ _ => refl,
+                Succ(m) => λ before inside => List::cong_cons(h, t.take_put_window_before(s, ys, m, before, inside)),
+            },
+        },
+    }
+}
+
+theorem List::drop_put_window_after_zero<A>(self xs: List<A>, ys: List<A>, k: Nat): xs.put_window(0, ys).drop(k + ys.len()) = xs.drop(k + ys.len()) {
+    trans(cong_fn<List<A>, List<A>>(λ zs => zs.drop(k + ys.len()), xs.put_window_from_zero(ys)),
+        trans(sym((ys ++ xs.drop(ys.len())).drop_drop(ys.len(), k)),
+            trans(cong_fn<List<A>, List<A>>(λ zs => zs.drop(k), ys.drop_append_len(xs.drop(ys.len()))), xs.drop_drop(ys.len(), k))))
+}
+
+// What is past the replaced window is the list's own.
+theorem List::drop_put_window_after<A>(self xs: List<A>): (start: Nat) → (ys: List<A>) → (k: Nat) → start <= xs.len() →
+    xs.put_window(start, ys).drop(k + (ys.len() + start)) = xs.drop(k + (ys.len() + start)) {
+    match xs {
+        Nil => λ start ys k => match start {
+            Zero => λ _ => List::drop_put_window_after_zero<A>(Nil, ys, k),
+            Succ(_) => λ fits => false_elim(fits),
+        },
+        Cons(h, t) => λ start ys k => match start {
+            Zero => λ _ => Cons(h, t).drop_put_window_after_zero(ys, k),
+            Succ(s) => λ fits => t.drop_put_window_after(s, ys, k, fits),
+        },
+    }
+}
+
+// A window that ends at or before the replaced one reads what it read.
+theorem List::window_put_window_before<A>(self xs: List<A>, start: Nat, ys: List<A>, a, b: Nat, before: b <= start, inside: start <= xs.len()):
+    xs.put_window(start, ys).window(a, b) = xs.window(a, b) {
+    trans(sym(xs.put_window(start, ys).drop_take(b, a)),
+        trans(cong_fn<List<A>, List<A>>(λ zs => zs.drop(a), xs.take_put_window_before(start, ys, b, before, inside)), xs.drop_take(b, a)))
+}
+
+// A window that begins at or past the replaced one's end reads what it read.
+theorem List::window_put_window_after<A>(self xs: List<A>, start: Nat, ys: List<A>, a, b: Nat, after: ys.len() + start <= a, inside: start <= xs.len()):
+    xs.put_window(start, ys).window(a, b) = xs.window(a, b) {
+    cong_fn<List<A>, List<A>>(λ zs => zs.take(b - a),
+        j(Nat::sub_add_cancel(ys.len() + start, a, after), λ x _ => xs.put_window(start, ys).drop(x) = xs.drop(x),
+            xs.drop_put_window_after(start, ys, a - (ys.len() + start), inside)))
 }
