@@ -1134,7 +1134,7 @@ fn the_scanners_run_is_the_lexer_on_strings_of_token_pieces() {
 /// changed, and at each: the whole line, and the line read only as far as
 /// each of its tokens (`lex_while`, which is how an import list is read
 /// without lexing the module under it). Stopping early holds where `Eof`
-/// lands when a token is refused, which differs by the kind of token.
+/// lands when a token is refused: at that token's start, whatever its kind.
 #[test]
 fn the_scanners_run_stops_where_the_lexer_stops() {
     let mut random = Lcg(0x57095);
@@ -1165,6 +1165,10 @@ fn the_scanners_run_stops_where_the_lexer_stops() {
                         asked <= stop
                     });
                     assert_eq!(plain(&theirs), plain(&ours), "{what}: {source:?} stopped at token {stop}");
+                    if stop + 1 < whole.len() {
+                        let at = whole[stop].span.start;
+                        assert_eq!(theirs.last().map(|tok| (tok.span.start, tok.span.end)), Some((at, at)), "{what}: {source:?} stopped at token {stop}");
+                    }
                     stops += 1;
                 }
             }

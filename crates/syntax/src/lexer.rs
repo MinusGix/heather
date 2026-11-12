@@ -554,7 +554,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
 
 /// The tokens of `src` before the first one `keep` refuses, or before the
 /// first that does not lex, then `Eof`. The refused token is the last thing
-/// read, so nothing past it is met, an error least of all. What a token is
+/// read, so nothing past it is met, an error least of all; `Eof` stands at
+/// its start, where an error's `Eof` stands at the error. What a token is
 /// never depends on the tokens before it, which is why stopping early reads
 /// a prefix of what [`lex`] reads.
 pub fn lex_while(src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
@@ -723,12 +724,8 @@ fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl F
         let Some(kind) = kind else { continue };
         let tok = Tok { kind, span: Span { start, end } };
         if !keep(&tok) {
-            // Where `lex_into_rust` stands when `keep` refuses: past a
-            // token it measured before making it, at the start of one it
-            // made first.
-            let past = matches!(tok.kind, TokKind::Ident(_) | TokKind::Num(_) | TokKind::SuffixedNum(..) | TokKind::Scaled(_) | TokKind::ArgSlot(_) | TokKind::Hole(_));
-            let stopped = if past { end } else { start };
-            toks.push(Tok { kind: TokKind::Eof, span: Span { start: stopped, end: stopped } });
+            // At the refused token's start, as `lex_into_rust` stands.
+            toks.push(Tok { kind: TokKind::Eof, span: Span { start, end: start } });
             return Ok(true);
         }
         toks.push(tok);
@@ -758,6 +755,9 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             ($tok:expr) => {{
                 let tok = $tok;
                 if !keep(&tok) {
+                    // `Eof` at the refused token's start, whatever its
+                    // kind: some kinds are measured before they are made.
+                    i = tok.span.start;
                     break 'toks;
                 }
                 toks.push(tok);
