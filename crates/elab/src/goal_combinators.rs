@@ -1040,6 +1040,11 @@ fn contracted(elab: &Elaborator, cx: &Cx, oracle: &crate::oracle::SemanticOracle
             *label = Rc::new(contracted(elab, cx, oracle, label, budget));
             *children = Rc::new(contracted(elab, cx, oracle, children, budget));
         }
+        // A match left stuck (a body's `match` on what its arguments do not
+        // decide, `let after = step(…)` read in its scrutinee): its
+        // scrutinee, which is where it is scoped; the arms are below their
+        // binders.
+        Term::Case { scrut, .. } => *scrut = Rc::new(contracted(elab, cx, oracle, scrut, budget)),
         _ => {}
     }
     output
@@ -1131,11 +1136,12 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                 }
             }
             // A function literal a law's instance put a function literal
-            // into (`λ ys => out(again(ys))` at `again := λ ys => into(…)`):
-            // its β-redexes contracted, so a law under the binder meets the
-            // body as written. Syntactic only: nothing below a binder is
-            // scoped where the oracle is.
-            Term::Lam { body, .. } if budget.1 => *body = Rc::new(beta_below(body)),
+            // into (`λ ys => out(again(ys))` at `again := λ ys => into(…)`),
+            // or a node's value read at its literal (`λ w => ofNat(fst(…))`):
+            // its β-redexes and projections of pairs contracted, so a law
+            // under the binder meets the body as written. Syntactic only:
+            // nothing below a binder is scoped where the oracle is.
+            Term::Lam { body, .. } if budget.1 => *body = crate::spelling::contract_projections(&Rc::new(beta_below(body))),
             Term::Succ(inner) => *inner = Rc::new(term(elab, cx, inner, budget)),
             Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 *val = Rc::new(term(elab, cx, val, budget));
@@ -1213,6 +1219,25 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                         && reduced != output
                     {
                         return term(elab, cx, &reduced, budget);
+                    }
+                }
+                // A match that stays stuck, for `simp`: an arm that ignores
+                // its constructor's payload (a `Bool` match's) is a term
+                // where the match is, computed there, so the laws meet its
+                // calls as they meet the scrutinee's.
+                if budget.1
+                    && let Term::Case { case_l, case_r, .. } = &mut output
+                {
+                    for arm in [case_l, case_r] {
+                        // Below the arm's own binder: lowered past it when
+                        // nothing reads it.
+                        let outer = arm.inst_top(0, &Term::Zero);
+                        if outer.shift_local(1) == **arm {
+                            let computed = term(elab, cx, &outer, budget);
+                            if computed != outer {
+                                *arm = Rc::new(computed.shift_local(1));
+                            }
+                        }
                     }
                 }
             }

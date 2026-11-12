@@ -20,27 +20,43 @@ is now unfolded (docs/simp-design.md §14). Naming a matched (non-recursive)
 arm's children by their patterns as well was tried and reverted: it
 changed what `omega` read in `CReal::archimedean`.
 
-What still stopped a whole proof from being one call:
+What stopped a whole proof from being one call, and what became of it:
 
-1. **A definition whose body is a match on a non-constructor** (`Tm::leave`
-   matches on `after(64, flag).eq_bit(1)`) cannot be unfolded: the match
-   is not spelled, so the unfolding is refused. What is wanted is to rewrite
-   the scrutinee (`set_here` makes it `ofNat(1).eq_bit(ofNat(1))`), let the
-   match compute, and only then show the arm. Today the proof keeps a
-   `cong_fn` over the match.
-2. **Unfolding a function that reads a constructor's fields at a literal
-   constructor** (`Node::step(Const(64, flag, 1), v)`) leaves the fields as
-   projections of the label payload (`ofNat(fst(snd(…)))`), not the
-   literal's arguments.
-3. **Arm goals spell a pattern's child as the raw children projection**
-   (`leave_region(l, flag, n0, fst(cs))` for `rest`) in the goal the
-   elaborator hands an arm reached through `Option::and_then_elim`, so a
-   law over `rest` cannot be spelled there. This is the elaborator's goal,
-   not simp's computation.
+1. ~~**A definition whose body is a match on a non-constructor**~~ (fixed
+   2026-11-12, second pass): such a body unfolds when its scrutinee spells,
+   the laws rewrite the scrutinee, and the match selects its arm; a
+   comparison of two closed words computes. `Tm::lower_leaf_sound`'s and
+   `Tm::lower_again_sound`'s final chains are one call each.
+2. ~~**Fields of a literal constructor as raw projections**~~ (fixed): a
+   matched arm that does not spell is contracted to the fields written.
+3. ~~**Arm goals spelling a pattern's child raw**~~ (fixed): the display
+   reads a projection the child's `nth` alias computes to as the pattern's
+   name.
 4. Papercut: `let x: a ≠ b = …` is a parse error (`expected =, found Ne`);
    `let x: (a ≠ b) = …` works.
 
-Not tried yet: a default set for `Valuation` (`Valuation()` is a function
-returning a type, so `name_of` may not key it), and the rest of the
-Valuation sites (`native_structured_meaning`, `native_compile_nodes`,
-`rt_lower`, `function_ir_pass`).
+A default set for `Valuation` (`Valuation()` is a function returning a type,
+so `name_of` may not key it) is not tried yet.
+
+
+Second pass (2026-11-12): also converted `Fun::fuel_zero_sound`,
+`Fun::meas_zero_sound` and `Fun::meas_pass_sound` (whole final chains) and
+`Fun::fuel_pass_sound`'s four Valuation lets (side conditions by
+`discharge := omega(…)`), which needed laws inside a stuck match's arms,
+β under a function literal, an equation's step chaining as `=` at any
+carrier, and `Tm::leave_pointwise` (docs/simp-design.md §14.1).
+
+Still open:
+
+5. **A law whose left side has a variable head** (`left: (v) →
+   finish(LoopEnd(words_of(v, ns), False)) = …`) is not matched where it
+   sits in a match's arm; the proof passes it applied (`left(pv2)`).
+6. **A side condition from list membership** (`id ≠ n` from `Mem(id, ns)`
+   and `absent(n, ns)`, as `words_agree`'s pointwise premise needs) has no
+   discharger, so `nexts_same`-style lets stay hand chains.
+7. **`Fun::fuel_pass_sound`'s final chain** stays: the pass's `Sub` node's
+   value computes through width casts that the proof's own `pred` does not
+   have, so the computed valuation is not the proof's `pv1`.
+
+Not tried yet: the rest of the Valuation sites (`native_structured_meaning`,
+`native_compile_nodes`, `rt_lower`, `function_ir_pass`).

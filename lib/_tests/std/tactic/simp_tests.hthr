@@ -77,6 +77,13 @@ theorem unfolded_into_a_match(f: Nat → Bool, n, x, y: Nat, h: f(n) = True): le
 theorem decided_by_equal_words(v: Nat → BitVec(64), n: Nat, h: v(n) = BitVec::ofNat(1)): flag_word(v, n) = 1 { simp_only(flag_word, h) }
 theorem decided_by_unequal_words(v: Nat → BitVec(64), n: Nat, h: v(n) = BitVec::ofNat(0)): flag_word(v, n) = 0 { simp_only(flag_word, h) }
 
+// A match nothing decides keeps its arms, and the laws rewrite inside them.
+fn pick_shifted(f: Nat → Bool, n, a, b: Nat) → Nat { match f(n) { False => 0 + a, True => b } }
+
+theorem inside_the_arms(f: Nat → Bool, n, a, b: Nat): pick_shifted(f, n, a, b) = (match f(n) { False => a, True => b }) {
+    simp_only(pick_shifted, Nat::add_left_zero)
+}
+
 // Nothing decides it: the match is what is left, shown by its scrutinee.
 // expect-error: match eq_bit(v(n), ofNat(1))
 theorem undecided_match(v: Nat → BitVec(64), n: Nat): flag_word(v, n) = 1 { simp_only(flag_word) }

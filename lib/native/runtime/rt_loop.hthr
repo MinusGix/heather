@@ -1102,27 +1102,22 @@ theorem Fun::meas_pass_sound(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::A
     let exit_value = bit_value(pv2a(64, flag).eq_bit(pv2a(64, t.next)));
     let pv3 = Valuation::set(pv2a, Succ(t.next), exit_value);
     let flag_lt: (flag < t.next) = Nat::lt_of_lt_of_le(flag, Succ(flag), t.next, flag.lt_succ_self(), ran.left);
-    let exit_bit: (pv3(1, Succ(t.next)).head_bit() = pv2(64, flag).eq_bit(BitVec::ofNat(1))) =
-        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(pv2a, Succ(t.next), exit_value, 1)),
-            eq2(λ (a: BitVec(64)) (b: BitVec(64)) => a.eq_bit(b),
-                Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, flag, Nat::ne_of_lt(flag, t.next, flag_lt)),
-                Valuation::set_here(pv2, t.next, λ wd => BitVec::ofNat(1), 64)));
     let ns_out = Fun::absent_ids(ws, Succ(c), t.next, Inr(Nat::le_of_lt(flag, t.next, flag_lt)));
     let ns_out2 = Fun::absent_ids(ws, Succ(c), Succ(t.next), Inr(Nat::le_succ_r(flag, t.next, Nat::le_of_lt(flag, t.next, flag_lt))));
     let nexts_same: (words_of(pv3, ns) = words_of(pv2, ns)) = words_agree(ns, pv2, pv3, λ id mem =>
         trans(Valuation::set_other(pv2a, Succ(t.next), exit_value, 64, id, λ e => absent_mem(Succ(t.next), ns, ns_out2, id, mem, sym(e))),
             Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, id, λ e => absent_mem(t.next, ns, ns_out, id, mem, sym(e)))));
-    let M = λ (b: Bool) (s: List<BitVec(64)>) (fin: BitVec(64)) => match b { False => later(s), True => fin };
     let at_st = Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
         ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(tys, ws, res, h, ys)) →
         Tm::out(tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(tys, res, again(ys)), ctx, Ty::extend(tys, ws, Nil, trivial, xs))) =
             Ty::uncurry(tys, ws, res, h, xs), guarded, st, len_st);
-    let read_back = λ (ys: List<BitVec(64)>) => Tm::out(tys, res, Tm::into(tys, res, later(ys)));
-    trans(cong_fn(λ (fin: BitVec(64)) => M(pv3(1, Succ(t.next)).head_bit(), words_of(pv3, ns), fin), left(pv3)),
-        trans(Tm::eq3(M, exit_bit, nexts_same, cong_fn(λ (s: List<BitVec(64)>) => s.head_or(BitVec::zero()), nexts_same)),
-            trans(Tm::leave_cont(pv2, flag, ns, later, read_back, sym(Tm::out_into(tys, res, er, later(words_of(pv2, ns))))),
-            trans(ran.right(λ (ys: List<BitVec(64)>) => Tm::into(tys, res, later(ys))), at_st(later, λ ys len_ys lt =>
-                earlier(ys, trans(len_ys, sym(Fun::ids_len(ws, Succ(bnd)))), Nat::lt_of_lt_of_le(m(ys), m(st), Succ(r), lt, hr)))))))
+    // The pass run: the exit bit is the flag word's, the next state is
+    // what the body left, and leaving is what the body's tail means.
+    simp_only(loop_pass, pass_valuation, Fun::meas_pass, nodes_region, Region::eval, Node::step, nexts_same, left(pv2),
+        Valuation::set_here, Valuation::set_other, bit_value, BitVec::head_bit_cons_bit,
+        sym(at_st(later, λ ys len_ys lt => earlier(ys, trans(len_ys, sym(Fun::ids_len(ws, Succ(bnd)))), Nat::lt_of_lt_of_le(m(ys), m(st), Succ(r), lt, hr)))),
+        sym(ran.right(λ (ys: List<BitVec(64)>) => Tm::into(tys, res, later(ys)))), Tm::out_into(tys, res, er), Tm::leave,
+        discharge := omega(flag_lt))
 }
 
 // The passes run out: the body once more, no recursion being reachable.
