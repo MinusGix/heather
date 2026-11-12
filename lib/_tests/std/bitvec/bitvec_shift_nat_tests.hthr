@@ -1,0 +1,60 @@
+// Probes of `lib/std/bitvec/bitvec_shift_nat.hthr`: shifts and low masks
+// read as Nat arithmetic, at a literal and an open width, a literal and an
+// open count, in the operator spellings compiled code writes, and a
+// negative control where a law needs its bound. Tests, not library
+// (docs/test-value-audit.md §4.5).
+import bool; import logic; import nat; import bitvec; import bitvec_nat; import bitvec_resize; import bitvec_shift_nat; import omega;
+
+// Closed values: what the laws say, computed.
+theorem shl_closed(): BitVec::ofNat(13, n := 8).shift_left(2).toNat() = 52 { refl }
+theorem shl_wraps_closed(): BitVec::ofNat(200, n := 8).shift_left(1).toNat() = 144 { refl }
+theorem shr_closed(): BitVec::ofNat(200, n := 8).shift_right(3).toNat() = 25 { refl }
+theorem mask_closed(): BitVec::low_mask(5, n := 8).toNat() = 31 { refl }
+theorem mask_past_closed(): BitVec::low_mask(11, n := 8) = BitVec::all_ones() { refl }
+theorem band_mask_closed(): BitVec::ofNat(200, n := 8).band(BitVec::low_mask(4)).toNat() = 8 { refl }
+
+// An open width, a literal count: `2^3` is read as `8` by conversion.
+theorem shl_open_width(n: Nat, x: BitVec(n)): x.shift_left(3).toNat() = (x.toNat() * 8).mod(Nat::pow(2, n)) {
+    BitVec::toNat_shift_left_mod(n, x, 3)
+}
+theorem shr_open_width(n: Nat, x: BitVec(n)): x.shift_right(4).toNat() = x.toNat().div(16) { BitVec::toNat_shift_right(n, x, 4) }
+theorem mask_open_width(n: Nat, x: BitVec(n)): x.band(BitVec::low_mask(3)).toNat() = x.toNat().mod(8) {
+    BitVec::toNat_band_low_mask(n, 3, x)
+}
+
+// A literal width, an open count, in operator spelling.
+theorem shr_symbol(x: u64, k: Nat): (x >> k).toNat() = x.toNat().div(Nat::pow(2, k)) { BitVec::toNat_shift_right(64, x, k) }
+theorem shl_symbol(x: u64, k: Nat): (x << k).toNat() = (x.toNat() * Nat::pow(2, k)).mod(Nat::pow(2, 64)) {
+    BitVec::toNat_shift_left_mod(64, x, k)
+}
+theorem round_down_symbol(x: u64, k: Nat): (x & ~BitVec::low_mask(k, n := 64)).toNat() = x.toNat() - x.toNat().mod(Nat::pow(2, k)) {
+    BitVec::toNat_band_complement_low_mask(64, k, x)
+}
+theorem split_symbol(x: u32, k: Nat): ((x >> k) << k) | (x & BitVec::low_mask(k)) = x {
+    BitVec::shift_right_shift_left_bor_low_mask(32, k, x)
+}
+
+// Open width and count both.
+theorem mask_value_open(n, k: Nat, fits: k <= n): BitVec::low_mask(k, n := n).toNat() = Nat::pow(2, k) - 1 {
+    BitVec::toNat_low_mask(n, k, fits)
+}
+theorem mask_word_open(n, k: Nat): BitVec::low_mask(k, n := n) = BitVec::ofNat(Nat::pow(2, k)).sub(BitVec::ofNat(1)) {
+    BitVec::low_mask_eq_sub_one(n, k)
+}
+theorem clear_low_open(n, k: Nat, x: BitVec(n)): x.shift_right(k).shift_left(k) = x.band(BitVec::low_mask(k).complement()) {
+    BitVec::shift_right_shift_left(n, k, x)
+}
+
+// An aligned scale needs no `mod`: `(t << 2) + 64`'s shift at a small `t`.
+theorem scaled_index(t: u64, small: t.toNat() < 1024): (t << 2).toNat() = t.toNat() * 4 {
+    let fits: (t.toNat() * 4 < Nat::pow(2, 64)) = { omega };
+    BitVec::toNat_shift_left(64, t, 2, fits)
+}
+
+// Negative control: past the width a mask is all ones, not `2^k - 1`, so its
+// value law needs `k <= n` (`9 <= 8` reduces to `False`).
+theorem mask_past_value(): ¬(BitVec::low_mask(9, n := 8).toNat() = Nat::pow(2, 9) - 1) {
+    Nat::ne_of_same(BitVec::low_mask(9, n := 8).toNat(), Nat::pow(2, 9) - 1, refl)
+}
+// expect-error: `trivial` proves `True`, but `False` is expected here
+theorem mask_past_refused(): BitVec::low_mask(9, n := 8).toNat() = Nat::pow(2, 9) - 1 { BitVec::toNat_low_mask(8, 9, trivial) }
