@@ -35,6 +35,8 @@ fn c1(v: [u32; 64], j: u64) → [u32; 64]
 
 **Notes for direction 1** (read 2026-11-13, nothing built). The proofs need not be shared to be cheap: it may be enough that each is an application of an opaque declaration, since two different opaque heads fail to compare at once and the kernel then unfolds the call that ignores them. That was not tested with two different lemmas (both companions elaborate the same source, so a written lemma is the same term in each); the test that passed had the same lemma on both sides. The elaborator cannot add a declaration in the middle of a body: `resolve.rs`'s mints (`mint_open`, `mint_pending`) are recorded while a body is elaborated and committed between declarations, and the body keeps the inline term. So the lift is a pass over the syntax before the body, as `measure.rs`'s `lift_obligation` is: a call of a global with a defaulted parameter left out (`names.global(owner).params[i].default`) owes that parameter's type at the call's arguments, over the binders and hypotheses in scope at the site, which `lift_obligation` already collects for a self-call.
 
+**Decided (Minus, 2026-11-13):** direction 1, lift found proofs out. The general form, every proof a tactic finds in any declaration abstracted into a lemma of its own (as Lean abstracts nested proofs), needs the elaborator to add a declaration in the middle of a body; the pass over a `decreases` body is the part that fits today. Definitional proof irrelevance would remove the cost at its root and is a change to the type theory.
+
 ## Done when
 
 A loop over `[u32; 64]` whose body reads and stores at indices with found proofs has its companions, and `Sha256::expand` written with them compiles.

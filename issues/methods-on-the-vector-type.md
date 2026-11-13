@@ -1,0 +1,28 @@
+---
+title: `[A; n]` has no name a method can be declared on
+status: open
+labels: [surface,methods,vectors,needs-decision]
+area: language
+created: 2026-11-13
+updated: 2026-11-13
+---
+
+```heather
+fn Vec::at({w, n: Nat}, self v: [BitVec(w); n], i: u64, …) → BitVec(w) { … }
+// `Vec` is not a type, a type former or a function in scope, so `Vec::at` attaches to nothing —
+// a member declaration is `fn <Type>::at(…)` …, and the owner must be declared (or be a kernel type) before it
+```
+
+A member's owner is a declared type or a kernel type with a name, and `[A; n]` has none in the surface. So the vector library is free functions (`vector_index`, `vector_update`, `vector_get`, `vector_entries`, …) and `v.at(i)` cannot be written. Minus (2026-11-13, PR #551's thread): `vector_at`, `vector_put`, `vector_get` "should obviously be on the type".
+
+**Needs a decision (Minus):** the owner's name. The host already views `[A; n]` as `Vec` of the element type and the length (`docs/host-elaboration-interface-design.md` §28), so `Vec` is the candidate: `fn Vec::at<A>({n: Nat}, self v: [A; n], …)`, called `v.at(i)`.
+
+Then: the vector library's functions become methods (`vector_index` to `Vec::index`, and so on), a rename across `lib/`.
+
+## Done when
+
+A method declared on the vector type is called with a dot, and `lib/std/data/vector.hthr`'s functions are methods.
+
+## Log
+
+- 2026-11-13: Filed with the refusal above.
