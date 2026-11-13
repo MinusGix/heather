@@ -140,6 +140,8 @@ theorem mask_of_difference(t: BitVec(64)): ((t - 3) & 15).toNat() < 16 { bv_omeg
 theorem mask_open_width(n: Nat, x: BitVec(n)): (x & BitVec::ofNat(15)).toNat() < 16 { bv_omega }
 // A literal masked word.
 theorem mask_literal(): (BitVec::ofNat(37, n := 64) & BitVec::ofNat(15)).toNat() < 16 { bv_omega }
+// The mask a bare numeral beside it (issues/named-result-only-implicit-deferred.md).
+theorem mask_literal_numeral(): (BitVec::ofNat(37, n := 64) & 15).toNat() < 16 { bv_omega }
 // A mask that is not a numeral bounds by its own value.
 theorem mask_by_word(x, m: BitVec(64)): (x & m).toNat() <= m.toNat() { bv_omega }
 // Inside arithmetic: two masked words cannot overflow their sum.

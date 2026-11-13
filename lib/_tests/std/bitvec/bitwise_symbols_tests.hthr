@@ -61,3 +61,23 @@ fn no_xor_at_nat(a, b: Nat) → Nat { a ⊕ b }
 // The issue's own case: a mutable counter whose type only the literal gives.
 fn count_up() → Nat { let mut i = 0u64; i := i + 1; i := i ⊕ 3; i.toNat() }
 theorem counted(): count_up() = 2 { refl }
+
+// ---- A word whose width is named, beside a numeral (issues/named-result-only-implicit-deferred.md) ----
+
+// `BitVec::ofNat(37, n := 64)` names the width its arguments cannot give, so
+// it infers: the numeral beside it is a word at that width, in an inference
+// position (a receiver), through an operator, a method and a qualified call.
+theorem named_width_operator(): (BitVec::ofNat(37, n := 64) & 15).toNat() = 5 { refl }
+theorem named_width_method(): BitVec::ofNat(37, n := 64).band(15).toNat() = 5 { refl }
+theorem named_width_call(): BitVec::band(BitVec::ofNat(37, n := 64), 15).toNat() = 5 { refl }
+theorem named_width_sum(): (BitVec::ofNat(37, n := 8) + 250).toNat() = 31 { refl }
+// At an open width.
+theorem named_width_open(k: Nat, x: BitVec(k)): (BitVec::ofNat(0, n := k) & x) = BitVec::ofNat(0, n := k) & x { refl }
+// In a checking position, as before.
+fn named_width_checking() → BitVec(64) { BitVec::ofNat(37, n := 64) & 15 }
+theorem named_width_checking_value(): named_width_checking().toNat() = 5 { refl }
+
+// Negative control: unnamed, the width still has nowhere to come from in an
+// inference position, and the receiver has no type to find `toNat` at.
+// expect-error: unbound name `toNat`
+fn unnamed_width() → Nat { (BitVec::ofNat(37) & 15).toNat() }

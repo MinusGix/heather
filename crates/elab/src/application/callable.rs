@@ -10,6 +10,7 @@ use heather_kernel::rc::Rc;
 use heather_kernel::term::{CtxBase, GlobalBinding, Type};
 
 use super::{ParamMeta, Skel};
+use heather_syntax::NamedArg;
 use crate::{Cx, Elaborator, GlobalInfo, mentions_binder};
 
 /// Callable heads' part of the elaborator.
@@ -155,7 +156,8 @@ impl Callables<'_> {
     /// Three guards, each keeping a call that infers today on its old path:
     ///
     /// - `@name(…)` (`explicit`) fills every parameter by hand, so nothing is
-    ///   left to infer;
+    ///   left to infer; a named argument fills its one, so a call that names
+    ///   every result-only implicit (`BitVec::ofNat(37, n := 64)`) infers;
     /// - a call with **spill** (more arguments than declared parameters) is
     ///   the curried-tail route of [`application::apply_implicit`], where the
     ///   over-applied argument's type is exactly the evidence a result-only
@@ -165,7 +167,7 @@ impl Callables<'_> {
     ///
     /// `name<…>(…)` needs no guard: it parses as an `App` whose head is a
     /// `TyApp`, which [`Expr::as_named`] already declines.
-    pub(crate) fn call_defers_for_result_only(&self, cx: &Cx, name: &str, n_args: usize) -> bool {
+    pub(crate) fn call_defers_for_result_only(&self, cx: &Cx, name: &str, n_args: usize, named: &[NamedArg]) -> bool {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return false;
         }
@@ -189,24 +191,29 @@ impl Callables<'_> {
         }
         // Everything past here depends only on the declaration, so it is
         // computed once (see [`Elaborator::result_only_memo`]).
-        if let Some(&hit) = self.memos.result_only_memo.borrow().get(&info.abs) {
-            return hit;
-        }
-        let hit = self.walk_for_result_only(info.abs, &params);
-        self.memos.result_only_memo.borrow_mut().insert(info.abs, hit);
-        hit
+        let memo = self.memos.result_only_memo.borrow().get(&info.abs).cloned();
+        let result_only = memo.unwrap_or_else(|| {
+            let found = self.walk_for_result_only(info.abs, &params);
+            self.memos.result_only_memo.borrow_mut().insert(info.abs, found.clone());
+            found
+        });
+        // A result-only implicit the call names (`BitVec::ofNat(37, n := 64)`)
+        // is filled by hand, as `@name(…)` fills them all: only one left
+        // unnamed has nothing but the expected type to come from
+        // (issues/named-result-only-implicit-deferred.md).
+        result_only.iter().any(|&i| !named.iter().any(|a| a.name == params[i].name))
     }
 
     /// The declaration-only half of [`Self::call_defers_for_result_only`],
     /// behind that method's memo.
-    fn walk_for_result_only(&self, abs: u32, params: &[ParamMeta]) -> bool {
+    fn walk_for_result_only(&self, abs: u32, params: &[ParamMeta]) -> Vec<usize> {
         let GlobalBinding::Tm { ctx, ty, .. } = &self.psi.bindings[abs as usize] else {
-            return false;
+            return Vec::new();
         };
         // The declaration's own Δ must be `·`, or the local indices below are
         // not the parameters' (every ordinary `fn`/`theorem` is closed).
         if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
-            return false;
+            return Vec::new();
         }
         // The declared telescope, one domain per parameter. Read off the
         // *stored* type, which is closed, so the local indices below are the
@@ -216,18 +223,19 @@ impl Callables<'_> {
         let mut cur: Type = ty.as_ref().clone();
         for _ in 0..params.len() {
             let Type::Pi { dom, cod, .. } = cur else {
-                return false;
+                return Vec::new();
             };
             doms.push((*dom).clone());
             cur = (*cod).clone();
         }
-        params.iter().enumerate().any(|(i, p)| {
+        (0..params.len()).filter(|&i| {
+            let p = &params[i];
             p.implicit
                 && p.solver.is_none()
                 && !params.iter().enumerate().skip(i + 1).any(|(j, q)| {
                     !q.implicit && mentions_binder(&doms[j], j as u32, (j - 1 - i) as u32)
                 })
-        })
+        }).collect()
     }
 }
 

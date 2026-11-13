@@ -308,7 +308,7 @@ impl AppUnify<'_> {
                 // of this set, and the only one that can still elaborate if
                 // deferral does not pay off — which is why it, alone, carries
                 // the inference fallback in [`application::apply_implicit`].
-                Some((n, args, false)) => Callables(self).call_defers_for_result_only(cx, n, args.len()),
+                Some((n, args, false)) => Callables(self).call_defers_for_result_only(cx, n, args.len(), e.named_args()),
                 _ => false,
             },
             _ => false,
@@ -324,7 +324,7 @@ impl AppUnify<'_> {
         }
         match e.as_named() {
             Some(("absurd", _, _)) | Some(("FS", _, false)) => false,
-            Some((n, args, false)) => Callables(self).call_defers_for_result_only(cx, n, args.len()),
+            Some((n, args, false)) => Callables(self).call_defers_for_result_only(cx, n, args.len(), e.named_args()),
             _ => false,
         }
     }
