@@ -90,7 +90,7 @@ theorem BitVec::toNat_band_ofNat_le(n: Nat, x: BitVec(n), m: Nat): x.band(BitVec
         BitVec::toNat_band_le_right(n, x, BitVec::ofNat(m)), BitVec::toNat_ofNat_le(n, m))
 }
 
-theorem BitVec::ofNat_mod(n, x: Nat):BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
+theorem BitVec::ofNat_mod(n, x: Nat): BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
     trans(BitVec::ofNat_cong(n, sym(BitVec::toNat_ofNat_mod(n, x))), BitVec::ofNat_toNat(n, BitVec::ofNat(x)))
 }
 
