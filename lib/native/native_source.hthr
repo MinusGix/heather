@@ -44,6 +44,7 @@
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_placeless;
 import linux_calls;
 import linux_trees;
 import itree;
@@ -105,7 +106,7 @@ fn nodes_write_ports(nodes: List<Node>) → List<Port> {
 // The ports a region's run writes, in the order it writes them: a
 // conditional's are its taken arm's, read as `run` branches, at the value
 // it reads its bit at; a loop's are its outputs and the bit it ends with.
-fn StructuredRegion::written(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → List<Port> {
+fn StructuredRegion::written(self region: StructuredRegion, call: Writers(), values: Valuation(), buffers: Buffers()) → List<Port> {
     match region {
         Dataflow(body) => nodes_write_ports(body.nodes),
         Sequence(prefix, continuation) => {
@@ -120,6 +121,7 @@ fn StructuredRegion::written(self region: StructuredRegion, call: Answers(), val
             False => when_false.written(call, values, buffers),
             True => when_true.written(call, values, buffers),
         },
+        Lend(views, _, _, result) => nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)],
         Call(_, _, result) => [Port(result, 64)],
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => word_ports(outputs) ++ [Port(exhausted, 1)],
     }
@@ -134,7 +136,7 @@ fn Env::settle(self env: Env, after: Valuation(), ports: List<Port>) → Env {
     }
 }
 
-fn Env::compute(self env: Env, call: Answers(), region: StructuredRegion) → Env {
+fn Env::compute(self env: Env, call: Writers(), region: StructuredRegion) → Env {
     let after = region.run(call, env.valuation(), env.buffers);
     Env(env.words, after.buffers, env.args).settle(after.values, region.written(call, env.valuation(), env.buffers))
 }
@@ -276,7 +278,7 @@ fn Flow::pass(self flow: Flow, again: Nat) → Step<Env, Flow> {
 // go, and the caller's environment: `Source::performs` at a depth.
 fn Performs() → Type { Nat → List<Nat> → List<Nat> → Env → ITree<Flow>(Events::linux()) }
 
-fn Stmt::denote(self s: Stmt, call: Answers(), perform: Performs(), n: Nat, env: Env) → ITree<Flow>(Events::linux()) {
+fn Stmt::denote(self s: Stmt, call: Writers(), perform: Performs(), n: Nat, env: Env) → ITree<Flow>(Events::linux()) {
     match s {
         Compute(region) => Ret(Onward(env.compute(call, region))),
         Invoke(shape) => Vis(shape.cmd(env), λ a => Ret(Onward(shape.answer(env, a)))),
@@ -303,7 +305,7 @@ fn performs_below(perform, perform2: Performs()) → Type {
 }
 
 // More fuel grows a statement's tree, where a call's tree grows.
-theorem Stmt::grows(self s: Stmt, call: Answers(), perform, perform2: Performs(), below: performs_below(perform, perform2), n: Nat): (env: Env) →
+theorem Stmt::grows(self s: Stmt, call: Writers(), perform, perform2: Performs(), below: performs_below(perform, perform2), n: Nat): (env: Env) →
     ITree::Below(Events::linux(), s.denote(call, perform, n, env), s.denote(call, perform2, Succ(n), env)) {
     match s {
         Compute(_) => λ env => refl,
@@ -414,6 +416,7 @@ fn StructuredRegion::ids(self region: StructuredRegion) → List<Nat> {
         Sequence(prefix, continuation) => nodes_mentions(prefix.nodes) ++ continuation.ids(),
         Compose(prefix, continuation) => prefix.ids() ++ continuation.ids(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.ids() ++ when_false.ids()),
+        Lend(views, _, arguments, result) => nodes_mentions(views_nodes(views)) ++ Cons(result, views_homes(views) ++ arguments),
         Call(_, arguments, result) => Cons(result, arguments),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ (outputs ++ body.ids()))))))),
@@ -468,7 +471,7 @@ fn Flow::status(self flow: Flow) → BitVec(64) {
 // procedure's body, its own calls one deeper, entered and left as the
 // procedure says. A call to no procedure does nothing (the compile refuses
 // it).
-fn Source::performs(self src: Source, call: Answers(), n: Nat, depth: Nat) → Performs() {
+fn Source::performs(self src: Source, call: Writers(), n: Nat, depth: Nat) → Performs() {
     match depth {
         Zero => λ procedure args results env => Ret(Exited(call_depth_status())),
         Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) {
@@ -480,7 +483,7 @@ fn Source::performs(self src: Source, call: Answers(), n: Nat, depth: Nat) → P
 }
 
 // More fuel grows every call's tree, at every depth.
-theorem Source::performs_grows(self src: Source, call: Answers(), n: Nat, depth: Nat):
+theorem Source::performs_grows(self src: Source, call: Writers(), n: Nat, depth: Nat):
     performs_below(src.performs(call, n, depth), src.performs(call, Succ(n), depth)) {
     match depth {
         Zero => λ procedure args results env => refl,
@@ -509,7 +512,7 @@ theorem Source::performs_grows(self src: Source, call: Answers(), n: Nat, depth:
 
 // `main` at fuel `n`, its calls nesting at most the source's depth.
 fn Source::main_tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<Flow>(Events::linux()) {
-    src.main.denote(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth), n, src.start(args))
+    src.main.denote(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth), n, src.start(args))
 }
 
 fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
@@ -521,8 +524,8 @@ fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<Bit
     Program(λ n => src.tree(args, n), λ n => ITree::below_bind(Events::linux(),
         src.main_tree(args, n), src.main_tree(args, Succ(n)),
         λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
-        src.main.grows(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth),
-            src.performs(program_eval(src.functions), Succ(n), src.depth), src.performs_grows(program_eval(src.functions), n, src.depth),
+        src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
+            src.performs(program_writers(src.functions), Succ(n), src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
             n, src.start(args)), λ flow => refl))
 }
 
@@ -533,7 +536,7 @@ fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<Bit
 // (`linux_x86_64_sim_paid`) and takes fewer steps than the fuel never meets
 // one.
 
-theorem Stmt::deep(self s: Stmt, call: Answers(), perform: Performs(), n: Nat,
+theorem Stmt::deep(self s: Stmt, call: Writers(), perform: Performs(), n: Nat,
     calls: (procedure: Nat) → (args, results: List<Nat>) → (env: Env) → ITree::Deep(Events::linux(), perform(procedure, args, results, env), n)):
     (env: Env) → ITree::Deep(Events::linux(), s.denote(call, perform, n, env), n) {
     match s {
@@ -568,7 +571,7 @@ theorem Stmt::deep(self s: Stmt, call: Answers(), perform: Performs(), n: Nat,
 }
 
 // Every call's tree, at every depth.
-theorem Source::performs_deep(self src: Source, call: Answers(), n: Nat, depth: Nat):
+theorem Source::performs_deep(self src: Source, call: Writers(), n: Nat, depth: Nat):
     (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
     ITree::Deep(Events::linux(), src.performs(call, n, depth)(procedure, args, results, env), n) {
     match depth {
@@ -590,6 +593,6 @@ theorem Source::performs_deep(self src: Source, call: Answers(), n: Nat, depth: 
 // The program deepens: at fuel `d` its cuts lie `d` deep.
 theorem Source::deepens(self src: Source, args: List<List<BitVec(8)>>): Program::Deepens(Events::linux(), src.denote(args)) {
     λ d => Exists(d, ITree::deep_map<Flow, BitVec(64)>(Events::linux(), src.main_tree(args, d), λ flow => flow.status(), d,
-        src.main.deep(program_eval(src.functions), src.performs(program_eval(src.functions), d, src.depth), d,
-            src.performs_deep(program_eval(src.functions), d, src.depth), src.start(args))))
+        src.main.deep(program_writers(src.functions), src.performs(program_writers(src.functions), d, src.depth), d,
+            src.performs_deep(program_writers(src.functions), d, src.depth), src.start(args))))
 }

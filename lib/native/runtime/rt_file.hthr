@@ -1,0 +1,336 @@
+// `rt` over a span it writes: computations over the file
+// (docs/native-one-compiler-design.md §2.6, U4 step 4c).
+//
+// `rt`'s terms (`Tm`) are values: total and pure, their meaning a function
+// of their words in a world, and the spans a function is lent are part of
+// that world. A store changes the world, so it is not a term. It is a
+// computation, the layer over terms that a call to Linux is (`ETm`,
+// `rt_io`):
+//
+// - `Pure(t)` returns a value and leaves the span as it is;
+// - `Let(e, body)` binds a pure value and goes on;
+// - `If(c, yes, no)` and `IfEq` branch on a `Bool` variable;
+// - `Put(i, length, v, body)` stores a byte under a length word and goes
+//   on;
+// - `Call(f, args, body)` runs a computation of the program and binds its
+//   value for the rest, which goes on from the span the callee left;
+// - `Again(args)` ends as the function itself does on new arguments, from
+//   the span as it is: the self-call a loop is made of (`rt_file_loop`);
+// - `Lend(f, views, args, body)` runs a computation of the program over
+//   windows of the function's spans (`FView`) and binds its value: the
+//   callee's written span is a window of the written span, put back where
+//   it was, and the spans it reads are windows of any of the spans.
+//
+// A computation writes one span, span 0 of its file, and its meaning
+// threads that span's bytes: `List<BitVec(8)> → Mutated<List<BitVec(8)>,
+// value>`, over the rest of the file, which it only reads. Each pure term
+// is read at the world of the file as it is then, `Cons(own, rest)`.
+//
+// The span is **not a value of `rt`**: no computation can name it, so none
+// can read the bytes as they were before a store. A source that reflects
+// at all threads its span straight through, which is what makes the store
+// in place sound.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import nat_map;
+import list_window;
+import rt;
+
+// ---------------------------------------------------------------------------
+// The write under a length word
+
+// The span with `v` at the index where the index is below the word, the
+// span as it was elsewhere: what code lent a span does to it (`FTm::Put`),
+// which tests the index against the length it was handed and stores under
+// the test. Beside `List::byte_within`, the read.
+fn List::with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → List<BitVec(8)> {
+    match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }
+}
+
+// Below the length word, the store under it is the plain one.
+theorem List::with_byte_within_inside(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8), inside: i.toNat() < length.toNat()):
+    xs.with_byte_within(length, i, v) = xs.with_byte(i, v) {
+    let below: (i.unsigned_lt_bit(length) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, length, inside);
+    let stored: ((match i.unsigned_lt_bit(length) { False => xs, True => xs.with_byte(i, v) }) = xs.with_byte(i, v)) = rewrite(below, refl);
+    stored
+}
+
+// The same as a statement on a span a body threads: `span.put_within(length,
+// i, v);`, which rebinds `span` to the span with the byte stored.
+fn List::put_within(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → True {
+    span := span.with_byte_within(length, i, v);
+}
+
+// ---------------------------------------------------------------------------
+// Views
+
+// A window of one of the function's spans, as a `Lend` hands it to its
+// callee: bytes `start` up to `end` of span `span` of the file, whose place
+// is the word variable `home`. `end` is a word variable. `start` is one
+// too, or none for a window from the span's first byte, which is how a
+// span is handed on whole: under its own length word. The callee takes two
+// words for the window, as it does for any span: where it lies, and how
+// long it is (`FView::base`, `FView::length`).
+record FView { span: Nat, home: Nat, start: Option<Nat>, end: Nat }
+
+// ---------------------------------------------------------------------------
+// Computations
+
+inductive FTm {
+    // A value, the span unchanged.
+    Pure(t: Tm),
+    // A pure value bound once: `body` sees it as variable 0.
+    Let(e: Tm, body: FTm),
+    // `match` on a `Bool` variable.
+    If(c: Nat, yes: FTm, no: FTm),
+    // `match h: c` on a `Bool` variable, the equation erased (`Tm::IfEq`).
+    IfEq(c: Nat, yes: FTm, no: FTm),
+    // The byte variable `v` stored at the word variable `i` under the
+    // length word variable `length`; `body` binds nothing new.
+    Put(i: Nat, length: Nat, v: Nat, body: FTm),
+    // A computation of the program, by index, on variables: `body` sees
+    // its value as variable 0 and goes on from the span it left.
+    Call(f: Nat, args: List<Nat>, body: FTm),
+    // The function itself, the program's computation 0 (as a pure function
+    // is entry 0 of its own table), on variables, its answer the term's:
+    // a self-call in tail position.
+    Again(args: List<Nat>),
+    // A computation of the program over views: its written span is the
+    // first view, a window of the function's written span, and the spans
+    // it reads are the views after it. `body` sees its value as variable 0
+    // and goes on from the span with the window put back.
+    Lend(f: Nat, views: List<FView>, args: List<Nat>, body: FTm),
+}
+
+// A computation function: `lent` spans, the first the one it writes.
+record FFun { params: List<Ty>, result: Ty, body: FTm, lent: Nat := 1 }
+
+// What a computation of a signature means: the span's bytes threaded
+// through a function of the signature's operands.
+fn FTm::Sem(tys: Nat → RecInfo, s: Sig) → Type {
+    List<BitVec(8)> → Ty::ArrowsTo(tys, s.params, Mutated<List<BitVec(8)>, s.result.sem(tys)>)
+}
+
+// The meanings of a program's computations, one per signature: what a
+// `Call` is answered with.
+fn FTm::Sems(tys: Nat → RecInfo, sigs: List<Sig>) → Type {
+    match sigs { Nil => True, Cons(s, rest) => Pair<FTm::Sem(tys, s), FTm::Sems(tys, rest)> }
+}
+
+fn FTm::get(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::Sems(tys, sigs) → (i: Nat) → FTm::Sem(tys, Sig::at(sigs, i)) {
+    match sigs {
+        Nil => λ _ i => λ own => Mutated(own, False),
+        Cons(_, rest) => λ cs i => match i { Zero => cs.fst, Succ(k) => FTm::get(tys, rest, cs.snd, k) },
+    }
+}
+
+// What a computation's meaning reads besides the term and the span it
+// writes: the types and the pure signatures (`w`, whose own callees and
+// spans are not read), the pure functions' meanings at each file, the
+// computations' signatures and their meanings at each rest of a file, and
+// the spans after the first. A computation called on the spans as they are
+// is read at `rest`; the meanings are at every rest because one called
+// over windows of the spans is read at the windows.
+record FWorld {
+    w: World,
+    callees: (b: List<List<BitVec(8)>>) → Sig::Sems(w.tys, w.sigs),
+    fsigs: List<Sig>,
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+    rest: List<List<BitVec(8)>>,
+}
+
+// The world a pure term is read in when the written span holds `own`.
+fn FWorld::at(self fw: FWorld, own: List<BitVec(8)>) → World {
+    World(fw.w.tys, fw.w.sigs, fw.callees(Cons(own, fw.rest)), Cons(own, fw.rest))
+}
+
+// A program with no functions over a table of types: nothing to call.
+fn FWorld::alone(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>) → FWorld { FWorld(World(tys, [], trivial), λ _ => trivial, [], λ _ => trivial, rest) }
+
+// A pure term's value there, at the code it has in `w`: the two codes are
+// one (`Tm::ty_static`, rt_lower), and at a closed term the cast is a
+// conversion.
+fn FTm::value(fw: FWorld, own: List<BitVec(8)>, t: Tm, g: List<Ty>, env: Env(fw.w.tys, g)) → t.ty(fw.w, g).sem(fw.w.tys) {
+    Ty::cast(fw.w.tys, t.ty(fw.at(own), g), t.ty(fw.w, g), t.sem(fw.at(own), g, env))
+}
+
+// A computation's answer read at another code.
+fn FTm::recast(tys: Nat → RecInfo, a, b: Ty, m: Mutated<List<BitVec(8)>, a.sem(tys)>) → Mutated<List<BitVec(8)>, b.sem(tys)> {
+    Mutated(m.after, Ty::cast(tys, a, b, m.value))
+}
+
+// A computation's meaning applied to variables, each cast to its operand's
+// code; where operands run out, the span as it is and `d` (refused by
+// every judgment).
+fn FTm::apply(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), R: Type, d: R, ps: List<Ty>) → Ty::ArrowsTo(tys, ps, R) → List<Nat> → R {
+    match ps {
+        Nil => λ f vs => f,
+        Cons(p, rest) => λ f vs => match vs {
+            Nil => d,
+            Cons(v, more) => FTm::apply(tys, g, env, R, d, rest, f(Ty::cast(tys, Ty::at(g, v), p, Env::get(tys, g, env, v))), more),
+        },
+    }
+}
+
+// The code a computation returns.
+fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
+    match t {
+        Pure(v) => v.ty(w, g),
+        Let(e, body) => body.ty(w, fsigs, Cons(e.ty(w, g), g)),
+        If(_, yes, _) => yes.ty(w, fsigs, g),
+        IfEq(_, yes, _) => yes.ty(w, fsigs, g),
+        Put(_, _, _, body) => body.ty(w, fsigs, g),
+        Call(f, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
+        Again(_) => Sig::at(fsigs, 0).result,
+        Lend(f, _, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
+    }
+}
+
+// The span a `Put` leaves.
+fn FTm::put(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), i, length, v: Nat, own: List<BitVec(8)>) → List<BitVec(8)> {
+    own.with_byte_within(Ty::cast(tys, Ty::at(g, length), Word(64), Env::get(tys, g, env, length)),
+        Ty::cast(tys, Ty::at(g, i), Word(64), Env::get(tys, g, env, i)), Ty::cast(tys, Ty::at(g, v), Word(8), Env::get(tys, g, env, v)))
+}
+
+// What a `Call` answers: the callee at the span as it is, on the
+// variables.
+fn FTm::called(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, args: List<Nat>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)> {
+    FTm::apply(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
+        Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), Sig::at(fw.fsigs, f).params,
+        FTm::get(fw.w.tys, fw.fsigs, fw.writers(fw.rest), f, own), args)
+}
+
+// ---------------------------------------------------------------------------
+// What a view is
+
+// A word variable's value.
+fn FTm::word(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), v: Nat) → BitVec(64) {
+    Ty::cast(tys, Ty::at(g, v), Word(64), Env::get(tys, g, env, v))
+}
+
+// The index a view starts at, the word that is where it lies, and the word
+// that is its length, each from where the view starts: a view from the
+// first byte lies at the span's place and is as long as its end.
+fn FView::first(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>) → Nat {
+    match start { None => 0, Some(s) => FTm::word(tys, g, env, s).toNat() }
+}
+
+fn FView::place(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), home: Nat, start: Option<Nat>) → BitVec(64) {
+    match start { None => FTm::word(tys, g, env, home), Some(s) => FTm::word(tys, g, env, home).add(FTm::word(tys, g, env, s)) }
+}
+
+fn FView::size(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>, end: Nat) → BitVec(64) {
+    match start { None => FTm::word(tys, g, env, end), Some(s) => FTm::word(tys, g, env, end).sub(FTm::word(tys, g, env, s)) }
+}
+
+fn FView::from(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → Nat { FView::first(tys, g, env, view.start) }
+
+fn FView::base(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → BitVec(64) { FView::place(tys, g, env, view.home, view.start) }
+
+fn FView::length(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)) → BitVec(64) { FView::size(tys, g, env, view.start, view.end) }
+
+// The bytes a view is of a file: a window of its span (`List::window`),
+// shorter where the window passes the span's end.
+fn FView::bytes(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), file: List<List<BitVec(8)>>) → List<BitVec(8)> {
+    file.span(view.span).window(view.from(tys, g, env), FTm::word(tys, g, env, view.end).toNat())
+}
+
+// The words a lend's callee takes for its spans, view by view: where the
+// window lies, then its length.
+fn FTm::lent_words(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), views: List<FView>) → List<BitVec(64)> {
+    match views {
+        Nil => Nil,
+        Cons(view, rest) => Cons(view.base(tys, g, env), Cons(view.length(tys, g, env), FTm::lent_words(tys, g, env, rest))),
+    }
+}
+
+// The file a lend's callee runs over: the views, in order.
+fn FTm::lent_file(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), views: List<FView>, file: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    match views { Nil => Nil, Cons(view, rest) => Cons(view.bytes(tys, g, env, file), FTm::lent_file(tys, g, env, rest, file)) }
+}
+
+// A computation's meaning applied to the words of its spans and then to
+// variables (`FTm::apply`); `d` where the words outnumber the operands.
+fn FTm::apply_lent(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), R: Type, d: R, xs: List<BitVec(64)>)
+    → (ps: List<Ty>) → Ty::ArrowsTo(tys, ps, R) → List<Nat> → R {
+    match xs {
+        Nil => λ ps f vs => FTm::apply(tys, g, env, R, d, ps, f, vs),
+        Cons(x, more) => λ ps => match ps {
+            Nil => λ f vs => d,
+            Cons(p, later) => λ f vs => FTm::apply_lent(tys, g, env, R, d, more, later, f(Ty::cast(tys, Word(64), p, x)), vs),
+        },
+    }
+}
+
+// What a `Lend` answers: the callee from the first view's window, over the
+// file of the views after it, on the views' words and the variables; the
+// window it left is put back into the written span (`List::put_window`).
+// The callee's meaning is read at the rest of the file it runs over, which
+// is why the meanings are at every rest (`FWorld`).
+fn FTm::lent(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, views: List<FView>, args: List<Nat>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)> {
+    match views {
+        Nil => Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)),
+        Cons(view, reads) => shared(
+            FTm::apply_lent(fw.w.tys, g, env, Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>,
+                Mutated(own, Sig::at(fw.fsigs, f).result.default(fw.w.tys)), FTm::lent_words(fw.w.tys, g, env, Cons(view, reads)),
+                Sig::at(fw.fsigs, f).params,
+                FTm::get(fw.w.tys, fw.fsigs, fw.writers(FTm::lent_file(fw.w.tys, g, env, reads, Cons(own, fw.rest))), f,
+                    view.bytes(fw.w.tys, g, env, Cons(own, fw.rest))), args),
+            λ (m: Mutated<List<BitVec(8)>, Sig::at(fw.fsigs, f).result.sem(fw.w.tys)>) =>
+                Mutated(own.put_window(view.from(fw.w.tys, g, env), m.after), m.value)),
+    }
+}
+
+// The meaning: a function threading the written span's bytes, at the code
+// the computation returns.
+fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
+    → Mutated<List<BitVec(8)>, t.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)> {
+    match t {
+        Pure(v) => λ g env own => Mutated(own, FTm::value(fw, own, v, g, env)),
+        Let(e, body) => λ g env own => body.sem(fw, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g env own =>
+            match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) {
+                False => FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own)),
+                True => yes.sem(fw, g, env, own),
+            },
+        IfEq(c, yes, no) => λ g env own =>
+            Tm::convoy(Mutated<List<BitVec(8)>, yes.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)>,
+                Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.sem(fw, g, env, own),
+                FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own))),
+        Put(i, length, v, body) => λ g env own => body.sem(fw, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g env own =>
+            shared(FTm::called(fw, g, env, f, args, own), λ m =>
+                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Again(args) => λ g env own => FTm::called(fw, g, env, 0, args, own),
+        Lend(f, views, args, body) => λ g env own =>
+            shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
+                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+    }
+}
+
+// A computation function's meaning: its body under its parameters,
+// curried, at its declared result.
+fn FFun::curry(tys: Nat → RecInfo, r: Ty, ps: List<Ty>)
+    → (g: List<Ty>) → Env(tys, g) → (Env(tys, Ty::bind_onto(ps, g)) → Mutated<List<BitVec(8)>, r.sem(tys)>)
+    → Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)
+{
+    match ps {
+        Nil => λ g env k => k(env),
+        Cons(p, rest) => λ g env k => λ (x: p.sem(tys)) => FFun::curry(tys, r, rest, Cons(p, g), Pair(x, env), k),
+    }
+}
+
+fn FFun::sig(self f: FFun) → Sig { Sig(f.params, f.result) }
+
+fn FFun::meaning(self f: FFun, fw: FWorld) → FTm::Sem(fw.w.tys, f.sig()) {
+    λ own => FFun::curry(fw.w.tys, f.result, f.params, Nil, trivial, λ env =>
+        FTm::recast(fw.w.tys, f.body.ty(fw.w, fw.fsigs, Ty::bind_onto(f.params, Nil)), f.result,
+            f.body.sem(fw, Ty::bind_onto(f.params, Nil), env, own)))
+}

@@ -19,6 +19,7 @@
 //! the reader.
 
 use heather_kernel::rc::Rc;
+use std::collections::HashMap;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
@@ -135,9 +136,35 @@ pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
 /// shifted. Types are left whole: their term slots are the annotations the
 /// spelling kept, and a reduct's types are not where it put a redex. Shares
 /// every untouched subtree.
+///
+/// A reduct is a graph: a record updated field by field is each update's
+/// record built from projections of the one before, so the walk visits a
+/// node once however many parents it has. Walked as a tree, such a term
+/// costs its fields to the power of its updates.
 pub(crate) fn contract_projections(t: &Rc<Term>) -> Rc<Term> {
+    contract_projections_once(t, 0, &mut HashMap::new())
+}
+
+/// [`contract_projections`], with the answers of the nodes more than one
+/// parent can reach: those with more owners than their parent and the
+/// `held` copies of it the walk itself made. Every key is a node of the
+/// term the walk began at, which outlives the walk, so no address is reused
+/// under it.
+fn contract_projections_once(t: &Rc<Term>, held: usize, seen: &mut HashMap<*const Term, Rc<Term>>) -> Rc<Term> {
+    if Rc::strong_count(t) <= 1 + held {
+        return contract_projections_at(t, seen);
+    }
+    if let Some(done) = seen.get(&Rc::as_ptr(t)) {
+        return Rc::clone(done);
+    }
+    let out = contract_projections_at(t, seen);
+    seen.insert(Rc::as_ptr(t), Rc::clone(&out));
+    out
+}
+
+fn contract_projections_at(t: &Rc<Term>, seen: &mut HashMap<*const Term, Rc<Term>>) -> Rc<Term> {
     if let Some((first, pair)) = proj_of(t) {
-        let inner = contract_projections(pair);
+        let inner = contract_projections_once(pair, 0, seen);
         if let Some((a, b)) = pair_of(&inner) {
             return Rc::clone(if first { a } else { b });
         }
@@ -154,11 +181,11 @@ pub(crate) fn contract_projections(t: &Rc<Term>) -> Rc<Term> {
         return Rc::new(out);
     }
     // Every term child of the formers below, rewritten in place, and `false` when
-    // none moved.
-    fn each(slots: &mut [&mut Rc<Term>]) -> bool {
+    // none moved. The slots are a copy's, so each child has one owner more.
+    fn each(slots: &mut [&mut Rc<Term>], seen: &mut HashMap<*const Term, Rc<Term>>) -> bool {
         let mut moved = false;
         for slot in slots.iter_mut() {
-            let new = contract_projections(slot);
+            let new = contract_projections_once(slot, 1, seen);
             if !Rc::ptr_eq(&new, slot) {
                 **slot = new;
                 moved = true;
@@ -168,18 +195,18 @@ pub(crate) fn contract_projections(t: &Rc<Term>) -> Rc<Term> {
     }
     let mut out = (**t).clone();
     let moved = match &mut out {
-        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => each(&mut [fst, snd]),
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => each(&mut [fst, snd], seen),
         Term::Inl { val, .. } | Term::Inr { val, .. } | Term::InlAt { val, .. } | Term::InrAt { val, .. } => {
-            each(&mut [val])
+            each(&mut [val], seen)
         }
-        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => each(&mut [fun, arg]),
-        Term::Lam { body, .. } => each(&mut [body]),
-        Term::Succ(n) => each(&mut [n]),
-        Term::Refl { tm, .. } => each(&mut [tm]),
-        Term::Supf { label, children, .. } => each(&mut [label, children]),
-        Term::Corec { index, seed, .. } => each(&mut [index, seed]),
-        Term::Out { index, scrut, .. } => each(&mut [index, scrut]),
-        Term::Case { case_l, case_r, scrut, .. } => each(&mut [case_l, case_r, scrut]),
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => each(&mut [fun, arg], seen),
+        Term::Lam { body, .. } => each(&mut [body], seen),
+        Term::Succ(n) => each(&mut [n], seen),
+        Term::Refl { tm, .. } => each(&mut [tm], seen),
+        Term::Supf { label, children, .. } => each(&mut [label, children], seen),
+        Term::Corec { index, seed, .. } => each(&mut [index, seed], seen),
+        Term::Out { index, scrut, .. } => each(&mut [index, scrut], seen),
+        Term::Case { case_l, case_r, scrut, .. } => each(&mut [case_l, case_r, scrut], seen),
         _ => false,
     };
     if moved { Rc::new(out) } else { Rc::clone(t) }

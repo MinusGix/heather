@@ -1,0 +1,72 @@
+// An export's return theorem at a span function's ending
+// (docs/native-library-exports-design.md §7): what `compile-x86` states a
+// certificate's `…_returns` with.
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_asm_table;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import function_ir_writes;
+import function_ir_lower_reads;
+import x86_64_lending;
+import function_ir_run;
+import rt_file;
+import rt_file_loop;
+import function_ir_state;
+
+// `compiled_returns_written` and `compiled_returns_marked` at an ending
+// that is a span function's (`FTm::end_of`): the word is the function's
+// value and the first buffer the span it leaves. An export's certificate
+// is stated through these, with the function's result a parameter here, so
+// that no comparison there has the ending's word on one side and the
+// function's value on the other: the kernel advances the function first,
+// and one that calls a loop at a numeral is then computed pass by pass
+// (issues/conversion-callee-unfolded-before-the-meet.md).
+theorem Ending::returns_written<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
+    marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+    evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), m: Mutated<List<BitVec(8)>, BitVec(64)>,
+    runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
+    compiled_returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
+        stack, top, before, loan, f, below, arguments, fits, FTm::end_of(rest, m), runs)
+}
+
+theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
+    tables: List<List<Bool>>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+    evaluable: program_evaluable(functions).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), f: Nat, below: Succ(f) <= functions.len(),
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks_row(tables, f)).spans()),
+    arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(),
+    m: Mutated<List<BitVec(8)>, BitVec(64)>, runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
+    compiled_returns_marked<M>(functions, placement, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
+        stack, top, before, f, below, loan, arguments, fits, FTm::end_of(rest, m), runs)
+}

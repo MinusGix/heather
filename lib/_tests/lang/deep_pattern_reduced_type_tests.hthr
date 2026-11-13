@@ -1,0 +1,111 @@
+// Probes of a constructor inside a pattern where the scrutinee's type is
+// not written as its declaration's shape but reduces to it
+// (issues/deep-pattern-ctor-unknown-column-type.md): the variable of a
+// `let x <- t;`, whose type arrives as the carrier applied to its
+// argument, and a type a function computes. In both a nullary constructor
+// in a sub-pattern was read as a variable that matches anything, so
+// `Cons(_, Nil)` took a list of two. A type named by a `def` was read
+// rightly before and is here as the control. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+// ---------------------------------------------------------------------------
+// Under a bind
+
+// A plain recursive field under a bind.
+fn one(t: Tac<List<Nat>>) → Tac<Bool> {
+    let xs <- t;
+    match xs {
+        Cons(_, Nil) => pure(True),
+        _ => pure(False),
+    }
+}
+
+theorem one_of_one(): one(pure([1])) = pure(True) { refl }
+theorem one_of_two(): one(pure([1, 2])) = pure(False) { refl }
+theorem one_of_none(): one(pure([])) = pure(False) { refl }
+
+// A payload field under a bind.
+fn empty_inside(t: Tac<Option<List<Nat>>>) → Tac<Bool> {
+    let o <- t;
+    match o {
+        Some(Nil) => pure(True),
+        _ => pure(False),
+    }
+}
+
+theorem inside_empty(): empty_inside(pure(Some([]))) = pure(True) { refl }
+theorem inside_full(): empty_inside(pure(Some([1]))) = pure(False) { refl }
+theorem inside_none(): empty_inside(pure(None)) = pure(False) { refl }
+
+// Two levels.
+fn exactly_two(t: Tac<List<Nat>>) → Tac<Bool> {
+    let xs <- t;
+    match xs {
+        Cons(_, Cons(_, Nil)) => pure(True),
+        _ => pure(False),
+    }
+}
+
+theorem two_of_two(): exactly_two(pure([1, 2])) = pure(True) { refl }
+theorem two_of_three(): exactly_two(pure([1, 2, 3])) = pure(False) { refl }
+
+// A name that is no constructor is a binder, under a bind as elsewhere.
+fn tail_len(t: Tac<List<Nat>>) → Tac<Nat> {
+    let xs <- t;
+    match xs {
+        Cons(_, rest) => pure(rest.len()),
+        _ => pure(0),
+    }
+}
+
+theorem tail_of_three(): tail_len(pure([1, 2, 3])) = pure(2) { refl }
+
+// At `Option`, the carrier `?` and `<-` share.
+fn opt_one(o: Option<List<Nat>>) → Option<Bool> {
+    let xs <- o;
+    match xs {
+        Cons(_, Nil) => Some(True),
+        _ => Some(False),
+    }
+}
+
+theorem opt_two(): opt_one(Some([1, 2])) = Some(False) { refl }
+
+// The reading this used to have is refused.
+// expect-error(kernel)
+theorem one_of_two_wrong(): one(pure([1, 2])) = pure(True) { refl }
+
+// ---------------------------------------------------------------------------
+// A type that is a definition, and a type a function computes
+
+def Names: Type = List<Nat>;
+
+fn lone(xs: Names) → Bool {
+    match xs {
+        Cons(_, Nil) => True,
+        _ => False,
+    }
+}
+
+theorem lone_one(): lone([1]) = True { refl }
+theorem lone_two(): lone([1, 2]) = False { refl }
+
+fn Maybe(A: Type) → Type { Option<A> }
+
+fn holds_nothing(o: Maybe(List<Nat>)) → Bool {
+    match o {
+        Some(Nil) => True,
+        _ => False,
+    }
+}
+
+theorem nothing_held(): holds_nothing(Some([])) = True { refl }
+theorem something_held(): holds_nothing(Some([4])) = False { refl }

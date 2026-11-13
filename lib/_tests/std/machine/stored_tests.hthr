@@ -1,0 +1,130 @@
+// Probes of `lib/std/machine/stored.hthr`: a byte stored and read back in
+// literal bytes, a store that leaves its neighbour, the laws at neutral
+// bytes and an open codec, then words in each byte order, an array, a
+// pair with padding, and SHA-256's context as a record through its fields. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import option;
+import pair;
+import list;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+
+def four: List<u8> = [0x10, 0x20, 0x30, 0x40];
+
+// By computation at literal bytes.
+theorem byte_read(): Stored::byte().get(four, 2) = 0x30 { refl }
+theorem byte_stored(): Stored::byte().put(four, 2, 0x99) = [0x10, 0x20, 0x99, 0x40] { refl }
+theorem byte_past_end(): Stored::byte().get(four, 7) = 0x00 { refl }
+
+// The laws at neutral bytes: read back, a neighbour left, the length kept.
+theorem byte_back(bytes: List<u8>, at: Nat, b: u8, inside: at <= bytes.len()):
+    Stored::byte().get(Stored::byte().put(bytes, at, b), at) = b
+{
+    Stored::byte().get_put(bytes, at, b, inside)
+}
+
+theorem byte_neighbour(bytes: List<u8>, at: Nat, b: u8, inside: 1 + at <= bytes.len()):
+    Stored::byte().get(Stored::byte().put(bytes, 1 + at, b), at) = Stored::byte().get(bytes, at)
+{
+    Stored::byte().get_put_apart(Stored::byte(), bytes, 1 + at, at, b, Inl((1 + at).le_refl()), inside)
+}
+
+theorem byte_length(bytes: List<u8>, at: Nat, b: u8, inside: 1 + at <= bytes.len()):
+    Stored::byte().put(bytes, at, b).len() = bytes.len()
+{
+    Stored::byte().len_put(bytes, at, b, inside)
+}
+
+// At an open codec, two fields of a sound table: a store into one leaves
+// the other, the premise read off the table by index.
+theorem fields_apart<A, B>(s: Stored<A>, t: Stored<B>, whole: Layout, at, other: Nat,
+    fits: whole.Fits([Field(at, s.layout), Field(other, t.layout)]), bytes: List<u8>, a: A, inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    s.get_put_fields(t, bytes, at, other, a,
+        whole.fits_apart([Field(at, s.layout), Field(other, t.layout)], fits, 1, 0, refl, refl, λ same => absurd(same)), inside)
+}
+
+// A window that overlaps the store is not claimed to be left: the store
+// shows through it.
+theorem overlap_shows(): Stored::byte().get(Stored::byte().put(four, 2, 0x99), 2) = 0x99 { refl }
+
+// Words in each byte order, read and stored in literal bytes.
+def five: List<u8> = [0x01, 0x02, 0x03, 0x04, 0xaa];
+theorem u32_be_read(): Stored::u32_be().get(five, 0) = 0x01020304 { refl }
+theorem u32_le_read(): Stored::u32_le().get(five, 0) = 0x04030201 { refl }
+theorem u32_be_offset(): Stored::u32_be().get(five, 1) = 0x020304aa { refl }
+theorem u32_be_stored(): Stored::u32_be().put(five, 1, 0xdeadbeef) = [0x01, 0xde, 0xad, 0xbe, 0xef] { refl }
+theorem u16_le_stored(): Stored::u16_le().put(five, 0, 0xbeef) = [0xef, 0xbe, 0x03, 0x04, 0xaa] { refl }
+theorem u32_be_layout(): Stored::u32_be().layout = Layout::word(2) { refl }
+
+// A word past the end of the bytes reads zeros where there are none: a
+// window is total, and the laws carry the bound.
+theorem u32_be_short(): Stored::u32_be().get(five, 3) = 0x04aa0000 { refl }
+
+// An array, its elements a stride apart.
+def eight: List<u8> = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+theorem array_read(): Stored::u32_be().array(2).get(eight, 0) = [0x01020304, 0x05060708] { refl }
+theorem array_layout(): Stored::u32_be().array(8).layout = Layout(32, 2) { refl }
+
+// A byte and then a word: three bytes of padding between, zeros when written.
+theorem pair_read(): Stored::byte().then(Stored::u32_be()).get([0x7f, 0xee, 0xee, 0xee, 0x01, 0x02, 0x03, 0x04], 0) = Pair(0x7f, 0x01020304) { refl }
+theorem pair_write(): Stored::byte().then(Stored::u32_be()).write(Pair(0x7f, 0x01020304)) = [0x7f, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04] { refl }
+theorem pair_layout(): Stored::byte().then(Stored::u32_be()).layout = Layout(8, 2) { refl }
+
+// The other way round the padding is at the end, and `padded` writes it.
+theorem padded_layout(): Stored::u32_be().then(Stored::byte()).padded().layout = Layout(8, 2) { refl }
+theorem padded_write(): Stored::u32_be().then(Stored::byte()).padded().write(Pair(0x01020304, 0x7f)) = [0x01, 0x02, 0x03, 0x04, 0x7f, 0x00, 0x00, 0x00] { refl }
+
+// A record through its fields in order: SHA-256's context, whose layout
+// is the one `Layout::in_order` computes (layout_tests).
+record Sha256 { hash: [u32; 8], working: [u32; 8], block: [u32; 64], count: u64 }
+
+fn Sha256::fields() → Stored<Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>> {
+    Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).then(Stored::u64_be())
+}
+
+fn Sha256::stored() → Stored<Sha256> {
+    Sha256::fields().padded()
+        .map(λ p => Sha256(p.fst.fst.fst, p.fst.fst.snd, p.fst.snd, p.snd), λ (c: Sha256) => Pair(Pair(Pair(c.hash, c.working), c.block), c.count), λ c => refl)
+}
+
+theorem sha256_stored_layout(): Sha256::stored().layout = Layout(328, 3) { refl }
+
+// A field is read by its own codec at its own offset, by the codecs' laws
+// and never by unfolding the record's: the count at byte 320, and
+// schedule word `i` at byte `4 * i + 64`. These are the statements a
+// generated accessor is proved against.
+// The count is the big-endian word at byte 320.
+theorem sha256_count_at(bytes: List<u8>, at: Nat): Sha256::stored().get(bytes, at).count = Stored::u64_be().get(bytes, 320 + at) {
+    let fields = Sha256::fields();
+    let unpadded: (fields.padded().get(bytes, at).snd = fields.get(bytes, at).snd) = cong_fn(λ (p: Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>) => p.snd, fields.get_padded(bytes, at));
+    trans(unpadded, Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64)).get_then_snd(Stored::u64_be(), bytes, at))
+}
+
+// Schedule word `i` is the big-endian word at byte `4 * i + 64`.
+theorem sha256_block_at(bytes: List<u8>, at, i: Nat, inside: i < 64):
+    vector_entries(Sha256::stored().get(bytes, at).block).nth(i) = Some(Stored::u32_be().get(bytes, i * 4 + (64 + at))) {
+    let fields = Sha256::fields();
+    let three = Stored::u32_be().array(8).then(Stored::u32_be().array(8)).then(Stored::u32_be().array(64));
+    let two = Stored::u32_be().array(8).then(Stored::u32_be().array(8));
+    let unpadded: (fields.padded().get(bytes, at).fst.snd = fields.get(bytes, at).fst.snd) = cong_fn(λ (p: Pair<Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>, u64>) => p.fst.snd, fields.get_padded(bytes, at));
+    let third: (fields.get(bytes, at).fst.snd = three.get(bytes, at).snd) = cong_fn(λ (p: Pair<Pair<[u32; 8], [u32; 8]>, [u32; 64]>) => p.snd, three.get_then_fst(Stored::u64_be(), bytes, at));
+    let block: (three.get(bytes, at).snd = Stored::u32_be().array(64).get(bytes, 64 + at)) = two.get_then_snd(Stored::u32_be().array(64), bytes, at);
+    let whole: (Sha256::stored().get(bytes, at).block = Stored::u32_be().array(64).get(bytes, 64 + at)) = trans(unpadded, trans(third, block));
+    trans(cong_fn(λ (v: [u32; 64]) => vector_entries(v).nth(i), whole), Stored::u32_be().get_array_nth(64, bytes, 64 + at, i, inside))
+}
+
+// The laws at an open codec: an array of any stored value reads back.
+theorem array_back<A>(s: Stored<A>, n: Nat, xs: [A; n], bytes: List<u8>, at: Nat, inside: at <= bytes.len()):
+    s.array(n).get(s.array(n).put(bytes, at, xs), at) = xs
+{
+    s.array(n).get_put(bytes, at, xs, inside)
+}

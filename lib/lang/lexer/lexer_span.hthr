@@ -1,0 +1,326 @@
+// Heather's scanner over a source it is lent: one token, found by compiled
+// code that reads the caller's bytes where they lie
+// (docs/native-library-exports-design.md §10, R3; issues/self-lexer-linked.md).
+//
+// `scan_token(source, length, at, previous)` is the longest token of
+// `source` from offset `at`, after a token of kind `previous`: the
+// automaton of `lexer_scan` stepped over the bytes until it stops, with
+// the last position it accepted at remembered. It is the loop of
+// `lexer_tokens`' `Accepted::longest` with the source held as a span and
+// the offsets as words, which is what a `runtime fn` compiles; the
+// function that hands out the tokens one after another, and drops
+// whitespace and comments, stays its caller's. That it is that loop is
+// `scan_token_longest`, at the end of this file.
+//
+// The answer is one word (`token_word`): the token's kind in the top byte
+// and the offset just past it in the `TOKEN_END_BITS` below, or zero for a
+// refusal, which no token is since no kind is zero. Rust reads the word
+// apart (`heather_linked::scanner::token`) with the shift and the mask
+// `token_word_kind` and `token_word_end` read it back with, and its
+// `TOKEN_END_BITS` is this one, generated (`crates/linked/generated/
+// CONSTANTS.tsv`).
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+import tactic;
+import char;
+import string;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import lexer_scan;
+import lexer_tokens;
+
+// How many of a token word's low bits are where the token ends; its kind
+// is above them. Rust's copy is generated from this one.
+def TOKEN_END_BITS: Nat = 56;
+
+// A token found: its kind above, where it ends below.
+runtime fn token_word(kind, end: u64) → u64 { kind.shift_left(TOKEN_END_BITS).bor(end) }
+
+// The word read back, as Rust reads it: the shift gives the kind and the
+// mask the end, for a kind of one byte and an end below `2^56`. Each is
+// the word's bits moved, at a kind and an end that are their low bits
+// zero-extended (`BitVec::zero_extend_take_low_of_lt`); the halves are
+// put together with the end's first, so that what each reading keeps is
+// a bit `||` a zero from the left (`BitVec::bor_comm`).
+theorem token_kind_up(k: u8): k.zero_extend(56).shift_left(TOKEN_END_BITS) = BitVec::concat(BitVec::zero(), k, n := 56, m := 8) { refl }
+
+theorem token_word_kind_bits(k: u8, e: BitVec(56)): token_word(k.zero_extend(56), e.zero_extend(8)).shift_right(TOKEN_END_BITS) = k.zero_extend(56) {
+    let end = e.zero_extend(8);
+    trans(cong_fn(λ (w: u64) => w.shift_right(TOKEN_END_BITS), BitVec::bor_comm(64, k.zero_extend(56).shift_left(TOKEN_END_BITS), end)),
+        cong_fn(λ (w: u64) => end.bor(w).shift_right(TOKEN_END_BITS), token_kind_up(k)))
+}
+
+theorem token_word_end_bits(k: u8, e: BitVec(56)):
+    token_word(k.zero_extend(56), e.zero_extend(8)).band(BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1)) = e.zero_extend(8) {
+    BitVec::band_comm(64, token_word(k.zero_extend(56), e.zero_extend(8)), BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1))
+}
+
+theorem token_word_kind(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS)):
+    token_word(kind, end).shift_right(TOKEN_END_BITS) = kind {
+    let k = kind.take_low(8, 56);
+    j(BitVec::zero_extend_take_low_of_lt(8, 56, kind, small), λ x _ => token_word(x, end).shift_right(TOKEN_END_BITS) = x,
+        j(BitVec::zero_extend_take_low_of_lt(56, 8, end, fits), λ y _ => token_word(k.zero_extend(56), y).shift_right(TOKEN_END_BITS) = k.zero_extend(56),
+            token_word_kind_bits(k, end.take_low(56, 8))))
+}
+
+theorem token_word_end(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS)):
+    token_word(kind, end).band(BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1)) = end {
+    let k = kind.take_low(8, 56);
+    let mask: u64 = BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1);
+    j(BitVec::zero_extend_take_low_of_lt(8, 56, kind, small), λ x _ => token_word(x, end).band(mask) = end,
+        j(BitVec::zero_extend_take_low_of_lt(56, 8, end, fits), λ y _ => token_word(k.zero_extend(56), y).band(mask) = y,
+            token_word_end_bits(k, end.take_low(56, 8))))
+}
+
+// A token's word is not zero, so zero is a refusal and nothing else: the
+// kind is read back from it, and no kind the automaton accepts is zero
+// (`scan_last` makes a word only where `scan_accept` is not).
+theorem token_word_nonzero(kind, end: u64, small: kind.toNat() < 256, fits: end.toNat() < Nat::pow(2, TOKEN_END_BITS), named: ¬(kind = 0)):
+    ¬(token_word(kind, end) = 0) {
+    λ zero => named(trans(sym(token_word_kind(kind, end, small, fits)), cong_fn(λ (w: u64) => w.shift_right(TOKEN_END_BITS), zero)))
+}
+
+// The state after the byte at `i`, which the loop's test has found below
+// the length.
+runtime fn scan_at(source: List<BitVec(8)>, length, state, i: u64) → u64 {
+    scan_step(state, source.byte_within(length, i).zero_extend(56))
+}
+
+// What is remembered at offset `i` in `state`: this position if the state
+// accepts a kind, and what was remembered before if it does not.
+runtime fn scan_last(state, i, last: u64) → u64 {
+    if scan_accept(state).eq_bit(0) { last } else { token_word(scan_accept(state), i) }
+}
+
+// Where the loop stops, in `state` at offset `i`: a refusal, the automaton
+// with no way on, or the end of the source, where a state that goes on
+// accepts here if it accepts and is given `END`.
+runtime fn scan_stopped(state, i, last: u64) → u64 {
+    if state.eq_bit(FAIL) {
+        0
+    } else if state.eq_bit(DEAD) {
+        last
+    } else if scan_step(state, END).eq_bit(FAIL) {
+        0
+    } else {
+        scan_last(state, i, last)
+    }
+}
+
+// The longest token from `state`, the state the automaton is in at offset
+// `i`: `last` is the word of the last position it accepted at before this
+// one, zero for none. It steps while bytes are left and the state goes on;
+// past the span's end the automaton is given `END` once. One loop with one
+// way round: where it stops is decided after it (`scan_stopped`).
+runtime fn scan_from(source: List<BitVec(8)>, length, state, i, last: u64) → u64 decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) {
+        False => scan_stopped(state, i, last),
+        True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length,
+            Bool::and_true_parts(i.unsigned_lt_bit(length), !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), h).left);
+        bv_omega
+    };
+}
+
+// The longest token of `source` from `at`, after a token of kind
+// `previous` (zero at the start of the source).
+runtime fn scan_token(source: List<BitVec(8)>, length, at, previous: u64) → u64 { scan_from(source, length, scan_begin(previous), at, 0) }
+
+// ---------------------------------------------------------------------------
+// The loop is the specification's (`lexer_tokens`' `Accepted::longest`), at
+// a source whose length is the length word.
+
+// A token found, as the loop's word: none is zero.
+fn Accepted::word(found: Option<Accepted>) → u64 {
+    match found { None => 0, Some(token) => token_word(token.kind, BitVec::ofNat(token.end)) }
+}
+
+// What the loop remembers is what the specification remembers.
+theorem scan_last_after(state, i: u64, rest: List<u8>, found: Option<Accepted>):
+    scan_last(state, i, Accepted::word(found)) = Accepted::word(Accepted::after(state, rest, i.toNat(), found)) {
+    match scan_accept(state).eq_bit(0) as λ b => (match b { True => Accepted::word(found), False => token_word(scan_accept(state), i) })
+        = Accepted::word(match b { True => found, False => Some(Accepted(scan_accept(state), i.toNat(), rest)) }) {
+        False => cong_fn(λ (end: u64) => token_word(scan_accept(state), end), sym(BitVec::ofNat_toNat(64, i))),
+        True => refl,
+    }
+}
+
+// The loop where its test fails, and where it holds.
+theorem scan_from_stops(source: List<BitVec(8)>, length, state, i, last: u64,
+    stop: (i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = False):
+    scan_from(source, length, state, i, last) = scan_stopped(state, i, last) {
+    trans(scan_from_unfold(source, length, state, i, last),
+        j(sym(stop), λ b _ => (match h: b {
+            False => scan_stopped(state, i, last),
+            True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+        }) = scan_stopped(state, i, last), refl))
+}
+
+theorem scan_from_steps(source: List<BitVec(8)>, length, state, i, last: u64,
+    go: (i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = True):
+    scan_from(source, length, state, i, last) = scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)) {
+    trans(scan_from_unfold(source, length, state, i, last),
+        j(sym(go), λ b _ => (match h: b {
+            False => scan_stopped(state, i, last),
+            True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+        }) = scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)), refl))
+}
+
+// The machine's unsigned test, from the bound in `Nat` either way.
+theorem scan_below(i, length: u64, below: i.toNat() < length.toNat()): i.unsigned_lt_bit(length) = True {
+    BitVec::borrow_sub_bit_true_iff(64, i, length).mpr(below)
+}
+
+theorem scan_past(i, length: u64, past: length.toNat() <= i.toNat()): i.unsigned_lt_bit(length) = False {
+    (match i.unsigned_lt_bit(length) as λ b => i.unsigned_lt_bit(length) = b → b = False {
+        False => λ _ => refl,
+        True => λ under => {
+            let below = bitvec_omega::unsigned_true(64, i, length, under);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+// A state that goes on passes the loop's test of the state.
+theorem scan_goes(state: u64, live: state.eq_bit(FAIL) = False, on: state.eq_bit(DEAD) = False):
+    !(state.eq_bit(FAIL) || state.eq_bit(DEAD)) = True {
+    j(sym(live), λ b _ => !(b || state.eq_bit(DEAD)) = True, j(sym(on), λ b _ => !b = True, refl))
+}
+
+// `scan_stopped` by what its two tests of the state answer.
+fn scan_stopped_by(failed, dead: Bool, state, i, last: u64) → u64 {
+    if failed { 0 } else if dead { last } else if scan_step(state, END).eq_bit(FAIL) { 0 } else { scan_last(state, i, last) }
+}
+
+// Where the loop stops, by its state.
+theorem scan_stopped_failed(state, i, last: u64, failed: state.eq_bit(FAIL) = True): scan_stopped(state, i, last) = 0 {
+    j(sym(failed), λ b _ => scan_stopped_by(b, state.eq_bit(DEAD), state, i, last) = 0,
+        refl)
+}
+
+theorem scan_stopped_dead(state, i, last: u64, live: state.eq_bit(FAIL) = False, dead: state.eq_bit(DEAD) = True):
+    scan_stopped(state, i, last) = last {
+    j(sym(live), λ b _ => scan_stopped_by(b, state.eq_bit(DEAD), state, i, last) = last,
+        j(sym(dead), λ b _ => scan_stopped_by(False, b, state, i, last) = last, refl))
+}
+
+theorem scan_stopped_at_end(state, i, last: u64, live: state.eq_bit(FAIL) = False, on: state.eq_bit(DEAD) = False):
+    scan_stopped(state, i, last) = if scan_step(state, END).eq_bit(FAIL) { 0 } else { scan_last(state, i, last) } {
+    j(sym(live), λ b _ => scan_stopped_by(b, state.eq_bit(DEAD), state, i, last)
+            = if scan_step(state, END).eq_bit(FAIL) { 0 } else { scan_last(state, i, last) },
+        j(sym(on), λ b _ => scan_stopped_by(False, b, state, i, last)
+            = if scan_step(state, END).eq_bit(FAIL) { 0 } else { scan_last(state, i, last) }, refl))
+}
+
+// The byte the loop reads at `i` is the head of what is left there.
+theorem scan_at_head(source: List<u8>, length, state, i: u64, byte: u8, tail: List<u8>, here: source.drop(i.toNat()) = Cons(byte, tail),
+    below: i.unsigned_lt_bit(length) = True): scan_at(source, length, state, i) = scan_step(state, byte.zero_extend(56)) {
+    cong_fn(λ (b: u8) => scan_step(state, b.zero_extend(56)),
+        trans(j(sym(below), λ b _ => (match b { False => BitVec::ofNat(0), True => source.byte_at(i) }) = source.byte_at(i), refl),
+            cong_fn(λ (o: Option<u8>) => o.unwrap_or(BitVec::ofNat(0)), trans(source.nth_drop(i.toNat()), cong_fn(λ (l: List<u8>) => l.nth(0), here)))))
+}
+
+// The loop from a state that goes on, over what is left of the source: the
+// specification's longest token from there, as a word.
+theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state, i: u64) → (found: Option<Accepted>) →
+    source.drop(i.toNat()) = rest → i.toNat() + rest.len() = length.toNat() → state.eq_bit(FAIL) = False → state.eq_bit(DEAD) = False →
+    scan_from(source, length, state, i, Accepted::word(found))
+        = Accepted::word(Accepted::longest(state, rest, i.toNat(), Accepted::after(state, rest, i.toNat(), found))) {
+    match rest {
+        Nil => λ state i found here ends live on => {
+            let past: length.toNat() <= i.toNat() = omega;
+            let stop: ((i.unsigned_lt_bit(length) && !(state.eq_bit(FAIL) || state.eq_bit(DEAD))) = False) =
+                cong_fn(λ (b: Bool) => b && !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), scan_past(i, length, past));
+            trans(scan_from_stops(source, length, state, i, Accepted::word(found), stop),
+                trans(scan_stopped_at_end(state, i, Accepted::word(found), live, on),
+                    match scan_step(state, END).eq_bit(FAIL) as λ b => (match b { False => scan_last(state, i, Accepted::word(found)), True => 0 })
+                        = Accepted::word(if b { None } else { Accepted::after(state, Nil, i.toNat(), found) }) {
+                        False => scan_last_after(state, i, Nil, found),
+                        True => refl,
+                    }))
+        },
+        Cons(byte, tail) => λ state i found here ends live on => {
+            let below: i.toNat() < length.toNat() = omega;
+            let under = scan_below(i, length, below);
+            let next = scan_step(state, byte.zero_extend(56));
+            let kept = Accepted::after(state, Cons(byte, tail), i.toNat(), found);
+            let up: (i.add(1).toNat() = Succ(i.toNat())) = bv_omega;
+            let stepped: (scan_from(source, length, state, i, Accepted::word(found)) = scan_from(source, length, next, i.add(1), Accepted::word(kept))) =
+                trans(scan_from_steps(source, length, state, i, Accepted::word(found),
+                        Bool::and_true_of(i.unsigned_lt_bit(length), !(state.eq_bit(FAIL) || state.eq_bit(DEAD)), under, scan_goes(state, live, on))),
+                    trans(cong_fn(λ (s: u64) => scan_from(source, length, s, i.add(1), scan_last(state, i, Accepted::word(found))),
+                            scan_at_head(source, length, state, i, byte, tail, here, under)),
+                        cong_fn(λ (w: u64) => scan_from(source, length, next, i.add(1), w), scan_last_after(state, i, Cons(byte, tail), found))));
+            trans(stepped, (match next.eq_bit(FAIL) as λ b => next.eq_bit(FAIL) = b → scan_from(source, length, next, i.add(1), Accepted::word(kept))
+                = Accepted::word(if b {
+                    None
+                } else if next.eq_bit(DEAD) {
+                    kept
+                } else {
+                    Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept))
+                }) {
+                True => λ failed => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
+                        trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !(b || next.eq_bit(DEAD)), failed),
+                            i.add(1).unsigned_lt_bit(length).and_false_r())),
+                    scan_stopped_failed(next, i.add(1), Accepted::word(kept), failed)),
+                False => λ live2 => (match next.eq_bit(DEAD) as λ b => next.eq_bit(DEAD) = b → scan_from(source, length, next, i.add(1), Accepted::word(kept))
+                    = Accepted::word(if b { kept } else { Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept)) }) {
+                    True => λ dead => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
+                            trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !b, trans(cong_fn(λ (b: Bool) => b || next.eq_bit(DEAD), live2), dead)),
+                                i.add(1).unsigned_lt_bit(length).and_false_r())),
+                        scan_stopped_dead(next, i.add(1), Accepted::word(kept), live2, dead)),
+                    False => λ on2 => {
+                        let left: (source.drop(i.add(1).toNat()) = tail) =
+                            trans(cong_fn(λ (n: Nat) => source.drop(n), up), trans(source.drop_succ(i.toNat()), trans(cong_fn(λ (l: List<u8>) => l.drop(1), here), tail.drop_zero())));
+                        let ends2: (i.add(1).toNat() + tail.len() = length.toNat()) = omega;
+                        j(up, λ n _ => scan_from(source, length, next, i.add(1), Accepted::word(kept))
+                            = Accepted::word(Accepted::longest(next, tail, n, Accepted::after(next, tail, n, kept))),
+                            scan_from_longest(source, length, tail)(next, i.add(1), kept, left, ends2, live2, on2))
+                    },
+                })(refl),
+            })(refl))
+        },
+    }
+}
+
+// Whatever holds of both starting states holds of the one a token begins in.
+theorem scan_begin_either(previous: u64, P: u64 → Type, shift: P(START_SHIFT), plain: P(START)): P(scan_begin(previous)) {
+    match previous.eq_bit(0) || previous.eq_bit(KIND_SPACE) || previous.eq_bit(KIND_LPAREN) || previous.eq_bit(KIND_COMMA)
+        as λ b => P(match b { False => START, True => START_SHIFT }) {
+        False => plain,
+        True => shift,
+    }
+}
+
+// The linked function is the specification's scan of one token
+// (`Scanned::from` calls `Accepted::longest` so), at a source whose length
+// is the length word and an offset inside it: zero where the specification
+// refuses, and the token's kind and end otherwise.
+theorem scan_token_longest(source: List<u8>, length, at, previous: u64, sized: source.len() = length.toNat(), within: at.toNat() <= length.toNat()):
+    scan_token(source, length, at, previous) = Accepted::word(Accepted::longest(scan_begin(previous), source.drop(at.toNat()), at.toNat(), None)) {
+    let begin = scan_begin(previous);
+    let rest = source.drop(at.toNat());
+    let left = source.len_drop(at.toNat());
+    let ends: (at.toNat() + rest.len() = length.toNat()) = omega;
+    let none: (scan_accept(begin).eq_bit(0) = True) = scan_begin_either(previous, λ (s: u64) => scan_accept(s).eq_bit(0) = True, refl, refl);
+    trans(scan_from_longest(source, length, rest)(begin, at, None, refl, ends,
+            scan_begin_either(previous, λ (s: u64) => s.eq_bit(FAIL) = False, refl, refl),
+            scan_begin_either(previous, λ (s: u64) => s.eq_bit(DEAD) = False, refl, refl)),
+        cong_fn(λ (kept: Option<Accepted>) => Accepted::word(Accepted::longest(begin, rest, at.toNat(), kept)),
+            j(sym(none), λ b _ => (match b as λ _ => Option<Accepted> { False => Some(Accepted(scan_accept(begin), at.toNat(), rest)), True => None }) = None, refl)))
+}

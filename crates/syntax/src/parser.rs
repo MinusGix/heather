@@ -232,6 +232,10 @@ struct Parser {
     /// each as a `let mut` local, and a `mut self` one is returned beside the
     /// result. Taken by the first [`Parser::block_body`].
     pending_mut: Option<Vec<(String, bool)>>,
+    /// The method whose body is being read, by its base name, when it is a
+    /// `mut self` one: a call of that name on the receiver that ends the
+    /// body is the method's own ([`Parser::receiver_end`]).
+    own_method: Option<String>,
     /// The next block opened is the body of a `while` with no measure
     /// (docs/sequencing-surface-design.md §18): its binds stay as markers
     /// until the loop is lowered, because they run inside the loop's step,
@@ -687,6 +691,7 @@ impl Parser {
             elseless_if: false,
             mut_params: Vec::new(),
             pending_mut: None,
+            own_method: None,
             defer_binds: false,
             mutables: Vec::new(),
             range_header: false,
@@ -1169,13 +1174,13 @@ impl Parser {
                             span: g.span,
                         })
                     }
-                    Item::Prefixed(p) => {
+                    Item::Prefixed(PrefixedItem { span, .. }) | Item::PrefixedRecord(PrefixedRecordItem { span, .. }) => {
                         return Err(ParseError {
                             msg: "a prefixed declaration cannot be in a section yet: its \
                                   generator runs at the module's empty context, as a \
                                   `generate` does (docs/value-definitions-design.md §3)"
                                 .into(),
-                            span: p.span,
+                            span: *span,
                         })
                     }
                 }
@@ -1433,9 +1438,9 @@ impl Parser {
                 msg: "a `generate` cannot yet inherit an `assuming` telescope".into(),
                 span: g.span,
             }),
-            Item::Prefixed(p) => Err(ParseError {
+            Item::Prefixed(PrefixedItem { span, .. }) | Item::PrefixedRecord(PrefixedRecordItem { span, .. }) => Err(ParseError {
                 msg: "a prefixed declaration cannot yet inherit an `assuming` telescope".into(),
-                span: p.span,
+                span,
             }),
         }
     }
@@ -1504,15 +1509,16 @@ impl Parser {
         // (docs/value-definitions-design.md §3). A name before a declaration
         // keyword, or a name applied, is not otherwise an item, so this reads
         // nothing that used to parse. The modifier keywords are matched first.
+        // `laid record T { … }`: a `record` takes a prefix too (§3.5).
         if let TokKind::Ident(w) = self.peek()
             && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
             && (matches!(self.nth(1), TokKind::LParen)
-                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()) || PREFIXED_TYPE_WORDS.contains(&k.as_str()))
                 // `a b fn f`: two prefixes, read as one so it is refused as such.
                 || (matches!(self.nth(1), TokKind::Ident(_))
-                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))))
+                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()) || PREFIXED_TYPE_WORDS.contains(&k.as_str()))))
         {
-            return Ok(Item::Prefixed(self.prefixed()?));
+            return self.prefixed();
         }
         Ok(Item::Decl(self.decl()?))
     }
@@ -1551,8 +1557,9 @@ impl Parser {
     /// `P decl` or `P(args) decl` ([`Item::Prefixed`]). One prefix: a second
     /// name before the declaration is refused, since composing generators is
     /// open (issues/scoped-declaration-generators.md). The declaration under
-    /// it is a `fn`, a `theorem` or a `def`.
-    fn prefixed(&mut self) -> R<PrefixedItem> {
+    /// it is a `fn`, a `theorem` or a `def`, or a `record`
+    /// ([`Item::PrefixedRecord`]).
+    fn prefixed(&mut self) -> R<Item> {
         let start = self.peek_span();
         let (name, name_span) = self.ident("a generator's name")?;
         let mut generator = Expr { kind: ExprKind::Var(name.clone()), span: name_span };
@@ -1563,6 +1570,21 @@ impl Parser {
                 kind: ExprKind::App { head: Box::new(generator), args, named, explicit: false, goal_oriented: false },
                 span: name_span.join(close),
             };
+        }
+        if self.at_kw("record") {
+            let record = self.record()?;
+            let span = start.join(record.span);
+            return Ok(Item::PrefixedRecord(PrefixedRecordItem { generator, record, span }));
+        }
+        if let TokKind::Ident(w) = self.peek()
+            && matches!(w.as_str(), "inductive" | "codata" | "class" | "instance")
+        {
+            let w = w.clone();
+            return self.err(&format!(
+                "a generator prefixes a `fn`, a `theorem`, a `def` or a `record`, not \
+                 {} `{w}` (docs/value-definitions-design.md §3)",
+                if w == "inductive" || w == "instance" { "an" } else { "a" }
+            ));
         }
         if let TokKind::Ident(w) = self.peek()
             && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
@@ -1591,7 +1613,7 @@ impl Parser {
             });
         }
         let span = start.join(decl.span);
-        Ok(PrefixedItem { generator, decl, span })
+        Ok(Item::Prefixed(PrefixedItem { generator, decl, span }))
     }
 
     /// `class C<A> extends P<A>, Q<A> { f: T, … }`
@@ -3166,8 +3188,10 @@ impl Parser {
             let saved = self.propagation_depth;
             self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
             self.pending_mut = (!mut_params.is_empty()).then(|| mut_params.clone());
+            self.own_method = mut_self.is_some().then(|| name.rsplit("::").next().unwrap_or(&name).to_string());
             let body = self.block();
             self.pending_mut = None;
+            self.own_method = None;
             self.propagation_depth = saved;
             body?
         };
@@ -3306,7 +3330,7 @@ impl Parser {
     /// scope: one that may update its receiver (§8.2)?
     fn mut_receiver(&self, e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Dot { recv, args: Some(_), .. }
-            if matches!(&recv.kind, ExprKind::Var(x) if self.mutables.contains(x)))
+            if crate::imperative::place_root(recv).is_some_and(|x| self.mutables.iter().any(|m| m == x)))
     }
 
     /// [`Self::block_body`] before its layer-2 statements and binds are
@@ -3353,23 +3377,73 @@ impl Parser {
             head.append(&mut block.stmts);
             block.stmts = head;
             if let Some((receiver, _)) = ps.iter().find(|(_, s)| *s) {
-                let span = block.result.span;
-                let value = if crate::imperative::is_unit_result(&block.result) {
-                    Expr { kind: ExprKind::Var("trivial".into()), span }
-                } else {
-                    let name = self.hygienic("value");
-                    let value = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
-                    block.stmts.push(Stmt::Let { name: name.clone(), ty: None, expr: value, span, opaque: false });
-                    Expr { kind: ExprKind::Var(name), span }
-                };
-                let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
-                block.result = Box::new(Expr {
-                    kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
-                    span,
-                });
+                self.receiver_end(&mut block, receiver);
             }
         }
         Ok(block)
+    }
+
+    /// The end of a `mut self` body, where the receiver `x` goes back out
+    /// beside the body's value: `Mutated(x, value)`, the value bound first
+    /// (§8.2).
+    ///
+    /// A body that ends in a branch one of whose arms updates the receiver
+    /// returns it at the end of each arm instead (§19.2), since the
+    /// receiver after the branch is a different one per arm: each arm ends
+    /// as a body does, and [`crate::imperative::lower_block`] gives its
+    /// statements the body's mutable locals. The method's own call on the
+    /// receiver, where it ends the body or such an arm, is the whole result
+    /// ([`crate::imperative::MUTATED_WHOLE`]), so the recursion is a tail
+    /// call.
+    fn receiver_end(&mut self, block: &mut Block, receiver: &str) {
+        if let ExprKind::Match { motive: None, arms, eqbind, .. } = &mut block.result.kind
+            && crate::imperative::tail_updates(arms, eqbind.as_deref(), receiver)
+        {
+            for arm in arms.iter_mut() {
+                let span = arm.body.span;
+                let mut body = match std::mem::replace(&mut arm.body.kind, ExprKind::AutoRefl) {
+                    ExprKind::Block(b) => *b,
+                    kind => {
+                        // An arm that is a bare call on the receiver: bound
+                        // first, as a block's result is (§8.2).
+                        let call = Expr { kind, span };
+                        if crate::imperative::receiver_call(&call, receiver) {
+                            let name = self.hygienic("tail");
+                            let bound = Stmt::Let {
+                                name: name.clone(), ty: None,
+                                expr: crate::imperative::marked(crate::imperative::MUTCALL, call, span), span, opaque: false,
+                            };
+                            Block { stmts: vec![bound], result: Box::new(Expr { kind: ExprKind::Var(name), span }), ons: Vec::new(), span }
+                        } else {
+                            Block { stmts: Vec::new(), result: Box::new(call), ons: Vec::new(), span }
+                        }
+                    }
+                };
+                self.receiver_end(&mut body, receiver);
+                arm.body.kind = ExprKind::Block(Box::new(body));
+            }
+            return;
+        }
+        if let Some(method) = self.own_method.clone()
+            && let Some(call) = crate::imperative::take_own_call(block, receiver, &method)
+        {
+            let span = call.span;
+            block.result = Box::new(crate::imperative::marked(crate::imperative::MUTATED_WHOLE, call, span));
+            return;
+        }
+        // The value stands in the record, where it is checked at the
+        // method's result type: a numeral there is one of that type.
+        let span = block.result.span;
+        let value = if crate::imperative::is_unit_result(&block.result) {
+            Expr { kind: ExprKind::Var("trivial".into()), span }
+        } else {
+            std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var("trivial".into()), span })
+        };
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
+        block.result = Box::new(Expr {
+            kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
+            span,
+        });
     }
 
     /// [`Self::block_body`] after its statements: the result (`parsed` when
@@ -3911,16 +3985,18 @@ impl Parser {
             // be left off before the block's `}`, as a statement body's last
             // assignment usually is.
             if matches!(self.peek(), TokKind::ColonEq) {
-                let ExprKind::Var(name) = &expr.kind else {
+                if crate::imperative::place_root(&expr).is_none() {
                     return Err(ParseError {
-                        msg: "only a local is assigned: write `x := e` (a field path, `x.f := e`, is not \
-                              supported yet)".into(),
+                        msg: "only a place is assigned: a local, `x := e`, or a field path of one, \
+                              `x.f := e` (docs/sequencing-surface-design.md §20)".into(),
                         span: expr.span,
                     });
-                };
-                let name = name.clone();
+                }
                 self.bump();
                 let value = self.expr()?;
+                // `x.f := e` assigns `x` the record with that field replaced
+                // (§20): `x := x with { f = e }`.
+                let (name, value) = crate::imperative::place_update(&expr, value).expect("a place");
                 let end = if matches!(self.peek(), TokKind::RBrace) {
                     value.span
                 } else {
@@ -9498,3 +9574,7 @@ mod tests {
 /// The words a declaration (or its modifier) starts with: what may follow a
 /// prefix generator's name ([`Parser::prefixed`]).
 const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom", "interface"];
+/// The type declarations a name may stand before: `record` takes a prefix
+/// generator, and the others are named so that one before them is refused
+/// as a prefix and not as "expected `fn`".
+const PREFIXED_TYPE_WORDS: &[&str] = &["record", "inductive", "codata", "class", "instance"];

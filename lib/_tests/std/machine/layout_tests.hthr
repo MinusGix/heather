@@ -1,0 +1,68 @@
+// Probes of `lib/std/machine/layout.hthr` and of `Nat::round_up`: layouts
+// and field tables at closed values, SHA-256's context among them, a table
+// written by hand and checked by evaluation, and tables that do not fit.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import layout;
+
+// Rounding at closed values, a multiple and a non-multiple, and at zero.
+theorem round_up_between(): (13).round_up(4) = 16 { refl }
+theorem round_up_at_multiple(): (16).round_up(4) = 16 { refl }
+theorem round_up_by_one(): (13).round_up(1) = 13 { refl }
+theorem round_up_by_zero(): (13).round_up(0) = 13 { refl }
+theorem padding_between(): (13).padding(4) = 3 { refl }
+
+// Not a power of two: the rounding is `Nat`'s, not a mask's.
+theorem round_up_by_three(): (13).round_up(3) = 15 { refl }
+
+// A `u16` then a `u32`: the second at 4, eight bytes, aligned to four.
+theorem pair_offset(): Layout::word(1).offset_of(Layout::word(2)) = 4 { refl }
+theorem pair_layout(): Layout::word(1).extend(Layout::word(2)) = Layout(8, 2) { refl }
+theorem pair_align(): Layout::word(1).extend(Layout::word(2)).align() = 4 { refl }
+
+// The other way round needs padding at the end: six bytes, a stride of eight.
+theorem pair_reversed(): Layout::word(2).extend(Layout::word(1)) = Layout(6, 2) { refl }
+theorem pair_reversed_stride(): Layout::word(2).extend(Layout::word(1)).stride() = 8 { refl }
+theorem pair_reversed_padded(): Layout::word(2).extend(Layout::word(1)).pad_to_align() = Layout(8, 2) { refl }
+
+// Three bytes at no alignment, eight times.
+theorem bytes_array(): Layout::bytes(3).array(8) = Layout(24, 0) { refl }
+
+// A record in order: a byte, a `u32`, a `u16`.
+def mixed: List<Layout> = [Layout::word(0), Layout::word(2), Layout::word(1)];
+
+theorem mixed_layout(): Layout::in_order(mixed) = Layout(12, 2) { refl }
+theorem mixed_fields(): Layout::fields_in_order(mixed)
+    = [Field(0, Layout::word(0)), Field(4, Layout::word(2)), Field(8, Layout::word(1))] { refl }
+theorem mixed_fits(): Layout::in_order(mixed).Fits(Layout::fields_in_order(mixed)) { Layout::in_order_fits(mixed) }
+
+// SHA-256's context: the hash value, the working variables and the
+// schedule as arrays of four-byte words, then a count.
+def sha256_items: List<Layout> = [Layout::word(2).array(8), Layout::word(2).array(8), Layout::word(2).array(64), Layout::word(3)];
+
+theorem sha256_context_layout(): Layout::in_order(sha256_items) = Layout(328, 3) { refl }
+theorem sha256_context_offsets(): Layout::fields_in_order(sha256_items).map(λ f => f.offset) = [0, 32, 64, 320] { refl }
+
+// A table written by hand is checked by evaluation: a register block with
+// a gap, its fields out of order.
+def block_fields: List<Field> = [Field(8, Layout::word(2)), Field(0, Layout::word(1)), Field(4, Layout::word(1))];
+
+theorem block_fits(): Layout(16, 2).Fits(block_fields) { Layout(16, 2).fits_of_bit(block_fields, refl) }
+
+// Its second and third fields share no byte, by index.
+theorem block_apart(): Field(0, Layout::word(1)).Apart(Field(4, Layout::word(1))) {
+    Layout(16, 2).fits_apart(block_fields, block_fits(), 1, 2, refl, refl, λ same => absurd(same))
+}
+
+// Tables that do not fit: two fields sharing bytes, a field at an
+// unaligned offset, one past the end, and one asking more alignment than
+// the whole gives.
+theorem overlapping_refused(): Layout(8, 0).fits_bit([Field(0, Layout::bytes(4)), Field(2, Layout::bytes(4))]) = False { refl }
+theorem unaligned_refused(): Layout(8, 2).fits_bit([Field(2, Layout::word(2))]) = False { refl }
+theorem outside_refused(): Layout(8, 2).fits_bit([Field(8, Layout::word(0))]) = False { refl }
+theorem overaligned_refused(): Layout(8, 0).fits_bit([Field(0, Layout::word(2))]) = False { refl }

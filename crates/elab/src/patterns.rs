@@ -181,8 +181,20 @@ impl Patterns<'_> {
         // classified against its own column type, not the global constructor
         // table: two visible constructors of one name must not turn it into a
         // binder (issues/deep-pattern-ctor-needs-column-type.md).
-        let has_deep = arms.iter().any(|a| {
-            let cols = self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span);
+        // Each arm's columns are read once, for the refusal, the fast path
+        // and the reclassification below (normalizing named patterns keeps
+        // the arms' order and puts each arm's binders in declaration order,
+        // which is how its columns are indexed).
+        let arm_cols: Vec<Option<Vec<PatCol>>> = arms
+            .iter()
+            .map(|a| self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span))
+            .collect();
+        for (a, cols) in arms.iter().zip(&arm_cols) {
+            if !a.default {
+                self.check_classifiable(&a.binders, cols.as_deref())?;
+            }
+        }
+        let has_deep = arms.iter().zip(&arm_cols).any(|(a, cols)| {
             a.binders
                 .iter()
                 .enumerate()
@@ -202,9 +214,9 @@ impl Patterns<'_> {
         // `is_deep` below sees the reclassified shape.
         let arms: Vec<Arm> = arms
             .iter()
-            .map(|a| Arm {
+            .zip(&arm_cols)
+            .map(|(a, cols)| Arm {
                 binders: {
-                    let cols = self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span);
                     a.binders
                         .iter()
                         .enumerate()
@@ -803,6 +815,48 @@ impl Patterns<'_> {
         }
     }
 
+    /// §3.5's other half: a bare identifier is classified against its
+    /// column's type, and where that type cannot be read there is no
+    /// classification to make. Reading the identifier as a binder then is a
+    /// guess, and a wrong one is silent: `Cons(c, Nil)` matches every
+    /// non-empty list. So a constructor's name in a column of unknown type
+    /// is refused (issues/deep-pattern-ctor-unknown-column-type.md). A
+    /// name that is no visible nullary constructor is a binder, as always.
+    fn check_classifiable(&self, pats: &[Pat], cols: Option<&[PatCol]>) -> R<()> {
+        for (j, p) in pats.iter().enumerate() {
+            match p {
+                Pat::Var { name, span } if cols.is_none() => {
+                    if let Some((ind, k)) = self.lookup_ctor(name)
+                        && ind.ctors[k].fields.is_empty()
+                    {
+                        return err(
+                            format!(
+                                "`{name}` is a constructor of `{}`, but the type of the field it is \
+                                 written at is not known here, so it cannot be told from a variable \
+                                 named `{name}`, which would match anything. Give the scrutinee its \
+                                 type where it is bound, or match this field in a `match` of its own \
+                                 inside the arm",
+                                ind.name
+                            ),
+                            *span,
+                        );
+                    }
+                }
+                Pat::Var { .. } => {}
+                Pat::Ctor { name, args, span } => {
+                    let sub = cols
+                        .and_then(|cs| cs.get(j))
+                        .and_then(|c| self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span));
+                    self.check_classifiable(args, sub.as_deref())?;
+                }
+                // A named pattern's column is found once its siblings are
+                // back in declaration order; `reclassify_at` reads it then.
+                Pat::Named { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
     fn pat_is_deep_at(&self, p: &Pat, col: Option<&PatCol>) -> bool {
         match p {
             Pat::Ctor { .. } => true,
@@ -861,7 +915,18 @@ impl Patterns<'_> {
         let ctor_name = anonymous_ctor_name(&ind, ctor_name).unwrap_or(ctor_name);
         let i = crate::inductive::arm_ctor_index(&ind, ctor_name)?;
         let ctor = &ind.ctors[i];
-        let spine = self.spine(ty, lvl, ind.ctors.len(), span).ok()?;
+        // The type as written first: an indexed family's literal index
+        // reduces the family away. Where the written type is not the
+        // declaration's shape but reduces to it, the reduced one is read:
+        // a type that arrived as an application of a carrier's argument
+        // (`M(A)` solved to `List<Nat>` for a `let x <- t;` continuation)
+        // is such a type, and without this its columns were unknown and a
+        // nullary constructor in them a binder
+        // (issues/deep-pattern-ctor-unknown-column-type.md).
+        let spine = self
+            .spine(ty, lvl, ind.ctors.len(), span)
+            .or_else(|_| self.spine(&head, lvl, ind.ctors.len(), span))
+            .ok()?;
         let mut pcx = cx.clone();
         let mut cur = (*spine.ctors[i].0).clone();
         let mut payloads = Vec::new();

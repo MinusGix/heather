@@ -350,6 +350,51 @@ theorem Site::moves_reload<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
 }
 
 // ---------------------------------------------------------------------------
+// A byte read
+
+// A byte loaded at a label, zero-extended, from a canonical address that
+// reads one.
+theorem Site::moves_load_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: ByteLoad, at: asm_back(site.program, k) = At(before, name, LoadByte(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(8)>(λ byte =>
+        (read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47)) ∧
+        ((site.data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte)) ∧ post(byte_load_after(load, byte, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + byte_load_bytes(load).len(), pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = byte_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, LoadByte(load), at, here),
+             Exists(found.witness, ByteLoadStep(canonical := BitVec::drop_low_zero_of_lt(47, 17, read_gpr(load.base, s.gprs), found.proof.left),
+                present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), byte_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A byte stored
+
+// A register's low byte stored at a label, through a plain base, to a
+// writable byte that keeps the code, which is resident when it is stored.
+theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: ByteStore, at: asm_back(site.program, k) = At(before, name, StoreByte(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
+        (site.Resident(byte_store_after(writes, store, s).memory) ∧ post(byte_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds, resident);
+        let after = byte_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(byte_store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, StoreByte(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Calls
 
 // A function at offset `entry`: entered with the stack pointer at offset `i`
@@ -372,6 +417,19 @@ theorem Site::returns_weaken<M>(self site: Site<M>, stack: Stack<M>(site.fetch, 
     returns: site.Returns(stack, entry, pre, post), implies: (i: Nat) → (s: MachineState<M>) → weaker(i, s) → pre(i, s)):
     site.Returns(stack, entry, weaker, post) {
     λ s at resident i rsp room held ret saved => returns(s, at, resident, i, rsp, room, implies(i, s, held), ret, saved)
+}
+
+// A weaker promise, from the stronger one and the room it was entered with.
+theorem Site::returns_implies<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, post, weaker: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.Returns(stack, entry, pre, post),
+    implies: (i: Nat) → (s, t: MachineState<M>) → i + 8 <= stack.size → post(i, s, t) → weaker(i, s, t)):
+    site.Returns(stack, entry, pre, weaker) {
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, implies(i, s, ran.witness, room, ran.proof.right.right.right.right)⟩⟩⟩⟩)
+    }
 }
 
 // A CALL at a label, its callee's contract given: from the call to the item

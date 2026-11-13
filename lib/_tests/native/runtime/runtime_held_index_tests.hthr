@@ -1,0 +1,196 @@
+// Probes for an array field's element at an index that is a word, in a
+// function of a laid record (`lib/native/runtime/rt_held_reflect.hthr`,
+// docs/layout-design.md §9.5): `vector_get(t.f, i.toNat(), 0)` is read by
+// the codec's checked element accessor, and `t.f := vector_update(t.f,
+// i.toNat(), x)` stored by it. The code tests the index against the
+// array's count, so the function of the record is the total one (0 past
+// the end, nothing stored there) and no bound is proved at the call.
+// Nothing here is proved by hand: each theorem reads what the generator
+// published. An element at a literal index is `runtime_held_array_tests.hthr`.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// ---------------------------------------------------------------------------
+// Four words and a count
+
+laid(endian := BigEndian) record Sums { parts: [u32; 4], count: u64 }
+
+// An element read at a word, beside a word field.
+runtime fn Sums::part(self s: Sums, i: u64) → u64 { vector_get(s.parts, i.toNat(), 0).zero_extend(32) + s.count }
+
+// An element stored at a word.
+runtime fn Sums::put(mut self s: Sums, i, w: u64) → u64 {
+    s.parts := vector_update(s.parts, i.toNat(), w.truncate(32, 32));
+    w
+}
+
+// One element from two others, the indices computed.
+runtime fn Sums::mix(mut self s: Sums, i: u64) → u64 {
+    s.parts := vector_update(s.parts, i.toNat(), vector_get(s.parts, (i + 1).toNat(), 0) + vector_get(s.parts, (i + 2).toNat(), 0));
+    s.count := s.count + 1;
+    i
+}
+
+// Two elements stored, the inner update first.
+runtime fn Sums::swap(mut self s: Sums, i, j: u64) → u64 {
+    s.parts := vector_update(vector_update(s.parts, i.toNat(), vector_get(s.parts, j.toNat(), 0)), j.toNat(), vector_get(s.parts, i.toNat(), 0));
+    0
+}
+
+// An element stored at a numeral after a call of another function of the
+// record: the accessor's own store where that element lies, with no test.
+runtime fn Sums::seal(mut self s: Sums, i, w: u64) → u64 {
+    s.put(i, w);
+    s.parts := vector_update(vector_update(s.parts, 0, w.truncate(32, 32)), 3, i.truncate(32, 32));
+    w
+}
+
+theorem part_value(own: List<u8>, s: Sums, length, i: u64, holds: Sums::stored().Holds(own, length, s)):
+    Sums::part::bytes(own, length, i).value = vector_get(s.parts, i.toNat(), 0).zero_extend(32) + s.count {
+    sym(Sums::part::runs_held(own, s, length, i, holds).value)
+}
+
+theorem put_holds(own: List<u8>, s: Sums, length, i, w: u64, holds: Sums::stored().Holds(own, length, s)):
+    Sums::stored().Holds(Sums::put::bytes(own, length, i, w).after, length, s with { parts = vector_update(s.parts, i.toNat(), w.truncate(32, 32)) }) {
+    Sums::put::runs_held(own, s, length, i, w, holds).holds
+}
+
+theorem mix_held(own: List<u8>, s: Sums, length, i: u64, holds: Sums::stored().Holds(own, length, s)):
+    Agrees<Sums, u64>(Sums::stored(), length, Sums::mix(s, i), Sums::mix::bytes(own, length, i)) {
+    Sums::mix::runs_held(own, s, length, i, holds)
+}
+
+theorem swap_held(own: List<u8>, s: Sums, length, i, j: u64, holds: Sums::stored().Holds(own, length, s)):
+    Agrees<Sums, u64>(Sums::stored(), length, Sums::swap(s, i, j), Sums::swap::bytes(own, length, i, j)) {
+    Sums::swap::runs_held(own, s, length, i, j, holds)
+}
+
+// On bytes: the third word is stored most significant byte first, eight
+// bytes in; past the count nothing is stored and 0 is read.
+def SUMS_BYTES: List<u8> = [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 16];
+
+theorem put_bytes(): Sums::put::bytes(SUMS_BYTES, 24, 2, 0x0102).after = [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 1, 2, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
+
+theorem put_past(): Sums::put::bytes(SUMS_BYTES, 24, 4, 0x0102).after = SUMS_BYTES { refl }
+
+theorem part_bytes(): Sums::part::bytes(SUMS_BYTES, 24, 3).value = 20 { refl }
+
+theorem part_past(): Sums::part::bytes(SUMS_BYTES, 24, 4).value = 16 { refl }
+
+// `seal` on bytes: element 1 by the checked store, then 0 and 3 by their own.
+theorem seal_bytes(): Sums::seal::bytes(SUMS_BYTES, 24, 1, 9).after = [0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
+
+theorem swap_bytes(): Sums::swap::bytes(SUMS_BYTES, 24, 0, 3).after = [0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
+
+// ---------------------------------------------------------------------------
+// A loop over an array: each word from the third on is the sum of the two
+// before it, the shape of a message schedule.
+
+laid(endian := BigEndian) record Sched { w: [u64; 8], rounds: u64 }
+
+runtime fn Sched::expand(mut self s: Sched, t: u64) → u64
+    decreases (8 - t).toNat() {
+    if h: t < 8 {
+        s.w := vector_update(s.w, t.toNat(), vector_get(s.w, (t - 1).toNat(), 0) + vector_get(s.w, (t - 2).toNat(), 0));
+        s.expand(t + 1)
+    } else {
+        s.rounds
+    }
+}
+
+theorem expand_held(own: List<u8>, s: Sched, length, t: u64, holds: Sched::stored().Holds(own, length, s)):
+    Agrees<Sched, u64>(Sched::stored(), length, Sched::expand(s, t), Sched::expand::bytes(own, length, t)) {
+    Sched::expand::runs_held(own, s, length, t, holds)
+}
+
+// On bytes, from two ones: the loop stores six words, each read back by
+// the passes after it.
+def SCHED_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+theorem expand_bytes(): Sched::expand::bytes(SCHED_BYTES, 72, 2).after = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+// A literal index is `vector_index`'s (`runtime_held_array_tests.hthr`).
+// expect-error: at an index that is not a word's `toNat()`
+runtime fn Sums::third(self s: Sums) → u64 { vector_get(s.parts, 2, 0).zero_extend(32) }
+
+// expect-error: with a value past the end that is not 0
+runtime fn Sums::padded(self s: Sums, i: u64) → u64 { vector_get(s.parts, i.toNat(), 7).zero_extend(32) }
+
+// ---------------------------------------------------------------------------
+// A byte of an array of words
+
+// A byte of the array's bytes replaced at a word: one checked store of a
+// byte, where the word store is four.
+runtime fn Sums::tag(mut self s: Sums, i, b: u64) → u64 {
+    s.parts := vector_with_byte_be(s.parts, i.toNat(), b.truncate(8, 56));
+    i
+}
+
+theorem tag_held(own: List<u8>, s: Sums, length, i, b: u64, holds: Sums::stored().Holds(own, length, s)):
+    Agrees<Sums, u64>(Sums::stored(), length, Sums::tag(s, i, b), Sums::tag::bytes(own, length, i, b)) {
+    Sums::tag::runs_held(own, s, length, i, b, holds)
+}
+
+// On bytes: byte 6 is the third byte of the second word, and nothing is
+// stored past the array's sixteen bytes, where the count lies.
+theorem tag_bytes(): Sums::tag::bytes(SUMS_BYTES, 24, 6, 0xab).after = [0, 0, 0, 1, 0, 0, 0xab, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
+theorem tag_past(): Sums::tag::bytes(SUMS_BYTES, 24, 16, 0xab).after = SUMS_BYTES { refl }
+// And at the record: the second word with its third byte replaced.
+theorem tag_word(): vector_with_byte_be([1, 2, 3, 4], 6, BitVec::ofNat(0xab)) = [1, 0xab02, 3, 4] { refl }
+
+// A byte at a numeral is not read as a store yet.
+// expect-error: a byte of the array field `parts` at an index that is not a word's `toNat()`
+runtime fn Sums::tag_sixth(mut self s: Sums, b: u64) → u64 {
+    s.parts := vector_with_byte_be(s.parts, 6, b.truncate(8, 56));
+    b
+}

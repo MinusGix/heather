@@ -5,7 +5,7 @@ labels: [native,metaprogramming,elaboration]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-12
 ---
 
 `runtime fn mix` in `mix.hthr` is refused: "the generated `mix::rt` was
@@ -30,3 +30,7 @@ binding outside, or qualified-only), and let the generated group publish.
 
 - `runtime fn mix` checks in `mix.hthr`, and `compile-x86 mix.hthr mix`
   compiles it.
+
+## Log
+
+- 2026-11-12: Met again writing SHA-256's compress (2026-11-12): a `runtime fn sha256_compress` in `sha256_compress.hthr`, and one function `sha256_round` in a module that imported `sha256_round.hthr`. Two things worth keeping. The refusal is the generator's last step, so it shows only once everything before it passes: here that was after a day spent on [[runtime-link-compares-functions]], with the name clash waiting behind it; a check of the function's name against the modules in scope at the head of the generator would say it first. And the clash is with any module in scope of that name, not only the function's own file. The module is `sha256_block.hthr` and the round `sha256_step` for this reason.

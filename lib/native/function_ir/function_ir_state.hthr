@@ -5,19 +5,24 @@
 //
 // A `BufferLoad` reads a byte of the file and a `BufferStore` writes one, in
 // schedule order: for byte nodes on one buffer the schedule is an order,
-// not only a validation aid. Every other node, and every call, leaves the
-// file as it was; a conditional runs the arm its bit picks, and a loop
-// carries the file from pass to pass. A function a region calls sees no
-// buffers: a callee is `eval`ed on words.
+// not only a validation aid. Every other node leaves the file as it was; a
+// conditional runs the arm its bit picks, and a loop carries the file from
+// pass to pass. A call is answered over the file as it is when the call is
+// made, with a word and the file its callee leaves (`Writers`), and the
+// statement after it starts from that file
+// (docs/native-one-compiler-design.md §2.6): which of its buffers a callee
+// sees, and what it gives back, is the caller's to say
+// (`program_writers`, function_ir_placeless).
 //
 // `eval` stays the word evaluator S4's lowering and compile-x86's
-// certificates are stated over, and it is `run` from no buffers, where a
-// load reads zero and a store has nowhere to land
-// (`StructuredRegion::run_empty`). S4 lowers to registers only and refuses
-// the byte nodes; the native compiler, which keeps every buffer in memory,
-// compiles them (`native_compile`).
+// certificates are stated over: a region that stores nothing, its callees
+// leaving the file, runs as it evaluates over the file
+// (`StructuredRegion::run_quiet`, function_ir_run). S4 lowers to registers
+// only and refuses the byte nodes; the native compiler, which keeps every
+// buffer in memory, compiles them (`native_compile`).
 import function_ir;
 import function_ir_eval;
+import nat_map;
 import bitvec;
 import bool;
 import list;
@@ -34,6 +39,27 @@ fn low_byte(word: BitVec(64)) → BitVec(8) { word.take_low(8, 56) }
 // Byte `index` of buffer `buffer` set to `byte`, where the buffer has one.
 fn store_byte(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8)) → Buffers() {
     buffers.update(buffer, λ bytes => bytes.update(index, λ _ => byte))
+}
+
+// A store sets its byte of its buffer, where the buffer has one, and
+// leaves every other buffer.
+theorem buffer_bytes_stored(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8)):
+    buffer_bytes(store_byte(buffers, buffer, index, byte), buffer) =
+        buffer_bytes(buffers, buffer).update(index, λ (_: BitVec(8)) => byte) {
+    let set = λ (bytes: List<BitVec(8)>) => bytes.update(index, λ (_: BitVec(8)) => byte);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    (match buffers.nth(buffer) as λ found => buffers.nth(buffer) = found →
+        read(buffers.update(buffer, set).nth(buffer)) = set(read(found)) {
+        None => λ none => cong_fn(read, buffers.nth_update_none(buffer, set, none)),
+        Some(bytes) => λ some => cong_fn(read, buffers.nth_update_here(buffer, set, bytes, some)),
+    })(refl)
+}
+
+theorem buffer_bytes_store_other(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8), other: Nat, differs: buffer ≠ other):
+    buffer_bytes(store_byte(buffers, buffer, index, byte), other) = buffer_bytes(buffers, other) {
+    let set = λ (bytes: List<BitVec(8)>) => bytes.update(index, λ (_: BitVec(8)) => byte);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +221,28 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
 // ---------------------------------------------------------------------------
 // Structured regions
 
-fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → State {
+// What a call is answered with: the word returned and the file left.
+record Ending { word: BitVec(64), buffers: Buffers() }
+
+// Callees that may write: each answers a call made over a file.
+fn Writers() → Type { Buffers() → Nat → List<BitVec(64)> → Ending }
+
+// The words such callees return over one file, as an evaluation is
+// answered (`Answers`).
+fn Writers::words(call: Writers(), held: Buffers()) → Answers() { λ f words => call(held, f, words).word }
+
+// Callees that leave every file as it was.
+fn Writers::Quiet(call: Writers()) → Type { (held: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → call(held, f, words).buffers = held }
+
+// Callees that read: each answers a call over a file with a word.
+fn Readers() → Type { Buffers() → Answers() }
+
+// Callees that read, as callees that may write and do not.
+fn Readers::quiet(call: Readers()) → Writers() { λ held f words => Ending(call(held, f, words), held) }
+
+theorem Readers::quiet_quiet(call: Readers()): Writers::Quiet(Readers::quiet(call)) { λ held f words => refl }
+
+fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values: Valuation(), buffers: Buffers()) → State {
     match region {
         Dataflow(body) => run_nodes(body.nodes, values, buffers),
         Sequence(prefix, continuation) => {
@@ -214,50 +261,20 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values:
                 False => when_false.run(call, values, buffers).buffers,
                 True => when_true.run(call, values, buffers).buffers,
             }),
-        Call(callee, arguments, result) => State(Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))), buffers),
+        // A call over views: the callee runs on the windows, and what it leaves in
+        // a written one is put back.
+        Lend(views, callee, arguments, result) => {
+            let bound = run_nodes(views_nodes(views), values, buffers);
+            shared(call(viewed(views, bound.values, bound.buffers), callee, words_of(bound.values, views_homes(views) ++ arguments)), λ (answer: Ending) =>
+                State(Valuation::set(bound.values, result, word_value(answer.word)), put_views(views, bound.values, answer.buffers, bound.buffers)))
+        },
+        // The callee is run once, whoever reads its word or its file.
+        Call(callee, arguments, result) => shared(call(buffers, callee, words_of(values, arguments)), λ (answer: Ending) =>
+            State(Valuation::set(values, result, word_value(answer.word)), answer.buffers)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers);
             State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted, bit_value(end.end.exhausted)), end.buffers)
-        },
-    }
-}
-
-// The theorem: from no buffers a region runs as it evaluates.
-theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Answers()): (values: Valuation()) →
-    region.run(call, values, Nil) = State(region.eval(call, values), Nil) {
-    match region {
-        Dataflow(body) => λ values => run_nodes_empty(body.nodes, values),
-        Sequence(prefix, continuation) => λ values => j(sym(run_nodes_empty(prefix.nodes, values)),
-            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, eval_nodes(prefix.nodes, values)), Nil),
-            continuation.run_empty(call, eval_nodes(prefix.nodes, values))),
-        Compose(prefix, continuation) => λ values => j(sym(prefix.run_empty(call, values)),
-            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, prefix.eval(call, values)), Nil),
-            continuation.run_empty(call, prefix.eval(call, values))),
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ values => {
-            let b = values(1, condition).head_bit();
-            let nil_either: ((match b as λ _ => Buffers() { False => Nil, True => Nil }) = Nil) =
-                match b { False => refl, True => refl };
-            j(sym(when_false.run_empty(call, values)), λ f _ => State(λ w id => match b {
-                        False => f.values(w, id),
-                        True => when_true.run(call, values, Nil).values(w, id),
-                    }, match b { False => f.buffers, True => when_true.run(call, values, Nil).buffers }) =
-                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
-                j(sym(when_true.run_empty(call, values)), λ t _ => State(λ w id => match b {
-                            False => when_false.eval(call, values)(w, id),
-                            True => t.values(w, id),
-                        }, match b { False => Nil, True => t.buffers }) =
-                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
-                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
-                        nil_either)))
-        },
-        Call(_, _, _) => λ values => refl,
-        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values => {
-            let step = λ (pass: Valuation()) => body.eval(call, pass);
-            let ended = loop_run_empty(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step,
-                λ v => body.run_empty(call, v), parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
-            cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
-                bit_value(end.end.exhausted)), end.buffers), ended)
         },
     }
 }

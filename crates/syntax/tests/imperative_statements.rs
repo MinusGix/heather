@@ -200,3 +200,115 @@ fn a_method_call_on_a_mutable_local_is_claimed_by_its_block() {
     let parsed = format!("{:?}", parse_file("fn f(c: C) -> Nat { let a = c.tick(1); a }").unwrap());
     assert!(!parsed.contains("\\0mut"), "{parsed}");
 }
+
+#[test]
+fn a_branch_that_ends_a_block_updates_the_blocks_locals() {
+    // The arms of a tail `if`/`match` are the block's last statements, so
+    // they assign its `let mut` locals (docs/sequencing-surface-design.md
+    // §19.1), through an arm's own tail too.
+    for src in [
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { x := 2; x } else { x } }",
+        "fn f(o: O) -> Nat { let mut x = 1; match o { A => { x := 2; x }, B => 0 } }",
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { let y = 3; if d { x := y; x } else { y } } else { x } }",
+        "fn f(c: Bool) -> Nat { let y = { let mut x = 1; if c { x := 2; x } else { x } }; y }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        for marker in ["\\0mut", "\\0assign", "\\0stmt", "\\0unit"] {
+            assert!(!parsed.contains(marker), "{src} keeps {marker}");
+        }
+    }
+    for src in [
+        // The branch does not end the block that declared the local.
+        "fn f(c: Bool) -> Nat { let mut x = 1; let y = if c { x := 2; x } else { x }; y }",
+        // The arm's pattern binds the name: it is the pattern's there.
+        "fn f(o: O) -> Nat { let mut x = 1; match o { A(x) => { x := 2; x }, B => x } }",
+        // So does the equation's name.
+        "fn f(o: O) -> Nat { let mut h = 1; match h: o { A => { h := 2; 0 }, B => 0 } }",
+        // Shadowed by a plain `let` in the arm.
+        "fn f(c: Bool) -> Nat { let mut x = 1; if c { let x = 5; x := 2; x } else { x } }",
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains("is not mutable"), "{src}: {}", error.msg);
+    }
+}
+
+#[test]
+fn a_mut_self_body_that_ends_in_a_branch_returns_its_receiver_per_arm() {
+    let count = |src: &str, what: &str| {
+        format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg))).matches(what).count()
+    };
+    // An arm assigns the receiver: each arm ends in its own `Mutated`
+    // (§19.2), beside the one in the result type.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { c := g(c); 1 } else { 0 } }", "\"Mutated\""), 3);
+    // So does a call on it, as a statement or bound.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { c.tick(1); 1 } else { 0 } }", "\"Mutated\""), 3);
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { let a = c.tick(1); a } else { 0 } }", "\"Mutated\""), 3);
+    // And through an arm's own tail: three ends.
+    assert_eq!(
+        count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { if d { c.tick(1); 1 } else { 2 } } else { 0 } }", "\"Mutated\""),
+        4
+    );
+    // No arm touches the receiver: one `Mutated` round the branch, so the
+    // receiver after the call does not wait on which arm runs.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { c.tick(1); if b { 1 } else { 0 } }", "\"Mutated\""), 2);
+    // An arm that rebinds the receiver's name does not return that name.
+    assert_eq!(count("fn C::f(mut self c: C, b: Bool) -> Nat { if b { let c = 5; c } else { 0 } }", "\"Mutated\""), 2);
+    // A branch with a written motive is a value.
+    assert_eq!(
+        count("fn C::f(mut self c: C, n: Nat) -> Nat { match n as λ z => Nat { Zero => 0, Succ(k) => k } }", "\"Mutated\""),
+        2
+    );
+}
+
+#[test]
+fn a_mut_self_methods_own_call_at_its_end_is_the_whole_result() {
+    let parsed = |src: &str| format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+    // The method's own call on the receiver, where it ends an arm: the
+    // record the body returns, with no `Mutated` round it.
+    let own = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { c.tick(k); c.f(k) } } }");
+    assert_eq!(own.matches("\\0mutated_whole").count(), 1, "{own}");
+    assert_eq!(own.matches("\"Mutated\"").count(), 2, "{own}");
+    // An arm that is the bare call.
+    let bare = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => c.f(k) } }");
+    assert_eq!(bare.matches("\\0mutated_whole").count(), 1, "{bare}");
+    // Another method's call there is bound as before, its two parts read.
+    let other = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { c.tick(k); c.g(k) } } }");
+    assert!(!other.contains("\\0mutated_whole"), "{other}");
+    // So is the method's name called on another local.
+    let elsewhere = parsed("fn C::f(mut self c: C, n: Nat) -> Nat { let mut d = c; d.f(n) }");
+    assert!(!elsewhere.contains("\\0mutated_whole"), "{elsewhere}");
+}
+
+#[test]
+fn a_field_path_of_a_mutable_local_is_a_place() {
+    let parsed = |src: &str| format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+    // `x.f := e` assigns `x` the record with the field replaced, and a path
+    // of two fields nests the update.
+    let one = parsed("fn f(p: P) -> P { let mut q = p; q.left := 1; q }");
+    assert_eq!(one.matches("RecordUpdate").count(), 1, "{one}");
+    let two = parsed("fn f(p: P) -> P { let mut q = p; q.inner.left := 1; q }");
+    assert_eq!(two.matches("RecordUpdate").count(), 2, "{two}");
+    // A method called on a field of a mutable local is a candidate its
+    // block claims; on a field of anything else it is an ordinary call.
+    let call = parsed("fn f(p: P) -> P { let mut q = p; q.left.tick(1); q }");
+    assert_eq!(call.matches("\\0mutated").count(), 1, "{call}");
+    let fixed = parsed("fn f(p: P) -> Nat { let n = p.left.tick(1); n }");
+    assert!(!fixed.contains("\\0mut"), "{fixed}");
+    // In a `mut self` body's tail arm, a bare call on a field of the
+    // receiver is bound first, and the arm returns the receiver.
+    let arm = parsed("fn P::f(mut self p: P, b: Bool) -> Nat { match b { True => p.left.tick(1), False => 0 } }");
+    // (The declared result and one per arm.)
+    assert_eq!(arm.matches("\"Mutated\"").count(), 3, "{arm}");
+    assert_eq!(arm.matches("#tail").count(), 2, "{arm}");
+    // The method's own name called on a field is not the body's own call.
+    let field = parsed("fn P::f(mut self p: P, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => p.left.f(k) } }");
+    assert!(!field.contains("\\0mutated_whole"), "{field}");
+    // What is no place: a path through a call or an index, and a place
+    // whose local is not mutable.
+    for src in ["fn f(p: P) -> Nat { let mut q = p; q.left.get() := 1; 0 }", "fn f(p: P) -> Nat { let mut q = p; q.items[0] := 1; 0 }"] {
+        let error = parse_file(src).expect_err(src);
+        assert!(error.msg.contains("only a place is assigned"), "{src}: {}", error.msg);
+    }
+    let error = parse_file("fn f(p: P) -> Nat { p.left := 1; 0 }").expect_err("an immutable local's field");
+    assert!(error.msg.contains("is not mutable"), "{}", error.msg);
+}

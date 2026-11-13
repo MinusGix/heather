@@ -1,0 +1,195 @@
+// Probes for a function of a laid record that calls another
+// (`lib/native/runtime/rt_held_reflect.hthr`, "The walk";
+// `lib/native/runtime/runtime.hthr`, "A function of a laid record"): the
+// callee is the code the callee's own `runtime fn` compiled, called on the
+// span's place and its length word, and the caller's theorem is read off
+// the callee's (`m::runs_held`), which is all it knows of the callee.
+// Nothing here is proved by hand: each theorem restates or reads what the
+// generator published.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+
+// ---------------------------------------------------------------------------
+// Two words and a function of them that another calls.
+
+laid(endian := BigEndian) record Tally { count: u64, total: u64 }
+
+runtime fn Tally::bump(mut self t: Tally, by: u64) → u64 {
+    t.count := t.count + by;
+    t.count
+}
+
+// A body that ends in the call: what the call leaves and answers are the
+// body's.
+runtime fn Tally::once(mut self t: Tally, x: u64) → u64 { t.bump(x) }
+
+// The call's word used, and a field read after it: the field as the call
+// left it.
+runtime fn Tally::then(mut self t: Tally, x: u64) → u64 {
+    let v = t.bump(x);
+    v + t.count
+}
+
+// A store before each call, the second from the first call's word and
+// the field as that call left it; a field read before the first call and
+// again after it is read twice.
+runtime fn Tally::twice(mut self t: Tally, x: u64) → u64 {
+    t.total := t.total + x;
+    let once = t.bump(x);
+    t.total := t.total + once;
+    let again = t.bump(once);
+    again + t.count
+}
+
+// A caller of a caller.
+runtime fn Tally::thrice(mut self t: Tally, x: u64) → u64 {
+    let a = t.twice(x);
+    t.bump(a)
+}
+
+// A value of the record as it was before a call, used after it: the code
+// reads the field before the call.
+runtime fn Tally::kept(mut self t: Tally, x: u64) → u64 {
+    let before = t.count + 1;
+    let a = t.bump(x);
+    t.total := before;
+    a
+}
+
+// A call before a branch, and in one arm of it.
+runtime fn Tally::either(mut self t: Tally, x: u64) → u64 {
+    let a = t.bump(x);
+    if a.unsigned_lt_bit(x) {
+        t.bump(a)
+    } else {
+        t.total := a;
+        a
+    }
+}
+
+// Every field replaced between two calls, each by the first call's word.
+runtime fn Tally::reset(mut self t: Tally, x: u64) → u64 {
+    let a = t.bump(x);
+    t.count := a;
+    t.total := a;
+    t.bump(x)
+}
+
+// What is published, restated: the code over the span agrees with the
+// function of the record, which names the callee's function of the
+// record and never its code.
+theorem twice_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::twice(t, x), Tally::twice::bytes(own, length, x)) {
+    Tally::twice::runs_held(own, t, length, x, holds)
+}
+
+theorem thrice_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::thrice(t, x), Tally::thrice::bytes(own, length, x)) {
+    Tally::thrice::runs_held(own, t, length, x, holds)
+}
+
+// Read out: the record the span is left holding, and the word.
+theorem once_holds(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::stored().Holds(Tally::once::bytes(own, length, x).after, length, t with { count = t.count + x }) {
+    Tally::once::runs_held(own, t, length, x, holds).holds
+}
+
+theorem then_value(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::then::bytes(own, length, x).value = t.count + x + (t.count + x) {
+    sym(Tally::then::runs_held(own, t, length, x, holds).value)
+}
+
+theorem kept_holds(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::stored().Holds(Tally::kept::bytes(own, length, x).after, length, Tally(t.count + x, t.count + 1)) {
+    Tally::kept::runs_held(own, t, length, x, holds).holds
+}
+
+// The programs: a callee is one function of its caller's program, with
+// what it calls. `bump`'s is its code and four accessors' functions, a
+// caller's is that and itself, and a caller's caller's one more.
+theorem bump_program(): Tally::bump::program.len() = 5 { refl }
+
+theorem twice_program(): Tally::twice::program.len() = 6 { refl }
+
+theorem thrice_program(): Tally::thrice::program.len() = 7 { refl }
+
+theorem twice_runs(span: List<u8>, rest: List<List<u8>>, place, length, x: u64):
+    program_run(Tally::twice::program, Cons(span, rest), 5, [place, length, x]) = FTm::end_of(rest, Tally::twice::bytes(span, length, x)) {
+    Tally::twice::runs_over(span, rest, place, length, x)
+}
+
+// On bytes: a count of 1 and a total of 2, and `twice` at 3.
+def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
+
+theorem twice_bytes(): Tally::twice::bytes(TALLY_BYTES, 16, 3) = Mutated([0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 9], 16) { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+runtime fn Tally::get(self t: Tally) → u64 { t.count }
+
+// expect-error: which only reads the record, is not reflected yet
+runtime fn Tally::peek(mut self t: Tally, x: u64) → u64 {
+    let a = t.get();
+    t.bump(a)
+}
+
+// expect-error: a record a function left behind is built on again
+runtime fn Tally::back(self t: Tally, x: u64) → Mutated<Tally, u64> {
+    let m = Tally::bump(t, x);
+    Mutated(t, m.value)
+}
+
+fn Tally::plain(mut self t: Tally, by: u64) → u64 {
+    t.total := t.total + by;
+    t.total
+}
+
+// expect-error: which is not a function of the record compiled as one
+runtime fn Tally::uncompiled(mut self t: Tally, x: u64) → u64 { t.plain(x) }

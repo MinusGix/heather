@@ -544,7 +544,85 @@ which compiles the scanner's loop and is the smaller half of the export
 contract); fixed arrays and tables in the
 pure fragment (the whole of `compress` in Heather, and the automaton as a
 table); then the write half and SHA-256 behind a switch in `crates/cache`.
-The read half's design is written and waits on Minus
-(`docs/native-library-exports-design.md`, with its rounds R1 to R3 in §10
-there).
+The read half's design is written (`docs/native-library-exports-design.md`).
+Minus's answer (2026-11-11) was "unify first and then export": the program
+compiler and the function compiler are joined first, in the rounds of
+`docs/native-one-compiler-design.md`, and the export is the last of them.
+Its first two rounds are built (2026-11-11): a function's contract states
+the stores it may make, and a `write-elf` program calls functions compiled
+into the same file.
+
+
+**2026-11-12, the compression function whole** (the export round's end,
+`docs/native-library-exports-design.md`). SHA-256's compress is one linked
+function over two spans its caller lends
+(`lib/native/crypto/sha256_block.hthr`, `heather_linked::sha256::block`):
+the schedule, the sixty-four rounds and the final sums are compiled
+Heather, and only the padding is Rust's.
+
+- **The state is bytes of a context**, not words: the hash value, the
+  working variables and the schedule in one span of 320 bytes, each word
+  read and stored most significant byte first. A function passes six
+  words, so the eight working variables could not be values
+  (`issues/function-call-past-six-words.md`); a round reads what it needs
+  from the span and stores two words back after moving seven. That is
+  slower than the word functions under a Rust loop and it is the shape
+  that needed nothing new from the compiler.
+- **The constants are a tree of comparisons**, sixty-four leaves found by
+  halving, held to the specification's table by one evaluated theorem
+  (`lib/_tests/native/crypto/sha256_block_tests.hthr`). A table in the
+  pure fragment is still `issues/rt-fixed-arrays-and-tables.md`.
+- **What it found** was in the generator's link check, not the compiler:
+  two functions of one Heather type were being told apart by evaluating
+  both (`issues/runtime-link-compares-functions.md`). The library now
+  orders what the kernel compares so that data comes first; the rule that
+  would make it not depend on an order is that issue's.
+- **What is not proved**: that the Heather function is `Sha2::compress`.
+  The word functions' theorems are there to compose; the loops over the
+  span are what the proof has to walk, and it is a hand proof, so it
+  waits for a decision (`issues/sha2-compress-native.md`). Until then the
+  claim is the tests': the standard's vectors, an independent
+  implementation at every length through the padding boundaries, and a
+  transcription of the Heather function in Rust compared byte for byte on
+  spans of every shorter length.
+
+**The same day, the hash whole.** `sha256_init`, `sha256_update` and
+`sha256_finish` (`lib/native/crypto/sha256_stream.hthr`,
+`heather_linked::sha256::stream`) take a message in parts over the same
+context and eight bytes more for the count. The streaming buffer C2
+expected in Rust is not there: a block is assembled a byte at a time where
+the compression function reads it, so a part that ends inside a block
+leaves its bytes in the context, and the padding is compiled Heather too.
+What Rust holds is the bytes it lends. Each export is its own program
+until an entry of a shared one can be lent a span
+(`issues/linked-program-entries-limits.md`), so the compression function
+is in the crate once per export that reaches it.
+
+Next for this lane: the agreement proof, or SHA-256 behind a switch in
+`crates/cache` with the tests as its evidence
+(`issues/sha256-linked-into-cache.md`); both are Minus's to order, since
+the second puts unproved-against-the-specification code under every cache
+key. The linked type has the cache's three calls, so the switch itself is
+small; its speed is unmeasured and will be well below the Rust path's.
+
+The same day, the switch and the source. `HEATHER_LEXER=linked` has the
+`heather` binary cut every source with Heather's own scanner, compiled and
+linked into it; the Rust lexer still reads each token's value from the
+token's span and still answers alone wherever the scanner refuses, so
+nothing a user sees changes, and `HEATHER_LEXER_REPORT` is the one way to
+see who cut what. The lexer takes the scanner as a function and does not
+depend on the crate that links it (`issues/self-lexer-linked.md`). Off by
+default: the speed is unmeasured and values are still Rust's.
+
+Minus read the SHA-256 modules and asked what would make them elegant. A
+probe showed the generator already takes `u64` and `u8`, numerals, the
+arithmetic, shift and bitwise operators and `if a < b` inside a
+`runtime fn`; the SHA-256 modules were respelled with them. What the language does not have yet is in
+`issues/sha256-context-type.md`: the loops' hand proofs
+(`decreases-word-measures-by-hand`), a symbol for exclusive or (`⊕`, with
+`~` for complement, decided), width-suffixed literals (`42u64`, decided;
+no bare `42u`), measured recursion in a method, and then the larger parts
+that make the context a type: a record laid out over a span, a span as one
+value, 32-bit words, tables, and calls past six words. The context type is
+this route's next step after the switch.
 

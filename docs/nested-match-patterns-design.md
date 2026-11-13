@@ -248,6 +248,22 @@ spine. Thus a stored field written `A` in `Outer<A>`, instantiated at
 scrutinee's own type. This type information is used only for classification.
 The generated decision tree and every lowerer remain unchanged.
 
+The spine is read from the type as written, and where that is not the
+declaration's shape but reduces to it, from the reduced type. The second
+reading is not an optimisation. A type that arrives as an application, the
+carrier applied to its argument for the variable of a `let x <- t;`, or a
+type a function computes (`Maybe(List<Nat>)`), has no spine as written,
+and before 2026-11-12 its columns were therefore unknown and every nullary
+constructor in them a binder: `Cons(c, Nil)` matched each non-empty list,
+with no diagnostic (`issues/deep-pattern-ctor-unknown-column-type.md`).
+
+Where a column's type cannot be read at all, a bare identifier that is a
+visible nullary constructor's name is **refused**, not read as a binder:
+there is no classification to make, and the wrong guess is silent. The
+refusal names the constructor and its type and says to give the scrutinee
+its type or to match the field in the arm. A name that is no constructor
+stays a binder.
+
 ## 4. Decision 2: the `_` arm
 
 ```

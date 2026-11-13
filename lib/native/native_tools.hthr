@@ -3,13 +3,19 @@
 // `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native-procedures-design.md), written with the builder
-// (`native_build`) and lowered to sources `heather write-elf` compiles.
+// (`native_build`) and lowered to sources `heather write-elf` compiles;
+// tr through a word function it calls (`native_tool_words`) and through
+// one that rewrites the buffer it is lent, and `wc -l` through a function
+// lent the buffer (`native_tool_spans`).
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
 // source the tool lowers to).
 import native_build;
 import native_decimal;
 import native_source;
+import native_tool_words;
+import native_tool_words_program;
+import native_tool_spans;
 import list;
 import bitvec;
 import string;
@@ -47,6 +53,35 @@ fn tr_upper(capacity: Nat) → Tool {
 
 fn tr_upper_tool() → Tool { tr_upper(256) }
 
+// tr once more, each byte through `raise_letter` (native_tool_words): a
+// call, in the bounded loop, of a function compiled into the same file by
+// the function compiler (docs/native-one-compiler-design.md §2.2). The
+// tool's program is the one `heather reflect` wrote of it.
+fn raise_bytes_called(buf: Buf, count: Val) → Calc {
+    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c => fresh(num(0), λ r =>
+        call(0, [c.get()], r).then(buf.store(i.get(), r.get())))))
+}
+
+fn tr_upper_called(capacity: Nat) → Tool {
+    program(raise_letter_native_program(), buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
+        compute(raise_bytes_called(buf, n.get())) ++ write_all(stdout(), buf, n.get())))))
+}
+
+fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
+
+// tr a third time, the loop itself a function: each read's bytes raised by
+// `raise_span` (native_tool_spans), a `runtime fn` that is lent the
+// buffer, stores into it and calls `raise_word` on each byte. The write
+// after the call sends the buffer as the function left it
+// (docs/native-one-compiler-design.md §2.6; `raise_span_called` is what
+// the call is in the tool's meaning).
+fn tr_upper_span(capacity: Nat) → Tool {
+    program(raise_span_program(), buffer(capacity, λ buf => run(local(num(0), λ raised => each_read(stdin(), buf, λ n =>
+        compute(call(raise_span_entry(), [n.get(), num(0)], raised)) ++ write_all(stdout(), buf, n.get()))))))
+}
+
+fn tr_upper_span_tool() → Tool { tr_upper_span(256) }
+
 // ---------------------------------------------------------------------------
 // yes
 
@@ -77,6 +112,28 @@ fn head_c(count, capacity: Nat) → Tool {
 fn head_c10_tool() → Tool { head_c(10, 256) }
 
 // ---------------------------------------------------------------------------
+// tail -c +K
+
+// The input from its byte `start` on, counted from 0 (GNU's `+K` is
+// `start + 1`). The bytes of a read past those still to skip are a line of
+// the buffer read into: `copy_window` (native_tool_spans) copies it to the
+// same place of a second buffer, and it is written from there. The
+// statement lends its two buffers whole and the function lends the two
+// windows on to its loop (docs/native-library-exports-design.md §3.1), so
+// this is the tool whose call is over a line of a buffer; `tail` itself
+// needs no copy. A read that ends before the bytes to skip do is a line
+// that ends before it starts, which copies nothing and answers 0.
+fn tail_c_window(start, capacity: Nat) → Tool {
+    program(copy_window_program(), buffer(capacity, λ out => buffer(capacity, λ text => run(
+        local(num(start), λ skip => local(num(0), λ copied => each_read(stdin(), text, λ n =>
+            compute(call(copy_window_entry(), [skip.get(), n.get()], copied))
+                ++ when(copied.get(), write_span(stdout(), out, skip.get(), copied.get(), λ _ => exit(num(1))))
+                ++ skip.set(skip.get() + copied.get() - n.get()))))))))
+}
+
+fn tail_c7_window_tool() → Tool { tail_c_window(6, 256) }
+
+// ---------------------------------------------------------------------------
 // wc -l
 
 // The input's newlines counted, the count the exit status (Linux keeps its
@@ -89,6 +146,21 @@ fn wc_l(capacity: Nat) → Tool {
 }
 
 fn wc_l_tool() → Tool { wc_l(256) }
+
+// wc -l once more, each read's newlines counted by `count_newlines`
+// (native_tool_spans): a `runtime fn` lent the buffer, compiled into the
+// same file by the function compiler and passed the buffer's address and
+// capacity by the call (docs/native-one-compiler-design.md §2.3). The
+// function reads the bytes the read left in the program's buffer, and the
+// call's answer is the Heather function's at them
+// (`count_newlines_called`).
+fn wc_l_called(capacity: Nat) → Tool {
+    program(count_newlines_program(), buffer(capacity, λ buf => run(local(num(0), λ lines => local(num(0), λ found =>
+        each_read(stdin(), buf, λ n => compute(call(count_newlines_entry(), [n.get()], found)) ++ lines.set(lines.get() + found.get()))
+        ++ exit(lines.get()))))))
+}
+
+fn wc_l_called_tool() → Tool { wc_l_called(256) }
 
 // ---------------------------------------------------------------------------
 // echo

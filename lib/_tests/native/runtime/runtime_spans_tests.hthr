@@ -1,0 +1,175 @@
+// Probes of the `Compile` class at a function lent a span
+// (lib/native/runtime/runtime.hthr; docs/native-one-compiler-design.md
+// §2.3, U3c step 3): the instance holds one code, and its agreement is
+// stated at every file, so the code run over a file returns what the
+// function does at that file's span. Two instances are built by hand here,
+// through the same `Setup::compile` and `Setup::compile_measured` the
+// generator cites: a read of one byte, pinned by conversion at every file,
+// and a loop over the span, its `Guarded` from the function's own `ext` and
+// `irrel`. The reflections are written by hand (the reflector's round is
+// next). Tests, not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// One byte of a span, widened: a span parameter, then its length word.
+
+fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte_within(length, i).zero_extend(56) }
+
+// Its reflection: the span's home is two words, its place and its length,
+// before the index (variable 0; the length is variable 1).
+fn peek_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 1), Prim(Zext(8, 56), [0])), 1) }
+
+fn peek_base() → World { World(RecInfo::none, [], trivial) }
+
+// The instance. The pin is `refl` at every file: the reflection's meaning
+// at the file `f` reads `f`'s span 0, which is what `peek` is handed.
+fn peek_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
+    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f => refl, refl, refl)
+}
+
+instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
+    reflected := peek_compile().reflected,
+    world := peek_compile().world,
+    callees := peek_compile().callees,
+    typed := peek_compile().typed,
+    code := peek_compile().code,
+    agrees := peek_compile().agrees,
+    fits := peek_compile().fits,
+}
+
+// Read through the class: over any file, at any place and length word, the
+// code returns `peek` of the file's span.
+theorem peek_compiled(f: Buffers(), call: Answers(), place, length, i: BitVec(64)):
+    peek_compile().code.eval(call, [place, length, i], buffers := f) = peek(f.span(0), length, i) {
+    peek_compile().agrees(f, call, Tm::calls_agree_none_over(RecInfo::none, f, call), place, length, i)
+}
+
+// The instance is found by search, keyed on the function.
+fn code_of<F>(g: F, c: Compile<F>(g) := infer) → Function { c.code }
+
+theorem peek_found(): code_of(peek) = peek_compile().code { refl }
+
+// It runs: the second byte of three, and nothing past the length word.
+fn abc() → List<BitVec(8)> { [b(97), b(98), b(99)] }
+
+theorem peek_abc(): program_eval_over([abc()], [code_of(peek)], 0, [w(4096), w(3), w(1)]) = w(98) { refl }
+theorem peek_abc_short(): program_eval_over([abc()], [code_of(peek)], 0, [w(4096), w(1), w(1)]) = w(0) { refl }
+
+// ---------------------------------------------------------------------------
+// The newlines of a span from `i`, added to `acc`: a loop over the span.
+
+fn count_from(span: List<BitVec(8)>, length, i, acc: BitVec(64)) → BitVec(64) decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => acc,
+        True => count_from(span, length, i.add(BitVec::ofNat(1)), match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            False => acc,
+            True => acc.add(BitVec::ofNat(1)),
+        }),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// Its reflection (lib/_tests/native/runtime/rt_span_loops_tests.hthr spells
+// the environment line by line): four words, the home first.
+fn count_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), IfEq(0,
+        Let(Byte(0, 2, 3), Let(Lit(Word(8), 10), Let(Prim(Eq(8), [1, 0]), Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]),
+            Let(If(2, Prim(Add(64), [6, 1]), Var(6)), Call(0, [10, 9, 1, 0]))))))),
+        Var(1)))
+}
+
+fn count_words() → List<Ty> { [Word(64), Word(64), Word(64), Word(64)] }
+
+fn count_sigs() → List<Sig> { [Sig(count_words(), Word(64))] }
+
+// The function as its code's four words see it at a span: where the span
+// lies is not the function's to read.
+fn count_at(span: List<BitVec(8)>) → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64) {
+    λ place length i acc => count_from(span, length, i, acc)
+}
+
+// The table at a file: entry 0 is the function at the file's span.
+fn count_callees(f: Buffers()) → Sig::Sems(RecInfo::none, count_sigs()) { Pair(count_at(f.span(0)), trivial) }
+
+fn count_base() → World { World(RecInfo::none, count_sigs(), count_callees(Nil)) }
+
+fn count_measure(ys: List<BitVec(64)>) → Nat { ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat() }
+
+// The loop's statement as the generator proves it (`Fun::GuardedBy`): the
+// worlds are the files as they stand and the recursion is keyed by the
+// span, since `count_from::ext` asks its two recursions to agree at every
+// span; a pass at a file is at the file's span 0.
+fn count_in_words(span: List<BitVec(8)>, ys: List<BitVec(64)>) → BitVec(64) { Ty::uncurry(RecInfo::none, count_words(), Word(64), count_at(span), ys) }
+
+theorem count_guarded(): Fun::GuardedBy(count_words(), Word(64), count_body(), λ (f: Buffers()) => count_base().at(count_callees, f),
+    λ (f: Buffers()) => count_at(f.span(0)), λ (f: Buffers()) => f.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure) {
+    λ f place length i acc again hyp => sym(count_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+        λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
+            count_from::rec(length.sub(i).toNat(), s, y1, y2, y3, p),
+        λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) _ => again(s, [place, y1, y2, y3]),
+        λ s y1 y2 y3 p q => trans(count_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, y3, p,
+                nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
+            sym(hyp(s, [place, y1, y2, y3], refl, p))),
+        f.span(0), length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat())))
+}
+
+// The instance. `Guarded` at a file is the statement's at that file, with
+// the function spelled at the file's span 0, which is the function at the
+// file: the body's meaning stands at one world on both sides, and only the
+// two spellings of the function are compared.
+fn count_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64)>(count_from) {
+    Setup::compile_measured(Setup::default(), [Word(64), Word(64)], Word(64), [Word(64)], Word(64), count_body(), 1, count_base(),
+        count_callees, count_from, λ f => refl, refl, count_measure, λ place length i acc => BitVec::toNat_lt_pow(64, length.sub(i)),
+        λ f => Fun::guarded_by(count_words(), Word(64), count_body(), λ (g: Buffers()) => count_base().at(count_callees, g),
+            λ (g: Buffers()) => count_at(g.span(0)), λ (g: Buffers()) => g.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure,
+            λ g ys => refl, count_guarded(), f),
+        refl)
+}
+
+// Over any file, lent at any place with any length word, the one code
+// counts as the function does at the file's span, wherever its own entry
+// of the table is answered with it.
+theorem count_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(count_base().at(count_callees, f), call),
+    place, length, i, acc: BitVec(64)):
+    count_compile().code.eval(call, [place, length, i, acc], buffers := f) = count_from(f.span(0), length, i, acc) {
+    count_compile().agrees(f, call, agree, place, length, i, acc)
+}
+
+// The code is the one the step 2 probes lower by evaluation, and it runs.
+theorem count_code_lowered(): Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_body(), Word(64), count_base(), 1)
+    = Some(count_compile().code) { refl }
+
+theorem count_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_compile().code], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+
+// So at that file the function's value is the code's, with no evaluation of
+// the function: the newlines of the file.
+theorem count_at_file(call: Answers(), agree: Tm::CallsAgree(count_base().at(count_callees, [[b(10), b(97), b(10), b(10)]]), call)):
+    count_compile().code.eval(call, [w(4096), w(4), w(0), w(0)], buffers := [[b(10), b(97), b(10), b(10)]])
+        = count_from([b(10), b(97), b(10), b(10)], w(4), w(0), w(0)) {
+    count_compiled([[b(10), b(97), b(10), b(10)]], call, agree, w(4096), w(4), w(0), w(0))
+}

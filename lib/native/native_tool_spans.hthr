@@ -1,0 +1,217 @@
+// Functions over a buffer they are lent, which the builder's tools call
+// (docs/native-one-compiler-design.md §2.3): `runtime fn`s whose first
+// parameter is a span of bytes, compiled into the tool's file by the
+// function compiler and passed the buffer by the call
+// (`Prog::function_call`). Each is a Heather function, and its program is
+// proved to compute it at every file (`f::agrees_over`,
+// lib/native/runtime/runtime.hthr); what a tool's call of it answers is
+// stated below from that. `raise_span` stores into the buffer: it is a
+// `runtime fn` over the span it writes, and its program is proved to run
+// to it at every file (`f::runs_over`,
+// docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
+// span what it reads of another: the span after the written one is lent to
+// read, and the statement is at every file, the span read being the file's
+// next. `List::raise_letters` is `raise_span` as a method of its span, the
+// one export named by a method's path. `copy_window` calls `copy_span` over
+// a window of each of its spans (docs/native-library-exports-design.md
+// §3.1): the loop runs from its own index 0 over two windows and is told
+// nothing of where in the spans they lie.
+// The probes are lib/_tests/native/native_tool_spans_tests.hthr.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import native_tool_words;
+import native_tool_words_program;
+
+// The newlines among the span's bytes from `i` to below `count`, added to
+// `acc`. A byte is read under the span's own length word, so one past the
+// span's end counts as none.
+runtime fn newlines_from(span: List<BitVec(8)>, length, count, i, acc: BitVec(64)) → BitVec(64) decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => acc,
+        True => newlines_from(span, length, count, i.add(BitVec::ofNat(1)), match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            False => acc,
+            True => acc.add(BitVec::ofNat(1)),
+        }),
+    }
+}
+
+// count_newlines(span, length, count): how many of the span's first
+// `count` bytes are newlines.
+runtime fn count_newlines(span: List<BitVec(8)>, length, count: BitVec(64)) → BitVec(64) {
+    newlines_from(span, length, count, BitVec::ofNat(0), BitVec::ofNat(0))
+}
+
+// The program a tool calls it in, and its place there: the loop first, as
+// the function compiler asks of a callee.
+fn count_newlines_program() → List<Function> { count_newlines::program }
+fn count_newlines_entry() → Nat { 1 }
+
+// The word a tool's call answers: the function, at the first buffer the
+// tool holds and that buffer's size, whatever the buffer's address. `held`
+// is the tool's buffers as they are at the call.
+theorem count_newlines_answers(held: Buffers(), count: BitVec(64)):
+    program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
+        = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
+    match held {
+        Nil => count_newlines::agrees_over(Nil, BitVec::zero(), BitVec::ofNat(0), count),
+        Cons(bytes, rest) => count_newlines::agrees_over([bytes], BitVec::zero(), BitVec::ofNat(bytes.len()), count),
+    }
+}
+
+// What the call is in a tool's meaning (`program_writers`): that word, and
+// the tool's buffers as they were, since the program stores nothing.
+theorem count_newlines_called(held: Buffers(), count: BitVec(64)):
+    program_writers(count_newlines_program())(held, count_newlines_entry(), [count])
+        = Ending(count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count), held) {
+    trans(program_writers_quiet(count_newlines_program(), trivial, held, count_newlines_entry(), [count]),
+        cong_fn<BitVec(64), Ending>(λ word => Ending(word, held), count_newlines_answers(held, count)))
+}
+
+// ---------------------------------------------------------------------------
+// A function that writes the buffer it is lent
+
+// `raise_letter` (native_tool_words) as a function the generator compiles:
+// a byte raised to upper case where it is a lower-case ASCII letter.
+runtime fn raise_word(c: BitVec(64)) → BitVec(64) {
+    match c.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { True => c.sub(BitVec::ofNat(32)), False => c }
+}
+
+theorem raise_word_is(c: BitVec(64)): raise_word(c) = raise_letter(c) { refl }
+
+// raise_span(span, length, count, i): each of the span's bytes from `i` to
+// below `count` put through `raise_word` and stored back, answering the
+// index it stopped at. A byte is read and stored under the span's own
+// length word, so a count past the span's end stores nothing past it.
+runtime fn raise_span(span: List<BitVec(8)>, length, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => Mutated(span, i),
+        True => {
+            let mut span = span;
+            span.put_within(length, i, raise_word(span.byte_within(length, i).zero_extend(56)).truncate(8, 56));
+            raise_span(span, length, count, i.add(BitVec::ofNat(1)))
+        },
+    }
+}
+
+// The program a tool calls it in, and its place there: `raise_word` first,
+// as the function compiler asks of a callee.
+fn raise_span_program() → List<Function> { raise_span::program }
+fn raise_span_entry() → Nat { 1 }
+
+// What the call is in a tool's meaning (`program_writers`): the function
+// at the first buffer the tool holds and that buffer's size, whatever the
+// buffer's address. It answers the function's word and leaves the tool's
+// buffers with the first as the function left it.
+theorem raise_span_called(bytes: List<BitVec(8)>, rest: Buffers(), count, i: BitVec(64)):
+    program_writers(raise_span_program())(Cons(bytes, rest), raise_span_entry(), [count, i])
+        = Ending(raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).value,
+            Cons(raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).after, rest)) {
+    cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(bytes, rest))),
+        raise_span::runs_over(bytes, [], BitVec::zero(), BitVec::ofNat(bytes.len()), count, i))
+}
+
+// `raise_span` as a method of the span it stores into: the store is a call
+// on the receiver and the loop's own call ends the branch, so nothing
+// threads the span by hand. It is exported by its path
+// (crates/linked/generated/EXPORTS.tsv), under the symbol the path derives,
+// `list_raise_letters` (issues/linked-export-of-a-method.md).
+runtime fn List::raise_letters(mut self text: List<u8>, length, count, i: u64) → u64 decreases (count - i).toNat() {
+    if h: i < count {
+        text.put_within(length, i, raise_word(text.byte_within(length, i).zero_extend(56)).truncate(8, 56));
+        text.raise_letters(length, count, i + 1)
+    } else {
+        i
+    }
+}
+
+// copy_span(out, length, text, size, count, i): the bytes of `text` from
+// `i` to below `count` stored at their own indices in `out`, answering the
+// index it stopped at. A byte is read under `text`'s length word and stored
+// under `out`'s: past the end of `text` the byte stored is zero, and
+// nothing is stored past the end of `out`.
+runtime fn copy_span(out: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => Mutated(out, i),
+        True => {
+            let mut out = out;
+            out.put_within(length, i, text.byte_within(size, i));
+            copy_span(out, length, text, size, count, i.add(BitVec::ofNat(1)))
+        },
+    }
+}
+
+// Its program is the loop alone. Over any file, at any addresses: the
+// function at the file's first span, reading the second, the rest left.
+fn copy_span_program() → List<Function> { copy_span::program }
+fn copy_span_entry() → Nat { 0 }
+
+theorem copy_span_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, from, size, count, i: BitVec(64)):
+    program_run(copy_span_program(), Cons(out, rest), copy_span_entry(), [place, length, from, size, count, i])
+        = FTm::end_of(rest, copy_span(out, length, rest.span(0), size, count, i)) {
+    copy_span::runs_over(out, rest, place, length, from, size, count, i)
+}
+
+// copy_window(out, length, text, size, from, end): the bytes of `text`
+// from `from` to below `end` stored at their own indices in `out`,
+// answering how many: `end - from`, or 0 with nothing stored where `end`
+// is past either span's length word or before `from`. The three tests
+// are what makes the two windows windows; the copying is `copy_span`'s,
+// lent the windows, with the part it wrote put back where its window
+// starts.
+runtime fn copy_window(out: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match length.unsigned_lt_bit(end) {
+        True => Mutated(out, BitVec::ofNat(0)),
+        False => match size.unsigned_lt_bit(end) {
+            True => Mutated(out, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(out, BitVec::ofNat(0)),
+                False => {
+                    let done = copy_span(out.window(from.toNat(), end.toNat()), end.sub(from), text.window(from.toNat(), end.toNat()), end.sub(from),
+                        end.sub(from), BitVec::ofNat(0));
+                    Mutated(out.put_window(from.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+// Its program is the caller and the loop it lends to. Over any file, at
+// any addresses: the function at the file's first span, reading the
+// second, the rest left.
+fn copy_window_program() → List<Function> { copy_window::program }
+fn copy_window_entry() → Nat { 1 }
+
+theorem copy_window_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, at, size, from, end: BitVec(64)):
+    program_run(copy_window_program(), Cons(out, rest), copy_window_entry(), [place, length, at, size, from, end])
+        = FTm::end_of(rest, copy_window(out, length, rest.span(0), size, from, end)) {
+    copy_window::runs_over(out, rest, place, length, at, size, from, end)
+}

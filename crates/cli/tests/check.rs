@@ -41,6 +41,85 @@ fn bad_file_prints_all_diagnostics_exit_one() {
     assert!(err.contains("bad.hthr: 3 errors"), "{err}");
 }
 
+fn heather_with(lexer: Option<&str>, args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_heather"));
+    command.current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).args(args).env_remove("HEATHER_LEXER");
+    command.env("HEATHER_LEXER_REPORT", "1");
+    if let Some(lexer) = lexer {
+        command.env("HEATHER_LEXER", lexer);
+    }
+    command.output().expect("run heather")
+}
+
+/// What `HEATHER_LEXER_REPORT` printed, and stderr without it.
+fn lexer_report(out: &Output) -> (String, String) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (report, rest): (Vec<&str>, Vec<&str>) = stderr.lines().partition(|line| line.starts_with("lexer: "));
+    assert_eq!(report.len(), 1, "{stderr}");
+    (report[0].to_string(), rest.join("\n"))
+}
+
+/// `HEATHER_LEXER=linked` runs every source through Heather's own scanner,
+/// compiled and linked into the binary, and nothing a user sees changes:
+/// the same verdicts and the same diagnostics, a good file, a bad one and
+/// an import closure alike (`issues/self-lexer-linked.md`). The report is
+/// how the test knows the scanner ran at all.
+#[test]
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn the_linked_lexer_changes_nothing_but_who_cuts_the_tokens() {
+    for args in [&["check", "good.hthr"][..], &["check", "bad.hthr"], &["check", "root.hthr"], &["check", "good.hthr", "warning.hthr"]] {
+        let rust = heather_with(None, args);
+        let linked = heather_with(Some("linked"), args);
+        assert_eq!(rust.status.code(), linked.status.code(), "{args:?}");
+        assert_eq!(String::from_utf8_lossy(&rust.stdout), String::from_utf8_lossy(&linked.stdout), "{args:?}");
+        let ((rust_report, rust_err), (linked_report, linked_err)) = (lexer_report(&rust), lexer_report(&linked));
+        assert_eq!(rust_err, linked_err, "{args:?}");
+        assert_eq!(rust_report, "lexer: the Rust lexer (no scanner installed)");
+        // Every source lexes, so every one is the scanner's cut.
+        let cut: u64 = linked_report
+            .strip_prefix("lexer: the linked scanner cut ")
+            .and_then(|rest| rest.strip_suffix(" sources; 0 were left to the Rust lexer"))
+            .unwrap_or_else(|| panic!("{args:?}: {linked_report}"))
+            .parse()
+            .expect("a count");
+        assert!(cut >= 1, "{args:?}: {linked_report}");
+    }
+}
+
+/// A source that does not lex is the Rust lexer's to refuse, so the message
+/// and its place are the same with the switch on.
+#[test]
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn the_linked_lexer_leaves_a_refusal_to_the_rust_lexer() {
+    let dir = std::env::temp_dir().join(format!("heather-linked-lexer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a directory");
+    let file = dir.join("unlexable.hthr");
+    std::fs::write(&file, "theorem t(): 1 = 1 { refl }\ntheorem u(): 2 = 2 { re`fl }\n").expect("write");
+    let path = file.to_str().expect("a path");
+    let rust = heather_with(None, &["check", path]);
+    let linked = heather_with(Some("linked"), &["check", path]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(rust.status.code(), Some(1), "{}", String::from_utf8_lossy(&rust.stderr));
+    assert_eq!(linked.status.code(), Some(1));
+    let ((_, rust_err), (linked_report, linked_err)) = (lexer_report(&rust), lexer_report(&linked));
+    assert!(rust_err.contains("unlexable.hthr:2:"), "{rust_err}");
+    assert_eq!(rust_err, linked_err);
+    assert!(!linked_report.ends_with(" 0 were left to the Rust lexer"), "{linked_report}");
+}
+
+/// A value the switch does not know is said, and the Rust lexer runs.
+#[test]
+fn an_unknown_lexer_is_a_warning_and_the_rust_lexer() {
+    let out = heather_with(Some("heather"), &["check", "good.hthr"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "good.hthr: ok\n");
+    let (report, rest) = lexer_report(&out);
+    assert_eq!(rest, "warning: HEATHER_LEXER=heather: expected `linked` or `rust`; using the Rust lexer");
+    assert_eq!(report, "lexer: the Rust lexer (no scanner installed)");
+    let out = heather_with(Some("rust"), &["check", "good.hthr"]);
+    assert_eq!(lexer_report(&out), ("lexer: the Rust lexer (no scanner installed)".to_string(), String::new()));
+}
+
 #[test]
 fn several_files_check_independently() {
     // The bad file must not stop the good one from being checked, and the

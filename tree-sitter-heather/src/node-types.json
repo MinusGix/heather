@@ -5528,6 +5528,10 @@
             "named": true
           },
           {
+            "type": "record_declaration",
+            "named": true
+          },
+          {
             "type": "theorem_declaration",
             "named": true
           },

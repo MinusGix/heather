@@ -1,0 +1,1086 @@
+// A function reads and writes a buffer it is lent
+// (docs/native-one-compiler-design.md §2.3, §2.6;
+// docs/native-library-exports-design.md §3 to §5): what the lowering of a
+// `BufferLoad` and of a `BufferStore` needs that is not a machine run.
+//
+// A buffer has a home in the scope that reads it: two of the scope's
+// values, its address and its length (`Lent`). In a function they are
+// parameters by position (`lent_homes`), and a loop carries them as state
+// its passes do not change (`Carried`). A load is `MOVZX` from the address
+// plus the index, with no check of its own: it is accepted where the path
+// knows the index is below the length, that is, in the arm of a conditional
+// whose bit is that comparison (`File::bounded`). Otherwise the lowering
+// refuses, and the language above writes the check (`rt`'s `Get` does).
+// A store is a byte `MOV` to the same address under the same check, of a
+// value a register holds, and then the load of the byte it left, which is
+// what its output names (`File::store_at`).
+//
+// The machine runs of the load and of the store are in
+// `function_ir_lower_calls` (`load_emits`, `store_emits`), beside the frame
+// they run in.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_structured;
+import x86_64;
+import x86_64_store;
+import x86_64_block;
+import x86_64_data_read;
+import x86_64_kept;
+import x86_64_asm;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// A buffer's home
+
+// Buffer `buffer`'s home in a scope: the value that is its address and the
+// value that is its length.
+record Lent { buffer: Nat, base: Nat, length: Nat }
+
+// Where buffer `buffer` lies: zero for one the caller named no address for,
+// which a span of no bytes is lent at.
+fn address_of(addresses: List<BitVec(64)>, buffer: Nat) → BitVec(64) {
+    match addresses.nth(buffer) { None => BitVec::zero(), Some(address) => address }
+}
+
+fn Lent::Holds(self home: Lent, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    (values(64, home.base) = address_of(addresses, home.buffer)) ∧
+        (values(64, home.length) = BitVec::ofNat(buffer_bytes(buffers, home.buffer).len()))
+}
+
+fn HomesHold(homes: List<Lent>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match homes {
+        Nil => True,
+        Cons(home, rest) => home.Holds(values, addresses, buffers) ∧ HomesHold(rest, values, addresses, buffers),
+    }
+}
+
+theorem homes_hold_append(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), first: List<Lent>):
+    (second: List<Lent>) → HomesHold(first, values, addresses, buffers) → HomesHold(second, values, addresses, buffers) →
+    HomesHold(first ++ second, values, addresses, buffers) {
+    match first {
+        Nil => λ second _ later => later,
+        Cons(_, rest) => λ second here later =>
+            ⟨here.left, homes_hold_append(values, addresses, buffers, rest, second, here.right, later)⟩,
+    }
+}
+
+// A home says where its buffer lies and how long it is, and nothing else
+// of the file: homes hold over any file as long, buffer for buffer.
+theorem homes_hold_shaped(values: Valuation(), addresses: List<BitVec(64)>, from, to: Buffers(),
+    same: (b: Nat) → buffer_bytes(from, b).len() = buffer_bytes(to, b).len(), homes: List<Lent>):
+    HomesHold(homes, values, addresses, from) → HomesHold(homes, values, addresses, to) {
+    match homes {
+        Nil => λ _ => trivial,
+        Cons(home, rest) => λ held =>
+            ⟨⟨held.left.left, trans(held.left.right, cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), same(home.buffer)))⟩,
+             homes_hold_shaped(values, addresses, from, to, same, rest, held.right)⟩,
+    }
+}
+
+// Inside its length a buffer has the byte the meaning reads.
+theorem nth_or_zero(bytes: List<BitVec(8)>): (k: Nat) → k < bytes.len() →
+    bytes.nth(k) = Some(match bytes.nth(k) { None => BitVec::zero(), Some(byte) => byte }) {
+    match bytes {
+        Nil => λ k no => false_elim(no),
+        Cons(_, rest) => λ k => match k {
+            Zero => λ _ => refl,
+            Succ(j) => λ inside => nth_or_zero(rest, j, inside),
+        },
+    }
+}
+
+theorem buffer_byte_at(buffers: Buffers(), buffer, k: Nat):
+    k < buffer_bytes(buffers, buffer).len() → buffer_bytes(buffers, buffer).nth(k) = Some(buffer_byte(buffers, buffer, k)) {
+    match buffers.nth(buffer) as λ found => k < List::len<BitVec(8)>(match found { None => [], Some(bytes) => bytes }) →
+        List::nth<BitVec(8)>(match found { None => [], Some(bytes) => bytes }, k) = Some(match found {
+            None => BitVec::zero(),
+            Some(bytes) => match bytes.nth(k) { None => BitVec::zero(), Some(byte) => byte },
+        }) {
+        None => λ no => false_elim(no),
+        Some(bytes) => λ inside => nth_or_zero(bytes, k, inside),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The function's homes: its first parameters, two a buffer
+
+fn lent_homes(parameters: List<Nat>, count, buffer: Nat) → List<Lent> {
+    match count {
+        Zero => [],
+        Succ(more) => match parameters {
+            Nil => [],
+            Cons(base, after) => match after {
+                Nil => [],
+                Cons(length, rest) => Cons(Lent(buffer, base, length), lent_homes(rest, more, Succ(buffer))),
+            },
+        },
+    }
+}
+
+// The argument words of a call that lends `count` buffers from `buffer`
+// on: each one's address, then its length.
+fn ArgsLent(count: Nat) → Nat → List<BitVec(64)> → List<BitVec(64)> → Buffers() → Type {
+    match count {
+        Zero => λ _ _ _ _ => True,
+        Succ(more) => λ buffer arguments addresses buffers => match arguments {
+            Nil => False,
+            Cons(base, after) => match after {
+                Nil => False,
+                Cons(length, rest) => (base = address_of(addresses, buffer)) ∧
+                    ((length = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) ∧ ArgsLent(more, Succ(buffer), rest, addresses, buffers)),
+            },
+        },
+    }
+}
+
+theorem lent_homes_hold(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), count: Nat):
+    (parameters: List<Nat>) → (buffer: Nat) → ArgsLent(count, buffer, words_of(values, parameters), addresses, buffers) →
+    HomesHold(lent_homes(parameters, count, buffer), values, addresses, buffers) {
+    match count {
+        Zero => λ parameters buffer _ => trivial,
+        Succ(more) => λ parameters buffer => match parameters {
+            Nil => λ _ => trivial,
+            Cons(base, after) => match after {
+                Nil => λ _ => trivial,
+                Cons(length, rest) => λ lent =>
+                    ⟨⟨lent.left, lent.right.left⟩, lent_homes_hold(values, addresses, buffers, more, rest, Succ(buffer), lent.right.right)⟩,
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In bounds: what the path knows
+
+// `id` set says `index` is below `length`.
+fn bounds(op: CompareOp, left, right, index, length: Nat) → Bool {
+    match op { Below => left.same(index) && right.same(length), Less => False, Same => False }
+}
+
+theorem below_known(values: Valuation(), id, index, length: Nat, holds: CompareOp::Holds(function_ir_lower::Below, values, id, index, length),
+    set: values(1, id).head_bit() = True): values(64, index).toNat() < values(64, length).toNat() {
+    let bit: (values(64, index).unsigned_lt_bit(values(64, length)) = True) =
+        trans(sym(BitVec::head_bit_ofBool(values(64, index).unsigned_lt_bit(values(64, length)))),
+            trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), sym(holds)), set));
+    BitVec::borrow_sub_bit_true_iff(64, values(64, index), values(64, length)).mp(bit)
+}
+
+theorem bounds_sound(values: Valuation(), op: CompareOp, id, left, right, index, length: Nat):
+    bounds(op, left, right, index, length).IsTrue() → op.Holds(values, id, left, right) → values(1, id).head_bit() = True →
+    values(64, index).toNat() < values(64, length).toNat() {
+    match op {
+        Below => λ both below set => {
+            let sides = Bool::is_true_and(left.same(index), right.same(length), both);
+            let at_left = left.same_sound(index, eq_true_of_is_true(left.same(index), sides.left));
+            let at_right = right.same_sound(length, eq_true_of_is_true(right.same(length), sides.right));
+            j(at_left, λ i _ => values(64, i).toNat() < values(64, length).toNat(),
+                j(at_right, λ l _ => values(64, left).toNat() < values(64, l).toNat(), below_known(values, id, left, right, below, set)))
+        },
+        Less => λ no _ _ => false_elim(no),
+        Same => λ no _ _ => false_elim(no),
+    }
+}
+
+// The bit `id`, which the path knows set, is such a comparison.
+fn truth_bounds(all: List<Known>, id, index, length: Nat) → Bool {
+    match known_comparison(all, id) {
+        None => False,
+        Some(compared) => bounds(compared.op, compared.left, compared.right, index, length),
+    }
+}
+
+theorem truth_bounds_sound(values: Valuation(), all: List<Known>, id, index, length: Nat):
+    truth_bounds(all, id, index, length).IsTrue() → KnownHold(values, all) → values(1, id).head_bit() = True →
+    values(64, index).toNat() < values(64, length).toNat() {
+    (match known_comparison(all, id) as λ found => known_comparison(all, id) = found →
+        (match found { None => False, Some(compared) => bounds(compared.op, compared.left, compared.right, index, length) }).IsTrue() →
+        KnownHold(values, all) → values(1, id).head_bit() = True → values(64, index).toNat() < values(64, length).toNat() {
+        None => λ _ no _ _ => false_elim(no),
+        Some(compared) => λ found ok holds set => bounds_sound(values, compared.op, id, compared.left, compared.right, index, length, ok,
+            known_comparison_holds(values, id, compared, all, found, holds), set),
+    })(refl)
+}
+
+fn known_bounded(all, known: List<Known>, index, length: Nat) → Bool {
+    match known {
+        Nil => False,
+        Cons(here, rest) => match here {
+            Constant(_, _) => known_bounded(all, rest, index, length),
+            Compared(_, _, _, _) => known_bounded(all, rest, index, length),
+            Truth(id) => truth_bounds(all, id, index, length) || known_bounded(all, rest, index, length),
+            Falsity(_) => known_bounded(all, rest, index, length),
+        },
+    }
+}
+
+theorem known_bounded_sound(values: Valuation(), all: List<Known>, index, length: Nat, holds: KnownHold(values, all), known: List<Known>):
+    known_bounded(all, known, index, length).IsTrue() → KnownHold(values, known) →
+    values(64, index).toNat() < values(64, length).toNat() {
+    match known {
+        Nil => λ no _ => false_elim(no),
+        Cons(here, rest) => match here {
+            Constant(_, _) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
+            Compared(_, _, _, _) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
+            Truth(id) => λ ok part =>
+                match Bool::is_true_or(truth_bounds(all, id, index, length), known_bounded(all, rest, index, length), ok) {
+                    Inl(now) => truth_bounds_sound(values, all, id, index, length, now, holds, part.left),
+                    Inr(later) => known_bounded_sound(values, all, index, length, holds, rest, later, part.right),
+                },
+            Falsity(_) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
+        },
+    }
+}
+
+// Some arm taken on the way here tested `index` below `length`.
+fn File::bounded(self file: File, index, length: Nat) → Bool { known_bounded(file.known, file.known, index, length) }
+
+theorem File::bounded_sound(self file: File, values: Valuation(), gprs: Gprs, index, length: Nat,
+    represents: file.Represents(values, gprs), bounded: file.bounded(index, length).IsTrue()):
+    values(64, index).toNat() < values(64, length).toNat() {
+    known_bounded_sound(values, file.known, index, length, represents.right, file.known, bounded, represents.right)
+}
+
+// ---------------------------------------------------------------------------
+// At most: what the path knows from an arm taken where a bit is clear
+
+// `id` clear says `low` is at most `high`: the bit is `high` below `low`.
+fn at_most(op: CompareOp, left, right, low, high: Nat) → Bool {
+    match op { Below => left.same(high) && right.same(low), Less => False, Same => False }
+}
+
+theorem not_below_known(values: Valuation(), id, left, right: Nat, holds: CompareOp::Holds(function_ir_lower::Below, values, id, left, right),
+    clear: values(1, id).head_bit() = False): values(64, right).toNat() <= values(64, left).toNat() {
+    let bit: (values(64, left).unsigned_lt_bit(values(64, right)) = False) =
+        trans(sym(BitVec::head_bit_ofBool(values(64, left).unsigned_lt_bit(values(64, right)))),
+            trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), sym(holds)), clear));
+    match values(64, left).toNat().lt_or_ge(values(64, right).toNat()) {
+        Inl(below) => absurd(trans(sym(BitVec::borrow_sub_bit_true_iff(64, values(64, left), values(64, right)).mpr(below)), bit)),
+        Inr(not_below) => not_below,
+    }
+}
+
+theorem at_most_sound(values: Valuation(), op: CompareOp, id, left, right, low, high: Nat):
+    at_most(op, left, right, low, high).IsTrue() → op.Holds(values, id, left, right) → values(1, id).head_bit() = False →
+    values(64, low).toNat() <= values(64, high).toNat() {
+    match op {
+        Below => λ both below clear => {
+            let sides = Bool::is_true_and(left.same(high), right.same(low), both);
+            let at_left = left.same_sound(high, eq_true_of_is_true(left.same(high), sides.left));
+            let at_right = right.same_sound(low, eq_true_of_is_true(right.same(low), sides.right));
+            j(at_left, λ h _ => values(64, low).toNat() <= values(64, h).toNat(),
+                j(at_right, λ l _ => values(64, l).toNat() <= values(64, left).toNat(), not_below_known(values, id, left, right, below, clear)))
+        },
+        Less => λ no _ _ => false_elim(no),
+        Same => λ no _ _ => false_elim(no),
+    }
+}
+
+// The bit `id`, which the path knows clear, is such a comparison.
+fn falsity_at_most(all: List<Known>, id, low, high: Nat) → Bool {
+    match known_comparison(all, id) {
+        None => False,
+        Some(compared) => at_most(compared.op, compared.left, compared.right, low, high),
+    }
+}
+
+theorem falsity_at_most_sound(values: Valuation(), all: List<Known>, id, low, high: Nat):
+    falsity_at_most(all, id, low, high).IsTrue() → KnownHold(values, all) → values(1, id).head_bit() = False →
+    values(64, low).toNat() <= values(64, high).toNat() {
+    (match known_comparison(all, id) as λ found => known_comparison(all, id) = found →
+        (match found { None => False, Some(compared) => at_most(compared.op, compared.left, compared.right, low, high) }).IsTrue() →
+        KnownHold(values, all) → values(1, id).head_bit() = False → values(64, low).toNat() <= values(64, high).toNat() {
+        None => λ _ no _ _ => false_elim(no),
+        Some(compared) => λ found ok holds clear => at_most_sound(values, compared.op, id, compared.left, compared.right, low, high, ok,
+            known_comparison_holds(values, id, compared, all, found, holds), clear),
+    })(refl)
+}
+
+fn known_at_most(all, known: List<Known>, low, high: Nat) → Bool {
+    match known {
+        Nil => False,
+        Cons(here, rest) => match here {
+            Constant(_, _) => known_at_most(all, rest, low, high),
+            Compared(_, _, _, _) => known_at_most(all, rest, low, high),
+            Truth(_) => known_at_most(all, rest, low, high),
+            Falsity(id) => falsity_at_most(all, id, low, high) || known_at_most(all, rest, low, high),
+        },
+    }
+}
+
+theorem known_at_most_sound(values: Valuation(), all: List<Known>, low, high: Nat, holds: KnownHold(values, all), known: List<Known>):
+    known_at_most(all, known, low, high).IsTrue() → KnownHold(values, known) → values(64, low).toNat() <= values(64, high).toNat() {
+    match known {
+        Nil => λ no _ => false_elim(no),
+        Cons(here, rest) => match here {
+            Constant(_, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Compared(_, _, _, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Truth(_) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Falsity(id) => λ ok part =>
+                match Bool::is_true_or(falsity_at_most(all, id, low, high), known_at_most(all, rest, low, high), ok) {
+                    Inl(now) => falsity_at_most_sound(values, all, id, low, high, now, holds, part.left),
+                    Inr(later) => known_at_most_sound(values, all, low, high, holds, rest, later, part.right),
+                },
+        },
+    }
+}
+
+// Some arm taken on the way here tested `high` below `low` and found it
+// not so: `low` is at most `high`.
+fn File::at_most(self file: File, low, high: Nat) → Bool { known_at_most(file.known, file.known, low, high) }
+
+theorem File::at_most_sound(self file: File, values: Valuation(), gprs: Gprs, low, high: Nat, represents: file.Represents(values, gprs),
+    known: file.at_most(low, high).IsTrue()): values(64, low).toNat() <= values(64, high).toNat() {
+    known_at_most_sound(values, file.known, low, high, represents.right, file.known, known, represents.right)
+}
+
+// ---------------------------------------------------------------------------
+// The address: the base placed in the destination, the index added
+
+fn address_after(moved: Lowered, destination: Gpr, base, index: Nat,
+    at: Option<FoundAt(moved.file, Held(base, Word), destination)>,
+    other: Option<Found(moved.file, Held(index, Word))>) → Option<Lowered> {
+    match at {
+        None => None,
+        Some(_) => match other {
+            None => None,
+            Some(found) => Some(Lowered([AddRR(destination, found.register)], moved.file.write(destination, None))),
+        },
+    }
+}
+
+fn File::address(self file: File, destination: Gpr, base, index: Nat) → Option<Lowered> {
+    match file.place(Held(base, Word), destination) {
+        None => None,
+        Some(moved) => moved.then_option(address_after(moved, destination, base, index,
+            moved.file.found_at(Held(base, Word), destination), moved.file.find(Held(index, Word)))),
+    }
+}
+
+// The code keeps the file's description, and leaves the sum in the
+// destination, which the file no longer names.
+fn Addressed<M>(values: Valuation(), file: File, destination: Gpr, base, index: Nat, out: Lowered) → Type {
+    (s: MachineState<M>) → file.Represents(values, s.gprs) →
+        out.file.Represents(values, execute_block_normal(out.code, s).gprs) ∧
+            (read_gpr(destination, execute_block_normal(out.code, s).gprs) = values(64, base).add(values(64, index)))
+}
+
+theorem address_then<M>(values: Valuation(), file: File, moved: Lowered, keeps: Keeps<M>(values, file, True, moved),
+    destination: Gpr, base, index: Nat, at: Option<FoundAt(moved.file, Held(base, Word), destination)>,
+    other: Option<Found(moved.file, Held(index, Word))>):
+    moved.then_option(address_after(moved, destination, base, index, at, other)).All(
+        λ (out: Lowered) => Addressed<M>(values, file, destination, base, index, out)) {
+    match at {
+        None => trivial,
+        Some(here) => match other {
+            None => trivial,
+            Some(found) => λ s represents => {
+                let x = execute_block_normal(moved.code, s);
+                let held = keeps(s, represents, trivial);
+                let sum = read_gpr(destination, x.gprs).add(read_gpr(found.register, x.gprs));
+                let left: (values(64, base) = read_gpr(destination, x.gprs)) = here.rep(values, x.gprs, held);
+                let right: (values(64, index) = read_gpr(found.register, x.gprs)) = found.at.rep(values, x.gprs, held);
+                let after: (execute_block_normal(moved.code ++ [AddRR(destination, found.register)], s).gprs =
+                    write_gpr(destination, sum, x.gprs)) =
+                    trans(cong_fn(λ (state: MachineState<M>) => state.gprs,
+                            execute_block_append<M>(moved.code, [AddRR(destination, found.register)], s)),
+                        BinaryOp::executes<M>(OpAdd, destination, found.register, x));
+                j(sym(after), λ gprs _ => moved.file.write(destination, None).Represents(values, gprs) ∧
+                        (read_gpr(destination, gprs) = values(64, base).add(values(64, index))),
+                    ⟨moved.file.represents_write(values, x.gprs, destination, None, sum, held, trivial),
+                     trans(read_gpr_after_write(destination, sum, x.gprs),
+                        sym(rewrite_both(λ (a: BitVec(64)) (b: BitVec(64)) => a.add(b), left, right)))⟩)
+            },
+        },
+    }
+}
+
+theorem File::address_addressed<M>(self file: File, values: Valuation(), destination: Gpr, base, index: Nat):
+    file.address(destination, base, index).All(λ (out: Lowered) => Addressed<M>(values, file, destination, base, index, out)) {
+    (match file.place(Held(base, Word), destination) as λ placed => MayKeep<M>(values, file, True, placed) →
+        (match placed {
+            None => None,
+            Some(moved) => moved.then_option(address_after(moved, destination, base, index,
+                moved.file.found_at(Held(base, Word), destination), moved.file.find(Held(index, Word)))),
+        }).All(λ (out: Lowered) => Addressed<M>(values, file, destination, base, index, out)) {
+        None => λ _ => trivial,
+        Some(moved) => λ keeps => address_then<M>(values, file, moved, keeps, destination, base, index,
+            moved.file.found_at(Held(base, Word), destination), moved.file.find(Held(index, Word))),
+    })(file.place_keeps<M>(values, Held(base, Word), destination))
+}
+
+// ---------------------------------------------------------------------------
+// A leaf that is one load
+
+record Load { output: Nat, buffer: Nat, index: Nat }
+
+fn Node::as_load(self node: Node) → Option<Load> {
+    match node { BufferLoad(output, buffer, index) => Some(Load(output, buffer, index)), _ => None }
+}
+
+fn leaf_load(nodes: List<Node>) → Option<Load> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match rest { Nil => node.as_load(), Cons(_, _) => None },
+    }
+}
+
+fn Load::Holds(self load: Load, values: Valuation(), buffers: Buffers()) → Type {
+    values(64, load.output) = byte_word(buffer_byte(buffers, load.buffer, values(64, load.index).toNat()))
+}
+
+theorem Node::as_load_holds(self node: Node, values: Valuation(), buffers: Buffers(), load: Load):
+    node.as_load() = Some(load) → NodeHolds(values, node, buffers := buffers) → load.Holds(values, buffers) {
+    match node {
+        BufferLoad(output, buffer, index) => λ found holds =>
+            j(found, λ o _ => o.All(λ (l: Load) => l.Holds(values, buffers)), holds),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+theorem leaf_load_holds(values: Valuation(), buffers: Buffers(), nodes: List<Node>, load: Load):
+    leaf_load(nodes) = Some(load) → NodesHoldOver(buffers, values, nodes) → load.Holds(values, buffers) {
+    match nodes {
+        Nil => λ no _ => absurd(no),
+        Cons(node, rest) => match rest {
+            Nil => λ found holds => node.as_load_holds(values, buffers, load, found, holds.left),
+            Cons(_, _) => λ no _ => absurd(no),
+        },
+    }
+}
+
+// A leaf with no load means what it means over no buffers, which is what
+// the lowering of its nodes is proved against.
+fn Node::reads_buffer(self node: Node) → Bool { match node { BufferLoad(_, _, _) => True, _ => False } }
+
+fn nodes_blind(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => !node.reads_buffer() && nodes_blind(rest) }
+}
+
+theorem Node::holds_blind(self node: Node, values: Valuation(), buffers: Buffers()):
+    (!node.reads_buffer()).IsTrue() → NodeHolds(values, node, buffers := buffers) → NodeHolds(values, node) {
+    match node {
+        BufferLoad(_, _, _) => λ no _ => false_elim(no),
+        _ => λ _ holds => holds,
+    }
+}
+
+theorem nodes_hold_blind(values: Valuation(), buffers: Buffers(), nodes: List<Node>):
+    nodes_blind(nodes).IsTrue() → NodesHoldOver(buffers, values, nodes) → NodesHold(values, nodes) {
+    match nodes {
+        Nil => λ _ _ => trivial,
+        Cons(node, rest) => λ pure holds => {
+            let both = Bool::is_true_and(!node.reads_buffer(), nodes_blind(rest), pure);
+            ⟨node.holds_blind(values, buffers, both.left, holds.left), nodes_hold_blind(values, buffers, rest, both.right, holds.right)⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The load's code
+
+// A register written that is none of `registers`.
+fn Gpr::apart(self register: Gpr, registers: List<Gpr>) → Bool {
+    match registers { Nil => True, Cons(other, rest) => !register.same(other) && register.apart(rest) }
+}
+
+theorem kept_write(registers: List<Gpr>, register: Gpr, value: BitVec(64), gprs: Gprs):
+    register.apart(registers).IsTrue() → Kept(registers, gprs, write_gpr(register, value, gprs)) {
+    match registers {
+        Nil => λ _ => trivial,
+        Cons(other, rest) => λ apart => {
+            let both = Bool::is_true_and(!register.same(other), register.apart(rest), apart);
+            ⟨write_spares(register, other, value, gprs, both.left), kept_write(rest, register, value, gprs, both.right)⟩
+        },
+    }
+}
+
+// The callee-saved registers a function may hold values in, in the order
+// it takes them. A function that saves `saves` of them at its entry and
+// restores them at its exit (`Function::emit_lent`, function_ir_lower_calls)
+// holds values in those, and its body keeps the stack pointer and the rest:
+// what every leaf's code is checked to leave.
+fn kept_order() → List<Gpr> { [R12, R13, R14, R15, Rbx, Rbp] }
+fn body_kept(saves: Nat) → List<Gpr> { Cons(Rsp, kept_order().drop(saves)) }
+
+// From one home: refused unless the path knows the index below the home's
+// length, the address forms, and nothing the body keeps is written.
+fn File::load_at(self file: File, saves: Nat, prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    match file.bounded(load.index, home.length) {
+        False => None,
+        True => match file.address(destination, home.base, load.index) {
+            None => None,
+            Some(address) => match leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
+                False => None,
+                True => Some(Emitted(At(At(prog, 0, Block(address.code)), 0, LoadByte(ByteLoad(destination, destination))),
+                    address.file.write(destination, Some(Held(load.output, Word))), placement, names)),
+            },
+        },
+    }
+}
+
+// From the first of the buffer's homes that serves: after a loop a buffer
+// has the home the loop left and the one before it, and the file holds
+// one's values.
+fn File::load_from(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, load: Load, destination: Gpr, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    match homes {
+        Nil => None,
+        Cons(home, rest) => match home.buffer.same(load.buffer) {
+            False => file.load_from(saves, prog, rest, load, destination, placement, names),
+            True => match file.load_at(saves, prog, home, load, destination, placement, names) {
+                None => file.load_from(saves, prog, rest, load, destination, placement, names),
+                Some(emitted) => Some(emitted),
+            },
+        },
+    }
+}
+
+fn File::emit_load(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, load: Load, placement: List<Place>, names: Nat) → Option<Emitted> {
+    match placement {
+        Nil => None,
+        Cons(place, rest) => match place {
+            Folded => None,
+            Saving(_) => None,
+            Into(destination) => file.load_from(saves, prog, homes, load, destination, rest, names),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A leaf that is one store (docs/native-one-compiler-design.md §2.6)
+
+record Store { output: Nat, buffer: Nat, index: Nat, value: Nat }
+
+fn Node::as_store(self node: Node) → Option<Store> {
+    match node { BufferStore(output, buffer, index, value) => Some(Store(output, buffer, index, value)), _ => None }
+}
+
+fn leaf_store(nodes: List<Node>) → Option<Store> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match rest { Nil => node.as_store(), Cons(_, _) => None },
+    }
+}
+
+// The file a store leaves.
+fn Store::after(self store: Store, values: Valuation(), before: Buffers()) → Buffers() {
+    store_byte(before, store.buffer, values(64, store.index).toNat(), low_byte(values(64, store.value)))
+}
+
+// A store over the file `before`, leaving `after` (`Node::Runs`).
+fn Store::Runs(self store: Store, values: Valuation(), before, after: Buffers()) → Type {
+    (after = store.after(values, before)) ∧
+        (values(64, store.output) = byte_word(buffer_byte(after, store.buffer, values(64, store.index).toNat())))
+}
+
+theorem Node::as_store_runs(self node: Node, values: Valuation(), before, after: Buffers(), store: Store):
+    node.as_store() = Some(store) → node.Runs(values, before, after) → store.Runs(values, before, after) {
+    match node {
+        BufferStore(_, _, _, _) => λ found runs => j(found, λ o _ => o.All(λ (st: Store) => st.Runs(values, before, after)), runs),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+theorem leaf_store_runs(values: Valuation(), before, after: Buffers(), nodes: List<Node>, store: Store):
+    leaf_store(nodes) = Some(store) → NodesRun(nodes, values, before, after) → store.Runs(values, before, after) {
+    match nodes {
+        Nil => λ no _ => absurd(no),
+        Cons(node, rest) => match rest {
+            Nil => λ found runs => j(sym(runs.proof.right), λ file _ => store.Runs(values, before, file),
+                node.as_store_runs(values, before, runs.witness, store, found, runs.proof.left)),
+            Cons(_, _) => λ no _ => absurd(no),
+        },
+    }
+}
+
+// A leaf that is one store stores into that store's buffer.
+theorem Node::as_store_stores(self node: Node, store: Store): node.as_store() = Some(store) → node.stores_to(store.buffer).IsTrue() {
+    match node {
+        BufferStore(_, buffer, _, _) => λ found =>
+            j(found, λ o _ => o.All(λ (st: Store) => buffer.same(st.buffer).IsTrue()), Bool::is_true_of_eq(buffer.same_self())),
+        _ => λ no => absurd(no),
+    }
+}
+
+theorem leaf_store_stores(nodes: List<Node>, store: Store): leaf_store(nodes) = Some(store) → nodes_store(nodes, store.buffer).IsTrue() {
+    match nodes {
+        Nil => λ no => absurd(no),
+        Cons(node, rest) => match rest {
+            Nil => λ found => Bool::is_true_or_l(node.stores_to(store.buffer), False, node.as_store_stores(store, found)),
+            Cons(_, _) => λ no => absurd(no),
+        },
+    }
+}
+
+// Into one home: refused unless the path knows the index below the home's
+// length, the address forms in the output's register, a register holds the
+// value, and nothing callee-saved is written. The byte is stored over the
+// address and loaded back, which is what the store's output names.
+fn File::store_at(self file: File, saves: Nat, prog: Prog, home: Lent, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    match file.bounded(store.index, home.length) {
+        False => None,
+        True => match file.address(destination, home.base, store.index) {
+            None => None,
+            Some(address) => match address.file.find(Held(store.value, Word)) {
+                None => None,
+                Some(source) => match (leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
+                    store_base_plain(destination) {
+                    False => None,
+                    True => Some(Emitted(At(At(At(prog, 0, Block(address.code)), 0, StoreByte(ByteStore(destination, source.register))), 0,
+                            LoadByte(ByteLoad(destination, destination))),
+                        address.file.write(destination, Some(Held(store.output, Word))), placement, names)),
+                },
+            },
+        },
+    }
+}
+
+// Into the first of the buffer's homes that serves, as a load reads from.
+fn File::store_from(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, store: Store, destination: Gpr, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    match homes {
+        Nil => None,
+        Cons(home, rest) => match home.buffer.same(store.buffer) {
+            False => file.store_from(saves, prog, rest, store, destination, placement, names),
+            True => match file.store_at(saves, prog, home, store, destination, placement, names) {
+                None => file.store_from(saves, prog, rest, store, destination, placement, names),
+                Some(emitted) => Some(emitted),
+            },
+        },
+    }
+}
+
+fn File::emit_store(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, store: Store, placement: List<Place>, names: Nat) → Option<Emitted> {
+    match placement {
+        Nil => None,
+        Cons(place, rest) => match place {
+            Folded => None,
+            Saving(_) => None,
+            Into(destination) => file.store_from(saves, prog, homes, store, destination, rest, names),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop carries a home as state its passes do not change
+
+// Buffer `buffer`'s home inside a loop: the parameters `base` and `length`,
+// at the positions `at_base` and `at_length` of the state.
+record Carried { buffer: Nat, base: Nat, length: Nat, at_base: Nat, at_length: Nat }
+
+fn nth_is(ids: List<Nat>, at, id: Nat) → Bool {
+    match ids.nth(at) { None => False, Some(here) => here.same(id) }
+}
+
+theorem nth_is_sound(ids: List<Nat>, at, id: Nat): nth_is(ids, at, id).IsTrue() → ids.nth(at) = Some(id) {
+    match ids.nth(at) as λ found => (match found { None => False, Some(here) => here.same(id) }).IsTrue() → found = Some(id) {
+        None => λ no => false_elim(no),
+        Some(here) => λ same => cong_fn(λ (x: Nat) => Some(x), here.same_sound(id, eq_true_of_is_true(here.same(id), same))),
+    }
+}
+
+theorem words_of_nth(values: Valuation(), ids: List<Nat>): (at, id: Nat) → ids.nth(at) = Some(id) →
+    words_of(values, ids).nth(at) = Some(values(64, id)) {
+    match ids {
+        Nil => λ at id no => absurd(no),
+        Cons(here, rest) => λ at => match at {
+            Zero => λ id found =>
+                cong_fn(λ (x: Option<Nat>) => match x { None => None, Some(i) => Some(values(64, i)) }, found),
+            Succ(k) => λ id found => words_of_nth(values, rest, k, id, found),
+        },
+    }
+}
+
+// The word at a position named `id` is `id`'s.
+theorem word_at(values: Valuation(), ids: List<Nat>, at, id: Nat, word: BitVec(64), named: ids.nth(at) = Some(id),
+    here: words_of(values, ids).nth(at) = Some(word)): values(64, id) = word {
+    cong_fn(λ (x: Option<BitVec(64)>) => match x { None => word, Some(w) => w },
+        trans(sym(words_of_nth(values, ids, at, id, named)), here))
+}
+
+// The state `words` has the buffer's address and length at the positions.
+fn Carried::At(self carried: Carried, words: List<BitVec(64)>, addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    (words.nth(carried.at_base) = Some(address_of(addresses, carried.buffer))) ∧
+        (words.nth(carried.at_length) = Some(BitVec::ofNat(buffer_bytes(buffers, carried.buffer).len())))
+}
+
+fn CarriedAt(carried: List<Carried>, words: List<BitVec(64)>, addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match carried {
+        Nil => True,
+        Cons(here, rest) => here.At(words, addresses, buffers) ∧ CarriedAt(rest, words, addresses, buffers),
+    }
+}
+
+// `ids` names `base` and `length` at the positions.
+fn Carried::named(self carried: Carried, ids: List<Nat>, base, length: Nat) → Bool {
+    nth_is(ids, carried.at_base, base) && nth_is(ids, carried.at_length, length)
+}
+
+// Some home of `homes` for the same buffer enters the state there.
+fn Carried::enters(self carried: Carried, homes: List<Lent>, inputs: List<Nat>) → Bool {
+    match homes {
+        Nil => False,
+        Cons(home, rest) => (home.buffer.same(carried.buffer) && carried.named(inputs, home.base, home.length)) ||
+            carried.enters(rest, inputs),
+    }
+}
+
+// What the lowering checks of the homes it carries: each enters the state
+// from a home of the scope outside, is the parameters it says, and is
+// handed on by every pass as it came.
+fn carried_sound(carried: List<Carried>, homes: List<Lent>, inputs, parameters, next: List<Nat>) → Bool {
+    match carried {
+        Nil => True,
+        Cons(here, rest) => (here.enters(homes, inputs) && (here.named(parameters, here.base, here.length) &&
+            here.named(next, here.base, here.length))) && carried_sound(rest, homes, inputs, parameters, next),
+    }
+}
+
+theorem Carried::enters_at(self carried: Carried, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    inputs: List<Nat>, homes: List<Lent>):
+    carried.enters(homes, inputs).IsTrue() → HomesHold(homes, values, addresses, buffers) →
+    carried.At(words_of(values, inputs), addresses, buffers) {
+    match homes {
+        Nil => λ no _ => false_elim(no),
+        Cons(home, rest) => λ enters held =>
+            match Bool::is_true_or(home.buffer.same(carried.buffer) && carried.named(inputs, home.base, home.length),
+                carried.enters(rest, inputs), enters) {
+                Inl(here) => {
+                    let both = Bool::is_true_and(home.buffer.same(carried.buffer), carried.named(inputs, home.base, home.length), here);
+                    let names = Bool::is_true_and(nth_is(inputs, carried.at_base, home.base), nth_is(inputs, carried.at_length, home.length),
+                        both.right);
+                    let buffer = home.buffer.same_sound(carried.buffer, eq_true_of_is_true(home.buffer.same(carried.buffer), both.left));
+                    j(buffer, λ b _ => (words_of(values, inputs).nth(carried.at_base) = Some(address_of(addresses, b))) ∧
+                            (words_of(values, inputs).nth(carried.at_length) = Some(BitVec::ofNat(buffer_bytes(buffers, b).len()))),
+                        ⟨trans(words_of_nth(values, inputs, carried.at_base, home.base, nth_is_sound(inputs, carried.at_base, home.base, names.left)),
+                            cong_fn(λ (w: BitVec(64)) => Some(w), held.left.left)),
+                         trans(words_of_nth(values, inputs, carried.at_length, home.length,
+                                nth_is_sound(inputs, carried.at_length, home.length, names.right)),
+                            cong_fn(λ (w: BitVec(64)) => Some(w), held.left.right))⟩)
+                },
+                Inr(later) => carried.enters_at(values, addresses, buffers, inputs, rest, later, held.right),
+            },
+    }
+}
+
+// The carried homes as a pass's scope has them.
+fn carried_homes(carried: List<Carried>) → List<Lent> {
+    match carried { Nil => [], Cons(here, rest) => Cons(Lent(here.buffer, here.base, here.length), carried_homes(rest)) }
+}
+
+// And as the scope after the loop has them: under the outputs' names.
+fn carried_out(carried: List<Carried>, outputs: List<Nat>) → List<Lent> {
+    match carried {
+        Nil => [],
+        Cons(here, rest) => match outputs.nth(here.at_base) {
+            None => carried_out(rest, outputs),
+            Some(base) => match outputs.nth(here.at_length) {
+                None => carried_out(rest, outputs),
+                Some(length) => Cons(Lent(here.buffer, base, length), carried_out(rest, outputs)),
+            },
+        },
+    }
+}
+
+// The four facts of a loop's carried homes: they hold of the state it
+// starts with, a pass that starts with them has its homes and hands them
+// on, and the scope after has them under the outputs' names.
+theorem carried_enter(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
+    inputs, parameters, next: List<Nat>, held: HomesHold(homes, values, addresses, buffers), carried: List<Carried>):
+    carried_sound(carried, homes, inputs, parameters, next).IsTrue() → CarriedAt(carried, words_of(values, inputs), addresses, buffers) {
+    match carried {
+        Nil => λ _ => trivial,
+        Cons(here, rest) => λ sound => {
+            let both = Bool::is_true_and(here.enters(homes, inputs) && (here.named(parameters, here.base, here.length) &&
+                here.named(next, here.base, here.length)), carried_sound(rest, homes, inputs, parameters, next), sound);
+            let parts = Bool::is_true_and(here.enters(homes, inputs), here.named(parameters, here.base, here.length) &&
+                here.named(next, here.base, here.length), both.left);
+            ⟨here.enters_at(values, addresses, buffers, inputs, homes, parts.left, held),
+             carried_enter(values, addresses, buffers, homes, inputs, parameters, next, held, rest, both.right)⟩
+        },
+    }
+}
+
+theorem carried_pass(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
+    inputs, parameters, next: List<Nat>, carried: List<Carried>):
+    carried_sound(carried, homes, inputs, parameters, next).IsTrue() →
+    CarriedAt(carried, words_of(values, parameters), addresses, buffers) →
+    HomesHold(carried_homes(carried), values, addresses, buffers) ∧ CarriedAt(carried, words_of(values, next), addresses, buffers) {
+    match carried {
+        Nil => λ _ _ => ⟨trivial, trivial⟩,
+        Cons(here, rest) => λ sound at => {
+            let both = Bool::is_true_and(here.enters(homes, inputs) && (here.named(parameters, here.base, here.length) &&
+                here.named(next, here.base, here.length)), carried_sound(rest, homes, inputs, parameters, next), sound);
+            let parts = Bool::is_true_and(here.enters(homes, inputs), here.named(parameters, here.base, here.length) &&
+                here.named(next, here.base, here.length), both.left);
+            let named = Bool::is_true_and(here.named(parameters, here.base, here.length), here.named(next, here.base, here.length),
+                parts.right);
+            let now = Bool::is_true_and(nth_is(parameters, here.at_base, here.base), nth_is(parameters, here.at_length, here.length),
+                named.left);
+            let after = Bool::is_true_and(nth_is(next, here.at_base, here.base), nth_is(next, here.at_length, here.length), named.right);
+            let base: (values(64, here.base) = address_of(addresses, here.buffer)) =
+                word_at(values, parameters, here.at_base, here.base, address_of(addresses, here.buffer),
+                    nth_is_sound(parameters, here.at_base, here.base, now.left), at.left.left);
+            let length: (values(64, here.length) = BitVec::ofNat(buffer_bytes(buffers, here.buffer).len())) =
+                word_at(values, parameters, here.at_length, here.length, BitVec::ofNat(buffer_bytes(buffers, here.buffer).len()),
+                    nth_is_sound(parameters, here.at_length, here.length, now.right), at.left.right);
+            let later = carried_pass(values, addresses, buffers, homes, inputs, parameters, next, rest, both.right, at.right);
+            ⟨⟨⟨base, length⟩, later.left⟩,
+             ⟨⟨trans(words_of_nth(values, next, here.at_base, here.base, nth_is_sound(next, here.at_base, here.base, after.left)),
+                    cong_fn(λ (w: BitVec(64)) => Some(w), base)),
+               trans(words_of_nth(values, next, here.at_length, here.length, nth_is_sound(next, here.at_length, here.length, after.right)),
+                    cong_fn(λ (w: BitVec(64)) => Some(w), length))⟩, later.right⟩⟩
+        },
+    }
+}
+
+theorem carried_leave(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), outputs: List<Nat>, carried: List<Carried>):
+    CarriedAt(carried, words_of(values, outputs), addresses, buffers) →
+    HomesHold(carried_out(carried, outputs), values, addresses, buffers) {
+    match carried {
+        Nil => λ _ => trivial,
+        Cons(here, rest) => λ at => {
+            let later = carried_leave(values, addresses, buffers, outputs, rest, at.right);
+            match base: outputs.nth(here.at_base) {
+                None => later,
+                Some(b) => match length: outputs.nth(here.at_length) {
+                    None => later,
+                    Some(l) => ⟨⟨word_at(values, outputs, here.at_base, b, address_of(addresses, here.buffer), base, at.left.left),
+                        word_at(values, outputs, here.at_length, l, BitVec::ofNat(buffer_bytes(buffers, here.buffer).len()), length,
+                            at.left.right)⟩, later⟩,
+                },
+            }
+        },
+    }
+}
+
+// The search, untrusted: a position where `id` enters and the pass hands
+// its parameter on.
+record StateSlot { at: Nat, parameter: Nat }
+
+fn carry_slot(inputs, parameters, next: List<Nat>, id, at: Nat) → Option<StateSlot> {
+    match inputs {
+        Nil => None,
+        Cons(input, inputs_rest) => match parameters {
+            Nil => None,
+            Cons(parameter, parameters_rest) => match next {
+                Nil => None,
+                Cons(after, next_rest) => match input.same(id) && after.same(parameter) {
+                    True => Some(StateSlot(at, parameter)),
+                    False => carry_slot(inputs_rest, parameters_rest, next_rest, id, Succ(at)),
+                },
+            },
+        },
+    }
+}
+
+fn carry_homes(homes: List<Lent>, inputs, parameters, next: List<Nat>) → List<Carried> {
+    match homes {
+        Nil => [],
+        Cons(home, rest) => match carry_slot(inputs, parameters, next, home.base, 0) {
+            None => carry_homes(rest, inputs, parameters, next),
+            Some(base) => match carry_slot(inputs, parameters, next, home.length, 0) {
+                None => carry_homes(rest, inputs, parameters, next),
+                Some(length) => Cons(Carried(home.buffer, base.parameter, length.parameter, base.at, length.at),
+                    carry_homes(rest, inputs, parameters, next)),
+            },
+        },
+    }
+}
+
+// The homes a loop carries: what the search found, where it checks, and
+// none otherwise (the loop is lowered either way; a load inside is then
+// refused).
+fn loop_carried(homes: List<Lent>, inputs, parameters, next: List<Nat>) → List<Carried> {
+    match carried_sound(carry_homes(homes, inputs, parameters, next), homes, inputs, parameters, next) {
+        False => [],
+        True => carry_homes(homes, inputs, parameters, next),
+    }
+}
+
+theorem loop_carried_sound(homes: List<Lent>, inputs, parameters, next: List<Nat>):
+    carried_sound(loop_carried(homes, inputs, parameters, next), homes, inputs, parameters, next).IsTrue() {
+    match sound: carried_sound(carry_homes(homes, inputs, parameters, next), homes, inputs, parameters, next) {
+        False => trivial,
+        True => Bool::is_true_of_eq(sound),
+    }
+}
+
+// A loop whose passes keep `invariant` of their state: every pass starts
+// with it, and the final state has it. The file goes from pass to pass
+// (`LoopRunsOver`); the invariant is of the words.
+theorem loop_runs_over_keeping(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    invariant: List<BitVec(64)> → Type,
+    step: (values: Valuation()) → invariant(words_of(values, parameters)) → invariant(words_of(values, next)), remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) → invariant(state) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(λ (values: Valuation()) (from: Buffers()) (to: Buffers()) => pass(values, from, to) ∧ invariant(words_of(values, parameters)),
+        parameters, count, exit, next, remaining, state, final, exhausted, before, after) ∧ invariant(final) {
+    match remaining {
+        Zero => λ state final exhausted before after held ran => ⟨ran, j(sym(ran.left), λ st _ => invariant(st), held)⟩,
+        Succ(rest) => λ state final exhausted before after held ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let got = ran.proof.proof;
+            let here: invariant(words_of(values, parameters)) = j(sym(got.left), λ st _ => invariant(st), held);
+            let later = (match values(1, exit).head_bit() as λ b =>
+                (match b {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) →
+                (match b {
+                    False => LoopRunsOver(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ invariant(words_of(v, parameters)),
+                        parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) ∧ invariant(final) {
+                False => λ more => loop_runs_over_keeping(pass, parameters, count, exit, next, invariant, step, rest, words_of(values, next), final,
+                    exhausted, mid, after, step(values, here), more),
+                True => λ done => ⟨done, j(sym(done.left), λ st _ => invariant(st), step(values, here))⟩,
+            })(got.right.right.right);
+            ⟨Exists(values, Exists(mid, ⟨got.left, ⟨got.right.left, ⟨⟨got.right.right.left, here⟩, later.left⟩⟩⟩)), later.right⟩
+        },
+    }
+}
+
+// A loop entered from a scope with `homes`: every pass has the carried
+// homes, and the final state has them at their positions. A home is of the
+// lengths `buffers` says, which no pass changes.
+theorem loop_carries(pass: Valuation() → Buffers() → Buffers() → Type, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    homes: List<Lent>, held: HomesHold(homes, values, addresses, buffers), inputs, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat, final: List<BitVec(64)>, exhausted: Bool, before, after: Buffers(),
+    ran: LoopRunsOver(pass, parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after)):
+    LoopRunsOver(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧
+            HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, addresses, buffers),
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after) ∧
+    CarriedAt(loop_carried(homes, inputs, parameters, next), final, addresses, buffers) {
+    let carried = loop_carried(homes, inputs, parameters, next);
+    let sound = loop_carried_sound(homes, inputs, parameters, next);
+    let kept = loop_runs_over_keeping(pass, parameters, count, exit, next,
+        λ (state: List<BitVec(64)>) => CarriedAt(carried, state, addresses, buffers),
+        λ v at => carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, at).right, remaining,
+        words_of(values, inputs), final, exhausted, before, after,
+        carried_enter(values, addresses, buffers, homes, inputs, parameters, next, held, carried, sound), ran);
+    ⟨loop_runs_over_weaken(
+        λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ CarriedAt(carried, words_of(v, parameters), addresses, buffers),
+        λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => pass(v, from, to) ∧ HomesHold(carried_homes(carried), v, addresses, buffers),
+        λ v from to both => ⟨both.left, carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, both.right).left⟩,
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after, kept.left), kept.right⟩
+}
+
+// The homes of the scope after a region: a loop leaves the ones it carried
+// under its outputs' names, before the ones it was entered with.
+fn StructuredRegion::lends(self region: StructuredRegion, homes: List<Lent>) → List<Lent> {
+    match region {
+        Dataflow(_) => homes,
+        Sequence(_, continuation) => continuation.lends(homes),
+        Compose(prefix, continuation) => continuation.lends(prefix.lends(homes)),
+        Conditional(_, _, _, _, _, _) => homes,
+        Lend(_, _, _, _) => homes,
+        Call(_, _, _) => homes,
+        Loop(inputs, _, parameters, _, _, _, next, outputs, _) =>
+            carried_out(loop_carried(homes, inputs, parameters, next), outputs) ++ homes,
+    }
+}
+
+theorem StructuredRegion::lends_hold(self region: StructuredRegion, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    effects: Effects()): (homes: List<Lent>) → (before, after: Buffers()) → HomesHold(homes, values, addresses, buffers) →
+    StructuredRegionRunsOver(effects, values, region, before, after) → HomesHold(region.lends(homes), values, addresses, buffers) {
+    match region {
+        Dataflow(_) => λ homes before after held _ => held,
+        Sequence(_, continuation) => λ homes before after held ran =>
+            continuation.lends_hold(values, addresses, buffers, effects, homes, ran.witness, after, held, ran.proof.right),
+        Compose(prefix, continuation) => λ homes before after held ran =>
+            continuation.lends_hold(values, addresses, buffers, effects, prefix.lends(homes), ran.witness, after,
+                prefix.lends_hold(values, addresses, buffers, effects, homes, before, ran.witness, held, ran.proof.left), ran.proof.right),
+        Conditional(_, _, _, _, _, _) => λ homes before after held _ => held,
+        Lend(_, _, _, _) => λ homes before after held _ => held,
+        Call(_, _, _) => λ homes before after held _ => held,
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes before after held ran =>
+            homes_hold_append(values, addresses, buffers, carried_out(loop_carried(homes, inputs, parameters, next), outputs), homes,
+                carried_leave(values, addresses, buffers, outputs, loop_carried(homes, inputs, parameters, next),
+                    loop_carries(λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to),
+                        values, addresses, buffers, homes, held, inputs, parameters, count, exit, next, values(64, limit).toNat(),
+                        words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran).right),
+                held),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call hands buffers on: its first arguments are their homes
+
+fn Lent::is(self home: Lent, buffer, base, length: Nat) → Bool {
+    home.buffer.same(buffer) && (home.base.same(base) && home.length.same(length))
+}
+
+fn homes_have(homes: List<Lent>, buffer, base, length: Nat) → Bool {
+    match homes { Nil => False, Cons(home, rest) => home.is(buffer, base, length) || homes_have(rest, buffer, base, length) }
+}
+
+// The arguments begin with the homes of buffers `buffer` to `buffer + count`.
+fn args_lend(homes: List<Lent>, count: Nat) → Nat → List<Nat> → Bool {
+    match count {
+        Zero => λ _ _ => True,
+        Succ(more) => λ buffer arguments => match arguments {
+            Nil => False,
+            Cons(base, after) => match after {
+                Nil => False,
+                Cons(length, rest) => homes_have(homes, buffer, base, length) && args_lend(homes, more, Succ(buffer), rest),
+            },
+        },
+    }
+}
+
+theorem homes_have_holds(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), buffer, base, length: Nat,
+    homes: List<Lent>): homes_have(homes, buffer, base, length).IsTrue() → HomesHold(homes, values, addresses, buffers) →
+    (values(64, base) = address_of(addresses, buffer)) ∧ (values(64, length) = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) {
+    match homes {
+        Nil => λ no _ => false_elim(no),
+        Cons(home, rest) => λ has held =>
+            match Bool::is_true_or(home.is(buffer, base, length), homes_have(rest, buffer, base, length), has) {
+                Inl(here) => {
+                    let parts = Bool::is_true_and(home.buffer.same(buffer), home.base.same(base) && home.length.same(length), here);
+                    let ids = Bool::is_true_and(home.base.same(base), home.length.same(length), parts.right);
+                    let at_buffer = home.buffer.same_sound(buffer, eq_true_of_is_true(home.buffer.same(buffer), parts.left));
+                    let at_base = home.base.same_sound(base, eq_true_of_is_true(home.base.same(base), ids.left));
+                    let at_length = home.length.same_sound(length, eq_true_of_is_true(home.length.same(length), ids.right));
+                    j(at_buffer, λ b _ => (values(64, base) = address_of(addresses, b)) ∧
+                            (values(64, length) = BitVec::ofNat(buffer_bytes(buffers, b).len())),
+                        ⟨j(at_base, λ i _ => values(64, i) = address_of(addresses, home.buffer), held.left.left),
+                         j(at_length, λ i _ => values(64, i) = BitVec::ofNat(buffer_bytes(buffers, home.buffer).len()), held.left.right)⟩)
+                },
+                Inr(later) => homes_have_holds(values, addresses, buffers, buffer, base, length, rest, later, held.right),
+            },
+    }
+}
+
+theorem args_lend_lent(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
+    held: HomesHold(homes, values, addresses, buffers), count: Nat): (buffer: Nat) → (arguments: List<Nat>) →
+    args_lend(homes, count, buffer, arguments).IsTrue() → ArgsLent(count, buffer, words_of(values, arguments), addresses, buffers) {
+    match count {
+        Zero => λ buffer arguments _ => trivial,
+        Succ(more) => λ buffer arguments => match arguments {
+            Nil => λ no => false_elim(no),
+            Cons(base, after) => match after {
+                Nil => λ no => false_elim(no),
+                Cons(length, rest) => λ lend => {
+                    let both = Bool::is_true_and(homes_have(homes, buffer, base, length), args_lend(homes, more, Succ(buffer), rest), lend);
+                    let here = homes_have_holds(values, addresses, buffers, buffer, base, length, homes, both.left, held);
+                    ⟨here.left, ⟨here.right, args_lend_lent(values, addresses, buffers, homes, held, more, Succ(buffer), rest, both.right)⟩⟩
+                },
+            },
+        },
+    }
+}

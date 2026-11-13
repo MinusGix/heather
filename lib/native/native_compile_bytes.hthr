@@ -92,14 +92,17 @@ theorem cells_update(v, w: Nat → BitVec(8), c: BitVec(8), n: Nat): (o, i: Nat)
     }
 }
 
-// A byte stored inside its buffer keeps the environment with that byte set.
-theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v),
+// A byte stored inside its buffer: the buffers the cells keep, with that
+// byte set.
+theorem Layout::buffers_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8),
+    kept: (b, cap: Nat) → layout.capacities.nth(b) = Some(cap) → env.buffer(b) = cells_at(v, layout.buffer_offset(b), cap),
     buf, cap: Nat, found: layout.capacities.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
-    layout.Keeps(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), r.stored_cells(v, layout.buffer_offset(buf) + i, [c])) {
+    (b, cb: Nat) → layout.capacities.nth(b) = Some(cb) →
+    Env(env.words, store_byte(env.buffers, buf, i, c), env.args).buffer(b) =
+        cells_at(r.stored_cells(v, layout.buffer_offset(buf) + i, [c]), layout.buffer_offset(b), cb) {
     let o = layout.buffer_offset(buf);
     let q = o + i;
     let w = r.stored_cells(v, q, [c]);
-    let ends = layout.buffer_end(buf, cap, found);
     let after = Env(env.words, store_byte(env.buffers, buf, i, c), env.args);
     let apart = λ (p: Nat) (ne: p ≠ q) => r.cells_outside(v, q, [c], p, match p.lt_or_ge(q) {
         Inl(under) => Inl(under),
@@ -108,16 +111,13 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
             Inr(past)
         },
     });
-    let words = λ (k: Nat) (inside: k < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * k, λ t short =>
-        r.cells_outside(v, q, [c], 8 * k + t, Inl(omega(layout.word_below_buffers(k, t, inside, short), layout.buffers_after_words(buf)))))),
-        keeps.left(k, inside));
-    ⟨words, λ b cb found_b => match b.eq_dec(buf) {
+    λ b cb found_b => match b.eq_dec(buf) {
         Inl(here) => {
             let cap_same: (cb = cap) = Option::some_inj(cb, cap, trans(sym(found_b), j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cap), found)));
             let updated: (cells_at(w, o, cap) = cells_at(v, o, cap).update(i, λ _ => c)) = cells_update(v, w, c, cap, o, i, below,
                 r.cells_inside(v, q, [c], 0, c, refl), apart);
             let stored: (after.buffer(buf) = cells_at(w, o, cap)) = trans(env.buffer_stored_here(buf, i, c),
-                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ bytes => bytes.update(i, λ _ => c), keeps.right(buf, cap, found)), sym(updated)));
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ bytes => bytes.update(i, λ _ => c), kept(buf, cap, found)), sym(updated)));
             j(sym(here), λ x _ => after.buffer(x) = cells_at(w, layout.buffer_offset(x), cb),
                 j(sym(cap_same), λ k _ => after.buffer(buf) = cells_at(w, o, k), stored))
         },
@@ -134,9 +134,25 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
                 },
             };
             trans(env.buffer_stored_other(buf, i, c, b, other),
-                trans(keeps.right(b, cb, found_b), cells_agree(v, w, cb, o_b, λ t short => sym(apart(o_b + t, away(t, short))))))
+                trans(kept(b, cb, found_b), cells_agree(v, w, cb, o_b, λ t short => sym(apart(o_b + t, away(t, short))))))
         },
-    }⟩
+    }
+}
+
+// A byte stored inside its buffer keeps the environment with that byte set.
+theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v),
+    buf, cap: Nat, found: layout.capacities.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
+    layout.Keeps(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), r.stored_cells(v, layout.buffer_offset(buf) + i, [c])) {
+    let q = layout.buffer_offset(buf) + i;
+    let w = r.stored_cells(v, q, [c]);
+    let ends = layout.buffer_end(buf, cap, found);
+    let words = λ (k: Nat) (inside: k < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, layout.frame_cell(k), λ t short =>
+        r.cells_outside(v, q, [c], layout.frame_cell(k) + t, {
+            let past: (q + 1 <= layout.frame_cell(k) + t) = omega(below, ends, layout.scratch_below_size(), layout.frame_cell_at(k));
+            Inr(past)
+        }))),
+        keeps.left(k, inside));
+    ⟨words, layout.buffers_byte(r, env, v, keeps.right, buf, cap, found, i, below, c)⟩
 }
 
 // The byte stored at its address: the environment placed with it set.
@@ -305,7 +321,7 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rcx, g) = w) ∧ then_q(m)),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right.left, ⟨refl, ⟨cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right.left), held.right.right⟩⟩⟩⟩));
-    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨held.left, ⟨refl, held.right⟩⟩⟩)
+    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨t.held_rbx(live, env, s.gprs, s.memory, held.left, env, index), ⟨refl, held.right⟩⟩⟩)
 }
 
 theorem Prog::loads_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat, program: Prog,
@@ -433,14 +449,14 @@ theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Pro
             let yes: (w.borrow_sub_bit(BitVec::ofNat(cap)) = True) = trans(sym(hp.right.right), cf);
             let lt: (i < BitVec::ofNat(cap, n := 64).toNat()) = BitVec::borrow_sub_of_bit_true(64, w, BitVec::ofNat(cap), yes);
             let below: (i < cap) = omega(lt, cap_is);
-            valued(u, here, resident, ⟨hp.left, ⟨hp.left, ⟨hp.right.left, ⟨refl, below⟩⟩⟩⟩)
+            valued(u, here, resident, ⟨hp.left, ⟨t.held_rbx(live, env, u.gprs, u.memory, hp.left, env, value), ⟨trans(t.rbx_gprs_other(env, value, u.gprs, Rcx, refl), hp.right.left), ⟨refl, below⟩⟩⟩⟩)
         });
     let compared = t.goes_block_jcc(w0, 0, set, w_cmp, tree, AE, pre, jumped, λ _ => refl);
     let indexed = t.goes_word_to(live, env, p, index, Rcx, inside_index, holds_index, w_w0, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g) = w),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right, cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right)⟩⟩));
-    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨held, refl⟩⟩)
+    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨t.held_rbx(live, env, s.gprs, s.memory, held, env, index), refl⟩⟩)
 }
 
 theorem Prog::stores_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat, program: Prog,

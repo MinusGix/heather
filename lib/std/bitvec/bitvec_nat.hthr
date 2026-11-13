@@ -50,6 +50,14 @@ theorem BitVec::toNat_ofNat_mod(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).t
     }
 }
 
+// So it is at most the argument: a length kept as a word bounds no more
+// than the length.
+theorem BitVec::toNat_ofNat_le(n: Nat, x: Nat): BitVec::ofNat(x, n := n).toNat() <= x {
+    let m = Nat::pow(2, n);
+    let below: (x.mod(m) <= x) = j(Nat::div_mul_add_mod(x, m), λ t _ => x.mod(m) <= t, Nat::le_add_r(x.div(m) * m, x.mod(m)));
+    j(sym(BitVec::toNat_ofNat_mod(n, x)), λ v _ => v <= x, below)
+}
+
 theorem BitVec::ofNat_mod(n, x: Nat): BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
     trans(BitVec::ofNat_cong(n, sym(BitVec::toNat_ofNat_mod(n, x))), BitVec::ofNat_toNat(n, BitVec::ofNat(x)))
 }
@@ -275,6 +283,14 @@ theorem toNat_add(n: Nat, a, b: BitVec(n),
     bounded: a.toNat() + b.toNat() < Nat::pow(2, n)):
     a.add(b).toNat() = a.toNat() + b.toNat() {
     trans(BitVec::toNat_add_mod(n, a, b), (a.toNat() + b.toNat()).mod_of_lt(Nat::pow(2, n), bounded))
+}
+
+// A literal added to a word that stays below another word does not wrap.
+theorem BitVec::toNat_add_below(n: Nat, a, bound: BitVec(n), k: Nat, inside: a.toNat() + k < bound.toNat()): a.add(BitVec::ofNat(k)).toNat() = a.toNat() + k {
+    let top: (a.toNat() + k < Nat::pow(2, n)) = Nat::lt_trans(a.toNat() + k, bound.toNat(), Nat::pow(2, n), inside, BitVec::toNat_lt_pow(n, bound));
+    let small: (k < Nat::pow(2, n)) = Nat::le_trans(Succ(k), Succ(a.toNat() + k), Nat::pow(2, n), a.toNat().le_add_r(k), top);
+    let literal: (BitVec::ofNat(k, n := n).toNat() = k) = BitVec::toNat_ofNat(n, k, small);
+    trans(toNat_add(n, a, BitVec::ofNat(k), rewrite(literal, top)), rewrite(literal, refl))
 }
 
 // The machine's unsigned test decides the same strict bound as Nat.

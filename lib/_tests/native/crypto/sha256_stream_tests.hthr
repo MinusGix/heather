@@ -1,0 +1,153 @@
+// Probes of `sha256_stream` and `sha256_filling`: what their pieces leave in a context of literal
+// bytes, short of running a block, which is sixty-four rounds and is not
+// run by conversion here. The initial hash value is held to the
+// specification's. That the three exports together compute SHA-256 is held
+// where they are linked (crates/linked/tests/sha256.rs). Tests, not
+// library: nothing imports this module.
+import sha256_stream;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha256_round;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_filling;
+import sha256_padding;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import sha256_block;
+import stored_words;
+import sha2;
+import rt;
+import rt_file;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// A context of zeros and one of ones: 320 bytes of `sha256_block`'s and
+// the count's eight.
+fn blank() → List<BitVec(8)> { List::replicate(b(0), 328) }
+fn ones() → List<BitVec(8)> { List::replicate(b(0xff), 328) }
+
+// The context's words from byte `at` are these.
+fn words_from(ctx: List<BitVec(8)>, words: List<Nat>, at: Nat) → Bool {
+    match words {
+        Nil => True,
+        Cons(word, rest) => List::u32_be_within(ctx, w(328), w(at)).eq_bit(w(word)) && words_from(ctx, rest, at + 4),
+    }
+}
+
+// The count of bytes taken, where the declaration lays it.
+fn count_of(ctx: List<BitVec(8)>) → BitVec(64) { ctx.u64_be_within(w(328), Sha256::count_at) }
+fn with_count(ctx: List<BitVec(8)>, count: BitVec(64)) → List<BitVec(8)> { List::put_u64_be_within(ctx, w(328), Sha256::count_at, count).after }
+
+// ---------------------------------------------------------------------------
+// The count
+
+theorem count_round_trip(): count_of(with_count(blank(), w(0x0123456789abcdef))) = w(0x0123456789abcdef) { refl }
+// Most significant first, at byte 320.
+theorem count_bytes(): words_from(with_count(blank(), w(0x0123456789abcdef)), [0x01234567, 0x89abcdef], 320) = True { refl }
+// And nothing before it.
+theorem count_alone(): List::u32_be_within(with_count(blank(), w(0x0123456789abcdef)), w(328), w(316)) = w(0) { refl }
+
+// ---------------------------------------------------------------------------
+// The start
+
+// §5.3.3, as the specification holds it, and no bytes taken.
+theorem init_is_the_initial_value(): words_from(Sha256::init::bytes(ones(), w(328)).after, Sha2::sha256().initial, 0) = True { refl }
+theorem init_counts_none(): count_of(Sha256::init::bytes(ones(), w(328)).after) = w(0) { refl }
+// The working area is left as it was.
+theorem init_leaves_the_rest(): List::u32_be_within(Sha256::init::bytes(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
+
+// ---------------------------------------------------------------------------
+// Bytes into the block
+
+// A byte lands at `fill` in the block, which is byte 64 of the context,
+// and the block is one fuller.
+theorem push_lands(): List::u32_be_within(Sha256::push::bytes(blank(), w(328), w(5), w(0xab)).after, w(328), w(68)) = w(0x00ab0000) { refl }
+theorem push_counts(): Sha256::push::bytes(blank(), w(328), w(5), w(0xab)).value = w(6) { refl }
+
+// Three bytes of a message from an empty block.
+theorem absorb_three(): List::u32_be_within(Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
+    w(0x61626300) { refl }
+theorem absorb_fills(): Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).value = w(3) { refl }
+// From a block that holds two already, they follow them.
+theorem absorb_follows(): List::u32_be_within(Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(2)).after, w(328), w(64)) =
+    w(0x00006162) { refl }
+// The length word is the bound: a count past the message's end takes
+// nothing from past it.
+theorem absorb_under_length(): Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(2), w(0), w(0)).value = w(2) { refl }
+
+// A part taken: the count moves by its length.
+theorem update_counts(): count_of(Sha256::update::bytes(Sha256::init::bytes(blank(), w(328)).after, w(328), [b(0x61), b(0x62), b(0x63)], w(3)).after) = w(3) {
+    refl
+}
+
+// ---------------------------------------------------------------------------
+// The padding
+
+// Zeros from `i` to the block's end and nowhere else.
+theorem zero_to_the_end(): words_from(Sha256::zero::bytes(ones(), w(328), w(60)).after, [0xffffffff, 0x00000000, 0xffffffff], 120) = True { refl }
+
+// After three bytes: 0x80 at the fourth, zeros after it, the three as
+// they were, and no block run.
+theorem pad_short(): words_from(Sha256::pad::bytes(ones(), w(328), w(3)).after, [0xffffff80, 0x00000000], 64) = True { refl }
+theorem pad_short_to_the_end(): List::u32_be_within(Sha256::pad::bytes(ones(), w(328), w(3)).after, w(328), w(124)) = w(0) { refl }
+theorem pad_short_runs_nothing(): List::u32_be_within(Sha256::pad::bytes(ones(), w(328), w(3)).after, w(328), w(0)) = w(0xffffffff) { refl }
+
+// A byte's place in its word: the most significant is place 0, and the
+// other three bytes stay.
+theorem with_byte_first(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 0, b(0xab)) = BitVec::ofNat(0xab223344) { refl }
+theorem with_byte_last(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 3, b(0xab)) = BitVec::ofNat(0x112233ab) { refl }
+// Past the word's bytes it is the word.
+theorem with_byte_past(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 4, b(0xab)) = BitVec::ofNat(0x11223344) { refl }
+
+// `Sha256::put` is what the generator says of it: a span that holds a
+// context is left holding the context with that byte of its schedule
+// replaced.
+theorem put_holds(span: List<BitVec(8)>, s: Sha256, length, at, byte: BitVec(64), holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::put::bytes(span, length, at, byte).after, length,
+        s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }) {
+    Sha256::put::runs_held(span, s, length, at, byte, holds).holds
+}
+// On bytes it is one byte changed, and none past the schedule's.
+theorem put_one_byte(): words_from(Sha256::put::bytes(ones(), w(328), w(6), w(0xab)).after, [0xffffffff, 0xffffffff, 0xffffabff], 60) = True { refl }
+theorem put_past_the_schedule(): Sha256::put::bytes(ones(), w(328), w(256), w(0xab)).after = ones() { refl }

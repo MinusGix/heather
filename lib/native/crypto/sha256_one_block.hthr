@@ -1,0 +1,88 @@
+// SHA-256's compression function on one block a caller hands whole, as
+// compiled code (FIPS 180-4 §6.2.2): `Sha256::compress`, a function of the
+// context (`sha256_context.hthr`) that reads the block from a second span.
+// The block's bytes are stored where `Sha256::run` wants them, in the
+// schedule's first sixteen words, and the block is run. Exported as
+// `sha256_compress`.
+//
+// A module beside `sha256_stream.hthr` and not in it: each calls
+// `Sha256::run`, and under the test profile's binary the two together ran
+// at the library gate's rail.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_filling;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// The block's sixty-four bytes into the context's block.
+runtime fn Sha256::take_block(mut self s: Sha256, block: List<u8>, bn, i: u64) → u64
+    decreases (64 - i).toNat() {
+    if h: i < 64 {
+        s.put(i, block.byte_within(bn, i).zero_extend(56));
+        s.take_block(block, bn, i + 1)
+    } else {
+        i
+    }
+}
+
+// §6.2.2: H(i) from H(i−1) and a block. Of the context the hash value is
+// read, and it, the working variables and the schedule are written. What
+// the hash value's thirty-two bytes spell after the last block is the
+// digest.
+runtime fn Sha256::compress(mut self s: Sha256, block: List<u8>, bn: u64) → u64 {
+    s.take_block(block, bn, 0);
+    s.run()
+}
+
+theorem Sha256::compress_holds(span: List<u8>, s: Sha256, length: u64, block: List<u8>, bn: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::compress::bytes(span, length, block, bn).after, length, Sha256::compress(s, block, bn).after) {
+    Sha256::compress::runs_held(span, s, length, block, bn, holds).holds
+}

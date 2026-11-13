@@ -2634,6 +2634,28 @@ impl GeneratedDefs<'_> {
         Some((sref, aref))
     }
 
+    /// The code of the declared type `tag` as a term, with its type and
+    /// that type's level: `D#tycode` at its universe for a declaration with
+    /// no parameters, `D#tycode_fn` at its statement (a function into a
+    /// universe) for one with some. What a generator's `Global` of a type
+    /// stands for (`host.rs`).
+    pub(crate) fn type_code_term(&self, tag: u32) -> Option<(Term, Type, Level)> {
+        if let Some((_, level)) = self.types.gdefs().ty_code(&tag) {
+            let level = level.clone();
+            let head = self.gen_ref(GenDef::TyCode(tag))?;
+            return Some((head, Type::Ty(level.clone()), Level::succ(level)));
+        }
+        let entry = self.ty_code_fn_entry(tag)?;
+        let head = self.gen_ref(GenDef::TyCodeFn(tag))?;
+        let ty = Type::clone(&entry.stmt);
+        let level = match &ty {
+            Type::Ty(level) => Level::succ(level.clone()),
+            Type::Pi { dom_level, cod_level, .. } => Level::join(dom_level.clone(), cod_level.clone()),
+            _ => return None,
+        };
+        Some((head, ty, level))
+    }
+
     /// Closed-registration lookup, not the default API for annotations.
     /// Parameterized declarations have a TyCodeFn and deliberately decline
     /// here; emission callers should use [`Elaborator::annotation_type`].

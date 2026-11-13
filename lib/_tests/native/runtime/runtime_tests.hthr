@@ -17,6 +17,8 @@ import string;
 import tactic;
 import bitvec;
 import bitvec_nat;
+import bitvec_rotate;
+import algebra;
 import rt;
 import rt_lower;
 import function_ir;
@@ -54,7 +56,7 @@ theorem leaf_runs(a, b: BitVec(64)): program_eval(leaf::program, 0, [a, b]) = le
 // The instance's own agreement is the composable one: the code answers
 // `caller` wherever its table's functions are answered by their meanings.
 theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(caller::world, call), a, b: BitVec(64)):
-    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(call, agree, a, b) }
+    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(Nil, call, agree, a, b) }
 
 // The instance is found by search, keyed on the function.
 fn code_of<F>(f: F, c: Compile<F>(f) := infer) → Function { c.code }
@@ -63,13 +65,20 @@ theorem leaf_found(): code_of(leaf) = leaf::code { refl }
 
 theorem caller_found(): code_of(caller) = caller::code { refl }
 
-// The instance's agreement, read through the class at the function.
-theorem leaf_through_class(c: Compile<BitVec(64) → BitVec(64) → BitVec(64)>(leaf), call: Answers(),
-    agree: Tm::CallsAgree(c.world, call)):
-    Ty::Answers(c.world.tys, c.reflected.params, c.reflected.result,
-        retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, leaf), λ xs => c.code.eval(call, xs)) {
-    c.agrees(call, agree)
+// The instance's agreement, read through the class at the function: at
+// every file, the code run over it returns what the function does there.
+theorem leaf_through_class(c: Compile<BitVec(64) → BitVec(64) → BitVec(64)>(leaf), b: Buffers(), call: Answers(),
+    agree: Tm::CallsAgree(c.world.at(c.callees, b), call)):
+    Ty::Answers(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
+        Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), leaf, b),
+        λ xs => c.code.eval(call, xs, buffers := b)) {
+    c.agrees(b, call, agree)
 }
+
+// A function lent nothing computes the same over any file: the file is
+// there for the functions that read it.
+theorem caller_compiled_over(b: Buffers(), call: Answers(), agree: Tm::CallsAgree(caller::world.at(caller::world.fixed(), b), call),
+    x, y: BitVec(64)): caller::code.eval(call, [x, y], buffers := b) = caller(x, y) { caller::compile.agrees(b, call, agree, x, y) }
 
 // ---------------------------------------------------------------------------
 // Branches on comparisons through `&&`, `||` and `!`
@@ -160,6 +169,46 @@ theorem spread_rt_is(): spread::rt = Fun([Word(64)], Word(64),
         Let(Prim(Ashr(64, 60), [4]), Let(Prim(Bxor(64), [1, 0]), Let(Prim(Lshr(64, 7), [6]), Prim(Bor(64), [1, 0]))))))))) { refl }
 
 theorem spread_runs(x: BitVec(64)): program_eval(spread::program, 0, [x]) = spread(x) { spread::agrees(x) }
+
+// ---------------------------------------------------------------------------
+// Complement and rotations, which `rt` has no operation for: the generator
+// reads `~x` as `all_ones ⊕ x` and `x.rotr(k)`/`x.rotl(k)` as their shift
+// pairs (issues/rt-complement-and-rotate.md), and the pin holds because
+// each converts to its rewriting at a literal width.
+
+runtime fn flip(x: u64) → u64 { ~x }
+
+theorem flip_rt_is(): flip::rt =
+    Fun([Word(64)], Word(64), Let(Lit(Word(64), 0xffffffffffffffff), Prim(Bxor(64), [0, 1]))) { refl }
+
+theorem flip_runs(x: u64): program_eval(flip::program, 0, [x]) = ~x { flip::agrees(x) }
+
+// At a narrower width the literal is that width's all ones.
+runtime fn flip_low(x: u64) → u64 { (~x.truncate(32, 32)).zero_extend(32) }
+
+theorem flip_low_rt_is(): flip_low::rt = Fun([Word(64)], Word(64),
+    Let(Prim(Trunc(32, 32), [0]), Let(Lit(Word(32), 0xffffffff), Let(Prim(Bxor(32), [0, 1]), Prim(Zext(32, 32), [0]))))) { refl }
+
+theorem flip_low_runs(x: u64): program_eval(flip_low::program, 0, [x]) = flip_low(x) { flip_low::agrees(x) }
+
+// A rotation right and one left by the other count are the same two shifts,
+// bound once, joined each way.
+runtime fn spin(x: u64) → u64 { x.rotr(8) ⊕ x.rotl(56) }
+
+theorem spin_rt_is(): spin::rt = Fun([Word(64)], Word(64),
+    Let(Prim(Lshr(64, 8), [0]), Let(Prim(Shl(64, 56), [1]), Let(Prim(Bor(64), [1, 0]),
+        Let(Prim(Bor(64), [1, 2]), Prim(Bxor(64), [1, 0])))))) { refl }
+
+theorem spin_runs(x: u64): program_eval(spin::program, 0, [x]) = x.rotr(8) ⊕ x.rotl(56) { spin::agrees(x) }
+
+// A narrow rotation, and complement inside an expression.
+runtime fn spin_low(x, y: u64) → u64 {
+    let a = x.truncate(32, 32);
+    let b = y.truncate(32, 32);
+    (a.rotr(7) + (~a & b).rotl(3)).zero_extend(32)
+}
+
+theorem spin_low_runs(x, y: u64): program_eval(spin_low::program, 0, [x, y]) = spin_low(x, y) { spin_low::agrees(x, y) }
 
 // ---------------------------------------------------------------------------
 // A fourteen-arm callee and its caller (issues/runtime-fn-caller-agreement-fuel.md):
@@ -287,5 +336,12 @@ theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
 // expect-error: a result that is not a 64-bit word
 runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
 
-// expect-error: a parameter that is not a 64-bit word
-runtime fn sum_bytes(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { start }
+// A byte list is a lent span only where a span may stand: before the other
+// parameters, followed by its length word
+// (lib/_tests/native/runtime/runtime_lent_tests.hthr).
+// expect-error: a byte list parameter that is not a lent span
+runtime fn sum_bytes(start: BitVec(64), xs: List<BitVec(8)>) → BitVec(64) { start }
+
+// A rotation's count is a literal, as a shift's is.
+// expect-error: expected a numeral
+runtime fn spin_by(x, c: u64) → u64 { x.rotr(c.toNat()) }

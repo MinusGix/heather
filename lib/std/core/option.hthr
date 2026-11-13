@@ -40,3 +40,8 @@ theorem Option::and_then_elim<A, B>(P: Option<B> → Type, none: P(None), o: Opt
     some: (v: A) → o = Some(v) → P(f(v))): P(o.and_then(f)) {
     match o { None => none, Some(v) => some(v, refl) }
 }
+
+// Two continuations that answer alike give one chain.
+theorem Option::and_then_ext<A, B>(o: Option<A>, f, g: A → Option<B>, same: (v: A) → f(v) = g(v)): o.and_then(f) = o.and_then(g) {
+    match o { None => refl, Some(v) => same(v) }
+}

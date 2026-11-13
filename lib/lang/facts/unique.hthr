@@ -96,6 +96,7 @@ fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
         Call(f, args) => Share(Cons(d, Share::ids_of(g, args)), Sig::at(sigs, f).result.holds_bytes()),
         Fold(_, init, step) => Share(Cons(d, Share::at(g, init).ids), Sig::at(sigs, step).result.holds_bytes()),
         Case(_, zero, succ) => Share::join(zero.share(sigs, d, g), succ.share(sigs, Succ(d), Cons(Share([d], False), g))),
+        Byte(_, _, _) => Share([d], False),
     }
 }
 
@@ -133,6 +134,7 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
         Call(_, args) => Tm::hits(args, d, bound, ls),
         Fold(over, init, _) => Tm::hit(over, d, bound, ls) || Tm::hit(init, d, bound, ls),
         Case(c, zero, succ) => Tm::hit(c, d, bound, ls) || zero.reads(d, bound, ls) || succ.reads(Succ(d), bound, ls),
+        Byte(_, i, length) => Tm::hit(i, d, bound, ls) || Tm::hit(length, d, bound, ls),
     }
 }
 
@@ -203,6 +205,7 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         Fold(over, init, step) => [Pass(step, Share::moves(g, ks, Share::bufs_of(g, [init]))
             && !Nat::meets(Share::flat(Share::bufs_of(g, [init])), Share::at(g, over).ids))],
         Case(_, zero, succ) => zero.uses(sigs, n, d, g, ks) ++ succ.uses(sigs, n, Succ(d), Cons(Share([d], False), g), ks),
+        Byte(_, _, _) => [],
     }
 }
 

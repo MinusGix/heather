@@ -1,0 +1,239 @@
+// Probes of a loop over a lent span (`Fun::lower_measured` with kept words,
+// lib/native/runtime/rt_loop.hthr; docs/native-one-compiler-design.md §2.3,
+// U3c step 2): the two words of the span's home stay where they are through
+// the loop, which is what the function compiler asks of a loop that reads a
+// lent buffer. A function that counts a span's newlines is lowered to such a
+// loop by evaluation, the code is what the function compiler accepts, it
+// runs, and at every span it computes the function, `Guarded` proved from
+// the function's own `ext` and `irrel` as the generator will. The
+// reflections are written by hand here (the reflector's round is step 3).
+// Tests, not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_placeless;
+import x86_64;
+import x86_64_asm;
+import rt_lower;
+import rt_loop;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn span_loop_lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
+fn span_loop_code(r: Option<Function>) → Function { match r { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
+
+// ---------------------------------------------------------------------------
+// The newlines of a span from `i`, added to `acc`.
+
+fn count_from(span: List<BitVec(8)>, length, i, acc: BitVec(64)) → BitVec(64) decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => acc,
+        True => count_from(span, length, i.add(BitVec::ofNat(1)), match span.byte_within(length, i).eq_bit(BitVec::ofNat(10)) {
+            False => acc,
+            True => acc.add(BitVec::ofNat(1)),
+        }),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// Its reflection, over four words `[acc, i, length, place]`: the span's
+// place and length first, as the function compiler lays a lent buffer's
+// home out, then the function's own words. The self-call hands the place
+// and the length on as the variables they came in as.
+//
+//   let below = i <u length                  [below, acc, i, length, place]
+//   if below {
+//     let byte = span[i] under length        [byte, below, acc, i, length, place]
+//     let nl = 10                            [nl, byte, below, acc, i, length, place]
+//     let is = byte == nl                    [is, nl, byte, below, acc, i, length, place]
+//     let one = 1                            [one, is, nl, byte, below, acc, i, length, place]
+//     let i2 = i + one                       [i2, one, is, nl, byte, below, acc, i, length, place]
+//     let acc2 = if is { acc + one } else { acc }
+//     count(place, length, i2, acc2)         [acc2, i2, one, is, nl, byte, below, acc, i, length, place]
+//   } else acc
+fn count_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), IfEq(0,
+        Let(Byte(0, 2, 3), Let(Lit(Word(8), 10), Let(Prim(Eq(8), [1, 0]), Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]),
+            Let(If(2, Prim(Add(64), [6, 1]), Var(6)), Call(0, [10, 9, 1, 0]))))))),
+        Var(1)))
+}
+
+fn count_words() → List<Ty> { [Word(64), Word(64), Word(64), Word(64)] }
+
+// The function at a span, as the loop's four words see it: where the span
+// lies is not the function's to read.
+fn count_at(span: List<BitVec(8)>, place, length, i, acc: BitVec(64)) → BitVec(64) { count_from(span, length, i, acc) }
+
+// The world is the file, and the function at it.
+fn count_world(span: List<BitVec(8)>) → World {
+    World(RecInfo::none, [Sig(count_words(), Word(64))], Pair(λ (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) =>
+        count_at(span, place, length, i, acc), trivial), [span])
+}
+
+// Two words kept (the home), then the two the loop moves.
+fn count_lowered(span: List<BitVec(8)>) → Option<Function> {
+    Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_body(), Word(64), count_world(span), 1)
+}
+
+fn count_code() → Function { span_loop_code(count_lowered(Nil)) }
+
+// The lowering does not read the file.
+theorem count_lowers(span: List<BitVec(8)>): count_lowered(span) = Some(count_code()) { refl }
+
+// The code is the function compiler's: evaluable, placeless (the home is
+// read only as the loop's own parameters), and compiled when it is lent
+// its one buffer.
+theorem count_evaluable(): program_evaluable([count_code()]).IsTrue() { trivial }
+theorem count_placeless(): program_placeless([count_code()]).IsTrue() { trivial }
+theorem count_accepted(): lower_program_lent([count_code()], plan_program([count_code()]), [1]).is_some() = True { refl }
+
+// It runs: three newlines in four bytes, wherever the span is said to lie.
+theorem count_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_code()], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+theorem count_runs_from(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_code()], 0, [w(0), w(4), w(1), w(40)]) = w(42) { refl }
+// A length short of the span stops the count there; one past it reads no
+// byte the span does not have.
+theorem count_runs_short(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_code()], 0, [w(4096), w(2), w(0), w(0)]) = w(1) { refl }
+theorem count_runs_empty(): program_eval_over([[]], [count_code()], 0, [w(4096), w(0), w(0), w(7)]) = w(7) { refl }
+
+// ---------------------------------------------------------------------------
+// At every span, the loop computes the function.
+
+fn count_measure(span: List<BitVec(8)>, ys: List<BitVec(64)>) → Nat {
+    ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat()
+}
+
+// The body with its recursion answered by `again` is the recursor's step
+// with an ih that drops its proof; the span is the recursor's too, since
+// `decreases` takes every parameter into it.
+theorem count_step(span: List<BitVec(8)>, place, length, i, acc: BitVec(64), again: List<BitVec(8)> → List<BitVec(64)> → BitVec(64)):
+    count_body().tail_sem(count_world(span), 0, Word(64), again(span), count_words(), Pair(acc, Pair(i, Pair(length, Pair(place, trivial))))) =
+        count_from::body(length.sub(i).toNat(),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) _ => again(s, [place, y1, y2, y3]),
+            span, length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat())) { refl }
+
+// `GuardedAt`, from `count_from::ext` and `count_from::irrel`: `ext` asks
+// its two recursions to agree at every span, so `again` answers at every
+// span, the family's index.
+theorem count_guarded(): Fun::GuardedAt(count_words(), Word(64), count_body(), count_world,
+    λ (span: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) => count_at(span, place, length, i, acc),
+    count_measure) {
+    λ span place length i acc again hyp => sym(count_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+        λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
+            count_from::rec(length.sub(i).toNat(), s, y1, y2, y3, p),
+        λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) _ => again(s, [place, y1, y2, y3]),
+        λ s y1 y2 y3 p q => trans(count_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, y3, p,
+                nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
+            sym(hyp(s, [place, y1, y2, y3], refl, p))),
+        span, length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat())))
+}
+
+theorem count_bounded(span: List<BitVec(8)>): Fun::Bounded(count_words(), count_measure(span)) {
+    λ place length i acc => BitVec::toNat_lt_pow(64, length.sub(i))
+}
+
+// The loop's theorem at the span's world.
+theorem count_loops(span: List<BitVec(8)>): Fun::MeasuredHolds(count_words(), Word(64), count_world(span),
+    λ (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) => count_at(span, place, length, i, acc), count_lowered(span)) {
+    Fun::measured_sound_at([Word(64), Word(64)], Word(64), [Word(64)], count_body(), Word(64), count_world, 1,
+        λ (s: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) => count_at(s, place, length, i, acc),
+        count_measure, count_bounded, count_guarded(), span)
+}
+
+// So the one code, lent any span at any place with any length word, counts
+// as the function does.
+theorem count_compiled(span: List<BitVec(8)>, call: Answers(), agree: Tm::CallsAgree(count_world(span), call), place, length, i, acc: BitVec(64)):
+    count_code().eval(call, [place, length, i, acc], buffers := [span]) = count_from(span, length, i, acc) {
+    j(count_lowers(span), λ r _ => Fun::MeasuredHolds(count_words(), Word(64), count_world(span),
+        λ (place2: BitVec(64)) (length2: BitVec(64)) (i2: BitVec(64)) (acc2: BitVec(64)) => count_at(span, place2, length2, i2, acc2), r),
+        count_loops(span))(call, agree, [place, length, i, acc], refl)
+}
+
+// ---------------------------------------------------------------------------
+// Two self-calls under a branch, each handing the home on: the loop lowers
+// and runs as the one-call form does. (A Heather function of this form
+// through the generator is `clear_text`, runtime_span_tests.)
+
+fn count_split_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), If(0,
+        Let(Byte(0, 2, 3), Let(Lit(Word(8), 10), Let(Prim(Eq(8), [1, 0]), Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]),
+            If(2, Let(Prim(Add(64), [6, 1]), Call(0, [10, 9, 1, 0])), Call(0, [9, 8, 0, 6]))))))),
+        Var(1)))
+}
+
+fn count_split_code() → Function {
+    span_loop_code(Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_split_body(), Word(64), count_world(Nil), 1))
+}
+
+theorem count_split_lowers(): span_loop_lowers(Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_split_body(), Word(64),
+    count_world(Nil), 1)) = True { refl }
+theorem count_split_placeless(): program_placeless([count_split_code()]).IsTrue() { trivial }
+theorem count_split_accepted(): lower_program_lent([count_split_code()], plan_program([count_split_code()]), [1]).is_some() = True { refl }
+theorem count_split_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_split_code()], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+
+// ---------------------------------------------------------------------------
+// The body in the order the reflector writes it (the call's arguments left
+// to right, so the next index is made before the byte is read, and the
+// branch's arm makes its own literal): the next index lives across the
+// read, and the placement heuristic's first plan of the pass's branch puts
+// the tally where the next index is wanted. The branch is planned a second
+// time, apart (`StructuredRegion::plan_in`), and the function compiler
+// takes the loop.
+
+fn count_early_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), IfEq(0, Let(Lit(Word(64), 1), Let(Prim(Add(64), [3, 0]), Let(Byte(0, 4, 5), Let(Lit(Word(8), 10),
+        Let(Prim(Eq(8), [1, 0]), Let(If(0, Let(Lit(Word(64), 1), Prim(Add(64), [7, 0])), Var(6)), Call(0, [10, 9, 4, 0]))))))), Var(1)))
+}
+
+fn count_early_code() → Function {
+    span_loop_code(Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_early_body(), Word(64), count_world(Nil), 1))
+}
+
+theorem count_early_placeless(): program_placeless([count_early_code()]).IsTrue() { trivial }
+theorem count_early_accepted(): lower_program_lent([count_early_code()], plan_program([count_early_code()]), [1]).is_some() = True { refl }
+theorem count_early_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], [count_early_code()], 0, [w(4096), w(4), w(0), w(0)]) = w(3) { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused.
+
+// A self-call that hands something else on at a kept slot (here the index
+// where the length was) is not a loop that keeps it.
+fn count_moved_body() → Tm {
+    Let(Prim(Ult(64), [1, 2]), IfEq(0, Let(Lit(Word(64), 1), Let(Prim(Add(64), [3, 0]), Call(0, [5, 0, 0, 2]))), Var(1)))
+}
+
+theorem moved_home_not_lowered(): span_loop_lowers(Fun::lower_measured([Word(64), Word(64)], Word(64), [Word(64)], count_moved_body(), Word(64),
+    count_world(Nil), 1)) = False { refl }
+
+// Keeping nothing lowers, to a loop that moves every word, the home too;
+// the function compiler does not take a loop that reads a lent buffer
+// through a home it moved.
+fn count_unkept_code() → Function {
+    span_loop_code(Fun::lower_measured([], Word(64), [Word(64), Word(64), Word(64)], count_body(), Word(64), count_world(Nil), 1))
+}
+
+theorem unkept_lowers(): span_loop_lowers(Fun::lower_measured([], Word(64), [Word(64), Word(64), Word(64)], count_body(), Word(64),
+    count_world(Nil), 1)) = True { refl }
+theorem unkept_not_accepted(): lower_program_lent([count_unkept_code()], plan_program([count_unkept_code()]), [1]).is_some() = False { refl }
+
+// The kept loop lent nothing: its load has no buffer to read.
+theorem unlent_not_accepted(): lower_program_lent([count_code()], plan_program([count_code()]), [0]).is_some() = False { refl }

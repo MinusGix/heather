@@ -56,16 +56,26 @@ fn CompareOp::Holds(self op: CompareOp, values: Valuation(), output, left, right
 // What the file knows of a value no register need hold, from a node the
 // placement folded: a constant's value, or a comparison's equation over its
 // operands (a branch on it CMPs them and jumps on the flags). It is a fact
-// about the valuation, so no register write disturbs it.
+// about the valuation, so no register write disturbs it. `Truth` and
+// `Falsity` are what a path knows and no node says: the bit a conditional
+// tested, in the arm taken where it is set and in the arm taken where it is
+// clear (`StructuredRegion::emit_calls`). A load of a lent buffer is
+// accepted under the first, of a comparison below; the second, of the same
+// comparison, is the other order (`File::at_most`,
+// `function_ir_lower_reads`).
 inductive Known {
     Constant(id: Nat, value: Nat),
     Compared(id: Nat, op: CompareOp, left: Nat, right: Nat),
+    Truth(id: Nat),
+    Falsity(id: Nat),
 }
 
 fn Known::Holds(self known: Known, values: Valuation()) → Type {
     match known {
         Constant(id, value) => values(64, id) = BitVec::ofNat(value),
         Compared(id, op, left, right) => op.Holds(values, id, left, right),
+        Truth(id) => values(1, id).head_bit() = True,
+        Falsity(id) => values(1, id).head_bit() = False,
     }
 }
 
@@ -419,6 +429,8 @@ fn known_value(known: List<Known>, id: Nat) → Option<Nat> {
         Cons(here, rest) => match here {
             Constant(other, value) => match other.same(id) { False => known_value(rest, id), True => Some(value) },
             Compared(_, _, _, _) => known_value(rest, id),
+            Truth(_) => known_value(rest, id),
+            Falsity(_) => known_value(rest, id),
         },
     }
 }
@@ -435,6 +447,8 @@ theorem known_value_holds(values: Valuation(), id, value: Nat, known: List<Known
                     j(other.same_sound(id, same), λ i _ => values(64, i) = BitVec::ofNat(v), holds.left)),
             }),
             Compared(_, _, _, _) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
+            Truth(_) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
+            Falsity(_) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
         },
     }
 }
@@ -451,6 +465,8 @@ fn known_comparison(known: List<Known>, id: Nat) → Option<Comparison> {
                 False => known_comparison(rest, id),
                 True => Some(Comparison(op, left, right)),
             },
+            Truth(_) => known_comparison(rest, id),
+            Falsity(_) => known_comparison(rest, id),
         },
     }
 }
@@ -468,6 +484,8 @@ theorem known_comparison_holds(values: Valuation(), id: Nat, compared: Compariso
                 True => λ found holds => j(found, λ o _ => o.All(λ (c: Comparison) => c.op.Holds(values, id, c.left, c.right)),
                     j(other.same_sound(id, same), λ i _ => op.Holds(values, i, left, right), holds.left)),
             }),
+            Truth(_) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
+            Falsity(_) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
         },
     }
 }
@@ -939,9 +957,13 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
 // ---------------------------------------------------------------------------
 // Constants and copies
 
+// A constant loaded: the register holds it, and the file knows its value as
+// it knows a folded one's (`Node::fold`). So what asks for a constant
+// (`known_value`: an ADD's immediate once the register is gone, a view from
+// its buffer's start, `File::zero`) reads it wherever the placement put it.
 fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
     Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
-        file.write(destination, Some(Held(output, Word)))))
+        file.write(destination, Some(Held(output, Word))).know(Constant(output, value))))
 }
 
 theorem File::constant_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
@@ -950,8 +972,10 @@ theorem File::constant_keeps<M>(self file: File, values: Valuation(), destinatio
         file.constant(destination, output, value))
 {
     λ s represents holds =>
-        file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-            BitVec::ofNat(value), represents, holds)
+        file.write(destination, Some(Held(output, Word))).represents_know(values, write_gpr(destination, BitVec::ofNat(value), s.gprs),
+            Constant(output, value),
+            file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
+                BitVec::ofNat(value), represents, holds), holds)
 }
 
 fn File::copy_found(self file: File, destination: Gpr, output, source: Nat, found: Found(file, Held(source, Word)),
@@ -1182,7 +1206,8 @@ theorem File::add_keeps<M>(self file: File, values: Valuation(), destination: Gp
 
 // ---------------------------------------------------------------------------
 // Comparisons: `XOR d, d; CMP a, b; SETcc d`, the bit zero-extended in `d`.
-// The XOR goes first because it writes the flags the SETcc reads.
+// The XOR goes first because it writes the flags the SETcc reads, so `d`
+// is neither operand's register there; where it is one, `compare_over`.
 
 fn CompareOp::instruction(self op: CompareOp, low: LowByteGpr) → Instruction {
     match op { Below => SetBelow(low), Less => SetLess(low), Same => SetEqual(low) }
@@ -1242,14 +1267,40 @@ fn File::compare_found(self file: File, op: CompareOp, low: LowByteGpr, output, 
     }
 }
 
+// A comparison whose destination holds one of its operands: `CMP a, b;
+// MOV d, 0; SETcc d`. A MOV writes no flag, so here the destination is
+// cleared after the operands are read, and the bit may take the register
+// of an operand that dies at the comparison. The immediate makes it the
+// longer code, so `compare_with` takes it only where the XOR form has none.
+fn File::compare_over(self file: File, op: CompareOp, low: LowByteGpr, output, left, right: Nat,
+    first: Option<Found(file, Held(left, Word))>,
+    second: Option<Found(file, Held(right, Word))>) → Option<Lowered>
+{
+    match first {
+        None => None,
+        Some(a) => match second {
+            None => None,
+            Some(b) => Some(Lowered(
+                [CmpRR(a.register, b.register),
+                 MovRI(low_byte_gpr(low), BitVec::zero()),
+                 op.instruction(low)],
+                file.cleared(low).write(low_byte_gpr(low), Some(Held(output, Bit))))),
+        },
+    }
+}
+
 fn File::compare_with(self file: File, op: CompareOp, output, left, right: Nat,
     low: Option<LowByteGpr>) → Option<Lowered>
 {
     match low {
         None => None,
-        Some(byte) => file.compare_found(op, byte, output, left, right,
+        Some(byte) => match file.compare_found(op, byte, output, left, right,
             file.cleared(byte).find(Held(left, Word)),
-            file.cleared(byte).find(Held(right, Word))),
+            file.cleared(byte).find(Held(right, Word))) {
+            Some(lowered) => Some(lowered),
+            None => file.compare_over(op, byte, output, left, right,
+                file.find(Held(left, Word)), file.find(Held(right, Word))),
+        },
     }
 }
 
@@ -1316,16 +1367,64 @@ theorem File::compare_found_keeps<M>(self file: File, values: Valuation(), op: C
     }
 }
 
+theorem File::compare_over_keeps<M>(self file: File, values: Valuation(), op: CompareOp,
+    low: LowByteGpr, output, left, right: Nat,
+    first: Option<Found(file, Held(left, Word))>,
+    second: Option<Found(file, Held(right, Word))>):
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
+        file.compare_over(op, low, output, left, right, first, second))
+{
+    match first {
+        None => trivial,
+        Some(a) => match second {
+            None => trivial,
+            Some(b) => λ s represents holds => {
+                let register = low_byte_gpr(low);
+                let compared = execute_normal(decoded_canonical(CmpRR(a.register, b.register)), s);
+                let zeroing = execute_normal(decoded_canonical(MovRI(register, BitVec::zero())), compared);
+                let zeroed: file.cleared(low).Represents(values, zeroing.gprs) =
+                    file.represents_write(values, s.gprs, register, None, BitVec::zero(), represents, trivial);
+                j(sym(op.executes<M>(low, zeroing)),
+                    λ gprs _ => file.cleared(low).write(register, Some(Held(output, Bit))).Represents(values, gprs),
+                    file.cleared(low).represents_write(values, zeroing.gprs, register,
+                        Some(Held(output, Bit)),
+                        condition_byte(op.flag(zeroing.flags)).concat(
+                            read_gpr(register, zeroing.gprs).drop_low(8, 56)),
+                        zeroed,
+                        compare_written(values, op, output, left, right,
+                            read_gpr(a.register, s.gprs),
+                            read_gpr(b.register, s.gprs),
+                            read_gpr(register, zeroing.gprs), holds,
+                            a.at.rep(values, s.gprs, represents),
+                            b.at.rep(values, s.gprs, represents),
+                            read_gpr_after_write(register, BitVec::zero(), s.gprs))))
+            },
+        },
+    }
+}
+
 theorem File::compare_with_keeps<M>(self file: File, values: Valuation(), op: CompareOp,
     output, left, right: Nat, low: Option<LowByteGpr>):
     MayKeep<M>(values, file, op.Holds(values, output, left, right),
         file.compare_with(op, output, left, right, low))
 {
+    let facts = op.Holds(values, output, left, right);
     match low {
         None => trivial,
-        Some(byte) => file.compare_found_keeps<M>(values, op, byte, output, left, right,
+        Some(byte) => (match file.compare_found(op, byte, output, left, right,
+                file.cleared(byte).find(Held(left, Word)),
+                file.cleared(byte).find(Held(right, Word))) as λ found => MayKeep<M>(values, file, facts, found) →
+            MayKeep<M>(values, file, facts, match found {
+                Some(lowered) => Some(lowered),
+                None => file.compare_over(op, byte, output, left, right,
+                    file.find(Held(left, Word)), file.find(Held(right, Word))),
+            }) {
+            Some(_) => λ keeps => keeps,
+            None => λ _ => file.compare_over_keeps<M>(values, op, byte, output, left, right,
+                file.find(Held(left, Word)), file.find(Held(right, Word))),
+        })(file.compare_found_keeps<M>(values, op, byte, output, left, right,
             file.cleared(byte).find(Held(left, Word)),
-            file.cleared(byte).find(Held(right, Word))),
+            file.cleared(byte).find(Held(right, Word)))),
     }
 }
 
@@ -2616,7 +2715,13 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // node folded into what reads it. A folded constant is an ADD's immediate
 // (or loaded where something reads it from a register after all); a folded
 // comparison is the flags its branch jumps on. The file knows either.
-inductive Place { Into(register: Gpr), Folded }
+//
+// `Saving` is no node's place. It is what a function's placement begins
+// with where the function saves callee-saved registers to hold values in:
+// how many of them, in `kept_order` (function_ir_lower_reads,
+// `placement_saves` in function_ir_lower_calls). Where a node's place is
+// wanted it is a refusal.
+inductive Place { Into(register: Gpr), Folded, Saving(count: Nat) }
 
 fn Node::fold(self node: Node, file: File) → Option<Lowered> {
     match node {
@@ -2675,7 +2780,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
 }
 
 fn Node::lower_at(self node: Node, place: Place, file: File) → Option<Lowered> {
-    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file) }
+    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None }
 }
 
 theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
@@ -2684,6 +2789,7 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
     match place {
         Into(destination) => node.lower_keeps<M>(values, destination, file),
         Folded => node.fold_keeps<M>(values, file),
+        Saving(_) => trivial,
     }
 }
 
@@ -3124,6 +3230,26 @@ fn File::first_free(self file: File, live: Nat → Bool, pool: List<Gpr>) → Op
     }
 }
 
+// A free register of `pool` that is none of `kept`, else the first free
+// one. The planner keeps clear the registers something is wanted in where
+// a first plan of a branch lost a value (`StructuredRegion::plan_in`).
+fn File::first_unkept(self file: File, live: Nat → Bool, pool, kept: List<Gpr>) → Option<Gpr> {
+    match pool {
+        Nil => None,
+        Cons(register, rest) => match !register.listed(kept) && slot_free(file.at(register), live) {
+            True => Some(register),
+            False => file.first_unkept(live, rest, kept),
+        },
+    }
+}
+
+fn File::first_spare(self file: File, live: Nat → Bool, pool, kept: List<Gpr>) → Option<Gpr> {
+    match kept {
+        Nil => file.first_free(live, pool),
+        Cons(_, _) => match file.first_unkept(live, pool, kept) { None => file.first_free(live, pool), Some(register) => Some(register) },
+    }
+}
+
 fn target_of(id: Nat, entries: List<Port>, registers: List<Gpr>) → Option<Gpr> {
     match entries {
         Nil => None,
@@ -3177,18 +3303,112 @@ fn prefers_operand(node: Node) → Bool {
     }
 }
 
+// The first of `registers` that holds `id`, at any kind.
+fn File::holder(self file: File, id: Nat, registers: List<Gpr>) → Option<Gpr> {
+    match registers {
+        Nil => None,
+        Cons(register, rest) => match file.at(register) {
+            None => file.holder(id, rest),
+            Some(held) => match held.id.same(id) { True => Some(register), False => file.holder(id, rest) },
+        },
+    }
+}
+
+// The operands in whose register the node's code can leave its result:
+// the first of arithmetic and of a move (written in place), and either of
+// a comparison of words, which reads both before it clears the bit's
+// register (`File::compare_over`).
+fn Node::overwritable(self node: Node) → List<Nat> {
+    match node {
+        UnsignedLessThan(width, _, left, right) => match width.same(64) { True => [left, right], False => [] },
+        SignedLessThan(width, _, left, right) => match width.same(64) { True => [left, right], False => [] },
+        Equal(width, _, left, right) => match width.same(64) { True => [left, right], False => [] },
+        _ => match prefers_operand(node) { False => [], True => node.reads().take(1) },
+    }
+}
+
+// The register of the first of `operands` that is not read `later`: one
+// of `pool`, or RAX where the output may be there (`rax`).
+fn File::dying_of(self file: File, operands: List<Nat>, later: Nat → Bool, pool: List<Gpr>, rax: Bool) → Option<Gpr> {
+    match operands {
+        Nil => None,
+        Cons(operand, rest) => match later(operand) {
+            True => file.dying_of(rest, later, pool, rax),
+            False => match file.holder(operand, search_order()) {
+                None => file.dying_of(rest, later, pool, rax),
+                Some(register) => match register.listed(pool) || (register.same(Rax) && rax) {
+                    True => Some(register),
+                    False => file.dying_of(rest, later, pool, rax),
+                },
+            },
+        },
+    }
+}
+
+// Where a callee-saved register comes in the order a function saves them
+// (`kept_order`, function_ir_lower_reads), from one; none for a register a
+// function does not save.
+fn Gpr::save_rank(self register: Gpr) → Nat {
+    match register { R12 => 1, R13 => 2, R14 => 3, R15 => 4, Rbx => 5, Rbp => 6, _ => 0 }
+}
+
+// A pool's registers a function need not save, and the ones it must.
+fn pool_unsaved(pool: List<Gpr>) → List<Gpr> {
+    match pool {
+        Nil => [],
+        Cons(register, rest) => match register.save_rank() { Zero => Cons(register, pool_unsaved(rest)), Succ(_) => pool_unsaved(rest) },
+    }
+}
+fn pool_saved(pool: List<Gpr>) → List<Gpr> {
+    match pool {
+        Nil => [],
+        Cons(register, rest) => match register.save_rank() { Zero => pool_saved(rest), Succ(_) => Cons(register, pool_saved(rest)) },
+    }
+}
+
+// Where a node goes at no cost when no register of the pool that needs no
+// save is free: RAX if nothing live is there and the output is not read
+// after a later call, else the register of an operand that dies at the
+// node and that its code can write over.
+fn Node::crowded_in(self node: Node, file: File, live, later, crossed: Nat → Bool, pool: List<Gpr>) → Option<Gpr> {
+    match slot_free(file.at(Rax), live) && !crossed(node.output_id()) {
+        True => Some(Rax),
+        False => file.dying_of(node.overwritable(), later, pool, !crossed(node.output_id())),
+    }
+}
+
+// The same as a register: RAX where there is none, and the lowering will
+// refuse what is lost.
+fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool, pool: List<Gpr>) → Gpr {
+    match node.crowded_in(file, live, later, crossed, pool) { None => Rax, Some(register) => register }
+}
+
+// A register for a new value: the first free one of `pool` that a function
+// need not save, none of `kept` when one is free apart from them; else
+// what `crowded_in` finds; else the first free callee-saved register of
+// `pool`, which costs its function a save (`Saving`,
+// function_ir_lower_calls); else RAX.
+fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
+    match file.first_spare(live, pool_unsaved(pool), kept) {
+        Some(register) => register,
+        None => match node.crowded_in(file, live, later, crossed, pool) {
+            Some(register) => register,
+            None => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(register) => register },
+        },
+    }
+}
+
 // The output's own register if it is free; else, for arithmetic and moves,
 // the first operand's register when the operand dies here and it is in
 // `pool`, or is RAX and the output is not read after a later call
-// (`crossed`; a call's result lands in RAX); else the first free register
-// of `pool`.
+// (`crossed`; a call's result lands in RAX); else what `fresh` finds.
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
 fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: Nat → Bool) → Gpr
+    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = match file.first_free(live, pool) { None => Rax, Some(r) => r };
+    let fresh = node.fresh(file, live, later, crossed, pool, kept);
     let reuse = match prefers_operand(node) {
         False => fresh,
         True => match node.in_place(file, later) {
@@ -3211,7 +3431,7 @@ fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: Lis
 {
     node.choose_by(file, λ (id: Nat) => function_ir_lower::mentions(node.reads() ++ later, id),
         λ (id: Nat) => function_ir_lower::mentions(later, id), entries, registers, pool,
-        λ (id: Nat) => function_ir_lower::mentions(crossed, id))
+        λ (id: Nat) => function_ir_lower::mentions(crossed, id), [])
 }
 
 fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,

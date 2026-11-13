@@ -1,0 +1,81 @@
+// Probes of `sha256_block`: the round constants against the
+// specification's table. What the whole compression computes on a block is
+// held where it is linked (crates/linked/tests/sha256.rs), and its pieces
+// on the block of "abc" in `sha256_compression_tests.hthr`.
+//
+// And the regression of issues/runtime-link-compares-functions.md for
+// functions that only read: a caller and its callee of one Heather type,
+// both heavy. Before that issue's change the generator's link check ran
+// out of its budget on the pair. The writing pairs were the round when it
+// was three functions over the span; it is methods of `Sha256` now
+// (`sha256_working.hthr`), linked by the record's generator. A measured
+// function that only reads and calls one this heavy is refused for another
+// reason (issues/runtime-measured-reader-heavy-callee.md). Tests, not
+// library: nothing imports this module.
+import sha256_block;
+import stored_words;
+import sha256_round;
+import sha2;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import derive;
+import char;
+import string;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// The round constants
+
+// `sha256_k` from `t` on is the table from there.
+fn constants_from(ks: List<Nat>, t: Nat) → Bool {
+    match ks {
+        Nil => True,
+        Cons(k, rest) => sha256_k(w(t)).eq_bit(w(k)) && constants_from(rest, t + 1),
+    }
+}
+
+// All sixty-four, against FIPS 180-4 §4.2.2 as the specification holds it.
+theorem constants_are_the_table(): constants_from(Sha2::k256(), 0) = True { refl }
+theorem table_is_64(): Sha2::k256().len() = 64 { refl }
+// Past the table the halving ends at the last: no round asks.
+theorem constant_past_table(): sha256_k(w(64)) = w(0xc67178f2) { refl }
+
+// ---------------------------------------------------------------------------
+// A caller and a callee of one type, reading
+
+// T1 of round `t` from the context's bytes, as `Sha256::t1` computes it
+// from the context.
+runtime fn probe_t1(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → BitVec(64) {
+    sha256_t1(List::u32_be_within(ctx, cn, BitVec::ofNat(60)), List::u32_be_within(ctx, cn, BitVec::ofNat(48)), List::u32_be_within(ctx, cn, BitVec::ofNat(52)),
+        List::u32_be_within(ctx, cn, BitVec::ofNat(56)), sha256_k(t), List::u32_be_within(ctx, cn, t.shift_left(2).add(BitVec::ofNat(64))))
+}
+
+// Its caller, of the same type. That the two are `runtime fn`s at all is
+// the probe: each instance's link check is run by the generator.
+runtime fn probe_sum(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → BitVec(64) {
+    probe_t1(ctx, cn, t).add(sha256_t2(List::u32_be_within(ctx, cn, t), List::u32_be_within(ctx, cn, t.add(BitVec::ofNat(4))),
+        List::u32_be_within(ctx, cn, t.add(BitVec::ofNat(8)))))
+}

@@ -7,8 +7,8 @@
 // schedule (step 1). Each is a `runtime fn` over 64-bit words, so
 // `compile-x86` certifies it, and each is proved here to be the
 // specification's own function (`lib/std/crypto/sha2.hthr`) at SHA-512's
-// parameters: a rotation is the standard's shift pair on both sides, so the
-// proofs are unfoldings.
+// parameters: each is written as the standard writes it, so the proofs are
+// unfoldings.
 //
 // What is not here is what the pure fragment cannot hold yet: the eight
 // working variables, the sixteen-word schedule and the table of constants
@@ -19,6 +19,7 @@
 
 import bitvec;
 import bitvec_rotate;
+import algebra;
 import bool;
 import list;
 import logic;
@@ -35,95 +36,60 @@ import function_ir;
 import function_ir_eval;
 import runtime;
 
-// Ch with the complement spelled as an XOR against all ones, which is what
-// the pure fragment has.
-runtime fn sha512_ch(x, y, z: BitVec(64)) → BitVec(64) {
-    x.band(y).bxor(x.bxor(BitVec::ofNat(0xffffffffffffffff)).band(z))
-}
+// Ch and Maj (§4.1.3), as the standard writes them. The generator reads
+// `~x` as `all_ones ⊕ x` and a rotation as its shift pair
+// (issues/rt-complement-and-rotate.md).
+runtime fn sha512_ch(x, y, z: u64) → u64 { (x & y) ⊕ (~x & z) }
 
-runtime fn sha512_maj(x, y, z: BitVec(64)) → BitVec(64) {
-    x.band(y).bxor(x.band(z)).bxor(y.band(z))
-}
+runtime fn sha512_maj(x, y, z: u64) → u64 { (x & y) ⊕ (x & z) ⊕ (y & z) }
 
-// Σ0, Σ1, σ0, σ1 (§4.1.3), each rotation the shift pair.
-runtime fn sha512_big0(x: BitVec(64)) → BitVec(64) {
-    x.shift_right(28).bor(x.shift_left(36)).bxor(x.shift_right(34).bor(x.shift_left(30)))
-        .bxor(x.shift_right(39).bor(x.shift_left(25)))
-}
+// Σ0, Σ1, σ0, σ1 (§4.1.3).
+runtime fn sha512_big0(x: u64) → u64 { x.rotr(28) ⊕ x.rotr(34) ⊕ x.rotr(39) }
 
-runtime fn sha512_big1(x: BitVec(64)) → BitVec(64) {
-    x.shift_right(14).bor(x.shift_left(50)).bxor(x.shift_right(18).bor(x.shift_left(46)))
-        .bxor(x.shift_right(41).bor(x.shift_left(23)))
-}
+runtime fn sha512_big1(x: u64) → u64 { x.rotr(14) ⊕ x.rotr(18) ⊕ x.rotr(41) }
 
-runtime fn sha512_small0(x: BitVec(64)) → BitVec(64) {
-    x.shift_right(1).bor(x.shift_left(63)).bxor(x.shift_right(8).bor(x.shift_left(56)))
-        .bxor(x.shift_right(7))
-}
+runtime fn sha512_small0(x: u64) → u64 { x.rotr(1) ⊕ x.rotr(8) ⊕ (x >> 7) }
 
-runtime fn sha512_small1(x: BitVec(64)) → BitVec(64) {
-    x.shift_right(19).bor(x.shift_left(45)).bxor(x.shift_right(61).bor(x.shift_left(3)))
-        .bxor(x.shift_right(6))
-}
+runtime fn sha512_small1(x: u64) → u64 { x.rotr(19) ⊕ x.rotr(61) ⊕ (x >> 6) }
 
 // T1 = h + Σ1(e) + Ch(e, f, g) + K + W.
-runtime fn sha512_t1(h, e, f, g, k, w: BitVec(64)) → BitVec(64) {
-    h.add(sha512_big1(e)).add(sha512_ch(e, f, g)).add(k).add(w)
-}
+runtime fn sha512_t1(h, e, f, g, k, w: u64) → u64 { h + sha512_big1(e) + sha512_ch(e, f, g) + k + w }
 
 // T2 = Σ0(a) + Maj(a, b, c).
-runtime fn sha512_t2(a, b, c: BitVec(64)) → BitVec(64) {
-    sha512_big0(a).add(sha512_maj(a, b, c))
-}
+runtime fn sha512_t2(a, b, c: u64) → u64 { sha512_big0(a) + sha512_maj(a, b, c) }
 
 // W(t) = σ1(W(t−2)) + W(t−7) + σ0(W(t−15)) + W(t−16).
-runtime fn sha512_next(w2, w7, w15, w16: BitVec(64)) → BitVec(64) {
-    sha512_small1(w2).add(w7).add(sha512_small0(w15)).add(w16)
-}
+runtime fn sha512_next(w2, w7, w15, w16: u64) → u64 { sha512_small1(w2) + w7 + sha512_small0(w15) + w16 }
 
 // ---------------------------------------------------------------------------
 // Each is the specification's function.
 
-theorem sha512_ones(): BitVec::ofNat(0xffffffffffffffff, n := 64) = BitVec::all_ones() { refl }
+theorem sha512_big0_spec(x: u64): sha512_big0(x) = Sha2::sha512().big0.big(x) { refl }
+theorem sha512_big1_spec(x: u64): sha512_big1(x) = Sha2::sha512().big1.big(x) { refl }
+theorem sha512_small0_spec(x: u64): sha512_small0(x) = Sha2::sha512().small0.small(x) { refl }
+theorem sha512_small1_spec(x: u64): sha512_small1(x) = Sha2::sha512().small1.small(x) { refl }
+theorem sha512_maj_spec(x, y, z: u64): sha512_maj(x, y, z) = x.maj(y, z) { refl }
+theorem sha512_ch_spec(x, y, z: u64): sha512_ch(x, y, z) = x.ch(y, z) { refl }
 
-theorem sha512_big0_spec(x: BitVec(64)): sha512_big0(x) = Sha2::sha512().big0.big(x) { refl }
-theorem sha512_big1_spec(x: BitVec(64)): sha512_big1(x) = Sha2::sha512().big1.big(x) { refl }
-theorem sha512_small0_spec(x: BitVec(64)): sha512_small0(x) = Sha2::sha512().small0.small(x) { refl }
-theorem sha512_small1_spec(x: BitVec(64)): sha512_small1(x) = Sha2::sha512().small1.small(x) { refl }
-theorem sha512_maj_spec(x, y, z: BitVec(64)): sha512_maj(x, y, z) = x.maj(y, z) { refl }
-
-theorem sha512_ch_spec(x, y, z: BitVec(64)): sha512_ch(x, y, z) = x.ch(y, z) {
-    let complement: (x.bxor(BitVec::ofNat(0xffffffffffffffff)) = x.complement()) =
-        j(sym(sha512_ones()), λ ones _ => x.bxor(ones) = x.complement(), BitVec::bxor_all_ones(64, x));
-    cong_fn(λ (c: BitVec(64)) => x.band(y).bxor(c.band(z)), complement)
-}
-
-theorem sha512_t1_spec(s: Sha2State(64), k, w: BitVec(64)):
+theorem sha512_t1_spec(s: Sha2State(64), k, w: u64):
     sha512_t1(s.h, s.e, s.f, s.g, k, w) = Sha2::sha512().t1(s, k, w)
-{
-    let big: (sha512_big1(s.e) = Sha2::sha512().big1.big(s.e)) = sha512_big1_spec(s.e);
-    let ch: (sha512_ch(s.e, s.f, s.g) = s.e.ch(s.f, s.g)) = sha512_ch_spec(s.e, s.f, s.g);
-    trans(cong_fn(λ (v: BitVec(64)) => s.h.add(v).add(sha512_ch(s.e, s.f, s.g)).add(k).add(w), big),
-        cong_fn(λ (v: BitVec(64)) => s.h.add(Sha2::sha512().big1.big(s.e)).add(v).add(k).add(w), ch))
-}
+{ refl }
 
-theorem sha512_t2_spec(s: Sha2State(64)): sha512_t2(s.a, s.b, s.c) = Sha2::sha512().t2(s) {
-    cong_fn(λ (v: BitVec(64)) => v.add(sha512_maj(s.a, s.b, s.c)), sha512_big0_spec(s.a))
-}
+theorem sha512_t2_spec(s: Sha2State(64)): sha512_t2(s.a, s.b, s.c) = Sha2::sha512().t2(s) { refl }
 
 // One round of the specification is the two compiled words and `turn`.
-theorem sha512_round_spec(s: Sha2State(64), k, w: BitVec(64)):
+theorem sha512_round_spec(s: Sha2State(64), k, w: u64):
     Sha2::sha512().round(s, k, w) =
         s.turn(sha512_t1(s.h, s.e, s.f, s.g, k, w), sha512_t2(s.a, s.b, s.c))
 {
-    sym(trans(cong_fn(λ (t: BitVec(64)) => s.turn(t, sha512_t2(s.a, s.b, s.c)), sha512_t1_spec(s, k, w)),
-        cong_fn(λ (t: BitVec(64)) => s.turn(Sha2::sha512().t1(s, k, w), t), sha512_t2_spec(s))))
+    sym(trans(cong_fn(λ (t: u64) => s.turn(t, sha512_t2(s.a, s.b, s.c)), sha512_t1_spec(s, k, w)),
+        cong_fn(λ (t: u64) => s.turn(Sha2::sha512().t1(s, k, w), t), sha512_t2_spec(s))))
 }
 
 // A schedule word is the compiled word of the four the window holds at
 // those places, whatever the window holds past them.
-theorem sha512_next_spec(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15: BitVec(64),
-    rest: List<BitVec(64)>):
+theorem sha512_next_spec(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15: u64,
+    rest: List<u64>):
     Sha2::sha512().next_word(
         Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Cons(a7,
         Cons(a8, Cons(a9, Cons(a10, Cons(a11, Cons(a12, Cons(a13, Cons(a14, Cons(a15, rest))))))))))))))))) =

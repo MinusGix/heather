@@ -5,7 +5,7 @@ labels: [native,compiler,performance]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 `{p}_emits_k` is one conversion: the whole verified lowering of function
@@ -65,3 +65,7 @@ steeper than the function was not measured after the last change.
 A function of five hundred comparisons certifies under the usual cap, in
 parts the driver chose, and no part's statement mentions the code before
 it.
+
+## Log
+
+- 2026-11-11: `write-elf` has the same limit since the one-compiler round U2 ([[native-one-compiler]]): the functions a tool calls are linked onto the program in one statement (`<source>_elf_deep`, by `Prog::links`). Emitting a function a region at a time should serve both doors: `emit_functions_after` is `emit_functions` from a program instead of `Start`, so the per-function and per-region statements carry over.

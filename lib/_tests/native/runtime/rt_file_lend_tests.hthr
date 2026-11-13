@@ -1,0 +1,418 @@
+// Probes of a computation called over views (`FTm::Lend`,
+// lib/native/runtime/rt_file.hthr; docs/native-library-exports-design.md
+// §3.1, step V5a): a callee that writes a span and reads another, called
+// over a window of each of its caller's spans, and over the whole written
+// span and a window of the read one. The reflections are written by hand
+// here. Each is lowered by evaluation, the pin closes by conversion at any
+// spans, the once-proof `FFun::lower_sound` is instantiated over any file,
+// and the lowered program is what the function compiler accepts. What the
+// lowering refuses, and controls; and a loop that lends, whose values past
+// the ninth the function compiler keeps in callee-saved registers. Tests,
+// not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import bitvec;
+import string;
+import tactic;
+import rt;
+import rt_lower;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_reflect;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_rows;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn five() → List<BitVec(8)> { [b(1), b(2), b(3), b(4), b(5)] }
+fn tens() → List<BitVec(8)> { [b(10), b(20), b(30), b(40), b(50)] }
+
+fn bare() → World { World(RecInfo::none, [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+fn code_of(lowered: Option<Function>) → Function { match lowered { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
+
+// ---------------------------------------------------------------------------
+// The callee: a span written from a span read
+
+// The byte at `i` of the span it reads, stored at `i` of the span it
+// writes, each under its length word; the index returned.
+fn carry(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    Mutated(span.with_byte_within(length, i, text.byte_within(size, i)), i)
+}
+
+// Five words: each span's place and length, then the index. Under the
+// `Let` the byte is variable 0, the index 1 and the written span's length
+// 4.
+fn carry_rt() → FFun { FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64), Let(Byte(1, 0, 1), Put(1, 4, 0, Pure(Var(1)))), 2) }
+fn carry_code() → Function { code_of(carry_rt().lower(bare(), [], 0)) }
+
+theorem carry_lowers(): carry_rt().lower(bare(), [], 0).is_some() = True { refl }
+
+theorem carry_pinned(span, text: List<BitVec(8)>, more: List<List<BitVec(8)>>, place, length, at, size, i: BitVec(64)):
+    carry_rt().meaning(alone(Cons(text, more)), span, place, length, at, size, i) = carry(span, length, text, size, i) { refl }
+
+// The program's computations: `carry`'s signature, and its meaning at
+// every rest of a file.
+fn carry_world(rest: List<List<BitVec(8)>>) → FWorld {
+    FWorld(bare(), λ _ => trivial, [carry_rt().sig()], λ (r: List<List<BitVec(8)>>) => Pair(carry_rt().meaning(alone(r)), trivial), rest)
+}
+
+// The callee's code answers its callers over every file, the windows of a
+// lend among them: the hypothesis of the once-proof, from the callee's own
+// instance of it.
+theorem carry_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(carry_world(rest), 0, program_run([carry_code()])) {
+    ⟨λ own => Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), Writers::words(program_run([carry_code()]), Cons(own, rest))),
+        ⟨λ f among => false_elim(among),
+            λ f => match f {
+                Zero => λ _ r own => FFun::lower_sound(carry_rt(), alone(r), 0, program_run([]),
+                    FTm::calls_agree_none(RecInfo::none, r, program_run([])), own),
+                Succ(_) => λ ok => false_elim(ok.right),
+            }⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// A window of each span
+
+// `carry` at the first byte of the windows `from` up to `end` of both
+// spans, where they are windows; 0 and nothing stored where `end` is past
+// either span or before `from`. The three tests are what the function
+// compiler reads the windows' bounds off.
+fn carry_at(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match length.unsigned_lt_bit(end) {
+        True => Mutated(span, BitVec::ofNat(0)),
+        False => match size.unsigned_lt_bit(end) {
+            True => Mutated(span, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(span, BitVec::ofNat(0)),
+                False => {
+                    let done = carry(span.window(from.toNat(), end.toNat()), end.sub(from), text.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
+                    Mutated(span.put_window(from.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+// Six words. Each test's bit and then the index are bound, so at the lend
+// the index is variable 0, `end` 4, `from` 5, the read span's place 7 and
+// the written span's 9.
+fn carry_at_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Prim(Ult(64), [4, 0]), If(0, Pure(Lit(Word(64), 0)),
+            Let(Prim(Ult(64), [3, 1]), If(0, Pure(Lit(Word(64), 0)),
+                Let(Prim(Ult(64), [2, 3]), If(0, Pure(Lit(Word(64), 0)),
+                    Let(Lit(Word(64), 1), Lend(0, [FView(0, 9, Some(5), 4), FView(1, 7, Some(5), 4)], [0], Pure(Var(0)))))))))), 2)
+}
+
+fn carry_at_code() → Function { code_of(carry_at_rt().lower(bare(), [carry_rt().sig()], 0)) }
+fn window_program() → List<Function> { [carry_at_code(), carry_code()] }
+
+theorem carry_at_lowers(): carry_at_rt().lower(bare(), [carry_rt().sig()], 0).is_some() = True { refl }
+
+// The pin: the reflection means the function at any spans, the callee's
+// meaning read at the windows.
+theorem carry_at_pinned(span, text: List<BitVec(8)>, more: List<List<BitVec(8)>>, place, length, at, size, from, end: BitVec(64)):
+    carry_at_rt().meaning(carry_world(Cons(text, more)), span, place, length, at, size, from, end) = carry_at(span, length, text, size, from, end) {
+    refl
+}
+
+// The once-proof over the program: the caller's code, its lend answered by
+// the callee's code run over the windows, ends as the function does over
+// any file.
+theorem carry_at_compiled(span, text: List<BitVec(8)>, more: List<List<BitVec(8)>>, place, length, at, size, from, end: BitVec(64)):
+    program_run(window_program(), Cons(span, Cons(text, more)), 1, [place, length, at, size, from, end]) =
+        Ending(carry_at(span, length, text, size, from, end).value, Cons(carry_at(span, length, text, size, from, end).after, Cons(text, more))) {
+    FFun::lower_sound(carry_at_rt(), carry_world(Cons(text, more)), 0, program_run([carry_code()]), carry_agrees(Cons(text, more)), span, place, length,
+        at, size, from, end)
+}
+
+// On bytes: byte 1 of the window from 1 to 4 of the read span, which is
+// its byte 2, stored at 2 of the written span; a window of one byte has no
+// byte 1; and no window, nothing lent.
+theorem carry_at_runs(): program_run(window_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(1), w(4)]) =
+    Ending(w(1), [[b(1), b(2), b(30), b(4), b(5)], tens()]) { refl }
+theorem carry_at_short(): program_run(window_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(1), w(2)]) =
+    Ending(w(1), [five(), tens()]) { refl }
+theorem carry_at_past_written(): program_run(window_program(), [five(), tens()], 1, [w(4096), w(3), w(8192), w(5), w(1), w(4)]) =
+    Ending(w(0), [five(), tens()]) { refl }
+theorem carry_at_past_read(): program_run(window_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(3), w(1), w(4)]) =
+    Ending(w(0), [five(), tens()]) { refl }
+theorem carry_at_backwards(): program_run(window_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(4), w(1)]) =
+    Ending(w(0), [five(), tens()]) { refl }
+
+// The control: the lend does not leave the file as it was.
+theorem carry_at_changes(same: program_run(window_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(1), w(4)]) =
+    Ending(w(1), [five(), tens()])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 2).eq_bit(b(30)), same);
+    absurd(verdict)
+}
+
+// What the function compiler takes: evaluable, at no address, each
+// function lent two spans and storing into its first only, and lowered
+// under those lendings.
+theorem carry_at_evaluable(): program_evaluable(window_program()) = True { refl }
+theorem carry_at_placeless(): program_placeless(window_program()) = True { refl }
+theorem carry_at_counts(): program_counts(window_program()) = [2, 2] { refl }
+theorem carry_at_rows(): program_rows(window_program()) = [[True], [True]] { refl }
+theorem carry_at_marked(): program_marked(window_program(), [[True], [True]]) = True { refl }
+theorem carry_at_accepted(): lower_program_lent(window_program(), plan_program(window_program()), program_counts(window_program())).is_some() = True {
+    refl
+}
+
+// ---------------------------------------------------------------------------
+// The written span whole, a window of the read one
+
+// `carry` at 1 of the written span, from the window `from` up to `end` of
+// the read one. The written span is handed on under its own length word,
+// which is its window from the first byte: no test, and no arithmetic on
+// its place.
+fn carry_from(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match size.unsigned_lt_bit(end) {
+        True => Mutated(span, BitVec::ofNat(0)),
+        False => match end.unsigned_lt_bit(from) {
+            True => Mutated(span, BitVec::ofNat(0)),
+            False => {
+                let done = carry(span.window(0, length.toNat()), length, text.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
+                Mutated(span.put_window(0, done.after), done.value)
+            },
+        },
+    }
+}
+
+// Six words. At the lend the index is variable 0, `end` 3, `from` 4, the
+// read span's place 6, the written span's length 7 and its place 8.
+fn carry_from_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Prim(Ult(64), [2, 0]), If(0, Pure(Lit(Word(64), 0)),
+            Let(Prim(Ult(64), [1, 2]), If(0, Pure(Lit(Word(64), 0)),
+                Let(Lit(Word(64), 1), Lend(0, [FView(0, 8, None, 7), FView(1, 6, Some(4), 3)], [0], Pure(Var(0)))))))), 2)
+}
+
+fn carry_from_code() → Function { code_of(carry_from_rt().lower(bare(), [carry_rt().sig()], 0)) }
+fn prefix_program() → List<Function> { [carry_from_code(), carry_code()] }
+
+theorem carry_from_lowers(): carry_from_rt().lower(bare(), [carry_rt().sig()], 0).is_some() = True { refl }
+
+theorem carry_from_pinned(span, text: List<BitVec(8)>, more: List<List<BitVec(8)>>, place, length, at, size, from, end: BitVec(64)):
+    carry_from_rt().meaning(carry_world(Cons(text, more)), span, place, length, at, size, from, end) = carry_from(span, length, text, size, from, end) {
+    refl
+}
+
+theorem carry_from_compiled(span, text: List<BitVec(8)>, more: List<List<BitVec(8)>>, place, length, at, size, from, end: BitVec(64)):
+    program_run(prefix_program(), Cons(span, Cons(text, more)), 1, [place, length, at, size, from, end]) =
+        Ending(carry_from(span, length, text, size, from, end).value, Cons(carry_from(span, length, text, size, from, end).after, Cons(text, more))) {
+    FFun::lower_sound(carry_from_rt(), carry_world(Cons(text, more)), 0, program_run([carry_code()]), carry_agrees(Cons(text, more)), span, place, length,
+        at, size, from, end)
+}
+
+// On bytes: byte 1 of the window from 2 to 5 of the read span, its byte 3,
+// stored at 1 of the written span; under a length word of 1 the store is
+// past it; and the callee reads nothing past the window's end.
+theorem carry_from_runs(): program_run(prefix_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(5)]) =
+    Ending(w(1), [[b(1), b(40), b(3), b(4), b(5)], tens()]) { refl }
+theorem carry_from_under(): program_run(prefix_program(), [five(), tens()], 1, [w(4096), w(1), w(8192), w(5), w(2), w(5)]) =
+    Ending(w(1), [five(), tens()]) { refl }
+theorem carry_from_past_window(): program_run(prefix_program(), [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(3)]) =
+    Ending(w(1), [[b(1), b(0), b(3), b(4), b(5)], tens()]) { refl }
+
+theorem carry_from_evaluable(): program_evaluable(prefix_program()) = True { refl }
+theorem carry_from_placeless(): program_placeless(prefix_program()) = True { refl }
+theorem carry_from_rows(): program_rows(prefix_program()) = [[True], [True]] { refl }
+theorem carry_from_accepted(): lower_program_lent(prefix_program(), plan_program(prefix_program()), program_counts(prefix_program())).is_some() = True {
+    refl
+}
+
+// ---------------------------------------------------------------------------
+// What the lowering refuses
+
+// A lend with no view: the callee has no span to write.
+theorem no_view_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64), Lend(0, [], [4, 3, 2, 1, 0], Pure(Var(0))), 2)
+        .lower(bare(), [carry_rt().sig()], 0) = None { refl }
+
+// A first view of a span the function only reads: the callee would write
+// it.
+theorem read_span_written_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Lend(0, [FView(1, 2, None, 1), FView(1, 2, None, 1)], [0], Pure(Var(0))), 2).lower(bare(), [carry_rt().sig()], 0) = None { refl }
+
+// A view too few for the callee's words, and an argument too many.
+theorem short_views_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64), Lend(0, [FView(0, 4, None, 3)], [0], Pure(Var(0))), 2)
+        .lower(bare(), [carry_rt().sig()], 0) = None { refl }
+theorem long_lend_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Lend(0, [FView(0, 4, None, 3), FView(1, 2, None, 1)], [0, 0], Pure(Var(0))), 2).lower(bare(), [carry_rt().sig()], 0) = None { refl }
+
+// A view that ends at a byte: its end is not a word.
+theorem byte_end_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Prim(Trunc(8, 56), [0]), Lend(0, [FView(0, 5, None, 0), FView(1, 3, None, 2)], [1], Pure(Var(0)))), 2)
+        .lower(bare(), [carry_rt().sig()], 0) = None { refl }
+
+// The same lend with its views as they should be lowers.
+theorem whole_lend_lowers():
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Lend(0, [FView(0, 4, None, 3), FView(1, 2, None, 1)], [0], Pure(Var(0))), 2).lower(bare(), [carry_rt().sig()], 0).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A loop that lends
+
+// Four words kept (each span's place and length) and the index moved: a
+// pass lends the one byte's window `i..i + 1` of each span to `carry`, at
+// index 0, and goes round from `i + 1`; it leaves with the index where the
+// window would pass either length. The shape of a hash's loop over its
+// blocks, a byte at a time.
+//
+//   let one = 1                  [one, i, size, at, length, place]
+//   let next = i + one           [next, one, i, size, at, length, place]
+//   if length <u next { i } else
+//   if size <u next { i } else
+//   if next <u i { i } else
+//     let zero = 0               [zero, _, _, _, next, one, i, size, at, length, place]
+//     let r = carry(span from i to next, text from i to next, zero)
+//     again(place, length, at, size, next)
+fn each_body() → FTm {
+    Let(Lit(Word(64), 1), Let(Prim(Add(64), [1, 0]), Let(Prim(Ult(64), [5, 0]), IfEq(0, Pure(Var(3)),
+        Let(Prim(Ult(64), [4, 1]), IfEq(0, Pure(Var(4)), Let(Prim(Ult(64), [2, 4]), IfEq(0, Pure(Var(5)),
+            Let(Lit(Word(64), 0), Lend(0, [FView(0, 10, Some(6), 4), FView(1, 8, Some(6), 4)], [0], Again([11, 10, 9, 8, 5])))))))))))
+}
+fn each_lowered() → Option<Function> {
+    FFun::lower_measured([Word(64), Word(64), Word(64), Word(64)], Word(64), [], each_body(), Word(64), bare(), [carry_rt().sig()], 0, 2)
+}
+fn each_code() → Function { code_of(each_lowered()) }
+fn each_program() → List<Function> { [each_code(), carry_code()] }
+
+// It lowers, and the code is the function compiler's to run: every byte of
+// the read span from 1 on is carried, a pass a byte.
+theorem each_lowers(): each_lowered().is_some() = True { refl }
+theorem each_evaluable(): program_evaluable(each_program()).IsTrue() { trivial }
+theorem each_runs(a, c: BitVec(64)): program_run(each_program(), [five(), tens()], 1, [a, w(5), c, w(5), w(1)]) =
+    Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]) { refl }
+theorem each_runs_short(): program_run(each_program(), [five(), tens()], 1, [w(0), w(5), w(0), w(3), w(0)]) =
+    Ending(w(3), [[b(10), b(20), b(30), b(4), b(5)], tens()]) { refl }
+
+// A pass holds twelve values at the call (the four kept words, the index
+// and the next, the loop's count, the argument and the four words the
+// views bind) and nine caller-saved registers hold a function's values.
+// The planner puts what fits nowhere else in callee-saved registers and
+// says how many the function saves, three here: the function stores them
+// above its spill slots at its entry and loads them back before its
+// return, so its caller finds them kept (`Saving`, `function_runs`). The
+// callee is crowded by nothing and saves none.
+theorem each_saves(): placement_saves(each_code().plan()) = 3 { refl }
+theorem carry_saves(): placement_saves(carry_code().plan()) = 0 { refl }
+theorem each_present(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).is_some().IsTrue() { trivial }
+fn each_machine() → Prog { lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).get(each_present()) }
+theorem each_accepted(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]) = Some(each_machine()) {
+    Option::some_get(lower_program_lent(each_program(), plan_program(each_program()), [2, 2]), each_present())
+}
+theorem each_reports_nothing(): each_code().refused(1, each_code().plan(), 2, [2, 2]) = "nothing: the function has code after no other" { refl }
+theorem each_marked(): program_marked(each_program(), [[True], [True]]) = True { refl }
+
+// So the code, the two spans lent wherever the laws let them lie, the
+// first to be written: it returns 5 and the file in memory has the read
+// span's bytes from 1 on in the written one.
+theorem each_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 2], addresses, [five(), tens()], [True]).spans())):
+    Site<M>(fetch, data, each_machine(), last, origin).Returns(stack, asm_labels(each_machine())(2),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(5), c, w(5), w(1)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+            stack.LentOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), top, 1, [a, w(5), c, w(5), w(1)], [five(), tens()])(i, s),
+        stack.AnsweredOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()])) {
+    compiled_returns_marked<M>(each_program(), plan_program(each_program()), [2, 2], addresses, [[True], [True]], each_machine(),
+        each_accepted(), each_evaluable(), trivial, fetch, data, last, origin, stack, top, [five(), tens()], 1, trivial, loan,
+        [a, w(5), c, w(5), w(1)], trivial, Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]), each_runs(a, c))
+}
+
+// The controls. The same places with no save are refused: a value in a
+// callee-saved register the function does not save is one its caller would
+// lose. So are they with one register fewer saved than they use.
+theorem each_unsaved_refused(): lower_program_lent(each_program(), carry_code().plan() ++ placement_body(each_code().plan()), [2, 2]) = None { refl }
+theorem each_undersaved_refused():
+    lower_program_lent(each_program(), carry_code().plan() ++ Cons(Saving(2), placement_body(each_code().plan())), [2, 2]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Read from source
+
+// The reflector reads each of the two functions above as the term written
+// for it by hand: the call over windows from the `put_window` that puts
+// its part back, a window's bounds as the words whose `toNat` they are.
+theorem carry_at_reflected(): True { by reflects_file_as(["carry", "carry_at"], [], [carry_rt(), carry_at_rt()]) }
+theorem carry_from_reflected(): True { by reflects_file_as(["carry", "carry_from"], [], [carry_rt(), carry_from_rt()]) }
+
+// What the reflector refuses of a call over windows, each with its reason.
+
+// A window from a literal other than 0: the code has no word to compare.
+fn from_one(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(1, end.toNat()), end, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(1, done.after), done.value)
+}
+// expect-error: a window's bounds are `x.toNat()` of 64-bit words
+theorem from_one_refused(): True { by reflects_file_as(["carry", "from_one"], [], []) }
+
+// A window's length word that is not its bounds' difference.
+fn wrong_size(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(from.toNat(), end.toNat()), length, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(from.toNat(), done.after), done.value)
+}
+// expect-error: the word after a window is the window's length
+theorem wrong_size_refused(): True { by reflects_file_as(["carry", "wrong_size"], [], []) }
+
+// The part put back somewhere other than where its window started.
+fn put_elsewhere(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(from.toNat(), end.toNat()), end.sub(from), text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: `put_window` puts back what a call over windows wrote
+theorem put_elsewhere_refused(): True { by reflects_file_as(["carry", "put_elsewhere"], [], []) }
+
+// A window to read of the span the call writes.
+fn reads_own(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(0, end.toNat()), end, span.window(0, length.toNat()), length, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: a window to read of the span the call writes
+theorem reads_own_refused(): True { by reflects_file_as(["carry", "reads_own"], [], []) }
+
+// A callee's first span, which it writes, as a window of a span this
+// function only reads.
+fn writes_read(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(text.window(0, size.toNat()), size, text.window(0, size.toNat()), size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: the first window of a call over windows is of the span this function writes
+theorem writes_read_refused(): True { by reflects_file_as(["carry", "writes_read"], [], []) }
+
+// A span handed whole to a call whose part is put back: the callee's span
+// is then not a window.
+fn whole_text(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let done = carry(span.window(0, length.toNat()), length, text, size, BitVec::ofNat(0));
+    Mutated(span.put_window(0, done.after), done.value)
+}
+// expect-error: takes each of its spans as a window
+theorem whole_text_refused(): True { by reflects_file_as(["carry", "whole_text"], [], []) }

@@ -212,6 +212,75 @@ optimization that uses it is proved once under it as a hypothesis.
   pass sound (`docs/certified-pass-algebra-probe.md`;
   `function-ir-pass-in-heather` is the first real one). A pass that needs a
   fact takes it as a hypothesis of its local law.
+- **One compiler serves the levels** (Minus, 2026-11-11: "unify first and
+  then export"; `docs/native-one-compiler-design.md`). `write-elf` and
+  `compile-x86` share FunctionIR and the region lowering and grew apart
+  above it. The direction is one compiler of functions: a frame, System V
+  registers, buffers lent, a body that may have effects. A pure function,
+  a program's `main` and an export are its cases. The first joint is
+  built: a program's call of a `runtime fn` is a CALL of the function
+  compiler's code in the same file, proved from that function's contract.
+  The second is built for reads: a function reads a buffer it is lent
+  through a home (two of its values, address and length), under a
+  comparison the path knows, and its contract says what it was lent
+  (§2.5); a program's call passes its buffer's home, and a tool runs that
+  reads its input and calls a compiled loop over it. `Compile(f)` says so
+  for a function over memory: it is stated at every file, the function
+  taking a span and its length word where its code takes the home, and
+  one code serving every file, and a `runtime fn` whose leading
+  parameters are a byte list and its length word is such a function, a
+  loop over the span included. Such functions link into a program that
+  is proved at every file, call one another over the same span, and a
+  tool's call of one is proved to answer as the Heather function at the
+  tool's buffer: `wc -l` counts with a `runtime fn`. What is left of it
+  is writes. They are designed (`docs/native-one-compiler-design.md`
+  §2.6): the file is state the meaning threads, and a caller lends a
+  span by laws that say what a store into it leaves, which are what
+  Rust's `&` and `&mut` give. The memory half is built
+  (`x86_64_lending.hthr`), the function compiler's contract is stated
+  under those laws with the file threaded (`Site::CallsOver`), and it
+  compiles a store under the bound a load asks, into a span the lending
+  lets be written; what such a function returns and leaves is stated by
+  evaluation (`program_run`), the same at every address of the spans it
+  is lent (`program_run_placeless`), and a program's meaning threads the
+  file through its calls (`program_writers`). The program compiler
+  proves such a call: it lends its buffers to write, and the statement
+  after the call holds over the file the callee left
+  (`Target::based_left`), so a program whose functions store links:
+  `tr` runs with its loop a called function that rewrites the buffer
+  (`raise_span`, a `runtime fn`). `rt` writes as
+  a computation over the span, a layer over its pure terms as the layer
+  over Linux is (`FTm`, `rt_file.hthr`): the meaning threads the bytes
+  of the one span written, and the lowering's code runs to it
+  (`FTm::lower_sound`, `rt_file_lower.hthr`). A computation that calls
+  itself last under a measure is one loop with the span carried from
+  pass to pass, proved once against any function that satisfies the
+  body's equation (`FFun::measured_sound`, `rt_file_loop.hthr`); the
+  measure may read the span. Such a function is ordinary Heather of
+  type span to `Mutated`, a `mut self` method or a function returning
+  the record, and its reflection is read from its elaborated body by
+  the chain of stores and calls that makes each end's span
+  (`rt_file_reflect.hthr`). Its class states the run
+  (`CompileSpan<F>(f)`, `runtime_file.hthr`), and a program is linked
+  from instances of both classes over the files with a span first, a
+  function at a time (`program_spanned`, `function_ir_link.hthr`). The
+  generator is `runtime fn`'s own, told by the type: a function whose
+  type ends in `Mutated` gets a `CompileSpan` instance, a linked
+  program and its run stated at every file (`f::runs_over`), with
+  nothing proved for the function in particular. The third joint is
+  built but for its last step
+  (`docs/native-procedures-are-functions-design.md`, steps 5a to 5c): a
+  statement's words are in a frame of its activation, the callee saves
+  what it keeps and counts its own depth, one function emits every
+  call, and one contract says a callee runs as its tree
+  (`Target::Callable`), proved once at the call site
+  (`Target::goes_calls`). A procedure meets it with its body's tree and
+  a function with the tree that is a value, its proved return read as
+  the answer. Still to come is one lowering of byte nodes. Calls keep
+  two levels in the meaning, because a region is a total function and a
+  statement is a tree: what a region calls answers with a value, what a
+  statement calls may ask, run out of depth or exit, and recursion
+  lives there.
 - **Representations.** `datarepr` gives a spec type a runtime layout by
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
@@ -219,8 +288,10 @@ optimization that uses it is proved once under it as a hypothesis.
 
 ### 2.5 Memory a function is lent
 
-Proposed 2026-11-10 (`docs/native-library-exports-design.md`), not yet
-accepted. Principle 1 applied to memory:
+Proposed 2026-11-10 (`docs/native-library-exports-design.md`); Minus's
+answer (2026-11-11) was to join the two compilers first, so it lands in
+the order of `docs/native-one-compiler-design.md`. Principle 1 applied to
+memory:
 
 - **A buffer is a value in every level's meaning.** A list of bytes in
   `rt`, a numbered entry of `Buffers()` in FunctionIR. No meaning mentions
@@ -232,13 +303,30 @@ accepted. Principle 1 applied to memory:
   it may make (`Wrote`). What a caller wants kept, its frame, the code, the
   spans it lent, follows from that one relation, so exports, calls between
   compiled functions and `Proved` items share one footprint.
-- **What a caller promises is a premise, stated semantically** (`Lends`: no
-  store the call may make changes what the span reads). Geometry, two
+- **What a caller promises is a premise, stated semantically** (first
+  `Lends`: no store the call may make changes what the span reads; with
+  writes, the laws of a `Loan`, which say what each store leaves).
+  Geometry, two
   spans sharing no address, proves the premise where addresses are
   numbers and is decided there, never inside the compiler's proof.
 - **An access the machine may refuse is guarded by a comparison the path
   knows**, the default that always compiles; a fact (`InBounds`) removes
   the guard as an optimization (§2.3).
+
+Built for reads in the function compiler (2026-11-11,
+`function_ir_lower_reads`): the home is two values of the scope, carried
+by loops and handed on by calls; the guard is the conditional the source
+already has, known in the arm it selects, so the lowering emits no check
+of its own. One thing the list above leaves open is settled in
+`docs/native-one-compiler-design.md` §2.3: the lowered code is handed an
+address as a word, so "no meaning mentions an address" needs the
+evaluation not to depend on that word. An export gets this from its
+agreement equation over an open word; a program's tree needs it as a
+theorem about placeless functions. That theorem is built
+(`program_eval_placeless`), and a program's compile cites it: the tree
+states a call over the buffers the program holds with no address
+(`program_readers`), the code passes the address the layout gives, and the
+two answers are the same for every function `Prog::links` accepts.
 
 ---
 
@@ -414,7 +502,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed, awaiting acceptance (§2.5) | `docs/native-library-exports-design.md`, `docs/native-lexer-crypto-roadmap.md` §2, milestone `nh-library` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads and writes inside one file (a program lends its buffers to a function it calls, which may store into them); a function that reads a span its Rust caller owns is exported, its declaration generated from the certificate's signature; the scanner's loop is one such function, proved to be the specification's scan of a token and called once a token from Rust; a function that stores into a span its Rust caller lends is exported too, the spans it may write read off its program and its wrapper taking `&mut [u8]` | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |

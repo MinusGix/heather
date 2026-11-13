@@ -1,0 +1,152 @@
+// Probes of a lending (x86_64_lending; docs/native-one-compiler-design.md
+// §2.6): two spans of a data region lent above an offset `top`, the first
+// to write and the second to read, by `DataRegion::loan`, and what the
+// laws give a borrower and its caller. Then the control: no lending has a
+// written span that shares its first byte with another. Tests, not
+// library: nothing imports this module.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_byte_memory;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Two spans of sixteen bytes, the first written
+
+fn pair_size(b: Nat) → Nat { match b { Zero => 16, Succ(k) => match k { Zero => 16, Succ(_) => 0 } } }
+fn pair_offset(top, b: Nat) → Nat { match b { Zero => top, Succ(_) => top + 16 } }
+fn pair_at(r: DataRegion, top, b: Nat) → BitVec(64) {
+    match b { Zero => next_rip(r.low, top), Succ(k) => match k { Zero => next_rip(r.low, top + 16), Succ(_) => BitVec::zero() } }
+}
+fn pair_written(b: Nat) → Bool { match b { Zero => True, Succ(_) => False } }
+
+fn pair_spans(r: DataRegion, top: Nat) → Spans { Spans(λ b => pair_at(r, top, b), pair_size, pair_written) }
+
+theorem pair_placed(r: DataRegion, top: Nat, fits: top + 32 <= r.size, b: Nat): 0 < pair_size(b) →
+    (pair_at(r, top, b) = next_rip(r.low, pair_offset(top, b))) ∧ ((top <= pair_offset(top, b)) ∧ (pair_offset(top, b) + pair_size(b) <= r.size)) {
+    let here: (top <= top) = omega;
+    let whole: (top + 16 <= r.size) = omega(fits);
+    let above: (top <= top + 16) = omega;
+    let all: (top + 16 + 16 <= r.size) = omega(fits);
+    match b {
+        Zero => λ _ => ⟨refl, ⟨here, whole⟩⟩,
+        Succ(k) => match k {
+            Zero => λ _ => ⟨refl, ⟨above, all⟩⟩,
+            Succ(_) => λ no => false_elim(no),
+        },
+    }
+}
+
+theorem pair_empty(r: DataRegion, top: Nat, b: Nat): pair_size(b) = 0 → pair_at(r, top, b).toNat() <= Nat::pow(2, 47) {
+    match b {
+        Zero => λ no => false_elim(j(no, λ n _ => 0 < n, trivial)),
+        Succ(k) => match k {
+            Zero => λ no => false_elim(j(no, λ n _ => 0 < n, trivial)),
+            Succ(_) => λ _ => j(sym(BitVec::zero_toNat(64)), λ z _ => z <= Nat::pow(2, 47), Nat::leb_sound(0, Nat::pow(2, 47), trivial)),
+        },
+    }
+}
+
+theorem pair_apart(top: Nat, b, c: Nat): pair_written(b) = True → b ≠ c → 0 < pair_size(b) → 0 < pair_size(c) →
+    (pair_offset(top, b) + pair_size(b) <= pair_offset(top, c)) ∨ (pair_offset(top, c) + pair_size(c) <= pair_offset(top, b)) {
+    let below: (top + 16 <= top + 16) = omega;
+    match b {
+        Zero => match c {
+            Zero => λ _ differs _ _ => false_elim(differs(refl)),
+            Succ(k) => match k {
+                Zero => λ _ _ _ _ => Inl(below),
+                Succ(_) => λ _ _ _ no => false_elim(no),
+            },
+        },
+        Succ(_) => λ written _ _ _ => absurd(written),
+    }
+}
+
+// The lending: whatever the region, wherever the two spans fit above `top`.
+theorem pair_loan(r: DataRegion, top: Nat, fits: top + 32 <= r.size):
+    Loan<X86Memory(r.profile)>(r.profile.fetch(), r.profile.data(), r.stack(), top, pair_spans(r, top)) {
+    r.loan(top, pair_spans(r, top), λ b => pair_offset(top, b), omega(fits), λ b => pair_placed(r, top, fits, b),
+        λ b => pair_empty(r, top, b), λ b c => pair_apart(top, b, c))
+}
+
+// ---------------------------------------------------------------------------
+// What the borrower and its caller have
+
+// A byte stored into the written span: it reads its bytes with that one set.
+theorem put_reads_back(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86Memory(r.profile), k: Nat, inside: k < 16,
+    byte: BitVec(8), xs: List<BitVec(8)>, whole: xs.len() = 16, reads: Readable(r.profile.data(), m, next_rip(r.low, top), xs)):
+    Readable(r.profile.data(), r.profile.store(m, next_rip(next_rip(r.low, top), k), [byte]), next_rip(r.low, top),
+        xs.update(k, λ (_: BitVec(8)) => byte)) {
+    pair_loan(r, top, fits).put_reads(m, 0, k, refl, inside, byte, xs, whole, reads)
+}
+
+// The span lent to read reads what it did after anything the borrower may
+// store, into its own room or the other span.
+theorem read_span_kept(r: DataRegion, top: Nat, fits: top + 32 <= r.size, i: Nat, low: i <= top, ys: List<BitVec(8)>, short: ys.len() <= 16,
+    before, after: X86Memory(r.profile), wrote: r.stack().WroteIn(i, pair_spans(r, top), before, after),
+    reads: Readable(r.profile.data(), before, next_rip(r.low, top + 16), ys)): Readable(r.profile.data(), after, next_rip(r.low, top + 16), ys) {
+    pair_loan(r, top, fits).unwritten_reads(i, low, 1, refl, ys, short, before, after, wrote, reads)
+}
+
+// The caller's stack words from the borrower's entry up to `top`, and the
+// code, are as they were.
+theorem caller_words_kept(r: DataRegion, top: Nat, fits: top + 32 <= r.size, i: Nat, before, after: X86Memory(r.profile),
+    wrote: r.stack().WroteIn(i, pair_spans(r, top), before, after)): r.stack().UnchangedTo(i, top, before, after) {
+    pair_loan(r, top, fits).unchanged(i, before, after, wrote)
+}
+
+theorem code_kept(r: DataRegion, top: Nat, fits: top + 32 <= r.size, i: Nat, low: i <= top, bytes: List<BitVec(8)>, at: BitVec(64),
+    before, after: X86Memory(r.profile), wrote: r.stack().WroteIn(i, pair_spans(r, top), before, after),
+    resident: CodeResident(r.profile.fetch(), before, bytes, at)): CodeResident(r.profile.fetch(), after, bytes, at) {
+    pair_loan(r, top, fits).resident(i, low, bytes, at, before, after, wrote, resident)
+}
+
+// A store into the written span is one the borrower may make; into the
+// other it is not, the span not being lent to write.
+theorem put_allowed(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), k: Nat, inside: k < 16, byte: BitVec(8)):
+    r.stack().WroteIn(i, pair_spans(r, top), m, r.profile.store(m, next_rip(next_rip(r.low, top), k), [byte])) {
+    r.stack().wrote_in_put(i, pair_spans(r, top), m, 0, k, refl, inside, byte)
+}
+
+// expect-error(kernel): the kernel rejected `put_refused`: NotConvertible
+theorem put_refused(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), k: Nat, inside: k < 16, byte: BitVec(8)):
+    r.stack().WroteIn(i, pair_spans(r, top), m, r.profile.store(m, next_rip(next_rip(r.low, top + 16), k), [byte])) {
+    r.stack().wrote_in_put(i, pair_spans(r, top), m, 1, k, refl, inside, byte)
+}
+
+// With nothing written, what a call may store is what it could before.
+theorem reads_only_wrote(r: DataRegion, top: Nat, i: Nat, before, after: X86Memory(r.profile),
+    wrote: r.stack().WroteIn(i, Spans(λ b => pair_at(r, top, b), pair_size, λ _ => False), before, after)): r.stack().Wrote(i, before, after) {
+    r.stack().wrote_in_none(i, Spans(λ b => pair_at(r, top, b), pair_size, λ _ => False), λ b => refl, before, after, wrote)
+}
+
+// ---------------------------------------------------------------------------
+// The control: a written span is nobody else's
+
+// No lending, over any stack and memory, has a span that may be written
+// starting where another span starts: the byte stored there would read back
+// (`stored`) and read as it did (`apart`), whatever byte it is.
+theorem written_span_unshared<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans), b, c: Nat, differs: b ≠ c, written: spans.written(b) = True, some: 0 < spans.size(b),
+    other: 0 < spans.size(c), same: spans.at(b) = spans.at(c), memory: M): False {
+    let seen = λ (byte: BitVec(8)) => {
+        let after = stack.writes.store(memory, spans.byte(b, 0), [byte]);
+        let back: (data.read(after, next_rip(spans.at(c), 0)) = Some(byte)) =
+            j(same, λ a _ => data.read(after, next_rip(a, 0)) = Some(byte), loan.stored(memory, b, 0, written, some, byte));
+        trans(sym(back), loan.apart(memory, b, 0, written, some, byte, c, 0, other, Inl(differs)))
+    };
+    let both: (Some<BitVec(8)>(BitVec::ofNat(0)) = Some<BitVec(8)>(BitVec::ofNat(1))) = trans(seen(BitVec::ofNat(0)), sym(seen(BitVec::ofNat(1))));
+    let verdict: (True = False) = cong_fn<Option<BitVec(8)>, Bool>(λ o => match o { None => True, Some(v) => v.eq_bit(BitVec::ofNat(0)) }, both);
+    absurd(verdict)
+}

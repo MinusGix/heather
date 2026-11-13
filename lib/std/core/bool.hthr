@@ -320,6 +320,11 @@ theorem Bool::and_true_of(self a, b: Bool): a = True → b = True → (a && b) =
     match a { True => λ ha hb => hb, False => λ ha hb => absurd(ha) }
 }
 
+// A disjunction's verdict is one of its parts'.
+theorem Bool::or_true_parts(self a, b: Bool): (a || b) = True → a = True ∨ b = True {
+    match a { True => λ _ => Inl(refl), False => λ right => Inr(right) }
+}
+
 theorem is_true_dec_yes(b: Bool, p: b.IsTrue()): b.is_true_dec() = Inl(p) {
     match b as λ x => (u: x.IsTrue()) → x.is_true_dec() = Inl(u) {
         False => λ u => false_elim(u),

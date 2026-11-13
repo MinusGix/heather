@@ -1,0 +1,242 @@
+// Controls of the contract a compiled function is exported under
+// (function_ir_compile's `compiled_returns`, `compiled_returns_lent`,
+// `compiled_returns_unlent` and `compiled_returns_written`;
+// docs/native-library-exports-design.md §6, the clauses by number). Each
+// clause of the contract is a part of those theorems' statements; a control
+// shows the clause has teeth, that something which would break it is
+// refused or is provably not what the statement allows. The controls that
+// need a running process are `crates/linked/tests/spans.rs`, and the
+// compiler's own refusals `crates/cli/tests/native_linked.rs`.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+// sum(a, b) = a + b: a function of words, with one value to place.
+fn sum() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+theorem sum_planned(): plan_program([sum()]) = [Into(Rax)] { refl }
+theorem sum_lowers(): lower_program([sum()], plan_program([sum()])).is_some().IsTrue() { trivial }
+
+// ---------------------------------------------------------------------------
+// Clause 3: RBX, RBP, R12 to R15 are kept, and RSP
+//
+// The placement is untrusted: the lowering checks the code it wrote
+// against the registers a callee keeps (`leaves_all`), so a placement that
+// puts the function's value in one of them has no code, whichever it is.
+// The same function with the planner's placement lowers (`sum_lowers`).
+
+theorem into_rbx_refused(): lower_program([sum()], [Into(Rbx)]) = None { refl }
+theorem into_rbp_refused(): lower_program([sum()], [Into(Rbp)]) = None { refl }
+theorem into_rsp_refused(): lower_program([sum()], [Into(Rsp)]) = None { refl }
+theorem into_r12_refused(): lower_program([sum()], [Into(R12)]) = None { refl }
+theorem into_r13_refused(): lower_program([sum()], [Into(R13)]) = None { refl }
+theorem into_r14_refused(): lower_program([sum()], [Into(R14)]) = None { refl }
+theorem into_r15_refused(): lower_program([sum()], [Into(R15)]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Clause 4: the callee stores only into its own room below the return
+// address
+//
+// The post says memory is as it was but for stores below the offset the
+// call was entered at (`Stack::Wrote`), from which the caller has that
+// every word at or above it reads as before (`Stack::Unchanged`,
+// `Stack::wrote_unchanged`). A store of a differing word at or above that
+// offset is not such a memory: no code that made one could meet the post.
+theorem store_above_is_not_unchanged<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), from, k: Nat,
+    above: from <= k, fits: k + 8 <= stack.size, memory: M, word: BitVec(64),
+    differs: read_word(data, memory, stack.at(k)) ≠ Some(word)):
+    ¬stack.Unchanged(from, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    λ unchanged => differs(trans(sym(unchanged(k, above, fits)), stack.stored(memory, k, fits, word)))
+}
+
+// And the same store below it is one the post allows: the bound is the
+// offset, not the store.
+theorem store_below_is_wrote<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), i, k: Nat,
+    below: k + 8 <= i, memory: M, word: BitVec(64)):
+    stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_store(i, memory, k, below, word)
+}
+
+// ---------------------------------------------------------------------------
+// Clause 4, where a span is lent to write
+//
+// A function that stores into a span is exported under a lending that
+// marks the span (`Lending::writing`, `compiled_returns_written`;
+// docs/native-library-exports-design.md §7): the post then allows stores
+// of bytes into the marked spans beside the callee's own room
+// (`Stack::WroteIn`). The marks are the whole of what that adds.
+
+// The lending lets the marked buffers be written and no other, wherever
+// they lie and whatever they hold.
+theorem writing_lets_the_marked(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers()):
+    (Lending::writing(counts, addresses, buffers, [False, True]).written(1) = True) ∧
+    ((Lending::writing(counts, addresses, buffers, [False, True]).written(0) = False) ∧
+     (Lending::writing(counts, addresses, buffers, [False, True]).written(2) = False)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A lending to read is the one with no marks.
+theorem reading_marks_none(counts: List<Nat>, addresses: List<BitVec(64)>, buffers: Buffers(), b: Nat):
+    Lending::writing(counts, addresses, buffers, []).written(b) = Lending::reading(counts, addresses, buffers).written(b) {
+    refl
+}
+
+// What a caller keeps of a span beside the written one: whatever the call
+// stored, a span the lending does not mark reads after as it did before.
+// So an export that takes `&mut [u8]` and `&[u8]` leaves the second.
+theorem unmarked_span_is_kept<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), top: Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, buffers: Buffers(),
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, buffers, [True, False]).spans()), i: Nat, low: i <= top,
+    before, after: M, wrote: stack.WroteIn(i, Lending::writing(counts, addresses, buffers, [True, False]).spans(), before, after),
+    reads: Readable(data, before, address_of(addresses, 1), buffer_bytes(buffers, 1))):
+    Readable(data, after, address_of(addresses, 1), buffer_bytes(buffers, 1)) {
+    loan.unwritten_reads(i, low, 1, refl, buffer_bytes(buffers, 1), buffer_bytes(buffers, 1).len().le_refl(), before, after, wrote, reads)
+}
+
+// The certificate's premise is that every store of the program is into a
+// marked buffer (`program_stores_within`, by evaluation). For a program
+// that stores into a buffer the marks leave out it has no proof, so no
+// `_returns` is stated over a lending that hides a store.
+fn storing() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [BufferStore(output := 3, buffer := 0, index := 2, value := 2)], outputs := Ports([word(3)]))),
+        result := 3)
+}
+
+theorem storing_within_its_mark(): program_stores_within([storing()], [True]).IsTrue() { trivial }
+theorem hidden_store_has_no_premise(hidden: program_stores_within([storing()], [False]).IsTrue()): False { hidden }
+theorem unmarked_store_has_no_premise(hidden: program_stores_within([storing()], []).IsTrue()): False { hidden }
+
+// ---------------------------------------------------------------------------
+// Clause 5: the callee reads only its frame and the spans lent
+//
+// A load lowers only where a comparison of its index with its span's own
+// length is known true: `function_ir_lower_reads_tests` has the refusals
+// (`unguarded_refused`, `wrong_bound_refused`, `wrong_arm_refused`,
+// `other_buffer_refused`, `unlent_refused`). Here, the count: a function
+// that reads a span (the byte at an index, under the span's length) is
+// refused under a table that lends it none, or more than it takes, so a
+// certificate's `counts` cannot misstate what its code is lent.
+fn first_byte() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), Port(id := 3, width := 1)])),
+            Conditional(Ports([word(0), word(1), word(2), Port(id := 3, width := 1)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [BufferLoad(output := 4, buffer := 0, index := 2)],
+                    outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+theorem first_byte_lowers(): lower_program_lent([first_byte()], plan_program([first_byte()]), [1]).is_some().IsTrue() { trivial }
+theorem first_byte_unlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [0]) = None { refl }
+theorem first_byte_overlent_refused(): lower_program_lent([first_byte()], plan_program([first_byte()]), [2]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A function of words in a program that is lent spans
+//
+// An export's program may hold functions lent nothing beside the one that
+// reads a span, and each can be exported at its own label
+// (docs/native-library-exports-design.md §6.3). Such a function's contract
+// is the plain one, `Stack::CalleePost`, with no premise about a span:
+// `compiled_returns_unlent`. Here `sum` under `first_byte`, in a program
+// lent a span at its last function only.
+fn reading_beside() → List<Function> { [first_byte(), sum()] }
+theorem reading_beside_counts(): program_counts(reading_beside()) = [0, 1] { refl }
+theorem reading_beside_lowers(): lower_program_lent(reading_beside(), plan_program(reading_beside()), [0, 1]).is_some().IsTrue() { trivial }
+
+// `sum` is the program's function 0: at its label it is a function of words,
+// whatever lowering of the program is the code.
+theorem sum_beside_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program_lent(reading_beside(), placement, [0, 1]) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), a, b: BitVec(64)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(1),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn([a, b], argument_registers(), s.gprs) ∧ 120 * 1 <= i,
+        stack.CalleePost(program_eval_over(Nil, reading_beside(), 0, [a, b]))) {
+    compiled_returns_unlent<M>(reading_beside(), placement, [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
+        refl, [a, b], trivial, program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)
+}
+
+// The function that reads its span has no such contract: that it is lent
+// nothing has no proof. Its contract is `compiled_returns_lent`, which asks
+// for the span.
+theorem lent_function_is_not_plain(unlent: lent_count([0, 1], 1) = 0): False { Nat::succ_ne_zero(0)(unlent) }
+
+// ---------------------------------------------------------------------------
+// Clause 9: the direction flag, x87, SSE and MXCSR are untouched
+//
+// Not modelled: the machine state has no such part. It holds because no
+// instruction the model has writes one, which is an inventory. This is it:
+// every instruction by name, with what it writes besides memory it is
+// given. A match has no default arm, so an instruction added to the model
+// does not check here until it is classed, and one that writes the
+// direction flag or a vector register has no class to take: adding it
+// means modelling that state first, and restating the clause.
+inductive Written {
+    // A general register, and nothing else.
+    Register,
+    // The status flags (CF, PF, AF, ZF, SF, OF), and nothing else.
+    Status,
+    // A general register and the status flags.
+    RegisterAndStatus,
+}
+
+fn Instruction::written(self instruction: Instruction) → Written {
+    match instruction {
+        MovRR(_, _) => Register,
+        MovRI(_, _) => Register,
+        AddRR(_, _) => RegisterAndStatus,
+        SubRR(_, _) => RegisterAndStatus,
+        AndRR(_, _) => RegisterAndStatus,
+        OrRR(_, _) => RegisterAndStatus,
+        XorRR(_, _) => RegisterAndStatus,
+        CmpRR(_, _) => Status,
+        SetBelow(_) => Register,
+        SetLess(_) => Register,
+        SetEqual(_) => Register,
+        TestRR(_, _) => Status,
+        AddRI8(_, _) => RegisterAndStatus,
+        AddRI32(_, _) => RegisterAndStatus,
+        ShiftOne(_, _) => RegisterAndStatus,
+        ShiftImm(_, _, _) => RegisterAndStatus,
+    }
+}
+
+// The count the inventory was taken at, so the list above is read again
+// when it moves.
+fn every_instruction() → List<Instruction> {
+    [MovRR(Rax, Rax), MovRI(Rax, BitVec::ofNat(0)), AddRR(Rax, Rax), SubRR(Rax, Rax), AndRR(Rax, Rax), OrRR(Rax, Rax), XorRR(Rax, Rax),
+        CmpRR(Rax, Rax), SetBelow(Al), SetLess(Al), SetEqual(Al), TestRR(Rax, Rax), AddRI8(Rax, BitVec::ofNat(0)),
+        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0))]
+}
+theorem inventory_size(): every_instruction().len() = 16 { refl }

@@ -21,6 +21,7 @@ import linux_world;
 import linux_world_co;
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
 import native_source;
 import native_source_co;
 import native_source_io;
@@ -70,7 +71,7 @@ fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
 fn piped() → Io { Io::of(World::piped([[b(104), b(105)]])) }
 fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [buf], []) }
 
-fn no_calls() → Answers() { λ f ws => BitVec::ofNat(0) }
+fn no_calls() → Writers() { λ held f ws => Ending(BitVec::ofNat(0), held) }
 
 // Run at a piped world: "hi" comes back out, and the result word holds the
 // write's count.
@@ -85,14 +86,15 @@ theorem echo_means(io: Io, buf: List<BitVec(8)>):
     echo_body().sem(ETm::plain_world(), echo_g(), Pair(buf, trivial), io) = Io::echo_lowered(io, buf) { refl }
 
 // The theorem at this program: the lowered statements' tree, read against
-// any world, is the surface method, up to silent steps.
-fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
-    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(no_calls(), perform)(start(buf)),
+// any world, is the surface method, up to silent steps, whatever the
+// program's functions answer (`call`): it calls none.
+fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(call, perform)(start(buf)),
             λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
         λ io => CRet(Io::echo_lowered(io, buf)))
 {
     echo_body().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        no_calls(), Tm::calls_agree_none(RecInfo::none, no_calls()), perform, start(buf), Pair(buf, trivial),
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 

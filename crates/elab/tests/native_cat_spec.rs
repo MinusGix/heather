@@ -24,7 +24,14 @@ const PREFIX: &[(&str, &str)] = &[
     ("stream_filter", include_str!("../../../lib/native/stream_filter.hthr")),
     ("stream_filter_spec", include_str!("../../../lib/native/stream_filter_spec.hthr")),
     ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+    ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
     ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
+    // The placeless check is stated over the run with the file threaded too.
+    ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
+    // A call over views: the windows it lends and puts back.
+    ("function_ir_views", include_str!("../../../lib/native/function_ir/function_ir_views.hthr")),
+    ("function_ir_run", include_str!("../../../lib/native/function_ir/function_ir_run.hthr")),
+    ("function_ir_placeless", include_str!("../../../lib/native/function_ir/function_ir_placeless.hthr")),
     ("native_source", include_str!("../../../lib/native/native_source.hthr")),
     ("native_source_sim", include_str!("../../../lib/native/native_source_sim.hthr")),
 ];

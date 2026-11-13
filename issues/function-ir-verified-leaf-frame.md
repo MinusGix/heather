@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-11-12
 ---
 
 Every function `lower_program` emits opens a 64-byte frame
@@ -24,3 +24,7 @@ runs over `frame_allocate`/`frame_free`) become one case of two.
 Found while measuring [[function-ir-verified-selection-rules]]: after
 that round this pair and [[function-ir-verified-short-jumps]] are the
 whole size gap on `examples/x86-native/branches.hthr`'s leaf examples.
+
+## Log
+
+- 2026-11-12: The frame is 112 bytes since a function may save callee-saved registers ([[function-ir-values-in-kept-registers]]), still one constant for every function. [[function-frame-sized-by-use]] is the general form of this issue: a leaf with no saves is its smallest case, and the contract's stack bound follows from the same table.

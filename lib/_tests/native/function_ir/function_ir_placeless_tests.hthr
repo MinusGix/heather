@@ -1,0 +1,446 @@
+// Probes of `function_ir_placeless`: the functions that read a lent span
+// are placeless, the theorem gives their answer at every address word, and
+// each way an address could reach an answer is refused by the check. The
+// same of functions that write the span: the word they return and the file
+// they leave (`program_run_placeless`), and a program's call of one
+// (`program_writers`). And of a function that lends a view: the view's
+// base is an address the lend makes, hidden as the buffer's own is.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_placeless;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// Placeless: a guarded load, a loop over the buffer, a call handing it on
+
+// The byte at an index, 256 past the end (`function_ir_lower_reads_tests`).
+fn byte_at() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [BufferLoad(output := 4, buffer := 0, index := 2)],
+                    outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+theorem byte_at_addresses(): byte_at().addresses() = [0] { refl }
+theorem byte_at_placeless(): program_placeless([byte_at()]) = True { refl }
+
+// The sum of the buffer's bytes: a loop carrying the home.
+fn sum() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]),
+                nodes := [Const(width := 64, output := 2, value := 0), Const(width := 64, output := 3, value := 0)],
+                outputs := Ports([word(0), word(1), word(2), word(3)])),
+            Loop(inputs := [0, 1, 2, 3], bound := 1, parameters := [10, 11, 12, 13], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([word(10), word(11), word(12), word(13), word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([word(10), word(11), word(12), word(13), bit(20), bit(15)])),
+                    Conditional(Ports([word(10), word(11), word(12), word(13), bit(20), bit(15)]), 15, Ports([word(12), word(13)]),
+                        Ports([word(16), word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([word(12), word(13)]), nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([word(12), word(13), word(18)])),
+                            Dataflow(Region(inputs := Ports([word(12), word(13), word(18)]),
+                                nodes := [Add(width := 64, output := 16, left := 13, right := 18),
+                                    Const(width := 64, output := 19, value := 1),
+                                    Add(width := 64, output := 17, left := 12, right := 19)],
+                                outputs := Ports([word(16), word(17)])))),
+                        Dataflow(Region(inputs := Ports([word(12), word(13)]),
+                            nodes := [Move(width := 64, output := 16, source := 13), Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([word(16), word(17)]))))),
+                exit := 20, next := [10, 11, 17, 16], outputs := [4, 5, 6, 7], exhausted := 8)),
+        result := 7)
+}
+
+// The loop hides its copy of the address, and the output it leaves it at.
+theorem sum_taints(): sum().body.taints(sum().addresses()) = [4, 0] { refl }
+theorem sum_placeless(): program_placeless([sum()]) = True { refl }
+
+// The theorem, used: the sum over any buffers is the sum stated at address
+// zero, whatever address word the caller passes.
+theorem sum_anywhere(buffers: Buffers(), address, length: BitVec(64)):
+    program_eval_over(buffers, [sum()], 0, [address, length]) = program_eval_over(buffers, [sum()], 0, [BitVec::zero(), length]) {
+    program_eval_placeless(buffers, [sum()], trivial, 0, [BitVec::zero(), length], [address, length],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// The buffer's first byte, by calling `byte_at` with the home it was lent.
+fn first() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2)])),
+            Call(0, [0, 1, 2], 3)),
+        result := 3)
+}
+
+fn firsts() → List<Function> { [first(), byte_at()] }
+
+theorem firsts_lent(): program_lent(firsts(), 0) = 1 ∧ program_lent(firsts(), 1) = 1 { ⟨refl, refl⟩ }
+theorem firsts_placeless(): program_placeless(firsts()) = True { refl }
+
+theorem first_anywhere(buffers: Buffers(), address, length: BitVec(64)):
+    program_eval_over(buffers, firsts(), 1, [address, length]) = program_eval_over(buffers, firsts(), 1, [BitVec::zero(), length]) {
+    program_eval_placeless(buffers, firsts(), trivial, 1, [BitVec::zero(), length], [address, length],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// Refused: each way an address could reach an answer
+
+// The address itself, returned: its answer is the address word.
+fn returns_address() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [], outputs := Ports([word(0)]))), result := 0)
+}
+
+theorem returns_address_refused(): program_placeless([returns_address()]) = False { refl }
+theorem returns_address_at_one(): program_eval([returns_address()], 0, [w(1), w(0)]) = w(1) { refl }
+theorem returns_address_at_two(): program_eval([returns_address()], 0, [w(2), w(0)]) = w(2) { refl }
+
+// Read by a node.
+fn moves_address() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 1, right := 0)],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+theorem moves_address_refused(): program_placeless([moves_address()]) = False { refl }
+
+// Tested by a branch.
+fn branches_on_address() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Conditional(Ports([word(0), word(1)]), 0, Ports([word(1)]), Ports([word(2)]),
+            Dataflow(Region(inputs := Ports([word(1)]), nodes := [Const(width := 64, output := 2, value := 1)],
+                outputs := Ports([word(2)]))),
+            Dataflow(Region(inputs := Ports([word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(2)])))),
+        result := 2)
+}
+
+theorem branches_on_address_refused(): program_placeless([branches_on_address()]) = False { refl }
+
+// Passed to a callee at its length's place, the length at its address's.
+fn swapped() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2)])),
+            Call(0, [1, 0, 2], 3)),
+        result := 3)
+}
+
+theorem swapped_refused(): program_placeless([swapped(), byte_at()]) = False { refl }
+
+// Passed to a callee that is lent nothing, so reads every word it is given.
+fn takes_words() → Function {
+    Function(parameters := [0, 1], body := Dataflow(Region(inputs := Ports([word(0), word(1)]),
+            nodes := [Add(width := 64, output := 2, left := 0, right := 1)], outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+fn hands_words() → Function {
+    Function(parameters := [0, 1], lent := 1, body := Call(0, [0, 1], 2), result := 2)
+}
+
+theorem takes_words_placeless(): program_placeless([takes_words()]) = True { refl }
+theorem hands_words_refused(): program_placeless([hands_words(), takes_words()]) = False { refl }
+
+// A loop counting by the address.
+fn counts_by_address() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2)])),
+            Loop(inputs := [2], bound := 0, parameters := [10], count := 14,
+                body := Dataflow(Region(inputs := Ports([word(10), word(14)]),
+                    nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                        Const(width := 64, output := 19, value := 1), Add(width := 64, output := 17, left := 10, right := 19)],
+                    outputs := Ports([word(17), bit(20)]))),
+                exit := 20, next := [17], outputs := [4], exhausted := 8)),
+        result := 4)
+}
+
+theorem counts_by_address_refused(): program_placeless([counts_by_address()]) = False { refl }
+
+// A loop moving the address into a place that came in clean, and out.
+fn leaks_through_loop() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Loop(inputs := [0, 1], bound := 1, parameters := [10, 11], count := 14,
+            body := Dataflow(Region(inputs := Ports([word(10), word(11), word(14)]),
+                nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14)],
+                outputs := Ports([word(10), word(11), bit(20)]))),
+            exit := 20, next := [10, 10], outputs := [4, 5], exhausted := 8),
+        result := 5)
+}
+
+theorem leaks_through_loop_refused(): program_placeless([leaks_through_loop()]) = False { refl }
+
+// The same loop keeping each place its own is placeless, though the place
+// the address left at is still hidden: returning that one is refused.
+fn carries() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Loop(inputs := [0, 1], bound := 1, parameters := [10, 11], count := 14,
+            body := Dataflow(Region(inputs := Ports([word(10), word(11), word(14)]),
+                nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14)],
+                outputs := Ports([word(10), word(11), bit(20)]))),
+            exit := 20, next := [10, 11], outputs := [4, 5], exhausted := 8),
+        result := 5)
+}
+
+fn carries_out() → Function {
+    Function(parameters := [0, 1], lent := 1, body := carries().body, result := 4)
+}
+
+theorem carries_placeless(): program_placeless([carries()]) = True { refl }
+theorem carries_out_refused(): program_placeless([carries_out()]) = False { refl }
+
+// ---------------------------------------------------------------------------
+// With the file threaded: functions that write the span they are lent
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// put(buffer, i, v): `v`'s low byte at `i` when `i` is inside, returning
+// the byte then there, and 256 past the end.
+fn put() → Function {
+    Function(parameters := [0, 1, 2, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(5)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(5), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(5), bit(3)]), 3, Ports([word(0), word(2), word(5)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 5)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2), word(5)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+theorem put_placeless(): program_placeless([put()]) = True { refl }
+
+// The theorem, used: over any file, the word returned and the file left
+// are those stated at address zero.
+theorem put_anywhere(file: Buffers(), address, length, i, v: BitVec(64)):
+    program_run([put()], file, 0, [address, length, i, v]) = program_run([put()], file, 0, [BitVec::zero(), length, i, v]) {
+    program_run_placeless([put()], trivial, file, 0, [BitVec::zero(), length, i, v], [address, length, i, v],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// So what it does at a literal file is one evaluation, whatever the
+// address: 'X' at 1 of "abc".
+theorem put_runs(address: BitVec(64)):
+    program_run([put()], [[b(97), b(98), b(99)]], 0, [address, w(3), w(1), w(88)]) = Ending(w(88), [[b(97), b(88), b(99)]]) {
+    trans(put_anywhere([[b(97), b(98), b(99)]], address, w(3), w(1), w(88)), refl)
+}
+
+// A caller handing its home on to `put`, storing at the first byte.
+fn put_first() → Function {
+    Function(parameters := [0, 1, 5], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(5)]), nodes := [Const(width := 64, output := 2, value := 0)],
+                outputs := Ports([word(0), word(1), word(2), word(5)])),
+            Call(0, [0, 1, 2, 5], 3)),
+        result := 3)
+}
+
+fn puts() → List<Function> { [put_first(), put()] }
+
+theorem puts_placeless(): program_placeless(puts()) = True { refl }
+
+theorem put_first_runs(address: BitVec(64)):
+    program_run(puts(), [[b(97), b(98), b(99)]], 1, [address, w(3), w(88)]) = Ending(w(88), [[b(88), b(98), b(99)]]) {
+    trans(program_run_placeless(puts(), trivial, [[b(97), b(98), b(99)]], 1, [BitVec::zero(), w(3), w(88)], [address, w(3), w(88)],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩), refl)
+}
+
+// A program's call of it (`program_writers`), stated with the words alone:
+// the program holds two buffers and lends `put` the first, and the call
+// answers with the first as the store left it and the second as it was.
+theorem put_called(): program_writers([put()])([[b(97), b(98), b(99)], [b(1)]], 0, [w(1), w(88)]) = Ending(w(88), [[b(97), b(88), b(99)], [b(1)]]) {
+    refl
+}
+
+// Past the buffer's end nothing is stored.
+theorem put_called_past(): program_writers([put()])([[b(97)], [b(1)]], 0, [w(4), w(88)]) = Ending(w(256), [[b(97)], [b(1)]]) { refl }
+
+// A program with no buffer lends none: the function sees an empty one,
+// and no buffer is made.
+theorem put_called_none(): program_writers([put()])([], 0, [w(0), w(88)]) = Ending(w(256), []) { refl }
+
+// The caller's call of the callee, from the program: the home handed on.
+theorem put_first_called(): program_writers(puts())([[b(97), b(98), b(99)]], 1, [w(88)]) = Ending(w(88), [[b(88), b(98), b(99)]]) { refl }
+
+// The control: the call does not leave the buffers as they were, so it is
+// not a quiet one (`Writers::Quiet`).
+theorem put_not_quiet(quiet: Writers::Quiet(program_writers([put()]))): False {
+    let kept: (program_writers([put()])([[b(97), b(98), b(99)]], 0, [w(1), w(88)]).buffers = [[b(97), b(98), b(99)]]) =
+        quiet([[b(97), b(98), b(99)]], 0, [w(1), w(88)]);
+    let verdict: (True = False) = cong_fn<Buffers(), Bool>(λ file => buffer_byte(file, 0, 1).eq_bit(b(88)), kept);
+    absurd(verdict)
+}
+
+// Refused: the address stored. The file it leaves is the address word's.
+fn stores_address() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]),
+                    nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 0)], outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 2)
+}
+
+theorem stores_address_refused(): program_placeless([stores_address()]) = False { refl }
+theorem stores_address_at_one(): program_run([stores_address()], [[b(97)]], 0, [w(1), w(1), w(0)]) = Ending(w(0), [[b(1)]]) { refl }
+theorem stores_address_at_two(): program_run([stores_address()], [[b(97)]], 0, [w(2), w(1), w(0)]) = Ending(w(0), [[b(2)]]) { refl }
+
+// Refused: a store at the address as an index.
+fn stores_at_address() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [BufferStore(output := 4, buffer := 0, index := 0, value := 2)], outputs := Ports([word(4)]))),
+        result := 1)
+}
+
+theorem stores_at_address_refused(): program_placeless([stores_at_address()]) = False { refl }
+
+// The theorem asks for the check: at a program that fails it, it is not
+// had.
+// expect-error(mismatch)
+theorem stores_address_anywhere(file: Buffers(), address, length, i: BitVec(64)):
+    program_run([stores_address()], file, 0, [address, length, i]) = program_run([stores_address()], file, 0, [BitVec::zero(), length, i]) {
+    program_run_placeless([stores_address()], trivial, file, 0, [BitVec::zero(), length, i], [address, length, i],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A call over views: a view's base is an address the lend makes
+
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+fn then(nodes: List<Node>, rest: StructuredRegion) → StructuredRegion { Sequence(Region(Ports([]), nodes, Ports([])), rest) }
+fn when(flag, output: Nat, yes, no: StructuredRegion) → StructuredRegion {
+    Conditional(Ports([]), flag, Ports([]), Ports([word(output)]), yes, no)
+}
+
+// The call of function 0 over the window `from` (2) up to `to` (3) of the
+// buffer, where that is a window of it, and 512 where it is not;
+// `after` is what follows the call, and `result` what is returned.
+fn lends_with(view: View, arguments: List<Nat>, after: List<Node>, result: Nat) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 1, result := result,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 1, right := 3)],
+            when(10, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 11, left := 3, right := 2)],
+                    when(11, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                        Compose(Lend([view], 0, arguments, 9), leaf(Cons(Move(64, 8, 9), after))))))))
+}
+
+// lends(buffer, from, to, i, v): `put(i, v)` over the window.
+fn lends() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [], 8)
+}
+fn lenders() → List<Function> { [lends(), put()] }
+
+theorem lenders_placeless(): program_placeless(lenders()) = True { refl }
+
+// What the lend hides: the base it made, beside the address it came from.
+theorem lend_taints(): Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 9).taints([0]) =
+    [6, 0] {
+    refl
+}
+
+// The theorem, used: over any file, the word returned and the file left
+// are those stated at address zero.
+theorem lends_anywhere(file: Buffers(), address, length, from, to, i, v: BitVec(64)):
+    program_run(lenders(), file, 1, [address, length, from, to, i, v]) =
+    program_run(lenders(), file, 1, [BitVec::zero(), length, from, to, i, v]) {
+    program_run_placeless(lenders(), trivial, file, 1, [BitVec::zero(), length, from, to, i, v], [address, length, from, to, i, v],
+        ⟨λ never => false_elim(never), ⟨λ _ => refl, refl⟩⟩)
+}
+
+// So at a literal file it is one evaluation, whatever the address: 9 put
+// at 1 of the window from 1 to 4 is put at 2 of the buffer.
+theorem lends_runs(address: BitVec(64)):
+    program_run(lenders(), [[b(1), b(2), b(3), b(4), b(5)]], 1, [address, w(5), w(1), w(4), w(1), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]) {
+    trans(lends_anywhere([[b(1), b(2), b(3), b(4), b(5)]], address, w(5), w(1), w(4), w(1), w(9)), refl)
+}
+
+// A program's call of it, stated with the words alone.
+theorem lends_called(): program_writers(lenders())([[b(1), b(2), b(3), b(4), b(5)], [b(7)]], 1, [w(1), w(4), w(1), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)], [b(7)]]) {
+    refl
+}
+
+// Refused: the view's base returned. Its answer is the address word plus
+// the start.
+fn returns_base() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [], 6)
+}
+
+theorem returns_base_refused(): program_placeless([returns_base(), put()]) = False { refl }
+theorem returns_base_at_one(): program_eval([returns_base(), put()], 1, [w(1), w(5), w(1), w(4), w(1), w(9)]) = w(2) { refl }
+theorem returns_base_at_two(): program_eval([returns_base(), put()], 1, [w(2), w(5), w(1), w(4), w(1), w(9)]) = w(3) { refl }
+
+// A node after the call reads the base.
+fn reads_base() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [Move(64, 12, 6)], 8)
+}
+
+theorem reads_base_refused(): program_placeless([reads_base(), put()]) = False { refl }
+
+// The view's length is no address: a node may read it.
+fn reads_length() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 5], [Move(64, 8, 7)], 8)
+}
+
+theorem reads_length_placeless(): program_placeless([reads_length(), put()]) = True { refl }
+
+// A view that starts at the address.
+fn starts_at_address() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 0, end := 3, written := True, base := 6, length := 7), [4, 5], [], 8)
+}
+
+theorem starts_at_address_refused(): program_placeless([starts_at_address(), put()]) = False { refl }
+
+// The address passed as a word, beside the view.
+fn passes_address() → Function {
+    lends_with(View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7), [4, 0], [], 8)
+}
+
+theorem passes_address_refused(): program_placeless([passes_address(), put()]) = False { refl }
+
+// Two views for a callee lent one buffer: the second view's base would be
+// a word of the callee's.
+fn lends_two() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7),
+                View(buffer := 0, home := 0, start := 2, end := 3, written := False, base := 12, length := 13)], 0, [], 9))
+}
+
+theorem lends_two_refused(): program_placeless([lends_two(), put()]) = False { refl }

@@ -1,0 +1,333 @@
+// Views: lending on a part of a span
+// (docs/native-library-exports-design.md §3.1).
+//
+// A call lent spans may lend a callee parts of them: bytes `start` up to
+// `start + size` of a span it holds, under a number of the callee's own. A
+// view costs no copy. What the callee is owed is the laws of a `Loan`
+// (x86_64_lending) over the views as spans, and here they follow from the
+// lender's own:
+//
+// - `Views`: which span each view is of, where in it the view starts, how
+//   long it is, and whether it may be written. `Views::spans` is the views
+//   as spans.
+// - `Viewed(views, spans)`: what makes the views lendable. Each lies inside
+//   its span; a view to write is of a span the lender may write; and a view
+//   to write shares no byte with another view. Two views that are only read
+//   may overlap, and two halves of one span may be lent apart, one of them
+//   to write.
+// - `Loan::view`: the lender's loan is a loan of the views.
+// - `Stack::wrote_in_view`: what the callee stores through the views, the
+//   lender may store through its spans. `Loan::view_outside`: and a byte of
+//   the lender's that no written view covers reads as it did.
+// - Reading through a view (`readable_window`), and a span after its view
+//   was written (`readable_put_window`): the list of bytes with its window
+//   replaced (`List::put_window`, list_window).
+// - `Loan::onto`, `Stack::wrote_in_onto`: the same under other numbers.
+//   The views as spans are `Views::spans`; a callee's buffers are spans it
+//   numbers itself, no longer than the views and lying where they do, and
+//   the loan and the trail carry over.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import memory;
+import bitvec;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+import relation;
+import transition;
+
+// ---------------------------------------------------------------------------
+// Views and the spans they are
+
+// The views lent, by number: view `v` is `size(v)` bytes of span `of(v)`,
+// from that span's byte `start(v)`, and may be stored into when
+// `written(v)`.
+record Views { of: Nat → Nat, start: Nat → Nat, size: Nat → Nat, written: Nat → Bool }
+
+// The views as spans: where each lies.
+fn Views::spans(self views: Views, spans: Spans) → Spans {
+    Spans(at := λ v => spans.byte(views.of(v), views.start(v)), size := views.size, written := views.written)
+}
+
+// Byte `k` of a view is byte `start + k` of its span.
+theorem Views::byte_at(self views: Views, spans: Spans, v, k: Nat):
+    views.spans(spans).byte(v, k) = spans.byte(views.of(v), views.start(v) + k) {
+    rip_compose(spans.at(views.of(v)), views.start(v), k)
+}
+
+record Viewed(views: Views, spans: Spans) {
+    inside: (v: Nat) → views.start(v) + views.size(v) <= spans.size(views.of(v)),
+    allowed: (v: Nat) → views.written(v) = True → spans.written(views.of(v)) = True,
+    // A view to write shares no byte with another: it is of another span,
+    // or the two lie apart in one.
+    alone: (v, u: Nat) → views.written(v) = True → v ≠ u →
+        (views.of(v) ≠ views.of(u)) ∨ ((views.start(v) + views.size(v) <= views.start(u)) ∨ (views.start(u) + views.size(u) <= views.start(v))),
+}
+
+// ---------------------------------------------------------------------------
+// The loan of the views
+
+theorem Loan::view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans)):
+    Loan<M>(fetch, data, stack, top, views.spans(spans)) {
+    let at = λ (v: Nat) (k: Nat) => views.byte_at(spans, v, k);
+    let within: ((v: Nat) → (k: Nat) → k < views.size(v) → views.start(v) + k < spans.size(views.of(v))) = λ v k short => omega(short, viewed.inside(v));
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    Loan(
+        room := loan.room,
+        canonical := λ v => {
+            let value: (spans.byte(views.of(v), views.start(v)).toNat() = spans.at(views.of(v)).toNat() + views.start(v)) =
+                BitVec::offset_toNat(64, spans.at(views.of(v)), views.start(v), omega(loan.canonical(views.of(v)), viewed.inside(v), wide));
+            let fits: (spans.byte(views.of(v), views.start(v)).toNat() + views.size(v) <= Nat::pow(2, 47)) =
+                omega(value, loan.canonical(views.of(v)), viewed.inside(v));
+            fits
+        },
+        under := λ memory k below word v j short =>
+            j(sym(at(v, j)), λ a _ => data.read(stack.writes.store(memory, next_rip(stack.low, k), word_bytes(word)), a) = data.read(memory, a),
+                loan.under(memory, k, below, word, views.of(v), views.start(v) + j, within(v, j, short))),
+        writable := λ memory v k written short =>
+            j(sym(at(v, k)), λ a _ => stack.writes.writable(memory, a, 1),
+                loan.writable(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short))),
+        stored := λ memory v k written short byte =>
+            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, [byte]), a) = Some(byte),
+                loan.stored(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte)),
+        apart := λ memory v k written short byte u i other_short other => {
+            let in_v: (k < views.size(v)) = short;
+            let in_u: (i < views.size(u)) = other_short;
+            let differ: ((views.of(v) ≠ views.of(u)) ∨ (views.start(v) + k ≠ views.start(u) + i)) = match v.eq_dec(u) {
+                Inl(same) => Inr(match other {
+                    Inl(not_same) => false_elim(not_same(same)),
+                    Inr(not_at) => j(same, λ w _ => views.start(v) + k ≠ views.start(w) + i, λ eq => not_at(omega(eq))),
+                }),
+                Inr(not_same) => match viewed.alone(v, u, written, not_same) {
+                    Inl(spans_differ) => Inl(spans_differ),
+                    Inr(lie_apart) => Inr(match lie_apart {
+                        Inl(before) => λ eq => omega(eq, before, in_v),
+                        Inr(after) => λ eq => omega(eq, after, in_u),
+                    }),
+                },
+            };
+            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, [byte]), views.spans(spans).byte(u, i)) =
+                    data.read(memory, views.spans(spans).byte(u, i)),
+                j(sym(at(u, i)), λ c _ => data.read(stack.writes.store(memory, spans.byte(views.of(v), views.start(v) + k), [byte]), c) = data.read(memory, c),
+                    loan.apart(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, views.of(u),
+                        views.start(u) + i, within(u, i, other_short), differ)))
+        },
+        keeps := λ memory v k written short byte j_ below =>
+            j(sym(at(v, k)), λ a _ => read_word(data, stack.writes.store(memory, a, [byte]), next_rip(stack.low, j_)) =
+                    read_word(data, memory, next_rip(stack.low, j_)),
+                loan.keeps(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, j_, below)),
+        keeps_code := λ memory v k written short byte bytes origin resident =>
+            j(sym(at(v, k)), λ a _ => CodeResident(fetch, stack.writes.store(memory, a, [byte]), bytes, origin),
+                loan.keeps_code(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, bytes, origin, resident)),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// What was stored through the views
+
+// A store through a view is a store into its span.
+theorem Stack::wrote_in_view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    views: Views, viewed: Viewed(views, spans), before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after)):
+    stack.WroteIn(i, spans, before, after) {
+    Star::monotone(λ (m: M) (n: M) => stack.Stores(i, views.spans(spans), m, n), λ (m: M) (n: M) => stack.Stores(i, spans, m, n),
+        λ m n step => match step {
+            Inl(own) => Inl(own),
+            Inr(put) => {
+                let v = put.witness;
+                let k = put.proof.witness;
+                let inside: (k < views.size(v)) = put.proof.proof.left.right;
+                Inr(Exists(views.of(v), Exists(views.start(v) + k,
+                    ⟨⟨viewed.allowed(v, put.proof.proof.left.left), omega(inside, viewed.inside(v))⟩,
+                     Exists(put.proof.proof.right.witness,
+                        j(views.byte_at(spans, v, k), λ a _ => n = stack.writes.store(m, a, [put.proof.proof.right.witness]), put.proof.proof.right.proof))⟩)))
+            },
+        }, before, after, wrote)
+}
+
+// A byte of the lender's spans that no view to write covers reads what it
+// did, whatever was stored through the views.
+theorem Loan::view_outside<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top, c, t: Nat,
+    short: t < spans.size(c),
+    outside: (v: Nat) → views.written(v) = True → views.of(v) = c → (t < views.start(v)) ∨ (views.start(v) + views.size(v) <= t),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after)):
+    data.read(after, spans.byte(c, t)) = data.read(before, spans.byte(c, t)) {
+    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, views.spans(spans), m, n), λ (m: M) => data.read(m, spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+        λ m n held step => match step {
+            Inl(own) => j(sym(own.proof.right.proof), λ x _ => data.read(x, spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+                trans(loan.under(m, own.witness, omega(own.proof.left, low), own.proof.right.witness, c, t, short), held)),
+            Inr(put) => {
+                let v = put.witness;
+                let k = put.proof.witness;
+                let written = put.proof.proof.left.left;
+                let inside: (k < views.size(v)) = put.proof.proof.left.right;
+                let differ: ((views.of(v) ≠ c) ∨ (views.start(v) + k ≠ t)) = match views.of(v).eq_dec(c) {
+                    Inl(same) => Inr(match outside(v, written, same) {
+                        Inl(below) => λ eq => omega(eq, below),
+                        Inr(above) => λ eq => omega(eq, above, inside),
+                    }),
+                    Inr(other) => Inl(other),
+                };
+                j(sym(put.proof.proof.right.proof), λ x _ => data.read(x, spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+                    j(sym(views.byte_at(spans, v, k)),
+                        λ a _ => data.read(stack.writes.store(m, a, [put.proof.proof.right.witness]), spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+                        trans(loan.apart(m, views.of(v), views.start(v) + k, viewed.allowed(v, written), omega(inside, viewed.inside(v)),
+                            put.proof.proof.right.witness, c, t, short, differ), held)))
+            },
+        }, before, after, refl, wrote)
+}
+
+// ---------------------------------------------------------------------------
+// Reading through a view, and a span after its view was written
+
+// A window of the bytes a span reads is read at the window's start.
+theorem readable_window<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>, reads: Readable(data, memory, a, xs),
+    start, end: Nat, low: start <= end, high: end <= xs.len()): Readable(data, memory, next_rip(a, start), xs.window(start, end)) {
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, start).toNat() = a.toNat() + start) = BitVec::offset_toNat(64, a, start, omega(reads.left, low, high, wide));
+    let len: (xs.window(start, end).len() = end - start) = xs.len_window(start, end, low, high);
+    ⟨omega(value, len, reads.left, low, high),
+     λ k short => {
+        let inside: (k < end - start) = j(len, λ n _ => k < n, short);
+        let swap: (start + k = k + start) = omega();
+        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ at => data.read(memory, at), rip_compose(a, start, k)),
+            trans(reads.right(start + k, omega(inside, high)),
+                trans(cong_fn<Nat, Option<BitVec(8)>>(λ n => xs.nth(n), swap), sym(xs.nth_window(start, end, k, inside)))))
+     }⟩
+}
+
+// A span whose bytes read `xs` before, whose window from `start` reads
+// `ys` now, and whose bytes outside the window read as before, reads `xs`
+// with the window replaced.
+theorem readable_put_window<M>(data: ByteReadAccess<M>, before, after: M, a: BitVec(64), xs, ys: List<BitVec(8)>, start: Nat,
+    fits: ys.len() + start <= xs.len(), was: Readable(data, before, a, xs), now: Readable(data, after, next_rip(a, start), ys),
+    kept: (t: Nat) → t < xs.len() → (t < start) ∨ (ys.len() + start <= t) → data.read(after, next_rip(a, t)) = data.read(before, next_rip(a, t))):
+    Readable(data, after, a, xs.put_window(start, ys)) {
+    let len: (xs.put_window(start, ys).len() = xs.len()) = xs.len_put_window(start, ys, fits);
+    ⟨j(sym(len), λ n _ => a.toNat() + n <= Nat::pow(2, 47), was.left),
+     λ t short => {
+        let in_xs: (t < xs.len()) = j(len, λ n _ => t < n, short);
+        match t.lt_or_ge(start) {
+            Inl(below) => trans(kept(t, in_xs, Inl(below)),
+                trans(was.right(t, in_xs), sym(xs.nth_put_window_before(start, ys, t, below, omega(fits))))),
+            Inr(from) => match t.lt_or_ge(ys.len() + start) {
+                Inl(inside) => {
+                    let parts: (t = (t - start) + start) = omega(from);
+                    let swap: (start + (t - start) = t) = omega(from);
+                    j(sym(parts), λ u _ => data.read(after, next_rip(a, t)) = xs.put_window(start, ys).nth(u),
+                        trans(cong_fn<Nat, Option<BitVec(8)>>(λ n => data.read(after, next_rip(a, n)), sym(swap)),
+                            trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ at => data.read(after, at), sym(rip_compose(a, start, t - start))),
+                                trans(now.right(t - start, omega(from, inside)),
+                                    sym(xs.nth_put_window_inside(start, ys, t - start, omega(from, inside), omega(fits)))))))
+                },
+                Inr(past) => {
+                    let parts: (t = (t - (ys.len() + start)) + (ys.len() + start)) = omega(past);
+                    trans(kept(t, in_xs, Inr(past)),
+                        trans(was.right(t, in_xs),
+                            j(sym(parts), λ u _ => xs.nth(u) = xs.put_window(start, ys).nth(u),
+                                sym(xs.nth_put_window_after(start, ys, t - (ys.len() + start), omega(fits))))))
+                },
+            },
+        }
+     }⟩
+}
+
+// A span no view to write is of reads what it did.
+theorem Loan::view_unwritten_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    c: Nat, unviewed: (v: Nat) → views.written(v) = True → views.of(v) ≠ c, ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after), reads: Readable(data, before, spans.at(c), ys)):
+    Readable(data, after, spans.at(c), ys) {
+    ⟨reads.left, λ t short => trans(loan.view_outside(views, viewed, i, low, c, t, omega(short, fits),
+        λ v written same => false_elim(unviewed(v, written, same)), before, after, wrote), reads.right(t, short))⟩
+}
+
+// A span one view to write is of, and no other: after the stores it reads
+// its bytes with the view's replaced by what the view reads.
+theorem Loan::view_written_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    v: Nat, only: (u: Nat) → views.written(u) = True → views.of(u) = views.of(v) → u = v, xs, ys: List<BitVec(8)>,
+    whole: xs.len() = spans.size(views.of(v)), same_len: ys.len() = views.size(v), before, after: M,
+    wrote: stack.WroteIn(i, views.spans(spans), before, after), was: Readable(data, before, spans.at(views.of(v)), xs),
+    now: Readable(data, after, views.spans(spans).at(v), ys)): Readable(data, after, spans.at(views.of(v)), xs.put_window(views.start(v), ys)) {
+    readable_put_window(data, before, after, spans.at(views.of(v)), xs, ys, views.start(v), omega(whole, same_len, viewed.inside(v)), was, now,
+        λ t short out => loan.view_outside(views, viewed, i, low, views.of(v), t, j(whole, λ n _ => t < n, short),
+            λ u written same => j(sym(only(u, written, same)), λ w _ => (t < views.start(w)) ∨ (views.start(w) + views.size(w) <= t),
+                match out {
+                    Inl(below) => Inl(below),
+                    Inr(past) => Inr(omega(past, same_len)),
+                }), before, after, wrote))
+}
+
+// ---------------------------------------------------------------------------
+// The same spans under other numbers
+
+// A loan of spans is a loan of any spans that lie in them number for
+// number: no longer, written only where they are, and at the same place
+// wherever they have a byte. Where a span has no byte its place is free,
+// but for being canonical.
+theorem Loan::onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), other: Spans, size: (b: Nat) → other.size(b) <= spans.size(b),
+    written: (b: Nat) → other.written(b) = True → spans.written(b) = True, at: (b: Nat) → 0 < other.size(b) → other.at(b) = spans.at(b),
+    canonical: (b: Nat) → other.at(b).toNat() + other.size(b) <= Nat::pow(2, 47)): Loan<M>(fetch, data, stack, top, other) {
+    let here: ((b: Nat) → (k: Nat) → k < other.size(b) → spans.at(b) = other.at(b)) = λ b k short => sym(at(b, omega(short)));
+    let within: ((b: Nat) → (k: Nat) → k < other.size(b) → k < spans.size(b)) = λ b k short => omega(short, size(b));
+    Loan(
+        room := loan.room,
+        canonical := canonical,
+        under := λ memory k below word b i short =>
+            j(here(b, i, short), λ a _ => data.read(stack.writes.store(memory, next_rip(stack.low, k), word_bytes(word)), next_rip(a, i)) =
+                    data.read(memory, next_rip(a, i)),
+                loan.under(memory, k, below, word, b, i, within(b, i, short))),
+        writable := λ memory b k marked short =>
+            j(here(b, k, short), λ a _ => stack.writes.writable(memory, next_rip(a, k), 1),
+                loan.writable(memory, b, k, written(b, marked), within(b, k, short))),
+        stored := λ memory b k marked short byte =>
+            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), [byte]), next_rip(a, k)) = Some(byte),
+                loan.stored(memory, b, k, written(b, marked), within(b, k, short), byte)),
+        apart := λ memory b k marked short byte c i other_short differ =>
+            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), [byte]), other.byte(c, i)) =
+                    data.read(memory, other.byte(c, i)),
+                j(here(c, i, other_short),
+                    λ e _ => data.read(stack.writes.store(memory, spans.byte(b, k), [byte]), next_rip(e, i)) = data.read(memory, next_rip(e, i)),
+                    loan.apart(memory, b, k, written(b, marked), within(b, k, short), byte, c, i, within(c, i, other_short), differ))),
+        keeps := λ memory b k marked short byte i below =>
+            j(here(b, k, short), λ a _ => read_word(data, stack.writes.store(memory, next_rip(a, k), [byte]), next_rip(stack.low, i)) =
+                    read_word(data, memory, next_rip(stack.low, i)),
+                loan.keeps(memory, b, k, written(b, marked), within(b, k, short), byte, i, below)),
+        keeps_code := λ memory b k marked short byte bytes origin resident =>
+            j(here(b, k, short), λ a _ => CodeResident(fetch, stack.writes.store(memory, next_rip(a, k), [byte]), bytes, origin),
+                loan.keeps_code(memory, b, k, written(b, marked), within(b, k, short), byte, bytes, origin, resident)),
+    )
+}
+
+// And what was stored under them was stored under the spans.
+theorem Stack::wrote_in_onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    spans, other: Spans, size: (b: Nat) → other.size(b) <= spans.size(b),
+    written: (b: Nat) → other.written(b) = True → spans.written(b) = True, at: (b: Nat) → 0 < other.size(b) → other.at(b) = spans.at(b),
+    before, after: M, wrote: stack.WroteIn(i, other, before, after)): stack.WroteIn(i, spans, before, after) {
+    Star::monotone(λ (m: M) (n: M) => stack.Stores(i, other, m, n), λ (m: M) (n: M) => stack.Stores(i, spans, m, n),
+        λ m n step => match step {
+            Inl(own) => Inl(own),
+            Inr(put) => {
+                let b = put.witness;
+                let k = put.proof.witness;
+                let inside: (k < other.size(b)) = put.proof.proof.left.right;
+                Inr(Exists(b, Exists(k,
+                    ⟨⟨written(b, put.proof.proof.left.left), omega(inside, size(b))⟩,
+                     Exists(put.proof.proof.right.witness,
+                        j(at(b, omega(inside)), λ a _ => n = stack.writes.store(m, next_rip(a, k), [put.proof.proof.right.witness]),
+                            put.proof.proof.right.proof))⟩)))
+            },
+        }, before, after, wrote)
+}

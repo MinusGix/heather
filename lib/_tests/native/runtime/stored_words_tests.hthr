@@ -1,0 +1,115 @@
+// Probes of `stored_words`: the word accessors on literal bytes, where a
+// read or a store meets the end of the span or of the length word, and
+// the theorems that make them the codec's at open spans. Tests, not
+// library: nothing imports this module.
+import stored_words;
+import stored;
+import layout;
+import list_window;
+import vector;
+import bitvec_bytes;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import derive;
+import char;
+import string;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn six() → List<BitVec(8)> { [b(0x01), b(0x23), b(0x45), b(0x67), b(0x89), b(0xab)] }
+fn ten() → List<BitVec(8)> { [b(0x01), b(0x23), b(0x45), b(0x67), b(0x89), b(0xab), b(0xcd), b(0xef), b(0x10), b(0x32)] }
+
+// ---------------------------------------------------------------------------
+// Words of four bytes
+
+// Four bytes, the most significant first.
+theorem word_at_start(): List::u32_be_within(six(), w(6), w(0)) = w(0x01234567) { refl }
+theorem word_at_two(): List::u32_be_within(six(), w(6), w(2)) = w(0x456789ab) { refl }
+// A byte past the end, or past the length word, is read as zero and
+// nowhere.
+theorem word_past_end(): List::u32_be_within(six(), w(6), w(4)) = w(0x89ab0000) { refl }
+theorem word_under_length(): List::u32_be_within(six(), w(2), w(0)) = w(0x01230000) { refl }
+
+// A word's low four bytes are stored, and what is above them is not.
+theorem put_stores_four(): List::put_u32_be_within(six(), w(6), w(1), w(0xdeadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
+theorem put_low_half_only(): List::put_u32_be_within(six(), w(6), w(1), w(0x7deadbeef)).after = [b(0x01), b(0xde), b(0xad), b(0xbe), b(0xef), b(0xab)] { refl }
+theorem put_then_read(): List::u32_be_within(List::put_u32_be_within(six(), w(6), w(1), w(0xdeadbeef)).after, w(6), w(1)) = w(0xdeadbeef) { refl }
+// Nothing is stored past the end.
+theorem put_at_end(): List::put_u32_be_within(six(), w(6), w(4), w(0xdeadbeef)).after = [b(0x01), b(0x23), b(0x45), b(0x67), b(0xde), b(0xad)] { refl }
+
+// ---------------------------------------------------------------------------
+// Words of eight bytes
+
+theorem wide_at_start(): List::u64_be_within(ten(), w(10), w(0)) = w(0x0123456789abcdef) { refl }
+theorem wide_at_two(): List::u64_be_within(ten(), w(10), w(2)) = w(0x456789abcdef1032) { refl }
+// Past the length word the low bytes are zero.
+theorem wide_under_length(): List::u64_be_within(ten(), w(6), w(0)) = w(0x0123456789ab0000) { refl }
+
+theorem wide_put(): List::put_u64_be_within(ten(), w(10), w(1), w(0xfedcba9876543210)).after
+    = [b(0x01), b(0xfe), b(0xdc), b(0xba), b(0x98), b(0x76), b(0x54), b(0x32), b(0x10), b(0x32)] { refl }
+theorem wide_put_then_read(): List::u64_be_within(List::put_u64_be_within(ten(), w(10), w(2), w(0xfedcba9876543210)).after, w(10), w(2)) = w(0xfedcba9876543210) { refl }
+
+// ---------------------------------------------------------------------------
+// The codec's, at literal bytes and at open ones
+
+// The accessor and the codec read one word, by evaluation of both.
+theorem word_is_codec(): List::u32_be_within(six(), w(6), w(1)) = Stored::u32_be().get(six(), 1).zero_extend(32) { refl }
+theorem wide_is_codec(): List::u64_be_within(ten(), w(10), w(1)) = Stored::u64_be().get(ten(), 1) { refl }
+
+// A word stored through the accessor is read back through the codec: the
+// two theorems and the codec's own law, at any span.
+theorem put_then_get(span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    Stored::u32_be().get(List::put_u32_be_within(span, length, i, word).after, i.toNat()) = word.truncate(32, 32) {
+    let stored: (List::put_u32_be_within(span, length, i, word).after = Stored::u32_be().put(span, i.toNat(), word.truncate(32, 32))) =
+        cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, span.put_u32_be_within_stored(length, i, word, inside, own));
+    trans(cong_fn(λ (bytes: List<u8>) => Stored::u32_be().get(bytes, i.toNat()), stored),
+        Stored::u32_be().get_put(span, i.toNat(), word.truncate(32, 32), omega))
+}
+
+// A stored word is read back by the accessor, the low half of what was
+// stored: the store keeps the length the read's bound is against.
+theorem put_then_read_open(span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::u32_be_within(List::put_u32_be_within(span, length, i, word).after, length, i) = word.truncate(32, 32).zero_extend(32) {
+    trans(List::put_u32_be_within(span, length, i, word).after.u32_be_within_stored(length, i, inside),
+        cong_fn(λ (v: u32) => v.zero_extend(32), put_then_get(span, length, i, word, inside, own)))
+}
+
+// A word stored apart from another leaves it: two fields of a record.
+theorem put_leaves_the_other(span: List<u8>, length, i, k, word: u64, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len(),
+    apart: k.toNat() + 4 <= i.toNat()):
+    Stored::u32_be().get(List::put_u32_be_within(span, length, i, word).after, k.toNat()) = Stored::u32_be().get(span, k.toNat()) {
+    let stored: (List::put_u32_be_within(span, length, i, word).after = Stored::u32_be().put(span, i.toNat(), word.truncate(32, 32))) =
+        cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, span.put_u32_be_within_stored(length, i, word, inside, own));
+    trans(cong_fn(λ (bytes: List<u8>) => Stored::u32_be().get(bytes, k.toNat()), stored),
+        Stored::u32_be().get_put_apart(Stored::u32_be(), span, i.toNat(), k.toNat(), word.truncate(32, 32), Inl(omega), omega))
+}
+
+// Negative controls: the bound is what makes them one. Under a length
+// word short of the word, the accessor reads zeros where the codec reads
+// the span's bytes, and stores less than the codec does.
+theorem short_read_differs(): List::u32_be_within(six(), w(2), w(0)).eq_bit(Stored::u32_be().get(six(), 0).zero_extend(32)) = False { refl }
+theorem short_store_differs(): Stored::u32_be().get(List::put_u32_be_within(six(), w(2), w(0), w(0xdeadbeef)).after, 0)
+    .eq_bit(Stored::u32_be().get(Stored::u32_be().put(six(), 0, BitVec::ofNat(0xdeadbeef)), 0)) = False { refl }

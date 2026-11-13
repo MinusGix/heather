@@ -1,0 +1,200 @@
+// Probes of `runtime fn` on functions that call another over windows of
+// their spans (`FTm::Lend`, lib/native/runtime/rt_file.hthr;
+// docs/native-library-exports-design.md §3.1, V5a): the callee's spans
+// are windows of the caller's, the written window is put back, and the
+// generated statements are at every file. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_rows;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn five() → List<BitVec(8)> { [b(1), b(2), b(3), b(4), b(5)] }
+fn tens() → List<BitVec(8)> { [b(10), b(20), b(30), b(40), b(50)] }
+
+// ---------------------------------------------------------------------------
+// The callee
+
+// Byte `i` of `src` at `i` of `dst`, each under its own length word.
+runtime fn copy_byte(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn: BitVec(64), i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    Mutated(dst.with_byte_within(dn, i, src.byte_within(sn, i)), i)
+}
+
+// ---------------------------------------------------------------------------
+// A window of each span
+
+// `copy_byte` at the first byte of the windows `from` up to `end` of both
+// spans, where they are windows; 0 and nothing stored where `end` is past
+// either span or before `from`.
+runtime fn copy_window(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match dn.unsigned_lt_bit(end) {
+        True => Mutated(dst, BitVec::ofNat(0)),
+        False => match sn.unsigned_lt_bit(end) {
+            True => Mutated(dst, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(dst, BitVec::ofNat(0)),
+                False => {
+                    let done = copy_byte(dst.window(from.toNat(), end.toNat()), end.sub(from), src.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(0));
+                    Mutated(dst.put_window(from.toNat(), done.after), BitVec::ofNat(1))
+                },
+            },
+        },
+    }
+}
+
+theorem copy_window_shaped(): copy_window::rt.lent = 2 { refl }
+
+theorem copy_window_runs(): program_run(copy_window::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(4)]) =
+    Ending(w(1), [[b(1), b(2), b(30), b(4), b(5)], tens()]) { refl }
+theorem copy_window_past(): program_run(copy_window::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(6)]) =
+    Ending(w(0), [five(), tens()]) { refl }
+
+// What the generator states, at every file.
+theorem copy_window_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, from, end: BitVec(64)):
+    program_run(copy_window::program, Cons(dst, rest), 1, [dp, dn, sp, sn, from, end]) = FTm::end_of(rest, copy_window(dst, dn, rest.span(0), sn, from, end)) {
+    copy_window::runs_over(dst, rest, dp, dn, sp, sn, from, end)
+}
+
+theorem copy_window_placeless(): program_placeless(copy_window::program) = True { refl }
+theorem copy_window_rows(): program_rows(copy_window::program) = [[True], [True]] { refl }
+theorem copy_window_lowers(): lower_program_lent(copy_window::program, plan_program(copy_window::program), program_counts(copy_window::program)).is_some()
+    = True { refl }
+
+// The store is the window's: `copy_byte` at 1 of a window one byte long
+// stores nothing, the window's length word being what its store is under.
+runtime fn copy_second(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match dn.unsigned_lt_bit(end) {
+        True => Mutated(dst, BitVec::ofNat(0)),
+        False => match sn.unsigned_lt_bit(end) {
+            True => Mutated(dst, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(dst, BitVec::ofNat(0)),
+                False => {
+                    let done = copy_byte(dst.window(from.toNat(), end.toNat()), end.sub(from), src.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
+                    Mutated(dst.put_window(from.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+theorem copy_second_runs(): program_run(copy_second::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(1), w(4)]) =
+    Ending(w(1), [[b(1), b(2), b(30), b(4), b(5)], tens()]) { refl }
+theorem copy_second_confined(): program_run(copy_second::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(3)]) =
+    Ending(w(1), [five(), tens()]) { refl }
+
+// ---------------------------------------------------------------------------
+// The written span whole, a window of the read one
+
+// `copy_byte` at 1 of the written span, from the window `from` up to
+// `end` of the read one: the written span goes under its own length word,
+// which is its window from the first byte, with no test.
+runtime fn copy_into(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match sn.unsigned_lt_bit(end) {
+        True => Mutated(dst, BitVec::ofNat(0)),
+        False => match end.unsigned_lt_bit(from) {
+            True => Mutated(dst, BitVec::ofNat(0)),
+            False => {
+                let done = copy_byte(dst.window(0, dn.toNat()), dn, src.window(from.toNat(), end.toNat()), end.sub(from), BitVec::ofNat(1));
+                Mutated(dst.put_window(0, done.after), done.value)
+            },
+        },
+    }
+}
+
+theorem copy_into_runs(): program_run(copy_into::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(2), w(5)]) =
+    Ending(w(1), [[b(1), b(40), b(3), b(4), b(5)], tens()]) { refl }
+theorem copy_into_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, from, end: BitVec(64)):
+    program_run(copy_into::program, Cons(dst, rest), 1, [dp, dn, sp, sn, from, end]) = FTm::end_of(rest, copy_into(dst, dn, rest.span(0), sn, from, end)) {
+    copy_into::runs_over(dst, rest, dp, dn, sp, sn, from, end)
+}
+theorem copy_into_lowers(): lower_program_lent(copy_into::program, plan_program(copy_into::program), program_counts(copy_into::program)).is_some()
+    = True { refl }
+
+// ---------------------------------------------------------------------------
+// A loop called over windows
+
+// xor_from(dst, dn, src, sn, count, i): each byte of `dst` from `i` to
+// below `count` xored with `src`'s byte at its index.
+runtime fn xor_from(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, count, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)>
+    decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => Mutated(dst, i),
+        True => {
+            let mut dst = dst;
+            dst.put_within(dn, i, dst.byte_within(dn, i).bxor(src.byte_within(sn, i)));
+            xor_from(dst, dn, src, sn, count, i.add(BitVec::ofNat(1)))
+        },
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, count, h);
+        bv_omega
+    };
+}
+
+// The bytes `from` up to `end` of `dst` xored with those of `src`: the
+// loop runs over the two windows from its own index 0, and knows nothing
+// of where in the spans they lie.
+runtime fn xor_window(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn, from, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match dn.unsigned_lt_bit(end) {
+        True => Mutated(dst, BitVec::ofNat(0)),
+        False => match sn.unsigned_lt_bit(end) {
+            True => Mutated(dst, BitVec::ofNat(0)),
+            False => match end.unsigned_lt_bit(from) {
+                True => Mutated(dst, BitVec::ofNat(0)),
+                False => {
+                    let done = xor_from(dst.window(from.toNat(), end.toNat()), end.sub(from), src.window(from.toNat(), end.toNat()), end.sub(from), end.sub(from), BitVec::ofNat(0));
+                    Mutated(dst.put_window(from.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+theorem xor_window_runs(): program_run(xor_window::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(1), w(4)]) =
+    Ending(w(3), [[b(1), b(22), b(29), b(44), b(5)], tens()]) { refl }
+theorem xor_window_empty(): program_run(xor_window::program, [five(), tens()], 1, [w(4096), w(5), w(8192), w(5), w(3), w(3)]) =
+    Ending(w(0), [five(), tens()]) { refl }
+theorem xor_window_stated(dst: List<BitVec(8)>, rest: List<List<BitVec(8)>>, dp, dn, sp, sn, from, end: BitVec(64)):
+    program_run(xor_window::program, Cons(dst, rest), 1, [dp, dn, sp, sn, from, end]) = FTm::end_of(rest, xor_window(dst, dn, rest.span(0), sn, from, end)) {
+    xor_window::runs_over(dst, rest, dp, dn, sp, sn, from, end)
+}
+// That the function compiler accepts this program is not stated here: the
+// kernel runs out of fuel evaluating the lowering of a lender and a loop
+// together. The export of the same shape is where it is compiled and its
+// certificate checked (`xor_window` in lib/native/native_tool_spans.hthr).

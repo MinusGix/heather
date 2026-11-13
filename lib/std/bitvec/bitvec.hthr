@@ -2247,6 +2247,11 @@ theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
     }
 }
 
+// So such a value is its low `n` bits, zero-extended.
+theorem BitVec::zero_extend_take_low_of_lt(n, m: Nat, x: BitVec(m + n), fits: x.toNat() < Nat::pow(2, n)): x.take_low(n, m).zero_extend(m) = x {
+    j(BitVec::drop_low_zero_of_lt(n, m, x, fits), λ hi _ => x.take_low(n, m).concat(hi) = x, BitVec::concat_split(n, m, x))
+}
+
 // Zero high columns preserve an incoming borrow, so unsigned comparison can
 // use a wider physical word without changing the narrow logical result.
 theorem BitVec::borrow_zero_columns(n: Nat): (borrow: Bool) →
@@ -2330,6 +2335,49 @@ theorem BitVec::bor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
             ih(extra, a.tail_bits(), b.tail_bits()),
             a := (a.bor(b)).head_bit(), b := (a.bor(b)).head_bit()),
     }
+}
+
+// `|` with zero, either side.
+theorem BitVec::bor_zero_l(n: Nat): (x: BitVec(n)) → BitVec::zero(n := n).bor(x) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, refl, ih(x.tail_bits()), a := x.head_bit(), b := x.head_bit()),
+    }
+}
+
+theorem BitVec::bor_zero_r(n: Nat): (x: BitVec(n)) → x.bor(BitVec::zero()) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, x.head_bit().or_false_r(), ih(x.tail_bits())),
+    }
+}
+
+// `|` is of the low parts and of the high parts.
+theorem BitVec::bor_concat(n: Nat): (m: Nat) → (lo1, lo2: BitVec(n)) → (hi1, hi2: BitVec(m)) →
+    lo1.concat(hi1).bor(lo2.concat(hi2)) = lo1.bor(lo2).concat(hi1.bor(hi2)) {
+    match n {
+        Zero => λ m lo1 lo2 hi1 hi2 => refl,
+        Succ(k, ih) => λ m lo1 lo2 hi1 hi2 => BitVec::cons_bit_cong(m + k, refl,
+            ih(m, lo1.tail_bits(), lo2.tail_bits(), hi1, hi2), a := lo1.head_bit() || lo2.head_bit(), b := lo1.head_bit() || lo2.head_bit()),
+    }
+}
+
+// A low part under zeros joined to a high part over zeros is the two
+// side by side: how a shift and an `|` place one field above another.
+theorem BitVec::bor_concat_zeros(n, m: Nat, lo: BitVec(n), hi: BitVec(m)):
+    lo.concat(BitVec::zero(n := m)).bor(BitVec::zero(n := n).concat(hi)) = lo.concat(hi) {
+    trans(BitVec::bor_concat(n, m, lo, BitVec::zero(), BitVec::zero(), hi),
+        rewrite(BitVec::bor_zero_r(n, lo), BitVec::bor_zero_l(m, hi), refl))
+}
+
+// The same above `k` zeros and with the operands as a shift and an `|`
+// write them: what is already placed, then the field shifted over it.
+theorem BitVec::bor_concat_above(k, n, m: Nat, b: BitVec(n), w: BitVec(m)):
+    BitVec::zero(n := k).concat(BitVec::zero(n := n).concat(w)).bor(BitVec::zero(n := k).concat(b.concat(BitVec::zero(n := m))))
+        = BitVec::zero(n := k).concat(b.concat(w)) {
+    trans(BitVec::bor_comm(m + n + k, BitVec::zero(n := k).concat(BitVec::zero(n := n).concat(w)), BitVec::zero(n := k).concat(b.concat(BitVec::zero(n := m)))),
+        trans(BitVec::bor_concat(k, m + n, BitVec::zero(), BitVec::zero(), b.concat(BitVec::zero(n := m)), BitVec::zero(n := n).concat(w)),
+            rewrite(BitVec::bor_zero_columns(k), BitVec::bor_concat_zeros(n, m, b, w), refl)))
 }
 
 theorem BitVec::bxor_zero_columns(n: Nat): BitVec::zero(n := n).bxor(BitVec::zero()) = BitVec::zero() {

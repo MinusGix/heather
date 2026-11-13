@@ -5,7 +5,7 @@
 // literal the kernel checks equal to the source by `refl`, then compiles
 // the literal, so a tool's lowering is evaluated once and not again in
 // every statement of the certificate (crates/cli/src/native/elf.rs). A
-// source with functions is spelled `[0]`, and `write-elf` then compiles the
+// source this cannot spell is `[0]`, and `write-elf` then compiles the
 // source as it is. Untrusted: a misspelling is a literal the kernel refuses.
 import native_source;
 import function_ir;
@@ -64,9 +64,19 @@ fn Region::spelled_body(self body: Region) → List<Nat> {
 
 fn List::spell_ids(self ids: List<Nat>) → List<Nat> { Cons(ids.len(), ids) }
 
+// A call's views, after their count: each its seven fields, `written` as a
+// bit.
+fn spell_views(views: List<View>) → List<Nat> {
+    match views {
+        Nil => [],
+        Cons(view, rest) => Cons(view.buffer, Cons(view.home, Cons(view.start, Cons(view.end,
+            Cons(match view.written { False => 0, True => 1 }, Cons(view.base, Cons(view.length, spell_views(rest)))))))),
+    }
+}
+
 // A region's tag, then its fields in order, its parts' in prefix order:
 // 0 a leaf, 1 a sequence, 2 a composition, 3 a conditional, 4 a call, 5 a
-// loop (issues/native-region-spelling.md).
+// loop, 6 a call over views (issues/native-region-spelling.md).
 fn StructuredRegion::spelled_tagged(self region: StructuredRegion) → List<Nat> {
     match region {
         Dataflow(body) => Cons(0, body.spelled_body()),
@@ -75,6 +85,8 @@ fn StructuredRegion::spelled_tagged(self region: StructuredRegion) → List<Nat>
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => Cons(3, List::append(inputs.spelled_ports(),
             Cons(condition, List::append(arguments.spelled_ports(), List::append(outputs.spelled_ports(),
                 List::append(when_true.spelled_tagged(), when_false.spelled_tagged())))))),
+        Lend(views, callee, arguments, result) => Cons(6, Cons(views.len(), List::append(spell_views(views),
+            Cons(callee, List::append(arguments.spell_ids(), [result]))))),
         Call(callee, arguments, result) => Cons(4, Cons(callee, List::append(arguments.spell_ids(), [result]))),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => Cons(5, List::append(inputs.spell_ids(),
             Cons(bound, List::append(parameters.spell_ids(), Cons(count, List::append(body.spelled_tagged(),
@@ -95,6 +107,7 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
             Sequence(_, _) => Some(Cons(7, region.spelled_tagged())),
             Compose(_, _) => Some(Cons(7, region.spelled_tagged())),
             Conditional(_, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
+            Lend(_, _, _, _) => Some(Cons(7, region.spelled_tagged())),
             Call(_, _, _) => Some(Cons(7, region.spelled_tagged())),
             Loop(_, _, _, _, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
         },
@@ -125,12 +138,29 @@ fn List::spell_procedures(self procs: List<Procedure>) → Option<List<Nat>> {
     }
 }
 
+// Each function: its parameters' count and ids, its body, its result, then
+// how many buffers it is lent.
+fn List::spell_functions(self functions: List<Function>) → List<Nat> {
+    match functions {
+        Nil => [],
+        Cons(f, rest) => List::append(f.parameters.spell_ids(),
+            List::append(f.body.spelled_tagged(), Cons(f.result, Cons(f.lent, rest.spell_functions())))),
+    }
+}
+
 // `[1]`, its words, its buffers' count and each buffer, then `main`; with
 // procedures `[2]`, its words, its depth, its buffers, the procedures'
-// count and each procedure, then `main`; or `[0]`.
+// count and each procedure, then `main`; with functions `[3]`, as `[2]`
+// with the functions' count and each function before the procedures'; or
+// `[0]`.
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
-        Cons(_, _) => [0],
+        Cons(_, _) => match Some(Cons(3, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(),
+                    Cons(src.functions.len(), List::append(src.functions.spell_functions(), [src.procedures.len()]))))))))
+                .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {
+            None => [0],
+            Some(spelled) => spelled,
+        },
         Nil => match src.procedures {
             Cons(_, _) => match Some(Cons(2, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), [src.procedures.len()]))))))
                     .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {

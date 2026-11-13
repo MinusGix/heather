@@ -1,0 +1,105 @@
+// A block assembled in the context and the message's end, as functions of
+// the context (FIPS 180-4 §5.1.1, issues/sha256-context-type.md,
+// docs/layout-design.md §9.5 item 4): a byte into the block, the block run
+// when the sixty-fourth lands, and zeros to the block's end; the padding
+// and the length are `sha256_padding.hthr`, a module of their own so that
+// neither's elaboration is both
+// (issues/runtime-tests-cold-build-past-rail.md). Each is a `mut self`
+// method of `Sha256` with the generator's
+// record theorem, and each store into the context is one of these or of
+// the compression's (`sha256_compression.hthr`).
+//
+// A block is assembled in the schedule's first sixteen words, where the
+// compression wants it, and a block's words are their bytes with the most
+// significant first. So a byte of the block is a byte of a word:
+// `Sha256::put` is the schedule with that byte replaced
+// (`vector_with_byte_be`, `stored_words.hthr`), and its code is one store
+// of a byte under a test of the index.
+//
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import function_ir_lower;
+import function_ir_lower_calls;
+import nat_map;
+import rt_held_loop;
+import x86_64_asm;
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+
+// Byte `at` of the schedule's bytes: of a block, its byte `at`. One store
+// of a byte, where the declaration lays the schedule.
+runtime fn Sha256::put(mut self s: Sha256, at, byte: u64) → u64 {
+    s.schedule := vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56));
+    at
+}
+
+// One byte into the block at `fill`, and the block run when that fills
+// it. Answers how full the block then is.
+runtime fn Sha256::push(mut self s: Sha256, fill, byte: u64) → u64 {
+    s.put(fill, byte);
+    if fill = 63 {
+        s.run();
+        0
+    } else {
+        fill + 1
+    }
+}
+
+// Zeros in the block from `i` to its end.
+runtime fn Sha256::zero(mut self s: Sha256, i: u64) → u64
+    decreases (64 - i).toNat() {
+    if h: i < 64 {
+        s.put(i, 0);
+        s.zero(i + 1)
+    } else {
+        i
+    }
+}

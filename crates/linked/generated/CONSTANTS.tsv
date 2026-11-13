@@ -1,0 +1,9 @@
+# Values the Rust here must agree on with the code it links, one per line:
+# the module and the `def` in it, which must be `def <name>: Nat =
+# <numeral>;` and is what the linked code itself uses. `generated/constants.rs`
+# is the Rust of them, written by `scripts/linked` (`heather linked-exports`,
+# `heather_cli::linked::constants_rs`) and held to the modules by
+# `crates/cli/tests/linked_exports.rs`, so none is written by hand in Rust.
+lib/lang/lexer/lexer_span.hthr	TOKEN_END_BITS
+lib/native/crypto/sha256_context.hthr	SHA256_CONTEXT_BYTES
+lib/native/crypto/sha256_context.hthr	SHA256_DIGEST_AT

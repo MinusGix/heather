@@ -9,8 +9,8 @@
 //
 // What a process gives (`Stack`): `size` bytes from `low` up, writable in
 // every memory, below the canonical boundary, whose word reads see the stores
-// made into them and nothing else, and into which a store leaves code where
-// it was. These are a profile's laws, proved once for its memory; a proof
+// made into them and nothing else, into which a store leaves code where
+// it was, and every word of which reads as some word. These are a profile's laws, proved once for its memory; a proof
 // that runs over the stack names its addresses by their offsets from `low`
 // (`next_rip(low, i)`), so it never does arithmetic on an open address.
 import x86_64;
@@ -19,6 +19,7 @@ import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
+import memory;
 import bitvec;
 import bitvec_signed;
 import bool;
@@ -240,6 +241,9 @@ record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
     // Code is never on the stack.
     keeps_code: (memory: M) → (i: Nat) → i + 8 <= size → (word: BitVec(64)) → (bytes: List<BitVec(8)>) → (at: BitVec(64)) →
         CodeResident(fetch, memory, bytes, at) → CodeResident(fetch, writes.store(memory, next_rip(low, i), word_bytes(word)), bytes, at),
+    // Every word of it reads as some word, whatever was stored there: what
+    // a frame not yet written holds.
+    readable: (memory: M) → (i: Nat) → i + 8 <= size → Exists<BitVec(64)>(λ word => read_word(data, memory, next_rip(low, i)) = Some(word)),
 }
 
 fn Stack::at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat) → BitVec(64) {
@@ -273,6 +277,128 @@ theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
     i, from: Nat, fits: i + 8 <= stack.size, below: i + 8 <= from, word: BitVec(64)):
     stack.Unchanged(from, memory, stack.writes.store(memory, stack.at(i), word_bytes(word))) {
     λ k above k_fits => stack.apart(memory, i, k, fits, k_fits, Inl(Nat::le_trans(i + 8, from, k, below, above)), word)
+}
+
+// ---------------------------------------------------------------------------
+// What a call may store (docs/native-one-compiler-design.md §2.1)
+
+// One store a function entered at stack offset `i` may make: a word of its
+// own room, below its return address.
+fn Stack::Own<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
+    Exists<Nat>(λ k => (k + 8 <= i) ∧ Exists<BitVec(64)>(λ word => after = stack.writes.store(before, stack.at(k), word_bytes(word))))
+}
+
+// What a call entered at `i` may have done to memory: stores of its own,
+// one after another. What a caller keeps across the call is what such
+// stores leave: its words at and above `i` (`wrote_unchanged`), the code
+// (`wrote_resident`), and anything else stable under them.
+fn Stack::Wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
+    Star(λ (m: M) (n: M) => stack.Own(i, m, n), before, after)
+}
+
+theorem Stack::wrote_refl<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M):
+    stack.Wrote(i, memory, memory) {
+    Star::refl(λ (m: M) (n: M) => stack.Own(i, m, n), memory)
+}
+
+theorem Stack::wrote_trans<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a, b, c: M,
+    first: stack.Wrote(i, a, b), second: stack.Wrote(i, b, c)): stack.Wrote(i, a, c) {
+    Star::trans(λ (m: M) (n: M) => stack.Own(i, m, n), a, b, c, first, second)
+}
+
+// A word stored wholly below `i`.
+theorem Stack::wrote_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M,
+    k: Nat, below: k + 8 <= i, word: BitVec(64)): stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    Star::one(λ (m: M) (n: M) => stack.Own(i, m, n), memory, stack.writes.store(memory, stack.at(k), word_bytes(word)),
+        Exists(k, ⟨below, Exists(word, refl)⟩))
+}
+
+// One more store after the others.
+theorem Stack::wrote_then<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, memory: M,
+    wrote: stack.Wrote(i, before, memory), k: Nat, below: k + 8 <= i, word: BitVec(64)):
+    stack.Wrote(i, before, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_trans(i, before, memory, stack.writes.store(memory, stack.at(k), word_bytes(word)), wrote,
+        stack.wrote_store(i, memory, k, below, word))
+}
+
+// What a call entered lower may store, one entered higher may.
+theorem Stack::wrote_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat, le: d <= i,
+    before, after: M, wrote: stack.Wrote(d, before, after)): stack.Wrote(i, before, after) {
+    Star::monotone(λ (m: M) (n: M) => stack.Own(d, m, n), λ (m: M) (n: M) => stack.Own(i, m, n),
+        λ m n step => Exists(step.witness, ⟨omega(step.proof.left, le), step.proof.right⟩), before, after, wrote)
+}
+
+// The caller's words at and above `i`, the return address included, are as
+// they were.
+theorem Stack::wrote_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, before, after: M, wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => stack.Unchanged(i, before, m),
+        λ m n held step => j(sym(step.proof.right.proof), λ x _ => stack.Unchanged(i, before, x),
+            stack.unchanged_trans(i, before, m, stack.writes.store(m, stack.at(step.witness), word_bytes(step.proof.right.witness)), held,
+                stack.store_below(m, step.witness, i, omega(step.proof.left, room), step.proof.left, step.proof.right.witness))),
+        before, after, stack.unchanged_refl(i, before), wrote)
+}
+
+// Code stays where it was.
+theorem Stack::wrote_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64), before, after: M, wrote: stack.Wrote(i, before, after),
+    resident: CodeResident(fetch, before, bytes, at)): CodeResident(fetch, after, bytes, at) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => CodeResident(fetch, m, bytes, at),
+        λ m n held step => j(sym(step.proof.right.proof), λ x _ => CodeResident(fetch, x, bytes, at),
+            stack.keeps_code(m, step.witness, omega(step.proof.left, room), step.proof.right.witness, bytes, at, held)),
+        before, after, resident, wrote)
+}
+
+// ---------------------------------------------------------------------------
+// A lent span (docs/native-library-exports-design.md §4.2)
+
+// Bytes `xs` read at `a`, below the canonical boundary.
+fn Readable<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>) → Type {
+    (a.toNat() + xs.len() <= Nat::pow(2, 47)) ∧ ((k: Nat) → k < xs.len() → data.read(memory, next_rip(a, k)) = xs.nth(k))
+}
+
+// A span is lent to a call entered at `i`: nothing the call may store
+// changes what it reads. Stated as stability and not as where the span
+// lies, so a load's proof compares no addresses: memory now is `Wrote`
+// from memory at entry, so the span reads its bytes here. Where it lies is
+// the memory model's to say (`DataRegion::lends`, x86_64_byte_memory).
+fn Stack::Lends<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, memory: M) → Type {
+    (after: M) → stack.Wrote(i, memory, after) → Readable(data, after, a, xs)
+}
+
+// A lent span reads its bytes, stays lent across the call's own stores, and
+// is lent to whatever the call calls, which is entered lower.
+theorem Stack::lends_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): Readable(data, memory, a, xs) {
+    lent(memory, stack.wrote_refl(i, memory))
+}
+
+theorem Stack::lends_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, before, after: M, lent: stack.Lends(i, a, xs, before), wrote: stack.Wrote(i, before, after)):
+    stack.Lends(i, a, xs, after) {
+    λ later more => lent(later, stack.wrote_trans(i, before, after, later, wrote, more))
+}
+
+theorem Stack::lends_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat, le: d <= i,
+    a: BitVec(64), xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): stack.Lends(d, a, xs, memory) {
+    λ after wrote => lent(after, stack.wrote_deeper(d, i, le, memory, after, wrote))
+}
+
+// A register holding base plus index addresses the lent span's byte there,
+// at any memory the call's own stores have reached: what a byte load asks
+// of its base.
+theorem Stack::lent_address<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, entry: M, lent: stack.Lends(i, a, xs, entry), index: BitVec(64), memory: M,
+    wrote: stack.Wrote(i, entry, memory), inside: index.toNat() < xs.len()):
+    (a.add(index).toNat() < Nat::pow(2, 47)) ∧ (data.read(memory, a.add(index)) = xs.nth(index.toNat())) {
+    let readable = lent(memory, wrote);
+    let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
+        BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
+    ⟨j(sym(address), λ x _ => x.toNat() < Nat::pow(2, 47), omega(value, readable.left, inside)),
+     j(sym(address), λ x _ => data.read(memory, x) = xs.nth(index.toNat()), readable.right(index.toNat(), inside))⟩
 }
 
 // ---------------------------------------------------------------------------

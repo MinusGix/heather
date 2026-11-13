@@ -20,7 +20,10 @@
 use std::path::{Path, PathBuf};
 
 use heather_linked::scanner::{self, DEAD, END, FAIL, Kind, Scanner, Token};
-use heather_syntax::lexer::{Tok, TokKind, lex};
+use heather_syntax::lexer::{
+    SCAN_COMMENT, SCAN_SPACE, Scan, Tok, TokKind, lex, lex_rust, lex_scanned, lex_while, lex_while_scanned, scan_code, scanner_counts,
+    scanner_installed,
+};
 
 /// The scanner's kind for a lexer token.
 fn kind_of(kind: &TokKind) -> Kind {
@@ -360,7 +363,7 @@ fn the_automaton_is_one_export() {
     // program would be a second copy nothing calls.
     let manifest = include_str!("../generated/EXPORTS.tsv");
     for export in ["scan_step", "scan_accept", "scan_begin"] {
-        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{export}\n")), "{export} is not in EXPORTS.tsv");
+        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{export}\t")), "{export} is not in EXPORTS.tsv");
     }
     assert!(!manifest.contains("\tstep_"), "a family is exported apart from the program");
     // And every family the module writes is one `scan_choose` calls, once:
@@ -577,6 +580,90 @@ fn a_value_is_refused_by_what_reads_it() {
         assert!(lex(source).is_err(), "the lexer takes {source:?}");
         assert_eq!(lex_linked(source), None);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The loop, which is linked too.
+
+/// The loop of `scanner::token` in Rust, over the automaton's three linked
+/// functions: the longest token from `at`, the last position accepted at
+/// remembered. This is what `Scanner` ran before the loop was one linked
+/// function, and it is the reference that function is held to here at
+/// offsets no scan starts from.
+fn munch(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+    let mut state = scanner::begin(previous);
+    let mut last = None;
+    let mut next = at;
+    loop {
+        let byte = source.get(next).map_or(END, |byte| u64::from(*byte));
+        state = scanner::step(state, byte);
+        if state == FAIL {
+            return None;
+        }
+        if state == DEAD || byte == END {
+            return last;
+        }
+        next += 1;
+        let kind = scanner::accept(state);
+        if kind != 0 {
+            last = Some((kind, next));
+        }
+    }
+}
+
+/// What a token may come after: nothing, each kind a shift may begin
+/// after, one it may not, and a word that is no kind.
+const BEFORE: [u64; 6] = [0, Kind::Space as u64, Kind::LParen as u64, Kind::Comma as u64, Kind::Ident as u64, 1 << 40];
+
+fn assert_token_is_the_loops(source: &[u8], at: usize, what: &str) {
+    for previous in BEFORE {
+        assert_eq!(scanner::token(source, at, previous), munch(source, at, previous), "{what}: from {at}, after {previous}");
+    }
+}
+
+#[test]
+fn the_linked_loop_is_the_loop_over_the_automaton() {
+    // From every offset of every probe, the ones inside a token and inside
+    // a multi-byte character among them, and from past the end, where
+    // nothing is read and nothing is a token.
+    for source in PROBES.iter().chain(BEYOND).chain(PIECES) {
+        let source = source.as_bytes();
+        for at in (0..=source.len() + 2).chain([source.len() + 4096, usize::MAX >> 8, usize::MAX]) {
+            assert_token_is_the_loops(source, at, &String::from_utf8_lossy(source));
+        }
+    }
+    // Bytes that are no text at all: the automaton takes any byte.
+    let mut lcg = Lcg(0x70ce_17);
+    for round in 0..2000 {
+        let bytes: Vec<u8> = (0..lcg.below(40)).map(|_| if lcg.below(3) == 0 { lcg.word() as u8 } else { b"a1 \n\"'/.>:=-"[lcg.below(12)] }).collect();
+        for at in 0..=bytes.len() {
+            assert_token_is_the_loops(&bytes, at, &format!("round {round}"));
+        }
+    }
+    // A token longer than any register of state could count by accident:
+    // the end is a position, not a length.
+    let long = format!("// {}\n{}", "c".repeat(70_000), "a".repeat(70_000));
+    assert_eq!(scanner::token(long.as_bytes(), 0, 0), Some((Kind::Comment as u64, 70_003)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_004, Kind::Space as u64), Some((Kind::Ident as u64, 140_004)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_003, Kind::Comment as u64), Some((Kind::Space as u64, 70_004)));
+}
+
+// Every offset of the scanner's own sources, and every offset a scan of
+// the repository's sources starts from (the oracle below walks those too,
+// through `Scanner`; this is the word itself, kind and end).
+#[test]
+fn the_linked_loop_at_every_offset_of_the_lexer_sources() {
+    let mut offsets = 0;
+    for (path, text) in corpus() {
+        let source = text.as_bytes();
+        if path.components().any(|part| part.as_os_str() == "lexer") {
+            for at in 0..=source.len() {
+                assert_token_is_the_loops(source, at, &path.display().to_string());
+            }
+            offsets += source.len();
+        }
+    }
+    assert!(offsets > 50_000, "only {offsets} offsets: the lexer's sources were not found");
 }
 
 // ---------------------------------------------------------------------------
@@ -932,4 +1019,277 @@ fn the_evaluated_probes_are_what_the_scanner_gives() {
     }
     let found = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(found == expected, "{} is not what `PROBES` gives: run scripts/lexer-probes", path.display());
+}
+
+// ---------------------------------------------------------------------------
+// The lexer run by the scanner: `heather_syntax::lexer::lex_scanned`, which
+// is what `HEATHER_LEXER=linked` puts under `lex` (`install_scanner`,
+// `issues/self-lexer-linked.md`). Nothing in this binary installs a scanner
+// (that is the process's one choice, and `crates/cli/tests/check.rs` makes
+// it in a process of its own), so `lex` and `lex_while` here are the Rust
+// lexer and the oracle.
+
+/// `lex_scanned` by the linked scanner on one source: the lexer's tokens
+/// with every one of them the scanner's cut, or the lexer's refusal, message
+/// and place. Answers whether the source lexed.
+fn run_by_the_scanner(source: &str) -> Result<bool, String> {
+    let theirs = lex_rust(source);
+    let (ours, cut) = lex_scanned(scanner::token, source);
+    match (theirs, ours) {
+        (Ok(theirs), Ok(ours)) => {
+            let (theirs, ours) = (plain(&theirs), plain(&ours));
+            if theirs != ours {
+                let at = theirs.iter().zip(&ours).position(|(a, b)| a != b).unwrap_or(theirs.len().min(ours.len()));
+                return Err(format!("token {at}: the lexer has {:?}, the scanner's run {:?}", theirs.get(at), ours.get(at)));
+            }
+            if !cut {
+                return Err("the tokens are the lexer's own: the scanner's cut was given up".to_string());
+            }
+            Ok(true)
+        }
+        (Err(theirs), Err(ours)) => {
+            if (theirs.msg.as_str(), theirs.span.start, theirs.span.end) != (ours.msg.as_str(), ours.span.start, ours.span.end) {
+                return Err(format!("the lexer refuses with {theirs:?}, the scanner's run with {ours:?}"));
+            }
+            if cut {
+                return Err("a refusal counted as the scanner's cut".to_string());
+            }
+            Ok(false)
+        }
+        (Ok(_), Err(ours)) => Err(format!("the lexer accepts what the scanner's run refuses: {}", ours.msg)),
+        (Err(theirs), Ok(_)) => Err(format!("the scanner's run accepts what the lexer refuses: {}", theirs.msg)),
+    }
+}
+
+fn assert_run_by_the_scanner(source: &str, what: &str) -> bool {
+    match run_by_the_scanner(source) {
+        Ok(lexed) => lexed,
+        Err(why) => panic!("{what}: {why}\n  source: {source:?}"),
+    }
+}
+
+#[test]
+fn nothing_here_installs_a_scanner() {
+    assert!(!scanner_installed());
+    assert_eq!(scanner_counts(), (0, 0));
+}
+
+/// The numbering is written three times: `lexer_scan.hthr`'s `KIND_*`
+/// constants, [`Kind`] (held to the module by `the_kinds_are_the_modules`),
+/// and the lexer's `scan_code`, which this holds to [`Kind`] at every kind
+/// of token there is.
+#[test]
+fn the_lexers_codes_are_the_scanners() {
+    assert_eq!(SCAN_SPACE, Kind::Space.code());
+    assert_eq!(SCAN_COMMENT, Kind::Comment.code());
+    let mut seen = std::collections::HashSet::new();
+    let mut hold = |source: &str| {
+        for tok in lex(source).expect("lexes") {
+            assert_eq!(scan_code(&tok.kind), kind_of(&tok.kind).code(), "{:?}", tok.kind);
+            seen.insert(kind_of(&tok.kind));
+        }
+    };
+    for (_, text) in corpus() {
+        if lex(&text).is_ok() {
+            hold(&text);
+        }
+    }
+    hold("⟦ ⟧ $ == ⊕ ~ 42u64");
+    let missing: Vec<Kind> =
+        Kind::ALL.iter().copied().filter(|kind| !matches!(kind, Kind::Space | Kind::Comment) && !seen.contains(kind)).collect();
+    assert_eq!(missing, []);
+}
+
+#[test]
+fn the_scanners_run_is_the_lexer_on_every_source_in_the_repository() {
+    let corpus = corpus();
+    let mut lexed = 0;
+    for (path, text) in &corpus {
+        lexed += usize::from(assert_run_by_the_scanner(text, &path.display().to_string()));
+    }
+    // All but the fixtures that are there to be refused.
+    assert!(lexed > 300 && lexed + 40 > corpus.len(), "{lexed} of {} sources lexed", corpus.len());
+}
+
+#[test]
+fn the_scanners_run_is_the_lexer_on_strings_of_token_pieces() {
+    let mut random = Lcg(0x1e8ed);
+    let mut refused = 0;
+    let rounds = 300_000;
+    for round in 0..rounds {
+        let pieces = match random.below(2 * THEMES.len()) {
+            theme if theme < THEMES.len() => THEMES[theme],
+            _ => PIECES,
+        };
+        let mut source = String::new();
+        for _ in 0..1 + random.below(9) {
+            source.push_str(random.pick(pieces));
+        }
+        refused += usize::from(!assert_run_by_the_scanner(&source, &format!("round {round}")));
+    }
+    assert!(refused > rounds / 10 && refused < rounds * 9 / 10, "{refused} of {rounds} refused");
+}
+
+/// One line in sixteen of every source, as it is and with one character
+/// changed, and at each: the whole line, and the line read only as far as
+/// each of its tokens (`lex_while`, which is how an import list is read
+/// without lexing the module under it). Stopping early holds where `Eof`
+/// lands when a token is refused: at that token's start, whatever its kind.
+#[test]
+fn the_scanners_run_stops_where_the_lexer_stops() {
+    let mut random = Lcg(0x57095);
+    let (mut lines, mut stops, mut refused) = (0, 0, 0);
+    for (path, text) in corpus() {
+        for (number, line) in text.lines().enumerate() {
+            if line.is_empty() || random.below(16) != 0 {
+                continue;
+            }
+            let what = format!("{}:{}", path.display(), number + 1);
+            let starts: Vec<usize> = line.char_indices().map(|(at, _)| at).collect();
+            let at = starts[random.below(starts.len())];
+            let width = line[at..].chars().next().expect("a character").len_utf8();
+            let changed = format!("{}{}{}", &line[..at], random.pick(PIECES), &line[at + width..]);
+            for source in [line, changed.as_str()] {
+                refused += usize::from(!assert_run_by_the_scanner(source, &what));
+                let whole = lex_while(source, |_| true);
+                assert_eq!(plain(&whole), plain(&lex_while_scanned(scanner::token, source, |_| true)), "{what}: {source:?}");
+                for stop in 0..whole.len() {
+                    let mut asked = 0;
+                    let theirs = lex_while(source, |_| {
+                        asked += 1;
+                        asked <= stop
+                    });
+                    let mut asked = 0;
+                    let ours = lex_while_scanned(scanner::token, source, |_| {
+                        asked += 1;
+                        asked <= stop
+                    });
+                    assert_eq!(plain(&theirs), plain(&ours), "{what}: {source:?} stopped at token {stop}");
+                    if stop + 1 < whole.len() {
+                        let at = whole[stop].span.start;
+                        assert_eq!(theirs.last().map(|tok| (tok.span.start, tok.span.end)), Some((at, at)), "{what}: {source:?} stopped at token {stop}");
+                    }
+                    stops += 1;
+                }
+            }
+            lines += 1;
+        }
+    }
+    assert!(lines > 5_000 && stops > 50_000, "{lines} lines, {stops} stops");
+    assert!(refused > 100, "{refused} refused");
+}
+
+// Scanners that are wrong, for what the lexer does about each.
+
+fn refuses_everything(_: &[u8], _: usize, _: u64) -> Option<(u64, usize)> {
+    None
+}
+
+/// The linked scanner as far as byte 12, and a refusal from there.
+fn refuses_late(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+    if at >= 12 { None } else { scanner::token(source, at, previous) }
+}
+
+/// Every identifier called a numeral.
+fn mislabels(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+    let (code, end) = scanner::token(source, at, previous)?;
+    Some((if code == Kind::Ident.code() { Kind::Num.code() } else { code }, end))
+}
+
+fn ends_nowhere(_: &[u8], at: usize, _: u64) -> Option<(u64, usize)> {
+    Some((Kind::Ident.code(), at))
+}
+
+fn ends_past_the_source(source: &[u8], _: usize, _: u64) -> Option<(u64, usize)> {
+    Some((Kind::Ident.code(), source.len() + 8))
+}
+
+/// One byte at a time, which is inside a character where one is longer.
+fn ends_inside_a_character(_: &[u8], at: usize, _: u64) -> Option<(u64, usize)> {
+    Some((Kind::Forall.code(), at + 1))
+}
+
+/// Every identifier of two characters or more cut after its first.
+fn cuts_identifiers_short(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+    let (code, end) = scanner::token(source, at, previous)?;
+    Some((code, if code == Kind::Ident.code() && end > at + 1 && source[at + 1].is_ascii_alphabetic() { at + 1 } else { end }))
+}
+
+const WRONGED: &[&str] = &[
+    "theorem two(): 1 + 1 = 2 { refl }",
+    "fn id<A: Type>(x: A) → A { x } // the identity\n",
+    "∀ x, x ≤ y ∧ \"a\\n\" ++ 'c' → ?hole₁ 0x1f 2.5e3",
+    "let s = \"unterminated",
+    "a ` b",
+    "",
+];
+
+/// A scanner that refuses, names a kind the bytes are not, or answers an
+/// end that is no end leaves the whole source to the lexer: its tokens or
+/// its refusal, and never a panic or a loop.
+#[test]
+fn a_scanner_that_is_wrong_about_a_token_is_not_listened_to() {
+    let scanners: [(&str, Scan); 6] = [
+        ("refuses everything", refuses_everything),
+        ("refuses late", refuses_late),
+        ("mislabels", mislabels),
+        ("ends nowhere", ends_nowhere),
+        ("ends past the source", ends_past_the_source),
+        ("ends inside a character", ends_inside_a_character),
+    ];
+    for source in WRONGED {
+        let theirs = lex_rust(source);
+        for (name, scan) in scanners {
+            let (ours, cut) = lex_scanned(scan, source);
+            match (&theirs, &ours) {
+                (Ok(theirs), Ok(ours)) => assert_eq!(plain(theirs), plain(ours), "{name}: {source:?}"),
+                (Err(theirs), Err(ours)) => assert_eq!((&theirs.msg, theirs.span.start), (&ours.msg, ours.span.start), "{name}: {source:?}"),
+                _ => panic!("{name}: {source:?}: the lexer has {theirs:?}, the run {ours:?}"),
+            }
+            // The scanner's cut stood only where it was never wrong: the
+            // empty source, and a source `refuses_late` or `mislabels` never
+            // got to be wrong about.
+            let untouched = source.is_empty()
+                || (name == "refuses late" && source.len() <= 12)
+                || (name == "mislabels" && theirs.as_ref().is_ok_and(|toks| !toks.iter().any(|tok| matches!(tok.kind, TokKind::Ident(_)))));
+            assert_eq!(cut, untouched && theirs.is_ok(), "{name}: {source:?}");
+        }
+    }
+}
+
+/// Giving up part way asks `keep` about no token twice: the tokens it kept
+/// from the scanner's cut are the lexer's first tokens, and it is asked
+/// again only from there.
+#[test]
+fn giving_the_scanner_up_asks_about_each_token_once() {
+    let source = "theorem two(): 1 + 1 = 2 { refl }";
+    for stop in 0..12 {
+        let mut theirs_asked = Vec::new();
+        let theirs = lex_while(source, |tok| {
+            theirs_asked.push(tok.span.start);
+            theirs_asked.len() <= stop
+        });
+        let mut ours_asked = Vec::new();
+        let ours = lex_while_scanned(refuses_late, source, |tok| {
+            ours_asked.push(tok.span.start);
+            ours_asked.len() <= stop
+        });
+        assert_eq!(plain(&theirs), plain(&ours), "stopped at token {stop}");
+        assert_eq!(theirs_asked, ours_asked, "stopped at token {stop}");
+    }
+}
+
+/// What the lexer does not catch, said as a test so that it is not thought
+/// to: a cut that is wrong but whose every piece is a token of the kind
+/// named. The lexer reads each span alone, so `ab` cut as `a` and `b` is two
+/// identifiers to it. What holds the linked scanner's cuts is the tests
+/// above this section, over every source in the repository.
+#[test]
+fn a_wrong_cut_made_of_right_tokens_is_the_scanners_to_answer_for() {
+    let source = "ab + c";
+    let (ours, cut) = lex_scanned(cuts_identifiers_short, source);
+    let ours = plain(&ours.expect("lexes"));
+    assert!(cut);
+    assert_eq!(ours.len(), 5);
+    assert_ne!(ours, plain(&lex_rust(source).expect("lexes")));
 }

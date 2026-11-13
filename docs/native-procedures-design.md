@@ -10,6 +10,13 @@ of `docs/compiler-milestones-proposal.md`). It draws in
 `issues/native-register-moves-and-convention.md` where they are needed to
 make a call compile, and leaves the rest of them open (§8).
 
+`docs/native-procedures-are-functions-design.md` (proposed 2026-11-11,
+round U5 of `docs/native-one-compiler-design.md`) keeps §1 and §2 of this
+note, what a procedure is and what a call means, and proposes to replace
+the convention, the compile and its proof (§3 to §5): words in a frame
+of the activation, the callee saving, one contract with the function
+compiler's. Until that round is built this note describes the code.
+
 Today a native tool is a closed `Source` (`lib/native/native_source.hthr`)
 whose procedures are Heather functions returning an `Act`, inlined where
 they are called (`lib/native/native_build.hthr`). That has two walls: code
@@ -128,7 +135,7 @@ fuel per call. With a depth, the question disappears: the handler is
   only RAX and RBX beside them.
 - **Homes are global.** A word has one home for the whole program, in a
   register or its slot, as now.
-- **Caller saves.** At a call the caller pushes each word live after it but
+- **Caller saves** (until U5's step 5b; see §4's note). At a call the caller pushes each word live after it but
   for the results (`out − results`, the set it needs back) from its home,
   and after the return pops each back into its home. The callee saves
   nothing, and its code may write any home.
@@ -145,6 +152,19 @@ fuel per call. With a depth, the question disappears: the handler is
   refinement, `native-register-moves-and-convention`'s (§8).
 
 ## 4. The code
+
+*Since 2026-11-11 (U5's steps 5a and 5b,
+`docs/native-procedures-are-functions-design.md` §3) there is no `frame`
+slot and the caller saves nothing: RSP is the frame, held in the claim
+between statements; a word without a register lives in its activation's
+frame there; and the callee saves the registers the program's homes use
+and opens its own frame. §3's "why not callee-saves" was about static
+slots, where a callee's code could write a caller's word; a frame above
+the callee's RSP is out of its reach by the memory clause. What follows
+describes the code before those steps. The `room` slot is as written;
+since step 5c the depth is tested and counted in the callee's entry and
+counted back in its exit, not at the call site, and results come back in
+RAX, RDX, RCX, RSI, RDI and R8.*
 
 ### 4.1 Layout
 

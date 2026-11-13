@@ -1,0 +1,91 @@
+// A round of SHA-256 as functions of its context (FIPS 180-4 §6.2.2 step
+// 3): the second of the three modules `sha256_compression.hthr` describes.
+// A round's second half is two functions (`turn`, `set`) because a
+// function passes at most six words; the seven moves are a third
+// (`shift`). Its first half, T1, is `Sha256::t1` (`sha256_schedule.hthr`),
+// and the loop calls the two (`Sha256::rounds`): a function that called
+// `turn` itself would carry `turn`'s whole program in its own
+// elaboration, which is the long part of it.
+//
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import function_ir_lower;
+import function_ir_lower_calls;
+import nat_map;
+import rt_held_loop;
+import x86_64_asm;
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import sha256_schedule;
+
+// Seven of the working variables each moved to the next: h takes g first
+// and b takes a last, so that a word is read before it is stored over
+// (step 3). Pass `i` moves working variable 6 − i.
+runtime fn Sha256::shift(mut self s: Sha256, i: u64) → u64
+    decreases (7 - i).toNat() {
+    if h: i < 7 {
+        s.working := vector_update(s.working, (7 - i).toNat(), vector_get(s.working, (6 - i).toNat(), 0));
+        s.shift(i + 1)
+    } else {
+        i
+    }
+}
+
+// The working variables after a round, from the two new words: the seven
+// move, then a and e are stored, e over the d that moved there.
+runtime fn Sha256::set(mut self s: Sha256, first, fifth: u64) → u64 {
+    s.shift(0);
+    s.working := vector_update(vector_update(s.working, 0, first.truncate(32, 32)), 4, fifth.truncate(32, 32));
+    fifth
+}
+
+// A round's second half: T2 from a, b and c, then the new a and e.
+runtime fn Sha256::turn(mut self s: Sha256, t1: u64) → u64 {
+    s.set(t1 + sha256_t2(vector_index(s.working, 0, trivial).zero_extend(32), vector_index(s.working, 1, trivial).zero_extend(32), vector_index(s.working, 2, trivial).zero_extend(32)),
+        vector_index(s.working, 3, trivial).zero_extend(32) + t1)
+}

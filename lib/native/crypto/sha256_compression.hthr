@@ -1,0 +1,123 @@
+// SHA-256's compression as functions of its context (FIPS 180-4 §6.2.2,
+// issues/sha256-context-type.md, docs/layout-design.md §9.5 item 4): the
+// schedule, the working variables, the sixty-four rounds and the new hash
+// value, each a `mut self` method of `Sha256` (`sha256_context.hthr`)
+// that reads and stores the context's words by name and index. Nothing
+// here writes an offset or a width: `s.schedule` at `t.toNat()` is the
+// accessor's checked element where the declaration lays it.
+//
+// These are the linked ones: `sha256_compress` (`sha256_one_block.hthr`)
+// copies the block's bytes into the schedule and runs `Sha256::run`'s code
+// on the span, and the stream's functions reach the same code through the
+// context's own (`sha256_filling.hthr`).
+//
+// What each publishes is the generator's: `Sha256::run::bytes`, the code's
+// function over the span, and `Sha256::run::runs_held`, that where the
+// span holds a context the code computes `Sha256::run` of it and leaves
+// the span holding what `Sha256::run` leaves. Nothing is proved by hand.
+//
+// A word is 32 bits in the context and 64 in the code, so the word
+// functions (`sha256_round.hthr`) take each `zero_extend`ed and their
+// results are `truncate`d where stored. An element at a word index is
+// read with a value for past the end (`vector_get(…, 0)`): the code tests
+// the index, so no method here owes a bound.
+//
+// The schedule and the working variables' start are `sha256_schedule.hthr`
+// and a round is `sha256_working.hthr`: three modules, so that no one
+// module's elaboration is all of them
+// (issues/runtime-tests-cold-build-past-rail.md).
+//
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import function_ir_lower;
+import function_ir_lower_calls;
+import nat_map;
+import rt_held_loop;
+import x86_64_asm;
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import sha256_schedule;
+import sha256_working;
+
+// Rounds `i` to 63: T1, then T2 and the working variables' turn.
+runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
+    decreases (64 - i).toNat() {
+    if h: i < 64 {
+        let t1 = s.t1(i);
+        s.turn(t1);
+        s.rounds(i + 1)
+    } else {
+        i
+    }
+}
+
+// The hash value with the working variables added, word by word (step 4).
+runtime fn Sha256::end(mut self s: Sha256, i: u64) → u64
+    decreases (8 - i).toNat() {
+    if h: i < 8 {
+        s.hash := vector_update(s.hash, i.toNat(), vector_get(s.hash, i.toNat(), 0) + vector_get(s.working, i.toNat(), 0));
+        s.end(i + 1)
+    } else {
+        i
+    }
+}
+
+// The compression of the block whose sixteen words are the schedule's
+// first: H(i) where H(i−1) was.
+runtime fn Sha256::run(mut self s: Sha256) → u64 {
+    s.expand(16);
+    s.begin(0);
+    s.rounds(0);
+    s.end(0)
+}
+
+// A span that held a context is left holding the context compressed.
+theorem Sha256::run_holds(own: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(own, length, s)):
+    Sha256::stored().Holds(Sha256::run::bytes(own, length).after, length, Sha256::run(s).after) {
+    Sha256::run::runs_held(own, s, length, holds).holds
+}

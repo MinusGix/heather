@@ -1,0 +1,126 @@
+// Probes of `function_ir_run`, FunctionIR evaluated with the file threaded
+// (docs/native-one-compiler-design.md §2.6, U4 step 4a-5): a store runs to
+// the file with its byte set, a load after it reads that byte, a caller
+// reads what its callee stored (which evaluation over a fixed file does
+// not), a program with no store leaves the file and answers as it
+// evaluates, and what the run answers is what the meaning allows, at
+// literal files and at a neutral one. Tests, not library: nothing imports
+// this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+
+// ---------------------------------------------------------------------------
+// A store
+
+// storer(i, v): `v`'s low byte at `i` of buffer 0, returning the byte then
+// there.
+fn storer() → Function {
+    Function(parameters := [0, 1], body := leaf([BufferStore(output := 2, buffer := 0, index := 0, value := 1)]), result := 2)
+}
+
+theorem storer_evaluable(): program_evaluable([storer()]).IsTrue() { trivial }
+theorem storer_runs(): program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
+
+// Past the buffer's end a store is no store, and the byte there is zero.
+theorem storer_past(): program_run([storer()], [[b(1)]], 0, [w(1), w(7)]) = Ending(w(0), [[b(1)]]) { refl }
+
+// The control: it does not leave the file as it was.
+theorem storer_changes(same: program_run([storer()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(2)]])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(7)), same);
+    absurd(verdict)
+}
+
+// At any file and any words, what the run answers is what the meaning
+// allows (`program_run_effects`).
+theorem storer_allowed(file: Buffers(), i, v: BitVec(64)):
+    program_effects([storer()])(file, 0, [i, v], program_run([storer()], file, 0, [i, v]).word,
+        program_run([storer()], file, 0, [i, v]).buffers) {
+    program_run_effects([storer()], trivial, file, 0, [i, v], trivial)
+}
+
+// A call with another count of words than the function takes is not one
+// the theorem speaks of.
+theorem storer_arity(): arity_fits(program_arity([storer()], 0), 1) = False { refl }
+
+// ---------------------------------------------------------------------------
+// A load after a store, and a caller after its callee
+
+// put_get(i, v): the store, then the load of the same byte.
+fn put_get() → Function {
+    Function(parameters := [0, 1],
+        body := leaf([BufferStore(output := 2, buffer := 0, index := 0, value := 1), BufferLoad(output := 3, buffer := 0, index := 0)]),
+        result := 3)
+}
+theorem put_get_runs(): program_run([put_get()], [[b(1), b(2)]], 0, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
+
+// reads_back(i, v): calls `storer`, then loads the byte it stored into.
+fn reads_back() → Function {
+    Function(parameters := [0, 1], body := Compose(Call(0, [0, 1], 2), leaf([BufferLoad(output := 3, buffer := 0, index := 0)])),
+        result := 3)
+}
+fn calling() → List<Function> { [reads_back(), storer()] }
+
+theorem calling_evaluable(): program_evaluable(calling()).IsTrue() { trivial }
+
+// The caller's load reads the file its callee left: 7, and the file has
+// it.
+theorem reads_back_runs(): program_run(calling(), [[b(1), b(2)]], 1, [w(1), w(7)]) = Ending(w(7), [[b(1), b(7)]]) { refl }
+
+// Evaluation over a fixed file reads the old byte: this is what threading
+// the file adds.
+theorem reads_back_fixed(): program_eval_over([[b(1), b(2)]], calling(), 1, [w(1), w(7)]) = w(2) { refl }
+
+theorem reads_back_allowed(file: Buffers(), i, v: BitVec(64)):
+    program_effects(calling())(file, 1, [i, v], program_run(calling(), file, 1, [i, v]).word, program_run(calling(), file, 1, [i, v]).buffers) {
+    program_run_effects(calling(), trivial, file, 1, [i, v], trivial)
+}
+
+// ---------------------------------------------------------------------------
+// A program with no store
+
+// The byte at an index, or 256 past the end.
+fn peek() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(Region(Ports([]), [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)], Ports([])),
+            Conditional(Ports([]), 3, Ports([]), Ports([]), leaf([BufferLoad(output := 4, buffer := 0, index := 2)]),
+                leaf([Const(width := 64, output := 4, value := 256)]))),
+        result := 4)
+}
+fn abc() → Buffers() { [[b(97), b(98), b(99)]] }
+
+// It leaves the file and answers as it evaluates over it.
+theorem peek_runs(): program_run([peek()], abc(), 0, [w(4096), w(3), w(1)]) = Ending(w(98), abc()) { refl }
+theorem peek_as_eval(): program_run([peek()], abc(), 0, [w(4096), w(3), w(1)]).word = program_eval_over(abc(), [peek()], 0, [w(4096), w(3), w(1)]) {
+    refl
+}
+theorem peek_past(): program_run([peek()], abc(), 0, [w(4096), w(3), w(5)]) = Ending(w(256), abc()) { refl }
+
+// ---------------------------------------------------------------------------
+// What the theorem does not speak of
+
+// A store whose output is its own index reads what it writes: the program
+// is not evaluable, and `program_run_effects` asks that it is.
+fn selfish() → Function {
+    Function(parameters := [0, 1], body := leaf([BufferStore(output := 0, buffer := 0, index := 0, value := 1)]), result := 0)
+}
+theorem selfish_not_evaluable(): program_evaluable([selfish()]) = False { refl }
+
+// expect-error(mismatch)
+theorem selfish_allowed(file: Buffers(), i, v: BitVec(64)):
+    program_effects([selfish()])(file, 0, [i, v], program_run([selfish()], file, 0, [i, v]).word,
+        program_run([selfish()], file, 0, [i, v]).buffers) {
+    program_run_effects([selfish()], trivial, file, 0, [i, v], trivial)
+}

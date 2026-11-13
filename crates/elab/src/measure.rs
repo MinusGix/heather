@@ -1512,7 +1512,7 @@ impl MethodCalls<'_> {
                 self.block(b);
                 return true;
             }
-            if let Some(call) = self.call(x) {
+            if let Some(call) = self.whole(x).or_else(|| self.call(x)) {
                 *x = call;
                 // The receiver and the arguments may call again.
                 if let ExprKind::App { args, named, .. } = &mut x.kind {
@@ -1593,6 +1593,21 @@ impl MethodCalls<'_> {
         for on in &mut b.ons {
             self.expr(&mut on.expr);
         }
+    }
+
+    /// `\0mutated_whole(x.f(ā))`, a self-call that ends a `mut self` body
+    /// ([`heather_syntax::MUTATED_WHOLE`]): the call, which is the record the
+    /// body returns, so the recursion is a tail call the companions follow.
+    fn whole(&mut self, e: &Expr) -> Option<Expr> {
+        if !self.mutated {
+            return None;
+        }
+        let ExprKind::App { head, args, .. } = &e.kind else { return None };
+        if !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::MUTATED_WHOLE) {
+            return None;
+        }
+        let [inner] = args.as_slice() else { return None };
+        self.call(inner)
     }
 
     /// `\0mutated(x.f(ā))`, a self-call the block declaring `x` claimed:
@@ -2168,11 +2183,13 @@ impl<'a> Rewrite<'a> {
     /// A copy whose output is read and whose bookkeeping is thrown away: it
     /// spells a subterm exactly as `f#body` spells it (same obligation
     /// numbering, same transports) without advancing this walk.
-    /// Whether a match is an [`AutoEqs`] candidate: a plain `match`
-    /// without an equation binding, on a computed scrutinee (let-aliased
-    /// by the time it is walked), with an arm that calls a member.
+    /// Whether a match is an [`AutoEqs`] candidate: a plain `match` or an
+    /// `if` without an equation binding, on a computed scrutinee (let-aliased
+    /// by the time it is walked), with an arm that calls a member. An `if`
+    /// is the match on its test's bit, so a plain `if c` gets the equation
+    /// `if h: c` writes (issues/measured-span-loop-plain-if.md).
     fn auto_candidate(&self, form: MatchForm, scrut: &Expr, eqbind: &Option<String>, arms: &[Arm]) -> bool {
-        form == MatchForm::Match
+        matches!(form, MatchForm::Match | MatchForm::If)
             && eqbind.is_none()
             && matches!(&scrut.kind, ExprKind::Var(v) if self.scrut_aliases.iter().any(|(n, _)| n == v))
             && arms.iter().any(|a| self.calls_member(&a.body))
@@ -2912,6 +2929,23 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                 span: block.span,
             }))
         }
+        // A record built or updated: a field path assigned in a body is the
+        // second (docs/sequencing-surface-design.md §20).
+        ExprKind::RecordUpdate { base, fields } => ExprKind::RecordUpdate {
+            base: Box::new(go(base, bound)),
+            fields: fields
+                .iter()
+                .map(|f| heather_syntax::RecordLitField { name: f.name.clone(), expr: go(&f.expr, bound), span: f.span })
+                .collect(),
+        },
+        ExprKind::RecordLit { name, tyargs, fields } => ExprKind::RecordLit {
+            name: name.clone(),
+            tyargs: tyargs.clone(),
+            fields: fields
+                .iter()
+                .map(|f| heather_syntax::RecordLitField { name: f.name.clone(), expr: go(&f.expr, bound), span: f.span })
+                .collect(),
+        },
         // A measure is an expression over the parameters; the remaining forms
         // either bind nothing to substitute under or are not measures anyone
         // writes. Left as they are.
@@ -3270,15 +3304,23 @@ impl Respell<'_> {
                     let ExprKind::Dot { recv, .. } = &call.kind else {
                         return Err("a marked call this walk cannot read".into());
                     };
-                    let ExprKind::Var(receiver) = &recv.kind else {
+                    // The local rebound: the receiver, or the local it is a
+                    // field path of, with that field replaced (§20). The
+                    // update is written at a hole so that the call, already
+                    // read in `env`, is not read in it again.
+                    let hole = "#after";
+                    let Some((receiver, update)) = heather_syntax::place_update(recv, var(hole, span)) else {
                         return Err("a marked call this walk cannot read".into());
                     };
                     let call = apply(&env, call);
                     let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
+                    let mut at = env.clone();
+                    bind(&mut at, hole, part(heather_syntax::MUTATED_AFTER));
+                    let after = apply(&at, &update);
                     if !name.starts_with("#seq") {
                         bind(&mut env, name, part(heather_syntax::MUTATED_VALUE));
                     }
-                    bind(&mut env, receiver, part(heather_syntax::MUTATED_AFTER));
+                    bind(&mut env, &receiver, after);
                 }
                 // An unclaimed candidate is an ordinary call.
                 Some((false, call)) => {
@@ -3460,7 +3502,7 @@ impl Respell<'_> {
         eqbind: Option<&str>,
         arms: &[Arm],
     ) -> Result<Triple, String> {
-        if eqbind.is_none() && form == MatchForm::Match {
+        if eqbind.is_none() && matches!(form, MatchForm::Match | MatchForm::If) {
             if matches!(scrut.kind, ExprKind::Var(_)) {
                 if self.rw.refining_match(scrut, &None).is_some() {
                     return Err("a `match` below another `match`'s arm on a variable the measure mentions".into());

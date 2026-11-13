@@ -1,0 +1,126 @@
+// Probes for an array field in a function of a laid record
+// (`lib/native/runtime/rt_held_reflect.hthr`, docs/layout-design.md §9.5):
+// an array whose elements' codec has an accessor is read and stored an
+// element at a time, at a literal index, each element where its part of
+// the record lies. Nothing here is proved by hand: each theorem reads
+// what the generator published. The probes of a record of words are
+// `runtime_held_tests.hthr`.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+
+// ---------------------------------------------------------------------------
+// Four words and a count
+
+laid(endian := BigEndian) record Sums { parts: [u32; 4], count: u64 }
+
+// An element read at a literal index, beside a word field.
+runtime fn Sums::second(self s: Sums) → u64 { vector_index(s.parts, 1, trivial).zero_extend(32) + s.count }
+
+// The whole array stored from a vector written out: a store for each
+// element.
+runtime fn Sums::start(mut self s: Sums) → u64 {
+    s.parts := [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a];
+    s.count := 0;
+    0
+}
+
+// One element stored, from another and an operand: the code stores that
+// element and no other.
+runtime fn Sums::nudge(mut self s: Sums, w: u64) → u64 {
+    s.parts := vector_update(s.parts, 2, (vector_index(s.parts, 1, trivial).zero_extend(32) + w).truncate(32, 32));
+    w
+}
+
+// A function that touches no element compiles with the array beside it.
+runtime fn Sums::counted(mut self s: Sums, n: u64) → u64 {
+    s.count := s.count + n;
+    s.count
+}
+
+theorem second_value(own: List<u8>, s: Sums, length: u64, holds: Sums::stored().Holds(own, length, s)):
+    Sums::second::bytes(own, length).value = vector_index(s.parts, 1, trivial).zero_extend(32) + s.count {
+    sym(Sums::second::runs_held(own, s, length, holds).value)
+}
+
+theorem start_holds(own: List<u8>, s: Sums, length: u64, holds: Sums::stored().Holds(own, length, s)):
+    Sums::stored().Holds(Sums::start::bytes(own, length).after, length, Sums([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a], 0)) {
+    Sums::start::runs_held(own, s, length, holds).holds
+}
+
+theorem nudge_holds(own: List<u8>, s: Sums, length, w: u64, holds: Sums::stored().Holds(own, length, s)):
+    Sums::stored().Holds(Sums::nudge::bytes(own, length, w).after, length,
+        s with { parts = vector_update(s.parts, 2, (vector_index(s.parts, 1, trivial).zero_extend(32) + w).truncate(32, 32)) }) {
+    Sums::nudge::runs_held(own, s, length, w, holds).holds
+}
+
+// Nothing is compiled per element: `nudge`'s program is its code and the
+// two accessors of a 32-bit word, the reader and the writer.
+theorem nudge_program(): Sums::nudge::program.len() = 3 { refl }
+
+// On bytes: the third word is stored most significant byte first, eight
+// bytes in, and the rest is left.
+def SUMS_ZEROS: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+theorem nudge_bytes(): Sums::nudge::bytes(SUMS_ZEROS, 24, 0x0102).after = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+laid(endian := BigEndian) record Shorts { halves: [u16; 2], count: u64 }
+
+// expect-error: it changes the field `halves`, whose codec has no accessor
+runtime fn Shorts::fill(mut self s: Shorts) → u64 {
+    s.halves := [1, 2];
+    0
+}
+
+// An index of the kernel's own (`v[i]`, at `Fin`) is not read yet: an
+// element is `vector_index(v, i, trivial)`.
+// expect-error: a form the reflected fragment does not have
+runtime fn Sums::third(self s: Sums) → u64 { s.parts[2].zero_extend(32) }

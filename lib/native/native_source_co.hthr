@@ -34,6 +34,7 @@ import linux_trees;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_placeless;
 import bool;
 import native_source;
 
@@ -45,7 +46,7 @@ fn PerformsCo() → Type { Nat → List<Nat> → List<Nat> → Env → CoTree<Fl
 
 // A function of the environment, so that the recursion is on the statement:
 // a function whose result is codata would be read as corecursive.
-fn Stmt::denote_co(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env → CoTree<Flow>(Events::linux()) {
+fn Stmt::denote_co(self s: Stmt, call: Writers(), perform: PerformsCo()) → Env → CoTree<Flow>(Events::linux()) {
     match s {
         Compute(region) => λ env => CRet(Onward(env.compute(call, region))),
         Invoke(shape) => λ env => CVis(shape.cmd(env), λ a => CRet(Onward(shape.answer(env, a)))),
@@ -66,7 +67,7 @@ fn Stmt::denote_co(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env
 }
 
 // What a call does at depth `depth`, as `Source::performs` with no fuel.
-fn Source::performs_co(self src: Source, call: Answers(), depth: Nat) → PerformsCo() {
+fn Source::performs_co(self src: Source, call: Writers(), depth: Nat) → PerformsCo() {
     match depth {
         Zero => λ procedure args results env => CRet(Exited(call_depth_status())),
         Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) {
@@ -78,7 +79,7 @@ fn Source::performs_co(self src: Source, call: Answers(), depth: Nat) → Perfor
 }
 
 fn Source::main_tree_co(self src: Source, args: List<List<BitVec(8)>>) → CoTree<Flow>(Events::linux()) {
-    src.main.denote_co(program_eval(src.functions), src.performs_co(program_eval(src.functions), src.depth))(src.start(args))
+    src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), src.depth))(src.start(args))
 }
 
 // The program run with the command line `args`, with no fuel.
@@ -97,7 +98,7 @@ fn performs_into(perform: Performs(), perform_co: PerformsCo()) → Type {
 
 // At every fuel, construct by construct (`ITree::into_bind`,
 // `ITree::into_iter`).
-theorem Stmt::into_co(self s: Stmt, call: Answers(), perform: Performs(), perform_co: PerformsCo(),
+theorem Stmt::into_co(self s: Stmt, call: Writers(), perform: Performs(), perform_co: PerformsCo(),
     hp: performs_into(perform, perform_co), n: Nat): (env: Env) →
     ITree::Into(Events::linux(), s.denote(call, perform, n, env), s.denote_co(call, perform_co)(env))
 {
@@ -134,7 +135,7 @@ theorem Stmt::into_co(self s: Stmt, call: Answers(), perform: Performs(), perfor
 }
 
 // Every call at every depth, by induction on the depth.
-theorem Source::performs_into_co(self src: Source, call: Answers(), n: Nat, depth: Nat):
+theorem Source::performs_into_co(self src: Source, call: Writers(), n: Nat, depth: Nat):
     performs_into(src.performs(call, n, depth), src.performs_co(call, depth))
 {
     match depth {
@@ -168,9 +169,9 @@ theorem Source::tree_co_refines(self src: Source, args: List<List<BitVec(8)>>):
 {
     λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => src.tree(args, n), tr)) =>
         ITree::into_map(Events::linux(), src.main_tree(args, c.n), src.main_tree_co(args), λ flow => flow.status(),
-            src.main.into_co(program_eval(src.functions), src.performs(program_eval(src.functions), c.n, src.depth),
-                src.performs_co(program_eval(src.functions), src.depth),
-                src.performs_into_co(program_eval(src.functions), c.n, src.depth), c.n, src.start(args)),
+            src.main.into_co(program_writers(src.functions), src.performs(program_writers(src.functions), c.n, src.depth),
+                src.performs_co(program_writers(src.functions), src.depth),
+                src.performs_into_co(program_writers(src.functions), c.n, src.depth), c.n, src.start(args)),
             tr, c.h)
 }
 
@@ -186,7 +187,7 @@ fn performs_onto(perform_co: PerformsCo(), perform: Nat → Performs()) → Type
 // The fuelled denotation is a family that grows (`Stmt::grows`), so each
 // construct's parts are found at fuels raised to their sum
 // (`CoTree::onto_bind`, `CoTree::onto_iter`).
-theorem Stmt::onto_co(self s: Stmt, call: Answers(), perform: Nat → Performs(),
+theorem Stmt::onto_co(self s: Stmt, call: Writers(), perform: Nat → Performs(),
     grows: (n: Nat) → performs_below(perform(n), perform(Succ(n))), perform_co: PerformsCo(),
     hp: performs_onto(perform_co, perform)): (env: Env) →
     CoTree::Onto(Events::linux(), s.denote_co(call, perform_co)(env), λ n => s.denote(call, perform(n), n, env))
@@ -235,7 +236,7 @@ theorem Stmt::onto_co(self s: Stmt, call: Answers(), perform: Nat → Performs()
 }
 
 // Every call at every depth, by induction on the depth.
-theorem Source::performs_onto_co(self src: Source, call: Answers(), depth: Nat):
+theorem Source::performs_onto_co(self src: Source, call: Writers(), depth: Nat):
     performs_onto(src.performs_co(call, depth), λ n => src.performs(call, n, depth))
 {
     match depth {
@@ -272,13 +273,13 @@ theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>):
 {
     λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_co(args)), tr)) =>
         CoTree::onto_map(Events::linux(), src.main_tree_co(args), λ n => src.main_tree(args, n),
-            λ n => src.main.grows(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth),
-                src.performs(program_eval(src.functions), Succ(n), src.depth), src.performs_grows(program_eval(src.functions), n, src.depth),
+            λ n => src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
+                src.performs(program_writers(src.functions), Succ(n), src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
                 n, src.start(args)),
             λ flow => flow.status(),
-            src.main.onto_co(program_eval(src.functions), λ n => src.performs(program_eval(src.functions), n, src.depth),
-                λ n => src.performs_grows(program_eval(src.functions), n, src.depth),
-                src.performs_co(program_eval(src.functions), src.depth), src.performs_onto_co(program_eval(src.functions), src.depth),
+            src.main.onto_co(program_writers(src.functions), λ n => src.performs(program_writers(src.functions), n, src.depth),
+                λ n => src.performs_grows(program_writers(src.functions), n, src.depth),
+                src.performs_co(program_writers(src.functions), src.depth), src.performs_onto_co(program_writers(src.functions), src.depth),
                 src.start(args)),
             c.n, tr, c.h)
 }

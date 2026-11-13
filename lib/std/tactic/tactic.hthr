@@ -343,7 +343,10 @@ inductive Req {
     // `(y: X) → h[y/x]`, `X` the local's type. What `wlog` makes of a
     // hypothesis about its points before abstracting them, so the cases
     // receive it at their own points (Lean's `generalizing`). Refused for
-    // a term, and where `Abstract` is.
+    // a term, and where `Abstract` is. `x` may also be a global `g: X`:
+    // `(y: X) → h[y/g]`, every mention of the global a parameter, which a
+    // generator proves a statement at where the global's body must not be
+    // unfolded, and applies to `g`.
     Revert(h: Handle, x: Expr),
     // A proof of the type `goal`, by normalising it with `laws` until its
     // two sides meet, as `simp_only(laws…)` does there: each law a proof of
@@ -358,6 +361,14 @@ inductive Req {
     // list, and no law is rewritten by another to a result that does not
     // join. Refused with the law at fault and the route.
     SimpCheck(laws: List<Expr>),
+    // The numeral the closed term `e` of type `Nat` computes to, as a
+    // handle whose `View` is `HLit`. The term is run where a tactic's own
+    // values are, so a library function over numerals (a layout's size, an
+    // offset) costs its steps; `Whnf` walks the term and declines where a
+    // function that recurses by steps is under the head. Refused for a term
+    // that is not a `Nat`, that mentions a local, or whose value is not a
+    // numeral.
+    Numeral(e: Expr),
 }
 
 inductive Never {}
@@ -402,6 +413,7 @@ fn Resp(r: Req) → Type {
         Revert(_, _) => Checked<Handle>,
         Simp(_, _) => Checked<Handle>,
         SimpCheck(_) => Checked<Handle>,
+        Numeral(_) => Checked<Handle>,
     }
 }
 
@@ -498,6 +510,14 @@ fn revert_into(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Revert(h, x)) 
 fn simp_by(laws: List<Expr>, goal: Handle) → Tac<Checked<Handle>> { ask(Simp(laws, goal)) }
 fn simp_check_laws(laws: List<Expr>) → Tac<Checked<Handle>> { ask(SimpCheck(laws)) }
 
+// The numeral a closed `Nat` term computes to (`Numeral`).
+fn numeral(e: Expr) → Tac<Checked<Nat>> {
+    ask(Numeral(e)).bind(λ c => match c {
+        Refused(why) => pure(Refused(why)),
+        Accepted(h) => view(h).bind(λ v => match v { HLit(n) => pure(Accepted(n)), _ => pure(Refused("the host answered with no numeral")) }),
+    })
+}
+
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
 }
@@ -565,6 +585,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Revert(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Simp(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         SimpCheck(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Numeral(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -931,6 +952,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 // 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
 // 32: `Spell`. 33: `Abstract`. 34: `Revert`. 35: `Simp`. 36: `SimpCheck`.
+// 37: `Numeral`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -971,6 +993,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Revert(_, _) => 34,
             Simp(_, _) => 35,
             SimpCheck(_) => 36,
+            Numeral(_) => 37,
         },
     }
 }
@@ -993,6 +1016,7 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             Inj(e, _) => e,
             Absurd(e, _) => e,
             Spell(e) => e,
+            Numeral(e) => e,
             Abstract(_, x) => x,
             Revert(_, x) => x,
             _ => NatLit(0),

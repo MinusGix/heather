@@ -230,8 +230,8 @@ predicate. `Loop` is `iter`, which makes `Function::Computes` partial for
 every client.
 
 **Construct lemmas.** The lowering's induction over `StructuredRegion`
-(`emit_calls_emits`) changes statement for every arm. Today it is
-`MayEmitIn` over `Site::Moves` with a pure post. It would have to be a `Wp`
+(`StructuredRegion::emit_calls_runs`) changes statement for every arm. Today it is
+`MayEmitOver` over `Site::Moves` with a pure post. It would have to be a `Wp`
 post carrying the tree's continuation, because any arm may contain a syscall
 below it. `Dataflow` and `Sequence` arms that contain no syscall could
 borrow S4's lemmas through a "this subregion is pure" case split, and that

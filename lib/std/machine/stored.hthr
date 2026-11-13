@@ -1,0 +1,393 @@
+// What is stored in bytes: a value of `A` as bytes of a `Layout`, read and
+// written through a window of a list (docs/layout-design.md §5.2). The
+// third layer over `lib/std/machine/layout.hthr`: a `Stored<A>` says how
+// an `A` is bytes, `get` and `put` read and store one at an offset, and
+// the laws are proved once for every codec: what is put is read back
+// (`get_put`), a store leaves what is apart from it (`get_put_apart`,
+// whose premise is what `Layout::fits_apart` gives two fields of a sound
+// table), and a store keeps the length (`len_put`).
+//
+// The codecs: a byte; a word of two, four or eight bytes in either byte
+// order (`u32_be`, `u32_le`, from `lib/std/bitvec/bitvec_bytes.hthr`);
+// `array`, elements a stride apart; `then`, one value after another at
+// `Layout::extend`'s offset; `padded`; and `map`, which is how a record is
+// stored as its fields in order. Byte order is the codec's and not the
+// type's: SHA-2 is big-endian, ChaCha20 little-endian, and both hold a
+// `u32`. Padding is written as zeros and not read.
+//
+// Nothing here is undefined: a window past the end of the bytes is
+// shorter, and each law carries the bound it needs as a hypothesis.
+// Alignment is the layout's and no law asks for it; it matters to where a
+// value is placed, not to what its bytes are.
+
+import logic;
+import bool;
+import nat;
+import option;
+import pair;
+import list;
+import omega;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+
+// How a value of `A` is bytes of a layout: a writer whose output is the
+// layout's size, and a reader that gives back what was written.
+record Stored<A> {
+    layout: Layout,
+    read: List<u8> → A,
+    write: A → List<u8>,
+    sized: (a: A) → write(a).len() = layout.size,
+    round: (a: A) → read(write(a)) = a,
+}
+
+// The value at `at` of `bytes`.
+fn Stored::get<A>(self s: Stored<A>, bytes: List<u8>, at: Nat) → A { s.read(bytes.window(at, s.layout.size + at)) }
+
+// `bytes` with the value stored at `at`.
+fn Stored::put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A) → List<u8> { bytes.put_window(at, s.write(a)) }
+
+// What is put is what is then read.
+theorem Stored::get_put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A, inside: at <= bytes.len()):
+    s.get(s.put(bytes, at, a), at) = a
+{
+    trans(cong_fn<List<u8>, A>(λ w => s.read(w),
+            j(s.sized(a), λ n _ => bytes.put_window(at, s.write(a)).window(at, n + at) = s.write(a),
+                bytes.window_put_window(at, s.write(a), inside))),
+        s.round(a))
+}
+
+// A store keeps the length.
+theorem Stored::len_put<A>(self s: Stored<A>, bytes: List<u8>, at: Nat, a: A, fits: s.layout.size + at <= bytes.len()):
+    s.put(bytes, at, a).len() = bytes.len()
+{
+    bytes.len_put_window(at, s.write(a), j(sym(s.sized(a)), λ n _ => n + at <= bytes.len(), fits))
+}
+
+// A store leaves what is apart from it: a value read from bytes the store
+// did not touch is the value that was there.
+theorem Stored::get_put_apart<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at, other: Nat, a: A,
+    apart: t.layout.size + other <= at ∨ s.layout.size + at <= other, inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    cong_fn<List<u8>, B>(λ w => t.read(w), match apart {
+        Inl(before) => bytes.window_put_window_before(at, s.write(a), other, t.layout.size + other, before, inside),
+        Inr(after) => bytes.window_put_window_after(at, s.write(a), other, t.layout.size + other,
+            j(sym(s.sized(a)), λ n _ => n + at <= other, after), inside),
+    })
+}
+
+// The same of two fields: a value read at one field after a store into
+// another that shares no byte with it.
+theorem Stored::get_put_fields<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at, other: Nat, a: A,
+    apart: Field(other, t.layout).Apart(Field(at, s.layout)), inside: at <= bytes.len()):
+    t.get(s.put(bytes, at, a), other) = t.get(bytes, other)
+{
+    s.get_put_apart(t, bytes, at, other, a, apart, inside)
+}
+
+// ---------------------------------------------------------------------------
+// Codecs: a byte
+
+// A byte as itself.
+fn Stored::byte() → Stored<u8> {
+    Stored(Layout::word(0), λ (bytes: List<u8>) => bytes.head_or(BitVec::ofNat(0)), λ (b: u8) => [b], λ _ => refl, λ _ => refl)
+}
+
+// ---------------------------------------------------------------------------
+// Words
+
+// The same codec at another alignment: where a value goes is the
+// layout's, what its bytes are is not.
+fn Stored::aligned<A>(self s: Stored<A>, log: Nat) → Stored<A> {
+    Stored(Layout(s.layout.size, log), s.read, s.write, s.sized, s.round)
+}
+
+// A word of `k` bytes, the most significant first, at no alignment.
+fn Stored::be_bytes(k: Nat) → Stored<BitVec(8 * k)> {
+    Stored(Layout::bytes(k),
+        λ (bytes: List<u8>) => BitVec::of_bytes_be(bytes.vector_of(k, BitVec::ofNat(0))),
+        λ (w: BitVec(8 * k)) => vector_entries(w.bytes_be(k)),
+        λ w => vector_entries_len(k, w.bytes_be(k)),
+        λ w => trans(rewrite(vector_of_entries_exact(k, BitVec::ofNat(0, n := 8), w.bytes_be(k)), refl), BitVec::of_bytes_be_bytes_be(k, w)))
+}
+
+// A word of `k` bytes, the least significant first, at no alignment.
+fn Stored::le_bytes(k: Nat) → Stored<BitVec(8 * k)> {
+    Stored(Layout::bytes(k),
+        λ (bytes: List<u8>) => BitVec::of_bytes_le(bytes.vector_of(k, BitVec::ofNat(0))),
+        λ (w: BitVec(8 * k)) => vector_entries(w.bytes_le(k)),
+        λ w => vector_entries_len(k, w.bytes_le(k)),
+        λ w => trans(rewrite(vector_of_entries_exact(k, BitVec::ofNat(0, n := 8), w.bytes_le(k)), refl), BitVec::of_bytes_le_bytes_le(k, w)))
+}
+
+// The words of two, four and eight bytes, aligned to their size, in each
+// byte order. Byte order is the codec's: a `u32` is one type.
+fn Stored::u16_be() → Stored<u16> { Stored::be_bytes(2).aligned(1) }
+fn Stored::u16_le() → Stored<u16> { Stored::le_bytes(2).aligned(1) }
+fn Stored::u32_be() → Stored<u32> { Stored::be_bytes(4).aligned(2) }
+fn Stored::u32_le() → Stored<u32> { Stored::le_bytes(4).aligned(2) }
+fn Stored::u64_be() → Stored<u64> { Stored::be_bytes(8).aligned(3) }
+fn Stored::u64_le() → Stored<u64> { Stored::le_bytes(8).aligned(3) }
+
+// ---------------------------------------------------------------------------
+// Padding
+
+// A value's bytes with zeros after them up to `end`.
+fn Stored::write_to<A>(self s: Stored<A>, a: A, end: Nat) → List<u8> {
+    s.write(a) ++ List::replicate(BitVec::ofNat(0), end - s.layout.size)
+}
+
+theorem Stored::len_write_to<A>(self s: Stored<A>, a: A, end: Nat, past: s.layout.size <= end): s.write_to(a, end).len() = end {
+    calc {
+        (s.write(a) ++ List::replicate(BitVec::ofNat(0, n := 8), end - s.layout.size)).len()
+            = s.write(a).len() + List::replicate(BitVec::ofNat(0, n := 8), end - s.layout.size).len()
+                := s.write(a).len_append(List::replicate(BitVec::ofNat(0, n := 8), end - s.layout.size)),
+            = s.layout.size + (end - s.layout.size)
+                := rewrite(s.sized(a), List::len_replicate(BitVec::ofNat(0, n := 8), end - s.layout.size), refl),
+            = end := s.layout.size.le_add(end, past),
+    }
+}
+
+// The value's own bytes are the front of them, whatever follows.
+theorem Stored::take_write_to<A>(self s: Stored<A>, a: A, end: Nat, rest: List<u8>): (s.write_to(a, end) ++ rest).take(s.layout.size) = s.write(a) {
+    let zeros = List::replicate(BitVec::ofNat(0, n := 8), end - s.layout.size);
+    trans(cong_fn<List<u8>, List<u8>>(λ bs => bs.take(s.layout.size), s.write(a).append_assoc(zeros, rest)),
+        j(s.sized(a), λ m _ => (s.write(a) ++ (zeros ++ rest)).take(m) = s.write(a), s.write(a).take_append_len(zeros ++ rest)))
+}
+
+theorem Stored::drop_write_to<A>(self s: Stored<A>, a: A, end: Nat, rest: List<u8>, past: s.layout.size <= end):
+    (s.write_to(a, end) ++ rest).drop(end) = rest
+{
+    j(s.len_write_to(a, end, past), λ m _ => (s.write_to(a, end) ++ rest).drop(m) = rest, s.write_to(a, end).drop_append_len(rest))
+}
+
+// The size padded to the alignment, with zeros: a record's last step.
+fn Stored::padded<A>(self s: Stored<A>) → Stored<A> {
+    Stored(s.layout.pad_to_align(), λ (bytes: List<u8>) => s.read(bytes.take(s.layout.size)), λ (a: A) => s.write_to(a, s.layout.stride()),
+        λ a => s.len_write_to(a, s.layout.stride(), s.layout.stride_ge()),
+        λ a => trans(cong_fn<List<u8>, A>(λ bs => s.read(bs),
+                j(s.sized(a), λ m _ => s.write_to(a, s.layout.stride()).take(m) = s.write(a),
+                    s.write(a).take_append_len(List::replicate(BitVec::ofNat(0, n := 8), s.layout.stride() - s.layout.size)))),
+            s.round(a)))
+}
+
+// ---------------------------------------------------------------------------
+// Arrays
+
+// The elements one after another, each padded to the stride.
+fn Stored::write_all<A>(self s: Stored<A>, {n: Nat}, xs: [A; n]) → List<u8> {
+    (match n as λ m => [A; m] → List<u8> {
+        Zero => λ _ => Nil,
+        Succ(_, ih) => λ ys => s.write_to(head(ys), s.layout.stride()) ++ ih(tail(ys)),
+    })(xs)
+}
+
+// `n` elements read a stride apart.
+fn Stored::read_all<A>(self s: Stored<A>, n: Nat, bytes: List<u8>) → [A; n] {
+    (match n as λ m => List<u8> → [A; m] {
+        Zero => λ _ => [],
+        Succ(_, ih) => λ bs => cons(s.read(bs.take(s.layout.size)), ih(bs.drop(s.layout.stride()))),
+    })(bytes)
+}
+
+theorem Stored::len_write_all<A>(self s: Stored<A>, n: Nat): (xs: [A; n]) → s.write_all(xs).len() = n * s.layout.stride() {
+    match n as λ m => (xs: [A; m]) → s.write_all(xs).len() = m * s.layout.stride() {
+        Zero => λ xs => sym(s.layout.stride().mul_left_zero()),
+        Succ(k, ih) => λ xs => calc {
+            (s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).len()
+                = s.write_to(head(xs), s.layout.stride()).len() + s.write_all(tail(xs)).len() := s.write_to(head(xs), s.layout.stride()).len_append(s.write_all(tail(xs))),
+                = s.layout.stride() + k * s.layout.stride() := rewrite(s.len_write_to(head(xs), s.layout.stride(), s.layout.stride_ge()), ih(tail(xs)), refl),
+                = Succ(k) * s.layout.stride() := sym(k.mul_succ_left(s.layout.stride())),
+        },
+    }
+}
+
+theorem Stored::read_all_write_all<A>(self s: Stored<A>, n: Nat): (xs: [A; n]) → s.read_all(n, s.write_all(xs)) = xs {
+    match n as λ m => (xs: [A; m]) → s.read_all(m, s.write_all(xs)) = xs {
+        Zero => λ xs => refl,
+        Succ(k, ih) => λ xs => {
+            let first: (s.read((s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).take(s.layout.size)) = head(xs)) =
+                trans(cong_fn<List<u8>, A>(λ bs => s.read(bs), s.take_write_to(head(xs), s.layout.stride(), s.write_all(tail(xs)))), s.round(head(xs)));
+            let others: (s.read_all(k, (s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).drop(s.layout.stride())) = tail(xs)) =
+                trans(cong_fn<List<u8>, [A; k]>(λ bs => s.read_all(k, bs), s.drop_write_to(head(xs), s.layout.stride(), s.write_all(tail(xs)), s.layout.stride_ge())), ih(tail(xs)));
+            let both: (cons(s.read((s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).take(s.layout.size)),
+                    s.read_all(k, (s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).drop(s.layout.stride())))
+                = cons(head(xs), tail(xs))) = rewrite(first, others, refl);
+            both
+        },
+    }
+}
+
+// `n` of a stored value, each at its stride.
+fn Stored::array<A>(self s: Stored<A>, n: Nat) → Stored<[A; n]> {
+    Stored(s.layout.array(n), λ (bytes: List<u8>) => s.read_all(n, bytes), λ (xs: [A; n]) => s.write_all(xs),
+        λ xs => s.len_write_all(n, xs), λ xs => s.read_all_write_all(n, xs))
+}
+
+// ---------------------------------------------------------------------------
+// One value and then another, and records
+
+// `s` and then `t`, which is at `s.layout.offset_of(t.layout)`: the layout
+// is `extend`'s.
+fn Stored::then<A, B>(self s: Stored<A>, t: Stored<B>) → Stored<Pair<A, B>> {
+    Stored(s.layout.extend(t.layout),
+        λ (bytes: List<u8>) => Pair(s.read(bytes.take(s.layout.size)), t.read(bytes.drop(s.layout.offset_of(t.layout)).take(t.layout.size))),
+        λ (p: Pair<A, B>) => s.write_to(p.fst, s.layout.offset_of(t.layout)) ++ t.write(p.snd),
+        λ p => calc {
+            (s.write_to(p.fst, s.layout.offset_of(t.layout)) ++ t.write(p.snd)).len()
+                = s.write_to(p.fst, s.layout.offset_of(t.layout)).len() + t.write(p.snd).len()
+                    := s.write_to(p.fst, s.layout.offset_of(t.layout)).len_append(t.write(p.snd)),
+                = s.layout.offset_of(t.layout) + t.layout.size
+                    := rewrite(s.len_write_to(p.fst, s.layout.offset_of(t.layout), s.layout.offset_of_ge(t.layout)), t.sized(p.snd), refl),
+                = t.layout.size + s.layout.offset_of(t.layout) := s.layout.offset_of(t.layout).add_comm(t.layout.size),
+        },
+        λ p => {
+            let whole = s.write_to(p.fst, s.layout.offset_of(t.layout)) ++ t.write(p.snd);
+            let first: (s.read(whole.take(s.layout.size)) = p.fst) =
+                trans(cong_fn<List<u8>, A>(λ bs => s.read(bs), s.take_write_to(p.fst, s.layout.offset_of(t.layout), t.write(p.snd))), s.round(p.fst));
+            let after: (whole.drop(s.layout.offset_of(t.layout)).take(t.layout.size) = t.write(p.snd)) =
+                trans(cong_fn<List<u8>, List<u8>>(λ bs => bs.take(t.layout.size),
+                        s.drop_write_to(p.fst, s.layout.offset_of(t.layout), t.write(p.snd), s.layout.offset_of_ge(t.layout))),
+                    j(t.sized(p.snd), λ m _ => t.write(p.snd).take(m) = t.write(p.snd), t.write(p.snd).take_len()));
+            let second: (t.read(whole.drop(s.layout.offset_of(t.layout)).take(t.layout.size)) = p.snd) =
+                trans(cong_fn<List<u8>, B>(λ bs => t.read(bs), after), t.round(p.snd));
+            let both: (Pair(s.read(whole.take(s.layout.size)), t.read(whole.drop(s.layout.offset_of(t.layout)).take(t.layout.size))) = Pair(p.fst, p.snd)) =
+                rewrite(first, second, refl);
+            both
+        })
+}
+
+// A codec read through a pair of functions: how a record is stored as
+// its fields in order.
+fn Stored::map<A, B>(self s: Stored<A>, to: A → B, from: B → A, back: (b: B) → to(from(b)) = b) → Stored<B> {
+    Stored(s.layout, λ (bytes: List<u8>) => to(s.read(bytes)), λ (b: B) => s.write(from(b)), λ b => s.sized(from(b)),
+        λ b => trans(cong_fn<A, B>(to, s.round(from(b))), back(b)))
+}
+
+// A record as its fields: the fields in order, padded to the alignment,
+// read through the record's constructor.
+fn Stored::record<F, R>(self fields: Stored<F>, to: F → R, from: R → F, back: (r: R) → to(from(r)) = r) → Stored<R> {
+    fields.padded().map(to, from, back)
+}
+
+// ---------------------------------------------------------------------------
+// A read and a store, piece by piece
+//
+// What `get` and `put` are at each codec, so that a field of a record or
+// an element of an array is read by its own codec at its own offset, and
+// a word is its bytes at their indices. An accessor over the bytes is
+// proved against these (`lib/native/runtime/stored_words.hthr`).
+
+// A word of `k` bytes read from `at` is the bytes there, in the codec's
+// order.
+theorem Stored::get_be_bytes(k: Nat, bytes: List<u8>, at: Nat):
+    Stored::be_bytes(k).get(bytes, at) = BitVec::of_bytes_be(bytes.vector_at(at, k, BitVec::ofNat(0))) {
+    cong_fn(λ (v: [u8; k]) => BitVec::of_bytes_be(v), bytes.vector_of_window(at, k, BitVec::ofNat(0)))
+}
+
+theorem Stored::get_le_bytes(k: Nat, bytes: List<u8>, at: Nat):
+    Stored::le_bytes(k).get(bytes, at) = BitVec::of_bytes_le(bytes.vector_at(at, k, BitVec::ofNat(0))) {
+    cong_fn(λ (v: [u8; k]) => BitVec::of_bytes_le(v), bytes.vector_of_window(at, k, BitVec::ofNat(0)))
+}
+
+// A word of `k` bytes stored at `at` is its bytes stored one at a time.
+theorem Stored::put_be_bytes(k: Nat, bytes: List<u8>, at: Nat, w: BitVec(8 * k), fits: k + at <= bytes.len()):
+    Stored::be_bytes(k).put(bytes, at, w) = bytes.update_from(at, vector_entries(w.bytes_be(k))) {
+    List::put_window_update_from(vector_entries(w.bytes_be(k)), bytes, at, rewrite(vector_entries_len(k, w.bytes_be(k)), fits))
+}
+
+theorem Stored::put_le_bytes(k: Nat, bytes: List<u8>, at: Nat, w: BitVec(8 * k), fits: k + at <= bytes.len()):
+    Stored::le_bytes(k).put(bytes, at, w) = bytes.update_from(at, vector_entries(w.bytes_le(k))) {
+    List::put_window_update_from(vector_entries(w.bytes_le(k)), bytes, at, rewrite(vector_entries_len(k, w.bytes_le(k)), fits))
+}
+
+// A big-endian word of four bytes stored with one byte of what was there
+// replaced is that byte stored: what a store of one byte does to the word
+// it lies in.
+theorem Stored::u32_be_put_with_byte(bytes: List<u8>, at, r: Nat, b: u8, below: r < 4, fits: 4 + at <= bytes.len()):
+    Stored::u32_be().put(bytes, at, BitVec::with_byte_be(4, Stored::u32_be().get(bytes, at), r, b)) = bytes.update(at + r, λ _ => b) {
+    let zero: u8 = BitVec::ofNat(0);
+    let entries = bytes.vector_at(at, 4, zero);
+    let read: (Stored::u32_be().get(bytes, at) = BitVec::of_bytes_be(entries)) = Stored::get_be_bytes(4, bytes, at);
+    let back: (BitVec::of_bytes_be(entries).bytes_be(4) = entries) = BitVec::bytes_be_of_bytes_be(4, entries);
+    let changed: (BitVec::with_byte_be(4, Stored::u32_be().get(bytes, at), r, b) = BitVec::of_bytes_be(vector_update(entries, r, b))) =
+        rewrite(read, rewrite(back, refl));
+    let again: (BitVec::of_bytes_be(vector_update(entries, r, b)).bytes_be(4) = vector_update(entries, r, b)) = BitVec::bytes_be_of_bytes_be(4, vector_update(entries, r, b));
+    let stored: (Stored::u32_be().put(bytes, at, BitVec::of_bytes_be(vector_update(entries, r, b))) = bytes.update_from(at, vector_entries(vector_update(entries, r, b)))) =
+        trans(Stored::put_be_bytes(4, bytes, at, BitVec::of_bytes_be(vector_update(entries, r, b)), fits),
+            cong_fn(λ (v: [u8; 4]) => bytes.update_from(at, vector_entries(v)), again));
+    trans(cong_fn(λ (x: u32) => Stored::u32_be().put(bytes, at, x), changed), trans(stored, bytes.update_from_one_of_four(at, r, b, zero, below)))
+}
+
+// Padding does not move the value.
+theorem Stored::get_padded<A>(self s: Stored<A>, bytes: List<u8>, at: Nat): s.padded().get(bytes, at) = s.get(bytes, at) {
+    let room: s.layout.size <= s.layout.stride() = s.layout.stride_ge();
+    cong_fn<List<u8>, A>(λ bs => s.read(bs), bytes.take_window(at, s.layout.stride() + at, s.layout.size, omega))
+}
+
+// A value read through a function is the function of the value read.
+theorem Stored::get_map<A, B>(self s: Stored<A>, to: A → B, from: B → A, back: (b: B) → to(from(b)) = b, bytes: List<u8>, at: Nat):
+    s.map(to, from, back).get(bytes, at) = to(s.get(bytes, at)) { refl }
+
+// A pair's first value is read where the pair is.
+theorem Stored::get_then_fst<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at: Nat): s.then(t).get(bytes, at).fst = s.get(bytes, at) {
+    let room: s.layout.size <= s.layout.offset_of(t.layout) = s.layout.offset_of_ge(t.layout);
+    cong_fn<List<u8>, A>(λ bs => s.read(bs), bytes.take_window(at, (t.layout.size + s.layout.offset_of(t.layout)) + at, s.layout.size, omega))
+}
+
+// Its second is read at the offset `extend` gives it.
+theorem Stored::get_then_snd<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at: Nat):
+    s.then(t).get(bytes, at).snd = t.get(bytes, s.layout.offset_of(t.layout) + at) {
+    cong_fn<List<u8>, B>(λ bs => t.read(bs),
+        bytes.take_drop_window(at, (t.layout.size + s.layout.offset_of(t.layout)) + at, s.layout.offset_of(t.layout), t.layout.size, omega))
+}
+
+// Element `i` of `n` read a stride apart is read `i` strides on.
+theorem Stored::read_all_nth<A>(self s: Stored<A>, n: Nat): (bytes: List<u8>) → (i: Nat) → i < n →
+    vector_entries(s.read_all(n, bytes)).nth(i) = Some(s.read(bytes.drop(i * s.layout.stride()).take(s.layout.size))) {
+    match n as λ m => (bytes: List<u8>) → (i: Nat) → i < m →
+        vector_entries(s.read_all(m, bytes)).nth(i) = Some(s.read(bytes.drop(i * s.layout.stride()).take(s.layout.size))) {
+        Zero => λ bytes i inside => false_elim(inside),
+        Succ(k, ih) => λ bytes i => match i {
+            Zero => λ inside => {
+                let start: (bytes.drop(0 * s.layout.stride()) = bytes) = trans(cong_fn<Nat, List<u8>>(λ m => bytes.drop(m), s.layout.stride().mul_left_zero()), bytes.drop_zero());
+                let first: (Some(s.read(bytes.take(s.layout.size))) = Some(s.read(bytes.drop(0 * s.layout.stride()).take(s.layout.size)))) = rewrite(start, refl);
+                first
+            },
+            Succ(j) => λ inside => {
+                let on: (bytes.drop(s.layout.stride()).drop(j * s.layout.stride()) = bytes.drop(Succ(j) * s.layout.stride())) =
+                    trans(bytes.drop_drop(s.layout.stride(), j * s.layout.stride()),
+                        cong_fn<Nat, List<u8>>(λ m => bytes.drop(m), trans((j * s.layout.stride()).add_comm(s.layout.stride()), sym(j.mul_succ_left(s.layout.stride())))));
+                trans(ih(bytes.drop(s.layout.stride()), j, inside), cong_fn<List<u8>, Option<A>>(λ bs => Some(s.read(bs.take(s.layout.size))), on))
+            },
+        },
+    }
+}
+
+// Element `i` of a stored array is the element's codec `i` strides on.
+theorem Stored::get_array_nth<A>(self s: Stored<A>, n: Nat, bytes: List<u8>, at, i: Nat, inside: i < n):
+    vector_entries(s.array(n).get(bytes, at)).nth(i) = Some(s.get(bytes, i * s.layout.stride() + at)) {
+    let whole = bytes.window(at, n * s.layout.stride() + at);
+    let room: s.layout.size + i * s.layout.stride() <= n * s.layout.stride() = s.layout.array_element_inside(inside);
+    trans(s.read_all_nth(n, whole, i, inside),
+        cong_fn<List<u8>, Option<A>>(λ bs => Some(s.read(bs)),
+            bytes.take_drop_window(at, n * s.layout.stride() + at, i * s.layout.stride(), s.layout.size, omega)))
+}
+
+// A pair is read as its two values, each by its own codec.
+theorem Stored::get_then<A, B>(self s: Stored<A>, t: Stored<B>, bytes: List<u8>, at: Nat):
+    s.then(t).get(bytes, at) = Pair(s.get(bytes, at), t.get(bytes, s.layout.offset_of(t.layout) + at)) {
+    let whole = s.then(t).get(bytes, at);
+    let both: (Pair(whole.fst, whole.snd) = Pair(s.get(bytes, at), t.get(bytes, s.layout.offset_of(t.layout) + at))) =
+        rewrite(s.get_then_fst(t, bytes, at), s.get_then_snd(t, bytes, at), refl);
+    both
+}
+
+// The same by the vector's own index.
+theorem Stored::get_array_index<A>(self s: Stored<A>, n: Nat, bytes: List<u8>, at, i: Nat, inside: i < n):
+    vector_index(s.array(n).get(bytes, at), i, inside) = s.get(bytes, i * s.layout.stride() + at) {
+    inj(trans(sym(vector_entries_nth(n, s.array(n).get(bytes, at), i, inside)), s.get_array_nth(n, bytes, at, i, inside)))
+}

@@ -21,6 +21,12 @@ heather-syntax = { path = "../syntax" }
 heather-elab-lib = { path = "../elab-lib" }
 heather-cache = { path = "../cache" }
 
+# Heather's own scanner, compiled and linked (`crates/linked`): what
+# `HEATHER_LEXER=linked` hands the lexer (`src/main.rs`,
+# `issues/self-lexer-linked.md`). The compiled code is x86-64 Linux's.
+[target.'cfg(all(target_arch = "x86_64", target_os = "linux"))'.dependencies]
+heather-linked = { path = "../linked" }
+
 [features]
 value-metrics = ["heather-elab-lib/value-metrics"]
 

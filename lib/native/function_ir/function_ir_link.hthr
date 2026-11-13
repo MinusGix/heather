@@ -1,0 +1,322 @@
+// Linking over the run (docs/native-one-compiler-design.md §2.6, U4 step
+// 4c-3b): what `function_ir_eval` proves of a program put together from
+// functions checked one by one (`relabel`, `program_linked_files`), for
+// functions that write.
+//
+// A function is written against a numbering of its own callees and put
+// into a program that numbers them its way, its calls renamed. Run, it
+// ends as it did before with each call answered at its new name
+// (`Function::relabel_run`): an equation between states, at every file.
+//
+// A program is then proved a function at a time over a family of files
+// (`program_spanned`), `emb(s)` for every `s`: the files a function that
+// writes is known at are the ones with its span first and the rest as it
+// was, and every file a run passes through is one of them. Each function,
+// its calls answered by anything that answers as `sources` says over the
+// family, ends as `sources` says at its own index. The program's run is
+// then `sources` over the family (`program_spanned_sources`).
+//
+// Two things are said of what answers the calls (`Writers::Sourced`). A
+// call of as many words as the function takes ends as `sources` says. And
+// a function marked still leaves the file whatever it is called on: the
+// code of a function that only reads asks that of its callees at every
+// call it makes (`Function::run_still`), and gives it.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_placeless;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Renamed calls
+
+// Calls answered at their renamed functions, over the file the call is
+// made in.
+fn Writers::relabel(call: Writers(), links: Nat → Nat) → Writers() { λ held f words => call(held, links(f), words) }
+
+// Passes that end alike make loops that end alike.
+theorem loop_run_ext(step, other: Valuation() → Buffers() → State, same: (v: Valuation()) → (held: Buffers()) → other(v, held) = step(v, held),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat): (state: List<BitVec(64)>) → (buffers: Buffers()) →
+    loop_run(other, parameters, count, exit, next, remaining, state, buffers) = loop_run(step, parameters, count, exit, next, remaining, state, buffers) {
+    match remaining {
+        Zero => λ state buffers => refl,
+        Succ(rest) => λ state buffers => {
+            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(entry, buffers);
+            let later = match after.values(1, exit).head_bit() as λ b =>
+                    (match b as λ _ => LoopState {
+                        False => loop_run(other, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                        True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                    }) = (match b as λ _ => LoopState {
+                        False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                        True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                    }) {
+                False => loop_run_ext(step, other, same, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => refl,
+            };
+            j(sym(same(entry, buffers)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => loop_run(other, parameters, count, exit, next, rest, words_of(s.values, next), s.buffers),
+                    True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
+                }) = (match after.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                    True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                }), later)
+        },
+    }
+}
+
+// The theorem: a renamed region runs as the region does with its calls
+// answered at the new names.
+theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Writers(), links: Nat → Nat): (values: Valuation()) → (buffers: Buffers()) →
+    region.relabel(links).run(call, values, buffers) = region.run(Writers::relabel(call, links), values, buffers) {
+    match region {
+        Dataflow(body) => λ values buffers => refl,
+        Sequence(prefix, continuation) => λ values buffers =>
+            continuation.relabel_run(call, links, run_nodes(prefix.nodes, values, buffers).values, run_nodes(prefix.nodes, values, buffers).buffers),
+        Compose(prefix, continuation) => λ values buffers => {
+            let after = prefix.run(Writers::relabel(call, links), values, buffers);
+            j(sym(prefix.relabel_run(call, links, values, buffers)),
+                λ s _ => continuation.relabel(links).run(call, s.values, s.buffers) = continuation.run(Writers::relabel(call, links), after.values, after.buffers),
+                continuation.relabel_run(call, links, after.values, after.buffers))
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ values buffers => {
+            let b = values(1, condition).head_bit();
+            let yes = when_true.run(Writers::relabel(call, links), values, buffers);
+            let no = when_false.run(Writers::relabel(call, links), values, buffers);
+            let whole = State(λ w id => match b { False => no.values(w, id), True => yes.values(w, id) },
+                match b { False => no.buffers, True => yes.buffers });
+            j(sym(when_false.relabel_run(call, links, values, buffers)), λ x _ => State(λ w id => match b {
+                        False => x.values(w, id),
+                        True => when_true.relabel(links).run(call, values, buffers).values(w, id),
+                    }, match b { False => x.buffers, True => when_true.relabel(links).run(call, values, buffers).buffers }) = whole,
+                j(sym(when_true.relabel_run(call, links, values, buffers)), λ y _ => State(λ w id => match b {
+                            False => no.values(w, id),
+                            True => y.values(w, id),
+                        }, match b { False => no.buffers, True => y.buffers }) = whole,
+                    refl))
+        },
+        Lend(views, callee, arguments, result) => λ values buffers => refl,
+        Call(callee, arguments, result) => λ values buffers => refl,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values buffers =>
+            cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
+                    bit_value(end.end.exhausted)), end.buffers),
+                loop_run_ext(λ (pass: Valuation()) (held: Buffers()) => body.run(Writers::relabel(call, links), pass, held),
+                    λ (pass: Valuation()) (held: Buffers()) => body.relabel(links).run(call, pass, held),
+                    λ v held => body.relabel_run(call, links, v, held), parameters, count, exit, next, values(64, bound).toNat(),
+                    words_of(values, inputs), buffers)),
+    }
+}
+
+theorem Function::relabel_run(self function: Function, call: Writers(), links: Nat → Nat, arguments: List<BitVec(64)>, buffers: Buffers()):
+    function.relabel(links).run(call, arguments, buffers) = function.run(Writers::relabel(call, links), arguments, buffers) {
+    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
+        function.body.relabel_run(call, links, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers))
+}
+
+// ---------------------------------------------------------------------------
+// A function that only reads, run among functions that write
+
+theorem Ending::eta(self e: Ending): Ending(e.word, e.buffers) = e { match e { Ending(_, _) => refl } }
+
+// Calls that fit a table are of the functions the table names.
+theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: Nat → Option<Nat>, among: Nat → Bool,
+    named: (k: Nat) → (n: Nat) → arity_fits(arity(k), n).IsTrue() → among(k).IsTrue()):
+    region.calls_fit(arity).IsTrue() → region.calls_among(among).IsTrue() {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => λ ok => continuation.calls_fit_among(arity, among, named, ok),
+        Compose(prefix, continuation) => λ ok => {
+            let parts = Bool::is_true_and(prefix.calls_fit(arity), continuation.calls_fit(arity), ok);
+            Bool::is_true_and_intro(prefix.calls_among(among), continuation.calls_among(among),
+                prefix.calls_fit_among(arity, among, named, parts.left), continuation.calls_fit_among(arity, among, named, parts.right))
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ ok => {
+            let arms = Bool::is_true_and(when_true.calls_fit(arity), when_false.calls_fit(arity), ok);
+            Bool::is_true_and_intro(when_true.calls_among(among), when_false.calls_among(among),
+                when_true.calls_fit_among(arity, among, named, arms.left), when_false.calls_fit_among(arity, among, named, arms.right))
+        },
+        Lend(views, callee, arguments, _) => λ ok => named(callee, (views_homes(views) ++ arguments).len(), ok),
+        Call(callee, arguments, _) => λ ok => named(callee, arguments.len(), ok),
+        Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
+    }
+}
+
+// A function that stores nothing, every function it calls leaving the
+// file, runs as it evaluates with its calls answered by the words those
+// functions return over the file, and leaves it. Nothing is asked of what
+// the callees return, and they may be functions that write elsewhere.
+theorem Function::run_still(self function: Function, call: Writers(), buffers: Buffers(), among: Nat → Bool,
+    still: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(buffers, f, words).buffers = buffers,
+    quiet: function.body.quiet().IsTrue(), fits: function.body.calls_among(among).IsTrue(), arguments: List<BitVec(64)>):
+    function.run(call, arguments, buffers) = Ending(function.eval(Writers::words(call, buffers), arguments, buffers := buffers), buffers) {
+    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
+        function.body.run_quiet_among(call, Writers::words(call, buffers), buffers, among,
+            λ f ok words => j(still(f, ok, words), λ held _ => call(buffers, f, words) = Ending(call(buffers, f, words).word, held),
+                sym(call(buffers, f, words).eta())),
+            quiet, fits, Valuation::bind(Valuation::zero(), function.parameters, arguments)))
+}
+
+// ---------------------------------------------------------------------------
+// A program over a family of files, a function at a time
+
+// Which functions of a program leave the file, as `linked_arity` says how
+// many words each takes: the last function's mark first.
+fn linked_still(functions: List<Function>, stills: List<Bool>) → Nat → Bool {
+    match functions {
+        Nil => λ _ => False,
+        Cons(_, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => stills.head_or(False),
+            Inr(_) => linked_still(earlier, stills.tail(), f),
+        },
+    }
+}
+
+// Whether each function marked still stores nothing and calls only
+// functions marked still: decided once for a program, by evaluation.
+fn program_stills(functions: List<Function>, stills: List<Bool>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (match stills.head_or(False) {
+            False => True,
+            True => last.body.quiet() && last.body.calls_among(linked_still(earlier, stills.tail())),
+        }) && program_stills(earlier, stills.tail()),
+    }
+}
+
+// Then a function marked still leaves every file it is run over, whatever
+// the program's other functions do.
+theorem program_run_still(functions: List<Function>): (stills: List<Bool>) → program_stills(functions, stills).IsTrue() → (buffers: Buffers()) →
+    (f: Nat) → linked_still(functions, stills, f).IsTrue() → (words: List<BitVec(64)>) →
+    program_run(functions, buffers, f, words).buffers = buffers {
+    match functions {
+        Nil => λ stills _ buffers f never words => false_elim(never),
+        Cons(last, earlier) => λ stills ok buffers f => {
+            let among = linked_still(earlier, stills.tail());
+            let parts = Bool::is_true_and(match stills.head_or(False) { False => True, True => last.body.quiet() && last.body.calls_among(among) },
+                program_stills(earlier, stills.tail()), ok);
+            let below = program_run(earlier);
+            let ih = program_run_still(earlier, stills.tail(), parts.right, buffers);
+            let own: stills.head_or(False).IsTrue() → (last.body.quiet() && last.body.calls_among(among)).IsTrue() =
+                (match stills.head_or(False) as λ b => (match b { False => True, True => last.body.quiet() && last.body.calls_among(among) }).IsTrue() →
+                    b.IsTrue() → (last.body.quiet() && last.body.calls_among(among)).IsTrue() {
+                    False => λ _ never => false_elim(never),
+                    True => λ both _ => both,
+                })(parts.left);
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d { Inl(_) => stills.head_or(False), Inr(_) => linked_still(earlier, stills.tail(), f) }).IsTrue() →
+                (words: List<BitVec(64)>) →
+                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }).buffers = buffers {
+                Inl(_) => λ marked words => {
+                    let both = Bool::is_true_and(last.body.quiet(), last.body.calls_among(among), own(marked));
+                    cong_fn<Ending, Buffers()>(λ end => end.buffers,
+                        last.run_still(below, buffers, among, λ g m ws => ih(g, m, ws), both.left, both.right, words))
+                },
+                Inr(_) => λ marked words => ih(f, marked, words),
+            }
+        },
+    }
+}
+
+// So a caller's calls of them leave its file: the functions marked still
+// are among what a region that stores nothing may call
+// (`Writers::Still`), in a program whose other functions write.
+theorem program_writers_stills(functions: List<Function>, stills: List<Bool>, ok: program_stills(functions, stills).IsTrue()):
+    Writers::Still(program_writers(functions), linked_still(functions, stills)) {
+    λ held f marked words => {
+        let k = program_lent(functions, f);
+        trans(cong_fn<Buffers(), Buffers()>(λ file => relent(k, file, held),
+                program_run_still(functions, stills, ok, lent_buffers(k, held), f, marked, stated_homes(0, k, held) ++ words)),
+            relent_same(k, held))
+    }
+}
+
+// A table of arities with the functions not marked still left out: what a
+// function that only reads is linked against, so that one check of its
+// links gives both that each callee takes its words and that it leaves
+// the file.
+fn still_arity(arity: Nat → Option<Nat>, still: Nat → Bool) → Nat → Option<Nat> { λ k => match still(k) { False => None, True => arity(k) } }
+
+theorem still_arity_fits(arity: Nat → Option<Nat>, still: Nat → Bool, k, n: Nat):
+    arity_fits(still_arity(arity, still, k), n).IsTrue() → still(k).IsTrue() ∧ arity_fits(arity(k), n).IsTrue() {
+    match still(k) as λ b => arity_fits(match b { False => None, True => arity(k) }, n).IsTrue() → b.IsTrue() ∧ arity_fits(arity(k), n).IsTrue() {
+        False => λ never => false_elim(never),
+        True => λ fits => ⟨trivial, fits⟩,
+    }
+}
+
+// `call` answers as `sources` says over the files `emb(s)`: a call of as
+// many words as the function takes ends as its source at `s` does, and a
+// function marked still leaves the file whatever it is called on.
+fn Writers::Sourced<S>(call: Writers(), emb: S → Buffers(), sources: S → Nat → List<BitVec(64)> → Ending, arity: Nat → Option<Nat>,
+    still: Nat → Bool) → Type {
+    ((s: S) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → call(emb(s), f, words) = sources(s, f, words))
+    ∧ ((s: S) → (f: Nat) → still(f).IsTrue() → (words: List<BitVec(64)>) → call(emb(s), f, words).buffers = emb(s))
+}
+
+// Every function of the program, its calls answered by anything that
+// answers the functions before it as `sources` says, runs to `sources` at
+// its own index, and leaves the file if it is marked still.
+fn program_spanned<S>(functions: List<Function>, arities: List<Nat>, stills: List<Bool>, emb: S → Buffers(),
+    sources: S → Nat → List<BitVec(64)> → Ending) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) =>
+            ((call: Writers()) → Writers::Sourced(call, emb, sources, linked_arity(earlier, arities.tail()), linked_still(earlier, stills.tail())) →
+                ((s: S) → (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() →
+                    last.run(call, words, emb(s)) = sources(s, earlier.len(), words))
+                ∧ (stills.head_or(False).IsTrue() → (s: S) → (words: List<BitVec(64)>) → last.run(call, words, emb(s)).buffers = emb(s)))
+            ∧ program_spanned(earlier, arities.tail(), stills.tail(), emb, sources),
+    }
+}
+
+// The theorem: such a program's run answers as `sources` says.
+theorem program_spanned_sources<S>(functions: List<Function>): (arities: List<Nat>) → (stills: List<Bool>) → (emb: S → Buffers()) →
+    (sources: S → Nat → List<BitVec(64)> → Ending) → program_spanned(functions, arities, stills, emb, sources) →
+    Writers::Sourced(program_run(functions), emb, sources, linked_arity(functions, arities), linked_still(functions, stills)) {
+    match functions {
+        Nil => λ arities stills emb sources _ => ⟨λ s f words never => false_elim(never), λ s f never words => false_elim(never)⟩,
+        Cons(last, earlier) => λ arities stills emb sources linked => {
+            let below = program_run(earlier);
+            let ih = program_spanned_sources(earlier, arities.tail(), stills.tail(), emb, sources, linked.right);
+            let part = linked.left(below, ih);
+            ⟨λ s f words => (match f.eq_dec(earlier.len()) as λ d =>
+                    arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) }, words.len()).IsTrue() →
+                    (match d as λ _ => Ending { Inl(_) => last.run(below, words, emb(s)), Inr(_) => below(emb(s), f, words) }) = sources(s, f, words) {
+                    Inl(e) => λ fits => j(sym(e), λ g _ => last.run(below, words, emb(s)) = sources(s, g, words), part.left(s, words, fits)),
+                    Inr(_) => λ fits => ih.left(s, f, words, fits),
+                }),
+            λ s f => (match f.eq_dec(earlier.len()) as λ d =>
+                    (match d { Inl(_) => stills.head_or(False), Inr(_) => linked_still(earlier, stills.tail(), f) }).IsTrue() →
+                    (words: List<BitVec(64)>) →
+                    (match d as λ _ => Ending { Inl(_) => last.run(below, words, emb(s)), Inr(_) => below(emb(s), f, words) }).buffers = emb(s) {
+                    Inl(_) => λ marked words => part.right(marked, s, words),
+                    Inr(_) => λ marked words => ih.right(s, f, marked, words),
+                })⟩
+        },
+    }
+}
+
+// The two halves, as a program's function is cited: what it ends in on as
+// many words as it takes, and that one marked still leaves the file.
+theorem program_spanned_answers<S>(functions: List<Function>, arities: List<Nat>, stills: List<Bool>, emb: S → Buffers(),
+    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources), s: S, f: Nat,
+    words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue()):
+    program_run(functions, emb(s), f, words) = sources(s, f, words) {
+    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked);
+    sourced.left(s, f, words, fits)
+}
+
+theorem program_spanned_still<S>(functions: List<Function>, arities: List<Nat>, stills: List<Bool>, emb: S → Buffers(),
+    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources), s: S, f: Nat,
+    marked: linked_still(functions, stills, f).IsTrue(), words: List<BitVec(64)>): program_run(functions, emb(s), f, words).buffers = emb(s) {
+    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked);
+    sourced.right(s, f, marked, words)
+}

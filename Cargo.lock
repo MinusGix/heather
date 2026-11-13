@@ -89,6 +89,7 @@ dependencies = [
  "heather-cache",
  "heather-elab-lib",
  "heather-kernel-lib",
+ "heather-linked",
  "heather-numeral",
  "heather-syntax",
 ]

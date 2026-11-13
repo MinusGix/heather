@@ -1,22 +1,36 @@
 #!/usr/bin/env bash
-# Rewrite the assembly `crates/linked` links: every export of
+# Rewrite what `crates/linked` links: every export of
 # `crates/linked/generated/EXPORTS.tsv`, compiled by `heather compile-x86`
-# (certificate checked, or nothing is written).
+# (certificate checked, or nothing is written), and then the Rust
+# declarations of them all, `generated/exports.rs`, from the table and the
+# signature each assembly file states (`heather linked-exports`), and the
+# constants of `generated/CONSTANTS.tsv`, `generated/constants.rs`, from the
+# `def` each row names.
 #
-#   scripts/linked            # rewrite crates/linked/generated/*.s
+#   scripts/linked            # rewrite crates/linked/generated/*.s, exports.rs
 #   scripts/linked --check    # exit 1 if a file on disk is not what is emitted
 #   scripts/linked --debug …  # compile with the debug binary instead
 #
-# `crates/cli/tests/native_linked.rs` is the gate that holds the files to the
-# compiler; this is how a round that changed a linked module, or the
-# lowering, brings them back. Same discipline as every direct `heather` run:
+# `crates/cli/tests/native_linked.rs` is the gate that holds the assembly to
+# the compiler, and `tests/linked_exports.rs` the declarations to their
+# generator; this is how a round that changed a linked module, the table, or
+# the lowering, brings them back. Same discipline as every direct `heather` run:
 # the release binary, built first (the link reserves address space a cap
 # would refuse), then capped.
+#
+# A row names the function as Heather does, a method by its path
+# (`List::raise_letters`), and is compiled under its symbol (`--symbol`): the
+# label, the file's stem and the Rust name, derived from the path or written
+# before it (the table's comment).
+#
+# A row with a fourth column is a function of that export's program: it is
+# compiled with it (`compile-x86 --entry`), as a second label in that
+# export's file, and has no file of its own.
 #
 # A row whose inputs did not change is not recompiled
 # (issues/scripts-linked-rebuild-cost.md). Its key is the binary's hash (the
 # lowering, the emitter and the bundled proof library are all in it), the row,
-# and every library file in the module's import closure, path and content
+# the entries compiled with it, and every library file in the module's import closure, path and content
 # (`scripts/lib-closures --files`, the loader's reading of the imports); the
 # value is the `.s` a compile with a checked certificate wrote, stored under
 # `${HEATHER_CACHE_DIR:-target}/linked-exports`. Only a checked compile is
@@ -50,54 +64,85 @@ work=$(mktemp -d "target/linked.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 binary_hash=$(sha256sum "$heather" | cut -d' ' -f1)
-rows=$(grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' | cut -f1,2)
+# The rows that have a file, as the compiler reads the table
+# (`heather linked-exports --rows`): the module, the function as Heather
+# names it (a method by its path), the symbol that is its label and its
+# file's stem, and the entries compiled with it as `--entry` names them.
+rows=$("$heather" linked-exports "$generated" --rows)
+declare -A function_of entries_of
 
 # The key of every row; the misses go to the compiler.
 declare -A key closure_of
 misses=()
-while IFS=$'\t' read -r module function; do
+while IFS=$'\t' read -r module function symbol entries; do
+  function_of[$symbol]=$function
+  entries_of[$symbol]=$entries
   if [[ -z "${closure_of[$module]:-}" ]]; then
     stem=$(basename "$module" .hthr)
     closure_of[$module]=$(scripts/lib-closures --files "$stem" | xargs sha256sum | sha256sum | cut -d' ' -f1)
   fi
-  key[$function]=$(printf '%s\n%s\t%s\n%s\n' "$binary_hash" "$module" "$function" "${closure_of[$module]}" |
-                   sha256sum | cut -d' ' -f1)
-  if [[ -n "${HEATHER_LINKED_NO_CACHE:-}" || ! -f "$memo/${key[$function]}.s" ]]; then
-    misses+=("$module"$'\t'"$function")
+  key[$symbol]=$(printf '%s\n%s\t%s\t%s\n%s\n%s\n' "$binary_hash" "$module" "$function" "$symbol" "$entries" "${closure_of[$module]}" |
+                 sha256sum | cut -d' ' -f1)
+  if [[ -n "${HEATHER_LINKED_NO_CACHE:-}" || ! -f "$memo/${key[$symbol]}.s" ]]; then
+    misses+=("$module"$'\t'"$symbol")
   fi
 done <<< "$rows"
 
-# One compiler per export, four at a time: an export costs a certificate.
+# One compiler per program, four at a time: a program costs a certificate.
 compile() {
-  local module=$1 function=$2 key=$3
+  local module=$1 function=$2 symbol=$3 key=$4
+  shift 4
+  local entries=()
+  for entry in "$@"; do entries+=(--entry "$entry"); done
   ( ulimit -v 8388608 -t 1500 -c 0
-    "$heather" compile-x86 "$module" "$function" -o "$work/$function.s" --cache-dir "$store" > "$work/$function.log" 2>&1 ) ||
-    { cat "$work/$function.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; return 1; }
+    "$heather" compile-x86 "$module" "$function" --symbol "$symbol" "${entries[@]}" -o "$work/$symbol.s" --cache-dir "$store" > "$work/$symbol.log" 2>&1 ) ||
+    { cat "$work/$symbol.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; return 1; }
   # Published under the key only once whole: a killed run leaves no hit.
-  cp "$work/$function.s" "$memo/$key.s.partial" && mv "$memo/$key.s.partial" "$memo/$key.s"
+  cp "$work/$symbol.s" "$memo/$key.s.partial" && mv "$memo/$key.s.partial" "$memo/$key.s"
 }
 export -f compile
 export heather store work memo
 if (( ${#misses[@]} > 0 )); then
   for row in "${misses[@]}"; do
-    IFS=$'\t' read -r module function <<< "$row"
-    printf '%s\t%s\t%s\n' "$module" "$function" "${key[$function]}"
-  done | xargs -P 4 -L 1 bash -c 'compile "$0" "$1" "$2"'
+    IFS=$'\t' read -r module symbol <<< "$row"
+    # No blank ends a line: `xargs -L` would join it to the next.
+    printf '%s\t%s\t%s\t%s%s\n' "$module" "${function_of[$symbol]}" "$symbol" "${key[$symbol]}" "${entries_of[$symbol]:+ ${entries_of[$symbol]}}"
+  done | xargs -P 4 -L 1 bash -c 'compile "$@"' compile
 fi
 
 stale=0
-while IFS=$'\t' read -r module function; do
-  emitted="$memo/${key[$function]}.s"
+while IFS=$'\t' read -r module function symbol entries; do
+  emitted="$memo/${key[$symbol]}.s"
   how=cached
-  [[ -f "$work/$function.s" ]] && { emitted="$work/$function.s"; how=compiled; }
-  if cmp -s "$emitted" "$generated/$function.s"; then
-    echo "$function: unchanged ($how)"
+  [[ -f "$work/$symbol.s" ]] && { emitted="$work/$symbol.s"; how=compiled; }
+  if cmp -s "$emitted" "$generated/$symbol.s"; then
+    echo "$symbol: unchanged ($how)"
   elif $check; then
-    echo "$function: $generated/$function.s is stale ($how)" >&2
+    echo "$symbol: $generated/$symbol.s is stale ($how)" >&2
     stale=1
   else
-    cp "$emitted" "$generated/$function.s"
-    echo "$function: rewritten ($how)"
+    cp "$emitted" "$generated/$symbol.s"
+    echo "$symbol: rewritten ($how)"
   fi
 done <<< "$rows"
+# A file no row has is a row that went, or became an entry of another's
+# program: nothing links it.
+for file in "$generated"/*.s; do
+  symbol=$(basename "$file" .s)
+  [[ -n "${key[$symbol]:-}" ]] && continue
+  if $check; then
+    echo "$symbol: $file is in no row that has a file" >&2
+    stale=1
+  else
+    rm "$file"
+    echo "$symbol: removed (no row has this file)"
+  fi
+done
+# The declarations follow the assembly on disk: after a rewrite, the new
+# files; under `--check`, the ones the check just compared.
+if $check; then
+  "$heather" linked-exports "$generated" --check || stale=1
+else
+  "$heather" linked-exports "$generated"
+fi
 exit $stale

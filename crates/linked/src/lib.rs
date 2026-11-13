@@ -15,9 +15,40 @@
 //! label with its arguments in RDI, RSI, RDX, RCX, R8, R9, a return address
 //! at RSP and room on the stack below it, the code returns the source
 //! function's value in RAX, keeps the callee-saved registers and RSP, and
-//! leaves the stack above the return address as it was. That is the System V
+//! stores nowhere but in its own room below the return address
+//! (`Stack::Wrote`), so the caller's stack and everything else it owns are
+//! as they were. That is the System V
 //! contract for a function of words, which is why the declarations below are
 //! `safe fn`: nothing a caller passes can make the call misbehave.
+//!
+//! An export may also read **a span of bytes its caller owns**
+//! (docs/native-library-exports-design.md): its code takes the span's
+//! address and length as two words, and its `_returns` theorem has the
+//! premises a pointer needs, that the two words are a span of readable
+//! bytes the callee's own stores cannot reach (`Stack::LentOver`, `Loan`),
+//! and then says as well that the span is left as it was. A `&[u8]` meets
+//! those premises, so the function Rust sees takes one: the declaration
+//! over a pointer is `unsafe` and private, and the wrapper that calls it
+//! with a slice's parts is generated with the premises beside the call
+//! (`generated/exports.rs`).
+//!
+//! And an export may **store into a span its caller lends**: the theorem's
+//! lending then marks the span as one to write, its premises ask what a
+//! store needs (the bytes writable, and apart from every other span, the
+//! stack and the code), and it says what the span holds after: the bytes
+//! the Heather function answers, with every other byte of memory the
+//! caller owns as it was (`Stack::WroteIn`, `Stack::AnsweredOver`). A
+//! `&mut [u8]` meets those premises, so that is what the wrapper takes.
+//! Which spans a function is lent to write is read off its compiled
+//! program, not its type: the assembly's signature says `span mut` exactly
+//! where some function of the program stores.
+//!
+//! Exports that share callees are **one program**: a row of the table may
+//! name the export whose program it is a function of, and it is then a
+//! second label in that export's file, under the one certificate, with a
+//! `_returns` theorem of its own there. The scanner's automaton functions
+//! are entries of the scanning loop's program, so the automaton is linked
+//! once.
 //!
 //! What the theorem does not cover is stated where the compiler states it:
 //! the platform around the call (that `extern "sysv64"` really passes
@@ -38,65 +69,59 @@
 //! one to the oracle that one is held to; nothing shipped calls it yet
 //! (`issues/sha256-linked-into-cache.md`).
 //!
+//! [`sha256::block`]: SHA-256's compression function whole, one linked
+//! function over a context and a block that its caller lends it
+//! (`lib/native/crypto/sha256_one_block.hthr`, over the context's functions in
+//! `sha256_compression.hthr`). The working variables, the
+//! schedule and the constants are Heather's there, the constants as a tree
+//! of comparisons and the rest as bytes of the context; the padding is
+//! still Rust's. That the Heather function is the specification's is not
+//! proved yet, where the word functions' is.
+//!
+//! [`sha256::stream`]: the hash whole, over a message that arrives in
+//! parts (`lib/native/crypto/sha256_stream.hthr`): three linked functions
+//! over one context, the padding included. Each is its own program, so
+//! the compression function is in the crate once per export that reaches
+//! it, until an entry of a shared program can be lent a span
+//! (`issues/linked-program-entries-limits.md`).
+//!
 //! [`scanner`]: Heather's own scanner, the automaton that cuts a source file
 //! into tokens (`lib/lang/lexer/lexer_scan.hthr`). Every decision about a
 //! byte is the linked code's; the loop that hands it the bytes is Rust's,
 //! for the same reason the hashes' state is. Its test holds it to the Rust
 //! lexer on every Heather source in the repository; nothing shipped calls
 //! it yet (`issues/self-lexer-linked.md`).
+//!
+//! [`spans`]: the first exports over memory their caller owns
+//! (`lib/native/native_tool_spans.hthr`): a count of a text's newlines,
+//! which reads, a text's letters raised to upper case in place, which
+//! writes, and one span copied into another, which is lent one to write and
+//! one to read. Their tests are the contract's process controls: a span that
+//! ends at an unmapped page, a written span with unwritable pages on both
+//! sides, an empty slice, and both stack alignments.
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod scanner;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub mod spans;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod sha256;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod sha512;
 
 // The one module the crate's `unsafe_code = "deny"` is lifted for: linking
-// the compiler's bytes (`global_asm!`) and naming the functions in them.
+// the compiler's bytes and naming the functions in them. It is generated in
+// full (`scripts/linked`, from `generated/EXPORTS.tsv` and the signature
+// each assembly file states), and `crates/cli/tests/linked_exports.rs`
+// refuses a hand edit to it.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[allow(unsafe_code)]
-mod exports {
-    // Each file is the compiler's output, verbatim (`options(raw)`: the text
-    // is assembly, not a format string). It selects `.text` itself and ends
-    // in a `.note.GNU-stack` section, so it is bracketed to leave the
-    // assembler where it was.
-    macro_rules! linked {
-        ($file:literal) => {
-            core::arch::global_asm!(
-                ".pushsection .text",
-                include_str!(concat!("../generated/", $file)),
-                ".popsection",
-                options(raw)
-            );
-        };
-    }
-    linked!("sha512_t1.s");
-    linked!("sha512_t2.s");
-    linked!("sha512_next.s");
-    linked!("sha256_t1.s");
-    linked!("sha256_t2.s");
-    linked!("sha256_next.s");
-    // The scanner's automaton is one file: `scan_step` and, inside the
-    // same certified program, every function it calls (`scanner`'s comment).
-    linked!("scan_step.s");
-    linked!("scan_accept.s");
-    linked!("scan_begin.s");
+#[path = "../generated/exports.rs"]
+mod exports;
 
-    // The functions are declared `safe` on the strength of their
-    // certificates (the crate's comment): the unproved part is the
-    // platform's, not the callee's.
-    unsafe extern "sysv64" {
-        pub safe fn sha512_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-        pub safe fn sha512_t2(a: u64, b: u64, c: u64) -> u64;
-        pub safe fn sha512_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-        // 32-bit words in the low halves (`sha256`'s comment).
-        pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-        pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
-        pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-        // The scanner's automaton (`scanner`).
-        pub safe fn scan_step(state: u64, byte: u64) -> u64;
-        pub safe fn scan_accept(state: u64) -> u64;
-        pub safe fn scan_begin(previous: u64) -> u64;
-    }
-}
+// The values the Rust here reads the linked code's answers with, each the
+// `def` the code itself uses, written by `scripts/linked` from
+// `generated/CONSTANTS.tsv` and held to the modules by
+// `crates/cli/tests/linked_exports.rs`: none is a hand's.
+#[path = "../generated/constants.rs"]
+pub mod constants;

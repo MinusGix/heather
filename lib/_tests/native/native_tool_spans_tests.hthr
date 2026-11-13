@@ -1,0 +1,238 @@
+// Probes of `native_tool_spans`: `count_newlines` is a `runtime fn`, so
+// what its program computes is the Heather function at every file
+// (`count_newlines::agrees_over`). Here: the program run on bytes, that it
+// may be called by a tool (evaluable, placeless, lowered by the function
+// compiler under its count of lent buffers), and what a tool's call of it
+// answers with no address stated (`program_readers`,
+// `count_newlines_answers`), and what the call is in the tool's meaning
+// (`program_writers`, `count_newlines_called`). And `raise_span`, a
+// `runtime fn` that stores into the span: what its program leaves on
+// bytes, at any address, and what a tool's call of it is at every buffer
+// (`raise_span_called`, from `raise_span::runs_over`). And `copy_span`,
+// which stores into one span what it reads of the next: what its program
+// leaves on bytes, and which of the two it stores into.
+import native_tool_spans;
+import rt;
+import runtime;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_rows;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// "a\nb\n\nc": three newlines in six bytes.
+fn lines() → Buffers() { [[b(97), b(10), b(98), b(10), b(10), b(99)]] }
+
+// ---------------------------------------------------------------------------
+// What it computes
+
+theorem counts_all(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(6)]) = w(3) { refl }
+// Only the first `count` bytes.
+theorem counts_first(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(2)]) = w(1) { refl }
+theorem counts_none(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(0)]) = w(0) { refl }
+// A count past the buffer's end reads nothing past it.
+theorem counts_to_end(): program_eval_over(lines(), count_newlines_program(), count_newlines_entry(), [w(4096), w(6), w(9)]) = w(3) { refl }
+
+// The function itself, with no program: the same counts.
+theorem function_counts(): count_newlines(lines().span(0), w(6), w(6)) = w(3) { refl }
+theorem function_counts_first(): count_newlines(lines().span(0), w(6), w(2)) = w(1) { refl }
+
+// At every file, wherever the span is said to lie, the program's root
+// answers as the function does.
+theorem counts_as_function(f: Buffers(), place, length, count: BitVec(64)):
+    program_eval_over(f, count_newlines_program(), count_newlines_entry(), [place, length, count]) = count_newlines(f.span(0), length, count) {
+    count_newlines::agrees_over(f, place, length, count)
+}
+
+// The program is the loop, then the function that starts it: the root is
+// the second, and both are lent the one span.
+theorem program_shape(): count_newlines_program().len() = 2 { refl }
+theorem loop_lent(): program_lent(count_newlines_program(), 0) = 1 { refl }
+
+// ---------------------------------------------------------------------------
+// What a program's call needs of it (`Prog::links`)
+
+theorem count_evaluable(): program_evaluable(count_newlines_program()) = True { refl }
+theorem count_placeless(): program_placeless(count_newlines_program()) = True { refl }
+theorem count_lent(): program_lent(count_newlines_program(), count_newlines_entry()) = 1 { refl }
+theorem count_lowers(): lower_program_lent(count_newlines_program(), plan_program(count_newlines_program()),
+    program_counts(count_newlines_program())).is_some().IsTrue() { trivial }
+
+// ---------------------------------------------------------------------------
+// A program's call: the buffers it holds, no address, the count its word
+
+theorem call_answers(): program_readers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = w(3) { refl }
+// It is lent the first buffer only, and sees it as it is when called.
+theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], count_newlines_entry(), [w(2)]) = w(2) { refl }
+theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], count_newlines_entry(), [w(2)]) = w(1) { refl }
+
+// The same call's word at any buffers and any count, with no evaluation:
+// the Heather function at the tool's first buffer and its size.
+theorem call_is_function(held: Buffers(), count: BitVec(64)):
+    program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
+        = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
+    count_newlines_answers(held, count)
+}
+
+// In a tool's meaning the call is that word and the tool's buffers as they
+// were (`program_writers`): at literal buffers by running, and at any.
+theorem call_runs(): program_writers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = Ending(w(3), lines()) { refl }
+theorem call_keeps(held: Buffers(), count: BitVec(64)):
+    program_writers(count_newlines_program())(held, count_newlines_entry(), [count]).buffers = held {
+    cong_fn<Ending, Buffers()>(λ answer => answer.buffers, count_newlines_called(held, count))
+}
+
+// ---------------------------------------------------------------------------
+// `raise_span`: a function that rewrites the span
+
+// "aZz{" and "x": a lower-case letter at each end of the range, one
+// already raised, and the byte after 'z'.
+fn mixed() → Buffers() { [[b(97), b(90), b(122), b(123)], [b(120)]] }
+fn mixed_raised() → Buffers() { [[b(65), b(90), b(90), b(123)], [b(120)]] }
+
+// It raises the first buffer's letters and answers how many bytes it went
+// over, wherever the buffer is said to lie.
+theorem raise_runs(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(4), w(0)]) = Ending(w(4), mixed_raised()) {
+    refl
+}
+// Only the first `count` bytes.
+theorem raise_first(place: BitVec(64)):
+    program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(1), w(0)]) = Ending(w(1), [[b(65), b(90), b(122), b(123)], [b(120)]]) {
+    refl
+}
+// A count past the span's length stores nothing past it, and is answered.
+theorem raise_to_end(place: BitVec(64)): program_run(raise_span_program(), mixed(), raise_span_entry(), [place, w(4), w(9), w(0)]) = Ending(w(9), mixed_raised()) {
+    refl
+}
+
+// What a program's call needs of it (`Prog::links`): it stores, and links.
+theorem raise_evaluable(): program_evaluable(raise_span_program()) = True { refl }
+theorem raise_placeless(): program_placeless(raise_span_program()) = True { refl }
+theorem raise_counts(): program_counts(raise_span_program()) = [0, 1] { refl }
+theorem raise_stores(): program_stores(raise_span_program(), 0) = True { refl }
+theorem raise_stores_first_only(): program_stores(raise_span_program(), 1) = False { refl }
+theorem raise_lowers(): lower_program_lent(raise_span_program(), plan_program(raise_span_program()),
+    program_counts(raise_span_program())).is_some().IsTrue() { trivial }
+
+// The same loop as a method of its span, `List::raise_letters`, exported by
+// its path (issues/linked-export-of-a-method.md): its program is
+// `raise_span`'s, so what is linked under `list_raise_letters` is the same
+// code.
+theorem raise_letters_program(): List::raise_letters::program = raise_span::program { refl }
+theorem raise_letters_runs(place: BitVec(64)):
+    program_run(List::raise_letters::program, mixed(), 1, [place, w(4), w(4), w(0)]) = Ending(w(4), mixed_raised()) {
+    refl
+}
+
+// A program's call: the buffers it holds and the count, no address. The
+// first buffer comes back raised, the second as it was.
+theorem raise_called(): program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed_raised()) { refl }
+
+// And at every buffer, count and index, with no evaluation: the function
+// itself, the tool's other buffers as they were.
+theorem raise_called_every(bytes, other: List<BitVec(8)>, count, i: BitVec(64)):
+    program_writers(raise_span_program())([bytes, other], raise_span_entry(), [count, i]).buffers
+        = [raise_span(bytes, BitVec::ofNat(bytes.len()), count, i).after, other] {
+    cong_fn<Ending, Buffers()>(λ answer => answer.buffers, raise_span_called(bytes, [other], count, i))
+}
+
+// The control: the call does not leave the file as it was.
+theorem raise_changes(same: program_writers(raise_span_program())(mixed(), raise_span_entry(), [w(4), w(0)]) = Ending(w(4), mixed())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(65)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// `copy_span`: one span written from another
+
+// "aZz{" and "xy": the second copied over the start of the first.
+fn pair() → Buffers() { [[b(97), b(90), b(122), b(123)], [b(120), b(121)]] }
+
+theorem copy_runs(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(2), w(0)]) =
+    Ending(w(2), [[b(120), b(121), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// From an index on, the bytes before it kept.
+theorem copy_later(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(2), w(1)]) =
+    Ending(w(2), [[b(97), b(121), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// A count past the read span stores zero for what it does not have, and
+// one past the written span stores nothing past it.
+theorem copy_past_read(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(4), from, w(2), w(3), w(0)]) =
+    Ending(w(3), [[b(120), b(121), b(0), b(123)], [b(120), b(121)]]) { refl }
+theorem copy_past_written(to, from: BitVec(64)): program_run(copy_span_program(), pair(), copy_span_entry(), [to, w(1), from, w(2), w(9), w(0)]) =
+    Ending(w(9), [[b(120), b(90), b(122), b(123)], [b(120), b(121)]]) { refl }
+
+// It is lent two buffers and stores into the first alone: the second is
+// lent to read.
+theorem copy_counts(): program_counts(copy_span_program()) = [2] { refl }
+theorem copy_stores(): program_stores(copy_span_program(), 0) = True { refl }
+theorem copy_stores_first_only(): program_stores(copy_span_program(), 1) = False { refl }
+theorem copy_within(): program_stores_within(copy_span_program(), [True, False]) = True { refl }
+theorem copy_not_within(): program_stores_within(copy_span_program(), [False, True]) = False { refl }
+theorem copy_evaluable(): program_evaluable(copy_span_program()) = True { refl }
+theorem copy_placeless(): program_placeless(copy_span_program()) = True { refl }
+theorem copy_lowers(): lower_program_lent(copy_span_program(), plan_program(copy_span_program()),
+    program_counts(copy_span_program())).is_some().IsTrue() { trivial }
+
+// The control: the span read is the file's second, not the first. Copying
+// "xy" over "aZ" is not copying "aZ" over itself.
+theorem copy_reads_the_second(same: program_run(copy_span_program(), pair(), copy_span_entry(), [w(0), w(4), w(0), w(2), w(2), w(0)]) = Ending(w(2), pair())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 0).eq_bit(b(120)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// `copy_window`: a window of one span written from that window of another
+
+// "abcde" and "VWXYZ".
+fn fives() → Buffers() { [[b(97), b(98), b(99), b(100), b(101)], [b(86), b(87), b(88), b(89), b(90)]] }
+
+// The bytes 1 up to 4, and no other: the loop it lends to runs from its
+// own index 0 over two windows three bytes long.
+theorem window_runs(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(1), w(4)]) =
+    Ending(w(3), [[b(97), b(87), b(88), b(89), b(101)], [b(86), b(87), b(88), b(89), b(90)]]) { refl }
+theorem window_whole(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(0), w(5)]) =
+    Ending(w(5), [[b(86), b(87), b(88), b(89), b(90)], [b(86), b(87), b(88), b(89), b(90)]]) { refl }
+theorem window_empty(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(2), w(2)]) =
+    Ending(w(0), fives()) { refl }
+
+// A window past either span's length word, or one that ends before it
+// starts, is no window: nothing is stored.
+theorem window_past_written(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(3), from, w(5), w(1), w(4)]) =
+    Ending(w(0), fives()) { refl }
+theorem window_past_read(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(3), w(1), w(4)]) =
+    Ending(w(0), fives()) { refl }
+theorem window_backwards(to, from: BitVec(64)): program_run(copy_window_program(), fives(), copy_window_entry(), [to, w(5), from, w(5), w(4), w(1)]) =
+    Ending(w(0), fives()) { refl }
+
+// Both functions are lent two buffers and store into the first alone, the
+// callee's first being a window of the caller's first.
+theorem window_counts(): program_counts(copy_window_program()) = [2, 2] { refl }
+theorem window_rows(): program_rows(copy_window_program()) = [[True], [True]] { refl }
+theorem window_marked(): program_marked(copy_window_program(), [[True, False], [True, False]]) = True { refl }
+theorem window_not_marked(): program_marked(copy_window_program(), [[True, False], [False, True]]) = False { refl }
+// One list of marks is not how a program that lends is stated: its marks
+// are a row for each function (`program_marked`).
+theorem window_one_list(): program_stores_within(copy_window_program(), [True, False]) = False { refl }
+theorem window_evaluable(): program_evaluable(copy_window_program()) = True { refl }
+theorem window_placeless(): program_placeless(copy_window_program()) = True { refl }
+
+// The control: the window read is the second span's.
+theorem window_reads_the_second(same: program_run(copy_window_program(), fives(), copy_window_entry(), [w(0), w(5), w(0), w(5), w(1), w(4)]) = Ending(w(3), fives())): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 1).eq_bit(b(87)), same);
+    absurd(verdict)
+}

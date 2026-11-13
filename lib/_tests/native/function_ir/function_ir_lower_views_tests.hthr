@@ -1,0 +1,355 @@
+// Probes of the lowering of a call over views (`File::emit_lend`,
+// function_ir_lower_calls; function_ir_lower_views;
+// docs/native-library-exports-design.md §3.1): a function that lends its
+// callee a window of its buffer to write, one that lends two windows of
+// one buffer, one to read and one to write, the code each lowers to, the
+// contract each meets at every lending of its counts, and what is
+// refused. Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_views;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+fn then(nodes: List<Node>, rest: StructuredRegion) → StructuredRegion { Sequence(Region(Ports([]), nodes, Ports([])), rest) }
+// The arms of a branch on `bit` that leave `output`: `yes` where it is
+// set.
+fn when(bit, output: Nat, yes, no: StructuredRegion) → StructuredRegion {
+    Conditional(Ports([]), bit, Ports([]), Ports([word(output)]), yes, no)
+}
+
+// ---------------------------------------------------------------------------
+// One view, to write
+
+// put_at(address, length, i, v): `v`'s low byte stored at `i` of its
+// buffer, returning the byte then there, or 256 past the end.
+fn put_at() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 4,
+        body := then([UnsignedLessThan(width := 64, output := 5, left := 2, right := 1)],
+            when(5, 4, leaf([BufferStore(output := 4, buffer := 0, index := 2, value := 3)]), leaf([Const(width := 64, output := 4, value := 256)]))))
+}
+
+// lends_at(address, length, from, to, i, v): `put_at(i, v)` over the bytes
+// `from` up to `to` of its buffer, or 512 where that is no window of it.
+// The two comparisons are what the lowering reads the window's bounds off
+// (`View::lendable`): `to` is at most the length, `from` at most `to`.
+fn lends_at(written: Bool) → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 1, result := 8,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 1, right := 3)],
+            when(10, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 11, left := 3, right := 2)],
+                    when(11, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                        Compose(Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := written, base := 6, length := 7)], 0, [4, 5], 9),
+                            leaf([Move(64, 8, 9)])))))))
+}
+fn lending() → List<Function> { [lends_at(True), put_at()] }
+
+fn five() → Buffers() { [[b(1), b(2), b(3), b(4), b(5)]] }
+
+theorem lending_evaluable(): program_evaluable(lending()).IsTrue() { trivial }
+
+// What it means, by evaluation: 9 put at 1 of the window from 1 to 4 is
+// put at 2 of the buffer; past the window's end nothing is stored, though
+// the buffer goes on; and where the bounds are no window nothing is lent.
+theorem lending_runs(a: BitVec(64)): program_run(lending(), five(), 1, [a, w(5), w(1), w(4), w(1), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]) { refl }
+theorem lending_past_the_view(a: BitVec(64)): program_run(lending(), five(), 1, [a, w(5), w(1), w(4), w(3), w(9)]) = Ending(w(256), five()) { refl }
+theorem lending_past_the_buffer(a: BitVec(64)): program_run(lending(), five(), 1, [a, w(5), w(1), w(6), w(1), w(9)]) = Ending(w(512), five()) { refl }
+theorem lending_backwards(a: BitVec(64)): program_run(lending(), five(), 1, [a, w(5), w(4), w(1), w(1), w(9)]) = Ending(w(512), five()) { refl }
+
+// It lowers: the views' base and length bound, then the call on them.
+theorem lending_present(): lower_program_lent(lending(), plan_program(lending()), [1, 1]).is_some().IsTrue() { trivial }
+fn lending_program() → Prog { lower_program_lent(lending(), plan_program(lending()), [1, 1]).get(lending_present()) }
+theorem lending_lowers(): lower_program_lent(lending(), plan_program(lending()), [1, 1]) = Some(lending_program()) {
+    Option::some_get(lower_program_lent(lending(), plan_program(lending()), [1, 1]), lending_present())
+}
+
+// Each function needs its buffer 0 lent to write: `put_at` stores into it,
+// `lends_at` lends a window of it to be written.
+theorem lending_marked(): program_marked(lending(), [[True], [True]]) = True { refl }
+
+// The theorem instantiated: at every lending of the counts that lets a
+// function write what its row marks, the function meets its contract.
+theorem lending_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), top: Nat):
+    Site<M>(fetch, data, lending_program(), last, origin).CallsLent(stack, program_effects(lending()), 2, [1, 1],
+        λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), top) {
+    lower_program_lent_needs<M>(lending(), plan_program(lending()), [1, 1], lending_program(), lending_lowers(),
+        λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), program_marked_needs(lending(), [[True], [True]], trivial),
+        fetch, data, last, origin, stack, top)
+}
+
+// So the code, over five bytes lent to be written wherever the laws let
+// them lie: it returns 9, and the bytes with 9 at 2 are the file in
+// memory.
+theorem lending_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([1, 1], addresses, five(), [True]).spans())):
+    Site<M>(fetch, data, lending_program(), last, origin).Returns(stack, asm_labels(lending_program())(2),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(5), w(1), w(4), w(1), w(9)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+            stack.LentOver(Lending::writing([1, 1], addresses, five(), [True]), top, 1, [a, w(5), w(1), w(4), w(1), w(9)], five())(i, s),
+        stack.AnsweredOver(Lending::writing([1, 1], addresses, five(), [True]), w(9), [[b(1), b(2), b(9), b(4), b(5)]])) {
+    compiled_returns_marked<M>(lending(), plan_program(lending()), [1, 1], addresses, [[True], [True]], lending_program(), lending_lowers(),
+        lending_evaluable(), trivial, fetch, data, last, origin, stack, top, five(), 1, trivial, loan, [a, w(5), w(1), w(4), w(1), w(9)],
+        trivial, Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]), lending_runs(a))
+}
+
+// A view lent to read, to a callee that stores into it. The lowering does
+// not refuse it: the code is the same. What refuses is the rows: no row
+// for the lender lets `put_at`'s row be met by the view, so the program
+// has no contract to be called under.
+fn showing() → List<Function> { [lends_at(False), put_at()] }
+theorem showing_lowers(): lower_program_lent(showing(), plan_program(showing()), [1, 1]).is_some().IsTrue() { trivial }
+theorem showing_unmarked(): program_marked(showing(), [[True], [True]]) = False { refl }
+theorem showing_unmarked_reading(): program_marked(showing(), [[True], [False]]) = False { refl }
+// And with a callee's row that says it writes nothing, the callee's own
+// store is what the rows refuse.
+theorem showing_unmarked_quiet(): program_marked(showing(), [[False], [False]]) = False { refl }
+
+// ---------------------------------------------------------------------------
+// A whole buffer under another number
+
+// renames(address, length, address, length, i, v): `put_at(i, v)` over the
+// whole of its buffer 1, which is the callee's buffer 0. The view runs
+// from the constant 0 to the buffer's own length, so no comparison is
+// asked for: renaming a buffer is free.
+fn renames() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 8,
+        body := then([Const(width := 64, output := 9, value := 0)],
+            Lend([View(buffer := 1, home := 2, start := 9, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 8)))
+}
+fn renaming() → List<Function> { [renames(), put_at()] }
+fn two() → Buffers() { [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(7)]] }
+
+theorem renaming_evaluable(): program_evaluable(renaming()).IsTrue() { trivial }
+theorem renaming_runs(a, c: BitVec(64)): program_run(renaming(), two(), 1, [a, w(3), c, w(4), w(3), w(9)]) =
+    Ending(w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]]) { refl }
+
+theorem renaming_present(): lower_program_lent(renaming(), plan_program(renaming()), [1, 2]).is_some().IsTrue() { trivial }
+fn renaming_program() → Prog { lower_program_lent(renaming(), plan_program(renaming()), [1, 2]).get(renaming_present()) }
+theorem renaming_lowers(): lower_program_lent(renaming(), plan_program(renaming()), [1, 2]) = Some(renaming_program()) {
+    Option::some_get(lower_program_lent(renaming(), plan_program(renaming()), [1, 2]), renaming_present())
+}
+
+// The callee needs its buffer 0 and the lender its buffer 1: one list of
+// marks for the program, read by each function at its own numbers, cannot
+// say both without also letting the lender's buffer 0 be written.
+theorem renaming_marked(): program_marked(renaming(), [[True], [False, True]]) = True { refl }
+theorem renaming_one_list(): program_stores_within(renaming(), [False, True]) = False { refl }
+
+// The lender's buffer 0 is lent to read: the code returns 9, and leaves 9
+// at 3 of buffer 1.
+theorem renaming_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([1, 2], addresses, two(), [False, True]).spans())):
+    Site<M>(fetch, data, renaming_program(), last, origin).Returns(stack, asm_labels(renaming_program())(2),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), c, w(4), w(3), w(9)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+            stack.LentOver(Lending::writing([1, 2], addresses, two(), [False, True]), top, 1, [a, w(3), c, w(4), w(3), w(9)], two())(i, s),
+        stack.AnsweredOver(Lending::writing([1, 2], addresses, two(), [False, True]), w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]])) {
+    compiled_returns_marked<M>(renaming(), plan_program(renaming()), [1, 2], addresses, [[True], [False, True]], renaming_program(),
+        renaming_lowers(), renaming_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
+        [a, w(3), c, w(4), w(3), w(9)], trivial, Ending(w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]]), renaming_runs(a, c))
+}
+
+// ---------------------------------------------------------------------------
+// Two views
+
+// carry_at(address, length, address, length, i): the byte at `i` of its
+// buffer 0 stored at `i` of its buffer 1, returning the byte then there,
+// or 256 where `i` is past either.
+fn carry_at() → Function {
+    Function(parameters := [0, 1, 2, 3, 4], lent := 2, result := 6,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 4, right := 1)],
+            when(10, 6,
+                then([UnsignedLessThan(width := 64, output := 11, left := 4, right := 3)],
+                    when(11, 6,
+                        then([BufferLoad(output := 5, buffer := 0, index := 4)], leaf([BufferStore(output := 6, buffer := 1, index := 4, value := 5)])),
+                        leaf([Const(width := 64, output := 6, value := 256)]))),
+                leaf([Const(width := 64, output := 6, value := 256)]))))
+}
+
+// crossing(address, length, address, length, mid): `carry_at(mid)` from
+// its buffer 1 from `mid` on, lent to read, into its buffer 0 from `mid`
+// on, lent to write: the lender's buffers under the callee's numbers the
+// other way round. Or 512 where `mid` is past either buffer.
+fn crossing() → Function {
+    Function(parameters := [0, 1, 2, 3, 4], lent := 2, result := 9,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 3, right := 4)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 16, left := 1, right := 4)],
+                    when(16, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                        Compose(Lend([View(buffer := 1, home := 2, start := 4, end := 3, written := False, base := 11, length := 12),
+                                View(buffer := 0, home := 0, start := 4, end := 1, written := True, base := 13, length := 14)], 0, [4], 15),
+                            leaf([Move(64, 9, 15)])))))))
+}
+fn crossed() → List<Function> { [crossing(), carry_at()] }
+
+theorem crossed_evaluable(): program_evaluable(crossed()).IsTrue() { trivial }
+theorem crossed_runs(a, c: BitVec(64)): program_run(crossed(), two(), 1, [a, w(3), c, w(4), w(1)]) =
+    Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]) { refl }
+theorem crossed_past(a, c: BitVec(64)): program_run(crossed(), two(), 1, [a, w(3), c, w(4), w(5)]) = Ending(w(512), two()) { refl }
+
+theorem crossed_present(): lower_program_lent(crossed(), plan_program(crossed()), [2, 2]).is_some().IsTrue() { trivial }
+fn crossed_program() → Prog { lower_program_lent(crossed(), plan_program(crossed()), [2, 2]).get(crossed_present()) }
+theorem crossed_lowers(): lower_program_lent(crossed(), plan_program(crossed()), [2, 2]) = Some(crossed_program()) {
+    Option::some_get(lower_program_lent(crossed(), plan_program(crossed()), [2, 2]), crossed_present())
+}
+
+// The callee needs its buffer 1 to write, which is the lender's buffer 0.
+theorem crossed_marked(): program_marked(crossed(), [[False, True], [True, False]]) = True { refl }
+theorem crossed_callee_row(): program_marked(crossed(), [[True, False], [True, False]]) = False { refl }
+theorem crossed_lender_row(): program_marked(crossed(), [[False, True], [False, True]]) = False { refl }
+
+// The lender's buffer 1 is lent to read: the code returns 6 and leaves it,
+// with 6 at 2 of buffer 0.
+theorem crossed_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 2], addresses, two(), [True, False]).spans())):
+    Site<M>(fetch, data, crossed_program(), last, origin).Returns(stack, asm_labels(crossed_program())(2),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(3), c, w(4), w(1)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+            stack.LentOver(Lending::writing([2, 2], addresses, two(), [True, False]), top, 1, [a, w(3), c, w(4), w(1)], two())(i, s),
+        stack.AnsweredOver(Lending::writing([2, 2], addresses, two(), [True, False]), w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]])) {
+    compiled_returns_marked<M>(crossed(), plan_program(crossed()), [2, 2], addresses, [[False, True], [True, False]], crossed_program(),
+        crossed_lowers(), crossed_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
+        [a, w(3), c, w(4), w(1)], trivial, Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]), crossed_runs(a, c))
+}
+
+// crossing_whole(address, length, address, length, mid): the same with the
+// whole of buffer 1 lent to read, from the constant 0. Ten values are
+// named on the way to the call (four home words, `mid`, the constant and
+// the four words the views bind) and nine registers hold a function's
+// values: it lowers because a home is read where a view names it, as any
+// operand is, and is free after the last view that does
+// (issues/function-homes-live-to-function-end.md).
+fn crossing_whole() → Function {
+    Function(parameters := [0, 1, 2, 3, 5], lent := 2, result := 9,
+        body := then([Const(width := 64, output := 6, value := 0), UnsignedLessThan(width := 64, output := 16, left := 1, right := 5)],
+            when(16, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 1, home := 2, start := 6, end := 3, written := False, base := 11, length := 12),
+                        View(buffer := 0, home := 0, start := 5, end := 1, written := True, base := 13, length := 14)], 0, [5], 15),
+                    leaf([Move(64, 9, 15)])))))
+}
+fn crossed_whole() → List<Function> { [crossing_whole(), carry_at()] }
+
+theorem crossed_whole_evaluable(): program_evaluable(crossed_whole()).IsTrue() { trivial }
+theorem crossed_whole_runs(a, c: BitVec(64)): program_run(crossed_whole(), two(), 1, [a, w(3), c, w(4), w(1)]) =
+    Ending(w(5), [[b(1), b(2), b(5)], [b(4), b(5), b(6), b(7)]]) { refl }
+theorem crossed_whole_past(a, c: BitVec(64)): program_run(crossed_whole(), two(), 1, [a, w(3), c, w(4), w(5)]) = Ending(w(512), two()) { refl }
+theorem crossed_whole_lowers(): lower_program_lent(crossed_whole(), plan_program(crossed_whole()), [2, 2]).is_some().IsTrue() { trivial }
+theorem crossed_whole_marked(): program_marked(crossed_whole(), [[False, True], [True, False]]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, and what the report says of each
+// (`Function::refused`, function_ir_refusal)
+
+// Two views of one buffer, one of them to write. The meaning says what it
+// does, and the lowering refuses it: a view to write is the only view of
+// its buffer (issues/views-of-one-buffer-apart.md).
+fn halves_at() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := False, base := 5, length := 6),
+                        View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                    leaf([Move(64, 9, 11)])))))
+}
+fn halving() → List<Function> { [halves_at(), carry_at()] }
+theorem halving_runs(a: BitVec(64)): program_run(halving(), five(), 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem halving_refused(): lower_program_lent(halving(), plan_program(halving()), [2, 1]) = None { refl }
+theorem halving_refused_why(): halves_at().refused(1, halves_at().plan(), 2, [2, 1]) =
+    "where 10 is false, the call of function 0 over views (buffer 0 from 4 to 2, buffer 0 from 2 to 1 written): a view to write shares its buffer with another view" { refl }
+
+// A window whose bounds no comparison on the way says.
+fn unguarded() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 1, result := 8,
+        body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 8))
+}
+theorem unguarded_refused(): lower_program_lent([unguarded(), put_at()], plan_program([unguarded(), put_at()]), [1, 1]) = None { refl }
+theorem unguarded_why(): unguarded().refused(1, unguarded().plan(), 2, [1, 1]) =
+    "the call of function 0 over views (buffer 0 from 2 to 3 written): its view of buffer 0 from 2 to 3: no arm taken on the way here says that its start is at most its end, and its start is not the constant 0" { refl }
+
+// A window that starts before it ends, with nothing said of where it ends
+// in the buffer.
+fn unbounded() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 1, result := 8,
+        body := then([UnsignedLessThan(width := 64, output := 11, left := 3, right := 2)],
+            when(11, 8, leaf([Const(width := 64, output := 8, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 9),
+                    leaf([Move(64, 8, 9)])))))
+}
+theorem unbounded_refused(): lower_program_lent([unbounded(), put_at()], plan_program([unbounded(), put_at()]), [1, 1]) = None { refl }
+theorem unbounded_why(): unbounded().refused(1, unbounded().plan(), 2, [1, 1]) =
+    "where 11 is false, the call of function 0 over views (buffer 0 from 2 to 3 written): its view of buffer 0 from 2 to 3: no arm taken on the way here says that its end is at most the buffer's length 1, and its end is not that length" { refl }
+
+// A view of a buffer the function is not lent.
+fn homeless() → Function {
+    Function(parameters := [0, 1, 4, 5], lent := 1, result := 8,
+        body := then([Const(width := 64, output := 9, value := 0)],
+            Lend([View(buffer := 1, home := 0, start := 9, end := 1, written := True, base := 6, length := 7)], 0, [4, 5], 8)))
+}
+theorem homeless_refused(): lower_program_lent([homeless(), put_at()], plan_program([homeless(), put_at()]), [1, 1]) = None { refl }
+theorem homeless_why(): homeless().refused(1, homeless().plan(), 2, [1, 1]) =
+    "the call of function 0 over views (buffer 1 from 9 to 1 written): its view of buffer 1 from 9 to 1: the scope has no home of that buffer at 0" { refl }
+
+// One view, to a callee that takes two buffers.
+fn short() → Function {
+    Function(parameters := [0, 1, 4], lent := 1, result := 8,
+        body := then([Const(width := 64, output := 9, value := 0)],
+            Lend([View(buffer := 0, home := 0, start := 9, end := 1, written := True, base := 6, length := 7)], 0, [0, 1, 4], 8)))
+}
+theorem short_refused(): lower_program_lent([short(), carry_at()], plan_program([short(), carry_at()]), [2, 1]) = None { refl }
+theorem short_why(): short().refused(1, short().plan(), 2, [2, 1]) =
+    "the call of function 0 over views (buffer 0 from 9 to 1 written): the callee is lent more buffers than the call has views" { refl }
+
+// No view: a call over none is a call.
+fn viewless() → Function {
+    Function(parameters := [0, 1, 4, 5], lent := 1, result := 8, body := Lend([], 0, [0, 1, 4, 5], 8))
+}
+theorem viewless_refused(): lower_program_lent([viewless(), put_at()], plan_program([viewless(), put_at()]), [1, 1]) = None { refl }
+theorem viewless_why(): viewless().refused(1, viewless().plan(), 2, [1, 1]) =
+    "the call of function 0 over views (): it has no view, and a call over none is written as a call" { refl }
+
+// ---------------------------------------------------------------------------
+// The checks themselves (function_ir_lower_views)
+
+fn window(buffer: Nat, written: Bool) → View { View(buffer := buffer, home := 0, start := 2, end := 3, written := written, base := 6, length := 7) }
+
+// A view to write is alone in its buffer, whichever comes first; views to
+// read share one.
+theorem alone_apart(): views_alone([window(0, True), window(1, True)]) = True { refl }
+theorem alone_reading(): views_alone([window(0, False), window(0, False)]) = True { refl }
+theorem alone_written_first(): views_alone([window(0, True), window(0, False)]) = False { refl }
+theorem alone_written_last(): views_alone([window(0, False), window(0, True)]) = False { refl }
+theorem alone_both_written(): views_alone([window(0, True), window(0, True)]) = False { refl }
+
+// The homes a callee's buffers are checked against are the views', by
+// position.
+theorem lents_numbered(): views_lents([window(4, True), window(2, False)]) = [Lent(0, 6, 7), Lent(1, 6, 7)] { refl }

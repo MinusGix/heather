@@ -1,0 +1,835 @@
+// What a region's run with the file threaded is, proved
+// (docs/native-one-compiler-design.md §2.6, U4 steps 4a-5 and 4b).
+//
+// `function_ir_writes` says what a program may do to the file as a
+// relation (`program_effects`), which is what the function compiler is
+// proved against. `function_ir_state`'s `run` computes it for a region,
+// and here for a program: `program_run` answers a call with the word it
+// returns and the file it leaves, a store setting its byte and a call
+// handing on the file its callee left. `program_run_effects` proves that
+// answer one the relation allows, for an evaluable program, so what a
+// function that writes returns and leaves is stated by evaluation, as a
+// function that only reads is (`program_eval_reads`).
+//
+// A program that stores nothing runs as it evaluates and leaves the file
+// (`program_run_quiet`): everything stated of a reading function by
+// `program_eval_over` is stated of its run.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_views;
+import function_ir_writes;
+import nat_map;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+// What a node's run names its output: its value over the file, and for a
+// store the byte in the file the store left.
+fn Node::run_value(self node: Node, values: Valuation(), buffers: Buffers()) → (w: Nat) → BitVec(w) {
+    match node {
+        BufferStore(_, buffer, index, value) =>
+            load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values),
+        _ => node.value(values, buffers := buffers),
+    }
+}
+
+theorem Node::run_values(self node: Node, values: Valuation(), buffers: Buffers()):
+    node.run(values, buffers).values = Valuation::set(values, node_output(node).id, node.run_value(values, buffers)) {
+    match node { _ => refl }
+}
+
+// A node's run keeps every id but its output.
+theorem Node::run_frame(self node: Node, values: Valuation(), buffers: Buffers(), w, id: Nat, differs: id ≠ node_output(node).id):
+    node.run(values, buffers).values(w, id) = values(w, id) {
+    j(sym(node.run_values(values, buffers)), λ vs _ => vs(w, id) = values(w, id),
+        Valuation::set_other(values, node_output(node).id, node.run_value(values, buffers), w, id, differs))
+}
+
+// A node that is no store runs as it steps over the file, and leaves it.
+theorem Node::run_step(self node: Node, values: Valuation(), buffers: Buffers()):
+    (!node.stores()).IsTrue() → node.run(values, buffers) = State(node.step(values, buffers := buffers), buffers) {
+    match node {
+        BufferStore(_, _, _, _) => λ no => false_elim(no),
+        _ => λ _ => refl,
+    }
+}
+
+theorem Node::run_holds_quiet(self node: Node, values, after: Valuation(), before: Buffers(), quiet: (!node.stores()).IsTrue(),
+    at_output: (w: Nat) → after(w, node_output(node).id) = node.run(values, before).values(w, node_output(node).id),
+    kept: (w: Nat) → (id: Nat) → Mem(id, node.reads()) → after(w, id) = values(w, id)):
+    node.Runs(after, before, node.run(values, before).buffers) {
+    (j(sym(node.run_step(values, before, quiet)),
+        λ s _ => ((w: Nat) → after(w, node_output(node).id) = s.values(w, node_output(node).id)) → node.Runs(after, before, s.buffers),
+        λ at => node.runs_quiet(after, before, quiet, node.holds_of(values, after, before,
+            λ w => trans(at(w), Valuation::set_here(values, node_output(node).id, node.value(values, buffers := before), w)), kept))))(at_output)
+}
+
+// A valuation whose output is what the node's run names it and whose
+// operands are as they were runs the node, to the file its run leaves.
+theorem Node::run_holds(self node: Node, values, after: Valuation(), before: Buffers()):
+    ((w: Nat) → after(w, node_output(node).id) = node.run(values, before).values(w, node_output(node).id)) →
+    ((w: Nat) → (id: Nat) → Mem(id, node.reads()) → after(w, id) = values(w, id)) →
+    node.Runs(after, before, node.run(values, before).buffers) {
+    match stores: node.stores() {
+        False => λ at_output kept =>
+            node.run_holds_quiet(values, after, before, j(sym(stores), λ b _ => (!b).IsTrue(), trivial), at_output, kept),
+        True => (match node as λ n => n.stores() = True →
+                ((w: Nat) → after(w, node_output(n).id) = n.run(values, before).values(w, node_output(n).id)) →
+                ((w: Nat) → (id: Nat) → Mem(id, n.reads()) → after(w, id) = values(w, id)) →
+                n.Runs(after, before, n.run(values, before).buffers) {
+            BufferStore(output, buffer, index, value) => λ _ at_output kept => {
+                let mid = store_byte(before, buffer, values(64, index).toNat(), low_byte(values(64, value)));
+                let at_index: (after(64, index) = values(64, index)) = kept(64, index, Inl(refl));
+                let at_value: (after(64, value) = values(64, value)) = kept(64, value, Inr(Inl(refl)));
+                let stored: (mid = store_byte(before, buffer, after(64, index).toNat(), low_byte(after(64, value)))) =
+                    sym(eq2(λ (x: BitVec(64)) (y: BitVec(64)) => store_byte(before, buffer, x.toNat(), low_byte(y)), at_index, at_value));
+                let named: (after(64, output) = byte_word(buffer_byte(mid, buffer, after(64, index).toNat()))) = trans(at_output(64),
+                    trans(Valuation::set_here(values, output, load_value(mid, buffer, index, values), 64),
+                        trans(word_value_word(byte_word(buffer_byte(mid, buffer, values(64, index).toNat()))),
+                            sym(cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(mid, buffer, x.toNat())), at_index)))));
+                ⟨stored, named⟩
+            },
+            _ => λ no _ _ => absurd(no),
+        })(stores),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schedules of nodes
+
+theorem run_nodes_frame(nodes: List<Node>): (values: Valuation()) → (buffers: Buffers()) → (w, id: Nat) →
+    absent(id, nodes_writes(nodes)).IsTrue() → run_nodes(nodes, values, buffers).values(w, id) = values(w, id) {
+    match nodes {
+        Nil => λ values buffers w id _ => refl,
+        Cons(node, rest) => λ values buffers w id h => {
+            let parts = Bool::is_true_and(id.differs(node_output(node).id), absent(id, nodes_writes(rest)), h);
+            let stepped = node.run(values, buffers);
+            trans(run_nodes_frame(rest, stepped.values, stepped.buffers, w, id, parts.right),
+                node.run_frame(values, buffers, w, id, id.differs_ne(node_output(node).id, parts.left)))
+        },
+    }
+}
+
+// Any valuation agreeing with the run's on what the nodes mention runs
+// them, from the file to the one the run leaves.
+theorem run_nodes_holds(nodes: List<Node>): nodes_evaluable(nodes).IsTrue() → (values, after: Valuation()) → (before: Buffers()) →
+    ((w: Nat) → (id: Nat) → Mem(id, nodes_mentions(nodes)) → after(w, id) = run_nodes(nodes, values, before).values(w, id)) →
+    NodesRun(nodes, after, before, run_nodes(nodes, values, before).buffers) {
+    match nodes {
+        Nil => λ _ values after before _ => refl,
+        Cons(node, rest) => λ ok values after before agree => {
+            let output = node_output(node).id;
+            let parts = Bool::is_true_and(absent(output, node.reads()),
+                disjoint(nodes_writes(rest), node.mentions()) && nodes_evaluable(rest), ok);
+            let later = Bool::is_true_and(disjoint(nodes_writes(rest), node.mentions()), nodes_evaluable(rest), parts.right);
+            let stepped = node.run(values, before);
+            let at_output = λ (w: Nat) => trans(agree(w, output, List::mem_append_l(node.mentions(), nodes_mentions(rest), output, Inl(refl))),
+                run_nodes_frame(rest, stepped.values, stepped.buffers, w, output,
+                    disjoint_mem(nodes_writes(rest), node.mentions(), later.left, output, Inl(refl))));
+            let kept = λ (w: Nat) (id: Nat) (m: Mem(id, node.reads())) =>
+                trans(agree(w, id, List::mem_append_l(node.mentions(), nodes_mentions(rest), id, Inr(m))),
+                    trans(run_nodes_frame(rest, stepped.values, stepped.buffers, w, id,
+                            disjoint_mem(nodes_writes(rest), node.mentions(), later.left, id, Inr(m))),
+                        node.run_frame(values, before, w, id, λ e => absent_mem(output, node.reads(), parts.left, id, m, sym(e)))));
+            Exists(stepped.buffers, ⟨node.run_holds(values, after, before, at_output, kept),
+                run_nodes_holds(rest, later.right, stepped.values, after, stepped.buffers,
+                    λ w id m => agree(w, id, List::mem_append_r(node.mentions(), nodes_mentions(rest), id, m)))⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// The loop's final state is a state: as many words as parameters.
+theorem loop_run_len(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    lengths: next.len() = parameters.len(), remaining: Nat):
+    (state: List<BitVec(64)>) → (buffers: Buffers()) → state.len() = parameters.len() →
+    loop_run(step, parameters, count, exit, next, remaining, state, buffers).end.state.len() = parameters.len() {
+    match remaining {
+        Zero => λ state buffers same => same,
+        Succ(rest) => λ state buffers same => {
+            let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
+            let next_len: (words_of(after.values, next).len() = parameters.len()) = trans(words_of_len(after.values, next), lengths);
+            match after.values(1, exit).head_bit() {
+                False => loop_run_len(step, parameters, count, exit, next, lengths, rest, words_of(after.values, next), after.buffers, next_len),
+                True => next_len,
+            }
+        },
+    }
+}
+
+// What the loop runs to is a run of it over the file, when each pass's
+// step runs the pass and keeps the parameters and the count.
+theorem loop_run_runs(pass: Valuation() → Buffers() → Buffers() → Type, step: Valuation() → Buffers() → State,
+    holds: (v: Valuation()) → (file: Buffers()) → pass(step(v, file).values, file, step(v, file).buffers),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, apart: distinct(Cons(count, parameters)).IsTrue(),
+    kept: (v: Valuation()) → (file: Buffers()) → (w, id: Nat) → Mem(id, Cons(count, parameters)) → step(v, file).values(w, id) = v(w, id),
+    lengths: next.len() = parameters.len(), remaining: Nat):
+    (state: List<BitVec(64)>) → (before: Buffers()) → state.len() = parameters.len() →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state,
+        loop_run(step, parameters, count, exit, next, remaining, state, before).end.state,
+        loop_run(step, parameters, count, exit, next, remaining, state, before).end.exhausted, before,
+        loop_run(step, parameters, count, exit, next, remaining, state, before).buffers) {
+    match remaining {
+        Zero => λ state before _ => ⟨refl, ⟨refl, refl⟩⟩,
+        Succ(rest) => λ state before same => {
+            let parts = Bool::is_true_and(absent(count, parameters), distinct(parameters), apart);
+            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
+            let entered = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(entered, before);
+            let bound: (words_of(after.values, parameters) = state) = trans(
+                words_agree(parameters, entered, after.values, λ id m => kept(entered, before, 64, id, Inr(m))),
+                words_of_bind(counted, parameters, parts.right, state, sym(same)));
+            let at_count: (after.values(64, count) = BitVec::ofNat(Succ(rest))) = trans(kept(entered, before, 64, count, Inl(refl)),
+                trans(Valuation::bind_frame(counted, parameters, state, 64, count, parts.left),
+                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))), 64),
+                        word_value_word(BitVec::ofNat(Succ(rest))))));
+            let next_len: (words_of(after.values, next).len() = parameters.len()) = trans(words_of_len(after.values, next), lengths);
+            Exists(after.values, Exists(after.buffers, ⟨bound, ⟨at_count, ⟨holds(entered, before),
+                match after.values(1, exit).head_bit() as λ b => match b as λ _ => Type {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(after.values, next),
+                        (match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).end.state,
+                        (match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).end.exhausted, after.buffers,
+                        (match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).buffers),
+                    True => ((match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).end.state =
+                            words_of(after.values, next)) ∧
+                        (((match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).end.exhausted = False) ∧
+                        ((match b as λ _ => LoopState {
+                            False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                            True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers) }).buffers = after.buffers)),
+                } {
+                    False => loop_run_runs(pass, step, holds, parameters, count, exit, next, apart, kept, lengths, rest,
+                        words_of(after.values, next), after.buffers, next_len),
+                    True => ⟨refl, ⟨refl, refl⟩⟩,
+                }⟩⟩⟩))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// Running keeps every id the region does not write.
+theorem StructuredRegion::run_keeps(self region: StructuredRegion, call: Writers()): (values: Valuation()) →
+    (buffers: Buffers()) → (w, id: Nat) → absent(id, region.writes()).IsTrue() →
+    region.run(call, values, buffers).values(w, id) = values(w, id) {
+    match region {
+        Dataflow(body) => λ values buffers w id h => run_nodes_frame(body.nodes, values, buffers, w, id, h),
+        Sequence(prefix, continuation) => λ values buffers w id h => {
+            let parts = absent_append(id, nodes_writes(prefix.nodes), continuation.writes(), h);
+            let first = run_nodes(prefix.nodes, values, buffers);
+            trans(continuation.run_keeps(call, first.values, first.buffers, w, id, parts.right),
+                run_nodes_frame(prefix.nodes, values, buffers, w, id, parts.left))
+        },
+        Compose(prefix, continuation) => λ values buffers w id h => {
+            let parts = absent_append(id, prefix.writes(), continuation.writes(), h);
+            let first = prefix.run(call, values, buffers);
+            trans(continuation.run_keeps(call, first.values, first.buffers, w, id, parts.right),
+                prefix.run_keeps(call, values, buffers, w, id, parts.left))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values buffers w id h => {
+            let parts = absent_append(id, when_true.writes(), when_false.writes(), h);
+            match values(1, condition).head_bit() {
+                False => when_false.run_keeps(call, values, buffers, w, id, parts.right),
+                True => when_true.run_keeps(call, values, buffers, w, id, parts.left),
+            }
+        },
+        Lend(views, callee, arguments, result) => λ values buffers w id h => {
+            let nodes = views_nodes(views);
+            let first = run_nodes(nodes, values, buffers);
+            let parts = absent_append(id, nodes_writes(nodes), [result], h);
+            trans(Valuation::set_other(first.values, result,
+                    word_value(call(viewed(views, first.values, first.buffers), callee, words_of(first.values, views_homes(views) ++ arguments)).word), w, id,
+                    id.differs_ne(result, Bool::is_true_and(id.differs(result), True, parts.right).left)),
+                run_nodes_frame(nodes, values, buffers, w, id, parts.left))
+        },
+        Call(callee, arguments, result) => λ values buffers w id h =>
+            Valuation::set_other(values, result, word_value(call(buffers, callee, words_of(values, arguments)).word), w, id,
+                id.differs_ne(result, Bool::is_true_and(id.differs(result), True, h).left)),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values buffers w id h => {
+            let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), buffers);
+            let parts = Bool::is_true_and(id.differs(exhausted), absent(id, outputs), h);
+            trans(Valuation::set_other(Valuation::bind(values, outputs, end.end.state), exhausted, bit_value(end.end.exhausted), w, id,
+                    id.differs_ne(exhausted, parts.left)),
+                Valuation::bind_frame(values, outputs, end.end.state, w, id, parts.right))
+        },
+    }
+}
+
+// The theorem: when every call a region makes is answered by a word and a
+// file its callee may return and leave, any valuation agreeing with the
+// run's on what the region mentions runs the region, from the file to the
+// one the run leaves.
+theorem StructuredRegion::run_holds(self region: StructuredRegion, effects: Effects(), call: Writers(),
+    arity: Nat → Option<Nat>,
+    answers: (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() →
+        effects(file, f, words, call(file, f, words).word, call(file, f, words).buffers)):
+    region.evaluable(arity).IsTrue() → (values, after: Valuation()) → (before: Buffers()) →
+    ((w: Nat) → (id: Nat) → Mem(id, region.mentions()) → after(w, id) = region.run(call, values, before).values(w, id)) →
+    StructuredRegionRunsOver(effects, after, region, before, region.run(call, values, before).buffers) {
+    match region {
+        Dataflow(body) => λ ok values after before agree => run_nodes_holds(body.nodes, ok, values, after, before, agree),
+        Sequence(prefix, continuation) => λ ok values after before agree => {
+            let parts = Bool::is_true_and(nodes_evaluable(prefix.nodes),
+                disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), nodes_mentions(prefix.nodes)), continuation.evaluable(arity), parts.right);
+            let first = run_nodes(prefix.nodes, values, before);
+            Exists(first.buffers, ⟨run_nodes_holds(prefix.nodes, parts.left, values, after, before, λ w id m =>
+                    trans(agree(w, id, List::mem_append_l(nodes_mentions(prefix.nodes), continuation.mentions(), id, m)),
+                        continuation.run_keeps(call, first.values, first.buffers, w, id,
+                            disjoint_mem(continuation.writes(), nodes_mentions(prefix.nodes), later.left, id, m)))),
+                continuation.run_holds(effects, call, arity, answers, later.right, first.values, after, first.buffers, λ w id m =>
+                    agree(w, id, List::mem_append_r(nodes_mentions(prefix.nodes), continuation.mentions(), id, m)))⟩)
+        },
+        Compose(prefix, continuation) => λ ok values after before agree => {
+            let parts = Bool::is_true_and(prefix.evaluable(arity),
+                disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), prefix.mentions()), continuation.evaluable(arity), parts.right);
+            let first = prefix.run(call, values, before);
+            Exists(first.buffers, ⟨prefix.run_holds(effects, call, arity, answers, parts.left, values, after, before, λ w id m =>
+                    trans(agree(w, id, List::mem_append_l(prefix.mentions(), continuation.mentions(), id, m)),
+                        continuation.run_keeps(call, first.values, first.buffers, w, id,
+                            disjoint_mem(continuation.writes(), prefix.mentions(), later.left, id, m)))),
+                continuation.run_holds(effects, call, arity, answers, later.right, first.values, after, first.buffers, λ w id m =>
+                    agree(w, id, List::mem_append_r(prefix.mentions(), continuation.mentions(), id, m)))⟩)
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ ok values after before agree => {
+            let parts = Bool::is_true_and(absent(condition, when_true.writes() ++ when_false.writes()),
+                when_true.evaluable(arity) && when_false.evaluable(arity), ok);
+            let arms = Bool::is_true_and(when_true.evaluable(arity), when_false.evaluable(arity), parts.right);
+            let kept: (after(1, condition) = values(1, condition)) = trans(agree(1, condition, Inl(refl)),
+                Conditional(inputs, condition, arguments, outputs, when_true, when_false).run_keeps(call, values, before, 1, condition,
+                    parts.left));
+            let chosen = (match values(1, condition).head_bit() as λ b =>
+                    ((w: Nat) → (id: Nat) → Mem(id, Cons(condition, when_true.mentions() ++ when_false.mentions())) →
+                        after(w, id) = (match b {
+                            False => when_false.run(call, values, before).values(w, id),
+                            True => when_true.run(call, values, before).values(w, id),
+                        })) →
+                    (match b {
+                        False => StructuredRegionRunsOver(effects, after, when_false, before, match b {
+                            False => when_false.run(call, values, before).buffers,
+                            True => when_true.run(call, values, before).buffers,
+                        }),
+                        True => StructuredRegionRunsOver(effects, after, when_true, before, match b {
+                            False => when_false.run(call, values, before).buffers,
+                            True => when_true.run(call, values, before).buffers,
+                        }),
+                    }) {
+                False => λ chose => when_false.run_holds(effects, call, arity, answers, arms.right, values, after, before, λ w id m =>
+                    chose(w, id, Inr(List::mem_append_r(when_true.mentions(), when_false.mentions(), id, m)))),
+                True => λ chose => when_true.run_holds(effects, call, arity, answers, arms.left, values, after, before, λ w id m =>
+                    chose(w, id, Inr(List::mem_append_l(when_true.mentions(), when_false.mentions(), id, m)))),
+            })(agree);
+            j(sym(kept), λ x _ => match x.head_bit() {
+                False => StructuredRegionRunsOver(effects, after, when_false, before, match values(1, condition).head_bit() {
+                    False => when_false.run(call, values, before).buffers,
+                    True => when_true.run(call, values, before).buffers,
+                }),
+                True => StructuredRegionRunsOver(effects, after, when_true, before, match values(1, condition).head_bit() {
+                    False => when_false.run(call, values, before).buffers,
+                    True => when_true.run(call, values, before).buffers,
+                }),
+            }, chosen)
+        },
+        // The windows and what is put back are read at the lend's own nodes'
+        // values, where the two valuations agree.
+        Lend(views, callee, arguments, result) => λ ok values after before agree => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let parts = Bool::is_true_and(nodes_evaluable(nodes),
+                disjoint([result], nodes_mentions(nodes)) && (absent(result, args) && arity_fits(arity(callee), args.len())), ok);
+            let later = Bool::is_true_and(disjoint([result], nodes_mentions(nodes)), absent(result, args) && arity_fits(arity(callee), args.len()),
+                parts.right);
+            let last = Bool::is_true_and(absent(result, args), arity_fits(arity(callee), args.len()), later.right);
+            let first = run_nodes(nodes, values, before);
+            let file = viewed(views, first.values, first.buffers);
+            let words = words_of(first.values, args);
+            let answer = call(file, callee, words);
+            let at_nodes = λ (w: Nat) (id: Nat) (m: Mem(id, nodes_mentions(nodes))) =>
+                trans(agree(w, id, List::mem_append_l(nodes_mentions(nodes), Cons(result, args), id, m)),
+                    Valuation::set_other(first.values, result, word_value(answer.word), w, id, id.differs_ne(result,
+                        Bool::is_true_and(id.differs(result), True, disjoint_mem([result], nodes_mentions(nodes), later.left, id, m)).left)));
+            let at_result: (after(64, result) = answer.word) = trans(agree(64, result, List::mem_append_r(nodes_mentions(nodes), Cons(result, args), result, Inl(refl))),
+                trans(Valuation::set_here(first.values, result, word_value(answer.word), 64), word_value_word(answer.word)));
+            let read: (words_of(after, args) = words) = words_agree(args, first.values, after, λ id m =>
+                trans(agree(64, id, List::mem_append_r(nodes_mentions(nodes), Cons(result, args), id, Inr(m))),
+                    Valuation::set_other(first.values, result, word_value(answer.word), 64, id, λ e => absent_mem(result, args, last.left, id, m, sym(e)))));
+            let fits: arity_fits(arity(callee), words.len()).IsTrue() =
+                j(sym(words_of_len(first.values, args)), λ n _ => arity_fits(arity(callee), n).IsTrue(), last.right);
+            let lent: (viewed(views, after, first.buffers) = file) = viewed_agree(views, first.values, after, first.buffers, λ id m => at_nodes(64, id, m));
+            let put: (put_views(views, after, answer.buffers, first.buffers) = put_views(views, first.values, answer.buffers, first.buffers)) =
+                put_views_agree(views, first.values, after, λ id m => at_nodes(64, id, m), answer.buffers, first.buffers);
+            Exists(first.buffers, ⟨run_nodes_holds(nodes, parts.left, values, after, before, at_nodes),
+                Exists(answer.buffers, ⟨j(sym(lent), λ held _ => effects(held, callee, words_of(after, args), after(64, result), answer.buffers),
+                    j(sym(read), λ ws _ => effects(file, callee, ws, after(64, result), answer.buffers),
+                        j(sym(at_result), λ r _ => effects(file, callee, words, r, answer.buffers), answers(file, callee, words, fits)))), sym(put)⟩)⟩)
+        },
+        Call(callee, arguments, result) => λ ok values after before agree => {
+            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
+            let words = words_of(values, arguments);
+            let answer = call(before, callee, words);
+            let at_result: (after(64, result) = answer.word) = trans(agree(64, result, Inl(refl)),
+                trans(Valuation::set_here(values, result, word_value(answer.word), 64), word_value_word(answer.word)));
+            let read: (words_of(after, arguments) = words) = words_agree(arguments, values, after, λ id m =>
+                trans(agree(64, id, Inr(m)), Valuation::set_other(values, result, word_value(answer.word), 64, id,
+                    λ e => absent_mem(result, arguments, parts.left, id, m, sym(e)))));
+            let fits: arity_fits(arity(callee), words.len()).IsTrue() =
+                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
+            j(sym(read), λ ws _ => effects(before, callee, ws, after(64, result), answer.buffers),
+                j(sym(at_result), λ r _ => effects(before, callee, words, r, answer.buffers), answers(before, callee, words, fits)))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values after before agree => {
+            let pass = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to);
+            let step = λ (v: Valuation()) (held: Buffers()) => body.run(call, v, held);
+            let p1 = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))))), ok);
+            let p2 = Bool::is_true_and(distinct(Cons(count, parameters)), disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len()))))), p1.right);
+            let p3 = Bool::is_true_and(disjoint(body.writes(), Cons(count, parameters)), distinct(Cons(exhausted, outputs))
+                && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))), p2.right);
+            let p4 = Bool::is_true_and(distinct(Cons(exhausted, outputs)), disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len()))), p3.right);
+            let p5 = Bool::is_true_and(disjoint(Cons(exhausted, outputs), Cons(bound, inputs)), inputs.len().matches(parameters.len())
+                && (next.len().matches(parameters.len()) && outputs.len().matches(parameters.len())), p4.right);
+            let p6 = Bool::is_true_and(inputs.len().matches(parameters.len()),
+                next.len().matches(parameters.len()) && outputs.len().matches(parameters.len()), p5.right);
+            let p7 = Bool::is_true_and(next.len().matches(parameters.len()), outputs.len().matches(parameters.len()), p6.right);
+            let outs = Bool::is_true_and(absent(exhausted, outputs), distinct(outputs), p4.left);
+            let in_len: (words_of(values, inputs).len() = parameters.len()) =
+                trans(words_of_len(values, inputs), inputs.len().matches_eq(parameters.len(), p6.left));
+            let next_len: (next.len() = parameters.len()) = next.len().matches_eq(parameters.len(), p7.left);
+            let n = values(64, bound).toNat();
+            let start = words_of(values, inputs);
+            let end = loop_run(step, parameters, count, exit, next, n, start, before);
+            let region = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
+            let bound_after: (after(64, bound) = values(64, bound)) = trans(agree(64, bound, Inl(refl)),
+                region.run_keeps(call, values, before, 64, bound,
+                    disjoint_mem(Cons(exhausted, outputs), Cons(bound, inputs), p5.left, bound, Inl(refl))));
+            let inputs_after: (words_of(after, inputs) = start) = words_agree(inputs, values, after, λ id m =>
+                trans(agree(64, id, List::mem_append_l(Cons(bound, inputs), Cons(exhausted, outputs), id, Inr(m))),
+                    region.run_keeps(call, values, before, 64, id,
+                        disjoint_mem(Cons(exhausted, outputs), Cons(bound, inputs), p5.left, id, Inr(m)))));
+            let bound_values = Valuation::bind(values, outputs, end.end.state);
+            let outputs_after: (words_of(after, outputs) = end.end.state) = trans(
+                words_agree(outputs, bound_values, after, λ id m =>
+                    trans(agree(64, id, List::mem_append_r(Cons(bound, inputs), Cons(exhausted, outputs), id, Inr(m))),
+                        Valuation::set_other(bound_values, exhausted, bit_value(end.end.exhausted), 64, id,
+                            λ e => absent_mem(exhausted, outputs, outs.left, id, m, sym(e))))),
+                words_of_bind(values, outputs, outs.right, end.end.state,
+                    trans(outputs.len().matches_eq(parameters.len(), p7.right),
+                        sym(loop_run_len(step, parameters, count, exit, next, next_len, n, start, before, in_len)))));
+            let exhausted_after: (after(1, exhausted).head_bit() = end.end.exhausted) = trans(
+                cong_fn<BitVec(1), Bool>(λ x => x.head_bit(), trans(agree(1, exhausted, List::mem_append_r(Cons(bound, inputs),
+                    Cons(exhausted, outputs), exhausted, Inl(refl))),
+                    trans(Valuation::set_here(bound_values, exhausted, bit_value(end.end.exhausted), 1), bit_value_bit(end.end.exhausted)))),
+                BitVec::head_bit_ofBool(end.end.exhausted));
+            let runs = loop_run_runs(pass, step,
+                λ v file => body.run_holds(effects, call, arity, answers, p1.left, v, body.run(call, v, file).values, file,
+                    λ w id m => refl),
+                parameters, count, exit, next, p2.left,
+                λ v file w id m => body.run_keeps(call, v, file, w, id,
+                    disjoint_mem(body.writes(), Cons(count, parameters), p3.left, id, m)),
+                next_len, n, start, before, in_len);
+            j(sym(exhausted_after), λ x _ => LoopRunsOver(pass, parameters, count, exit, next, after(64, bound).toNat(), words_of(after, inputs),
+                    words_of(after, outputs), x, before, end.buffers),
+                j(sym(outputs_after), λ x _ => LoopRunsOver(pass, parameters, count, exit, next, after(64, bound).toNat(),
+                        words_of(after, inputs), x, end.end.exhausted, before, end.buffers),
+                    j(sym(inputs_after), λ x _ => LoopRunsOver(pass, parameters, count, exit, next, after(64, bound).toNat(), x,
+                            end.end.state, end.end.exhausted, before, end.buffers),
+                        j(sym(bound_after), λ x _ => LoopRunsOver(pass, parameters, count, exit, next, x.toNat(), start, end.end.state,
+                                end.end.exhausted, before, end.buffers),
+                            runs))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// A function called on `arguments` over `buffers`: its result and the file
+// its body leaves. The body is run once.
+fn Function::run(self function: Function, call: Writers(), arguments: List<BitVec(64)>, buffers: Buffers()) → Ending {
+    shared(function.body.run(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers),
+        λ (end: State) => Ending(end.values(64, function.result), end.buffers))
+}
+
+// An evaluable function, its calls answered by what its callees may return
+// and leave, may return and leave what it runs to.
+theorem Function::run_runs(self function: Function, effects: Effects(), call: Writers(), arity: Nat → Option<Nat>,
+    answers: (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() →
+        effects(file, f, words, call(file, f, words).word, call(file, f, words).buffers),
+    ok: function.evaluable(arity).IsTrue(), arguments: List<BitVec(64)>, before: Buffers(),
+    count: function.parameters.len() = arguments.len()):
+    function.Runs(effects, arguments, function.run(call, arguments, before).word, before, function.run(call, arguments, before).buffers) {
+    let parts = Bool::is_true_and(function.body.evaluable(arity),
+        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
+    let params = Bool::is_true_and(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.right);
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    let end = function.body.run(call, bound, before);
+    let read: (words_of(end.values, function.parameters) = arguments) = trans(
+        words_agree(function.parameters, bound, end.values, λ id m =>
+            function.body.run_keeps(call, bound, before, 64, id,
+                disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
+        words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
+    Exists(end.values, ⟨read, ⟨function.body.run_holds(effects, call, arity, answers, parts.left, bound, end.values, before,
+        λ w id _ => refl), refl⟩⟩)
+}
+
+// The functions of a program, each answering its calls by the ones after
+// it, over the one file: `program_eval_over` with the file threaded.
+fn program_run(functions: List<Function>) → Writers() {
+    match functions {
+        Nil => λ buffers _ _ => Ending(BitVec::zero(), buffers),
+        Cons(last, earlier) => λ buffers f arguments => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.run(program_run(earlier), arguments, buffers),
+            Inr(_) => program_run(earlier, buffers, f, arguments),
+        },
+    }
+}
+
+// The theorem for programs: what `program_run` answers a call of the right
+// arity with, over a file, is a word the function may return and a file it
+// may leave.
+theorem program_run_effects(functions: List<Function>, ok: program_evaluable(functions).IsTrue()):
+    (before: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
+    program_effects(functions)(before, f, words, program_run(functions, before, f, words).word,
+        program_run(functions, before, f, words).buffers) {
+    match functions {
+        Nil => λ before f words never => false_elim(never),
+        Cons(last, earlier) => λ before f words => {
+            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let ih = program_run_effects(earlier, parts.right);
+            let below = program_run(earlier);
+            let may = program_effects(earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                    words.len()).IsTrue() →
+                (match d as λ _ => Type {
+                    Inl(_) => last.Runs(may, words,
+                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).word, before,
+                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).buffers),
+                    Inr(_) => may(before, f, words,
+                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).word,
+                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).buffers),
+                }) {
+                Inl(_) => λ fits => last.run_runs(may, below, program_arity(earlier), ih, parts.left, words, before,
+                    last.parameters.len().matches_eq(words.len(), fits)),
+                Inr(_) => λ fits => ih(before, f, words, fits),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A program that stores nothing
+
+// Nodes that store nothing run as they evaluate over the file, and leave
+// it.
+theorem run_nodes_quiet(nodes: List<Node>): nodes_quiet(nodes).IsTrue() → (values: Valuation()) → (buffers: Buffers()) →
+    run_nodes(nodes, values, buffers) = State(eval_nodes_over(buffers, nodes, values), buffers) {
+    match nodes {
+        Nil => λ _ values buffers => refl,
+        Cons(node, rest) => λ quiet values buffers => {
+            let parts = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            j(sym(node.run_step(values, buffers, parts.left)),
+                λ s _ => run_nodes(rest, s.values, s.buffers) =
+                    State(eval_nodes_over(buffers, rest, node.step(values, buffers := buffers)), buffers),
+                run_nodes_quiet(rest, parts.right, node.step(values, buffers := buffers), buffers))
+        },
+    }
+}
+
+// Passes that run as they evaluate over a file, leaving it, make a loop
+// that does.
+theorem loop_run_quiet(run_step: Valuation() → Buffers() → State, step: Valuation() → Valuation(), buffers: Buffers(),
+    same: (v: Valuation()) → run_step(v, buffers) = State(step(v), buffers), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat): (state: List<BitVec(64)>) →
+    loop_run(run_step, parameters, count, exit, next, remaining, state, buffers) =
+        LoopState(loop_eval(step, parameters, count, exit, next, remaining, state), buffers) {
+    match remaining {
+        Zero => λ state => refl,
+        Succ(rest) => λ state => {
+            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(before);
+            let ends = match after(1, exit).head_bit() as λ b =>
+                    (match b as λ _ => LoopState {
+                        False => loop_run(run_step, parameters, count, exit, next, rest, words_of(after, next), buffers),
+                        True => LoopState(LoopEnd(words_of(after, next), False), buffers),
+                    }) = LoopState(match b {
+                        False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                        True => LoopEnd(words_of(after, next), False),
+                    }, buffers) {
+                False => loop_run_quiet(run_step, step, buffers, same, parameters, count, exit, next, rest, words_of(after, next)),
+                True => refl,
+            };
+            j(sym(same(before)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => loop_run(run_step, parameters, count, exit, next, rest, words_of(s.values, next), s.buffers),
+                    True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
+                }) = LoopState(match after(1, exit).head_bit() {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }, buffers), ends)
+        },
+    }
+}
+
+// Whether every call a region makes is of a function `among` accepts.
+fn StructuredRegion::calls_among(self region: StructuredRegion, among: Nat → Bool) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_among(among),
+        Compose(prefix, continuation) => prefix.calls_among(among) && continuation.calls_among(among),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_among(among) && when_false.calls_among(among),
+        Lend(_, callee, _, _) => among(callee),
+        Call(callee, _, _) => among(callee),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_among(among),
+    }
+}
+
+fn every_function(f: Nat) → Bool { True }
+fn no_function(f: Nat) → Bool { False }
+
+// The functions numbered below `base`: a program's functions that only
+// read, where the ones that write are numbered after them.
+fn functions_below(base: Nat) → Nat → Bool { λ f => Succ(f).leb(base) }
+
+// Callees that leave every file as it was, asked only of the functions
+// `among` accepts: what a region that stores nothing needs of the functions
+// it calls, in a program where others write.
+fn Writers::Still(call: Writers(), among: Nat → Bool) → Type {
+    (held: Buffers()) → (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(held, f, words).buffers = held
+}
+
+theorem Writers::still_none(call: Writers()): Writers::Still(call, no_function) { λ held f never words => false_elim(never) }
+
+theorem Writers::quiet_still(call: Writers(), quiet: Writers::Quiet(call), among: Nat → Bool): Writers::Still(call, among) {
+    λ held f _ words => quiet(held, f, words)
+}
+
+// Stillness among more functions is stillness among fewer.
+theorem Writers::still_within(call: Writers(), among, wider: Nat → Bool, still: Writers::Still(call, wider),
+    within: (f: Nat) → among(f).IsTrue() → wider(f).IsTrue()): Writers::Still(call, among) {
+    λ held f ok words => still(held, f, within(f, ok), words)
+}
+
+theorem StructuredRegion::calls_among_every(self region: StructuredRegion): region.calls_among(every_function).IsTrue() {
+    match region {
+        Dataflow(_) => trivial,
+        Sequence(_, continuation) => continuation.calls_among_every(),
+        Compose(prefix, continuation) =>
+            Bool::is_true_and_intro(prefix.calls_among(every_function), continuation.calls_among(every_function), prefix.calls_among_every(),
+                continuation.calls_among_every()),
+        Conditional(_, _, _, _, when_true, when_false) =>
+            Bool::is_true_and_intro(when_true.calls_among(every_function), when_false.calls_among(every_function),
+                when_true.calls_among_every(), when_false.calls_among_every()),
+        Lend(_, _, _, _) => trivial,
+        Call(_, _, _) => trivial,
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_among_every(),
+    }
+}
+
+// The theorem: a region that stores nothing, each call it makes over the
+// file answered with `answers`' word and the file as it was, runs as it
+// evaluates over the file, and leaves it. Stillness is asked only of the
+// functions the region calls (`among`): the region of a pure term run
+// beside functions that write (`rt_file_lower`).
+theorem StructuredRegion::run_quiet_among(self region: StructuredRegion, call: Writers(), answers: Answers(), buffers: Buffers(),
+    among: Nat → Bool,
+    still: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers)):
+    region.quiet().IsTrue() → region.calls_among(among).IsTrue() → (values: Valuation()) →
+    region.run(call, values, buffers) = State(region.eval_over(buffers, answers, values), buffers) {
+    match region {
+        Dataflow(body) => λ quiet _ values => run_nodes_quiet(body.nodes, quiet, values, buffers),
+        Sequence(prefix, continuation) => λ quiet fits values => {
+            let parts = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
+            j(sym(run_nodes_quiet(prefix.nodes, parts.left, values, buffers)),
+                λ s _ => continuation.run(call, s.values, s.buffers) =
+                    State(continuation.eval_over(buffers, answers, eval_nodes_over(buffers, prefix.nodes, values)), buffers),
+                continuation.run_quiet_among(call, answers, buffers, among, still, parts.right, fits, eval_nodes_over(buffers, prefix.nodes, values)))
+        },
+        Compose(prefix, continuation) => λ quiet fits values => {
+            let parts = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            let fit = Bool::is_true_and(prefix.calls_among(among), continuation.calls_among(among), fits);
+            j(sym(prefix.run_quiet_among(call, answers, buffers, among, still, parts.left, fit.left, values)),
+                λ s _ => continuation.run(call, s.values, s.buffers) =
+                    State(continuation.eval_over(buffers, answers, prefix.eval_over(buffers, answers, values)), buffers),
+                continuation.run_quiet_among(call, answers, buffers, among, still, parts.right, fit.right, prefix.eval_over(buffers, answers, values)))
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ quiet fits values => {
+            let parts = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            let fit = Bool::is_true_and(when_true.calls_among(among), when_false.calls_among(among), fits);
+            let b = values(1, condition).head_bit();
+            let whole = Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval_over(buffers, answers, values);
+            let same_either: ((match b as λ _ => Buffers() { False => buffers, True => buffers }) = buffers) =
+                match b { False => refl, True => refl };
+            j(sym(when_false.run_quiet_among(call, answers, buffers, among, still, parts.right, fit.right, values)), λ f _ => State(λ w id => match b {
+                        False => f.values(w, id),
+                        True => when_true.run(call, values, buffers).values(w, id),
+                    }, match b { False => f.buffers, True => when_true.run(call, values, buffers).buffers }) = State(whole, buffers),
+                j(sym(when_true.run_quiet_among(call, answers, buffers, among, still, parts.left, fit.left, values)), λ t _ => State(λ w id => match b {
+                            False => when_false.eval_over(buffers, answers, values)(w, id),
+                            True => t.values(w, id),
+                        }, match b { False => buffers, True => t.buffers }) = State(whole, buffers),
+                    cong_fn<Buffers(), State>(λ held => State(whole, held), same_either)))
+        },
+        Lend(_, _, _, _) => λ never _ _ => false_elim(never),
+        Call(callee, arguments, result) => λ _ fits values =>
+            cong_fn<Ending, State>(λ answer => State(Valuation::set(values, result, word_value(answer.word)), answer.buffers),
+                still(callee, fits, words_of(values, arguments))),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet fits values => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, answers, pass);
+            let ended = loop_run_quiet(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step, buffers,
+                λ v => body.run_quiet_among(call, answers, buffers, among, still, quiet, fits, v), parameters, count, exit, next, values(64, bound).toNat(),
+                words_of(values, inputs));
+            cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
+                bit_value(end.end.exhausted)), end.buffers), ended)
+        },
+    }
+}
+
+// With every function still, whatever the region calls.
+theorem StructuredRegion::run_quiet(self region: StructuredRegion, call: Writers(), answers: Answers(), buffers: Buffers(),
+    still: (f: Nat) → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers)):
+    region.quiet().IsTrue() → (values: Valuation()) →
+    region.run(call, values, buffers) = State(region.eval_over(buffers, answers, values), buffers) {
+    λ quiet values => region.run_quiet_among(call, answers, buffers, every_function, λ f _ words => still(f, words), quiet,
+        region.calls_among_every(), values)
+}
+
+theorem Function::run_quiet(self function: Function, call: Writers(), answers: Answers(), buffers: Buffers(),
+    still: (f: Nat) → (words: List<BitVec(64)>) → call(buffers, f, words) = Ending(answers(f, words), buffers),
+    quiet: function.body.quiet().IsTrue(), arguments: List<BitVec(64)>):
+    function.run(call, arguments, buffers) = Ending(function.eval(answers, arguments, buffers := buffers), buffers) {
+    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
+        function.body.run_quiet(call, answers, buffers, still, quiet, Valuation::bind(Valuation::zero(), function.parameters, arguments)))
+}
+
+// The theorem for programs: one whose functions store nothing runs as it
+// evaluates over the file, and leaves it.
+theorem program_run_quiet(functions: List<Function>): program_quiet(functions).IsTrue() → (buffers: Buffers()) → (f: Nat) →
+    (words: List<BitVec(64)>) → program_run(functions, buffers, f, words) = Ending(program_eval_over(buffers, functions)(f, words), buffers) {
+    match functions {
+        Nil => λ _ buffers f words => refl,
+        Cons(last, earlier) => λ quiet buffers f words => {
+            let parts = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            let ih = program_run_quiet(earlier, parts.right, buffers);
+            let below = program_run(earlier);
+            let words_below = program_eval_over(buffers, earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) =
+                Ending(match d { Inl(_) => last.eval(words_below, words, buffers := buffers), Inr(_) => words_below(f, words) }, buffers) {
+                Inl(_) => last.run_quiet(below, words_below, buffers, ih, parts.left, words),
+                Inr(_) => ih(f, words),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop that writes, against a recursion bounded by a measure
+
+// One pass over `file` from the state `words_of(v, parameters)` with
+// `Succ(r)` passes left: leaving, what `finish` makes of the next state and
+// the file the pass left; going round, `later` of them (`loop_pass` with
+// the file carried).
+fn loop_pass_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopState → Ending,
+    later: List<BitVec(64)> → Buffers() → Ending, r: Nat, v: Valuation(), file: Buffers()) → Ending {
+    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), file);
+    match after.values(1, exit).head_bit() {
+        False => later(words_of(after.values, next), after.buffers),
+        True => finish(LoopState(LoopEnd(words_of(after.values, next), False), after.buffers)),
+    }
+}
+
+// What a loop's end is held to: `Good` of it, whatever the passes left,
+// and the recursion `run` where the measure is below them.
+fn LoopAgrees<S>(Good: Ending → Type, measure: List<BitVec(64)> → S → Nat,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending, r: Nat, state: List<BitVec(64)>, s: S,
+    end: Ending) → Type {
+    Good(end) ∧ ((h: Nat::Lt(measure(state, s), Succ(r))) → end = run(r, state, s, h))
+}
+
+// A loop whose passes write agrees with `run`, a recursion bounded by a
+// measure of its state and of what the file holds (`loop_eval_agrees_measured`
+// with the file carried). The files are a family `emb(s)`: the passes are
+// known only over those, and `Good` is what every end satisfies without the
+// measure, which is how a pass that goes round learns that the file the
+// later passes leave is of the family before it knows the measure fell.
+theorem loop_run_agrees_measured<S>(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), finish: LoopState → Ending, emb: S → Buffers(), Good: Ending → Type,
+    measure: List<BitVec(64)> → S → Nat,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending,
+    at_zero: (v: Valuation()) → (s: S) →
+        LoopAgrees<S>(Good, measure, run, 0, words_of(v, parameters), s, finish(LoopState(LoopEnd(words_of(v, parameters), True), emb(s)))),
+    at_pass: (r: Nat) → (v: Valuation()) → (s: S) →
+        ((state: List<BitVec(64)>) → (s2: S) → state.len() = parameters.len() →
+            LoopAgrees<S>(Good, measure, run, r, state, s2, finish(loop_run(step, parameters, count, exit, next, r, state, emb(s2))))) →
+        LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s,
+            loop_pass_run(step, parameters, count, exit, next, finish,
+                λ (state: List<BitVec(64)>) (file: Buffers()) => finish(loop_run(step, parameters, count, exit, next, r, state, file)), r, v, emb(s))),
+    remaining: Nat):
+    (state: List<BitVec(64)>) → (s: S) → state.len() = parameters.len() →
+        LoopAgrees<S>(Good, measure, run, remaining, state, s, finish(loop_run(step, parameters, count, exit, next, remaining, state, emb(s)))) {
+    match remaining {
+        Zero => λ state s fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, 0, st, s, finish(LoopState(LoopEnd(st, True), emb(s)))), at_zero(v, s))
+        },
+        Succ(r) => λ state s fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), emb(s));
+            let following = words_of(after.values, next);
+            let Held = λ (end: Ending) => LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s, end);
+            let earlier = λ (st: List<BitVec(64)>) (s2: S) (st_fits: st.len() = parameters.len()) =>
+                loop_run_agrees_measured<S>(step, parameters, count, exit, next, apart, finish, emb, Good, measure, run, at_zero, at_pass, r, st, s2, st_fits);
+            let at_v = (match after.values(1, exit).head_bit() as λ b =>
+                Held(match b { False => finish(loop_run(step, parameters, count, exit, next, r, following, after.buffers)),
+                    True => finish(LoopState(LoopEnd(following, False), after.buffers)) }) →
+                Held(finish(match b as λ _ => LoopState { False => loop_run(step, parameters, count, exit, next, r, following, after.buffers),
+                    True => LoopState(LoopEnd(following, False), after.buffers) })) {
+                False => λ passed => passed,
+                True => λ passed => passed,
+            })(at_pass(r, v, s, earlier));
+            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, Succ(r), st, s, finish(loop_run(step, parameters, count, exit, next, Succ(r), st, emb(s)))),
+                at_v)
+        },
+    }
+}
+
+// What a function answers when `post` follows the loop: `post` run on the
+// loop's end over the file the loop left, read at `result`
+// (`loop_finish_over` with the file carried). `post` is run once.
+fn loop_finish_run(post: StructuredRegion, call: Writers(), values: Valuation(), outputs: List<Nat>, exhausted, result: Nat) → LoopState → Ending {
+    λ ls => shared(post.run(call, Valuation::set(Valuation::bind(values, outputs, ls.end.state), exhausted, bit_value(ls.end.exhausted)), ls.buffers),
+        λ (end: State) => Ending(end.values(64, result), end.buffers))
+}

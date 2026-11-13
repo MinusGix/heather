@@ -1,0 +1,945 @@
+// FunctionIR's meaning with the file threaded, as a relation
+// (docs/native-one-compiler-design.md §2.6).
+//
+// The relation the function compiler is proved against
+// (`StructuredRegionHoldsOver`, function_ir) reads a file that never
+// changes: a store's equation is `True` there. Here the file is state. A
+// region runs from the file `before` to the file `after`: a store sets one
+// byte (`store_byte`, as `StructuredRegion::run` does), every other node
+// holds at the file it meets and leaves it, a call is answered with a word
+// and the file it leaves (`Effects`), and a loop carries the file from
+// pass to pass.
+//
+// - `StructuredRegionRunsOver(effects, values, region, before, after)`,
+//   `Function::Runs`, `program_effects`: the relation, a function's, and a
+//   program's, each function answering its calls by the functions after
+//   it.
+// - The fixed-file relation embeds: a region with no store that holds
+//   over a file runs from that file to itself, its callees leaving the
+//   file too (`StructuredRegion::runs_quiet`, `Function::runs_quiet`,
+//   `program_effects_quiet`). So what is proved of a program through
+//   `eval` and `Computes` is a statement of this relation.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// What a call does over a file
+
+// `effects(before, f, arguments, result, after)`: function `f`, called on
+// `arguments` over the file `before`, may return `result` and leave the
+// file `after`.
+fn Effects() → Type<1> { Buffers() → Nat → List<BitVec(64)> → BitVec(64) → Buffers() → Type }
+
+fn no_effects() → Effects() { λ _ _ _ _ _ => False }
+
+// Callees that leave the file as it is, answered over it as it is at the
+// call.
+fn Effects::keeping(callees: Buffers() → Callees()) → Effects() {
+    λ before f arguments result after => callees(before)(f, arguments, result) ∧ (after = before)
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+fn Node::stores(self node: Node) → Bool { match node { BufferStore(_, _, _, _) => True, _ => False } }
+
+fn nodes_quiet(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => !node.stores() && nodes_quiet(rest) }
+}
+
+// Whether a node stores into buffer `b`.
+fn Node::stores_to(self node: Node, b: Nat) → Bool { match node { BufferStore(_, buffer, _, _) => buffer.same(b), _ => False } }
+
+fn nodes_store(nodes: List<Node>, b: Nat) → Bool {
+    match nodes { Nil => False, Cons(node, rest) => node.stores_to(b) || nodes_store(rest, b) }
+}
+
+// Nodes with no store store into no buffer.
+theorem nodes_quiet_store(nodes: List<Node>, b: Nat): nodes_quiet(nodes).IsTrue() → nodes_store(nodes, b).IsTrue() → False {
+    match nodes {
+        Nil => λ _ never => never,
+        Cons(node, rest) => λ quiet stores => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            match Bool::is_true_or(node.stores_to(b), nodes_store(rest, b), stores) {
+                Inl(here) => (match node as λ n => (!n.stores()).IsTrue() → n.stores_to(b).IsTrue() → False {
+                    BufferStore(_, _, _, _) => λ no _ => no,
+                    _ => λ _ never => never,
+                })(both.left, here),
+                Inr(later) => nodes_quiet_store(rest, b, both.right, later),
+            }
+        },
+    }
+}
+
+// A node over the file `before`, leaving `after`: a store sets its byte
+// and names the byte then there; any other node holds at `before` and
+// leaves it.
+fn Node::Runs(self node: Node, values: Valuation(), before, after: Buffers()) → Type {
+    match node {
+        BufferStore(output, buffer, index, value) =>
+            (after = store_byte(before, buffer, values(64, index).toNat(), low_byte(values(64, value)))) ∧
+                (values(64, output) = byte_word(buffer_byte(after, buffer, values(64, index).toNat()))),
+        _ => NodeHolds(values, node, buffers := before) ∧ (after = before),
+    }
+}
+
+fn NodesRun(nodes: List<Node>, values: Valuation(), before, after: Buffers()) → Type {
+    match nodes {
+        Nil => after = before,
+        Cons(node, rest) => Exists<Buffers()>(λ mid => node.Runs(values, before, mid) ∧ NodesRun(rest, values, mid, after)),
+    }
+}
+
+// A node that is no store runs from a file to itself where it holds.
+theorem Node::runs_quiet(self node: Node, values: Valuation(), file: Buffers()):
+    (!node.stores()).IsTrue() → NodeHolds(values, node, buffers := file) → node.Runs(values, file, file) {
+    match node {
+        BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        _ => λ _ holds => ⟨holds, refl⟩,
+    }
+}
+
+theorem nodes_run_quiet(values: Valuation(), file: Buffers(), nodes: List<Node>):
+    nodes_quiet(nodes).IsTrue() → NodesHoldOver(file, values, nodes) → NodesRun(nodes, values, file, file) {
+    match nodes {
+        Nil => λ _ _ => refl,
+        Cons(node, rest) => λ quiet holds => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            Exists(file, ⟨node.runs_quiet(values, file, both.left, holds.left), nodes_run_quiet(values, file, rest, both.right, holds.right)⟩)
+        },
+    }
+}
+
+// And only so: it leaves the file, and holds over it.
+theorem Node::runs_still(self node: Node, values: Valuation(), before, after: Buffers()):
+    (!node.stores()).IsTrue() → node.Runs(values, before, after) → (after = before) ∧ NodeHolds(values, node, buffers := before) {
+    match node {
+        BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        _ => λ _ ran => ⟨ran.right, ran.left⟩,
+    }
+}
+
+theorem nodes_run_still(values: Valuation(), nodes: List<Node>): (before, after: Buffers()) → nodes_quiet(nodes).IsTrue() →
+    NodesRun(nodes, values, before, after) → (after = before) ∧ NodesHoldOver(before, values, nodes) {
+    match nodes {
+        Nil => λ before after _ ran => ⟨ran, trivial⟩,
+        Cons(node, rest) => λ before after quiet ran => {
+            let both = Bool::is_true_and(!node.stores(), nodes_quiet(rest), quiet);
+            let mid = ran.witness;
+            let here = node.runs_still(values, before, mid, both.left, ran.proof.left);
+            let later = nodes_run_still(values, rest, mid, after, both.right, ran.proof.right);
+            ⟨trans(later.left, here.left), ⟨here.right, j(here.left, λ m _ => NodesHoldOver(m, values, rest), later.right)⟩⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// `LoopRuns` with the file carried from pass to pass: each pass runs from
+// the file the one before left.
+fn LoopRunsOver(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat) →
+    List<BitVec(64)> → List<BitVec(64)> → Bool → Buffers() → Buffers() → Type {
+    match remaining {
+        Zero => λ state final exhausted before after => (final = state) ∧ ((exhausted = True) ∧ (after = before)),
+        Succ(rest) => λ state final exhausted before after => Exists<Valuation()>(λ values => Exists<Buffers()>(λ mid =>
+            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(Succ(rest))) ∧ (pass(values, before, mid) ∧
+                match values(1, exit).head_bit() {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                })))),
+    }
+}
+
+// Passes that leave a file make a loop that does.
+theorem loop_runs_over_quiet(pass: Valuation() → Type, over: Valuation() → Buffers() → Buffers() → Type, file: Buffers(),
+    lifts: (values: Valuation()) → pass(values) → over(values, file, file), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → LoopRuns(pass, parameters, count, exit, next, remaining, state, final, exhausted) →
+    LoopRunsOver(over, parameters, count, exit, next, remaining, state, final, exhausted, file, file) {
+    match remaining {
+        Zero => λ state final exhausted ran => ⟨ran.left, ⟨ran.right, refl⟩⟩,
+        Succ(rest) => λ state final exhausted ran => {
+            let values = ran.witness;
+            Exists(values, Exists(file, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨lifts(values, ran.proof.right.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
+                        True => (final = words_of(values, next)) ∧ (exhausted = False),
+                    }) →
+                    (match b {
+                        False => LoopRunsOver(over, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, file, file),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (file = file)),
+                    }) {
+                    False => λ later => loop_runs_over_quiet(pass, over, file, lifts, parameters, count, exit, next, rest,
+                        words_of(values, next), final, exhausted, later),
+                    True => λ done => ⟨done.left, ⟨done.right, refl⟩⟩,
+                })(ran.proof.right.right.right)⟩⟩⟩))
+        },
+    }
+}
+
+// Runs whose passes satisfy a weaker condition.
+theorem loop_runs_over_weaken(pass, weaker: Valuation() → Buffers() → Buffers() → Type,
+    implies: (values: Valuation()) → (before, after: Buffers()) → pass(values, before, after) → weaker(values, before, after),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(weaker, parameters, count, exit, next, remaining, state, final, exhausted, before, after) {
+    match remaining {
+        Zero => λ state final exhausted before after ran => ran,
+        Succ(rest) => λ state final exhausted before after ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            Exists(values, Exists(mid, ⟨held.left, ⟨held.right.left, ⟨implies(values, before, mid, held.right.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                    }) →
+                    (match b {
+                        False => LoopRunsOver(weaker, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                        True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                    }) {
+                    False => λ later => loop_runs_over_weaken(pass, weaker, implies, parameters, count, exit, next, rest,
+                        words_of(values, next), final, exhausted, mid, after, later),
+                    True => λ done => done,
+                })(held.right.right.right)⟩⟩⟩))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// A structured region's equations with the file threaded, its calls
+// answered by `effects`.
+fn StructuredRegionRunsOver(effects: Effects(), values: Valuation(), region: StructuredRegion, before, after: Buffers()) → Type {
+    match region {
+        Dataflow(body) => NodesRun(body.nodes, values, before, after),
+        Sequence(prefix, continuation) => Exists<Buffers()>(λ mid =>
+            NodesRun(prefix.nodes, values, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)),
+        Compose(prefix, continuation) => Exists<Buffers()>(λ mid =>
+            StructuredRegionRunsOver(effects, values, prefix, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)),
+        Conditional(_, condition, _, _, when_true, when_false) =>
+            match values(1, condition).head_bit() {
+                False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+            },
+        // The callee's effect is from the windows to what it left of them, and
+        // the file after is the file with the written windows put back.
+        Lend(views, callee, arguments, result) => Exists<Buffers()>(λ mid => NodesRun(views_nodes(views), values, before, mid) ∧
+            Exists<Buffers()>(λ left => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), values(64, result), left) ∧
+                (after = put_views(views, values, left, mid)))),
+        Call(callee, arguments, result) => effects(before, callee, words_of(values, arguments), values(64, result), after),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
+                values(1, exhausted).head_bit(), before, after),
+    }
+}
+
+// Whether a call over `views` may leave buffer `b` changed: a written view
+// of it is put back.
+fn views_store(views: List<View>, b: Nat) → Bool {
+    match views { Nil => False, Cons(view, rest) => (view.written && view.buffer.same(b)) || views_store(rest, b) }
+}
+
+// Whether a region stores into no buffer itself. What it calls is the
+// program's to say (`program_quiet`).
+fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_quiet(body.nodes),
+        Sequence(prefix, continuation) => nodes_quiet(prefix.nodes) && continuation.quiet(),
+        Compose(prefix, continuation) => prefix.quiet() && continuation.quiet(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.quiet() && when_false.quiet(),
+        // A call over views is taken for one that stores: what it puts back is
+        // the callee's to say.
+        Lend(_, _, _, _) => False,
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+    }
+}
+
+// Whether a region stores into buffer `b` itself.
+fn StructuredRegion::stores(self region: StructuredRegion, b: Nat) → Bool {
+    match region {
+        Dataflow(body) => nodes_store(body.nodes, b),
+        Sequence(prefix, continuation) => nodes_store(prefix.nodes, b) || continuation.stores(b),
+        Compose(prefix, continuation) => prefix.stores(b) || continuation.stores(b),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.stores(b) || when_false.stores(b),
+        Lend(views, _, _, _) => views_store(views, b),
+        Call(_, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores(b),
+    }
+}
+
+theorem StructuredRegion::quiet_stores(self region: StructuredRegion, b: Nat): region.quiet().IsTrue() → region.stores(b).IsTrue() → False {
+    match region {
+        Dataflow(body) => nodes_quiet_store(body.nodes, b),
+        Sequence(prefix, continuation) => λ quiet stores => {
+            let both = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
+            match Bool::is_true_or(nodes_store(prefix.nodes, b), continuation.stores(b), stores) {
+                Inl(first) => nodes_quiet_store(prefix.nodes, b, both.left, first),
+                Inr(second) => continuation.quiet_stores(b, both.right, second),
+            }
+        },
+        Compose(prefix, continuation) => λ quiet stores => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            match Bool::is_true_or(prefix.stores(b), continuation.stores(b), stores) {
+                Inl(first) => prefix.quiet_stores(b, both.left, first),
+                Inr(second) => continuation.quiet_stores(b, both.right, second),
+            }
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ quiet stores => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match Bool::is_true_or(when_true.stores(b), when_false.stores(b), stores) {
+                Inl(first) => when_true.quiet_stores(b, both.left, first),
+                Inr(second) => when_false.quiet_stores(b, both.right, second),
+            }
+        },
+        Lend(_, _, _, _) => λ never _ => never,
+        Call(_, _, _) => λ _ never => never,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet_stores(b),
+    }
+}
+
+// The fixed-file relation embeds: a region with no store that holds over
+// a file runs from that file to itself, where its callees leave the file.
+theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buffers() → Callees(), file: Buffers()):
+    region.quiet().IsTrue() → (values: Valuation()) → StructuredRegionHoldsOver(file, callees(file), values, region) →
+    StructuredRegionRunsOver(Effects::keeping(callees), values, region, file, file) {
+    match region {
+        Dataflow(body) => λ quiet values holds => nodes_run_quiet(values, file, body.nodes, quiet, holds),
+        Sequence(prefix, continuation) => λ quiet values holds => {
+            let both = Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet);
+            Exists(file, ⟨nodes_run_quiet(values, file, prefix.nodes, both.left, holds.left),
+                continuation.runs_quiet(callees, file, both.right, values, holds.right)⟩)
+        },
+        Compose(prefix, continuation) => λ quiet values holds => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Exists(file, ⟨prefix.runs_quiet(callees, file, both.left, values, holds.left),
+                continuation.runs_quiet(callees, file, both.right, values, holds.right)⟩)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ quiet values => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match values(1, condition).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionHoldsOver(file, callees(file), values, when_false),
+                    True => StructuredRegionHoldsOver(file, callees(file), values, when_true),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(Effects::keeping(callees), values, when_false, file, file),
+                    True => StructuredRegionRunsOver(Effects::keeping(callees), values, when_true, file, file),
+                }) {
+                False => λ holds => when_false.runs_quiet(callees, file, both.right, values, holds),
+                True => λ holds => when_true.runs_quiet(callees, file, both.left, values, holds),
+            }
+        },
+        Lend(_, _, _, _) => λ never _ _ => false_elim(never),
+        Call(_, _, _) => λ _ values holds => ⟨holds, refl⟩,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet values =>
+            loop_runs_over_quiet(λ (pass: Valuation()) => StructuredRegionHoldsOver(file, callees(file), pass, body),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(Effects::keeping(callees), pass, body, from, to),
+                file, λ pass held => body.runs_quiet(callees, file, quiet, pass, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit()),
+    }
+}
+
+// A region runs under any effects its own imply.
+theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after)):
+    (values: Valuation()) → (before, after: Buffers()) → StructuredRegionRunsOver(effects, values, region, before, after) →
+    StructuredRegionRunsOver(weaker, values, region, before, after) {
+    match region {
+        Dataflow(_) => λ values before after ran => ran,
+        Sequence(_, continuation) => λ values before after ran =>
+            Exists(ran.witness, ⟨ran.proof.left, continuation.runs_weaken(effects, weaker, implies, values, ran.witness, after, ran.proof.right)⟩),
+        Compose(prefix, continuation) => λ values before after ran =>
+            Exists(ran.witness, ⟨prefix.runs_weaken(effects, weaker, implies, values, before, ran.witness, ran.proof.left),
+                continuation.runs_weaken(effects, weaker, implies, values, ran.witness, after, ran.proof.right)⟩),
+        Conditional(_, condition, _, _, when_true, when_false) => λ values before after =>
+            match values(1, condition).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(weaker, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(weaker, values, when_true, before, after),
+                }) {
+                False => λ ran => when_false.runs_weaken(effects, weaker, implies, values, before, after, ran),
+                True => λ ran => when_true.runs_weaken(effects, weaker, implies, values, before, after, ran),
+            },
+        Lend(views, callee, arguments, result) => λ values before after ran =>
+            Exists(ran.witness, ⟨ran.proof.left, Exists(ran.proof.right.witness,
+                ⟨implies(viewed(views, values, ran.witness), callee, words_of(values, views_homes(views) ++ arguments), values(64, result),
+                    ran.proof.right.witness, ran.proof.right.proof.left), ran.proof.right.proof.right⟩)⟩),
+        Call(callee, arguments, result) => λ values before after ran =>
+            implies(before, callee, words_of(values, arguments), values(64, result), after, ran),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values before after =>
+            loop_runs_over_weaken(
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
+                λ pass from to held => body.runs_weaken(effects, weaker, implies, pass, from, to, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit(), before, after),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// Called on `arguments` over the file `before`, the function may return
+// `result` and leave `after`.
+fn Function::Runs(self function: Function, effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) → Type {
+    Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧
+        (StructuredRegionRunsOver(effects, values, function.body, before, after) ∧ values(64, function.result) = result))
+}
+
+// What the functions of a program do, each answering its calls by the
+// functions after it, over the one file (`program_callees_over` with the
+// file threaded).
+fn program_effects(functions: List<Function>) → Effects() {
+    match functions {
+        Nil => no_effects(),
+        Cons(last, earlier) => λ before f arguments result after => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+            Inr(_) => program_effects(earlier)(before, f, arguments, result, after),
+        },
+    }
+}
+
+// No function of the program stores into a buffer.
+fn program_quiet(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.quiet() && program_quiet(earlier) }
+}
+
+// `program_quiet` a function at a time, each its own declaration, as
+// `program_scan_at_drop` proves a program evaluable: the kernel's fuel is
+// per declaration, so a certificate built this way pays for its largest
+// function and not for the sum of them (the scanner's loop is linked with
+// the whole automaton, which no one evaluation walks).
+fn program_quiet_head(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, _) => last.body.quiet() }
+}
+
+theorem program_quiet_drop_zero(functions: List<Function>): program_quiet(functions.drop(0)).IsTrue() → program_quiet(functions).IsTrue() {
+    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
+theorem program_quiet_drop(functions: List<Function>): (n: Nat) → program_quiet_head(functions.drop(n)).IsTrue() →
+    program_quiet(functions.drop(Succ(n))).IsTrue() → program_quiet(functions.drop(n)).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ n => match n as λ i => program_quiet_head(Cons(last, earlier).drop(i)).IsTrue() →
+            program_quiet(Cons(last, earlier).drop(Succ(i))).IsTrue() → program_quiet(Cons(last, earlier).drop(i)).IsTrue() {
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.quiet(), program_quiet(earlier), head, program_quiet_drop_zero(earlier, rest)),
+            Succ(k) => λ head rest => program_quiet_drop(earlier, k, head, rest),
+        },
+    }
+}
+
+// Whether some function of the program stores into buffer `b`: a callee
+// is handed its caller's buffers under their numbers, so the buffers a
+// program may write are the ones its functions store into.
+fn program_stores(functions: List<Function>, b: Nat) → Bool {
+    match functions { Nil => False, Cons(last, earlier) => last.body.stores(b) || program_stores(earlier, b) }
+}
+
+theorem program_quiet_stores(functions: List<Function>, b: Nat): program_quiet(functions).IsTrue() → program_stores(functions, b).IsTrue() → False {
+    match functions {
+        Nil => λ _ never => never,
+        Cons(last, earlier) => λ quiet stores => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            match Bool::is_true_or(last.body.stores(b), program_stores(earlier, b), stores) {
+                Inl(here) => last.body.quiet_stores(b, both.left, here),
+                Inr(below) => program_quiet_stores(earlier, b, both.right, below),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Which buffers a program stores into, as data
+//
+// `program_stores(functions, b)` answers for one buffer. A caller that
+// lends a program its buffers states which of them may be written before
+// it knows `b` (`Lending.written`), so the claim it needs is over every
+// buffer: each store of the program is into a buffer `marks` marks. That
+// is one walk of each function, checked by evaluation a function at a
+// time as `program_quiet` is, and `program_quiet` is the case of no marks.
+
+// Buffer `b` is marked: `marks` has `True` at `b`.
+fn marked(marks: List<Bool>, b: Nat) → Bool { match marks.nth(b) { None => False, Some(mark) => mark } }
+
+fn Node::stores_within(self node: Node, marks: List<Bool>) → Bool {
+    match node { BufferStore(_, buffer, _, _) => marked(marks, buffer), _ => True }
+}
+
+fn nodes_store_within(nodes: List<Node>, marks: List<Bool>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.stores_within(marks) && nodes_store_within(rest, marks) }
+}
+
+theorem Node::stores_marked(self node: Node, marks: List<Bool>, b: Nat): node.stores_within(marks).IsTrue() → node.stores_to(b).IsTrue() →
+    marked(marks, b).IsTrue() {
+    match node as λ n => n.stores_within(marks).IsTrue() → n.stores_to(b).IsTrue() → marked(marks, b).IsTrue() {
+        BufferStore(_, buffer, _, _) => λ within here =>
+            j(buffer.same_sound(b, eq_true_of_is_true(buffer.same(b), here)), λ x _ => marked(marks, x).IsTrue(), within),
+        _ => λ _ never => false_elim(never),
+    }
+}
+
+theorem nodes_store_marked(nodes: List<Node>, marks: List<Bool>, b: Nat): nodes_store_within(nodes, marks).IsTrue() →
+    nodes_store(nodes, b).IsTrue() → marked(marks, b).IsTrue() {
+    match nodes {
+        Nil => λ _ never => false_elim(never),
+        Cons(node, rest) => λ within stores => {
+            let both = Bool::is_true_and(node.stores_within(marks), nodes_store_within(rest, marks), within);
+            match Bool::is_true_or(node.stores_to(b), nodes_store(rest, b), stores) {
+                Inl(here) => node.stores_marked(marks, b, both.left, here),
+                Inr(later) => nodes_store_marked(rest, marks, b, both.right, later),
+            }
+        },
+    }
+}
+
+// Every written view is of a marked buffer.
+fn views_within(views: List<View>, marks: List<Bool>) → Bool {
+    match views { Nil => True, Cons(view, rest) => (view.written.not() || marked(marks, view.buffer)) && views_within(rest, marks) }
+}
+
+theorem views_store_marked(views: List<View>, marks: List<Bool>, b: Nat): views_within(views, marks).IsTrue() → views_store(views, b).IsTrue() →
+    marked(marks, b).IsTrue() {
+    match views {
+        Nil => λ _ never => false_elim(never),
+        Cons(view, rest) => λ within stores => {
+            let both = Bool::is_true_and(view.written.not() || marked(marks, view.buffer), views_within(rest, marks), within);
+            match Bool::is_true_or(view.written && view.buffer.same(b), views_store(rest, b), stores) {
+                Inl(here) => {
+                    let parts = Bool::is_true_and(view.written, view.buffer.same(b), here);
+                    match Bool::is_true_or(view.written.not(), marked(marks, view.buffer), both.left) {
+                        Inl(unwritten) => false_elim(view.written.is_true_not(unwritten, parts.left)),
+                        Inr(is_marked) => j(view.buffer.same_sound(b, eq_true_of_is_true(view.buffer.same(b), parts.right)),
+                            λ x _ => marked(marks, x).IsTrue(), is_marked),
+                    }
+                },
+                Inr(later) => views_store_marked(rest, marks, b, both.right, later),
+            }
+        },
+    }
+}
+
+// Every store the region makes itself is into a marked buffer.
+fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bool>) → Bool {
+    match region {
+        Dataflow(body) => nodes_store_within(body.nodes, marks),
+        Sequence(prefix, continuation) => nodes_store_within(prefix.nodes, marks) && continuation.stores_within(marks),
+        Compose(prefix, continuation) => prefix.stores_within(marks) && continuation.stores_within(marks),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.stores_within(marks) && when_false.stores_within(marks),
+        Lend(views, _, _, _) => views_within(views, marks),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores_within(marks),
+    }
+}
+
+theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: List<Bool>, b: Nat): region.stores_within(marks).IsTrue() →
+    region.stores(b).IsTrue() → marked(marks, b).IsTrue() {
+    match region {
+        Dataflow(body) => nodes_store_marked(body.nodes, marks, b),
+        Sequence(prefix, continuation) => λ within stores => {
+            let both = Bool::is_true_and(nodes_store_within(prefix.nodes, marks), continuation.stores_within(marks), within);
+            match Bool::is_true_or(nodes_store(prefix.nodes, b), continuation.stores(b), stores) {
+                Inl(first) => nodes_store_marked(prefix.nodes, marks, b, both.left, first),
+                Inr(second) => continuation.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Compose(prefix, continuation) => λ within stores => {
+            let both = Bool::is_true_and(prefix.stores_within(marks), continuation.stores_within(marks), within);
+            match Bool::is_true_or(prefix.stores(b), continuation.stores(b), stores) {
+                Inl(first) => prefix.stores_marked(marks, b, both.left, first),
+                Inr(second) => continuation.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ within stores => {
+            let both = Bool::is_true_and(when_true.stores_within(marks), when_false.stores_within(marks), within);
+            match Bool::is_true_or(when_true.stores(b), when_false.stores(b), stores) {
+                Inl(first) => when_true.stores_marked(marks, b, both.left, first),
+                Inr(second) => when_false.stores_marked(marks, b, both.right, second),
+            }
+        },
+        Lend(views, _, _, _) => views_store_marked(views, marks, b),
+        Call(_, _, _) => λ _ never => false_elim(never),
+        Loop(_, _, _, _, body, _, _, _, _) => body.stores_marked(marks, b),
+    }
+}
+
+// Whether a region makes no call over views.
+fn StructuredRegion::lendless(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.lendless(),
+        Compose(prefix, continuation) => prefix.lendless() && continuation.lendless(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.lendless() && when_false.lendless(),
+        Lend(_, _, _, _) => False,
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.lendless(),
+    }
+}
+
+fn program_lendless(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.lendless() && program_lendless(earlier) }
+}
+
+// A region that stores into no buffer makes no call over views: such a
+// call is taken for one that stores.
+theorem StructuredRegion::quiet_lendless(self region: StructuredRegion): region.quiet().IsTrue() → region.lendless().IsTrue() {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(prefix, continuation) => λ quiet =>
+            continuation.quiet_lendless(Bool::is_true_and(nodes_quiet(prefix.nodes), continuation.quiet(), quiet).right),
+        Compose(prefix, continuation) => λ quiet => {
+            let both = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.lendless(), continuation.lendless(), prefix.quiet_lendless(both.left),
+                continuation.quiet_lendless(both.right))
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ quiet => {
+            let both = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            Bool::is_true_and_intro(when_true.lendless(), when_false.lendless(), when_true.quiet_lendless(both.left),
+                when_false.quiet_lendless(both.right))
+        },
+        Lend(_, _, _, _) => λ never => never,
+        Call(_, _, _) => λ _ => trivial,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet_lendless(),
+    }
+}
+
+theorem program_quiet_lendless(functions: List<Function>): program_quiet(functions).IsTrue() → program_lendless(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ quiet => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier), last.body.quiet_lendless(both.left),
+                program_quiet_lendless(earlier, both.right))
+        },
+    }
+}
+
+// Every store of every function of the program is into a marked buffer,
+// and no function calls over views: one list of marks for a program says
+// what every function needs written by its own buffers' numbers, and the
+// callee of a call over views numbers its views, not its caller's buffers.
+// A program that lends views is stated with marks for each function
+// (`program_marked`).
+fn program_stores_within(functions: List<Function>, marks: List<Bool>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (last.body.stores_within(marks) && last.body.lendless()) && program_stores_within(earlier, marks),
+    }
+}
+
+// A function at a time, as `program_quiet_drop`.
+fn program_stores_within_head(functions: List<Function>, marks: List<Bool>) → Bool {
+    match functions { Nil => True, Cons(last, _) => last.body.stores_within(marks) && last.body.lendless() }
+}
+
+theorem program_stores_within_drop_zero(functions: List<Function>, marks: List<Bool>):
+    program_stores_within(functions.drop(0), marks).IsTrue() → program_stores_within(functions, marks).IsTrue() {
+    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
+theorem program_stores_within_drop(functions: List<Function>, marks: List<Bool>): (n: Nat) →
+    program_stores_within_head(functions.drop(n), marks).IsTrue() → program_stores_within(functions.drop(Succ(n)), marks).IsTrue() →
+    program_stores_within(functions.drop(n), marks).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ n => match n as λ i => program_stores_within_head(Cons(last, earlier).drop(i), marks).IsTrue() →
+            program_stores_within(Cons(last, earlier).drop(Succ(i)), marks).IsTrue() →
+            program_stores_within(Cons(last, earlier).drop(i), marks).IsTrue() {
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.stores_within(marks) && last.body.lendless(),
+                program_stores_within(earlier, marks), head, program_stores_within_drop_zero(earlier, marks, rest)),
+            Succ(k) => λ head rest => program_stores_within_drop(earlier, marks, k, head, rest),
+        },
+    }
+}
+
+// Which of the buffers from `at` to below `at + count` the program stores
+// into, as numbers a tool reads (`compile-x86`, for an export's marks): a
+// one for a buffer it stores into.
+fn program_marks(functions: List<Function>, at, count: Nat) → List<Nat> {
+    match count {
+        Zero => [],
+        Succ(k) => Cons(match program_stores(functions, at) { True => 1, False => 0 }, program_marks(functions, Succ(at), k)),
+    }
+}
+
+// What a lender needs: a buffer the program stores into is a marked one.
+theorem program_stores_marked(functions: List<Function>, marks: List<Bool>, b: Nat): program_stores_within(functions, marks).IsTrue() →
+    program_stores(functions, b).IsTrue() → marked(marks, b) = True {
+    match functions {
+        Nil => λ _ never => false_elim(never),
+        Cons(last, earlier) => λ within stores => {
+            let both = Bool::is_true_and(last.body.stores_within(marks) && last.body.lendless(), program_stores_within(earlier, marks), within);
+            let here_within = Bool::is_true_and(last.body.stores_within(marks), last.body.lendless(), both.left).left;
+            match Bool::is_true_or(last.body.stores(b), program_stores(earlier, b), stores) {
+                Inl(here) => eq_true_of_is_true(marked(marks, b), last.body.stores_marked(marks, b, here_within, here)),
+                Inr(below) => program_stores_marked(earlier, marks, b, both.right, below),
+            }
+        },
+    }
+}
+
+theorem program_stores_within_lendless(functions: List<Function>, marks: List<Bool>): program_stores_within(functions, marks).IsTrue() →
+    program_lendless(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ within => {
+            let both = Bool::is_true_and(last.body.stores_within(marks) && last.body.lendless(), program_stores_within(earlier, marks), within);
+            Bool::is_true_and_intro(last.body.lendless(), program_lendless(earlier),
+                Bool::is_true_and(last.body.stores_within(marks), last.body.lendless(), both.left).right,
+                program_stores_within_lendless(earlier, marks, both.right))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What each function needs written
+//
+// `program_stores` answers for the whole program, which is enough while a
+// callee's buffers are its caller's: a call passes its caller's buffers on
+// by number. A call over views gives its callee windows numbered from
+// zero, so what the callee stores into says nothing of its caller's
+// buffers. `needs(f, b)` says of each function which of its own buffers it
+// needs lent to write: those it stores into (a written view's buffer among
+// them) and those the functions it calls need. At a call over views the
+// callee's needs are met by the views, each lent to write where the callee
+// needs it so (docs/native-library-exports-design.md §3.1).
+
+// The views as marks: which are lent to write.
+fn views_marks(views: List<View>) → List<Bool> {
+    match views { Nil => [], Cons(view, rest) => Cons(view.written, views_marks(rest)) }
+}
+
+// What a region's calls ask, given what each function needs: a call, that
+// `written` lets be written what its callee needs; a call over views, that
+// the views do.
+fn StructuredRegion::Asks(self region: StructuredRegion, needs: Nat → Nat → Bool, written: Nat → Bool) → Type {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.Asks(needs, written),
+        Compose(prefix, continuation) => prefix.Asks(needs, written) ∧ continuation.Asks(needs, written),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.Asks(needs, written) ∧ when_false.Asks(needs, written),
+        Lend(views, callee, _, _) => (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
+        Call(callee, _, _) => (b: Nat) → needs(callee, b).IsTrue() → written(b) = True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.Asks(needs, written),
+    }
+}
+
+// What is asked of `mine` is met by whatever lets `mine` be written.
+theorem StructuredRegion::asks_within(self region: StructuredRegion, needs: Nat → Nat → Bool, mine, written: Nat → Bool,
+    covers: (b: Nat) → mine(b).IsTrue() → written(b) = True): region.Asks(needs, mine) → region.Asks(needs, written) {
+    match region {
+        Dataflow(_) => λ asks => asks,
+        Sequence(_, continuation) => continuation.asks_within(needs, mine, written, covers),
+        Compose(prefix, continuation) => λ asks => ⟨prefix.asks_within(needs, mine, written, covers, asks.left),
+            continuation.asks_within(needs, mine, written, covers, asks.right)⟩,
+        Conditional(_, _, _, _, when_true, when_false) => λ asks => ⟨when_true.asks_within(needs, mine, written, covers, asks.left),
+            when_false.asks_within(needs, mine, written, covers, asks.right)⟩,
+        Lend(_, _, _, _) => λ asks => asks,
+        Call(callee, _, _) => λ asks b need => covers(b, Bool::is_true_of_eq(asks(b, need))),
+        Loop(_, _, _, _, body, _, _, _, _) => body.asks_within(needs, mine, written, covers),
+    }
+}
+
+// `needs` is right for a program: each function needs what it stores
+// into, and what its calls ask.
+fn ProgramNeeds(functions: List<Function>, needs: Nat → Nat → Bool) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (((b: Nat) → last.body.stores(b).IsTrue() → needs(earlier.len(), b) = True) ∧
+            last.body.Asks(needs, λ (b: Nat) => needs(earlier.len(), b))) ∧ ProgramNeeds(earlier, needs),
+    }
+}
+
+// With no call over views, one answer for every function is right where
+// it covers the program's stores: a callee needs what its caller does.
+theorem StructuredRegion::lendless_asks(self region: StructuredRegion, all: Nat → Bool): region.lendless().IsTrue() →
+    region.Asks(λ (_: Nat) (b: Nat) => all(b), λ (b: Nat) => all(b)) {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => continuation.lendless_asks(all),
+        Compose(prefix, continuation) => λ lendless => {
+            let both = Bool::is_true_and(prefix.lendless(), continuation.lendless(), lendless);
+            ⟨prefix.lendless_asks(all, both.left), continuation.lendless_asks(all, both.right)⟩
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ lendless => {
+            let both = Bool::is_true_and(when_true.lendless(), when_false.lendless(), lendless);
+            ⟨when_true.lendless_asks(all, both.left), when_false.lendless_asks(all, both.right)⟩
+        },
+        Lend(_, _, _, _) => λ never => false_elim(never),
+        Call(_, _, _) => λ _ b need => eq_true_of_is_true(all(b), need),
+        Loop(_, _, _, _, body, _, _, _, _) => body.lendless_asks(all),
+    }
+}
+
+theorem program_needs_all(functions: List<Function>, all: Nat → Bool): program_lendless(functions).IsTrue() →
+    ((b: Nat) → program_stores(functions, b).IsTrue() → all(b) = True) → ProgramNeeds(functions, λ (_: Nat) (b: Nat) => all(b)) {
+    match functions {
+        Nil => λ _ _ => trivial,
+        Cons(last, earlier) => λ lendless covers => {
+            let both = Bool::is_true_and(last.body.lendless(), program_lendless(earlier), lendless);
+            ⟨⟨λ b stores => covers(b, Bool::is_true_or_l(last.body.stores(b), program_stores(earlier, b), stores)),
+              last.body.lendless_asks(all, both.left)⟩,
+             program_needs_all(earlier, all, both.right,
+                λ b stores => covers(b, Bool::is_true_or_r(last.body.stores(b), program_stores(earlier, b), stores)))⟩
+        },
+    }
+}
+
+// As data: row `f` of `tables` marks the buffers function `f` needs
+// written. Rows are in the order of the program's counts, a function's
+// index its row's.
+fn marks_row(tables: List<List<Bool>>, f: Nat) → List<Bool> { match tables.nth(f) { None => [], Some(marks) => marks } }
+
+// Every mark of `need` is one of `have`.
+fn marks_within(need, have: List<Bool>) → Bool {
+    match need {
+        Nil => True,
+        Cons(mark, rest) => match have {
+            Nil => mark.not() && marks_within(rest, []),
+            Cons(held, others) => (mark.not() || held) && marks_within(rest, others),
+        },
+    }
+}
+
+theorem marks_within_marked(need: List<Bool>): (have: List<Bool>) → (b: Nat) → marks_within(need, have).IsTrue() →
+    marked(need, b).IsTrue() → marked(have, b) = True {
+    match need {
+        Nil => λ have b _ never => false_elim(never),
+        Cons(mark, rest) => λ have b => match have {
+            Nil => match b {
+                Zero => λ within here => false_elim(mark.is_true_not(Bool::is_true_and(mark.not(), marks_within(rest, []), within).left, here)),
+                Succ(k) => λ within later => marks_within_marked(rest, [], k,
+                    Bool::is_true_and(mark.not(), marks_within(rest, []), within).right, later),
+            },
+            Cons(held, others) => match b {
+                Zero => λ within here =>
+                    match Bool::is_true_or(mark.not(), held, Bool::is_true_and(mark.not() || held, marks_within(rest, others), within).left) {
+                        Inl(unmarked) => false_elim(mark.is_true_not(unmarked, here)),
+                        Inr(holds) => eq_true_of_is_true(held, holds),
+                    },
+                Succ(k) => λ within later => marks_within_marked(rest, others, k,
+                    Bool::is_true_and(mark.not() || held, marks_within(rest, others), within).right, later),
+            },
+        },
+    }
+}
+
+// A region's calls ask no more than `mine`: a callee's row is within it,
+// and at a call over views within the views lent to write.
+fn StructuredRegion::calls_within(self region: StructuredRegion, tables: List<List<Bool>>, mine: List<Bool>) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_within(tables, mine),
+        Compose(prefix, continuation) => prefix.calls_within(tables, mine) && continuation.calls_within(tables, mine),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_within(tables, mine) && when_false.calls_within(tables, mine),
+        Lend(views, callee, _, _) => marks_within(marks_row(tables, callee), views_marks(views)),
+        Call(callee, _, _) => marks_within(marks_row(tables, callee), mine),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_within(tables, mine),
+    }
+}
+
+theorem StructuredRegion::calls_within_asks(self region: StructuredRegion, tables: List<List<Bool>>, mine: List<Bool>):
+    region.calls_within(tables, mine).IsTrue() →
+    region.Asks(λ (f: Nat) (b: Nat) => marked(marks_row(tables, f), b), λ (b: Nat) => marked(mine, b)) {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => continuation.calls_within_asks(tables, mine),
+        Compose(prefix, continuation) => λ within => {
+            let both = Bool::is_true_and(prefix.calls_within(tables, mine), continuation.calls_within(tables, mine), within);
+            ⟨prefix.calls_within_asks(tables, mine, both.left), continuation.calls_within_asks(tables, mine, both.right)⟩
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ within => {
+            let both = Bool::is_true_and(when_true.calls_within(tables, mine), when_false.calls_within(tables, mine), within);
+            ⟨when_true.calls_within_asks(tables, mine, both.left), when_false.calls_within_asks(tables, mine, both.right)⟩
+        },
+        Lend(views, callee, _, _) => λ within v need => marks_within_marked(marks_row(tables, callee), views_marks(views), v, within, need),
+        Call(callee, _, _) => λ within b need => marks_within_marked(marks_row(tables, callee), mine, b, within, need),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_within_asks(tables, mine),
+    }
+}
+
+// The rows are right for the program: each function's stores and what its
+// calls ask are within its row. By evaluation, as `program_stores_within`.
+fn program_marked(functions: List<Function>, tables: List<List<Bool>>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (last.body.stores_within(marks_row(tables, earlier.len())) &&
+            last.body.calls_within(tables, marks_row(tables, earlier.len()))) && program_marked(earlier, tables),
+    }
+}
+
+theorem program_marked_needs(functions: List<Function>, tables: List<List<Bool>>): program_marked(functions, tables).IsTrue() →
+    ProgramNeeds(functions, λ (f: Nat) (b: Nat) => marked(marks_row(tables, f), b)) {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ within => {
+            let mine = marks_row(tables, earlier.len());
+            let both = Bool::is_true_and(last.body.stores_within(mine) && last.body.calls_within(tables, mine), program_marked(earlier, tables),
+                within);
+            let here = Bool::is_true_and(last.body.stores_within(mine), last.body.calls_within(tables, mine), both.left);
+            ⟨⟨λ b stores => eq_true_of_is_true(marked(mine, b), last.body.stores_marked(mine, b, here.left, stores)),
+              last.body.calls_within_asks(tables, mine, here.right)⟩,
+             program_marked_needs(earlier, tables, both.right)⟩
+        },
+    }
+}
+
+// A function with no store that computes over a file runs from that file
+// to itself.
+theorem Function::runs_quiet(self function: Function, callees: Buffers() → Callees(), file: Buffers(), quiet: function.body.quiet().IsTrue(),
+    arguments: List<BitVec(64)>, result: BitVec(64), computes: function.Computes(callees(file), arguments, result, buffers := file)):
+    function.Runs(Effects::keeping(callees), arguments, result, file, file) {
+    Exists(computes.witness, ⟨computes.proof.left,
+        ⟨function.body.runs_quiet(callees, file, quiet, computes.witness, computes.proof.right.left), computes.proof.right.right⟩⟩)
+}
+
+// And a program none of whose functions stores: what it may return over a
+// file, it does with the file left as it was.
+theorem program_effects_quiet(functions: List<Function>): program_quiet(functions).IsTrue() → (file: Buffers()) → (f: Nat) →
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → program_callees_over(file, functions)(f, arguments, result) →
+    program_effects(functions)(file, f, arguments, result, file) {
+    match functions {
+        Nil => λ _ file f arguments result never => never,
+        Cons(last, earlier) => λ quiet file f arguments result => {
+            let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+            let below = λ (held: Buffers()) => program_callees_over(held, earlier);
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Computes(program_callees_over(file, earlier), arguments, result, buffers := file),
+                    Inr(_) => program_callees_over(file, earlier)(f, arguments, result),
+                }) →
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, file, file),
+                    Inr(_) => program_effects(earlier)(file, f, arguments, result, file),
+                }) {
+                Inl(_) => λ computes => {
+                    let ran = last.runs_quiet(below, file, both.left, arguments, result, computes);
+                    Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(Effects::keeping(below), program_effects(earlier),
+                        λ before g words word after kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, x),
+                            program_effects_quiet(earlier, both.right, before, g, words, word, kept.left)),
+                        ran.witness, file, file, ran.proof.right.left), ran.proof.right.right⟩⟩)
+                },
+                Inr(_) => λ earlier_returns => program_effects_quiet(earlier, both.right, file, f, arguments, result, earlier_returns),
+            }
+        },
+    }
+}

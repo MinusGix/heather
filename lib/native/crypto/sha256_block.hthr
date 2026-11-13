@@ -1,0 +1,114 @@
+// SHA-256's round constants as compiled code (FIPS 180-4 §4.2.2,
+// issues/sha2-compress-native.md, stage C1 of
+// docs/native-lexer-crypto-roadmap.md). The compression is functions of
+// its context, a `Sha256` (`sha256_context.hthr`): `sha256_schedule.hthr`,
+// `sha256_working.hthr`, `sha256_compression.hthr`; `sha256_compress`, the
+// linked function, is in `sha256_one_block.hthr`.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+
+// The round constant K(t) (FIPS 180-4 §4.2.2), found by halving: compiled
+// code has no table to index (issues/rt-fixed-arrays-and-tables.md).
+runtime fn sha256_k(t: u64) → u64 {
+    if t < 32 {
+        if t < 16 {
+            if t < 8 {
+                if t < 4 {
+                    if t < 2 { if t < 1 { 0x428a2f98 } else { 0x71374491 } } else { if t < 3 { 0xb5c0fbcf } else { 0xe9b5dba5 } }
+                } else {
+                    if t < 6 { if t < 5 { 0x3956c25b } else { 0x59f111f1 } } else { if t < 7 { 0x923f82a4 } else { 0xab1c5ed5 } }
+                }
+            } else {
+                if t < 12 {
+                    if t < 10 { if t < 9 { 0xd807aa98 } else { 0x12835b01 } } else { if t < 11 { 0x243185be } else { 0x550c7dc3 } }
+                } else {
+                    if t < 14 { if t < 13 { 0x72be5d74 } else { 0x80deb1fe } } else { if t < 15 { 0x9bdc06a7 } else { 0xc19bf174 } }
+                }
+            }
+        } else {
+            if t < 24 {
+                if t < 20 {
+                    if t < 18 { if t < 17 { 0xe49b69c1 } else { 0xefbe4786 } } else { if t < 19 { 0x0fc19dc6 } else { 0x240ca1cc } }
+                } else {
+                    if t < 22 { if t < 21 { 0x2de92c6f } else { 0x4a7484aa } } else { if t < 23 { 0x5cb0a9dc } else { 0x76f988da } }
+                }
+            } else {
+                if t < 28 {
+                    if t < 26 { if t < 25 { 0x983e5152 } else { 0xa831c66d } } else { if t < 27 { 0xb00327c8 } else { 0xbf597fc7 } }
+                } else {
+                    if t < 30 { if t < 29 { 0xc6e00bf3 } else { 0xd5a79147 } } else { if t < 31 { 0x06ca6351 } else { 0x14292967 } }
+                }
+            }
+        }
+    } else {
+        if t < 48 {
+            if t < 40 {
+                if t < 36 {
+                    if t < 34 { if t < 33 { 0x27b70a85 } else { 0x2e1b2138 } } else { if t < 35 { 0x4d2c6dfc } else { 0x53380d13 } }
+                } else {
+                    if t < 38 { if t < 37 { 0x650a7354 } else { 0x766a0abb } } else { if t < 39 { 0x81c2c92e } else { 0x92722c85 } }
+                }
+            } else {
+                if t < 44 {
+                    if t < 42 { if t < 41 { 0xa2bfe8a1 } else { 0xa81a664b } } else { if t < 43 { 0xc24b8b70 } else { 0xc76c51a3 } }
+                } else {
+                    if t < 46 { if t < 45 { 0xd192e819 } else { 0xd6990624 } } else { if t < 47 { 0xf40e3585 } else { 0x106aa070 } }
+                }
+            }
+        } else {
+            if t < 56 {
+                if t < 52 {
+                    if t < 50 { if t < 49 { 0x19a4c116 } else { 0x1e376c08 } } else { if t < 51 { 0x2748774c } else { 0x34b0bcb5 } }
+                } else {
+                    if t < 54 { if t < 53 { 0x391c0cb3 } else { 0x4ed8aa4a } } else { if t < 55 { 0x5b9cca4f } else { 0x682e6ff3 } }
+                }
+            } else {
+                if t < 60 {
+                    if t < 58 { if t < 57 { 0x748f82ee } else { 0x78a5636f } } else { if t < 59 { 0x84c87814 } else { 0x8cc70208 } }
+                } else {
+                    if t < 62 { if t < 61 { 0x90befffa } else { 0xa4506ceb } } else { if t < 63 { 0xbef9a3f7 } else { 0xc67178f2 } }
+                }
+            }
+        }
+    }
+}

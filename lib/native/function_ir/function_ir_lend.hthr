@@ -1,0 +1,284 @@
+// What a caller that places its own buffers hands a function it calls
+// (docs/native-one-compiler-design.md §2.3): the homes of the buffers the
+// function is lent, each an address then a length, before its words.
+//
+// A program states its call with no address (`program_writers`,
+// function_ir_placeless: the answer at address zero), and its code passes
+// the addresses its buffers lie at. The lemmas here are what joins the two:
+// the placed homes agree with the stated ones everywhere but the address
+// places (`homes_apart`, what `program_eval_placeless` asks), they are the
+// homes the callee's contract asks for (`args_lent_placed`), and the table
+// of counts the functions are emitted under is the one the meaning reads
+// (`program_counts_lent`).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Placed homes
+
+// The homes of buffers `from` on, `count` of them: buffer `b` lying at
+// `at(b)` and `size(b)` bytes long.
+fn placed_homes(at: Nat → BitVec(64), size: Nat → Nat, from, count: Nat) → List<BitVec(64)> {
+    match count {
+        Zero => [],
+        Succ(k) => Cons(at(from), Cons(BitVec::ofNat(size(from)), placed_homes(at, size, Succ(from), k))),
+    }
+}
+
+// Where they lie, by buffer: the lending's table of addresses.
+fn placed_addresses(at: Nat → BitVec(64), from, count: Nat) → List<BitVec(64)> {
+    match count { Zero => [], Succ(k) => Cons(at(from), placed_addresses(at, Succ(from), k)) }
+}
+
+theorem placed_homes_len(at: Nat → BitVec(64), size: Nat → Nat, count: Nat): (from: Nat) →
+    placed_homes(at, size, from, count).len() = 2 * count {
+    match count {
+        Zero => λ from => refl,
+        Succ(_, ih) => λ from => Nat::cong_succ(Nat::cong_succ(ih(Succ(from)))),
+    }
+}
+
+// The homes before a call's words are two words a buffer more.
+theorem placed_words_len(at: Nat → BitVec(64), size: Nat → Nat, count: Nat, words: List<BitVec(64)>):
+    (placed_homes(at, size, 0, count) ++ words).len() = 2 * count + words.len() {
+    trans(placed_homes(at, size, 0, count).len_append(words),
+        cong_fn<Nat, Nat>(λ n => n + words.len(), placed_homes_len(at, size, count, 0)))
+}
+
+theorem placed_addresses_at(at: Nat → BitVec(64), count: Nat): (from, b: Nat) → b < count →
+    address_of(placed_addresses(at, from, count), b) = at(from + b) {
+    match count {
+        Zero => λ from b below => false_elim(omega(below)),
+        Succ(_, ih) => λ from b => match b {
+            Zero => λ _ => refl,
+            Succ(l) => λ below => trans(ih(Succ(from), l, below), cong_fn<Nat, BitVec(64)>(λ p => at(p), Nat::add_succ_left(from, l))),
+        },
+    }
+}
+
+theorem placed_addresses_past(at: Nat → BitVec(64), count: Nat): (from, b: Nat) → count <= b →
+    address_of(placed_addresses(at, from, count), b) = BitVec::zero() {
+    match count {
+        Zero => λ from b _ => refl,
+        Succ(_, ih) => λ from b => match b {
+            Zero => λ past => false_elim(omega(past)),
+            Succ(l) => λ past => ih(Succ(from), l, past),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The buffers a call is lent
+
+theorem lent_buffers_bytes(count: Nat): (held: Buffers()) → (b: Nat) → b < count →
+    buffer_bytes(lent_buffers(count, held), b) = buffer_bytes(held, b) {
+    match count {
+        Zero => λ held b below => false_elim(omega(below)),
+        Succ(_, ih) => λ held => match held {
+            Nil => λ b _ => refl,
+            Cons(bytes, rest) => λ b => match b {
+                Zero => λ _ => refl,
+                Succ(l) => λ below => ih(rest, l, below),
+            },
+        },
+    }
+}
+
+theorem lent_buffers_past(count: Nat): (held: Buffers()) → (b: Nat) → count <= b → buffer_bytes(lent_buffers(count, held), b) = [] {
+    match count {
+        Zero => λ held b _ => refl,
+        Succ(_, ih) => λ held => match held {
+            Nil => λ b _ => refl,
+            Cons(bytes, rest) => λ b => match b {
+                Zero => λ past => false_elim(omega(past)),
+                Succ(l) => λ past => ih(rest, l, past),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Placed against stated, and against the contract
+
+// ---------------------------------------------------------------------------
+// The file a caller holds after a call (`relent`)
+
+theorem buffers_rest_bytes(buffers: Buffers(), b: Nat): buffer_bytes(buffers_rest(buffers), b) = buffer_bytes(buffers, Succ(b)) {
+    match buffers { Nil => refl, Cons(_, _) => refl }
+}
+
+// It has the buffers the caller held.
+theorem relent_len(count: Nat): (after, held: Buffers()) → relent(count, after, held).len() = held.len() {
+    match count {
+        Zero => λ after held => refl,
+        Succ(_, ih) => λ after held => match held {
+            Nil => refl,
+            Cons(_, rest) => Nat::cong_succ(ih(buffers_rest(after), rest)),
+        },
+    }
+}
+
+// A buffer lent is as the callee left it…
+theorem relent_bytes_lent(count: Nat): (after, held: Buffers()) → (b: Nat) → b < count → b < held.len() →
+    buffer_bytes(relent(count, after, held), b) = buffer_bytes(after, b) {
+    match count {
+        Zero => λ after held b below _ => false_elim(omega(below)),
+        Succ(_, ih) => λ after held => match held {
+            Nil => λ b _ inside => false_elim(nothing_below_zero(b, inside)),
+            Cons(_, rest) => λ b => match b {
+                Zero => λ _ _ => refl,
+                Succ(l) => λ below inside => {
+                    let shorter: (Succ(l) < Succ(rest.len())) = inside;
+                    trans(ih(buffers_rest(after), rest, l, omega(below), omega(shorter)), buffers_rest_bytes(after, l))
+                },
+            },
+        },
+    }
+}
+
+// …and one past them as the caller held it.
+theorem relent_bytes_rest(count: Nat): (after, held: Buffers()) → (b: Nat) → count <= b →
+    buffer_bytes(relent(count, after, held), b) = buffer_bytes(held, b) {
+    match count {
+        Zero => λ after held b _ => refl,
+        Succ(_, ih) => λ after held => match held {
+            Nil => λ b _ => refl,
+            Cons(_, rest) => λ b => match b {
+                Zero => λ past => false_elim(omega(past)),
+                Succ(l) => λ past => ih(buffers_rest(after), rest, l, omega(past)),
+            },
+        },
+    }
+}
+
+// Two files of one count of buffers, each buffer's bytes the same, are one
+// file.
+theorem buffers_ext(xs: Buffers()): (ys: Buffers()) → xs.len() = ys.len() → ((b: Nat) → buffer_bytes(xs, b) = buffer_bytes(ys, b)) → xs = ys {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ _ _ => refl,
+            Cons(_, more) => λ len _ => false_elim(Nat::zero_ne_succ(more.len(), len)),
+        },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ len _ => false_elim(Nat::succ_ne_zero(rest.len(), len)),
+            Cons(y, more) => λ len same => eq2(λ (head: List<BitVec(8)>) (tail: Buffers()) => Cons(head, tail), same(0),
+                buffers_ext(rest, more, Nat::succ_inj(rest.len(), more.len(), len), λ b => same(Succ(b)))),
+        },
+    }
+}
+
+// A buffer past a file's end has no bytes.
+theorem buffer_bytes_past(buffers: Buffers(), b: Nat, past: buffers.len() <= b): buffer_bytes(buffers, b) = [] {
+    cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ found => match found { None => [], Some(bytes) => bytes }, buffers.nth_past_end(b, past))
+}
+
+// So the file a caller holds after a call is any of its count of buffers
+// that has the lent ones as the callee left them and the rest as they
+// were.
+theorem relent_is(count: Nat, after, held, file: Buffers(), shape: file.len() = held.len(),
+    lent: (b: Nat) → b < count → b < held.len() → buffer_bytes(file, b) = buffer_bytes(after, b),
+    rest: (b: Nat) → count <= b → buffer_bytes(file, b) = buffer_bytes(held, b)): file = relent(count, after, held) {
+    buffers_ext(file, relent(count, after, held), trans(shape, sym(relent_len(count, after, held))), λ b => match b.lt_or_ge(count) {
+        Inl(below) => match b.lt_or_ge(held.len()) {
+            Inl(inside) => trans(lent(b, below, inside), sym(relent_bytes_lent(count, after, held, b, below, inside))),
+            Inr(past) => trans(buffer_bytes_past(file, b, omega(past, shape)),
+                sym(buffer_bytes_past(relent(count, after, held), b, omega(past, relent_len(count, after, held))))),
+        },
+        Inr(past) => trans(rest(b, past), sym(relent_bytes_rest(count, after, held, b, past))),
+    })
+}
+
+// The placed homes and the homes a program states its call at agree but at
+// the address places, each buffer as long as its place says.
+theorem homes_apart(at: Nat → BitVec(64), size: Nat → Nat, held: Buffers(), words: List<BitVec(64)>, count: Nat): (from: Nat) →
+    ((b: Nat) → from <= b → b < from + count → buffer_bytes(held, b).len() = size(b)) →
+    ListsApart(base_mask(count), stated_homes(from, count, held) ++ words, placed_homes(at, size, from, count) ++ words) {
+    match count {
+        Zero => λ from _ => refl,
+        Succ(k) => λ from sized => {
+            let here: (from < from + Succ(k)) = omega(Nat::le_refl(from));
+            ⟨λ never => false_elim(never),
+                ⟨λ _ => cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), sym(sized(from, Nat::le_refl(from), here))),
+                    homes_apart(at, size, held, words, k, Succ(from), λ b low high => sized(b, omega(low), omega(high)))⟩⟩
+        },
+    }
+}
+
+// They are the homes the callee's contract asks of its first arguments,
+// the lending's addresses and buffers being where and what was placed.
+theorem args_lent_placed(at: Nat → BitVec(64), size: Nat → Nat, addresses: List<BitVec(64)>, buffers: Buffers(),
+    words: List<BitVec(64)>, count: Nat): (from: Nat) →
+    ((b: Nat) → from <= b → b < from + count → (at(b) = address_of(addresses, b)) ∧ (size(b) = buffer_bytes(buffers, b).len())) →
+    ArgsLent(count, from, placed_homes(at, size, from, count) ++ words, addresses, buffers) {
+    match count {
+        Zero => λ from _ => trivial,
+        Succ(k) => λ from agree => {
+            let here: (from < from + Succ(k)) = omega(Nat::le_refl(from));
+            let this = agree(from, Nat::le_refl(from), here);
+            ⟨this.left, ⟨cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), this.right),
+                args_lent_placed(at, size, addresses, buffers, words, k, Succ(from), λ b low high => agree(b, omega(low), omega(high)))⟩⟩
+        },
+    }
+}
+
+// A call lent its first `count` buffers where they are placed: the homes
+// meet the contract over the lending `Lending(_, placed_addresses, lent_buffers)`.
+theorem args_lent_first(at: Nat → BitVec(64), size: Nat → Nat, held: Buffers(), words: List<BitVec(64)>, count: Nat,
+    sized: (b: Nat) → b < count → buffer_bytes(held, b).len() = size(b)):
+    ArgsLent(count, 0, placed_homes(at, size, 0, count) ++ words, placed_addresses(at, 0, count), lent_buffers(count, held)) {
+    args_lent_placed(at, size, placed_addresses(at, 0, count), lent_buffers(count, held), words, count, 0, λ b _ high => {
+        let below: (b < count) = omega(high);
+        ⟨sym(trans(placed_addresses_at(at, count, 0, b, below), cong_fn<Nat, BitVec(64)>(λ p => at(p), Nat::add_left_zero(b)))),
+            trans(sym(sized(b, below)), cong_fn<List<BitVec(8)>, Nat>(λ bytes => bytes.len(), sym(lent_buffers_bytes(count, held, b, below))))⟩
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The table of counts
+
+theorem program_counts_len(functions: List<Function>): program_counts(functions).len() = functions.len() {
+    match functions {
+        Nil => refl,
+        Cons(last, earlier) => trans(program_counts(earlier).len_append([last.lent]), Nat::cong_succ(program_counts_len(earlier))),
+    }
+}
+
+// The count a function is emitted and called under is the one its meaning
+// reads.
+theorem program_counts_lent(functions: List<Function>): (f: Nat) → Succ(f) <= functions.len() →
+    lent_count(program_counts(functions), f) = program_lent(functions, f) {
+    match functions {
+        Nil => λ f below => false_elim(nothing_below_zero(f, below)),
+        Cons(last, earlier) => λ f below => {
+            let before = program_counts(earlier);
+            let lens = program_counts_len(earlier);
+            let read = λ (found: Option<Nat>) => match found { None => 0, Some(count) => count };
+            match f.eq_dec(earlier.len()) as λ d =>
+                lent_count(before ++ [last.lent], f) = (match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }) {
+                Inl(here) => {
+                    let at: (0 + before.len() = f) = omega(here, lens);
+                    j(at, λ i _ => lent_count(before ++ [last.lent], i) = last.lent,
+                        cong_fn<Option<Nat>, Nat>(read, before.nth_append_r([last.lent], 0)))
+                },
+                Inr(other) => {
+                    let inside: (f < before.len()) = omega(below, other, lens);
+                    let found = before.nth_present(f, inside);
+                    let fewer: (Succ(f) <= earlier.len()) = omega(inside, lens);
+                    trans(cong_fn<Option<Nat>, Nat>(read, trans(before.nth_append_l([last.lent], f, found.witness, found.proof), sym(found.proof))),
+                        program_counts_lent(earlier, f, fewer))
+                },
+            }
+        },
+    }
+}

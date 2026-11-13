@@ -5,6 +5,15 @@
 //! linked functions, and [`compress`] and [`digest`] are the Rust around
 //! them.
 //!
+//! [`block`] is the compression function whole: one linked function over
+//! two spans of bytes, with the schedule, the sixty-four rounds and the
+//! final sums all compiled Heather, and only the padding left to Rust.
+//!
+//! [`stream`] is the hash whole: [`stream::Sha256`] takes a message in
+//! parts and every byte of the work, the padding included, is compiled
+//! Heather. What is Rust's there is the bytes it lends, as many as the
+//! Heather module says a context is.
+//!
 //! # 32-bit words through a 64-bit boundary
 //!
 //! A `runtime fn`'s parameters and result are 64-bit words, so each linked
@@ -126,4 +135,175 @@ pub fn digest(message: &[u8]) -> [u8; 32] {
         bytes.copy_from_slice(&word.to_be_bytes());
     }
     out
+}
+
+/// The compression function as one linked function,
+/// `sha256_compress` of `lib/native/crypto/sha256_one_block.hthr`.
+///
+/// It works in a *context* of [`CONTEXT`](block::CONTEXT) bytes that its
+/// caller lends it, the `Sha256` record of
+/// `lib/native/crypto/sha256_context.hthr`: the hash value's eight words,
+/// the eight working variables and the schedule's sixty-four words, each
+/// word four bytes with the most significant first, and the stream's
+/// count, which this function leaves alone. Where each lies is that
+/// module's declaration's to say; Rust is told the context's size and
+/// where the hash value is ([`HASH`](block::HASH)), and needs nothing
+/// else. It reads the hash value and the block, and stores the hash
+/// value, the working variables and the schedule; the hash value after
+/// the block is where the one before it was. Nothing of the working area
+/// is read before it is stored, so a caller need not clear it.
+///
+/// Every read and store is under the length of the span it is in
+/// (`List::byte_within`, `List::put_within`): a block shorter than
+/// sixty-four bytes is read as though zeros followed it, and nothing is
+/// stored past the end of a context that is too short, where the function
+/// then computes something else that is still a function of the bytes it
+/// was lent. [`compress`](block::compress) lends it exactly what it asks.
+///
+/// What is certified is that the code computes the Heather function, with
+/// the memory safety that goes with it. That the Heather function is
+/// FIPS 180-4's is not proved yet (`issues/sha2-compress-native.md`); the
+/// tests hold it to the standard's vectors and to an independent
+/// implementation.
+pub mod block {
+    use super::INITIAL;
+    use crate::exports;
+
+    /// The bytes of a context: the Heather module's
+    /// `SHA256_CONTEXT_BYTES`, which is its record's size by a theorem
+    /// there.
+    pub const CONTEXT: usize = crate::constants::SHA256_CONTEXT_BYTES as usize;
+
+    /// Where the hash value's thirty-two bytes begin in a context: the
+    /// module's `SHA256_DIGEST_AT`, held to the record the same way.
+    pub const HASH: usize = crate::constants::SHA256_DIGEST_AT as usize;
+
+    /// The linked function at its boundary: any two spans. Answers 8, the
+    /// count its last loop stops at.
+    #[inline]
+    pub fn compress_spans(context: &mut [u8], block: &[u8]) -> u64 {
+        exports::sha256_compress(context, block)
+    }
+
+    /// §6.2.2: the hash value after one more block.
+    pub fn compress(hash: &mut [u32; 8], block: &[u8; 64]) {
+        let mut context = [0u8; CONTEXT];
+        for (bytes, word) in context[HASH..HASH + 32].chunks_exact_mut(4).zip(*hash) {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        exports::sha256_compress(&mut context, block);
+        for (word, bytes) in hash.iter_mut().zip(context[HASH..HASH + 32].chunks_exact(4)) {
+            *word = u32::from_be_bytes(bytes.try_into().expect("four bytes"));
+        }
+    }
+
+    /// SHA-256 of a message: one context through every block, and the
+    /// digest read off the hash value's thirty-two bytes, which are
+    /// already its words in the order §6.2.2 spells them.
+    pub fn digest(message: &[u8]) -> [u8; 32] {
+        let mut context = [0u8; CONTEXT];
+        for (bytes, word) in context[HASH..HASH + 32].chunks_exact_mut(4).zip(INITIAL) {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        let mut blocks = message.chunks_exact(64);
+        for block in &mut blocks {
+            exports::sha256_compress(&mut context, block);
+        }
+        // §5.1.1, as `super::digest` pads.
+        let tail = blocks.remainder();
+        let mut last = [0u8; 128];
+        last[..tail.len()].copy_from_slice(tail);
+        last[tail.len()] = 0x80;
+        let padded = if tail.len() + 9 <= 64 { 64 } else { 128 };
+        let bits = (message.len() as u64).wrapping_mul(8);
+        last[padded - 8..padded].copy_from_slice(&bits.to_be_bytes());
+        for block in last[..padded].chunks_exact(64) {
+            exports::sha256_compress(&mut context, block);
+        }
+        context[HASH..HASH + 32].try_into().expect("thirty-two bytes")
+    }
+}
+
+/// The hash over a message that arrives in parts, all of it linked:
+/// `sha256_init`, `sha256_update` and `sha256_finish` of
+/// `lib/native/crypto/sha256_stream.hthr`.
+///
+/// The context the three share is [`block`]'s, with its count of bytes
+/// taken, most significant first. A block is assembled in the schedule's
+/// first sixteen words, so a part that ends inside a block leaves its
+/// bytes in the context for the next part to follow, and the padding of
+/// §5.1.1 is the linked code's. The digest is the hash value's
+/// thirty-two bytes after `sha256_finish`.
+///
+/// Each function reads and stores only under the length of the span it is
+/// in, as [`block`]'s does, and what is certified is the same: the code
+/// computes the Heather functions. That those are FIPS 180-4's is the
+/// tests' claim.
+pub mod stream {
+    use crate::exports;
+
+    /// The bytes of a context: [`super::block::CONTEXT`].
+    pub const CONTEXT: usize = super::block::CONTEXT;
+
+    /// The linked functions at their boundary: any spans.
+    pub mod spans {
+        use crate::exports;
+
+        /// The initial hash value and a count of zero. Answers 0.
+        #[inline]
+        pub fn init(context: &mut [u8]) -> u64 {
+            exports::sha256_init(context)
+        }
+
+        /// One more part. Answers the count of bytes taken so far.
+        #[inline]
+        pub fn update(context: &mut [u8], message: &[u8]) -> u64 {
+            exports::sha256_update(context, message)
+        }
+
+        /// The padding and the last block.
+        #[inline]
+        pub fn finish(context: &mut [u8]) -> u64 {
+            exports::sha256_finish(context)
+        }
+    }
+
+    /// SHA-256 in progress: `crates/cache/src/sha256.rs`'s three calls,
+    /// each one linked function.
+    #[derive(Clone)]
+    pub struct Sha256 {
+        context: [u8; CONTEXT],
+    }
+
+    impl Sha256 {
+        pub fn new() -> Sha256 {
+            let mut context = [0u8; CONTEXT];
+            exports::sha256_init(&mut context);
+            Sha256 { context }
+        }
+
+        /// One more part of the message.
+        pub fn update(&mut self, bytes: &[u8]) {
+            exports::sha256_update(&mut self.context, bytes);
+        }
+
+        /// The digest of everything taken.
+        pub fn finish(mut self) -> [u8; 32] {
+            exports::sha256_finish(&mut self.context);
+            self.context[super::block::HASH..super::block::HASH + 32].try_into().expect("thirty-two bytes")
+        }
+    }
+
+    impl Default for Sha256 {
+        fn default() -> Sha256 {
+            Sha256::new()
+        }
+    }
+
+    /// SHA-256 of a message in one part.
+    pub fn digest(message: &[u8]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(message);
+        hash.finish()
+    }
 }

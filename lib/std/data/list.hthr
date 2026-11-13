@@ -476,6 +476,10 @@ theorem List::take_append_len<A>(self xs: List<A>, ys: List<A>): (xs ++ ys).take
     }
 }
 
+theorem List::take_len<A>(self xs: List<A>): xs.take(xs.len()) = xs {
+    match xs { Nil => refl, Cons(h, t) => List::cong_cons(h, t.take_len()) }
+}
+
 theorem List::len_filter<A>(self xs: List<A>, p: A → Bool): xs.filter(p).len() <= xs.len() {
     match xs {
         Nil => trivial,
@@ -988,6 +992,23 @@ theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Ex
     }
 }
 
+// Two lists of one length that hold the same element at every index are
+// one list.
+theorem List::ext_nth<A>(self xs: List<A>): (ys: List<A>) → xs.len() = ys.len() → ((k: Nat) → k < xs.len() → xs.nth(k) = ys.nth(k)) → xs = ys {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ _ _ => refl,
+            Cons(_, more) => λ len _ => false_elim(Nat::zero_ne_succ(more.len(), len)),
+        },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ len _ => false_elim(Nat::succ_ne_zero(rest.len(), len)),
+            Cons(y, more) => λ len same => trans(cong_fn<A, List<A>>(λ head => Cons(head, rest), Option::some_inj(x, y, same(0, trivial))),
+                cong_fn<List<A>, List<A>>(λ tail => Cons(y, tail),
+                    rest.ext_nth(more, Nat::succ_inj(rest.len(), more.len(), len), λ k below => same(Succ(k), below)))),
+        },
+    }
+}
+
 // The element at an index of a list mapped is the element there, mapped.
 theorem List::nth_map_some<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (x: A) → xs.nth(i) = Some(x) → xs.map(f).nth(i) = Some(f(x)) {
     match xs {
@@ -1061,6 +1082,26 @@ theorem List::update_past<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs
             Succ(k) => λ f past => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), t.update_past(k, f, past)),
         },
     }
+}
+
+// An entry stored over itself leaves the list as it was, `pad` standing
+// for the entry past its end, where nothing is stored.
+theorem List::update_same<A>(self xs: List<A>, pad: A): (i: Nat) → xs.update(i, λ _ => xs.nth(i).unwrap_or(pad)) = xs {
+    match xs {
+        Nil => λ i => refl,
+        Cons(h, t) => λ i => match i {
+            Zero => refl,
+            Succ(k) => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), t.update_same(pad, k)),
+        },
+    }
+}
+
+// And so after a store elsewhere.
+theorem List::update_other_same<A>(self xs: List<A>, i, k: Nat, b, pad: A, ne: k ≠ i):
+    xs.update(i, λ _ => b).update(k, λ _ => xs.nth(k).unwrap_or(pad)) = xs.update(i, λ _ => b) {
+    let s = xs.update(i, λ _ => b);
+    let same: (s.nth(k) = xs.nth(k)) = xs.nth_update_other(i, λ _ => b, k, ne);
+    j(same, λ n _ => s.update(k, λ _ => n.unwrap_or(pad)) = s, s.update_same(pad, k))
 }
 
 // The list as a vector of its length, in order: what a store of a list's

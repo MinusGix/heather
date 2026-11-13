@@ -1,0 +1,6 @@
+// A record under a prefix generator (docs/value-definitions-design.md §3.5).
+laid record Meters { value: u32 }
+
+laid(endian := BigEndian, order := AsWritten) record Header { tag: u8, length: u64, flags: [u16; 3] }
+
+fn Header::flag(i: Nat, inside: i < 3) → Nat { i }

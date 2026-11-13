@@ -10,6 +10,7 @@
 // pass may be any number of the spec's.
 import native_source;
 import function_ir_eval;
+import function_ir_state;
 import linux_calls;
 import linux_trees;
 import linux_trees_sim;
@@ -21,11 +22,11 @@ import logic;
 
 // What follows a statement in `Then`: the rest on the environment it left,
 // or the exit it took.
-fn Stmt::then_rest(self rest: Stmt, call: Answers(), perform: Performs(), n: Nat) → Flow → ITree<Flow>(Events::linux()) {
+fn Stmt::then_rest(self rest: Stmt, call: Writers(), perform: Performs(), n: Nat) → Flow → ITree<Flow>(Events::linux()) {
     λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) }
 }
 
-theorem Stmt::sim_then<B>(first, rest: Stmt, call: Answers(), perform: Performs(), n: Nat, env: Env,
+theorem Stmt::sim_then<B>(first, rest: Stmt, call: Writers(), perform: Performs(), n: Nat, env: Env,
     K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
     g: ITree::LinuxSimK(λ x w => ITree::LinuxSimK(K, rest.then_rest(call, perform, n, x), w), first.denote(call, perform, n, env), v)):
     ITree::LinuxSimK(K, Then(first, rest).denote(call, perform, n, env), v)
@@ -35,7 +36,7 @@ theorem Stmt::sim_then<B>(first, rest: Stmt, call: Answers(), perform: Performs(
         rest.then_rest(call, perform, n), λ x w h => h, g)
 }
 
-theorem Stmt::sim_branch_true<B>(condition: Nat, yes, no: Stmt, call: Answers(), perform: Performs(), n: Nat, env: Env,
+theorem Stmt::sim_branch_true<B>(condition: Nat, yes, no: Stmt, call: Writers(), perform: Performs(), n: Nat, env: Env,
     K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
     h: env.bit(condition) = True, g: ITree::LinuxSimK(K, yes.denote(call, perform, n, env), v)):
     ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, perform, n, env), v)
@@ -46,7 +47,7 @@ theorem Stmt::sim_branch_true<B>(condition: Nat, yes, no: Stmt, call: Answers(),
     }, v), g)
 }
 
-theorem Stmt::sim_branch_false<B>(condition: Nat, yes, no: Stmt, call: Answers(), perform: Performs(), n: Nat, env: Env,
+theorem Stmt::sim_branch_false<B>(condition: Nat, yes, no: Stmt, call: Writers(), perform: Performs(), n: Nat, env: Env,
     K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
     h: env.bit(condition) = False, g: ITree::LinuxSimK(K, no.denote(call, perform, n, env), v)):
     ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, perform, n, env), v)
@@ -81,7 +82,7 @@ theorem Flow::pass_leaves<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::l
 // The loop rule for `Repeat`: from the invariant at `k + 1` passes of fuel,
 // the body leaves the spec at the invariant at `k` when it goes round, and at
 // `K` when the loop is done. The loop's fuel is the statement's.
-theorem Stmt::sim_repeat<B>(body: Stmt, again: Nat, call: Answers(), perform: Performs(), n: Nat,
+theorem Stmt::sim_repeat<B>(body: Stmt, again: Nat, call: Writers(), perform: Performs(), n: Nat,
     I: Nat → Env → ITree<B>(Events::linux_spec()) → Type, K: Flow → ITree<B>(Events::linux_spec()) → Type,
     pass: (k: Nat) → (e: Env) → (w: ITree<B>(Events::linux_spec())) → I(Succ(k), e, w) →
         ITree::LinuxSimK(λ x w2 => ITree::StepK(Events::linux_spec(), I(k), K, x.pass(again), w2), body.denote(call, perform, n, e), w),

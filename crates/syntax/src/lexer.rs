@@ -554,7 +554,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
 
 /// The tokens of `src` before the first one `keep` refuses, or before the
 /// first that does not lex, then `Eof`. The refused token is the last thing
-/// read, so nothing past it is met, an error least of all. What a token is
+/// read, so nothing past it is met, an error least of all; `Eof` stands at
+/// its start, where an error's `Eof` stands at the error. What a token is
 /// never depends on the tokens before it, which is why stopping early reads
 /// a prefix of what [`lex`] reads.
 pub fn lex_while(src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
@@ -566,9 +567,187 @@ pub fn lex_while(src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
     toks
 }
 
+/// [`lex`] by this lexer alone, whatever scanner is installed: the oracle a
+/// scanner is held to.
+pub fn lex_rust(src: &str) -> Result<Vec<Tok>, LexError> {
+    let mut toks = Vec::new();
+    lex_into_rust(src, &mut toks, |_| true)?;
+    Ok(toks)
+}
+
+/// A scanner the lexer can be run by: the longest token of `source` from
+/// `at`, after a token whose kind's code is `previous` (zero at the start),
+/// as that kind's code and where it ends; `None` where it refuses. The
+/// codes are [`scan_code`]'s, with [`SCAN_SPACE`] and [`SCAN_COMMENT`] for
+/// what a lexer drops.
+///
+/// This is the shape of Heather's own scanner compiled and linked
+/// (`heather_linked::scanner::token`, from `lib/lang/lexer/lexer_span.hthr`).
+/// This crate does not depend on it: whoever links it hands it over
+/// ([`install_scanner`], or [`lex_scanned`] for one call), so the lexer and
+/// everything built on it compile the same with and without it
+/// (`issues/self-lexer-linked.md`).
+pub type Scan = fn(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)>;
+
+/// The code [`Scan`] gives whitespace.
+pub const SCAN_SPACE: u64 = 67;
+/// The code [`Scan`] gives a comment.
+pub const SCAN_COMMENT: u64 = 68;
+
+static SCANNER: std::sync::OnceLock<Scan> = std::sync::OnceLock::new();
+
+/// From here on [`lex`] and [`lex_while`] cut their source with `scan`, as
+/// [`lex_scanned`] does. The first call wins; the `heather` binary makes it
+/// once, before anything is read, when `HEATHER_LEXER=linked`.
+pub fn install_scanner(scan: Scan) {
+    let _ = SCANNER.set(scan);
+}
+
+/// Whether a scanner is installed.
+pub fn scanner_installed() -> bool {
+    SCANNER.get().is_some()
+}
+
+static CUT_BY_SCANNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LEFT_TO_LEXER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What the installed scanner has done in this process: how many sources
+/// it cut whole, and how many were this lexer's answer instead (a source
+/// that does not lex is one of those). Both zero with no scanner installed.
+/// `HEATHER_LEXER_REPORT` prints them when `heather` ends.
+pub fn scanner_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (CUT_BY_SCANNER.load(Relaxed), LEFT_TO_LEXER.load(Relaxed))
+}
+
+/// [`lex`] with `scan` deciding where each token starts and ends and which
+/// kind it is. A token's value (an identifier's text, a numeral, a string
+/// with its escapes resolved) is read from its span by this lexer, on
+/// those bytes alone. Wherever the scanner refuses, or a span does not
+/// read as one token of the scanner's kind, the whole answer is this
+/// lexer's own, so every message is the one [`lex`] gives. The flag says
+/// which happened: `true` where every token was the scanner's cut.
+pub fn lex_scanned(scan: Scan, src: &str) -> (Result<Vec<Tok>, LexError>, bool) {
+    let mut toks = Vec::new();
+    match lex_into_scanned(scan, src, &mut toks, |_| true) {
+        Ok(scanned) => (Ok(toks), scanned),
+        Err(error) => (Err(error), false),
+    }
+}
+
+/// [`lex_while`] with `scan`, as [`lex_scanned`] is [`lex`] with it.
+pub fn lex_while_scanned(scan: Scan, src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    if let Err(stopped) = lex_into_scanned(scan, src, &mut toks, keep) {
+        let at = stopped.span.start;
+        toks.push(Tok { kind: TokKind::Eof, span: Span { start: at, end: at } });
+    }
+    toks
+}
+
+/// The code a scanner gives a token of this kind: `lexer_scan.hthr`'s
+/// `KIND_*` constants, which `heather_linked::scanner::Kind` also numbers
+/// (`crates/linked/tests/scanner.rs` holds the three to each other).
+#[rustfmt::skip]
+pub fn scan_code(kind: &TokKind) -> u64 {
+    match kind {
+        TokKind::Ident(_) => 1, TokKind::Num(_) | TokKind::SuffixedNum(..) => 2, TokKind::Scaled(_) => 3, TokKind::Char(_) => 4,
+        TokKind::Str(_) => 5, TokKind::ArgSlot(_) => 6, TokKind::Hole(_) => 7, TokKind::LParen => 8,
+        TokKind::RParen => 9, TokKind::LBrace => 10, TokKind::RBrace => 11, TokKind::Comma => 12,
+        TokKind::Colon => 13, TokKind::Semi => 14, TokKind::At => 15, TokKind::Dot => 16,
+        TokKind::Plus => 17, TokKind::Minus => 18, TokKind::Bang => 19, TokKind::PlusPlus => 20,
+        TokKind::Star => 21, TokKind::Lt => 22, TokKind::LtEq => 23, TokKind::Gt => 24,
+        TokKind::LBracket => 25, TokKind::RBracket => 26, TokKind::LSemantic => 27, TokKind::RSemantic => 28,
+        TokKind::LAngle => 29, TokKind::RAngle => 30, TokKind::Pipe => 31, TokKind::Amp => 32,
+        TokKind::Slash => 33, TokKind::Percent => 34, TokKind::Shl => 35, TokKind::Shr => 36,
+        TokKind::Arrow => 37, TokKind::FatArrow => 38, TokKind::Turnstile => 39, TokKind::AmpAmp => 40,
+        TokKind::PipePipe => 41, TokKind::NormBar => 42, TokKind::Bullet => 43, TokKind::Approx => 44,
+        TokKind::Caret => 45, TokKind::SupInverse => 46, TokKind::Join => 47, TokKind::Meet => 48,
+        TokKind::Neg => 49, TokKind::Wedge => 50, TokKind::Vee => 51, TokKind::Iff => 52,
+        TokKind::LArrow => 53, TokKind::Exists => 54, TokKind::BigSum => 55, TokKind::BigProd => 56,
+        TokKind::UpArrow => 57, TokKind::Forall => 58, TokKind::Dollar => 59, TokKind::Lambda => 60,
+        TokKind::Eq => 61, TokKind::Ne => 62, TokKind::EqEq => 63, TokKind::ColonEq => 64,
+        TokKind::ColonColon => 65, TokKind::Eof => 66, TokKind::OPlus => 69, TokKind::Tilde => 70,
+    }
+}
+
+/// The token the scanner cut at `start..end` with kind `code`, its value
+/// read from those bytes alone; `None` where they are not one token of
+/// that kind to this lexer (a value this lexer refuses is such a case).
+fn scanned_token(src: &str, start: usize, end: usize, code: u64) -> Option<TokKind> {
+    // `>` and `>>` are told apart by what stands before them, which a span
+    // alone does not hold, and neither has a value: the scanner's kind
+    // stands.
+    if code == scan_code(&TokKind::Gt) {
+        return Some(TokKind::Gt);
+    }
+    if code == scan_code(&TokKind::Shr) {
+        return Some(TokKind::Shr);
+    }
+    let mut alone = Vec::with_capacity(2);
+    lex_into_rust(&src[start..end], &mut alone, |_| true).ok()?;
+    let [tok, _eof] = alone.as_slice() else { return None };
+    let whole = tok.span.start == 0 && tok.span.end == end - start;
+    (whole && scan_code(&tok.kind) == code).then(|| tok.kind.clone())
+}
+
+/// [`lex_into`] by a scanner. `Ok(true)` where every token was its cut;
+/// otherwise the answer is [`lex_into_rust`]'s, begun again, with `keep`
+/// not asked a second time about the tokens it has kept.
+fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> Result<bool, LexError> {
+    let bytes = src.as_bytes();
+    let base = toks.len();
+    let (mut at, mut previous) = (0, 0);
+    while at < bytes.len() {
+        let start = at;
+        let cut = scan(bytes, start, previous)
+            .filter(|&(_, end)| end > start && end <= bytes.len() && src.is_char_boundary(end))
+            .and_then(|(code, end)| {
+                let kind = if code == SCAN_SPACE || code == SCAN_COMMENT { None } else { Some(scanned_token(src, start, end, code)?) };
+                Some((code, end, kind))
+            });
+        let Some((code, end, kind)) = cut else {
+            let kept = toks.len() - base;
+            toks.truncate(base);
+            let mut seen = 0;
+            lex_into_rust(src, toks, |tok| {
+                if seen < kept {
+                    seen += 1;
+                    return true;
+                }
+                keep(tok)
+            })?;
+            return Ok(false);
+        };
+        previous = code;
+        at = end;
+        let Some(kind) = kind else { continue };
+        let tok = Tok { kind, span: Span { start, end } };
+        if !keep(&tok) {
+            // At the refused token's start, as `lex_into_rust` stands.
+            toks.push(Tok { kind: TokKind::Eof, span: Span { start, end: start } });
+            return Ok(true);
+        }
+        toks.push(tok);
+    }
+    toks.push(Tok { kind: TokKind::Eof, span: Span { start: at, end: at } });
+    Ok(true)
+}
+
 /// [`lex`] into `toks`, stopping before the first token `keep` refuses. `Eof`
-/// ends what was read unless an error does.
-fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> Result<(), LexError> {
+/// ends what was read unless an error does. By the installed scanner where
+/// there is one ([`install_scanner`]), and by [`lex_into_rust`] otherwise.
+fn lex_into(src: &str, toks: &mut Vec<Tok>, keep: impl FnMut(&Tok) -> bool) -> Result<(), LexError> {
+    let Some(scan) = SCANNER.get() else { return lex_into_rust(src, toks, keep) };
+    let answer = lex_into_scanned(*scan, src, toks, keep);
+    let count = if matches!(answer, Ok(true)) { &CUT_BY_SCANNER } else { &LEFT_TO_LEXER };
+    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    answer.map(|_| ())
+}
+
+/// The lexer itself, in Rust: what [`lex_into`] is with no scanner, what a
+/// scanner's cut is held to, and where every message comes from.
+fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> Result<(), LexError> {
     let bytes = src.as_bytes();
     let mut i = 0;
     'toks: while i < bytes.len() {
@@ -576,6 +755,9 @@ fn lex_into(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) 
             ($tok:expr) => {{
                 let tok = $tok;
                 if !keep(&tok) {
+                    // `Eof` at the refused token's start, whatever its
+                    // kind: some kinds are measured before they are made.
+                    i = tok.span.start;
                     break 'toks;
                 }
                 toks.push(tok);

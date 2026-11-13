@@ -1,0 +1,144 @@
+// Probes of `part`: a record with padding as its parts, each at the
+// offset the layout computes and each with both laws and no proof written
+// for it; the laws at open codecs; and parts that cannot be made. Tests,
+// not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import option;
+import pair;
+import list;
+import list_window;
+import omega;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import layout;
+import stored;
+import part;
+
+// ---------------------------------------------------------------------------
+// A record's parts: a header with padding inside it and after it
+
+// A tag byte, seven bytes of padding, a length at 8, three flags at 16,
+// and two bytes of padding to the alignment: 24 bytes.
+record Header { tag: u8, length: u64, flags: [u16; 3] }
+
+def HeaderFields: Type = Pair<Pair<u8, u64>, [u16; 3]>;
+
+fn Header::fields() → Stored<HeaderFields> { Stored::byte().then(Stored::u64_be()).then(Stored::u16_be().array(3)) }
+
+fn Header::of_fields(p: HeaderFields) → Header { Header(p.fst.fst, p.fst.snd, p.snd) }
+fn Header::to_fields(h: Header) → HeaderFields { Pair(Pair(h.tag, h.length), h.flags) }
+
+fn Header::stored() → Stored<Header> { Header::fields().record(Header::of_fields, Header::to_fields, λ h => refl) }
+
+fn Header::part<B>(p: Part<HeaderFields, B>(Header::fields())) → Part<Header, B>(Header::stored()) {
+    p.field(Header::of_fields, Header::to_fields, λ h => refl, λ p => refl)
+}
+
+fn Header::tag_part() → Part<Header, u8>(Header::stored()) {
+    Header::part(Part::fst(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)).then(Part::fst(Stored::byte(), Stored::u64_be())))
+}
+
+fn Header::length_part() → Part<Header, u64>(Header::stored()) {
+    Header::part(Part::fst(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)).then(Part::snd(Stored::byte(), Stored::u64_be())))
+}
+
+fn Header::flags_part() → Part<Header, [u16; 3]>(Header::stored()) {
+    Header::part(Part::snd(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)))
+}
+
+// One flag: a part of a part.
+fn Header::flag(i: Nat, inside: i < 3) → Part<Header, u16>(Header::stored()) {
+    Header::flags_part().then(Part::element(Stored::u16_be(), 3, i, inside))
+}
+
+theorem header_size(): Header::stored().layout.size = 24 { refl }
+theorem header_align(): Header::stored().layout.align() = 8 { refl }
+theorem tag_offset(): Header::tag_part().offset = 0 { refl }
+theorem length_offset(): Header::length_part().offset = 8 { refl }
+theorem flags_offset(): Header::flags_part().offset = 16 { refl }
+theorem flag_offset(): Header::flag(2, trivial).offset = 20 { refl }
+theorem length_of(h: Header): Header::length_part().of(h) = h.length { refl }
+theorem length_with(h: Header, n: u64): Header::length_part().with(h, n) = (h with { length = n }) { refl }
+theorem flag_of(h: Header, i: Nat, inside: i < 3): Header::flag(i, inside).of(h) = vector_index(h.flags, i, inside) { refl }
+theorem flag_with(h: Header, i: Nat, inside: i < 3, w: u16): Header::flag(i, inside).with(h, w) = (h with { flags = vector_update(h.flags, i, w) }) { refl }
+
+// The laws, instantiated: no proof about the header is written.
+theorem length_read(bytes: List<u8>, at: Nat): Stored::u64_be().get(bytes, 8 + at) = Header::stored().get(bytes, at).length {
+    Header::length_part().reads(bytes, at)
+}
+
+theorem length_put(bytes: List<u8>, at: Nat, n: u64, fits: 24 + at <= bytes.len()):
+    Header::stored().get(Stored::u64_be().put(bytes, 8 + at, n), at) = (Header::stored().get(bytes, at) with { length = n }) {
+    Header::length_part().get_put(bytes, at, n, fits)
+}
+
+theorem flag_read(bytes: List<u8>, at, i: Nat, inside: i < 3):
+    Stored::u16_be().get(bytes, (i * 2 + 16) + at) = vector_index(Header::stored().get(bytes, at).flags, i, inside) {
+    Header::flag(i, inside).reads(bytes, at)
+}
+
+theorem flag_put(bytes: List<u8>, at, i: Nat, inside: i < 3, w: u16, fits: 24 + at <= bytes.len()):
+    Header::stored().get(Stored::u16_be().put(bytes, (i * 2 + 16) + at, w), at)
+        = (Header::stored().get(bytes, at) with { flags = vector_update(Header::stored().get(bytes, at).flags, i, w) }) {
+    Header::flag(i, inside).get_put(bytes, at, w, fits)
+}
+
+// A store into the length leaves the tag: the record law and the record's
+// own projections.
+theorem length_put_leaves_tag(bytes: List<u8>, at: Nat, n: u64, fits: 24 + at <= bytes.len()):
+    Header::stored().get(Stored::u64_be().put(bytes, 8 + at, n), at).tag = Header::stored().get(bytes, at).tag {
+    cong_fn(λ (h: Header) => h.tag, length_put(bytes, at, n, fits))
+}
+
+// ---------------------------------------------------------------------------
+// At open codecs
+
+// The second of a pair, stored and read back as the pair.
+theorem snd_put<A, B>(s: Stored<A>, t: Stored<B>, bytes: List<u8>, at: Nat, b: B, fits: s.then(t).layout.size + at <= bytes.len()):
+    s.then(t).get(t.put(bytes, s.layout.offset_of(t.layout) + at, b), at) = Pair(s.then(t).get(bytes, at).fst, b) {
+    Part::snd(s, t).get_put(bytes, at, b, fits)
+}
+
+// An element of an array of pairs, and then the pair's second: a part of
+// a part of a part, its offset the sum.
+theorem deep_offset<A, B>(s: Stored<A>, t: Stored<B>, n, i: Nat, inside: i < n):
+    Part::element(s.then(t), n, i, inside).then(Part::snd(s, t)).offset = s.layout.offset_of(t.layout) + i * s.then(t).layout.stride() { refl }
+
+theorem deep_put<A, B>(s: Stored<A>, t: Stored<B>, n, i: Nat, inside: i < n, bytes: List<u8>, at: Nat, b: B, fits: s.then(t).array(n).layout.size + at <= bytes.len()):
+    s.then(t).array(n).get(t.put(bytes, (s.layout.offset_of(t.layout) + i * s.then(t).layout.stride()) + at, b), at)
+        = vector_update(s.then(t).array(n).get(bytes, at), i, Pair(vector_index(s.then(t).array(n).get(bytes, at), i, inside).fst, b)) {
+    Part::element(s.then(t), n, i, inside).then(Part::snd(s, t)).get_put(bytes, at, b, fits)
+}
+
+// ---------------------------------------------------------------------------
+// Vectors by index
+
+theorem index_literal(): vector_index<Nat>([10, 20, 30], 1, trivial) = 20 { refl }
+theorem update_literal(): vector_update<Nat>([10, 20, 30], 1, 7) = [10, 7, 30] { refl }
+// Past the end an update changes nothing.
+theorem update_past(): vector_update<Nat>([10, 20, 30], 3, 7) = [10, 20, 30] { refl }
+
+// ---------------------------------------------------------------------------
+// Parts that cannot be made
+
+// The length is not at 1, where a packed record would have it: the offset
+// is computed, and a law stated at another does not check.
+// expect-error(mismatch)
+theorem length_read_packed(bytes: List<u8>, at: Nat): Stored::u64_be().get(bytes, 1 + at) = Header::stored().get(bytes, at).length {
+    Header::length_part().reads(bytes, at)
+}
+
+// There is no fourth flag.
+// expect-error(mismatch)
+fn no_such_flag() → Part<Header, u16>(Header::stored()) { Header::flag(3, trivial) }
+
+// A part made by hand with the second value's projection at the first's
+// offset has no proof of its read law.
+// expect-error(mismatch)
+fn misplaced<A>(s: Stored<A>, t: Stored<A>) → Part<Pair<A, A>, A>(s.then(t)) {
+    Part(0, t, λ p => p.snd, λ p b => Pair(p.fst, b), Nat::le_refl(t.layout.size + s.layout.offset_of(t.layout)),
+        Part::snd(s, t).reads, Part::snd(s, t).frames)
+}

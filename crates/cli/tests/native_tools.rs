@@ -6,8 +6,10 @@
 //! `heather write-elf`, run as Linux processes beside GNU's
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
 //! issues/native-source-argv.md, issues/native-compile-other-calls.md,
-//! issues/native-decimal-io.md), and `heather reflect`'s program of a word
-//! function a tool calls (issues/native-build-reflected-helpers.md).
+//! issues/native-decimal-io.md), tr through a word function it calls, compiled
+//! into the same file (docs/native-one-compiler-design.md), and
+//! `heather reflect`'s program of that function
+//! (issues/native-build-reflected-helpers.md).
 //! None has
 //! a theorem of its own: `lib/native/native_tools.hthr` holds only the
 //! tools, and `native_compile_correct` is the proof of each.
@@ -129,6 +131,88 @@ fn compiled_tr_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// tr with each byte through `raise_letter`, a function compiled into the
+/// same file and called (docs/native-one-compiler-design.md §2.2): the
+/// same outputs as GNU's, and so as the tr above.
+#[test]
+fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
+    let dir = scratch("tr-called");
+    let binary = dir.join("tr");
+    write_program("lib/native/native_tools.hthr", "tr_upper_called_tool", &binary, true);
+    let mut random = Bytes::seeded("tr-called");
+    let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"hello, World! az AZ `{@[\n", &every, &text, &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(&mut gnu_tr(), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tr exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// tr with each read's bytes raised by `raise_span`, a function lent the
+/// buffer that stores into it and calls `raise_letter` on each byte
+/// (docs/native-one-compiler-design.md §2.6): the write after the call
+/// sends what the function left, which is what GNU's sends.
+#[test]
+fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
+    let dir = scratch("tr-span");
+    let binary = dir.join("tr");
+    write_program("lib/native/native_tools.hthr", "tr_upper_span_tool", &binary, true);
+    let mut random = Bytes::seeded("tr-span");
+    let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"hello, World! az AZ `{@[\n", &every, &text, &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(&mut gnu_tr(), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tr exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // A write that fails: stdout is full, and both exit 1.
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full.try_clone().unwrap()));
+        let (gnu_code, _) = run(&mut gnu_tr(), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+        assert_eq!(code, gnu_code, "as GNU's does");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A procedure and a function in one file, the procedure's body calling the
+/// function and `main` both: 'a' and 'b' raised and summed is the status
+/// (`raised_twice_runs`).
+#[test]
+fn a_procedure_and_a_function_compile_into_one_file() {
+    let dir = scratch("raised-twice");
+    let binary = dir.join("raised");
+    write_program("lib/_tests/native/native_build_tests.hthr", "raised_twice", &binary, false);
+    let (code, out) = run(&mut Command::new(&binary), b"", Stdio::piped());
+    assert_eq!(code, Some(131));
+    assert!(out.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A tool that calls a `runtime fn` (`raise_sum`, which calls another): the
+/// generator's program of it is compiled into the tool's file and called,
+/// and the status is the function's value (`raised_sum_runs`,
+/// `raised_sum_status`, lib/_tests/native/runtime/runtime_tool_tests.hthr).
+#[test]
+fn a_tool_calls_a_runtime_fn() {
+    let dir = scratch("raised-sum");
+    let binary = dir.join("raised");
+    write_program("lib/_tests/native/runtime/runtime_tool_tests.hthr", "raised_sum", &binary, true);
+    let (code, out) = run(&mut Command::new(&binary), b"", Stdio::piped());
+    assert_eq!(code, Some(131));
+    assert!(out.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The first `n` bytes a process writes, then the process killed.
 fn first_bytes(program: &mut Command, n: usize) -> Vec<u8> {
     let mut child = program.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
@@ -186,6 +270,54 @@ fn compiled_head_runs_as_gnu_head() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `tail -c +7` whose call is over a line of a buffer
+/// (issues/source-buffers-as-views.md): each read's bytes past those still
+/// to skip are copied by `copy_window`, which the statement lends its two
+/// buffers whole and which lends the window of each on to its loop. The
+/// program called is the one `heather_linked::spans::copy_window` links
+/// over spans a Rust caller owns. GNU's bytes for inputs shorter than the
+/// skip, as long, one longer and longer than a buffer, and for an input
+/// that arrives two bytes at a time, where the skip ends in a later read
+/// than the first.
+#[test]
+fn compiled_tail_copying_a_line_through_views_runs_as_gnu_tail() {
+    let dir = scratch("tail-window");
+    let binary = dir.join("tail");
+    write_tool("tail_c7_window_tool", &binary);
+
+    let mut random = Bytes::seeded("tail-window");
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"abc", b"abcdef", b"abcdefg", b"hello, heather\n", &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("tail").args(["-c", "+7"]), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tail exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // The same bytes however the reads fall: two at a time, with a pause.
+    let dripped = b"0123456789abcdefghij";
+    let mut child = Command::new(&binary).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        for pair in dripped.chunks(2) {
+            let _ = stdin.write_all(pair);
+            let _ = stdin.flush();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert_eq!((out.status.code(), &out.stdout[..]), (Some(0), &dripped[6..]), "a skip that ends in a later read");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room for this\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn compiled_wc_counts_lines_as_gnu_wc() {
     let dir = scratch("wc");
@@ -197,6 +329,33 @@ fn compiled_wc_counts_lines_as_gnu_wc() {
     let lines = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
     let bytes = random.take(70000, |r| r as u8);
     for input in [&b""[..], b"no newline", b"one\n", b"\n\n\n", &lines, &bytes] {
+        let (code, _) = run(&mut Command::new(&binary), input, Stdio::null());
+        let (_, gnu_out) = run(Command::new("wc").arg("-l"), input, Stdio::piped());
+        let count: u64 = String::from_utf8(gnu_out).unwrap().trim().parse().unwrap();
+        assert_eq!(code, Some((count % 256) as i32), "wc's status is GNU's count ({} bytes in)", input.len());
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// wc -l with each read's newlines counted by `count_newlines`, a function
+/// lent the buffer: compiled into the same file by the function compiler
+/// and passed the buffer's address and capacity by the call
+/// (docs/native-one-compiler-design.md §2.3). GNU's counts, and so the
+/// counts of the wc above, whose loop is the program's own.
+#[test]
+fn compiled_wc_calling_a_function_over_its_buffer_counts_as_gnu_wc() {
+    let dir = scratch("wc-called");
+    let binary = dir.join("wc");
+    write_program("lib/native/native_tools.hthr", "wc_l_called_tool", &binary, true);
+
+    let mut random = Bytes::seeded("wc-called");
+    let lines = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    // Reads of every length up to the buffer's 256 bytes and past it: a
+    // newline at each end of a read, and none.
+    let ends: Vec<u8> = (0..1024u32).map(|i| if i % 256 == 0 || i % 256 == 255 { b'\n' } else { b'x' }).collect();
+    for input in [&b""[..], b"no newline", b"one\n", b"\n\n\n", &ends, &lines, &bytes] {
         let (code, _) = run(&mut Command::new(&binary), input, Stdio::null());
         let (_, gnu_out) = run(Command::new("wc").arg("-l"), input, Stdio::piped());
         let count: u64 = String::from_utf8(gnu_out).unwrap().trim().parse().unwrap();

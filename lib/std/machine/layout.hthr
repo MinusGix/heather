@@ -1,0 +1,415 @@
+// Layout as a value: how many bytes a value takes and what its place is a
+// multiple of, with the operations Rust's `std::alloc::Layout` has and
+// what its documentation says of them as theorems
+// (docs/layout-design.md; issues/sha256-context-type.md is the first
+// customer). Two layers, each usable without the next:
+//
+// - `Layout`: a size and an alignment. `offset_of` and `extend` put one
+//   value after another; `stride`, `pad_to_align` and `array` repeat one.
+//   The alignment is held by its exponent, so it is a power of two by
+//   construction and no theorem has that as a premise. Rounding is
+//   `Nat::round_up` (lib/std/num/nat.hthr).
+// - Field tables: a `Field` is an offset and a layout, and `Layout::Fits`
+//   is what makes a table of them sound however it was made: each field
+//   inside the whole, aligned, and no two sharing a byte.
+//   `Layout::in_order` is Rust's `repr(C)` rule, with `in_order_fits`
+//   proved once; a table written by hand is checked by evaluation
+//   (`fits_of_bit`).
+//
+// Sums are written `size + offset`, the size first: `+` recurses on its
+// second argument, and this is the convention of
+// `lib/std/data/list_window.hthr`, which a field's bytes are read with.
+//
+// Sizes are `Nat`, so nothing here overflows. The same functions over
+// words, for a layout computed by compiled code, are
+// docs/layout-design.md §4.
+
+import logic;
+import bool;
+import nat;
+import algebra;
+import omega;
+import option;
+import list;
+
+// ---------------------------------------------------------------------------
+// A size and an alignment
+
+// How many bytes a value takes and what its place is a multiple of. The
+// alignment is held by its exponent, so it is a power of two by
+// construction and no operation has that to prove.
+record Layout { size: Nat, align_log: Nat }
+
+// The alignment in bytes.
+fn Layout::align(self l: Layout) → Nat { (2).pow(l.align_log) }
+
+evidence theorem Layout::align_pos({l: Layout}): 0 < l.align() { Nat::pow_pos() }
+
+// `n` bytes with no alignment asked.
+fn Layout::bytes(n: Nat) → Layout { Layout(n, 0) }
+
+// A word of `2^k` bytes, aligned to its size: `u8`, `u16`, `u32` and `u64`
+// are at 0, 1, 2 and 3.
+fn Layout::word(k: Nat) → Layout { Layout((2).pow(k), k) }
+
+// A place is aligned for `l`.
+fn Layout::Aligned(self l: Layout, at: Nat) → Type { l.align().Divides(at) }
+
+// Where a value of `next` goes after one of `l`: the first place at or
+// past `l`'s end that is aligned for it.
+fn Layout::offset_of(self l: Layout, next: Layout) → Nat { l.size.round_up(next.align()) }
+
+// `l` and then `next`, which is at `l.offset_of(next)`.
+fn Layout::extend(self l: Layout, next: Layout) → Layout {
+    Layout(next.size + l.offset_of(next), l.align_log.max(next.align_log))
+}
+
+// The size rounded up to the alignment: what one element of an array takes.
+fn Layout::stride(self l: Layout) → Nat { l.size.round_up(l.align()) }
+
+fn Layout::pad_to_align(self l: Layout) → Layout { Layout(l.stride(), l.align_log) }
+
+// `n` of `l`, element `i` at `i * l.stride()`.
+fn Layout::array(self l: Layout, n: Nat) → Layout { Layout(n * l.stride(), l.align_log) }
+
+// The same bytes with no alignment asked.
+fn Layout::packed(self l: Layout) → Layout { Layout(l.size, 0) }
+
+theorem Layout::offset_of_ge(self l, next: Layout): l.size <= l.offset_of(next) { l.size.le_round_up(next.align()) }
+
+theorem Layout::offset_of_lt(self l, next: Layout): l.offset_of(next) < l.size + next.align() {
+    l.size.round_up_lt(next.align())
+}
+
+theorem Layout::offset_of_aligned(self l, next: Layout): next.Aligned(l.offset_of(next)) {
+    l.size.round_up_dvd(next.align())
+}
+
+// No aligned place for `next` is between `l`'s end and the offset.
+theorem Layout::offset_of_least(self l, next: Layout, {at: Nat}, aligned: next.Aligned(at), past: l.size <= at):
+    l.offset_of(next) <= at
+{
+    l.size.round_up_least(next.align(), aligned, past)
+}
+
+// ---------------------------------------------------------------------------
+// Alignment
+
+// What is aligned for a layout is aligned for one whose alignment divides it.
+theorem Layout::aligned_of_dvd(self l: Layout, {m: Layout}, {at: Nat}, finer: l.align().Divides(m.align()), aligned: m.Aligned(at)):
+    l.Aligned(at)
+{
+    l.align().dvd_trans(finer, aligned)
+}
+
+theorem Layout::aligned_zero(self l: Layout): l.Aligned(0) { l.align().dvd_zero() }
+
+theorem Layout::aligned_add(self l: Layout, {at, more: Nat}, here: l.Aligned(at), there: l.Aligned(more)): l.Aligned(at + more) {
+    l.align().dvd_add(here, there)
+}
+
+// ---------------------------------------------------------------------------
+// `extend`: two values in order
+
+theorem Layout::extend_end(self l, next: Layout): l.extend(next).size = next.size + l.offset_of(next) { refl }
+
+// The first value is inside the pair, and before the second.
+theorem Layout::extend_first_inside(self l, next: Layout): l.size <= l.extend(next).size {
+    l.size.le_trans(l.offset_of(next), next.size + l.offset_of(next), l.offset_of_ge(next), next.size.le_add_r(l.offset_of(next)))
+}
+
+theorem Layout::extend_align_l(self l, next: Layout): l.align().Divides(l.extend(next).align()) {
+    (2).pow_dvd_pow_of_le(l.align_log.le_max_l(next.align_log))
+}
+
+theorem Layout::extend_align_r(self l, next: Layout): next.align().Divides(l.extend(next).align()) {
+    (2).pow_dvd_pow_of_le(l.align_log.le_max_r(next.align_log))
+}
+
+// Where the pair is aligned, each of the two is.
+theorem Layout::extend_aligned_l(self l, next: Layout, {at: Nat}, aligned: l.extend(next).Aligned(at)): l.Aligned(at) {
+    l.aligned_of_dvd(l.extend_align_l(next), aligned)
+}
+
+theorem Layout::extend_aligned_r(self l, next: Layout, {at: Nat}, aligned: l.extend(next).Aligned(at)):
+    next.Aligned(at + l.offset_of(next))
+{
+    next.aligned_add(next.aligned_of_dvd(l.extend_align_r(next), aligned), l.offset_of_aligned(next))
+}
+
+// ---------------------------------------------------------------------------
+// `stride`, `pad_to_align` and `array`
+
+theorem Layout::stride_ge(self l: Layout): l.size <= l.stride() { l.size.le_round_up(l.align()) }
+
+theorem Layout::stride_lt(self l: Layout): l.stride() < l.size + l.align() { l.size.round_up_lt(l.align()) }
+
+theorem Layout::stride_aligned(self l: Layout): l.Aligned(l.stride()) { l.size.round_up_dvd(l.align()) }
+
+theorem Layout::stride_of_aligned(self l: Layout, whole: l.Aligned(l.size)): l.stride() = l.size {
+    l.size.round_up_of_dvd(l.align(), whole)
+}
+
+// Padding once is enough.
+theorem Layout::pad_to_align_stride(self l: Layout): l.pad_to_align().stride() = l.stride() {
+    l.size.round_up_round_up(l.align())
+}
+
+theorem Layout::word_stride(k: Nat): Layout::word(k).stride() = (2).pow(k) {
+    Layout::word(k).stride_of_aligned(Nat::dvd_refl((2).pow(k)))
+}
+
+theorem Layout::bytes_stride(n: Nat): Layout::bytes(n).stride() = n {
+    Layout::bytes(n).stride_of_aligned(n.mod_one())
+}
+
+// Element `i` of an array ends at or before element `j` begins, for `i`
+// before `j`: no two elements share a byte.
+theorem Layout::array_elements_apart(self l: Layout, {i, j: Nat}, before: i < j): l.size + i * l.stride() <= j * l.stride() {
+    let step: Succ(i) * l.stride() <= j * l.stride() = l.stride().mul_le_mono_r(Succ(i), j, before);
+    let unrolled: (Succ(i) * l.stride() = l.stride() + i * l.stride()) = i.mul_succ_left(l.stride());
+    let fits: l.size <= l.stride() = l.stride_ge();
+    omega(step, unrolled, fits)
+}
+
+// Every element is inside the array.
+theorem Layout::array_element_inside(self l: Layout, {n, i: Nat}, inside: i < n): l.size + i * l.stride() <= l.array(n).size {
+    l.array_elements_apart(inside)
+}
+
+// Where the array is aligned, every element is.
+theorem Layout::array_element_aligned(self l: Layout, n, i: Nat, {at: Nat}, aligned: l.array(n).Aligned(at)):
+    l.Aligned(at + i * l.stride())
+{
+    l.aligned_add(aligned, l.align().dvd_mul_right(i, l.stride_aligned()))
+}
+
+theorem Layout::array_stride(self l: Layout, n: Nat): l.array(n).stride() = l.array(n).size {
+    l.array(n).stride_of_aligned(l.align().dvd_mul_right(n, l.stride_aligned()))
+}
+
+// ---------------------------------------------------------------------------
+// Fields of a whole
+
+// Where a field is and what it takes.
+record Field { offset: Nat, layout: Layout }
+
+// One past the field's last byte.
+fn Field::end(self f: Field) → Nat { f.layout.size + f.offset }
+
+// Two fields share no byte.
+fn Field::Apart(self f, g: Field) → Type { f.end() <= g.offset ∨ g.end() <= f.offset }
+
+theorem Field::apart_symm(self f, g: Field, apart: f.Apart(g)): g.Apart(f) {
+    match apart { Inl(before) => Inr(before), Inr(after) => Inl(after) }
+}
+
+fn Field::ApartFrom(self f: Field, others: List<Field>) → Type {
+    match others { Nil => True, Cons(g, rest) => f.Apart(g) ∧ f.ApartFrom(rest) }
+}
+
+// The field is inside `whole`, at an aligned offset, and asks no more
+// alignment than `whole` gives.
+fn Field::Within(self f: Field, whole: Layout) → Type {
+    f.end() <= whole.size ∧ f.layout.Aligned(f.offset) ∧ f.layout.align_log <= whole.align_log
+}
+
+// What makes a table of fields sound, however it was made: each field
+// within the whole, and no two sharing a byte.
+fn Layout::Fits(self whole: Layout, fields: List<Field>) → Type {
+    match fields { Nil => True, Cons(f, rest) => f.Within(whole) ∧ f.ApartFrom(rest) ∧ whole.Fits(rest) }
+}
+
+// Where the whole is aligned, a field within it is.
+theorem Field::within_aligned(self f: Field, {whole: Layout}, within: f.Within(whole), {at: Nat}, aligned: whole.Aligned(at)):
+    f.layout.Aligned(at + f.offset)
+{
+    f.layout.aligned_add(f.layout.aligned_of_dvd((2).pow_dvd_pow_of_le(within.right.right), aligned), within.right.left)
+}
+
+// ---------------------------------------------------------------------------
+// Fields in order: each at the next aligned place
+
+// `items` one after another past `start`.
+fn Layout::then_all(self start: Layout, items: List<Layout>) → Layout {
+    match items { Nil => start, Cons(item, rest) => start.extend(item).then_all(rest) }
+}
+
+// Where each of them is.
+fn Layout::fields_after(self start: Layout, items: List<Layout>) → List<Field> {
+    match items {
+        Nil => Nil,
+        Cons(item, rest) => Cons(Field(start.offset_of(item), item), start.extend(item).fields_after(rest)),
+    }
+}
+
+theorem Layout::extend_log_l(self l, next: Layout): l.align_log <= l.extend(next).align_log { l.align_log.le_max_l(next.align_log) }
+
+theorem Layout::extend_log_r(self l, next: Layout): next.align_log <= l.extend(next).align_log { l.align_log.le_max_r(next.align_log) }
+
+theorem Layout::then_all_size_ge(self start: Layout, items: List<Layout>): start.size <= start.then_all(items).size {
+    match items {
+        Nil => start.size.le_refl(),
+        Cons(item, rest) => start.size.le_trans(start.extend(item).size, start.extend(item).then_all(rest).size,
+            start.extend_first_inside(item), start.extend(item).then_all_size_ge(rest)),
+    }
+}
+
+theorem Layout::then_all_log_ge(self start: Layout, items: List<Layout>): start.align_log <= start.then_all(items).align_log {
+    match items {
+        Nil => start.align_log.le_refl(),
+        Cons(item, rest) => start.align_log.le_trans(start.extend(item).align_log, start.extend(item).then_all(rest).align_log,
+            start.extend_log_l(item), start.extend(item).then_all_log_ge(rest)),
+    }
+}
+
+// A field that ends at or before `start` shares no byte with what is
+// laid out past it.
+theorem Layout::fields_after_apart(self start: Layout, items: List<Layout>, f: Field, before: f.end() <= start.size):
+    f.ApartFrom(start.fields_after(items))
+{
+    match items {
+        Nil => trivial,
+        Cons(item, rest) => And(
+            Inl(f.end().le_trans(start.size, start.offset_of(item), before, start.offset_of_ge(item))),
+            start.extend(item).fields_after_apart(rest, f,
+                f.end().le_trans(start.size, start.extend(item).size, before, start.extend_first_inside(item)))),
+    }
+}
+
+// The fields laid out past `start` fit any whole that holds them all.
+theorem Layout::fields_after_fit(self start: Layout, items: List<Layout>, whole: Layout,
+    size: start.then_all(items).size <= whole.size, log: start.then_all(items).align_log <= whole.align_log):
+    whole.Fits(start.fields_after(items))
+{
+    match items {
+        Nil => trivial,
+        Cons(item, rest) => And(
+            And(start.extend(item).size.le_trans(start.extend(item).then_all(rest).size, whole.size,
+                    start.extend(item).then_all_size_ge(rest), size),
+                And(start.offset_of_aligned(item),
+                    item.align_log.le_trans(start.extend(item).align_log, whole.align_log, start.extend_log_r(item),
+                        start.extend(item).align_log.le_trans(start.extend(item).then_all(rest).align_log, whole.align_log,
+                            start.extend(item).then_all_log_ge(rest), log)))),
+            And(start.extend(item).fields_after_apart(rest, Field(start.offset_of(item), item), start.extend(item).size.le_refl()),
+                start.extend(item).fields_after_fit(rest, whole, size, log))),
+    }
+}
+
+// Rust's `repr(C)`: the fields in the order written, each at the next
+// aligned place, and the whole padded to its alignment.
+fn Layout::in_order(items: List<Layout>) → Layout { Layout::bytes(0).then_all(items).pad_to_align() }
+
+fn Layout::fields_in_order(items: List<Layout>) → List<Field> { Layout::bytes(0).fields_after(items) }
+
+theorem Layout::in_order_fits(items: List<Layout>): Layout::in_order(items).Fits(Layout::fields_in_order(items)) {
+    Layout::bytes(0).fields_after_fit(items, Layout::in_order(items),
+        Layout::bytes(0).then_all(items).stride_ge(), Layout::bytes(0).then_all(items).align_log.le_refl())
+}
+
+// ---------------------------------------------------------------------------
+// What a sound table gives a field by its index
+
+theorem Layout::fits_within(self whole: Layout, fields: List<Field>):
+    whole.Fits(fields) → (i: Nat) → (f: Field) → fields.nth(i) = Some(f) → f.Within(whole)
+{
+    match fields {
+        Nil => λ _ i f at => absurd(at),
+        Cons(_, rest) => λ fits i => match i {
+            Zero => λ f at => j(inj(at), λ x _ => x.Within(whole), fits.left),
+            Succ(k) => λ f at => whole.fits_within(rest, fits.right.right, k, f, at),
+        },
+    }
+}
+
+// A field apart from every field of a table is apart from each by index.
+theorem Field::apart_from_nth(self f: Field, others: List<Field>):
+    f.ApartFrom(others) → (i: Nat) → (g: Field) → others.nth(i) = Some(g) → f.Apart(g)
+{
+    match others {
+        Nil => λ _ i g at => absurd(at),
+        Cons(h, rest) => λ apart i => match i {
+            Zero => λ g at => j(inj(at), λ x _ => f.Apart(x), apart.left),
+            Succ(k) => λ g at => f.apart_from_nth(rest, apart.right, k, g, at),
+        },
+    }
+}
+
+// Two fields of a sound table at different indices share no byte.
+theorem Layout::fits_apart_ordered(self whole: Layout, fields: List<Field>):
+    whole.Fits(fields) → (i, d: Nat) → (f, g: Field) → fields.nth(i) = Some(f) → fields.nth(d + Succ(i)) = Some(g) → f.Apart(g)
+{
+    match fields {
+        Nil => λ _ i d f g at _ => absurd(at),
+        Cons(h, rest) => λ fits i => match i {
+            Zero => λ d f g at later => j(inj(at), λ x _ => x.Apart(g), h.apart_from_nth(rest, fits.right.left, d, g, later)),
+            Succ(k) => λ d f g at later => whole.fits_apart_ordered(rest, fits.right.right, k, d, f, g, at, later),
+        },
+    }
+}
+
+theorem Layout::fits_apart(self whole: Layout, fields: List<Field>, fits: whole.Fits(fields), i, k: Nat, {f, g: Field},
+    at_i: fields.nth(i) = Some(f), at_k: fields.nth(k) = Some(g), distinct: i ≠ k): f.Apart(g)
+{
+    match i.lt_trichotomy(k) {
+        Inl(below) => whole.fits_apart_ordered(fields, fits, i, k - Succ(i), f, g, at_i,
+            j(sym(Nat::sub_add_cancel(Succ(i), k, below)), λ x _ => fields.nth(x) = Some(g), at_k)),
+        Inr(Inl(same)) => false_elim(distinct(same)),
+        Inr(Inr(above)) => g.apart_symm(f, whole.fits_apart_ordered(fields, fits, k, i - Succ(k), g, f, at_k,
+            j(sym(Nat::sub_add_cancel(Succ(k), i, above)), λ x _ => fields.nth(x) = Some(f), at_i))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A table written by hand is checked by evaluation
+
+fn Field::apart_bit(self f, g: Field) → Bool { f.end().leb(g.offset) || g.end().leb(f.offset) }
+
+fn Field::apart_from_bit(self f: Field, others: List<Field>) → Bool {
+    match others { Nil => True, Cons(g, rest) => f.apart_bit(g) && f.apart_from_bit(rest) }
+}
+
+fn Field::within_bit(self f: Field, whole: Layout) → Bool {
+    f.end().leb(whole.size) && (f.offset.mod(f.layout.align()).leb(0) && f.layout.align_log.leb(whole.align_log))
+}
+
+fn Layout::fits_bit(self whole: Layout, fields: List<Field>) → Bool {
+    match fields { Nil => True, Cons(f, rest) => f.within_bit(whole) && (f.apart_from_bit(rest) && whole.fits_bit(rest)) }
+}
+
+theorem Field::apart_of_bit(self f, g: Field, bit: f.apart_bit(g) = True): f.Apart(g) {
+    match Bool::or_true_parts(f.end().leb(g.offset), g.end().leb(f.offset), bit) {
+        Inl(before) => Inl(f.end().le_of_leb(g.offset, before)),
+        Inr(after) => Inr(g.end().le_of_leb(f.offset, after)),
+    }
+}
+
+theorem Field::apart_from_of_bit(self f: Field, others: List<Field>): f.apart_from_bit(others) = True → f.ApartFrom(others) {
+    match others {
+        Nil => λ _ => trivial,
+        Cons(g, rest) => λ bit => And(
+            f.apart_of_bit(g, Bool::and_true_parts(f.apart_bit(g), f.apart_from_bit(rest), bit).left),
+            f.apart_from_of_bit(rest, Bool::and_true_parts(f.apart_bit(g), f.apart_from_bit(rest), bit).right)),
+    }
+}
+
+theorem Field::within_of_bit(self f: Field, whole: Layout, bit: f.within_bit(whole) = True): f.Within(whole) {
+    let parts = Bool::and_true_parts(f.end().leb(whole.size),
+        f.offset.mod(f.layout.align()).leb(0) && f.layout.align_log.leb(whole.align_log), bit);
+    let rest = Bool::and_true_parts(f.offset.mod(f.layout.align()).leb(0), f.layout.align_log.leb(whole.align_log), parts.right);
+    And(f.end().le_of_leb(whole.size, parts.left),
+        And(f.offset.mod(f.layout.align()).le_antisym(0, f.offset.mod(f.layout.align()).le_of_leb(0, rest.left), trivial),
+            f.layout.align_log.le_of_leb(whole.align_log, rest.right)))
+}
+
+theorem Layout::fits_of_bit(self whole: Layout, fields: List<Field>): whole.fits_bit(fields) = True → whole.Fits(fields) {
+    match fields {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ bit => And(
+            f.within_of_bit(whole, Bool::and_true_parts(f.within_bit(whole), f.apart_from_bit(rest) && whole.fits_bit(rest), bit).left),
+            And(f.apart_from_of_bit(rest, Bool::and_true_parts(f.apart_from_bit(rest), whole.fits_bit(rest),
+                    Bool::and_true_parts(f.within_bit(whole), f.apart_from_bit(rest) && whole.fits_bit(rest), bit).right).left),
+                whole.fits_of_bit(rest, Bool::and_true_parts(f.apart_from_bit(rest), whole.fits_bit(rest),
+                    Bool::and_true_parts(f.within_bit(whole), f.apart_from_bit(rest) && whole.fits_bit(rest), bit).right).right))),
+    }
+}

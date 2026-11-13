@@ -3,7 +3,7 @@ title: Benchmark suite for the frontend (parse, elaborate, full-file check)
 status: closed
 labels: [frontend,elaboration,performance,tooling]
 created: 2026-07-27
-updated: 2026-08-17
+updated: 2026-11-11
 ---
 
 Companion to [[kernel-benchmarks]], separate because the questions differ:
@@ -68,3 +68,4 @@ WHAT WAS RE-RECORDED (old -> new, min-ns rows): corpus/check-file ir_v1.hthr 67.
 TWO THINGS THE RE-RECORD EXPOSED, both filed rather than absorbed:
 - [[frontend-bench-baseline-host-string]]: the old baseline's host string did not match this machine, so `--check` had been comparing SHAPE ONLY here -- 9 comparisons where a matching baseline gives 50 to 57 -- while exiting 0. Half the gate was off and said "ok".
 - [[frontend-bench-heavy-contaminates-cheap-cases]]: with times live again, a full `--check` flags 4 to 7 cheap cases at 1.26-1.58x, reproducibly, while `--check --no-heavy` in the same minute is green with 50 comparisons and `--check --filter scale/declarations` is green with 5. The heavy ir_v1 cases contaminate every later family in the process. So the interim protocol, now in docs/frontend-benchmarking.md, is: believe the time half from `--no-heavy`, and run the full suite for the slope bands, the latency budgets and the guards -- which were green in every run of the evening, including `lib/certgen/ir_v1.hthr` at 3.78 s against its unchanged 150 s budget (the budget is enforced again at all: the panic used to abort the worker before the untruncated case ran).
+- 2026-11-11: Seen again 2026-11-11 under a full `scripts/test --pr` run (247 test files, native gates in full): family `corpus/check-file`, 'split exceeds the run it came from'. Three reruns of the test alone passed. Second sighting of the 2026-08-09 flake; the tolerance that entry suggests is still unbuilt.

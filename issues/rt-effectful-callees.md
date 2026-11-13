@@ -5,7 +5,7 @@ labels: [native,effects,runtime]
 area: heather-in-heather
 milestone: [nh-effects]
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-11
 ---
 
 `ETm` has no call of another effectful function
@@ -33,3 +33,7 @@ coarsest non-locality in the pipeline (`docs/effects-locality-design.md`
 
 - **[[effects-uniqueness-surface]]** owns the reflector and `ETm`.
 - **[[native-procedure-contracts]]** owns the procedure contract.
+
+## Log
+
+- 2026-11-11: docs/native-procedures-are-functions-design.md §2.8 places this after U5 of [[native-one-compiler]]: an `EFun` with parameters lowers to a `Procedure` under the one contract, and linking procedures from `runtime fn`s is where each gets a file of words of its own. [[runtime-fn-recursion]] assumes that linking.

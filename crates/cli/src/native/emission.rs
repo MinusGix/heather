@@ -68,6 +68,9 @@ impl Shape {
         let leaves = if arity == 0 { 1 } else { children.iter().map(|c| c.leaves).sum() };
         Ok(Shape { kind, names, then, children, leaves, index })
     }
+
+    /// The label name after it: a leaf's own count, else its last part's.
+    fn end(&self) -> u64 { self.children.last().map_or(self.then, Shape::end) }
 }
 
 fn malformed() -> String { "the statement tree's shape is malformed".into() }
@@ -115,9 +118,15 @@ impl Part {
 /// live before it from the allocation's check (`Stmt::emits_then_checked`).
 pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part, exit: usize, calls: Option<Calls>, joins: Vec<usize> }
 
-/// A source with procedures: each procedure's way in, its body's parts and
-/// its way out, read after the exit, then the shared exit.
-struct Calls { src: String, bodies: Vec<Body>, deep: usize }
+/// A source with procedures or functions: each procedure's way in, its
+/// body's parts and its way out, read after the exit, then the shared exit,
+/// then the functions' code (`Prog::links`) when it has any.
+struct Calls { src: String, homes: String, bodies: Vec<Body>, deep: usize, functions: Option<usize> }
+
+/// What `plan` takes of such a source: its spelling and its homes', its
+/// procedures' shapes (`List::procedures_shapes`), and whether it has
+/// functions.
+pub(super) struct CallsOf<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [u64], pub functions: bool }
 
 /// Procedure `index`'s reads: its way in (`Procedure::entry_code`), its
 /// body, and its way out (`Procedure::exit_code`).
@@ -139,25 +148,29 @@ fn procedure(src: &str, index: usize) -> String { format!("{src}().procedures.pr
 
 /// `shape` is `Source::shape`'s list (the preorder reversed, three numbers a
 /// node); `source`, `entry` and `layout` spell the main statement, the
-/// program it is emitted after, and the layout. With `procedures` (the
-/// source's spelling, for a source with procedures) the main statement
+/// program it is emitted after, and the layout. With `calls` (for a source
+/// with procedures or functions) the main statement
 /// starts at label name `first` (`Source::main_names`), and each
 /// procedure is read after the exit, its body a part at a time from its
-/// shape (`List::procedures_shapes`), then the shared exit.
-pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64], first: u64, procedures: Option<(&str, &[u64])>) -> Result<Plan, String> {
+/// shape (`List::procedures_shapes`), then the shared exit, then the
+/// functions' code, whose inner labels start after the last name the
+/// shapes count.
+pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64], first: u64, calls: Option<CallsOf<'_>>) -> Result<Plan, String> {
     let tree = tree_of(shape, Some(first))?;
     let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\nfn {p}_kn_0() → List<Fact> {{ [] }}\n");
     let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1, joins: Vec::new() };
     planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
     let exit = planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
-    let calls = match procedures {
+    let calls = match calls {
         None => None,
-        Some((src, mut shapes)) => {
+        Some(CallsOf { src, homes, mut shapes, functions }) => {
             let mut bodies = Vec::new();
+            let mut after = tree.end();
             while let [count, rest @ ..] = shapes {
                 let count = usize::try_from(*count).ok().filter(|&c| c <= rest.len()).ok_or_else(malformed)?;
                 let tree = tree_of(&rest[..count], None)?;
+                after = tree.end();
                 shapes = &rest[count..];
                 let (index, proc_) = (bodies.len(), procedure(src, bodies.len()));
                 let id = planner.parts;
@@ -169,7 +182,8 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
                 bodies.push(Body { entry, root, exit });
             }
             let deep = planner.read("deep", format!("Start.deep_exit({layout})"));
-            Some(Calls { src: src.to_string(), bodies, deep })
+            let functions = functions.then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {after}).unwrap_or(Start)")));
+            Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions })
         }
     };
     let plain: Vec<String> = planner.joins.iter().map(|rest| format!("match {p}_s_{rest}().reads_known() {{ True => 0, False => 1 }}")).collect();
@@ -282,11 +296,13 @@ impl Reading {
 /// each read's program and items, for reading the bytes (`byte_reads`).
 pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize>, pub spans: Vec<Span>, pub calls: Option<CallsStated> }
 
-/// With procedures: `{p}_e_0`'s program and the label name after it,
-/// `{p}_procedures` (the procedures' code after its exit, each by
+/// With procedures or functions: `{p}_e_0`'s program and the label name
+/// after it, `{p}_procedures` (the procedures' code after its exit, each by
 /// `Procedure::code_of` from its parts, joined by
 /// `List::procedures_code_of`) and the label name after them, and
-/// `{p}_deep` (the shared exit after them is `{p}_code()`).
+/// `{p}_deep` (the shared exit after them, and then the functions linked,
+/// is `{p}_code()`; the functions' lowering is that one statement, so a
+/// function is as large as one declaration's fuel lowers).
 pub(super) struct CallsStated { pub main: String, pub names: u64, pub procedures: String, pub after: u64 }
 
 /// A read's program, spelled at `Start`, where its items are in the
@@ -299,8 +315,10 @@ pub(super) struct Span { program: String, pub start: usize, pub count: usize, pu
 pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [(u64, usize)] }
 
 /// `readings` are `plan`'s reads, read. With `inits`, the entry is stated
-/// from its parts (`Inits::state`); without, by one `refl`.
-pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64], readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Option<Checks<'_>>) -> Result<Stated, String> {
+/// from its parts (`Inits::state`); without, by one `refl` over the set
+/// live as `main` starts, which the allocation's check found
+/// (`Source::entry_at`): the entry zeroes those words of `main`'s frame.
+pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64], readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Checks<'_>) -> Result<Stated, String> {
     if readings.len() != plan.reads.len() { return Err(out_of_order()); }
     let mut starts = Vec::with_capacity(readings.len());
     let (mut items, mut lens) = (Vec::new(), Vec::new());
@@ -315,22 +333,24 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
     if plain.len() != plan.joins.len() { return Err(out_of_order()); }
     let plain: BTreeSet<usize> = plan.joins.iter().zip(plain).filter(|&(_, &flag)| flag == 1).map(|(&rest, _)| rest).collect();
     let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts, plain: &plain, checked: false };
-    // The allocation's check first: the main statement's joins cite its
+    // The allocation's check first: the entry reads the set it found
+    // before `main` (`{p}_ck_0`), and the main statement's joins cite its
     // verdicts.
-    if let Some(checks) = &checks {
-        writer.theorems.push_str(&checks.state(p, &plan.root)?);
-        writer.checked = true;
-    }
+    let (checked, live) = checks.state(p, &plan.root)?;
+    writer.theorems.push_str(&checked);
+    writer.checked = true;
     match inits {
-        Some(inits) => inits.state(&mut writer, entered)?,
-        None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered))),
+        Some(inits) => inits.state(&mut writer, entered, &live)?,
+        None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{\n    \
+            {src}().entry_at({LOW}, {homes}, {live}, {}, {p}_ck_0(), refl)\n}}\n", writer.program(entered), writer.program(entered),
+            src = checks.src, homes = checks.homes, LOW = super::elf::LOW)),
     }
     let (start, end, names) = writer.part(&plan.root)?;
     writer.checked = false;
     if start != entered || end != main { return Err(out_of_order()); }
     let calls = match &plan.calls {
         None => None,
-        Some(Calls { src, bodies, deep }) => {
+        Some(Calls { src, homes, bodies, deep, functions }) => {
             let from = writer.end(plan.exit);
             let (mut at, mut label) = (from, names);
             // Each procedure's start, end, label names before and after.
@@ -354,7 +374,10 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
                 spans.push((at, out, label, after));
                 (at, label) = (out, after);
             }
-            if writer.starts[*deep] != at || writer.end(*deep) != items.len() { return Err(out_of_order()); }
+            let exited = writer.end(*deep);
+            let linked = match functions { None => exited, Some(read) => { if writer.starts[*read] != exited { return Err(out_of_order()); } writer.end(*read) } };
+            if writer.starts[*deep] != at || linked != items.len() { return Err(out_of_order()); }
+            writer.cuts.extend([at, exited]);
             let (end, last) = (writer.program(at), label);
             let n = bodies.len();
             writer.theorems.push_str(&format!("theorem {p}_pl_{n}(): {src}().procedures.drop({n}).procedures_code({end}, {layout}, {n}, {last}) = Some(Compiled({end}, {last})) {{ refl }}\n"));
@@ -365,7 +388,7 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
                     procedure(src, i), i + 1, i + 1));
             }
             writer.theorems.push_str(&format!("theorem {p}_procedures(): {src}().procedures.procedures_code({}, {layout}, 0, {names}) = Some(Compiled({end}, {last})) {{ {p}_pl_0() }}\n\
-                theorem {p}_deep(): {end}.deep_exit({layout}) = {p}_code() {{ refl }}\n", writer.program(from)));
+                theorem {p}_deep(): {end}.deep_exit({layout}).links({src}().functions, {homes}.places, {last}) = Some({p}_code()) {{ refl }}\n", writer.program(from)));
             Some(CallsStated { main: writer.program(main), names, procedures: end, after: last })
         }
     };
@@ -473,8 +496,9 @@ pub(super) struct Checks<'a> { pub src: &'a str, pub homes: &'a str, pub sets: &
 
 impl Checks<'_> {
     /// `{p}_ck_{id}` for each part, and `{p}_allocation_is`, that the
-    /// compile's check of the homes passes.
-    fn state(&self, p: &str, root: &Part) -> Result<String, String> {
+    /// compile's check of the homes passes; and the set live before the
+    /// root, spelled.
+    fn state(&self, p: &str, root: &Part) -> Result<(String, String), String> {
         let bad = || "the allocation's sets did not read back".to_string();
         // A set at `at`, after its length, and where the next starts.
         let set = |at: usize| -> Result<(String, usize), String> {
@@ -493,9 +517,10 @@ impl Checks<'_> {
         let mut text = String::new();
         self.part(p, root, &sets, &mut text)?;
         let (src, homes) = (self.src, self.homes);
+        let live = sets.first().ok_or_else(bad)?.1.clone();
         text.push_str(&format!("theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{\n    \
-            {src}().allocation_of({homes}, {}, refl, {p}_ck_0(), refl)\n}}\n", sets.first().ok_or_else(bad)?.1));
-        Ok(text)
+            {src}().allocation_of({homes}, {live}, refl, {p}_ck_0(), refl)\n}}\n"));
+        Ok((text, live))
     }
 
     fn part(&self, p: &str, part: &Part, sets: &[(String, String)], text: &mut String) -> Result<(), String> {
@@ -525,19 +550,25 @@ impl Checks<'_> {
 }
 
 impl Inits<'_> {
-    /// The entry, `Source::entry`: RSP saved (`{p}_entry_saved`), then
-    /// each buffer's initial bytes stored (`{p}_in_{j}`), a definition of
-    /// them at a time (`{p}_ib_{j}_{k}_is`, joined by
-    /// `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The literal is
-    /// cut where each starts and ends.
-    fn state(&self, writer: &mut Writer<'_>, entered: usize) -> Result<(), String> {
+    /// The entry, `Source::entry`: RSP saved and `main`'s frame opened,
+    /// the words of it in `live` (the set live as `main` starts) zeroed
+    /// (`{p}_entry_saved`), then each buffer's initial bytes stored
+    /// (`{p}_in_{j}`), a definition of them at a time (`{p}_ib_{j}_{k}_is`,
+    /// joined by `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The
+    /// literal is cut where each starts and ends.
+    fn state(&self, writer: &mut Writer<'_>, entered: usize, live: &str) -> Result<(), String> {
         let (p, layout) = (writer.p, writer.layout);
         let chunk = lowered::CHUNK as u64;
-        // Six items save RSP twice and the depth (`Prog::saves_rsp`), and two
-        // store each byte while there is room.
-        const SAVED: usize = 6;
-        let mut at = SAVED;
-        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth) = {} {{ refl }}\n", self.src, writer.program(at));
+        // Two items store each initial byte while there is room, and the
+        // entry's items before them save RSP and the depth
+        // (`Prog::saves_rsp`, four), open the frame (`Prog::frames_main`,
+        // one) and zero each live word of it (two a word).
+        const SAVED: usize = 4;
+        let stores: usize = self.shapes.iter().map(|&(capacity, len)| 2 * (len as u64).min(capacity) as usize).sum();
+        let framed = entered.checked_sub(stores).filter(|&framed| framed > SAVED && (framed - SAVED) % 2 == 1)
+            .ok_or_else(|| format!("the entry's initial bytes are {stores} items, and the entry read {entered}"))?;
+        let mut at = framed;
+        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth).frames_main({layout}, {live}) = {} {{ refl }}\n", self.src, writer.program(at));
         let mut starts = Vec::with_capacity(self.shapes.len());
         for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
             starts.push(at);
@@ -576,10 +607,10 @@ impl Inits<'_> {
                 Prog::inits_of({layout}, Buffer({capacity}, {p}_it_{j}_0()), {p}_bl_{}(), {j}, {from}, {to}, {end}, {p}_it_{j}_0_is(), {p}_in_{}_is())\n}}\n",
                 j + 1, j + 1));
         }
-        let start = writer.program(SAVED);
+        let start = writer.program(framed);
         text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}) = {end} {{\n    \
-            {src}().entry_of({LOW}, {homes}, {start}, {end}, {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
-        writer.cuts.insert(SAVED);
+            {src}().entry_of({LOW}, {homes}, {live}, {start}, {end}, {p}_ck_0(), {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
+        writer.cuts.insert(framed);
         writer.theorems.push_str(&text);
         Ok(())
     }

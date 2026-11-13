@@ -1,10 +1,15 @@
 // Length-indexed vectors `[A; n]` beyond the builtin `map`/`fold`: appending
-// at the end and reversal. A vector is eliminated by recursion on its length
+// at the end, reversal, and a vector's entries as a list and back
+// (`vector_entries`, `List::vector_of`), which is how a word's bytes are
+// bytes of a buffer (lib/std/machine/stored.hthr). A vector is eliminated by recursion on its length
 // with the vector abstracted (`head`/`tail` need a successor length), the way
 // `BitVec` is; `cons(head(v), tail(v))` is `v` by η, so no lemma states it.
 
 import logic;
+import bool;
 import nat;
+import option;
+import list;
 
 fn snoc<A>({n: Nat}, xs: [A; n], x: A) → [A; Succ(n)] {
     match n {
@@ -41,4 +46,243 @@ theorem reverse_reverse<A>(n: Nat): (xs: [A; n]) → reverse(reverse(xs)) = xs {
             trans(reverse_snoc(k, reverse(tail(xs)), head(xs)), inner)
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Vectors as lists
+
+// A vector's entries, first to last.
+fn vector_entries<A>({k: Nat}, v: [A; k]) → List<A> {
+    (match k as λ j => [A; j] → List<A> {
+        Zero => λ v => Nil,
+        Succ(_, ih) => λ v => Cons(head(v), ih(tail(v))),
+    })(v)
+}
+
+// A list's first `k` entries as a vector, `pad` past its end.
+fn List::vector_of<A>(self xs: List<A>, k: Nat, pad: A) → [A; k] {
+    (match k as λ j => List<A> → [A; j] {
+        Zero => λ xs => [],
+        Succ(_, ih) => λ xs => match xs { Nil => cons(pad, ih(Nil)), Cons(h, t) => cons(h, ih(t)) },
+    })(xs)
+}
+
+theorem vector_entries_len<A>(k: Nat): (v: [A; k]) → vector_entries(v).len() = k {
+    match k as λ j => (v: [A; j]) → vector_entries(v).len() = j {
+        Zero => λ v => refl,
+        Succ(_, ih) => λ v => Nat::cong(λ m => Succ(m), ih(tail(v))),
+    }
+}
+
+// A vector's entries, read back as a vector, are the vector, whatever
+// follows them.
+theorem vector_of_entries<A>(k: Nat, pad: A): (v: [A; k]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(k, pad) = v {
+    match k as λ j => (v: [A; j]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(j, pad) = v {
+        Zero => λ v rest => refl,
+        Succ(_, ih) => λ v rest => {
+            let inner: (cons(head(v), (vector_entries(tail(v)) ++ rest).vector_of(_, pad)) = cons(head(v), tail(v))) =
+                rewrite(ih(tail(v), rest), refl);
+            inner
+        },
+    }
+}
+
+// What follows a list's first `k` entries does not change them.
+theorem List::vector_of_append<A>(k: Nat, pad: A): (xs, more: List<A>) → k <= xs.len() → (xs ++ more).vector_of(k, pad) = xs.vector_of(k, pad) {
+    match k as λ j => (xs, more: List<A>) → j <= xs.len() → (xs ++ more).vector_of(j, pad) = xs.vector_of(j, pad) {
+        Zero => λ xs more _ => refl,
+        Succ(j, ih) => λ xs more => match xs as λ ys => Succ(j) <= ys.len() → (ys ++ more).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+            Nil => λ never => false_elim(never),
+            Cons(h, t) => λ fits => {
+                let inner: (cons(h, (t ++ more).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t, more, fits), refl);
+                inner
+            },
+        },
+    }
+}
+
+// A vector's entries read back as a vector are the vector.
+theorem vector_of_entries_exact<A>(k: Nat, pad: A): (v: [A; k]) → vector_entries(v).vector_of(k, pad) = v {
+    match k as λ j => (v: [A; j]) → vector_entries(v).vector_of(j, pad) = v {
+        Zero => λ v => refl,
+        Succ(_, ih) => λ v => {
+            let inner: (cons(head(v), vector_entries(tail(v)).vector_of(_, pad)) = cons(head(v), tail(v))) = rewrite(ih(tail(v)), refl);
+            inner
+        },
+    }
+}
+
+// A list of the vector's length is every entry the vector has.
+theorem List::entries_vector_of<A>(k: Nat, pad: A): (xs: List<A>) → xs.len() = k → vector_entries(xs.vector_of(k, pad)) = xs {
+    match k as λ j => (xs: List<A>) → xs.len() = j → vector_entries(xs.vector_of(j, pad)) = xs {
+        Zero => λ xs => match xs { Nil => λ _ => refl, Cons(_, _) => λ long => absurd(long) },
+        Succ(j, ih) => λ xs => match xs as λ ys => ys.len() = Succ(j) → vector_entries(ys.vector_of(Succ(j), pad)) = ys {
+            Nil => λ short => absurd(short),
+            Cons(h, t) => λ exact => List::cong_cons(h, ih(t, Nat::succ_inj(t.len(), j, exact))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A vector from the middle of a list
+
+// The `k` entries of `xs` from `at` as a vector, `pad` past its end.
+fn List::vector_at<A>(self xs: List<A>, at, k: Nat, pad: A) → [A; k] {
+    (match k as λ j => Nat → [A; j] {
+        Zero => λ at => [],
+        Succ(_, ih) => λ at => cons(xs.nth(at).unwrap_or(pad), ih(Succ(at))),
+    })(at)
+}
+
+// A list's first entries as a vector are its first and then the rest's.
+theorem List::vector_of_succ<A>(k: Nat, pad: A): (xs: List<A>) →
+    xs.vector_of(Succ(k), pad) = cons(xs.nth(0).unwrap_or(pad), xs.drop(1).vector_of(k, pad)) {
+    λ xs => match xs {
+        Nil => refl,
+        Cons(h, t) => {
+            let inner: (cons(h, t.vector_of(k, pad)) = cons(h, t.drop(0).vector_of(k, pad))) = rewrite(t.drop_zero(), refl);
+            inner
+        },
+    }
+}
+
+// What is left after `at` entries, as a vector, is the vector from `at`.
+theorem List::vector_of_drop<A>(self xs: List<A>, pad: A): (k, at: Nat) → xs.drop(at).vector_of(k, pad) = xs.vector_at(at, k, pad) {
+    λ k => match k as λ j => (at: Nat) → xs.drop(at).vector_of(j, pad) = xs.vector_at(at, j, pad) {
+        Zero => λ at => refl,
+        Succ(j, ih) => λ at => {
+            let first: (xs.drop(at).vector_of(Succ(j), pad) = cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad))) =
+                List::vector_of_succ(j, pad, xs.drop(at));
+            let rest: (cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad)) = cons(xs.nth(at).unwrap_or(pad), xs.vector_at(Succ(at), j, pad))) =
+                rewrite(sym(xs.nth_drop(at)), rewrite(sym(xs.drop_succ(at)), rewrite(ih(Succ(at)), refl)));
+            trans(first, rest)
+        },
+    }
+}
+
+// A vector of `k` entries reads no more than `k` of them.
+theorem List::vector_of_take<A>(k: Nat, pad: A): (xs: List<A>) → xs.take(k).vector_of(k, pad) = xs.vector_of(k, pad) {
+    match k as λ j => (xs: List<A>) → xs.take(j).vector_of(j, pad) = xs.vector_of(j, pad) {
+        Zero => λ xs => refl,
+        Succ(j, ih) => λ xs => match xs as λ ys => ys.take(Succ(j)).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+            Nil => refl,
+            Cons(h, t) => {
+                let inner: (cons(h, t.take(j).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t), refl);
+                inner
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entries by index
+
+// Entry `i` of a vector.
+fn vector_index<A>({n: Nat}, v: [A; n], i: Nat, inside: i < n) → A {
+    (match n as λ m => [A; m] → (i: Nat) → i < m → A {
+        Zero => λ v i inside => false_elim(inside),
+        Succ(_, ih) => λ v i => match i { Zero => λ _ => head(v), Succ(j) => λ inside => ih(tail(v), j, inside) },
+    })(v, i, inside)
+}
+
+// The vector with `a` at entry `i`; the vector where it has no such entry.
+fn vector_update<A>({n: Nat}, v: [A; n], i: Nat, a: A) → [A; n] {
+    (match n as λ m => [A; m] → Nat → [A; m] {
+        Zero => λ v i => v,
+        Succ(_, ih) => λ v i => match i { Zero => cons(a, tail(v)), Succ(j) => cons(head(v), ih(tail(v), j)) },
+    })(v, i)
+}
+
+// Entry `i` of a vector, and `pad` where it has no such entry: the read
+// beside `vector_update`, total as it is.
+fn vector_get<A>({n: Nat}, v: [A; n], i: Nat, pad: A) → A {
+    (match n as λ m => [A; m] → Nat → A {
+        Zero => λ v i => pad,
+        Succ(_, ih) => λ v i => match i { Zero => head(v), Succ(j) => ih(tail(v), j) },
+    })(v, i)
+}
+
+theorem vector_get_inside<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → (inside: i < n) → vector_get(v, i, pad) = vector_index(v, i, inside) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (pad: A) → (inside: i < m) → vector_get(v, i, pad) = vector_index(v, i, inside) {
+        Zero => λ v i pad inside => false_elim(inside),
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ pad inside => refl,
+            Succ(j) => λ pad inside => ih(tail(v), j, pad, inside),
+        },
+    }
+}
+
+theorem vector_get_past<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → n <= i → vector_get(v, i, pad) = pad {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (pad: A) → m <= i → vector_get(v, i, pad) = pad {
+        Zero => λ v i pad past => refl,
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ pad past => false_elim(past),
+            Succ(j) => λ pad past => ih(tail(v), j, pad, past),
+        },
+    }
+}
+
+// It is the entry of the vector's list.
+theorem vector_entries_nth<A>(n: Nat): (v: [A; n]) → (i: Nat) → (inside: i < n) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (inside: i < m) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
+        Zero => λ v i inside => false_elim(inside),
+        Succ(k, ih) => λ v i => match i {
+            Zero => λ inside => refl,
+            Succ(j) => λ inside => ih(tail(v), j, inside),
+        },
+    }
+}
+
+// The updated entry is the new value.
+theorem vector_index_update_same<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a: A) → (inside: j < n) → j = i → vector_index(vector_update(v, i, a), j, inside) = a {
+    match n as λ m => (v: [A; m]) → (i, j: Nat) → (a: A) → (inside: j < m) → j = i → vector_index(vector_update(v, i, a), j, inside) = a {
+        Zero => λ v i j a inside same => false_elim(inside),
+        Succ(k, ih) => λ v i j a => match i {
+            Zero => match j {
+                Zero => λ inside same => refl,
+                Succ(_) => λ inside same => absurd(same),
+            },
+            Succ(i1) => match j {
+                Zero => λ inside same => absurd(same),
+                Succ(j1) => λ inside same => ih(tail(v), i1, j1, a, inside, Nat::succ_inj(j1, i1, same)),
+            },
+        },
+    }
+}
+
+// Every other entry is as it was.
+theorem vector_index_update_other<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a: A) → (inside: j < n) → ¬(j = i) →
+    vector_index(vector_update(v, i, a), j, inside) = vector_index(v, j, inside) {
+    match n as λ m => (v: [A; m]) → (i, j: Nat) → (a: A) → (inside: j < m) → ¬(j = i) → vector_index(vector_update(v, i, a), j, inside) = vector_index(v, j, inside) {
+        Zero => λ v i j a inside other => false_elim(inside),
+        Succ(k, ih) => λ v i j a => match i {
+            Zero => match j {
+                Zero => λ inside other => false_elim(other(refl)),
+                Succ(_) => λ inside other => refl,
+            },
+            Succ(i1) => match j {
+                Zero => λ inside other => refl,
+                Succ(j1) => λ inside other => ih(tail(v), i1, j1, a, inside, λ same => other(cong_fn(λ (m: Nat) => Succ(m), same))),
+            },
+        },
+    }
+}
+
+// Two vectors with the same entries are one.
+theorem vector_ext<A>(n: Nat): (v, w: [A; n]) → ((j: Nat) → (inside: j < n) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
+    match n as λ m => (v, w: [A; m]) → ((j: Nat) → (inside: j < m) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
+        Zero => λ v w same => refl,
+        Succ(k, ih) => λ v w same => {
+            let first: (head(v) = head(w)) = same(0, trivial);
+            let rest: (tail(v) = tail(w)) = ih(tail(v), tail(w), λ j inside => same(Succ(j), inside));
+            let both: (cons(head(v), tail(v)) = cons(head(w), tail(w))) = rewrite(first, rest, refl);
+            both
+        },
+    }
+}
+
+// An update past the vector's end changes nothing.
+theorem vector_update_past<A>(n: Nat, v: [A; n], i: Nat, a: A, past: n <= i): vector_update(v, i, a) = v {
+    vector_ext(n, vector_update(v, i, a), v, λ j inside => vector_index_update_other(n, v, i, j, a, inside, λ same =>
+        i.lt_irrefl(i.lt_of_lt_of_le(n, i, j(same, λ k _ => k < n, inside), past))))
 }

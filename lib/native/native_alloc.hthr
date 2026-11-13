@@ -29,6 +29,7 @@
 import native_source;
 import function_ir;
 import function_ir_eval;
+import function_ir_lower;
 import x86_64;
 import bool;
 import list;
@@ -66,7 +67,10 @@ fn Home::in_pool(self home: Home) → Bool {
 // the words live at its head, by the word its test reads. The sets are the
 // allocator's too, so the check never iterates a fixpoint: it finds each
 // set closed (`Stmt::checks`), and a loop the list does not reach has none.
-record Homes { of: List<Home>, loops: List<List<Nat>> }
+// `places` is the registers of the values of the functions the program
+// calls (`lower_program`'s placement), a proposal like the rest: the
+// function compiler checks what it is given.
+record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [] }
 
 fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
     match homes.loops.nth(again) { None => [], Some(set) => set }
@@ -271,6 +275,7 @@ fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
         Sequence(prefix, continuation) => nodes_writes(prefix.nodes) ++ continuation.touches(),
         Compose(prefix, continuation) => prefix.touches() ++ continuation.touches(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.touches() ++ when_false.touches(),
+        Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
         Call(_, _, result) => [result],
         Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
     }
@@ -283,6 +288,7 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
         Sequence(prefix, continuation) => nodes_words(prefix.nodes) ++ continuation.named(),
         Compose(prefix, continuation) => prefix.named() ++ continuation.named(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.named() ++ when_false.named()),
+        Lend(views, _, arguments, result) => nodes_words(views_nodes(views)) ++ Cons(result, views_homes(views) ++ arguments),
         Call(_, arguments, result) => Cons(result, arguments),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
@@ -312,7 +318,12 @@ fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<
         Compose(prefix, continuation) => homes.region_checked(continuation, out).and_then(λ mid => homes.region_checked(prefix, mid)),
         Conditional(_, condition, _, _, when_true, when_false) => homes.region_checked(when_true, out).and_then(λ y =>
             homes.region_checked(when_false, out).and_then(λ n => Some(Cons(condition, y.union(n))))),
-        Call(_, _, _) => Some(out),
+        // A call over views: its views' nodes, then a call on the views' homes.
+        Lend(views, _, arguments, result) =>
+            (match homes.apart(result, out) { False => None, True => Some(live_before(views_homes(views) ++ arguments, result, out)) }).and_then(λ mid =>
+                homes.leaf_checked(views_nodes(views), mid)),
+        // A call reads its arguments and writes its result, as a node does.
+        Call(_, arguments, result) => match homes.apart(result, out) { False => None, True => Some(live_before(arguments, result, out)) },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
@@ -451,7 +462,8 @@ fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Na
             let y = homes.region_needs(when_true, out, n.sets);
             Needs(Cons(condition, y.live.union(n.live)), y.sets)
         },
-        Call(_, _, _) => Needs(out, sets),
+        Lend(views, _, arguments, result) => Needs(nodes_live_in(views_nodes(views), live_before(views_homes(views) ++ arguments, result, out)), sets),
+        Call(_, arguments, result) => Needs(live_before(arguments, result, out), sets),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             let done = nodes_live_in(moves(outputs, parameters), out);
@@ -566,9 +578,22 @@ fn Source::closure_fuel(self src: Source) → Nat { Succ(src.words * src.words) 
 // closed loop sets.
 fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fuel(), [])) }
 
-// Every procedure's body passes the check, from its results.
+// The same homes with `places` for the values of the functions the regions
+// call (`Prog::links`, native_compile): a proposal like the homes, checked
+// by the functions' lowering.
+fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places) }
+
+// Every procedure's body passes the check, from its results, and its
+// parameters are apart from what is live as it starts: its entry writes
+// them there, and `Procedure::fits` refuses the procedure otherwise.
 fn List::bodies_check(self procs: List<Procedure>, homes: Homes) → Bool {
-    match procs { Nil => True, Cons(proc, rest) => match proc.body.checked(homes, proc.results) { None => False, Some(_) => rest.bodies_check(homes) } }
+    match procs {
+        Nil => True,
+        Cons(proc, rest) => match proc.body.checked(homes, proc.results) {
+            None => False,
+            Some(live) => homes.all_apart(proc.params, live) && rest.bodies_check(homes),
+        },
+    }
 }
 
 // `homes` when the check passes them, `main` and every procedure's body,
@@ -655,7 +680,9 @@ fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Na
             let y = homes.region_graph(when_true, out, n.of);
             Graph(Cons(condition, y.live.union(n.live)), y.of)
         },
-        Call(_, _, _) => Graph(out, of),
+        Lend(views, _, arguments, result) =>
+            leaf_graph(views_nodes(views), live_before(views_homes(views) ++ arguments, result, out), of.written(result, out)),
+        Call(_, arguments, result) => Graph(live_before(arguments, result, out), of.written(result, out)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             let done = leaf_graph(moves(outputs, parameters), out, of);
@@ -720,6 +747,8 @@ fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: 
         Compose(prefix, continuation) => continuation.weighed(loop_weight, scale, prefix.weighed(loop_weight, scale, weights)),
         Conditional(_, condition, _, _, when_true, when_false) =>
             when_false.weighed(loop_weight, scale, when_true.weighed(loop_weight, scale, weights.bump(condition, scale))),
+        Lend(views, _, arguments, result) =>
+            nodes_weights(views_nodes(views), scale, weights).bump_all(Cons(result, views_homes(views) ++ arguments), scale),
         Call(_, arguments, result) => weights.bump_all(Cons(result, arguments), scale),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let inner = scale + loop_weight;
@@ -791,7 +820,7 @@ fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
     }
 }
 
-fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops) }
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places) }
 
 // Each word in turn, heaviest first, given the first register none of its
 // neighbours has, or its slot; a word live at the start keeps its slot.
@@ -817,9 +846,18 @@ fn Greedy::standard() → Greedy { Greedy(7) }
 
 // Each procedure's body's interference and weights after `main`'s: the
 // words are the source's, so a body's two words that interfere get two
-// registers as `main`'s do.
+// registers as `main`'s do. A procedure's entry writes its parameters with
+// what is live as its body starts, so they interfere there: no statement
+// of the body writes a parameter it only reads, and without this two such
+// parameters got one register and the procedure was refused.
 fn List::bodies_graph(self procs: List<Procedure>, homes: Homes, of: List<List<Bool>>) → List<List<Bool>> {
-    match procs { Nil => of, Cons(proc, rest) => rest.bodies_graph(homes, proc.body.graph(homes, proc.results, of).of) }
+    match procs {
+        Nil => of,
+        Cons(proc, rest) => {
+            let body = proc.body.graph(homes, proc.results, of);
+            rest.bodies_graph(homes, body.of.all_written(proc.params, body.live))
+        },
+    }
 }
 fn List::bodies_weights(self procs: List<Procedure>, loop_weight: Nat, weights: List<Nat>) → List<Nat> {
     match procs { Nil => weights, Cons(proc, rest) => rest.bodies_weights(loop_weight, proc.body.weights(loop_weight, 1, weights)) }
@@ -1037,7 +1075,22 @@ theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: L
                     when_false.checked_inside(loops, m, wide, out, so, λ i x => both(i, when_true.named().mem_append_r(when_false.named(), i, x))),
                     λ n in_n => y.union(n).cons_inside(condition, m, sw(condition, Inl(refl)), y.inside_union(n, m, in_y, in_n))))
         },
-        Call(_, _, _) => λ out so sw => so,
+        Lend(views, _, arguments, result) => λ out so sw => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let slot: (homes.apart(result, out) = True) = refl;
+            let call: Option::Inside(match homes.apart(result, out) { False => None, True => Some(live_before(args, result, out)) }, m) =
+                j(sym(slot), λ b _ => Option::Inside(match b { False => None, True => Some(live_before(args, result, out)) }, m),
+                    inside_live_before(args, result, out, m, λ i x => sw(i, nodes_words(nodes).mem_append_r(Cons(result, args), i, Inr(x))), so));
+            (match homes.apart(result, out) { False => None, True => Some(live_before(args, result, out)) }).inside_and_then(m,
+                λ mid => homes.leaf_checked(nodes, mid), call,
+                λ mid inside => nodes.leaf_checked_inside(loops, mid, m, inside, λ i x => sw(i, nodes_words(nodes).mem_append_l(Cons(result, args), i, x))))
+        },
+        Call(_, arguments, result) => λ out so sw => {
+            let slot: (homes.apart(result, out) = True) = refl;
+            j(sym(slot), λ b _ => Option::Inside(match b { False => None, True => Some(live_before(arguments, result, out)) }, m),
+                inside_live_before(arguments, result, out, m, λ i x => sw(i, Inr(x)), so))
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ out so sw => {
             let set = homes.loop_set(count);
             let entry = loop_entry(bound, count, inputs, parameters);

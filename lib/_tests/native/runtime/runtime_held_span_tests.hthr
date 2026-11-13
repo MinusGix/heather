@@ -1,0 +1,175 @@
+// Probes for a function of a laid record that reads a second span
+// (`lib/native/runtime/runtime.hthr`, "A function of a laid record";
+// docs/layout-design.md §9.5): after its record it takes each span it
+// only reads, the span's bytes and then its 64-bit length word, and then
+// its words. Its code over the bytes takes the record's span first, and
+// what it is proved to be, where that span holds a record, is the
+// function of the record at the same spans. A span is passed on to a
+// callee, or to the loop's next pass, as it came. Nothing here is proved
+// by hand: each theorem restates or reads what the generator published.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// ---------------------------------------------------------------------------
+// Two words, and functions that read a second span.
+
+laid(endian := BigEndian) record Tally { count: u64, total: u64 }
+
+// A byte of a span that is only read, added to a field.
+runtime fn Tally::take(mut self t: Tally, src: List<u8>, sn, i: u64) → u64 {
+    t.count := t.count + src.byte_within(sn, i).zero_extend(56);
+    i
+}
+
+theorem take_held(own: List<u8>, t: Tally, length: u64, src: List<u8>, sn, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::take(t, src, sn, i), Tally::take::bytes(own, length, src, sn, i)) {
+    Tally::take::runs_held(own, t, length, src, sn, i, holds)
+}
+
+// A loop over the span: each byte added.
+runtime fn Tally::gather(mut self t: Tally, src: List<u8>, sn, i: u64) → u64
+    decreases (sn - i).toNat() {
+    if h: i < sn {
+        t.total := t.total + src.byte_within(sn, i).zero_extend(56);
+        t.gather(src, sn, i + 1)
+    } else {
+        i
+    }
+}
+
+theorem gather_held(own: List<u8>, t: Tally, length: u64, src: List<u8>, sn, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::gather(t, src, sn, i), Tally::gather::bytes(own, length, src, sn, i)) {
+    Tally::gather::runs_held(own, t, length, src, sn, i, holds)
+}
+
+// A caller of the loop: the span is passed on as it came.
+runtime fn Tally::both(mut self t: Tally, src: List<u8>, sn: u64) → u64 {
+    t.count := sn;
+    t.gather(src, sn, 0)
+}
+
+theorem both_held(own: List<u8>, t: Tally, length: u64, src: List<u8>, sn: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::both(t, src, sn), Tally::both::bytes(own, length, src, sn)) {
+    Tally::both::runs_held(own, t, length, src, sn, holds)
+}
+
+// A loop whose pass calls a function that reads the span.
+runtime fn Tally::each(mut self t: Tally, src: List<u8>, sn, i: u64) → u64
+    decreases (sn - i).toNat() {
+    if h: i < sn {
+        t.take(src, sn, i);
+        t.each(src, sn, i + 1)
+    } else {
+        t.count
+    }
+}
+
+theorem each_held(own: List<u8>, t: Tally, length: u64, src: List<u8>, sn, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::each(t, src, sn, i), Tally::each::bytes(own, length, src, sn, i)) {
+    Tally::each::runs_held(own, t, length, src, sn, i, holds)
+}
+
+// Read out: the record the span is left holding is the one the function
+// of the record leaves.
+theorem both_holds(own: List<u8>, t: Tally, length: u64, src: List<u8>, sn: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::stored().Holds(Tally::both::bytes(own, length, src, sn).after, length, Tally::both(t, src, sn).after) {
+    Tally::both::runs_held(own, t, length, src, sn, holds).holds
+}
+
+// The program runs to the function over the bytes at every file: the
+// span read is the file's second, and the word in its place is not read.
+theorem gather_runs(span: List<u8>, rest: List<List<u8>>, place, length, at, sn, i: u64):
+    program_run(Tally::gather::program, Cons(span, rest), 4, [place, length, at, sn, i])
+        = FTm::end_of(rest, Tally::gather::bytes(span, length, Setup::span_at(rest, 0), sn, i)) {
+    Tally::gather::runs_over(span, rest, place, length, at, sn, i)
+}
+
+// On bytes: a count of 1 and a total of 2, and three bytes read.
+def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
+
+theorem take_bytes(): Tally::take::bytes(TALLY_BYTES, 16, [7, 8, 9], 3, 1) = Mutated([0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 2], 1) { refl }
+
+theorem gather_bytes(): Tally::gather::bytes(TALLY_BYTES, 16, [7, 8, 9], 3, 0) = Mutated([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 26], 3) { refl }
+
+// Past the span's length word a byte is zero, as `byte_within` reads it.
+theorem take_past(): Tally::take::bytes(TALLY_BYTES, 16, [7, 8, 9], 2, 2) = Mutated(TALLY_BYTES, 2) { refl }
+
+theorem both_bytes(): Tally::both::bytes(TALLY_BYTES, 16, [7, 8, 9], 3) = Mutated([0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 26], 3) { refl }
+
+// A function over a bare span calls the code of a function of a record,
+// read span and all: it learns bytes, and what the span then holds is the
+// callee's own theorem to cite.
+runtime fn List::tally_take(mut self ctx: List<u8>, cn: u64, src: List<u8>, sn, i: u64) → u64 {
+    let took = Tally::take::bytes(ctx, cn, src, sn, i);
+    ctx := took.after;
+    took.value
+}
+
+theorem tally_take_bytes(): List::tally_take(TALLY_BYTES, 16, [7, 8, 9], 3, 1) = Mutated([0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 2], 1) { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+// expect-error: the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words
+runtime fn Tally::late_span(mut self t: Tally, i: u64, src: List<u8>, sn: u64) → u64 {
+    t.count := i;
+    i
+}
+
+// expect-error: the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words
+runtime fn Tally::bare_span(mut self t: Tally, src: List<u8>) → u64 {
+    t.count := 0;
+    0
+}
+
+// expect-error: a lent span is passed on as it is
+runtime fn Tally::swapped(mut self t: Tally, a: List<u8>, an: u64, b: List<u8>, bn: u64) → u64 {
+    t.both(b, bn)
+}

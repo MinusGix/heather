@@ -79,8 +79,11 @@ source into a FunctionIR program and states:
 - and `_returns`, which instantiates the theorem `compiled_returns`. Called
   at its label with its arguments in RDI, RSI, …, a return address at RSP
   and room on the stack below it, the code returns the source's value in
-  RAX, keeps the callee-saved registers and RSP, and leaves the stack above
-  the return address as it was.
+  RAX, keeps the callee-saved registers and RSP, and leaves memory as it
+  was but for stores into its own room below the return address
+  (`Stack::Wrote`). The caller's stack words follow from that
+  (`compiled_returns_keeps`), and so does anything else of the caller's
+  that such stores cannot reach.
 
 The assembly is the whole program: each function's frame, body and RET,
 with the exported symbol at its function's label. The platform ABI around
@@ -138,7 +141,10 @@ directly: `generated/*.s` is `compile-x86`'s output for each line of
 `generated/EXPORTS.tsv`, checked in, and `crates/cli/tests/native_linked.rs`
 recompiles every export and compares. `scripts/linked` rewrites the files
 after a change to a linked module or to the lowering (`--check` only
-compares). The exports today are the word functions of SHA-512 and SHA-256
+compares). Exports that share callees are one program: `compile-x86 … --entry
+<module>::<function>` exports another function of the program at a label of
+its own in the same file, under the same certificate, and a table row's
+fourth column asks for that. The exports today are the word functions of SHA-512 and SHA-256
 (`lib/native/crypto/`), each proved to be the specification's
 (`lib/std/crypto/sha2.hthr`).
 

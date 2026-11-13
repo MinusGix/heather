@@ -1,0 +1,141 @@
+// SHA-256 over a message that arrives in parts, as compiled code
+// (issues/sha2-compress-native.md, stage C2 of
+// docs/native-lexer-crypto-roadmap.md): `Sha256::init`, `Sha256::update`
+// and `Sha256::finish`, with the padding of FIPS 180-4 §5.1.1 done here
+// and not by the caller. §6.2.2 on one block a caller hands whole is
+// `Sha256::compress` (`sha256_one_block.hthr`, a module of its own so that
+// each stays inside the library gate's rail).
+//
+// Each is a function of the context, a `Sha256` (`sha256_context.hthr`):
+// what `Sha256::run` works in, and the count of bytes taken so far, most
+// significant first. No body names an offset or a width. A block is
+// assembled where the compression function wants it, in the schedule's
+// first sixteen words, so a part that ends inside a block leaves its
+// bytes there for the next, and how many is the count's low six bits.
+// After `Sha256::finish` the hash value's thirty-two bytes are the digest.
+//
+// The message is a span the functions only read: each takes the span's
+// bytes and its length word after the context. The code of
+// each runs over the span that holds the context, with the read span the
+// file's second (`Sha256::update::bytes(ctx, cn, message, mn)`), and that
+// code is what is exported: `sha256_init`, `sha256_update`,
+// `sha256_finish`.
+//
+// A byte at a time: each is stored under the context's length and the
+// block is run when the sixty-fourth lands. That is the simplest loop that
+// is right at every split of a message, and a copy of whole blocks is an
+// optimization for a compiler that has one.
+//
+// Not proved here, as in `Sha256::run`: that what these compute is
+// `Sha2::digest`. The tests are where they are linked
+// (crates/linked/tests/sha256.rs).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_filling;
+import sha256_padding;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// The initial hash value (§5.3.3) and a count of zero. Its code is eight
+// stores of a word and one of the count, each where the declaration lays
+// the field.
+runtime fn Sha256::init(mut self s: Sha256) → u64 {
+    s.hash := [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    s.count := 0;
+    0
+}
+
+// The message's bytes from `j`, each pushed into the context's block
+// (`Sha256::push`). `fill` is how many bytes the block holds.
+runtime fn Sha256::absorb(mut self s: Sha256, message: List<u8>, mn, j, fill: u64) → u64
+    decreases (mn - j).toNat() {
+    if h: j < mn {
+        let filled = s.push(fill, message.byte_within(mn, j).zero_extend(56));
+        s.absorb(message, mn, j + 1, filled)
+    } else {
+        fill
+    }
+}
+
+// A part of the message taken into a context that has `count` bytes
+// already. The count is a parameter because it is read before the stores
+// and used after them (issues/runtime-record-function-limits.md).
+runtime fn Sha256::take(mut self s: Sha256, message: List<u8>, mn, count: u64) → u64 {
+    s.absorb(message, mn, 0, count & 63);
+    s.count := count + mn;
+    count + mn
+}
+
+// One more part of the message. Its word is the count of bytes taken.
+runtime fn Sha256::update(mut self s: Sha256, message: List<u8>, mn: u64) → u64 { s.take(message, mn, s.count) }
+
+// The message has ended (`Sha256::close`). The digest is then the hash
+// value's thirty-two bytes.
+runtime fn Sha256::finish(mut self s: Sha256) → u64 { s.close(s.count) }
+
+// What the compiled code leaves, each the generator's theorem and nothing
+// here by hand: where the span held a context, it holds what the function
+// of the context leaves.
+theorem Sha256::init_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::init::bytes(span, length).after, length,
+        s with { hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], count = 0 }) {
+    Sha256::init::runs_held(span, s, length, holds).holds
+}
+
+theorem Sha256::update_holds(span: List<u8>, s: Sha256, length: u64, message: List<u8>, mn: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::update::bytes(span, length, message, mn).after, length, Sha256::update(s, message, mn).after) {
+    Sha256::update::runs_held(span, s, length, message, mn, holds).holds
+}
+
+theorem Sha256::finish_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::finish::bytes(span, length).after, length, Sha256::finish(s).after) {
+    Sha256::finish::runs_held(span, s, length, holds).holds
+}

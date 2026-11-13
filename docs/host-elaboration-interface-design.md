@@ -835,7 +835,15 @@ publishes all of them where the generator was invoked, or none.
   identity type, and `Blank`, an argument the application's domain check
   solves (a run-scoped hole, so a generator writes `cong(_, _, f, _, _, p)`
   and lets unification find the implicit arguments). `AsType(e)` checks an
-  `Expr` as a type and answers its handle.
+  `Expr` as a type and answers its handle. A declared type's `GlobalRef`
+  (from `Lookup` of its name, or from a view) stands for the type's code:
+  `Global(g)` of a type with no parameters is the code itself, so
+  `AsType(Global(g))` is the type a name declares, which is how a generator
+  handed a name reaches its type (`laid record T`, 2026-11-12); of a type
+  with parameters it is the code's function of them, which `App` applies.
+  A kernel former (`Nat`, `True`) is still not a term. A fixed array's type
+  `[A; n]` views as `HGlobal(_, "Vec", [A, n])`, under the kernel's name
+  for the former.
 - **Reading a type's shape.** `Ctors(ty)` answers each constructor of an
   inductive type: its name, its fields (name and type), and the constructor as
   a function of its fields. It reuses R3's skeleton technique: an anonymous
@@ -1060,6 +1068,19 @@ additions serve it, and neither is specific to it:
   are abstracted, so the cases receive them at their own points (Lean's
   `generalizing`). Tag 34.
 
+  **At a global (2026-11-13).** `x` may be a global `g: X`, and the answer
+  is `(y: X) → h[y/g]`: every mention of the global in the type made a
+  parameter (the constant function where there is none), by the kernel's
+  syntactic abstraction of a term out of a type (`Type::abstract_local`,
+  the one motive synthesis uses). The `runtime fn` generator of a laid
+  record needed it: a function that calls loops of its record at numerals
+  is pinned to its reads and stores by a conversion, and at the callees
+  themselves the comparison unfolds a loop pass by pass before the two
+  sides meet (`issues/conversion-callee-unfolded-before-the-meet.md`). At
+  a parameter there is no body, so the statement is reverted over each
+  callee, proved by `refl` under them, and applied to the callees. Nothing
+  is trusted: the result is a type, and the kernel checks the proof of it.
+
 ## 27. A simplifier run: `Simp` (2026-11-11)
 
 - **`Simp(laws: List<Expr>, goal: Handle) → Checked<Handle>`**: a proof of
@@ -1083,3 +1104,35 @@ additions serve it, and neither is specific to it:
   with a proof of `True` so that a check is a theorem beside the set
   (`by simp_check([S])`); refused with the law at fault and the route.
   Tag 36.
+
+## 28. A closed term's numeral: `Numeral` (2026-11-12)
+
+- **`Numeral(e: Expr) → Checked<Handle>`**: the numeral the closed term
+  `e` of type `Nat` computes to, as a handle whose `View` is `HLit`
+  (`numeral(e)` in `tactic.hthr` reads it out as a `Nat`). The term is run
+  in the kernel's value domain, where the tactic's own values are computed
+  (`Reader::nat`), under the reader's budget. Tag 37.
+- **Why it is not `Whnf`.** `Whnf` walks the term with the reducer, and a
+  library function that recurses by steps under the head is past its
+  budget at small arguments: `Nat::round_up(33, 8)` does not come back,
+  and so neither does any offset of `lib/std/machine/layout.hthr`. The
+  reflector's own numeral reader (`rt_number`, a successor at a time
+  through `Whnf`) has the same limit. A tactic's own arithmetic never met
+  it because that runs in the value domain already; what was missing was a
+  way to run a *term* there.
+- **What it is for.** A generator that asks the library for a number and
+  writes it down: `laid` computes each field's offset with the layout
+  library's own functions (the part's `offset`, whatever codec the caller
+  named) and publishes it as a literal word, `T::f_at`. The literal is not
+  trusted: it is a declaration like any other, and a statement that it is
+  the part's offset is `refl`. The alternative was a second copy of the
+  layout rule inside the generator, which is what "laying out is a
+  library" is against (`docs/layout-design.md`).
+- **Refusals**: a term that is not a `Nat` ("it is a `Bool`, and a numeral
+  is a `Nat`"), one that mentions a local, and one whose value is not a
+  numeral within the budget. Probes: `lib/_tests/std/tactic/numeral_tests.hthr`
+  (`by_numeral`, a tactic that closes `e = k` by asking, on sums,
+  rounding, a quotient and two layouts, with the three refusals).
+- **Not here**: values of other types. A string or a list computed by the
+  library has no view as one handle; `issues/eval-command-for-closed-terms.md`
+  is where a general reader of closed values would go.

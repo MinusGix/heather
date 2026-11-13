@@ -44,55 +44,8 @@ import omega;
 // `cong` with its function given.
 theorem arena_cong<A, B>(f: A → B, {a, b: A}, p: a = b): f(a) = f(b) { j(p, λ x _ => f(a) = f(x), refl) }
 
-// A vector's entries, first to last.
-fn vector_entries<A>({k: Nat}, v: [A; k]) → List<A> {
-    (match k as λ j => [A; j] → List<A> {
-        Zero => λ v => Nil,
-        Succ(_, ih) => λ v => Cons(head(v), ih(tail(v))),
-    })(v)
-}
-
-// A list's first `k` entries as a vector, `pad` past its end.
-fn List::vector_of<A>(self xs: List<A>, k: Nat, pad: A) → [A; k] {
-    (match k as λ j => List<A> → [A; j] {
-        Zero => λ xs => [],
-        Succ(_, ih) => λ xs => match xs { Nil => cons(pad, ih(Nil)), Cons(h, t) => cons(h, ih(t)) },
-    })(xs)
-}
-
-theorem vector_entries_len<A>(k: Nat): (v: [A; k]) → vector_entries(v).len() = k {
-    match k as λ j => (v: [A; j]) → vector_entries(v).len() = j {
-        Zero => λ v => refl,
-        Succ(_, ih) => λ v => Nat::cong(λ m => Succ(m), ih(tail(v))),
-    }
-}
-
-// A vector's entries, read back as a vector, are the vector, whatever
-// follows them.
-theorem vector_of_entries<A>(k: Nat, pad: A): (v: [A; k]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(k, pad) = v {
-    match k as λ j => (v: [A; j]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(j, pad) = v {
-        Zero => λ v rest => refl,
-        Succ(_, ih) => λ v rest => {
-            let inner: (cons(head(v), (vector_entries(tail(v)) ++ rest).vector_of(_, pad)) = cons(head(v), tail(v))) =
-                rewrite(ih(tail(v), rest), refl);
-            inner
-        },
-    }
-}
-
-// What follows a list's first `k` entries does not change them.
-theorem List::vector_of_append<A>(k: Nat, pad: A): (xs, more: List<A>) → k <= xs.len() → (xs ++ more).vector_of(k, pad) = xs.vector_of(k, pad) {
-    match k as λ j => (xs, more: List<A>) → j <= xs.len() → (xs ++ more).vector_of(j, pad) = xs.vector_of(j, pad) {
-        Zero => λ xs more _ => refl,
-        Succ(j, ih) => λ xs more => match xs as λ ys => Succ(j) <= ys.len() → (ys ++ more).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
-            Nil => λ never => false_elim(never),
-            Cons(h, t) => λ fits => {
-                let inner: (cons(h, (t ++ more).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t, more, fits), refl);
-                inner
-            },
-        },
-    }
-}
+// A vector's entries as a list and a list's as a vector are
+// `vector_entries` and `List::vector_of` (lib/std/data/vector.hthr).
 
 // ---------------------------------------------------------------------------
 // Lists as lists

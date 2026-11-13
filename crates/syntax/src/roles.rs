@@ -529,6 +529,10 @@ impl<'a> Walk<'a> {
                 self.expr(&p.generator);
                 self.decl(&p.decl);
             }
+            Item::PrefixedRecord(p) => {
+                self.expr(&p.generator);
+                self.item(&Item::Inductive(p.record.clone()));
+            }
             Item::Inductive(i) => {
                 if let Some(open) = self.lt_after_name(i.span, &i.name) {
                     // `record R<A: Type<1>, X>`: a parameter declared at a

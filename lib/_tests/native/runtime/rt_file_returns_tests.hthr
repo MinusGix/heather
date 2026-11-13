@@ -1,0 +1,53 @@
+// Probes of an export's return theorem at a span function's ending
+// (`lib/native/runtime/rt_file_returns.hthr`).
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_asm_table;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import runtime;
+import rt;
+import function_ir_writes;
+import function_ir_lower_reads;
+import x86_64_lending;
+import function_ir_run;
+import rt_file;
+import rt_file_loop;
+import function_ir_state;
+
+import rt_file_returns;
+
+// At a function that leaves `after` and answers `value`, the code's word is
+// `value` and the file's first buffer `after`.
+theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
+    marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+    evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), after: List<BitVec(8)>, value: BitVec(64),
+    runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, Mutated(after, value))):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (ArgsIn(arguments, argument_registers(), s.gprs) ∧ 120 * Succ(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), value, Cons(after, rest))) {
+    Ending::returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
+        stack, top, before, loan, f, below, arguments, fits, rest, Mutated(after, value), runs)
+}

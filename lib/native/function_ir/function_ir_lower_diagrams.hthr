@@ -191,7 +191,7 @@ theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: V
         Exists(Leaf(nodes.folded([]), values, buffers), ⟨Exists([], ⟨refl, ⟨trivial, ⟨λ w id => refl, refl⟩⟩⟩),
             ⟨refl, ⟨refl, ⟨refl, λ k _ w => refl⟩⟩⟩⟩);
     let lowering: LowerMatch<M>(meant, body.file, Nil, index.fst, target, block) =
-        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), evaluable, values, meant, λ w id _ => refl),
+        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), Nil, evaluable, values, meant, λ w id _ => refl),
             Exists(placement, Exists(file, Exists(body, ⟨lowered, ⟨refl, ⟨refl, represents⟩⟩⟩)))⟩⟩⟩⟩;
     let mapped = StarDiagram::runs<Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, Pair<Nat, True>>>(Leaf::Step,
         λ a b => BlockStep<M>(a, b), CompileOrder, λ k s b => CompileMatch<M>(out, meant, body.file, Nil, k, s, b),

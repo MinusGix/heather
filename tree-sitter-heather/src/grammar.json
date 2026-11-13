@@ -1301,6 +1301,10 @@
               {
                 "type": "SYMBOL",
                 "name": "value_declaration"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "record_declaration"
               }
             ]
           }

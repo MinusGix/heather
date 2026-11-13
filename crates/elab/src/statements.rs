@@ -176,7 +176,10 @@ fn elaborate_mut_call(
     let ExprKind::Dot { recv, name: method, .. } = &call.kind else {
         unreachable!("the parser marks method calls only")
     };
-    let ExprKind::Var(receiver) = &recv.kind else { unreachable!("the parser marks calls on a local only") };
+    // The receiver is a local or a field path of one (§20): the local is
+    // what is rebound either way.
+    let direct = matches!(&recv.kind, ExprKind::Var(_));
+    let receiver = &place_text(recv);
     let statement = name.starts_with("#seq");
     let (term, ty, level) = elab.infer_mut_call(cx, call)?;
     let record = elab
@@ -222,26 +225,80 @@ fn elaborate_mut_call(
         }));
         Ok(())
     };
-    bind(cx, receiver, 0)?;
+    if direct {
+        bind(cx, receiver, 0)?;
+    } else {
+        // `x.f.m(a)`: the field after the call under a private name, and
+        // `x` rebound to itself with that field replaced. The private alias
+        // records no splice, so the call is kept by a use of `x`, as it is
+        // for a local.
+        let (term, ty, level) =
+            elab.project_destructured_field(cx, &record, &ty, Rc::clone(&whole.term), 0, span)?;
+        let after = "#after";
+        let outside = cx.aliases.len();
+        cx.aliases.push(Rc::new(Alias {
+            spliced: None,
+            skel: None,
+            name: after.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+        let hole = Expr { kind: ExprKind::Var(after.to_string()), span: recv.span };
+        let (root, update) = heather_syntax::place_update(recv, hole).expect("the parser marks calls on a place only");
+        let updated = elab.infer_statement_expression(cx, &update);
+        cx.aliases.truncate(outside);
+        let (term, ty, level) = updated?;
+        cx.aliases.push(Rc::new(Alias {
+            spliced: Some(Rc::clone(&whole.spliced)),
+            skel: None,
+            name: root,
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+    }
     if !statement {
         bind(cx, name, 1)?;
     }
     Ok(Some(whole))
 }
 
-/// `\0mutated_after(x.m(a))` or `\0mutated_value(x.m(a))`
-/// ([`heather_syntax::MUTATED_AFTER`]) in expression position: one part of a
-/// claimed call, read as [`elaborate_mut_call`] binds it. When `m` returns
-/// `Mutated`, the record's `after` (what the receiver is rebound to) or
-/// `value` (what `let p = …` binds); otherwise the receiver unchanged or the
-/// call itself. `None` when `e` is neither marker.
+/// A place as written, `x.f.g`, for a message.
+fn place_text(place: &Expr) -> String {
+    match &place.kind {
+        ExprKind::Var(x) => x.clone(),
+        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", place_text(recv)),
+        _ => "_".to_string(),
+    }
+}
+
+/// `\0mutated_after(x.m(a))`, `\0mutated_value(x.m(a))` or
+/// `\0mutated_whole(x.m(a))` ([`heather_syntax::MUTATED_AFTER`]) in
+/// expression position: one part of a claimed call, read as
+/// [`elaborate_mut_call`] binds it, or both. When `m` returns `Mutated`,
+/// the record's `after` (what the receiver is rebound to), its `value`
+/// (what `let p = …` binds), or the record, which is the call; otherwise
+/// the receiver unchanged, the call itself, or `Mutated` of the two. `None`
+/// when `e` is none of the markers.
 pub(crate) fn mut_call_part(elab: &impl StatementElab, cx: &Cx, e: &Expr) -> Option<R<(Term, Type, Level)>> {
+    enum Part {
+        After,
+        Value,
+        Whole,
+    }
     let ExprKind::App { head, args, .. } = &e.kind else { return None };
     let ExprKind::Var(n) = &head.kind else { return None };
-    let after = if n == heather_syntax::MUTATED_AFTER {
-        true
+    let part = if n == heather_syntax::MUTATED_AFTER {
+        Part::After
     } else if n == heather_syntax::MUTATED_VALUE {
-        false
+        Part::Value
+    } else if n == heather_syntax::MUTATED_WHOLE {
+        Part::Whole
     } else {
         return None;
     };
@@ -252,12 +309,30 @@ pub(crate) fn mut_call_part(elab: &impl StatementElab, cx: &Cx, e: &Expr) -> Opt
         let record = elab
             .record_for_destructuring(cx, &ty, e.span)
             .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
-        match record {
-            Some(record) => {
-                elab.project_destructured_field(cx, &record, &ty, Rc::new(term), if after { 0 } else { 1 }, e.span)
+        match (record, part) {
+            (Some(_), Part::Whole) => Ok((term, ty, level)),
+            (Some(record), part) => {
+                let index = if matches!(part, Part::After) { 0 } else { 1 };
+                elab.project_destructured_field(cx, &record, &ty, Rc::new(term), index, e.span)
             }
-            None if after => elab.infer_statement_expression(cx, recv),
-            None => Ok((term, ty, level)),
+            (None, Part::After) => elab.infer_statement_expression(cx, recv),
+            (None, Part::Value) => Ok((term, ty, level)),
+            // Not a `mut self` method: the receiver as it stands, beside
+            // the call, written as the body's end is where no call ends it.
+            (None, Part::Whole) => {
+                let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span: e.span };
+                let pair = Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(var(heather_syntax::MUTATED_RECORD)),
+                        args: vec![(**recv).clone(), call.clone()],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span: e.span,
+                };
+                elab.infer_statement_expression(cx, &pair)
+            }
         }
     })())
 }

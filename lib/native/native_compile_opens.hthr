@@ -86,16 +86,24 @@ theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         λ s held => held(s.flags, s.rip));
     let at_w0 = t.goes_known_to(live, env, w0, known, fd, Rdi, in_fd, m_fd, w_w1, Vis(c, tree), q1, at_w1);
     let post0 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q1(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_known(known, env, fd), u.gprs)), u.memory);
+        q1(write_gpr(Rdi, env.word(fd), t.rbx_known_gprs(known, env, fd, u.gprs)), u.memory);
     t.goes_weaken(prog_len(p), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => post0(execute_block_normal([MovRI(Rax, BitVec::ofNat(3))], s)),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
         t.goes_block(p, 0, [MovRI(Rax, BitVec::ofNat(3))], w_w0, Vis(c, tree), post0, at_w0),
-        λ s held => ⟨held, λ f rip => ⟨⟨⟨refl, refl⟩, trivial⟩,
+        λ s held => ⟨held, t.rbx_known_cases(known, env, fd, execute_block_normal([MovRI(Rax, BitVec::ofNat(3))], s).gprs,
+            λ (g1: Gprs) => q1(write_gpr(Rdi, env.word(fd), g1), s.memory),
+            λ _ _ f rip => ⟨⟨⟨refl, refl⟩, trivial⟩,
             λ resident a => match a {
                 Closed => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held, refl⟩⟩⟩,
                 CloseFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held,
                     cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
-            }⟩⟩)
+            }⟩,
+            λ _ f rip => ⟨⟨⟨refl, refl⟩, trivial⟩,
+            λ resident a => match a {
+                Closed => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held, refl⟩⟩⟩,
+                CloseFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held,
+                    cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
+            }⟩)⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +250,10 @@ theorem Target::scratch_put(self t: Target, env: Env, name: List<BitVec(8)>, i: 
         t.layout().stack_offset().le_of_add_le(8, t.r.size, t.stack_fits()));
     let w = t.r.buffer(v).set_span(so + i, one.to_vector()).cells;
     Exists(w, ⟨t.r.store_holds(v, m, pathed.proof.left, so + i, one, fits),
-        ⟨t.layout().keeps_agree(env, v, w, pathed.proof.right.left, λ q under => t.r.cells_outside(v, so + i, one, q,
-            Inl(Nat::le_trans(Succ(q), so, so + i, under, so.le_add_l(i))))),
+        ⟨t.layout().keeps_agree(env, v, w, pathed.proof.right.left, λ q away => t.r.cells_outside(v, so + i, one, q, match away {
+            Inl(under) => Inl(Nat::le_trans(Succ(q), so, so + i, under, so.le_add_l(i))),
+            Inr(over) => Inr(omega(over, below, t.layout().stack_below_size())),
+        })),
         ⟨t.stacked_store(env, v, m, so + i, one, below, pathed.proof.right.right.left),
         ⟨λ k c early got => trans(t.r.cells_outside(v, so + i, one, so + k, Inl(so.add_le_mono_l(Succ(k), i, early))),
             pathed.proof.right.right.right(k, c, early, got)),
@@ -681,7 +691,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                 let s1 = execute_block_normal([MovRI(Rdx, BitVec::ofNat(0))], u);
                 let ends = t.path_ended(placed_env, name, m, held.right.right.right.right.right.left, room, nonzero, nul, refl);
                 let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Exists(words, ⟨ends.left,
-                    j(sym(held.right.right.right.right.right.right), λ x _ => t.homes.Agrees(live, env, words, x), agrees)⟩);
+                    j(sym(held.right.right.right.right.right.right), λ x _ => t.Agreeing(live, env, words, x), agrees)⟩);
                 let landing = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧ (t.site().Resident(t.r.profile.store(m, a, one)) ∧
                     call_pre(execute_block_normal(asking, MachineState(s1.gprs, s1.flags, next_rip(s1.rip, 3), t.r.profile.store(m, a, one)))));
                 let landed: landing(next_rip(t.r.low, so + name.len())) = ⟨t.writable(m, so + name.len(), 1, fits),
@@ -725,8 +735,9 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_r0(write_gpr(Rcx, env.word(len), write_gpr(Rbx, layout.rbx_known(known, env, len), s.gprs)), s.memory),
+            q_r0(write_gpr(Rcx, env.word(len), t.rbx_known_gprs(known, env, len, s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
         t.goes_known_to(live, env, p, known, len, Rcx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
-        λ s held => ⟨held, ⟨held, t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
+        λ s held => ⟨held, ⟨t.held_rbx_known(live, env, s.gprs, s.memory, held, known, env, len),
+            t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
 }

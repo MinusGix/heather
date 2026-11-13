@@ -1,0 +1,190 @@
+// Probes of a program linked from a function that writes a span and
+// functions that only read (lib/native/runtime/runtime_file.hthr,
+// lib/native/function_ir/function_ir_link.hthr;
+// docs/native-one-compiler-design.md §2.6, U4 step 4c-3b). The loop that
+// raises every byte of its span is an instance of `CompileSpan`, built
+// from its reflection and its own recursor; `raise`, which it calls, and
+// `twice`, which it does not, are `runtime fn`s with the instances the
+// generator publishes. The three are put into one program that numbers
+// `raise` otherwise than the loop's own table does, and the program's run
+// is the loop at every file, from the instances and nothing proved here
+// about any of the three. The link is written by hand, as the generator
+// will write it (step 4c-3c). Tests, not library: nothing imports this
+// module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_placeless;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// The functions
+
+// A lowercase ASCII letter to its capital, on a word.
+runtime fn raise(x: BitVec(64)) → BitVec(64) {
+    match x.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { False => x, True => x.sub(BitVec::ofNat(32)) }
+}
+
+// A function of the program the loop does not call.
+runtime fn twice(a: BitVec(64)) → BitVec(64) { a.add(a) }
+
+// Every byte from `i` raised, the index it stopped at returned.
+fn raise_from(span: List<BitVec(8)>, length, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) {
+        False => Mutated(span, i),
+        True => raise_from(span.with_byte_within(length, i, raise(span.byte_within(length, i).zero_extend(56)).truncate(8, 56)), length,
+            i.add(BitVec::ofNat(1))),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length, h);
+        bv_omega
+    };
+}
+
+// ---------------------------------------------------------------------------
+// The loop's instance
+
+// Its reflection (`rt_file_reflect_tests` reads this term off the
+// function): `raise` is function 0 of the loop's own table.
+fn raise_body() → FTm {
+    Let(Prim(Ult(64), [0, 1]), IfEq(0,
+        Let(Byte(0, 1, 2), Let(Prim(Zext(8, 56), [0]), Let(Call(0, [0]), Let(Prim(Trunc(8, 56), [0]), Put(5, 6, 0,
+            Let(Lit(Word(64), 1), Let(Prim(Add(64), [6, 0]), Again([9, 8, 0])))))))),
+        Pure(Var(1))))
+}
+
+fn raise_words() → List<Ty> { [Word(64), Word(64), Word(64)] }
+
+// The loop's table: one function that only reads, none that write.
+fn raise_table() → World { World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
+fn raise_callees() → (b: Buffers()) → Sig::Sems(RecInfo::none, [Sig([Word(64)], Word(64))]) { λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial) }
+
+fn raise_measure(ys: List<BitVec(64)>, span: List<BitVec(8)>) → Nat {
+    ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat()
+}
+
+theorem raise_bounded(): FFun::Bounded(raise_words(), raise_measure) { λ span place length i => BitVec::toNat_lt_pow(64, length.sub(i)) }
+
+fn raise_typed() → Itself(List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>) =
+    Itself(FTm::Source(RecInfo::none, 1, raise_words(), Word(64))) { refl }
+
+// The function's equation, from its recursor's `ext` and `irrel`.
+theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(), Word(64), raise_body(),
+    FWorld::of(raise_table(), raise_callees(), [], λ _ => trivial, rest), FTm::source_at(RecInfo::none, 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
+    raise_measure) {
+    λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
+        sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
+                raise_from::rec(length.sub(i).toNat(), s, y1, y2, p),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
+                    nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
+                sym(trans(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                        hyp([place, y1, y2], s, refl, p)),
+                    FTm::mutated_eta(raise_from(s, y1, y2))))),
+            span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
+}
+
+fn raise_from_compile() → CompileSpan<List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>>(raise_from) {
+    FFun::compile_measured([Word(64), Word(64)], Word(64), [], Word(64), raise_body(), 1, raise_table(), raise_callees(), [], λ _ => trivial,
+        raise_from, raise_typed(), λ _ => raise_measure, λ _ => raise_bounded(), raise_guarded, refl)
+}
+
+// ---------------------------------------------------------------------------
+// The program
+
+// `twice` is function 0, `raise` function 1 and the loop function 2: the
+// loop's call of its own function 0 is renamed to 1.
+fn linked_program() → List<Function> {
+    [CompileSpan::linked(raise_from, raise_from_compile(), [1]), Compile::linked(raise, raise::compile, [1]), Compile::linked(twice, twice::compile, [0])]
+}
+
+fn linked_srcs() → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending> {
+    span_all_cons(Compile::span_source(twice, twice::compile), span_all_cons(Compile::span_source(raise, raise::compile),
+        span_all_cons(CompileSpan::source(raise_from, raise_from_compile()), span_all_nil())))
+}
+
+// It runs: "abc" from index 1 becomes "aBC".
+theorem linked_runs(): program_run(linked_program(), [[b(97), b(98), b(99)], [b(7)]], 2, [w(4096), w(3), w(1)]) =
+    Ending(w(3), [[b(97), b(66), b(67)], [b(7)]]) { refl }
+
+// The function compiler takes it, the loop lent one buffer.
+theorem linked_counts(): program_counts(linked_program()) = [0, 0, 1] { refl }
+theorem linked_accepted(): lower_program_lent(linked_program(), plan_program(linked_program()), program_counts(linked_program())).is_some() = True {
+    refl
+}
+
+// The link, a function at a time, over every span and every rest of a
+// file: what each is checked by is two short lists and a code that stores
+// nothing.
+theorem linked_spanned(): program_spanned(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs())) {
+    ⟨CompileSpan::spanned(raise_from, raise_from_compile(), linked_srcs(), [1], [],
+            linked_arity(linked_program().tail(), [1, 1]), linked_still(linked_program().tail(), [True, True]), refl, λ rest own => refl, trivial,
+            λ rest own => refl, trivial),
+        ⟨Compile::spanned(raise, raise::compile, trivial, linked_srcs(), [1], linked_arity(linked_program().drop(2), [1]),
+                linked_still(linked_program().drop(2), [True]), λ rest own => refl, trivial),
+            ⟨Compile::spanned(twice, twice::compile, trivial, linked_srcs(), [0], linked_arity([], []), linked_still([], []),
+                λ rest own => refl, trivial), trivial⟩⟩⟩
+}
+
+// So the program's function 2, over any file with a span first, at any
+// place and length word, is the loop: its word, and its span over the rest.
+theorem linked_raises(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i: BitVec(64)):
+    program_run(linked_program(), Cons(span, rest), 2, [place, length, i]) =
+        Ending(raise_from(span, length, i).value, Cons(raise_from(span, length, i).after, rest)) {
+    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
+        linked_spanned(), span_pair(span, rest), 2, [place, length, i], trivial)
+}
+
+// And `raise`, function 1, returns its word and leaves the file.
+theorem linked_raise(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, x: BitVec(64)):
+    program_run(linked_program(), Cons(span, rest), 1, [x]) = Ending(raise(x), Cons(span, rest)) {
+    program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
+        linked_spanned(), span_pair(span, rest), 1, [x], trivial)
+}
+
+// ---------------------------------------------------------------------------
+// A wrong link is refused
+
+// The loop's call named `twice`, function 0: what the program answers there
+// is not the meaning the loop's table has for its callee.
+// expect-error(kernel): the kernel rejected `linked_misnamed`: NotConvertible
+theorem linked_misnamed(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>):
+    List::map(Cons(0, Nil), λ (n: Nat) => link_source(linked_srcs()(rest, own).map(span_word), n)) =
+        Sig::uncurried(RecInfo::none, raise_table().sigs, raise_callees()(Cons(own, rest))) { refl }
+
+// The loop linked as a function that only reads would be: its name is not
+// among the functions marked still.
+theorem linked_not_still(): Sig::links_fit([Sig([Word(64), Word(64), Word(64)], Word(64))], [2],
+    still_arity(linked_arity(linked_program(), [3, 1, 1]), linked_still(linked_program(), [False, True, True]))) = False { refl }

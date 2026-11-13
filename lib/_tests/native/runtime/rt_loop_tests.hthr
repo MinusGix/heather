@@ -83,7 +83,7 @@ fn count_down_world() → World { World(RecInfo::none, [Sig([Word(64), Word(64)]
 
 fn count_down_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
 
-theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world())) = True { refl }
+theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0)) = True { refl }
 
 // The body with its recursion answered by `again` is the recursor's step
 // with an ih that drops its proof.
@@ -107,8 +107,8 @@ theorem count_down_bounded(): Fun::Bounded([Word(64), Word(64)], count_down_meas
 }
 
 theorem count_down_loops(): Fun::MeasuredHolds([Word(64), Word(64)], Word(64), count_down_world(), count_down,
-    Fun::lower_measured(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world())) {
-    Fun::measured_sound(Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), count_down, count_down_measure,
+    Fun::lower_measured([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0)) {
+    Fun::measured_sound([], Word(64), [Word(64)], count_down_body(), Word(64), count_down_world(), 0, count_down, count_down_measure,
         count_down_bounded(), count_down_guarded())
 }
 
@@ -116,8 +116,9 @@ theorem count_down_loops(): Fun::MeasuredHolds([Word(64), Word(64)], Word(64), c
 // `simp` on what a pass leaves: the continuation's `λ` is crossed by
 // `Tm::leave`'s pointwise evidence, and a law about the leaving word closes.
 
-theorem leave_continuation_simplified(w: World, res: Ty, er: res.OneWord(w.tys), a: Valuation(), flag: Nat, ns: List<Nat>):
+theorem leave_continuation_simplified(w: World, res: Ty, er: res.OneWord(w.tys), a: Valuation(), flag: Nat, kept, ns: List<Nat>):
     words_of(a, ns).head_or(BitVec::zero()) =
-        Tm::leave(a, flag, ns, λ (ys: List<BitVec(64)>) => Tm::out(w.tys, res, Tm::into(w.tys, res, ys.head_or(BitVec::zero())))) {
+        Tm::leave(a, flag, kept, ns,
+            λ (ys: List<BitVec(64)>) => Tm::out(w.tys, res, Tm::into(w.tys, res, words_of(a, ns).head_or(BitVec::zero())))) {
     simp_only(Tm::out_into(w.tys, res, er), Tm::leave_first)
 }

@@ -436,6 +436,8 @@ pub enum Request {
     Simp(Vec<RExpr>, u64),
     /// The laws checked as a rewrite system (docs/simp-design.md §4).
     SimpCheck(Vec<RExpr>),
+    /// The numeral a closed term of type `Nat` computes to.
+    Numeral(RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -1010,6 +1012,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }
                 Ok(Step::Ask(Request::SimpCheck(laws)))
             }
+            37 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::Numeral(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1486,7 +1492,11 @@ impl Run {
     /// The substitution that consumes every hole: each one's solution, or
     /// `unsolved(j)` for hole `j`. Entries run oldest hole first.
     fn sigma(&self, solved_shift: u32, unsolved: impl Fn(usize) -> Term) -> GlobalSubst {
+        // A shift by nothing is the solution itself, shared: this is asked
+        // for at every application a generator's expression has, and a copy
+        // of every solution each time was most of a long generator's run.
         let entries = self.holes.iter().enumerate().map(|(j, h)| GlobalEntry::Tm(match &h.sol {
+            Some(t) if solved_shift == 0 => Rc::clone(t),
             Some(t) => Rc::new(t.shift_global(solved_shift)),
             None => Rc::new(unsolved(j)),
         })).collect();
@@ -1955,6 +1965,7 @@ impl Host<'_> {
                 Request::Revert(h, x) => Answer::Handle(refusable(self.revert_request(run, h, &x))?),
                 Request::Simp(laws, goal) => Answer::Handle(refusable(self.simp_request(run, &laws, goal, span))?),
                 Request::SimpCheck(laws) => Answer::Handle(refusable(self.simp_check_request(run, &laws, span))?),
+                Request::Numeral(e) => Answer::Handle(refusable(self.numeral_request(run, &e))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2500,6 +2511,40 @@ impl Host<'_> {
         }
     }
 
+    /// `Numeral(e)`: the numeral a closed term of type `Nat` computes to,
+    /// as a handle `View` shows as `HLit`. The term is run in the kernel's
+    /// value domain, where a tactic's own values are computed
+    /// ([`Reader::nat`]), so a library function over numerals costs its
+    /// steps there. `Whnf` walks the term instead and declines where a
+    /// function that recurses by steps is under the head (`Nat::round_up`
+    /// is past its budget at two digits), which is why a generator that
+    /// asks the library for a number asks here. Refused for a term that is
+    /// not a `Nat`, that mentions a local, or whose value is not a numeral
+    /// within the reader's budget.
+    fn numeral_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(Fault::Ill("it mentions a hole nothing has solved".into()));
+        };
+        let gamma = run.cx(at)?.gamma;
+        if !matches!(self.goal_oracle().whnf_type(&gamma, &ty), Ok(Type::Nat)) {
+            return Err(Fault::Ill(format!("it is a `{}`, and a numeral is a `Nat`", self.shown_ty(run, at, &ty))));
+        }
+        let t = Rc::new(t);
+        if heather_kernel::subst::local_bound(&t) != 0 {
+            return Err(Fault::Ill("it mentions a local, and only a closed term computes to a numeral".into()));
+        }
+        let world = self.goal_psi();
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let n = reader.nat(reader.root((*t).clone())).map_err(|why| Fault::Ill(format!("it does not compute to a numeral: {why}")))?;
+        let n = usize::try_from(n).map_err(|_| Fault::Ill("its numeral is past this machine's word".into()))?;
+        Ok(run.issue(at, Held::Term(crate::inductive::nat_lit(n), Type::Nat, Level::Zero)))
+    }
+
     /// `Abstract(h, x)`: `λ y => h[y/x]`, for `x` a local of the goal's
     /// context, a function of `x`'s type. A type is abstracted as its code,
     /// so abstracting a goal over `n` and then `m` is the motive
@@ -2540,12 +2585,36 @@ impl Host<'_> {
     /// goal's context of type `X`; what `wlog` makes of a hypothesis about
     /// its points before abstracting them. As with `Abstract`, a later local
     /// whose type mentions `x` keeps meaning the original one.
+    ///
+    /// `x` may also be a global `g: X`: the type `(y: X) → h[y/g]`, every
+    /// mention of the global a parameter (the constant function where there
+    /// is none). A generator proves a statement by conversion there, where
+    /// the name has no body to unfold, and applies the proof to `g`.
     fn revert_request(&self, run: &mut Run, h: u64, x: &RExpr) -> Result<u64, Fault> {
         let (at, held) = run.held(h)?;
         let (ty, level) = match held {
             Held::Type(t, l) => (run.committed_ty(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?, l),
             Held::Term(..) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
         };
+        // A global: the type with each mention of it a parameter of the
+        // global's type. What is proved at the parameter is proved of a
+        // name with no body to unfold, and is then read at the global.
+        if let RExpr::Global(_) = x {
+            let unsolved = || Fault::Ill("the global's term or type mentions a hole nothing has solved".into());
+            let mark = run.trail.len();
+            let r = match self.reify(run, x, at) {
+                Ok(r) => r,
+                Err(f) => {
+                    run.restore(mark);
+                    return Err(f);
+                }
+            };
+            let pat = run.committed_tm(&run.partial_tm(&r.term)).ok_or_else(unsolved)?;
+            let dom = Rc::new(run.committed_ty(&run.partial_ty(&r.ty)).ok_or_else(unsolved)?);
+            let cod = ty.abstract_local(&pat).unwrap_or_else(|| ty.shift_local(1));
+            let pi = Type::Pi { dom_level: r.level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+            return Ok(run.issue(at, Held::Type(pi, Level::join(r.level, level))));
+        }
         let p = self.root_local_position(run, x)?;
         let gamma = run.cx(at)?.gamma;
         let n = gamma.len();
@@ -3201,6 +3270,20 @@ impl Host<'_> {
             Type::Nat => HeadView::Global(run.global_ref(GlobalKey::Builtin("Nat")), "Nat".into(), Vec::new()),
             Type::Unit { .. } => HeadView::Global(run.global_ref(GlobalKey::Builtin("True")), "True".into(), Vec::new()),
             Type::Empty { .. } => HeadView::Global(run.global_ref(GlobalKey::Builtin("False")), "False".into(), Vec::new()),
+            // `[A; n]`: the fixed array's former by the kernel's name, on
+            // its element type and its length, whether the type is held as
+            // the former or as the decoding of its code.
+            Type::Vec { level, elem, len } => {
+                let a = run.issue(at, Held::Type((**elem).clone(), level.clone()));
+                let n = run.issue(at, Held::Term((**len).clone(), Type::Nat, Level::Zero));
+                HeadView::Global(run.global_ref(GlobalKey::Builtin("Vec")), "Vec".into(), vec![a, n])
+            }
+            Type::El { tm, .. } if matches!(**tm, Term::TmVec { .. }) => {
+                let Term::TmVec { level, elem, len } = &**tm else { unreachable!() };
+                let a = run.issue(at, Held::Type(Type::El { level: level.clone(), tm: elem.clone() }, level.clone()));
+                let n = run.issue(at, Held::Term((**len).clone(), Type::Nat, Level::Zero));
+                HeadView::Global(run.global_ref(GlobalKey::Builtin("Vec")), "Vec".into(), vec![a, n])
+            }
             Type::El { tm, .. } => self.view_term(run, at, tm),
             Type::GlobalTy { var, subst } if subst.terms.is_empty() => {
                 match self.global_abs_of(*var).and_then(|abs| Some((abs, self.global_name_at(abs)?))) {
@@ -3616,10 +3699,16 @@ impl Host<'_> {
                 let key = run.globals.get(*g as usize).cloned().ok_or_else(|| Fault::Protocol(format!("global {g} was not issued by this run")))?;
                 let found = match key {
                     GlobalKey::At(abs) => self.raw_global_at(abs),
-                    GlobalKey::Type(_) | GlobalKey::Builtin(_) => None,
+                    // A declared type stands for its code: the code itself
+                    // where it takes no parameters, so `AsType(Global(g))`
+                    // is the type a name found by `Lookup` declares, and
+                    // the code's function of its parameters where it has
+                    // some, which `App` applies.
+                    GlobalKey::Type(tag) => GeneratedDefs(self).type_code_term(tag),
+                    GlobalKey::Builtin(_) => None,
                 };
                 let Some((term, ty, level)) = found else {
-                    return Err(Fault::Ill(format!("global {g} is a type or a former, not a term")));
+                    return Err(Fault::Ill(format!("global {g} is a kernel former or a type with no code, not a term")));
                 };
                 let n = run.len(at) as u32;
                 Ok(Reified { term: term.shift_local(n).shift_global(m), ty: ty.shift_local(n).shift_global(m), level })
@@ -4266,14 +4355,7 @@ impl HostMut<'_> {
     pub(crate) fn elab_prefixed(&mut self, p: &heather_syntax::ast::PrefixedItem) -> R<()> {
         use heather_syntax::ast::{Block, ExprKind, Stmt, TyKind};
         let d = &p.decl;
-        let prefix = match &p.generator.kind {
-            ExprKind::Var(n) => n.clone(),
-            ExprKind::App { head, .. } => match &head.kind {
-                ExprKind::Var(n) => n.clone(),
-                _ => unreachable!("the parser writes a prefix as a name or a call of one"),
-            },
-            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
-        };
+        let prefix = prefix_name(&p.generator);
         // `register def x: T = e;`: the built-in prefix, unless a generator of
         // that name is in scope (docs/registered-values-design.md).
         if prefix == "register"
@@ -4329,28 +4411,7 @@ impl HostMut<'_> {
             };
             handed.push(value);
         }
-        let generator = match &p.generator.kind {
-            ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
-                kind: ExprKind::App {
-                    head: head.clone(),
-                    args: handed.into_iter().chain(args.iter().cloned()).collect(),
-                    named: named.clone(),
-                    explicit: *explicit,
-                    goal_oriented: *goal_oriented,
-                },
-                span: p.generator.span,
-            },
-            _ => Expr {
-                kind: ExprKind::App {
-                    head: Box::new(p.generator.clone()),
-                    args: handed,
-                    named: Vec::new(),
-                    explicit: false,
-                    goal_oriented: false,
-                },
-                span: p.generator.span,
-            },
-        };
+        let generator = prefix_call(&p.generator, handed);
         self.session_transaction(|me| {
             if !d.value {
                 me.elab_decl(d)?;
@@ -4384,6 +4445,87 @@ impl HostMut<'_> {
             }
             HostMut(me).publish_members(&members, psi, &label, p.span)
         })
+    }
+
+    /// `P record T { … }` or `P(args) record T { … }`
+    /// (docs/value-definitions-design.md §3.5). The record is **consumed**:
+    /// declared as written, and then the generator is called with its name
+    /// in front of the written arguments, `P("T", args)`, and run as
+    /// `generate` runs its generator. A generator reaches the type from the
+    /// name by `lookup` and `as_type(Global(g))`. One transaction: where the
+    /// generator fails, the record is not declared either.
+    pub(crate) fn elab_prefixed_record(&mut self, p: &heather_syntax::ast::PrefixedRecordItem) -> R<()> {
+        use heather_syntax::ast::ExprKind;
+        let prefix = prefix_name(&p.generator);
+        let label = format!("{prefix} record {}", p.record.name);
+        if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
+            return err(
+                format!(
+                    "`{prefix}` is not a generator in scope: a name before `record` is a \
+                     generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                p.generator.span,
+            );
+        }
+        let name = Expr { kind: ExprKind::Str(p.record.name.clone()), span: p.record.span };
+        let generator = prefix_call(&p.generator, vec![name]);
+        self.session_transaction(|me| {
+            me.elab_inductive(&p.record)?;
+            let convention = format!("a generator prefixing a `record` is called as `{prefix}(name, …)`");
+            let (members, psi) = Host(me).run_generator(&generator, &label, p.span).map_err(|e| match e {
+                crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
+                    msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
+                    span,
+                },
+                crate::ElabError::Elab { msg, span } if msg.contains("the generator's call is ill-typed") => {
+                    crate::ElabError::Elab { msg: format!("{msg}; {convention}"), span }
+                }
+                other => other,
+            })?;
+            HostMut(me).publish_members(&members, psi, &label, p.span)
+        })
+    }
+}
+
+/// The name a prefix is written with: `P` of `P` or of `P(args)`.
+fn prefix_name(generator: &Expr) -> String {
+    use heather_syntax::ast::ExprKind;
+    match &generator.kind {
+        ExprKind::Var(n) => n.clone(),
+        ExprKind::App { head, .. } => match &head.kind {
+            ExprKind::Var(n) => n.clone(),
+            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+        },
+        _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+    }
+}
+
+/// A prefix's call: what the declaration hands it, in front of the
+/// arguments written.
+fn prefix_call(generator: &Expr, handed: Vec<Expr>) -> Expr {
+    use heather_syntax::ast::ExprKind;
+    match &generator.kind {
+        ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
+            kind: ExprKind::App {
+                head: head.clone(),
+                args: handed.into_iter().chain(args.iter().cloned()).collect(),
+                named: named.clone(),
+                explicit: *explicit,
+                goal_oriented: *goal_oriented,
+            },
+            span: generator.span,
+        },
+        _ => Expr {
+            kind: ExprKind::App {
+                head: Box::new(generator.clone()),
+                args: handed,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: generator.span,
+        },
     }
 }
 

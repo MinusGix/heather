@@ -16,7 +16,14 @@ import native_structured;
 import linux_x86_64_image;
 import native_tool_words;
 import native_tool_words_program;
+import native_tool_spans;
 import function_ir_eval;
+import function_ir_writes;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_placeless;
+import x86_64_asm;
+import logic;
 import linux_trees;
 
 // An exit's status computed into a temporary, the first word.
@@ -199,10 +206,248 @@ theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree
         cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exited_with, BitVec::ofNat_toNat(64, raise_letter(byte_word(byte))))))
 }
 
-// Not compiled yet: the compiler takes no call region (statement 2, a
-// sequence ending in the call), and `write-elf` refuses a tool with a
-// program. Calls compile as procedures in issues/native-compiled-procedures.md.
-theorem raised_status_refused(): refused_slots(raised_status([BitVec::ofNat(97)]).source()) = [2, 0, 0, 1, 0] { refl }
+// It compiles (docs/native-one-compiler-design.md §2.2): the call is the
+// function's code after the program's, called by the System V convention.
+// The homes carry where the function's values go (`Homes::placed`), a
+// proposal like the words' own; with none the functions do not link.
+fn raised_status_source() → Source { raised_status([BitVec::ofNat(97)]).source() }
+theorem raised_status_compiles(): raised_status_source().refusal(region_low(),
+    Homes::slots(raised_status_source()).placed(plan_program(raised_status_source().functions))) = [] { refl }
+theorem raised_status_unplaced(): refused_slots(raised_status_source()) = [0, 5, 17, 0, 0] { refl }
+
+// A call of a function the program does not have is refused at the call.
+fn calls_missing() → Tool {
+    program(raise_letter_native_program(), buffer_of([BitVec::ofNat(97)], λ b => run(local(num(0), λ r => compute(call(7, [b.at(num(0))], r)) ++ exit(r.get())))))
+}
+theorem calls_missing_refused(): refused_slots(calls_missing().source()) = [2, 0, 16, 7, 0] { refl }
+
+// The source spelled for `write-elf` with its functions (`[3]`).
+theorem raised_status_spelled(): raised_status_source().spelled().head_or(0) = 3 { refl }
+
+// A procedure and a function in one program: the procedure's body calls
+// the function, and `main` calls both. 'a' and 'b' raised, summed: 131.
+fn raised_twice() → Tool {
+    program(raise_letter_native_program(), depth(4, proc(1, 1, λ p => compute(call(0, [p.param(0).get()], p.result(0))),
+        λ raise => run(local(num(0), λ a => local(num(0), λ b =>
+            perform(raise, [num(97)], [a]) ++ compute(call(0, [num(98)], b)) ++ exit(a.get() + b.get())))))))
+}
+theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::ofNat(131)) { refl }
+theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
+    Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
+
+// A function lent the program's buffer (docs/native-one-compiler-design.md
+// §2.3): the newlines of "a\n\nb", counted by a function the program
+// calls. The source's meaning answers the call over the buffer as it is,
+// with no address (`program_readers`).
+
+// tally_newlines(buffer, count): how many of the buffer's first `count`
+// bytes are newlines, a byte past the buffer's end counting as none.
+// Written as FunctionIR, where `count_newlines` (native_tool_spans) is a
+// `runtime fn`: the builder's call of a lent function is probed on a
+// function small enough that the whole compile is one evaluation.
+//
+// Parameters 0 and 1 are the buffer's home (its address and its length),
+// parameter 2 the count. The loop makes `count` passes over the home, the
+// index and the tally; a pass reads the byte only under the test of the
+// index against the length, which is what bounds the load.
+fn tally_word(id: Nat) → Port { Port(id := id, width := 64) }
+fn tally_bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn tally_newlines() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([tally_word(0), tally_word(1), tally_word(2)]),
+                nodes := [Const(width := 64, output := 3, value := 0), Const(width := 64, output := 4, value := 0)],
+                outputs := Ports([tally_word(0), tally_word(1), tally_word(2), tally_word(3), tally_word(4)])),
+            Loop(inputs := [0, 1, 3, 4], bound := 2, parameters := [10, 11, 12, 13], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_bit(20), tally_bit(15)])),
+                    Conditional(Ports([tally_word(10), tally_word(11), tally_word(12), tally_word(13), tally_bit(20), tally_bit(15)]), 15,
+                        Ports([tally_word(12), tally_word(13)]), Ports([tally_word(16), tally_word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([tally_word(12), tally_word(13)]),
+                                nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([tally_word(12), tally_word(13), tally_word(18)])),
+                            Sequence(
+                                Region(inputs := Ports([tally_word(12), tally_word(13), tally_word(18)]),
+                                    nodes := [Const(width := 64, output := 21, value := 10),
+                                        Equal(width := 64, output := 22, left := 18, right := 21)],
+                                    outputs := Ports([tally_word(12), tally_word(13), tally_bit(22)])),
+                                Conditional(Ports([tally_word(12), tally_word(13), tally_bit(22)]), 22,
+                                    Ports([tally_word(12), tally_word(13)]), Ports([tally_word(16), tally_word(17)]),
+                                    Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
+                                        nodes := [Const(width := 64, output := 19, value := 1),
+                                            Add(width := 64, output := 16, left := 13, right := 19),
+                                            Add(width := 64, output := 17, left := 12, right := 19)],
+                                        outputs := Ports([tally_word(16), tally_word(17)]))),
+                                    Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
+                                        nodes := [Const(width := 64, output := 19, value := 1),
+                                            Move(width := 64, output := 16, source := 13),
+                                            Add(width := 64, output := 17, left := 12, right := 19)],
+                                        outputs := Ports([tally_word(16), tally_word(17)])))))),
+                        Dataflow(Region(inputs := Ports([tally_word(12), tally_word(13)]),
+                            nodes := [Move(width := 64, output := 16, source := 13), Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([tally_word(16), tally_word(17)]))))),
+                exit := 20, next := [10, 11, 17, 16], outputs := [5, 6, 7, 8], exhausted := 9)),
+        result := 8)
+}
+
+fn tally_program() → List<Function> { [tally_newlines()] }
+
+fn counted_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(10), BitVec::ofNat(10), BitVec::ofNat(98)] }
+fn counted() → Tool {
+    program(tally_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get())))))
+}
+theorem counted_runs(): counted().source().tree([], 0) = Ret(BitVec::ofNat(2)) { refl }
+
+// The same with `count_newlines` (native_tool_spans), a `runtime fn`: the
+// program is its generated one, the call its root. That the file compiles
+// is `write-elf`'s to check, in its own steps
+// (crates/cli/tests/native_tools.rs runs `wc_l_called_tool` against GNU's).
+fn counted_fn() → Tool {
+    program(count_newlines_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(count_newlines_entry(), [num(4)], r)) ++ exit(r.get())))))
+}
+theorem counted_fn_runs(): counted_fn().source().tree([], 0) = Ret(BitVec::ofNat(2)) { refl }
+
+// It compiles: the call passes the buffer's address and capacity before
+// the count (`Prog::function_call`), the function placeless and emitted
+// under its count of lent buffers (`Prog::links`).
+theorem counted_compiles(): counted().source().refusal(region_low(),
+    Homes::slots(counted().source()).placed(plan_program(counted().source().functions))) = [] { refl }
+
+// The source spelled for `write-elf` says the function is lent a buffer:
+// its last number before the procedures' count, which is the last but the
+// statement's.
+theorem counted_spelled(): counted().source().functions.spell_functions().last() = Some(1) { refl }
+
+// With no buffer in the file the call does not fit: the function is lent
+// one.
+fn counts_nothing() → Tool {
+    program(tally_program(), run(local(num(0), λ r => compute(call(0, [num(4)], r)) ++ exit(r.get()))))
+}
+theorem counts_nothing_refused(): refused_slots(counts_nothing().source()) = [2, 0, 16, 0, 0] { refl }
+
+// Nor with the homes written as arguments: the call passes them itself, so
+// the function takes one word after them.
+fn counts_by_hand() → Tool {
+    program(tally_program(), buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(0, [num(0), num(4), num(4)], r)) ++ exit(r.get())))))
+}
+theorem counts_by_hand_refused(): refused_slots(counts_by_hand().source()) = [2, 0, 16, 0, 0] { refl }
+
+// A function whose answer is where its buffer lies does not link: the
+// program states no address, so it would have no answer to state.
+fn where_it_lies() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Dataflow(Region(inputs := Ports([Port(0, 64), Port(1, 64)]), nodes := [], outputs := Ports([Port(0, 64)]))), result := 0)
+}
+fn asks_where() → Tool {
+    program([where_it_lies()], buffer_of(counted_bytes(), λ b => run(local(num(0), λ r => compute(call(0, [], r)) ++ exit(r.get())))))
+}
+// It is evaluable and the function compiler lowers it; placeless it is not.
+theorem where_it_lies_evaluable(): program_evaluable([where_it_lies()]) = True { refl }
+theorem where_it_lies_lowers(): lower_program_lent([where_it_lies()], plan_program([where_it_lies()]), [1]).is_some().IsTrue() { trivial }
+theorem where_it_lies_placed(): program_placeless([where_it_lies()]) = False { refl }
+theorem asks_where_refused(): asks_where().source().refusal(region_low(),
+    Homes::slots(asks_where().source()).placed(plan_program(asks_where().source().functions))) = [0, 5, 17, 0, 0] { refl }
+
+// A function that stores into its buffer links: a program lends its
+// buffers to write, and the statements after the call read the file the
+// callee left (docs/native-one-compiler-design.md §3, U4 step 4b-3).
+// overwrites(i): `i`'s low byte at `i` of the buffer, answering the byte
+// then there, or 256 past the capacity.
+fn overwrites() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([Port(0, 64), Port(1, 64), Port(2, 64)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([Port(0, 64), Port(1, 64), Port(2, 64), Port(3, 1)])),
+            Conditional(Ports([Port(0, 64), Port(1, 64), Port(2, 64), Port(3, 1)]), 3, Ports([Port(2, 64)]), Ports([Port(4, 64)]),
+                Dataflow(Region(inputs := Ports([Port(2, 64)]), nodes := [BufferStore(output := 4, buffer := 0, index := 2, value := 2)],
+                    outputs := Ports([Port(4, 64)]))),
+                Dataflow(Region(inputs := Ports([Port(2, 64)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([Port(4, 64)]))))),
+        result := 4)
+}
+fn overwriting(index: Nat) → Tool {
+    program([overwrites()], buffer_of(counted_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(0, [num(index)], r)) ++ exit(b.at(num(3)) + r.get())))))
+}
+theorem overwrites_evaluable(): program_evaluable([overwrites()]) = True { refl }
+theorem overwrites_placeless(): program_placeless([overwrites()]) = True { refl }
+theorem overwrites_lowers(): lower_program_lent([overwrites()], plan_program([overwrites()]), [1]).is_some().IsTrue() { trivial }
+theorem overwrites_stores(): program_quiet([overwrites()]) = False { refl }
+theorem overwriting_compiles(): overwriting(3).source().refusal(region_low(),
+    Homes::slots(overwriting(3).source()).placed(plan_program(overwriting(3).source().functions))) = [] { refl }
+
+// The statement after the call reads the byte the function stored: 3 and
+// the 3 it answered, where the byte was 98.
+theorem overwriting_runs(): overwriting(3).source().tree([], 0) = Ret(BitVec::ofNat(6)) { refl }
+
+// The control: it is not what the file held before the call.
+theorem overwriting_not_before(same: overwriting(3).source().tree([], 0) = Ret(BitVec::ofNat(101))): False {
+    absurd(cong_fn<ITree<BitVec(64)>(Events::linux()), Bool>(λ tree => match tree { Ret(status) => status.eq_bit(BitVec::ofNat(6)), _ => False }, same))
+}
+
+// A store elsewhere leaves that byte, and one past the capacity leaves
+// the file: 98 and the 1 it answered, 98 and 256.
+theorem overwriting_elsewhere(): overwriting(1).source().tree([], 0) = Ret(BitVec::ofNat(99)) { refl }
+theorem overwriting_past(): overwriting(9).source().tree([], 0) = Ret(BitVec::ofNat(354)) { refl }
+
+// `raise_span` (native_tool_spans) rewrites the buffer through a function
+// it calls: "aZz{" read back after the call is "AZZ{", so its first and
+// third bytes sum to 65 + 90, and the index it answers is 4.
+fn mixed_bytes() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(90), BitVec::ofNat(122), BitVec::ofNat(123)] }
+fn raised_span(count: Nat) → Tool {
+    program(raise_span_program(), buffer_of(mixed_bytes(), λ b => run(local(num(0), λ r =>
+        compute(call(raise_span_entry(), [num(count), num(0)], r)) ++ exit(b.at(num(0)) + b.at(num(2)) + r.get())))))
+}
+theorem raised_span_runs(): raised_span(4).source().tree([], 0) = Ret(BitVec::ofNat(159)) { refl }
+// Only the first `count` bytes: 65 and the 122 left, and 1.
+theorem raised_span_first(): raised_span(1).source().tree([], 0) = Ret(BitVec::ofNat(188)) { refl }
+// A count past the buffer stores nothing past its end, and is answered.
+theorem raised_span_past(): raised_span(5).source().tree([], 0) = Ret(BitVec::ofNat(160)) { refl }
+// That the function compiler takes `raise_span`'s program is `raise_lowers`
+// (native_tool_spans_tests), and a whole tool that calls it is compiled and
+// its certificate checked by `write-elf` (`tr_upper_span_tool`,
+// crates/cli/tests/native_tools.rs): the generated program's compile is
+// not one evaluation here, as `count_newlines`'s is not.
+
+// A line of one static buffer copied into another through views
+// (issues/source-buffers-as-views.md): the statement calls `copy_window`
+// (native_tool_spans) on its two buffers, each lent whole, and
+// `copy_window` lends the window of each to `copy_span`'s loop. "heather"
+// from 2 to below 5 is "ath" at its own indices of the first buffer: 97,
+// 116 and 104, the byte before them the 46 it was, and the 3 it answers.
+// The program the statement calls is the one Rust links
+// (`heather_linked::spans::copy_window`, over spans a caller owns), so one
+// program reads a static buffer, a line of one and a borrowed span through
+// the same nodes.
+fn line_bytes(codes: List<Nat>) → List<BitVec(8)> { codes.map(λ (code: Nat) => BitVec::ofNat(code)) }
+fn dotted_bytes() → List<BitVec(8)> { line_bytes([46, 46, 46, 46, 46, 46, 46]) }
+fn heather_bytes() → List<BitVec(8)> { line_bytes([104, 101, 97, 116, 104, 101, 114]) }
+fn line_copied(from, end: Nat) → Tool {
+    program(copy_window_program(), buffer_of(dotted_bytes(), λ out => buffer_of(heather_bytes(), λ text => run(local(num(0), λ r =>
+        compute(call(copy_window_entry(), [num(from), num(end)], r))
+            ++ exit(out.at(num(1)) + out.at(num(2)) + out.at(num(3)) + out.at(num(4)) + r.get()))))))
+}
+theorem line_copied_runs(): line_copied(2, 5).source().tree([], 0) = Ret(BitVec::ofNat(366)) { refl }
+// A line past the buffers' end, and one that ends before it starts, copy
+// nothing and answer 0: the four bytes are the dots they were.
+theorem line_copied_past(): line_copied(2, 8).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+theorem line_copied_backwards(): line_copied(5, 2).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+// The empty line at the buffers' end is a line.
+theorem line_copied_empty(): line_copied(7, 7).source().tree([], 0) = Ret(BitVec::ofNat(184)) { refl }
+// The source spelled for `write-elf` says the function called is lent two
+// buffers.
+theorem line_copied_spelled(): line_copied(2, 5).source().functions.spell_functions().last() = Some(2) { refl }
+// That the program links is `window_rows` and `window_placeless`
+// (native_tool_spans_tests); a tool that calls it on what it read is
+// compiled and its certificate checked by `write-elf`
+// (`tail_c7_window_tool`, crates/cli/tests/native_tools.rs).
 
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)

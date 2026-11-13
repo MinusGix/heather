@@ -209,7 +209,10 @@ fn wider_leaves_run() {
 /// Procedures compile and run (docs/native-procedures-design.md): a
 /// non-tail recursive sum called from two sites, its body emitted once;
 /// the sum of 0..20 at depth 20, whose innermost call is one too deep and
-/// exits 139 (`call_depth_status`); and a builder tool (`proc`,
+/// exits 139 (`call_depth_status`); a procedure of three parameters and
+/// three results, whose status tells any two out of place; two procedures
+/// calling each other, each keeping its parameter across its call, and the
+/// same a level short of the depth they nest; and a builder tool (`proc`,
 /// native_build) summing 0..n for the n bytes it reads, at most 64 calls
 /// deep.
 #[test]
@@ -219,6 +222,9 @@ fn procedures_run() {
     for (module, source, input, status, why) in [
         (PROBES, "summing", &b""[..], 9, "the sums of 0..2 and 0..3 add to 9"),
         (PROBES, "summing_shallow", &b""[..], 139, "a call past the depth exits 139"),
+        (PROBES, "spreading", &b""[..], 59, "three results come back each to its own word"),
+        (PROBES, "alternating", &b""[..], 23, "two procedures calling each other, a(5) with a(n) = b(n - 1) + n and b(n) = 2 a(n - 1) + n"),
+        (PROBES, "alternating_shallow", &b""[..], 139, "the same six calls at depth five"),
         (BUILT, "summed_input", &b"hello"[..], 15, "five bytes read sum 0..5"),
         (BUILT, "summed_input", &many[..], 139, "sixty-four bytes read nest sixty-five calls, one past the depth"),
     ] {
@@ -234,6 +240,30 @@ fn procedures_run() {
     for statement in ["theorem summing_elf_procedures()", "compile_calls_of("] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A function that calls over views links and runs
+/// (docs/native-library-exports-design.md §3.1, step V4d): the program's
+/// statement calls a function that lends its second buffer whole as its
+/// callee's first, and exits with the byte the callee stored through the
+/// view and read back. With the view lent to read the program is refused:
+/// no rows of marks hold of a store through it.
+#[test]
+fn a_function_lending_a_view_runs() {
+    let dir = scratch("views");
+    let binary = dir.join("view_program");
+    let result = write_elf(PROBES, "view_program", &binary);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let (code, out) = run(&binary, b"", Stdio::piped());
+    assert_eq!((code, out.len()), (Some(88), 0), "the byte stored through the view comes back");
+    let output = dir.join("view_program_read");
+    let result = write_elf(PROBES, "view_program_read", &output);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "`view_program_read` is refused");
+    let reason = "`view_program_read` is refused: the functions it calls do not link";
+    assert!(stderr.contains(reason) && stderr.contains("no rows of marks hold of them"), "its refusal says `{reason}`:\n{stderr}");
+    assert!(!output.exists(), "and nothing is written for it");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

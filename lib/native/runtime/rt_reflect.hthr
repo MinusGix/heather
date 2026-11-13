@@ -44,7 +44,16 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext }
+//
+// Two are not operations of `rt` but rewritings into them
+// (issues/rt-complement-and-rotate.md), which the pin accepts because each
+// right side converts to its left at a literal width: `PComplement` is
+// `~x` read as `all_ones ⊕ x` (`Bool::xor` matches on its left operand, so
+// a literal of all ones on the left computes to `!b` bit by bit, where on
+// the right it would be stuck on the neutral bit), and `PRotate(kind)` is
+// `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
+// defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat) }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -70,6 +79,14 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 // in order.
 record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
 
+// What the body of a function over a span it writes knows of that span
+// (`rt_file_reflect`, docs/native-one-compiler-design.md §2.6): the span
+// parameter's local, the span as it is now (`None` while nothing has
+// written it: the parameter itself; after a store or a call that writes,
+// that link of the chain), and the calls that wrote it so far, in order,
+// each with the variable its word is bound to.
+record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes> }
+
 // A recursion the walk is inside (design §16.11): a fuel recursion's `Succ`
 // arm, or a measured function's step (`f::body`). `ih` is the local the
 // recursion is called through, and a call of it is a call of the function
@@ -79,6 +96,30 @@ record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
 // arguments. A measured step's call passes a proof after the words, which
 // nothing reads.
 record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
+
+// The elements of an array field, each a word its codec's accessor reads:
+// element `i` of `count` lies at the word `base + i * stride`, and a read
+// of it at a literal index stands for `narrow` of `read` at that word
+// (`read` and `narrow` are applied to it, and to the word read). A read
+// at an index that is a word, `vector_get(x.f, i.toNat(), 0)`, stands for
+// `narrow` of `read_at` at the word the array begins at, its count and
+// the index: the accessor's checked read, 0 past the count.
+// `under` is the local a new one is assumed under where the terms live.
+record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr, read_at: Expr, under: LocalRef }
+
+// What an element's read stands for: a term, and for a read at a word
+// the local that stands in it for the index beside the index itself. The
+// index is under the body's binders and the accessor's terms under the
+// span's, so the term has a local of the span's for it, and the walk
+// binds that local to the index's variable.
+record ElementRead { term: Handle, index: Option<Pair<Nat, Handle>> }
+
+// What a field `field` of the local `of` stands for: a term, or for an
+// array its elements' terms. `FieldNow(of, call)` says the record the
+// local `of` named is now what `call` left, `call.after`: a field of that
+// term stands for what the local's did, and a field of the local itself,
+// read for the first time, is the record as it was and stands for nothing.
+inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm), FieldNow(of: Nat, call: Handle) }
 
 record Known {
     prims: List<PrimEntry>,
@@ -102,14 +143,37 @@ record Known {
     // The types the program holds by their `datarepr`, after `recs` in the
     // type table.
     reprs: List<ReprEntry>,
+    // How many spans the function being walked is lent (the generator's
+    // mode): span `j`'s bytes are the parameter at level `2j`, its length
+    // word the one at `2j + 1`.
+    lent: Nat,
+    // The span a computation writes; `None` for code that writes nothing.
+    file: Option<FileKnown>,
+    // Fields of a local that stand for a term each (a field of the record
+    // a span holds, for its accessor's read, `rt_held_reflect`): a read of
+    // the field is the term, reflected where it is first read.
+    named: List<FieldTerm>,
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named)
+}
+
+fn Known::lending(self k: Known, lent: Nat) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named)
+}
+
+fn Known::naming(self k: Known, named: List<FieldTerm>) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named)
+}
+
+// The span a parameter level is the bytes of, if it is one.
+fn Known::span_of(self k: Known, l: Nat) → Option<Nat> {
+    match Succ(l).leb(k.lent + k.lent).and(l.mod(2).same(0)) { True => Some(l.div(2)), False => None }
 }
 
 // Whether the walk reads types held by their repr: the generator's mode
@@ -181,6 +245,21 @@ fn Known::word_op(op: Nat, w: Nat) → Op {
 // Small plumbing.
 
 fn rt_refuse<A>(why: String) → Tac<A> { fail("rt: " ++ why, []) }
+
+// A refusal that shows the term refused.
+fn rt_refuse_at<A>(why: String, h: Handle) → Tac<A> {
+    view(h).bind(λ v => {
+        let what = match v {
+            HPi(_) => "a function type",
+            HEq(_, _) => "an equation",
+            HHole => "a term not known yet",
+            HLam(_) => "a function value",
+            HOther => "a term the host shows no layer of",
+            _ => "not reflected",
+        };
+        fail("rt: " ++ why, [At(Hd(h), Tried("the term", what))])
+    })
+}
 
 fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
     match c { Accepted(a) => pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
@@ -382,6 +461,20 @@ record RSt { depth: Nat, lets: List<Tm>, memo: List<Pair<Tm, Nat>>, handles: Lis
 
 fn RSt::with_funs(self st: RSt, funs: List<Nat>) → RSt { RSt(st.depth, st.lets, st.memo, st.handles, st.locals, funs) }
 
+fn RSt::with_handles(self st: RSt, handles: List<Pair<Nat, Nat>>) → RSt { RSt(st.depth, st.lets, st.memo, handles, st.locals, st.funs) }
+
+// The local `x` bound to the variable at `level`.
+fn RSt::with_local(self st: RSt, x: Nat, level: Nat) → RSt { RSt(st.depth, st.lets, st.memo, st.handles, Cons(Pair(x, level), st.locals), st.funs) }
+
+// The handle `h` bound to the variable at `level`.
+fn RSt::binding(self st: RSt, h: Handle, level: Nat) → RSt { st.with_handles(Cons(Pair(h.id, level), st.handles)) }
+
+// The handles in `ids` forgotten: what a term stood for before the
+// record changed is not what it stands for after.
+fn RSt::forgetting(self st: RSt, ids: List<Nat>) → RSt {
+    st.with_handles(st.handles.filter(λ p => match Known::index(ids, p.fst, 0) { Some(_) => False, None => True }))
+}
+
 // A level as a de Bruijn index at the current depth.
 fn RSt::index(self st: RSt, l: Nat) → Nat { st.depth - Succ(l) }
 
@@ -398,6 +491,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         Fold(over, init, step) => Fold(st.index(over), st.index(init), step),
         If(c, yes, no) => If(st.index(c), yes, no),
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
+        Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
         _ => t,
     }
 }
@@ -428,6 +522,17 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
     }
 }
 
+// A node no source handle stands for (a part of a rewriting, `PRotate`'s
+// shifts), as a variable: numbered like `finish`'s, bound by a `Let` unless
+// an equal node is bound already.
+fn RSt::node(self st: RSt, node: Tm) → Pair<RSt, Nat> {
+    match (match node { Lit(_, _) => None, _ => rt_memo(st.memo, node) }) {
+        Some(l) => Pair(st, l),
+        None => Pair(RSt(Succ(st.depth), Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
+            st.handles, st.locals, st.funs), st.depth),
+    }
+}
+
 // Each operand reflected as a variable, left to right: their levels.
 fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
     match hs {
@@ -444,7 +549,47 @@ fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<
 // position.
 fn rt_field_names(fs: List<FieldInfo>) → List<String> { fs.map(λ f => f.name) }
 
-fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+// The part of a name after its last `::`.
+fn rt_base_chars(cs: List<Char>, acc: List<Char>) → List<Char> {
+    match cs {
+        Nil => acc.rev(),
+        Cons(c, rest) => match c.code.same(58) { True => rt_base_chars(rest, []), False => rt_base_chars(rest, Cons(c, acc)) },
+    }
+}
+
+fn rt_base_name(name: String) → String { String(rt_base_chars(name.chars, [])) }
+
+// The field `name` of `r` where `r` is a constructor's value of a type
+// with one constructor that the program holds neither as a record nor by
+// a repr: the field's own term, which is what the read computes to. A
+// function of a record that the source updates and reads back
+// (`t.count := e; t.count`) elaborates to such reads.
+fn rt_field_of_value(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
+    view(r).bind(λ v => match v {
+        HCtor(ty, _, _, values) => match Known::rec(k.recs, ty.id, 0) {
+            Some(_) => pure(None),
+            None => k.is_repr_typed(r).bind(λ held => match held {
+                True => pure(None),
+                False => as_type(Global(ty)).bind(λ ct => match ct {
+                    Refused(_) => pure(None),
+                    Accepted(t) => ctors(t).bind(λ cc => match cc {
+                        Refused(_) => pure(None),
+                        Accepted(cs) => match cs {
+                            Nil => pure(None),
+                            Cons(c, more) => match more {
+                                Nil => pure(Known::field(rt_field_names(c.fields), rt_base_name(name), 0).and_then(λ pos => values.nth(pos))),
+                                Cons(_, _) => pure(None),
+                            },
+                        },
+                    }),
+                }),
+            }),
+        },
+        _ => pure(None),
+    })
+}
+
+fn rt_field_at(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     k.ty_of(r).bind(λ t => match t {
@@ -458,6 +603,225 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
                 Nil => rt_refuse("a record with no constructor"),
             })),
         _ => rt_unknown(name),
+    })
+}
+
+// The term a field of a local stands for, if the setup named one.
+fn Known::named_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Handle> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n {
+            FieldWhole(of, name, term) => match of.same(x) && Known::str_same(name, field) { True => Some(term), False => Known::named_at(rest, x, field) },
+            FieldEach(_, _, _) => Known::named_at(rest, x, field),
+            FieldNow(_, _) => Known::named_at(rest, x, field),
+        },
+    }
+}
+
+fn Known::elements_at(named: List<FieldTerm>, x: Nat, field: String) → Option<ElementTerm> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n {
+            FieldWhole(_, _, _) => Known::elements_at(rest, x, field),
+            FieldNow(_, _) => Known::elements_at(rest, x, field),
+            FieldEach(of, name, each) => match of.same(x) && Known::str_same(name, field) { True => Some(each), False => Known::elements_at(rest, x, field) },
+        },
+    }
+}
+
+// The word element `i` lies at, as a term.
+fn ElementTerm::place(self e: ElementTerm, i: Nat) → Tac<Expr> {
+    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    pure(App(App(Global(of_nat), NatLit(64)), NatLit(e.base + i * e.stride)))
+}
+
+// The accessor's read of element `i`, and that read at the element's type.
+fn ElementTerm::reads(self e: ElementTerm, i: Nat) → Tac<Pair<Handle, Handle>> {
+    let at <- e.place(i);
+    let read <- next_spelling(App(e.read, at)).bind(λ c => rt_accepted("an accessor's read of an element", c));
+    let value <- next_spelling(App(e.narrow, Hd(read))).bind(λ c => rt_accepted("an accessor's read at its element's width", c));
+    pure(Pair(read, value))
+}
+
+// The accessor's checked read of the element at the word `i`, at the
+// element's type.
+fn ElementTerm::reads_at(self e: ElementTerm, i: Handle) → Tac<ElementRead> {
+    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    let bitvec <- lookup("BitVec").bind(λ c => rt_accepted("`BitVec`", c));
+    let word_t <- as_type(App(Global(bitvec), NatLit(64))).bind(λ c => rt_accepted("a word's type", c));
+    let x <- assume(Hd(word_t), "index", Some(e.under)).bind(λ c => rt_accepted("an index's local", c));
+    let word: Nat → Expr = λ n => App(App(Global(of_nat), NatLit(64)), NatLit(n));
+    let read <- next_spelling(App(App(App(e.read_at, word(e.base)), word(e.count)), Local(x.ref))).bind(λ c => rt_accepted("an accessor's read of an element at a word", c));
+    let value <- next_spelling(App(e.narrow, Hd(read))).bind(λ c => rt_accepted("an accessor's read at its element's width", c));
+    pure(ElementRead(value, Some(Pair(x.ref.id, i))))
+}
+
+// The word a term is the `toNat()` of, if it is one.
+fn rt_to_nat_of(i: Handle) → Tac<Option<Handle>> {
+    view(i).bind(λ v => {
+        let word: Option<Handle> = match v {
+            HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "toNat") { True => args.nth(0), False => None },
+            _ => None,
+        };
+        pure(word)
+    })
+}
+
+// The call whose record a local's fields are now read off, if one has
+// been made (`FieldNow`).
+fn Known::now_at(named: List<FieldTerm>) → Option<Pair<Nat, Handle>> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n { FieldNow(of, call) => Some(Pair(of, call)), _ => Known::now_at(rest) },
+    }
+}
+
+// A term read as a field of a record: the record and the field's name.
+fn rt_field_read(h: Handle) → Tac<Option<Pair<Handle, String>>> {
+    let v <- view(h);
+    let read: Option<Pair<Handle, String>> = match v {
+        HGlobal(_, name, args) => match args {
+            Nil => None,
+            Cons(r, more) => match more { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+        },
+        HField(r, name, args) => match args { Nil => Some(Pair(r, name)), Cons(_, _) => None },
+        _ => None,
+    };
+    pure(read)
+}
+
+// Whether `r` is what `call` left: `call.after`, at that call or a copy
+// of it (the elaborator repeats a call wherever its record is read).
+fn rt_after_of(r: Handle, call: Handle) → Tac<Bool> {
+    rt_field_read(r).bind(λ read => match read {
+        None => pure(False),
+        Some(p) => match Known::str_same(rt_base_name(p.snd), "after") {
+            False => pure(False),
+            True => match p.fst.id.same(call.id) { True => pure(True), False => defeq(Hd(p.fst), Hd(call)) },
+        },
+    })
+}
+
+fn rt_record_before<A>() → Tac<A> {
+    rt_refuse("a field of the record as it was before a call of another function of the record, which the walk did not read before the call (a read under a `match` that is a value): the code reads the record as it is")
+}
+
+// The local whose named fields a record term's fields stand for: the
+// local itself while no call has changed the record, and what the last
+// call left once one has.
+fn rt_named_record(k: Known, r: Handle) → Tac<Option<Nat>> {
+    match k.named {
+        Nil => pure(None),
+        Cons(_, _) => view(r).bind(λ v => {
+            let local: Option<Nat> = match v { HLocal(x, args) => match args { Nil => Some(x.id), Cons(_, _) => None }, _ => None };
+            match Known::now_at(k.named) {
+                None => pure(local),
+                Some(now) => match local {
+                    Some(x) => match x.same(now.fst) { True => rt_record_before(), False => pure(local) },
+                    None => rt_after_of(r, now.snd).bind(λ is => {
+                        let found: Option<Nat> = match is { True => Some(now.fst), False => None };
+                        pure(found)
+                    }),
+                },
+            }
+        }),
+    }
+}
+
+// A term that is a field of a record with named fields, by the local the
+// record stands for and the field's name.
+fn rt_field_of_local(k: Known, h: Handle) → Tac<Option<Pair<Nat, String>>> {
+    rt_field_read(h).bind(λ read => match read {
+        None => pure(None),
+        Some(p) => rt_named_record(k, p.fst).bind(λ x => pure(x.map(λ id => Pair(id, rt_base_name(p.snd))))),
+    })
+}
+
+// An element of an array field the setup named, read at an index that is
+// a word: `vector_get(x.f, i.toNat(), 0)` stands for the accessor's
+// checked read of the array at `i`.
+fn rt_element_at(k: Known, args: List<Handle>) → Tac<Option<ElementRead>> {
+    match args.nth(0) {
+        None => pure(None),
+        Some(v) => match args.nth(1) {
+            None => pure(None),
+            Some(i) => match args.nth(2) {
+                None => pure(None),
+                Some(pad) => rt_field_of_local(k, v).bind(λ field => match field {
+                    None => pure(None),
+                    Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
+                        None => pure(None),
+                        Some(e) => rt_to_nat_of(i).bind(λ word => match word {
+                            None => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` at an index that is not a word's `toNat()`: write `vector_get(t." ++ p.snd ++ ", i.toNat(), 0)`, or `vector_index` at a literal"),
+                            Some(w) => {
+                                let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+                                let same <- defeq(Hd(pad), App(e.narrow, App(App(Global(of_nat), NatLit(64)), NatLit(0))));
+                                match same {
+                                    False => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` with a value past the end that is not 0: the code answers 0 there"),
+                                    True => e.reads_at(w).bind(λ r => pure(Some(r))),
+                                }
+                            },
+                        }),
+                    },
+                }),
+            },
+        },
+    }
+}
+
+// An element of an array field the setup named, read at a literal index:
+// `vector_index(x.f, i, _)` stands for the accessor's read where element
+// `i` lies.
+fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<ElementRead>> {
+    match k.named {
+        Nil => pure(None),
+        Cons(_, _) => match Known::str_same(rt_base_name(name), "vector_index") {
+            False => match Known::str_same(rt_base_name(name), "vector_get") { False => pure(None), True => rt_element_at(k, args) },
+            True => match args.nth(0) {
+                None => pure(None),
+                Some(v) => match args.nth(1) {
+                    None => pure(None),
+                    Some(i) => rt_field_of_local(k, v).bind(λ field => match field {
+                        None => pure(None),
+                        Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
+                            None => pure(None),
+                            Some(e) => rt_literal(i).bind(λ n => match Succ(n).leb(e.count) {
+                                False => rt_refuse("element " ++ decimal_name(Succ(n), n) ++ " of the array field `" ++ p.snd ++ "`, which has fewer"),
+                                True => e.reads(n).bind(λ r => pure(Some(ElementRead(r.snd, None)))),
+                            }),
+                        },
+                    }),
+                },
+            },
+        },
+    }
+}
+
+fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
+    rt_named_record(k, r).bind(λ x => pure(x.and_then(λ id => Known::named_at(k.named, id, rt_base_name(name)))))
+}
+
+fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    rt_field_named(k, r, name).bind(λ named => match named {
+        // A named term is one term for a field whatever record the span
+        // holds, so nothing inside it is kept by its handle: only the term
+        // itself, which a walk that changes the record forgets
+        // (`RSt::forgetting`), and the read as the body has it, which is a
+        // read of that record and stays what it was.
+        Some(e) => match rt_assoc(st.handles, e.id) {
+            Some(l) => pure(st.binding(h, l).finish(h, operand, Var(l))),
+            None => step(st.with_handles([]), e).bind(λ rr => {
+                let back = rr.fst.with_handles(st.handles);
+                let kept = match rr.snd { Var(l) => back.binding(e, l).binding(h, l), _ => back };
+                pure(kept.finish(h, operand, rr.snd))
+            }),
+        },
+        None => rt_field_of_value(k, r, name).bind(λ value => match value {
+            Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
+            None => rt_field_at(f, k, st, h, operand, r, name, step),
+        }),
     })
 }
 
@@ -487,6 +851,30 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
     }
 }
 
+// The name `lookup` finds the global `g` by where the tactic runs. A view
+// shows a global as a call of it is spelled, which for a member (`fn
+// List::poke`, called `span.poke(…)`) is its base name; that one is found
+// under its first parameter's type. `shown` where neither is it.
+fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
+    let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
+    lookup(shown).bind(λ c => match is_g(c) {
+        True => pure(shown),
+        False => infer(Global(g)).bind(λ ct => match ct {
+            Refused(_) => pure(shown),
+            Accepted(t) => view(t).bind(λ v => match v {
+                HPi(dom) => view(dom).bind(λ dv => match dv {
+                    HGlobal(_, owner, _) => lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
+                        True => pure(owner ++ "::" ++ shown),
+                        False => pure(shown),
+                    }),
+                    _ => pure(shown),
+                }),
+                _ => pure(shown),
+            }),
+        }),
+    })
+}
+
 // The program index of a called global: its place in the functions so far
 // or, in the generator's mode, a runtime fn not met before, appended (a
 // global `g` is one when `g::rt` is published, which only the `runtime`
@@ -496,7 +884,7 @@ fn rt_callee(k: Known, st: RSt, g: GlobalRef, name: String) → Tac<Option<Pair<
         Some(i) => pure(Some(Pair(st, i))),
         None => match k.discover {
             False => pure(None),
-            True => lookup(name ++ "::rt").bind(λ c => match c {
+            True => rt_name_of(g, name).bind(λ n => lookup(n ++ "::rt")).bind(λ c => match c {
                 Accepted(_) => pure(Some(Pair(st.with_funs(st.funs ++ [g.id]), st.funs.len()))),
                 Refused(_) => pure(None),
             }),
@@ -519,7 +907,7 @@ fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
                 },
                 None => rt_refuse(refused),
             },
-            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => pure(b), False => rt_refuse(refused) },
+            HCtor(ty, _, _, _) => match ty.id.same(k.boolean) { True => pure(b), False => rt_refuse(refused) },
             _ => rt_refuse(refused),
         }),
     })
@@ -615,6 +1003,26 @@ fn rt_answer(fuel: Nat, io: IoKnown, c: Handle) → Tac<CallRes> {
     }
 }
 
+// The call that wrote the span which `r` is, among those made so far: the
+// same handle, or a copy of one (the elaborator repeats a call wherever
+// its record is read).
+fn rt_file_answer_in(cs: List<CallRes>, g: Nat, r: Handle) → Tac<Option<CallRes>> {
+    match cs {
+        Nil => pure(None),
+        Cons(c, rest) => match c.method.same(g) {
+            False => rt_file_answer_in(rest, g, r),
+            True => defeq(Hd(r), Hd(c.call)).bind(λ same => match same { True => pure(Some(c)), False => rt_file_answer_in(rest, g, r) }),
+        },
+    }
+}
+
+fn rt_file_answer(fk: FileKnown, r: Handle) → Tac<Option<CallRes>> {
+    match rt_call_by_handle(fk.calls, r.id) {
+        Some(a) => pure(Some(a)),
+        None => view(r).bind(λ v => match v { HGlobal(g, _, _) => rt_file_answer_in(fk.calls, g.id, r), _ => pure(None) }),
+    }
+}
+
 // A field read. In effectful code, the answer of a call is the variables its
 // `Invoke` bound, and the world after a call is never a value; anything else
 // is an ordinary record's field.
@@ -622,7 +1030,19 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     match k.io {
-        None => rt_field(f, k, st, h, operand, r, name, step),
+        None => match k.file {
+            None => rt_field(f, k, st, h, operand, r, name, step),
+            Some(fk) => rt_file_answer(fk, r).bind(λ found => match found {
+                None => rt_field(f, k, st, h, operand, r, name, step),
+                Some(a) => match Known::str_same(name, "value") {
+                    True => match a.value {
+                        Some(l) => pure(st.finish(h, operand, Var(l))),
+                        None => rt_refuse("a call's whole answer used as one value"),
+                    },
+                    False => rt_refuse("the span after a call used as a value: it is threaded on to the next store or call, never runtime data"),
+                },
+            }),
+        },
         Some(io) => rt_call_of(io, r).bind(λ direct => match direct {
             True => match Known::str_same(name, "after") {
                 True => rt_refuse("the world after a call used as a value: it is threaded on to the next call, never runtime data"),
@@ -656,7 +1076,10 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
 fn rt_local(k: Known, st: RSt, h: Handle, operand: Bool, x: LocalRef, args: List<Handle>) → Tac<Pair<RSt, Tm>> {
     match args {
         Nil => match rt_assoc(st.locals, x.id) {
-            Some(l) => pure(st.finish(h, operand, Var(l))),
+            Some(l) => match k.span_of(l) {
+                None => pure(st.finish(h, operand, Var(l))),
+                Some(_) => rt_refuse("a lent span used as a value: its bytes are read by `byte_within` under its own length word, and a loop passes it on as it is"),
+            },
             None => match k.is_world(x) {
                 True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
                 False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
@@ -789,6 +1212,111 @@ fn rt_transfer(k: Known, g: GlobalRef, h: Handle, name: String, args: List<Handl
     }
 }
 
+// Whether `h` is the written span as it is now.
+fn rt_same_span(fk: FileKnown, h: Handle) → Tac<Bool> {
+    match fk.now {
+        None => view(h).bind(λ v => match v {
+            HLocal(x, args) => match args { Nil => pure(x.id.same(fk.span)), Cons(_, _) => pure(False) },
+            _ => pure(False),
+        }),
+        Some(now) => match h.id.same(now.id) { True => pure(True), False => defeq(Hd(h), Hd(now)) },
+    }
+}
+
+fn rt_old_span<A>() → Tac<A> {
+    rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
+}
+
+// A span parameter, by number.
+fn rt_param_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
+    let v <- view(h);
+    let found: Option<Nat> = match v {
+        HLocal(x, args) => match args { Nil => rt_assoc(st.locals, x.id).and_then(λ l => k.span_of(l)), Cons(_, _) => None },
+        _ => None,
+    };
+    match found {
+        Some(j) => pure(j),
+        None => rt_refuse("`byte_within` of bytes that are not a lent span (a leading `List<BitVec(8)>` parameter followed by its length word)"),
+    }
+}
+
+// The lent span an expression is: a span parameter, by number. In a
+// computation the written span is span 0, as it is now.
+fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
+    match k.file {
+        // The written span as it is now is span 0. A span the function only
+        // reads is its parameter, as in a function that writes none; the
+        // written span's own parameter is the span as it was.
+        Some(fk) => rt_same_span(fk, h).bind(λ same => match same {
+            True => pure(0),
+            False => view(h).bind(λ v => {
+                let found: Option<Nat> = match v {
+                    HLocal(x, args) => match args { Nil => rt_assoc(st.locals, x.id).and_then(λ l => k.span_of(l)), Cons(_, _) => None },
+                    _ => None,
+                };
+                match found.unwrap_or(0) { Zero => rt_old_span(), Succ(j) => pure(Succ(j)) }
+            }),
+        }),
+        None => rt_param_span(k, st, h),
+    }
+}
+
+// A call's arguments, as variables, where the callee is lent `lent` spans
+// (the function itself, or another function lent spans): each span's bytes
+// and its length word are passed on as they came in, span `j` as the
+// callee's span `j` (a loop keeps a span's home in place, and a call reads
+// its callee over the caller's file), and the words after them are
+// operands.
+fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
+    match lent {
+        Zero => RSt::operands(step, st, args),
+        Succ(n) => match args {
+            Cons(bytes, Cons(length, rest)) => {
+                let param: Tac<Nat> = Tac::bind<Head, Nat>(view(bytes), λ v => match v {
+                    HLocal(x, more) => match more {
+                        Nil => match rt_assoc(st.locals, x.id) { Some(l) => pure(l), None => pure(j + j + 1) },
+                        Cons(_, _) => pure(j + j + 1),
+                    },
+                    _ => pure(j + j + 1),
+                });
+                // In a computation the span passed is the written one as it
+                // is now, wherever the chain stands.
+                let passed: Tac<Nat> = match k.file {
+                    None => param,
+                    Some(fk) => match j { Zero => rt_same_span(fk, bytes).bind(λ same => match same { True => pure(0), False => rt_old_span() }), Succ(_) => param },
+                };
+                let l <- passed;
+                match l.same(j + j).and(Succ(j).leb(k.lent)) {
+                    False => rt_refuse("a lent span is passed on as it is, in its own place: the loop keeps its home, and a callee reads the caller's file"),
+                    True => step(st, length).bind(λ r => match RSt::level(r.snd).same(j + j + 1) {
+                        False => rt_refuse("a lent span's length word is passed on as it is: the loop keeps its home, and a callee reads the caller's file"),
+                        True => rt_lent_args(step, k, r.fst, Succ(j), n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
+                    }),
+                }
+            },
+            _ => rt_refuse("a call without its span"),
+        },
+    }
+}
+
+// How many spans a call's callee is lent, read off the arguments: its
+// leading byte lists, each with the word after it.
+fn rt_call_lent(fuel: Nat, k: Known, args: List<Handle>) → Tac<Nat> {
+    match fuel {
+        Zero => pure(0),
+        Succ(f) => match args {
+            Cons(bytes, Cons(_, rest)) => infer(Hd(bytes)).bind(λ c => match c {
+                Accepted(t) => k.is_bytes(t).bind(λ yes => match yes {
+                    True => rt_call_lent(f, k, rest).bind(λ n => pure(Succ(n))),
+                    False => pure(0),
+                }),
+                Refused(_) => pure(0),
+            }),
+            _ => pure(0),
+        },
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -797,7 +1325,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
             None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
                 HLocal(x, args) => match k.recursion {
                     Some(sc) => match x.id.same(sc.ih) {
-                        True => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args.take(sc.varied.len())).bind(λ r =>
+                        True => rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
                             pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
                         False => rt_local(k, st, h, operand, x, args),
                     },
@@ -879,6 +1407,42 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             Nil => rt_refuse("`toNat` without its operand"),
                         },
+                        // `span.byte_within(length, i)`: a byte of a lent span,
+                        // under the span's own length word.
+                        PWithin => match args {
+                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_span(k, st, bytes).bind(λ j =>
+                                rt_go(f, k, st, length, True).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
+                                    False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
+                                    True => rt_go(f, k, rl.fst, i, True).bind(λ ri =>
+                                        pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
+                                })),
+                            _ => rt_refuse("`byte_within` without its span, length word and index"),
+                        },
+                        // `~x`: all ones, then `all_ones ⊕ x` (the literal on
+                        // the left, where `Bool::xor` reads it).
+                        PComplement => match args {
+                            Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => rt_go(f, k, st, x, True).bind(λ r => {
+                                    let ones = r.fst.node(Lit(Word(w), Nat::pow(2, w) - 1));
+                                    pure(ones.fst.finish(h, operand, Prim(Bxor(w), [ones.snd, RSt::level(r.snd)])))
+                                }),
+                                _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                            }),
+                            Nil => rt_refuse("`" ++ name ++ "` without its operand"),
+                        },
+                        // `x.rotr(c)` is `x >> c | x << (w - c)`, `x.rotl(c)`
+                        // the mirror, the count a literal.
+                        PRotate(kind) => match args {
+                            Cons(x, Cons(count, _)) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => rt_literal(count).bind(λ c => rt_go(f, k, st, x, True).bind(λ r => {
+                                    let first = r.fst.node(Prim(Known::shift_op(1 - kind, w, c), [RSt::level(r.snd)]));
+                                    let second = first.fst.node(Prim(Known::shift_op(kind, w, w - c), [RSt::level(r.snd)]));
+                                    pure(second.fst.finish(h, operand, Prim(Bor(w), [first.snd, second.snd])))
+                                })),
+                                _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                            }),
+                            _ => rt_refuse("`" ++ name ++ "` without its operand and count"),
+                        },
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
@@ -900,13 +1464,33 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         },
                     },
                     None => rt_callee(k, st, g, name).bind(λ found => match found {
-                        Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
+                        // In the generator's mode a callee may be lent the
+                        // caller's spans.
+                        Some(si) => (match k.discover { True => rt_call_lent(f, k, args), False => pure(0) }).bind(λ lent =>
+                            rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, si.fst, 0, lent, args).bind(λ r =>
+                                pure(r.fst.finish(h, operand, Call(si.snd, r.snd))))),
                         None => rt_transfer(k, g, h, name, args).bind(λ moved => match moved {
                             Some(u) => rt_go(f, k, st, u, operand),
                             None => match args {
                                 Cons(r, rest) => match rest {
                                     Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
-                                    Cons(_, _) => rt_unknown(name),
+                                    Cons(_, _) => rt_element(k, name, args).bind(λ element => match element {
+                                        Some(u) => {
+                                            // An index that is a word is
+                                            // computed first, and the
+                                            // term's local stands for it.
+                                            let indexed: Tac<RSt> = match u.index {
+                                                None => pure(st),
+                                                Some(ix) => rt_go(f, k, st, ix.snd, True).bind(λ ri => pure(ri.fst.with_local(ix.fst, RSt::level(ri.snd)))),
+                                            };
+                                            indexed.bind(λ s1 => rt_go(f, k, s1.with_handles([]), u.term, True).bind(λ rr => {
+                                                let back = rr.fst.with_handles(s1.handles);
+                                                let kept = match rr.snd { Var(l) => back.binding(h, l), _ => back };
+                                                pure(kept.finish(h, operand, rr.snd))
+                                            }))
+                                        },
+                                        None => rt_unknown(name),
+                                    }),
                                 },
                                 Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
                             },
@@ -971,9 +1555,14 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                 _ => arms(h).bind(λ c => match c {
                     Accepted(m) => k.ty_of(m.scrut).bind(λ st_ty => match st_ty {
                         Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
-                        _ => rt_refuse("a form the reflected fragment does not have"),
+                        _ => rt_refuse_at("a form the reflected fragment does not have", h),
                     }),
-                    Refused(_) => rt_refuse("a form the reflected fragment does not have"),
+                    // A field read of a record just built, left as the
+                    // record's projection: one step on is the field's term.
+                    Refused(_) => next_spelling(Hd(h)).bind(λ s => match s {
+                        Accepted(u) => rt_go(f, k, st, u, operand),
+                        Refused(_) => rt_refuse_at("a form the reflected fragment does not have", h),
+                    }),
                 }),
             }),
         },
@@ -996,14 +1585,54 @@ fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pai
     }
 }
 
+// The spans a function is lent, read off its parameters' codes: each
+// leading byte list followed by a 64-bit word is a span and its length
+// word, and its code takes two words for them (where the bytes are, how
+// many). Their count, and the codes the function's code takes.
+fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
+    match tys {
+        Nil => Pair(0, tys),
+        Cons(bytes, more) => match more {
+            Nil => Pair(0, tys),
+            Cons(length, rest) => match bytes {
+                Bytes(_) => match (match length { Word(w) => w.same(64), _ => False }) {
+                    True => { let r = rt_lent(rest); Pair(Succ(r.fst), Cons(Word(64), Cons(Word(64), r.snd))) },
+                    False => Pair(0, tys),
+                },
+                _ => Pair(0, tys),
+            },
+        },
+    }
+}
+
+fn rt_has_bytes(tys: List<Ty>) → Bool {
+    match tys { Nil => False, Cons(t, rest) => match t { Bytes(_) => True, _ => rt_has_bytes(rest) } }
+}
+
+// In the generator's mode a function may be lent spans; any other byte
+// list among its parameters is refused here, with what a span is.
+fn rt_lend(k: Known, tys: List<Ty>) → Tac<Pair<Nat, List<Ty>>> {
+    match k.discover {
+        False => pure(Pair(0, tys)),
+        True => {
+            let r = rt_lent(tys);
+            match rt_has_bytes(r.snd) {
+                False => pure(r),
+                True => rt_refuse("a byte list parameter that is not a lent span: a span comes before the other parameters, each followed by its 64-bit length word"),
+            }
+        },
+    }
+}
+
 // A function, and the program's functions after it was walked (`k.funs`
 // and the runtime fns it was found to call).
 fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
     body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c)).bind(λ b =>
     rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b).bind(λ p =>
+    rt_lend(k, p.fst.snd).bind(λ lent =>
     k.ty_of(p.snd).bind(λ result =>
-    rt_go(fuel, k, p.fst.fst, p.snd, False).bind(λ r =>
-    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
+    rt_go(fuel, k.lending(lent.fst), p.fst.fst, p.snd, False).bind(λ r =>
+    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs)))))))
 }
 
 // How many parameters a function type takes.
@@ -1041,10 +1670,11 @@ fn rt_reflect_measured(fuel: Nat, k: Known, g: Nat, step: Nat) → Tac<Pair<Fun,
     let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
     let sc = SelfCall(o2.local.ref.id, [], List::range(n), List::range(n));
     let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let lent <- rt_lend(k, p.fst.snd);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
     let result <- k.ty_of(o3.body);
-    let r <- rt_go(fuel, k.within(sc), p.fst.fst, o3.body, False);
-    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))
+    let r <- rt_go(fuel, k.within(sc).lending(lent.fst), p.fst.fst, o3.body, False);
+    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
 }
 
 fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => pure(r.fst)) }
@@ -1066,7 +1696,24 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("BitVec::sign_extend", PSext), Pair("List::foldl", PFoldl),
      Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat),
      Pair("BitVec::truncate", PTrunc), Pair("BitVec::shift_left", PShift(0)), Pair("BitVec::shift_right", PShift(1)),
-     Pair("BitVec::arithmetic_shift_right", PShift(2))]
+     Pair("BitVec::arithmetic_shift_right", PShift(2)), Pair("List::byte_within", PWithin)]
+}
+
+// The rewritings among the primitives (`PComplement`, `PRotate`), each
+// known where its operation is in scope: a module that does not import
+// `bitvec_rotate` has no `rotr` to call.
+fn rt_derived_names() → List<Pair<String, Prim>> {
+    [Pair("BitVec::complement", PComplement), Pair("BitVec::rotr", PRotate(0)), Pair("BitVec::rotl", PRotate(1))]
+}
+
+fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
+    match ps {
+        Nil => pure([]),
+        Cons(p, rest) => lookup(p.fst).bind(λ c => rt_prims_present(rest).bind(λ es => match c {
+            Accepted(g) => pure(Cons(PrimEntry(g.id, p.snd), es)),
+            Refused(_) => pure(es),
+        })),
+    }
 }
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -1086,14 +1733,15 @@ fn rt_recs(names: List<String>) → Tac<List<RecEntry>> {
 // What the reflector knows, for a program of the functions `funs` (by
 // name, in order) reading the records `recs`.
 fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<Known> {
-    rt_prims(rt_prim_names()).bind(λ ps =>
+    rt_prims(rt_prim_names()).bind(λ base =>
+    rt_prims_present(rt_derived_names()).bind(λ derived =>
     rt_globals(funs).bind(λ gs =>
     rt_recs(recs).bind(λ rs =>
     rt_global("BitVec").bind(λ bv =>
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [])))))))))
+    pure(Known(base ++ derived, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None, []))))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }
@@ -1189,10 +1837,13 @@ fn Tm::show(self t: Tm) → String {
         Call(f, args) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "])",
         Fold(over, init, step) => "Fold(" ++ rt_nat(over) ++ ", " ++ rt_nat(init) ++ ", " ++ rt_nat(step) ++ ")",
         Case(c, zero, succ) => "Case(" ++ rt_nat(c) ++ ", " ++ zero.show() ++ ", " ++ succ.show() ++ ")",
+        Byte(k, i, length) => "Byte(" ++ rt_nat(k) ++ ", " ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ")",
     }
 }
 
-fn Fun::show(self f: Fun) → String { "Fun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.body.show() ++ ")" }
+fn Fun::show(self f: Fun) → String {
+    "Fun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.body.show() ++ ", " ++ rt_nat(f.lent) ++ ")"
+}
 
 // ---------------------------------------------------------------------------
 // The check `lib/_tests` runs: the reflection of the functions `funs`

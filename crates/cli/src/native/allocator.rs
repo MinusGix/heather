@@ -115,6 +115,22 @@ impl Reader<'_> {
                 let outputs = self.ids()?;
                 Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted: self.next()? }
             }
+            // A call over views (`spell_views`: seven numbers a view). Only a
+            // function makes one, and a function's region is read here to
+            // get past it, so it is kept as the call it ends in: the words
+            // it reads (each view's home and bounds, then the arguments)
+            // and its result.
+            6 => {
+                let count = self.next()? as usize;
+                let mut arguments = Vec::new();
+                for _ in 0..count {
+                    let f = self.take(7)?;
+                    arguments.extend([f[1], f[2], f[3]]);
+                }
+                self.next()?;
+                arguments.extend(self.ids()?);
+                Region::Call { arguments, result: self.next()? }
+            }
             _ => return None,
         })
     }
@@ -160,14 +176,27 @@ impl Reader<'_> {
 /// `[0]` (not a builder's), or one that does not read back.
 fn main_of(numbers: &[u64]) -> Option<(u64, Stmt)> {
     let mut r = Reader { numbers, at: 0 };
-    // A source with procedures (`[2]`) is allocated on the fork: this
-    // mirror walks `main` only.
-    if r.next()? != 1 { return None; }
+    // A source with procedures (`[2]`, or `[3]` with any) is allocated on
+    // the fork: this mirror walks `main` only. The functions a source calls
+    // (`[3]`) take no part: a call reads and writes the words it names.
+    let tag = r.next()?;
+    if tag != 1 && tag != 3 { return None; }
     let words = r.next()?;
+    if tag == 3 { r.next()?; }
     for _ in 0..r.next()? {
         r.next()?;
         let len = r.next()? as usize;
         r.take(len)?;
+    }
+    if tag == 3 {
+        for _ in 0..r.next()? {
+            r.ids()?;
+            r.region()?;
+            // Its result, and how many buffers it is lent.
+            r.next()?;
+            r.next()?;
+        }
+        if r.next()? != 0 { return None; }
     }
     let main = r.stmt()?;
     (r.at == numbers.len()).then_some((words, main))
@@ -256,7 +285,7 @@ fn region_needs(r: &Region, homes: &Homes, out: &[u64], sets: &mut Vec<Vec<u64>>
             let y = region_needs(yes, homes, out, sets);
             with_head(*condition, union(&y, &n))
         }
-        Region::Call { .. } => out.to_vec(),
+        Region::Call { arguments, result } => live_before(arguments, *result, out),
         Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
             let set = homes.loop_set(*count).to_vec();
             let done = nodes_live_in(&moves(outputs, parameters), out);
@@ -355,7 +384,10 @@ fn region_graph(r: &Region, homes: &Homes, out: &[u64], of: &mut Vec<Vec<bool>>)
             let y = region_graph(yes, homes, out, of);
             with_head(*condition, union(&y, &n))
         }
-        Region::Call { .. } => out.to_vec(),
+        Region::Call { arguments, result } => {
+            written(of, *result, out);
+            live_before(arguments, *result, out)
+        }
         Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
             let set = homes.loop_set(*count).to_vec();
             let done = leaf_graph(&moves(outputs, parameters), out, of);

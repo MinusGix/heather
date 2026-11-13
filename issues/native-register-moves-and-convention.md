@@ -4,7 +4,7 @@ status: open
 labels: [native,x86]
 area: heather-in-heather
 created: 2026-10-28
-updated: 2026-11-01
+updated: 2026-11-11
 milestone: [nh-procedures]
 ---
 
@@ -29,3 +29,6 @@ arguments and results go.
 - 2026-10-31: docs/native-procedures-design.md §3 fixes the first convention: arguments and results in RDI, RSI, RDX, RCX, R8, R9 (at most six each), homes global, the callee saves its own locals. Every word outside a callee's locals is live across a call to it; per-call-site pass-through sets with per-procedure clobber sets, and moves between homes, stay here.
 - 2026-11-01: Revised to caller-saves: a caller pushes every word live after a call but its results and pops them back after; the callee's code may write any home. A per-procedure clobber set, so a caller saves only words whose homes the callee may write, is the refinement that stays here.
 - 2026-11-05: gardener: cites a file it shares with [[native-procedure-contracts]] (`docs/native-procedures-design.md`).
+- 2026-11-11: docs/native-procedures-are-functions-design.md §2.3 proposes the convention for U5 of [[native-one-compiler]]: the function compiler's (six argument registers, RBX, RBP and R12 to R15 kept, the first result in RAX), the callee saving what it uses, R10 carried in RBX across a call. Per-procedure homes and moves between homes stay here.
+- 2026-11-11: U5's step 5b fixed half the convention: the callee saves. A procedure's entry stores every pool register the program's homes use and its exit puts them back, so a caller's registers and frame are as they were across a call and the caller pushes nothing. What stays here: the saved set is the program's (homes are global), so a procedure that uses two registers still saves all the program's; per-procedure homes would make it the procedure's own. RBX is scratch and unsaved, which an export changes.
+- 2026-11-11: U5's step 5c fixed the rest of the convention in code ([[native-one-compiler]]): one call sequence for a procedure and a function (`Prog::calls`), results in RAX, RDX, RCX, RSI, RDI, R8 (`result_registers()`), and a procedure keeping RBX and of R12 to R15 and RBP those a word of the program lives in (`Homes::kept`). R10 stays a home that no callee keeps; every caller carries it in RBX. What stays here is unchanged: the kept set is still read off the program's homes and not the procedure's, and there are no moves between homes.

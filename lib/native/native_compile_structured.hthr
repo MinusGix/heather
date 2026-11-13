@@ -34,6 +34,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_state;
+import function_ir_placeless;
 import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_sim;
@@ -103,7 +104,7 @@ theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m
     let words = held.witness;
     let placed = j(eq2(λ (bufs: Buffers()) (args: List<List<BitVec(8)>>) => Env(words, bufs, args), like.right.left, like.right.right),
         λ e _ => t.Placed(e, m), held.proof.left);
-    Exists(words, ⟨placed, λ i mi => trans(held.proof.right(i, mi), like.left(i, mi))⟩)
+    Exists(words, ⟨placed, ⟨λ i mi => trans(held.proof.right.left(i, mi), like.left(i, mi)), held.proof.right.right⟩⟩)
 }
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),
@@ -197,9 +198,18 @@ theorem Env::steps_args(nodes: List<Node>): (env: Env) → env.steps(nodes).args
     match nodes { Nil => λ env => refl, Cons(node, rest) => λ env => Env::steps_args(rest, env.computes([node])) }
 }
 
+// The ports a call over views writes are the words it touches.
+theorem views_touched(views: List<View>, result: Nat):
+    port_ids(nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)]) = nodes_writes(views_nodes(views)) ++ [result] {
+    match views {
+        Nil => refl,
+        Cons(view, rest) => cong_fn<List<Nat>, List<Nat>>(λ l => Cons(view.base, Cons(view.length, l)), views_touched(rest, result)),
+    }
+}
+
 // A region's meaning writes only the words it touches, and keeps the
 // command line.
-theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Answers()): (env: Env) → (x: Nat) →
+theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Writers()): (env: Env) → (x: Nat) →
     absent(x, region.touches()).IsTrue() → region.meaning(call, env).number(x) = env.number(x) {
     match region {
         Dataflow(body) => λ env x h => Env::steps_frame(body.nodes, env, x, h),
@@ -217,6 +227,11 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Ans
                 False => when_false.meaning_frame(call, env, x, parts.right),
                 True => when_true.meaning_frame(call, env, x, parts.left),
             }
+        },
+        Lend(views, callee, arguments, result) => λ env x h => {
+            let after = Lend(views, callee, arguments, result).run(call, env.valuation(), env.buffers);
+            Env::settle_frame(nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)], Env(env.words, after.buffers, env.args), after.values, x,
+                j(sym(views_touched(views, result)), λ l _ => absent(x, l).IsTrue(), h))
         },
         Call(callee, arguments, result) => λ env x h => {
             let after = Call(callee, arguments, result).run(call, env.valuation(), env.buffers);
@@ -272,15 +287,16 @@ theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) 
 // ---------------------------------------------------------------------------
 // What the machine claim asks of a region
 
-// What the compile's region scope gives the claim: leaves wide, no call,
-// and each loop in counted form with its body scoped from its pass.
+// What the compile's region scope gives the claim: leaves wide, and each
+// loop in counted form with its body scoped from its pass.
 fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
     match region {
         Dataflow(body) => nodes_wide(body.nodes).IsTrue(),
         Sequence(prefix, continuation) => nodes_wide(prefix.nodes).IsTrue() ∧ continuation.Ok(),
         Compose(prefix, continuation) => prefix.Ok() ∧ continuation.Ok(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.Ok() ∧ when_false.Ok(),
-        Call(_, _, _) => False,
+        Lend(_, _, _, _) => False,
+        Call(_, _, _) => True,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
             Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
@@ -314,7 +330,8 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
                 }))
             },
         }),
-        Call(_, _, _) => λ s t none => absurd(none),
+        Lend(_, _, _, _) => λ s t none => absurd(none),
+        Call(_, _, _) => λ s t _ => trivial,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             let goal = body.Ok() ∧ (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
@@ -412,6 +429,18 @@ theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: N
     p.within_trans(p.bit_to(layout, condition, Rax), p.tests(layout, condition, else_name), p.within_bit_to(layout, condition, Rax), Exists(2, refl))
 }
 
+// A function's call from its start (`Prog::function_call`).
+theorem Prog::within_function_call(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat):
+    p.Within(p.function_call(layout, out, callee, arguments, result)) {
+    let lent = program_lent(layout.functions, callee);
+    let regs = call_registers().drop(2 * lent);
+    let passed = p.words_to(layout, arguments, regs);
+    let back = then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(Succ(callee))),
+        Block([MovRR(R10, Rbx)]));
+    p.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, regs, p),
+        passed.within_trans(back, back.word_from(layout, out, result, Rax), Exists(3, refl), back.within_word_from(layout, out, result, Rax)))
+}
+
 theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Layout): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
     region.code(p, layout, out, names) = Some(c) → p.Within(c.prog) {
     match region {
@@ -446,7 +475,13 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
                                     n.prog.within_label(Succ(Succ(names))))))))
             })))
         },
-        Call(_, _, _) => λ p out names c none => absurd(none),
+        Lend(_, _, _, _) => λ p out names c none => absurd(none),
+        Call(callee, arguments, result) => λ p out names c emitted => {
+            let fc = p.function_call(layout, out, callee, arguments, result);
+            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = emitted;
+            Bool::guard_with(chain, λ _ same => j(Option::some_inj(Compiled(fc, names), c, same), λ x _ => p.Within(x.prog),
+                p.within_function_call(layout, out, callee, arguments, result)))
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out names c emitted => {
             let k = StructuredRegion::loop_code(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, layout, out, names, c, emitted);
             let head = Succ(names);
@@ -832,13 +867,24 @@ theorem clear_of(x, count, exhausted: Nat, parameters, touched: List<Nat>, h: ab
 
 // The code from `p` to `q` runs as the region's meaning, from what it needs
 // live to what is live after it.
-fn Target::Computes(self t: Target, region: StructuredRegion, call: Answers(), live, out: List<Nat>, p, q: Prog) → Type {
+fn Target::Computes(self t: Target, region: StructuredRegion, call: Writers(), live, out: List<Nat>, p, q: Prog) → Type {
     (env: Env) → (tree: ITree<BitVec(64)>(Events::linux())) → t.At(prog_len(q), out, tree, region.meaning(call, env)) → t.At(prog_len(p), live, tree, env)
+}
+
+// Every call of a function the compile emits runs as the call's meaning:
+// the hypothesis a region's claim takes for its `Call`s, proved from the
+// functions' contracts (`Target::functions_run`, native_compile_function).
+fn Target::Functions(self t: Target, call: Writers()) → Type {
+    (p: Prog) → (out: List<Nat>) → (callee: Nat) → (arguments: List<Nat>) → (result: Nat) →
+        t.layout().function_fits(callee, arguments, result).IsTrue() →
+        p.function_call(t.layout(), out, callee, arguments, result).Within(t.program) → t.homes.apart(result, out).IsTrue() →
+        t.Computes(Call(callee, arguments, result), call, live_before(arguments, result, out), out, p,
+            p.function_call(t.layout(), out, callee, arguments, result))
 }
 
 // At the loop's head with `m` passes left in its count, the parameters
 // holding the pass's state: the code runs on to where the passes end.
-theorem Target::loop_head(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
     exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, set, done, stop, down, after, live: List<Nat>,
     k: LoopCode(p, t.layout(), out, names, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, c),
     h: LoopChecked(t.homes, out, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, live),
@@ -1020,7 +1066,7 @@ theorem Target::loop_head(self t: Target, call: Answers(), inputs: List<Nat>, bo
 // A loop's code runs as its meaning: the entry sets the count and the
 // parameters, the head runs the passes, and the exit's moves leave the
 // outputs, the bit and every word the loop never writes as the meaning does.
-theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
     exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
     emitted: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).code(p, t.layout(), out, names) = Some(c),
     within: c.prog.Within(t.program),
@@ -1149,7 +1195,7 @@ theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bo
 // ---------------------------------------------------------------------------
 // Every region compiled runs as its meaning
 
-theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Answers()): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
+theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Writers(), fns: t.Functions(call)): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
     (c: Compiled) → region.code(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → (live: List<Nat>) →
     t.homes.region_checked(region, out) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
     let layout = t.layout();
@@ -1162,7 +1208,7 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
             let checks: (t.homes.region_checked(continuation, out).and_then(λ m => t.homes.leaf_checked(prefix.nodes, m)) = Some(live)) = checked;
             let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
             Option::and_then_with(chain, λ a first rest => {
-                let runs = continuation.code_runs(t, call, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
+                let runs = continuation.code_runs(t, call, fns, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
                 let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
                 let r: t.Computes(Sequence(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
                     t.leaf_goes(mid, prefix.nodes, p, names, a, first, w_a, live, cc.right, ok.left, env, tree, runs(env.steps(prefix.nodes), tree, next));
@@ -1175,9 +1221,9 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
             let checks: (t.homes.region_checked(continuation, out).and_then(λ m => t.homes.region_checked(prefix, m)) = Some(live)) = checked;
             let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
             Option::and_then_with(chain, λ a first rest => {
-                let runs = continuation.code_runs(t, call, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
+                let runs = continuation.code_runs(t, call, fns, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
                 let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
-                let pre = prefix.code_runs(t, call, ok.left, p, mid, names, a, first, w_a, live, cc.right);
+                let pre = prefix.code_runs(t, call, fns, ok.left, p, mid, names, a, first, w_a, live, cc.right);
                 let r: t.Computes(Compose(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
                     pre(env, tree, runs(prefix.meaning(call, env), tree, next));
                 r
@@ -1206,8 +1252,8 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                         let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
                         let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
                         let w_tested = tested.within_trans(y.prog, t.program, when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is), w_yes);
-                        let run_yes = when_true.code_runs(t, call, ok.left, tested, out, Succ(Succ(names)), y, y_is, w_yes, yl, yl_is);
-                        let run_no = when_false.code_runs(t, call, ok.right, other, out, y.names, nc, n_is, w_no, nl, nl_is);
+                        let run_yes = when_true.code_runs(t, call, fns, ok.left, tested, out, Succ(Succ(names)), y, y_is, w_yes, yl, yl_is);
+                        let run_no = when_false.code_runs(t, call, fns, ok.right, other, out, y.names, nc, n_is, w_no, nl, nl_is);
                         let r: t.Computes(region, call, arms, out, p, joined) = λ env tree next => t.goes_tests(arms, env, p, condition, names, inside, Inl(refl),
                             w_tested, w_other.witness, jumped, Block([]), w_other.proof, tree,
                             λ (set: env.bit(condition) = True) => t.at_sub(prog_len(tested), yl, arms, tree, env, λ i m => Inr(yl.union_left(nl, i, m)),
@@ -1221,9 +1267,24 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                     })(within))
             })))))
         },
-        Call(_, _, _) => λ ok => false_elim(ok),
+        Lend(_, _, _, _) => λ never p out names c emitted within live checked => false_elim(never),
+        Call(callee, arguments, result) => λ ok p out names c emitted within live checked => {
+            let region = Call(callee, arguments, result);
+            let fc = p.function_call(layout, out, callee, arguments, result);
+            let before = live_before(arguments, result, out);
+            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = emitted;
+            Bool::guard_with(chain, λ fit same =>
+                (match t.homes.apart(result, out) as λ b => t.homes.apart(result, out) = b →
+                        (match b as λ _ => Option<List<Nat>> { False => None, True => Some(before) }) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
+                    False => λ _ none => absurd(none),
+                    True => λ apart same_live =>
+                        j(Option::some_inj(before, live, same_live), λ l _ => t.Computes(region, call, l, out, p, c.prog),
+                        j(Option::some_inj(Compiled(fc, names), c, same), λ x _ => x.prog.Within(t.program) → t.Computes(region, call, before, out, p, x.prog),
+                            λ (w: fc.Within(t.program)) => fns(p, out, callee, arguments, result, fit, w, j(sym(apart), λ b _ => b.IsTrue(), trivial)))(within)),
+                })(refl, checked))
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
             t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,
-                body.code_runs(t, call, ok.left)),
+                body.code_runs(t, call, fns, ok.left)),
     }
 }
