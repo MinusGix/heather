@@ -820,6 +820,7 @@ fn ETm::ends_at(region: StructuredRegion, id: Nat) → Bool {
         Sequence(_, _) => False,
         Conditional(_, _, _, _, _, _) => False,
         Call(_, _, _) => False,
+        Lend(_, _, _, _) => False,
         Loop(_, _, _, _, _, _, _, _, _) => False,
     }
 }
@@ -858,6 +859,7 @@ theorem ETm::settle_end(region: StructuredRegion, id: Nat, call: Writers()): (va
         Sequence(_, _) => λ values buffers after env never => false_elim(never),
         Conditional(_, _, _, _, _, _) => λ values buffers after env never => false_elim(never),
         Call(_, _, _) => λ values buffers after env never => false_elim(never),
+        Lend(_, _, _, _) => λ values buffers after env never => false_elim(never),
         Loop(_, _, _, _, _, _, _, _, _) => λ values buffers after env never => false_elim(never),
     }
 }

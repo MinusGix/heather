@@ -26,3 +26,4 @@ A method declared on the vector type is called with a dot, and `lib/std/data/vec
 ## Log
 
 - 2026-11-13: Filed with the refusal above.
+- 2026-11-13: Minus (2026-11-13): the owner's name is `Vec` ("could be confused with Rust `Vec`", and he would rather it were less of a kernel type too, but `Vec` will work). To be built in a side thread; moving `vector_at`/`vector_put`/`vector_put_byte_be` onto it follows in the indexing thread, with the found-proof lifting reading a method call.
