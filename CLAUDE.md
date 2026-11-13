@@ -28,11 +28,11 @@
     `crates/cli/src/semantic.rs`). Why: `docs/testing-architecture-design.md`.
     Docs-only or issue-only changes need no suite at all.
   - **A change to what the elaborator infers re-elaborates the whole
-    library before it merges** (Minus, 2026-11-11): motive synthesis, the
+    library before it merges**: motive synthesis, the
     unifier, instance choice, defaults, any tactic or rewrite the library
     already calls. The fast and PR lanes replay unchanged library modules
-    after a compiler edit, so they cannot see a proof the change moved
-    (PR #566 merged three broken proofs that way). Run plain `scripts/test`
+    after a compiler edit, so they cannot see a proof the change moved.
+    Run plain `scripts/test`
     (the exact image policy), or the sweep: every `lib/**/*.hthr` through
     `heather check --cache --expectations` with the new release binary and
     no `--accept-stale-images`, capped per file, three at a time. Group
@@ -119,7 +119,7 @@
   lowering or the emitter, run **`scripts/linked`** to rewrite the files
   (`--check` compares; a row whose binary and import closure are unchanged
   is not recompiled) and the Rust declarations with them
-  (`generated/exports.rs`, never edited: `tests/linked_exports.rs`); a new
+  (`generated/exports.rs`, never edited: `crates/cli/tests/linked_exports.rs`); a new
   export is a line in the table (module, function, parameters, a span of
   bytes it reads as `name: span` and one it stores into as
   `name: span mut`; a method is named by its path, `List::f`, and exported
@@ -185,7 +185,7 @@
   the headline number is the scaling exponent, not the time.
   `docs/benchmarking.md` explains "regressed" and why the harness is
   first-party (the kernel has zero dependencies, dev-dependencies included).
-- **Cloud timings are the reference** (Minus, 2026-10-29): record and compare
+- **Cloud timings are the reference**: record and compare
   on the cloud box, counters first (`docs/cloud-benchmarks.md`). To
   hillclimb on a slow native or library cost, use **`scripts/bench-probes`**
   (`--filter`, `--check`, `--save`; `--heavy` adds cold `write-elf`s): one
