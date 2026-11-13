@@ -1,23 +1,32 @@
 // SHA-256 over a message that arrives in parts, as compiled code
 // (issues/sha2-compress-native.md, stage C2 of
-// docs/native-lexer-crypto-roadmap.md): `Sha256::init`, `sha256_update` and
-// `sha256_finish` over a context their caller lends, with the padding of
-// FIPS 180-4 §5.1.1 done here and not by the caller.
+// docs/native-lexer-crypto-roadmap.md): `Sha256::init`, `Sha256::update`
+// and `Sha256::finish`, with the padding of FIPS 180-4 §5.1.1 done here
+// and not by the caller. §6.2.2 on one block a caller hands whole is
+// `Sha256::compress` (`sha256_one_block.hthr`, a module of its own so that
+// each stays inside the library gate's rail).
 //
-// The context is a `Sha256` (`sha256_context.hthr`): what `sha256_block`
-// works in, and the count of bytes taken so far, most significant first.
-// A block is assembled where the compression function wants it, in the
-// schedule's first sixteen words, so a part that ends inside a block
-// leaves its bytes there for the next, and how many is the count's low six
-// bits. After `sha256_finish` the hash value's thirty-two bytes are the
-// digest. Each field is reached by the offset its declaration publishes.
+// Each is a function of the context, a `Sha256` (`sha256_context.hthr`):
+// what `Sha256::run` works in, and the count of bytes taken so far, most
+// significant first. No body names an offset or a width. A block is
+// assembled where the compression function wants it, in the schedule's
+// first sixteen words, so a part that ends inside a block leaves its
+// bytes there for the next, and how many is the count's low six bits.
+// After `Sha256::finish` the hash value's thirty-two bytes are the digest.
+//
+// The message is a span the functions only read: each takes the span's
+// bytes and its length word after the context. The code of
+// each runs over the span that holds the context, with the read span the
+// file's second (`Sha256::update::bytes(ctx, cn, message, mn)`), and that
+// code is what is exported: `sha256_init`, `sha256_update`,
+// `sha256_finish`.
 //
 // A byte at a time: each is stored under the context's length and the
 // block is run when the sixty-fourth lands. That is the simplest loop that
 // is right at every split of a message, and a copy of whole blocks is an
 // optimization for a compiler that has one.
 //
-// Not proved here, as in `sha256_block`: that what these compute is
+// Not proved here, as in `Sha256::run`: that what these compute is
 // `Sha2::digest`. The tests are where they are linked
 // (crates/linked/tests/sha256.rs).
 import logic;
@@ -73,39 +82,24 @@ import stored_accessor;
 import rt_held;
 import rt_held_fields;
 import rt_held_reflect;
+import rt_held_loop;
 
-// The count of bytes taken, from its eight bytes.
-runtime fn sha256_count(ctx: List<u8>, cn: u64) → u64 { ctx.u64_be_within(cn, Sha256::count_at) }
-
-runtime fn List::sha256_put_count(mut self ctx: List<u8>, cn, count: u64) → u64 { ctx.put_u64_be_within(cn, Sha256::count_at, count) }
-
-// The initial hash value (§5.3.3) and a count of zero: a function of the
-// context, compiled over the span that holds it. Its code is eight stores
-// of a word and one of the count, each where the declaration lays the
-// field, and it is exported as `sha256_init`.
+// The initial hash value (§5.3.3) and a count of zero. Its code is eight
+// stores of a word and one of the count, each where the declaration lays
+// the field.
 runtime fn Sha256::init(mut self s: Sha256) → u64 {
     s.hash := [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
     s.count := 0;
     0
 }
 
-// What the compiled code leaves: where the span held a context, it holds
-// that context with the initial hash value and no bytes taken. The
-// generator's theorem, nothing here by hand.
-theorem Sha256::init_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
-    Sha256::stored().Holds(Sha256::init::bytes(span, length).after, length,
-        s with { hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], count = 0 }) {
-    Sha256::init::runs_held(span, s, length, holds).holds
-}
-
 // The message's bytes from `j`, each pushed into the context's block
-// (`Sha256::push`, run on the span).
-runtime fn List::sha256_absorb(mut self ctx: List<u8>, cn: u64, message: List<u8>, mn, j, fill: u64) → u64
+// (`Sha256::push`). `fill` is how many bytes the block holds.
+runtime fn Sha256::absorb(mut self s: Sha256, message: List<u8>, mn, j, fill: u64) → u64
     decreases (mn - j).toNat() {
     if h: j < mn {
-        let pushed = Sha256::push::bytes(ctx, cn, fill, message.byte_within(mn, j).zero_extend(56));
-        ctx := pushed.after;
-        ctx.sha256_absorb(cn, message, mn, j + 1, pushed.value)
+        let filled = s.push(fill, message.byte_within(mn, j).zero_extend(56));
+        s.absorb(message, mn, j + 1, filled)
     } else {
         fill
     }
@@ -113,59 +107,35 @@ runtime fn List::sha256_absorb(mut self ctx: List<u8>, cn: u64, message: List<u8
 
 // A part of the message taken into a context that has `count` bytes
 // already. The count is a parameter because it is read before the stores
-// and used after them, and a span that is written is read as it is where
-// the read is used (issues/rt-file-read-before-store.md).
-runtime fn List::sha256_take(mut self ctx: List<u8>, cn: u64, message: List<u8>, mn, count: u64) → u64 {
-    ctx.sha256_absorb(cn, message, mn, 0, count & 63);
-    ctx.sha256_put_count(cn, count + mn)
+// and used after them (issues/runtime-record-function-limits.md).
+runtime fn Sha256::take(mut self s: Sha256, message: List<u8>, mn, count: u64) → u64 {
+    s.absorb(message, mn, 0, count & 63);
+    s.count := count + mn;
+    count + mn
 }
 
-// One more part of the message.
-runtime fn sha256_update(ctx: List<u8>, cn: u64, message: List<u8>, mn: u64) → Mutated<List<u8>, u64> {
-    let mut ctx = ctx;
-    let count = ctx.sha256_take(cn, message, mn, sha256_count(ctx, cn));
-    Mutated(ctx, count)
+// One more part of the message. Its word is the count of bytes taken.
+runtime fn Sha256::update(mut self s: Sha256, message: List<u8>, mn: u64) → u64 { s.take(message, mn, s.count) }
+
+// The message has ended (`Sha256::close`). The digest is then the hash
+// value's thirty-two bytes.
+runtime fn Sha256::finish(mut self s: Sha256) → u64 { s.close(s.count) }
+
+// What the compiled code leaves, each the generator's theorem and nothing
+// here by hand: where the span held a context, it holds what the function
+// of the context leaves.
+theorem Sha256::init_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::init::bytes(span, length).after, length,
+        s with { hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], count = 0 }) {
+    Sha256::init::runs_held(span, s, length, holds).holds
 }
 
-// The message has ended (`Sha256::close`, run on the span). The digest is
-// then the hash value's thirty-two bytes. The count is read here, before
-// any store.
-runtime fn sha256_finish(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
-    let closed = Sha256::close::bytes(ctx, cn, sha256_count(ctx, cn));
-    Mutated(closed.after, closed.value)
+theorem Sha256::update_holds(span: List<u8>, s: Sha256, length: u64, message: List<u8>, mn: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::update::bytes(span, length, message, mn).after, length, Sha256::update(s, message, mn).after) {
+    Sha256::update::runs_held(span, s, length, message, mn, holds).holds
 }
 
-// The block's sixty-four bytes into the context's block.
-runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64
-    decreases (64 - i).toNat() {
-    if h: i < 64 {
-        let put = Sha256::put::bytes(ctx, cn, i, block.byte_within(bn, i).zero_extend(56));
-        ctx := put.after;
-        ctx.sha256_take_block(cn, block, bn, i + 1)
-    } else {
-        i
-    }
-}
-
-// §6.2.2: H(i) from H(i−1) and a block. Of the context the hash value is
-// read, and it, the working variables and the schedule are written. What
-// the hash value's thirty-two bytes spell after the last block is the
-// digest.
-runtime fn sha256_compress(ctx: List<u8>, cn: u64, block: List<u8>, bn: u64) → Mutated<List<u8>, u64> {
-    let mut ctx = ctx;
-    ctx.sha256_take_block(cn, block, bn, 0);
-    let ran = Sha256::run::bytes(ctx, cn);
-    Mutated(ran.after, ran.value)
-}
-
-// The stream's own accessors are the record's: the count `sha256_update`
-// and `sha256_finish` read is the context's, and the one they store is
-// the context with its count replaced.
-theorem Sha256::count_is(ctx: List<u8>, cn: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat()): sha256_count(ctx, cn) = Sha256::of(ctx).count {
-    Sha256::count_read(ctx, cn, inside)
-}
-
-theorem Sha256::put_count_is(ctx: List<u8>, cn, count: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat(), own: cn.toNat() <= ctx.len()):
-    Sha256::of(List::sha256_put_count(ctx, cn, count).after) = (Sha256::of(ctx) with { count = count }) {
-    Sha256::count_put(ctx, cn, count, inside, own)
+theorem Sha256::finish_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::finish::bytes(span, length).after, length, Sha256::finish(s).after) {
+    Sha256::finish::runs_held(span, s, length, holds).holds
 }

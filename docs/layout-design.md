@@ -1019,19 +1019,18 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    The export's certificate needed the same remedy once more. Its
    return theorem compared the ending's word (`FTm::end_of(rest, m).word`)
    with the function's value, and the kernel advanced the function:
-   `sha256_compress` now reaches loops called at numerals, which then ran
+   the exported compression now reaches loops called at numerals, which then ran
    pass by pass. `compile-x86` states the theorem through
    `Ending::returns_written` and `Ending::returns_marked`
    (`rt_file_returns.hthr`), where the result is a parameter and the
    comparison is of two names.
 
-   **The stream's stores are the context's too**
-   (`sha256_filling.hthr`, `sha256_padding.hthr`): `Sha256::put` (a byte of the block),
-   `push`, `zero`, `pad` and `close`. What stays a function over the span
-   is what reads a second span, the message or the block
-   (`sha256_absorb`, `sha256_take_block`), and those store nothing
-   themselves: each byte goes through `Sha256::push::bytes` or
-   `Sha256::put::bytes`. A byte of the block is a quarter of a schedule
+   **The stream is the context's too** (`sha256_filling.hthr`,
+   `sha256_padding.hthr`, `sha256_stream.hthr`, `sha256_one_block.hthr`): `Sha256::put` (a byte of
+   the block), `push`, `zero`, `pad`, `close`, and over them `absorb`,
+   `take`, `update`, `finish`, `take_block` and `compress`. No function
+   of the linked SHA-256 is written over a bare span, and none names an
+   offset, a width or `Mutated`. A byte of the block is a quarter of a schedule
    word, and `put` is one store of it:
    `s.schedule := vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56))`,
    the array with byte `at mod 4` of word `at div 4` replaced, most
@@ -1044,8 +1043,32 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    (`Stored::u32_be_put_with_byte`), and one for every array
    (`Stored::held_put_byte`, `HWorld::stores_bytes_array`). Taken for
    big-endian words of four bytes at an index that is a word; a byte
-   read is not built. One more limit met:
-   `close` takes the count as a parameter, since a field read before a
+   read is not built.
+
+   **A span that is only read** is what the last six needed, the message
+   and the block:
+   `Sha256::absorb(mut self s: Sha256, message: List<u8>, mn, j, fill: u64)`.
+   After its record a function takes each span it only reads, the bytes
+   and then the length word, and then its words; the code takes the
+   record's span first, and each read span's place and length word where
+   the function takes the span. `FTm::held` was already a meaning at any
+   rest of a file, so the theory is unchanged. What changed is the
+   generator: the marks, what they owe, and a loop's function, measure
+   and equation are each a function of the rest of the file, and the
+   theorem reads them at the function's own spans,
+   `T::m::runs_held(own, t, length, src, sn, …, holds)`. A span goes to a
+   callee or to the loop's next pass as it came, in its own place, so
+   the callee's function of the record is read at the same file. One
+   thing is particular to a loop: its recursion takes the span's bytes
+   like any parameter, and `T::m::ext` asks that two recursions agree at
+   every span, where the code's answer is known only at the file's. The
+   body never varies the span, so each recursion compared is read at the
+   file's span whatever it is handed, and the equation still converts
+   (`runtime_held_counted`). Probes
+   `lib/_tests/native/runtime/runtime_held_span_tests.hthr`.
+
+   One more limit met:
+   `close` and `take` take the count as a parameter, since a field read before a
    call and used after it is reflected as read after, and the pin does
    not see that the call leaves it.
 

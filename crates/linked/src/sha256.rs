@@ -138,7 +138,7 @@ pub fn digest(message: &[u8]) -> [u8; 32] {
 }
 
 /// The compression function as one linked function,
-/// `sha256_compress` of `lib/native/crypto/sha256_stream.hthr`.
+/// `sha256_compress` of `lib/native/crypto/sha256_one_block.hthr`.
 ///
 /// It works in a *context* of [`CONTEXT`](block::CONTEXT) bytes that its
 /// caller lends it, the `Sha256` record of

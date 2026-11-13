@@ -195,7 +195,7 @@ runtime fn Plain::bump(mut self p: Plain) → u64 {
     p.count
 }
 
-// expect-error: a function of a laid record takes 64-bit words after its record
+// expect-error: a function of a laid record takes, after its record, the spans it only reads
 runtime fn Tally::add(mut self t: Tally, n: Nat) → u64 {
     t.count := t.count + BitVec::ofNat(n);
     t.count

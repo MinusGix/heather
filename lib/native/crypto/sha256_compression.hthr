@@ -6,7 +6,7 @@
 // here writes an offset or a width: `s.schedule` at `t.toNat()` is the
 // accessor's checked element where the declaration lays it.
 //
-// These are the linked ones: `sha256_compress` (`sha256_stream.hthr`)
+// These are the linked ones: `sha256_compress` (`sha256_one_block.hthr`)
 // copies the block's bytes into the schedule and runs `Sha256::run`'s code
 // on the span, and the stream's functions reach the same code through the
 // context's own (`sha256_filling.hthr`).

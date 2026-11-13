@@ -71,7 +71,7 @@
 //!
 //! [`sha256::block`]: SHA-256's compression function whole, one linked
 //! function over a context and a block that its caller lends it
-//! (`lib/native/crypto/sha256_stream.hthr`, over the context's functions in
+//! (`lib/native/crypto/sha256_one_block.hthr`, over the context's functions in
 //! `sha256_compression.hthr`). The working variables, the
 //! schedule and the constants are Heather's there, the constants as a tree
 //! of comparisons and the rest as bytes of the context; the padding is

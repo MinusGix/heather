@@ -3,7 +3,7 @@
 // docs/native-lexer-crypto-roadmap.md). The compression is functions of
 // its context, a `Sha256` (`sha256_context.hthr`): `sha256_schedule.hthr`,
 // `sha256_working.hthr`, `sha256_compression.hthr`; `sha256_compress`, the
-// linked function, is in `sha256_stream.hthr`.
+// linked function, is in `sha256_one_block.hthr`.
 import logic;
 import bool;
 import nat;

@@ -378,7 +378,7 @@ fn model(context: &mut [u8], block: &[u8]) -> u64 {
             put(span, i.wrapping_add(k as u64), byte);
         }
     }
-    // `sha256_take_block`, `Sha256::expand`, `Sha256::begin`.
+    // `Sha256::take_block`, `Sha256::expand`, `Sha256::begin`.
     for i in 0..64 {
         put(context, i + 64, block.get(i as usize).copied().unwrap_or(0));
     }

@@ -28,10 +28,10 @@ lib/native/crypto/sha512_round.hthr	sha512_next	w2, w7, w15, w16
 lib/native/crypto/sha256_round.hthr	sha256_t1	h, e, f, g, k, w
 lib/native/crypto/sha256_round.hthr	sha256_t2	a, b, c
 lib/native/crypto/sha256_round.hthr	sha256_next	w2, w7, w15, w16
-lib/native/crypto/sha256_stream.hthr	sha256_compress	ctx: span mut, block: span
+lib/native/crypto/sha256_one_block.hthr	Sha256::compress	ctx: span mut, block: span
 lib/native/crypto/sha256_stream.hthr	Sha256::init	ctx: span mut
-lib/native/crypto/sha256_stream.hthr	sha256_update	ctx: span mut, message: span
-lib/native/crypto/sha256_stream.hthr	sha256_finish	ctx: span mut
+lib/native/crypto/sha256_stream.hthr	Sha256::update	ctx: span mut, message: span
+lib/native/crypto/sha256_stream.hthr	Sha256::finish	ctx: span mut
 lib/lang/lexer/lexer_scan.hthr	scan_step	state, byte	scan_token
 lib/lang/lexer/lexer_scan.hthr	scan_accept	state	scan_token
 lib/lang/lexer/lexer_scan.hthr	scan_begin	previous	scan_token

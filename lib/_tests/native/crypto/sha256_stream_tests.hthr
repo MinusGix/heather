@@ -75,21 +75,25 @@ fn words_from(ctx: List<BitVec(8)>, words: List<Nat>, at: Nat) → Bool {
     }
 }
 
+// The count of bytes taken, where the declaration lays it.
+fn count_of(ctx: List<BitVec(8)>) → BitVec(64) { ctx.u64_be_within(w(328), Sha256::count_at) }
+fn with_count(ctx: List<BitVec(8)>, count: BitVec(64)) → List<BitVec(8)> { List::put_u64_be_within(ctx, w(328), Sha256::count_at, count).after }
+
 // ---------------------------------------------------------------------------
 // The count
 
-theorem count_round_trip(): sha256_count(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, w(328)) = w(0x0123456789abcdef) { refl }
+theorem count_round_trip(): count_of(with_count(blank(), w(0x0123456789abcdef))) = w(0x0123456789abcdef) { refl }
 // Most significant first, at byte 320.
-theorem count_bytes(): words_from(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, [0x01234567, 0x89abcdef], 320) = True { refl }
+theorem count_bytes(): words_from(with_count(blank(), w(0x0123456789abcdef)), [0x01234567, 0x89abcdef], 320) = True { refl }
 // And nothing before it.
-theorem count_alone(): List::u32_be_within(List::sha256_put_count(blank(), w(328), w(0x0123456789abcdef)).after, w(328), w(316)) = w(0) { refl }
+theorem count_alone(): List::u32_be_within(with_count(blank(), w(0x0123456789abcdef)), w(328), w(316)) = w(0) { refl }
 
 // ---------------------------------------------------------------------------
 // The start
 
 // §5.3.3, as the specification holds it, and no bytes taken.
 theorem init_is_the_initial_value(): words_from(Sha256::init::bytes(ones(), w(328)).after, Sha2::sha256().initial, 0) = True { refl }
-theorem init_counts_none(): sha256_count(Sha256::init::bytes(ones(), w(328)).after, w(328)) = w(0) { refl }
+theorem init_counts_none(): count_of(Sha256::init::bytes(ones(), w(328)).after) = w(0) { refl }
 // The working area is left as it was.
 theorem init_leaves_the_rest(): List::u32_be_within(Sha256::init::bytes(ones(), w(328)).after, w(328), w(32)) = w(0xffffffff) { refl }
 
@@ -102,18 +106,18 @@ theorem push_lands(): List::u32_be_within(Sha256::push::bytes(blank(), w(328), w
 theorem push_counts(): Sha256::push::bytes(blank(), w(328), w(5), w(0xab)).value = w(6) { refl }
 
 // Three bytes of a message from an empty block.
-theorem absorb_three(): List::u32_be_within(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
+theorem absorb_three(): List::u32_be_within(Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
     w(0x61626300) { refl }
-theorem absorb_fills(): List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).value = w(3) { refl }
+theorem absorb_fills(): Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).value = w(3) { refl }
 // From a block that holds two already, they follow them.
-theorem absorb_follows(): List::u32_be_within(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(2)).after, w(328), w(64)) =
+theorem absorb_follows(): List::u32_be_within(Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(2)).after, w(328), w(64)) =
     w(0x00006162) { refl }
 // The length word is the bound: a count past the message's end takes
 // nothing from past it.
-theorem absorb_under_length(): List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(2), w(0), w(0)).value = w(2) { refl }
+theorem absorb_under_length(): Sha256::absorb::bytes(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(2), w(0), w(0)).value = w(2) { refl }
 
 // A part taken: the count moves by its length.
-theorem update_counts(): sha256_count(sha256_update(Sha256::init::bytes(blank(), w(328)).after, w(328), [b(0x61), b(0x62), b(0x63)], w(3)).after, w(328)) = w(3) {
+theorem update_counts(): count_of(Sha256::update::bytes(Sha256::init::bytes(blank(), w(328)).after, w(328), [b(0x61), b(0x62), b(0x63)], w(3)).after) = w(3) {
     refl
 }
 

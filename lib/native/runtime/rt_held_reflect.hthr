@@ -54,6 +54,13 @@
 // after the stores of what the body changed before it ("The walk",
 // below). The walk hands the generator the functions called.
 //
+// After its record a function may take spans it only reads, each a
+// `List<u8>` and then its 64-bit length word, before its words: the code
+// takes each span's place and length word where the function takes them,
+// a byte of one is `src.byte_within(sn, i)`, read under the span's own
+// length word, and a call of another function of the record, or the
+// function's own, passes each span on as it came, in its own place.
+//
 // Untrusted like every producer: what a `runtime fn` of a record
 // publishes is the pin of this reflection's held meaning
 // (`FTm::held`, rt_held.hthr) to the function, by conversion, and a wrong
@@ -113,9 +120,10 @@ fn HeldEach::access(self e: HeldEach, i: Nat) → HeldAccess { HeldAccess(e.read
 fn HeldEach::entry(self e: HeldEach, v: Expr, i: Nat) → Expr { App(App(App(e.index_of, v), NatLit(i)), e.inside) }
 
 // A function of the record a function calls: the function over the span
-// the code calls (`T::m::bytes`), the function of the record, its name
-// and how many words it takes after its record.
-record HeldCall { bytes: Nat, run: GlobalRef, name: String, operands: Nat }
+// the code calls (`T::m::bytes`), the function of the record, its name,
+// how many words its code takes after its span's place and length word,
+// and how many spans it only reads (the first of those words, two each).
+record HeldCall { bytes: Nat, run: GlobalRef, name: String, operands: Nat, spans: Nat }
 
 fn HeldCall::of(cs: List<HeldCall>, g: Nat) → Option<HeldCall> {
     match cs { Nil => None, Cons(c, rest) => match c.run.id.same(g) { True => Some(c), False => HeldCall::of(rest, g) } }
@@ -128,11 +136,12 @@ fn HeldCall::add(cs: List<HeldCall>, c: HeldCall) → List<HeldCall> {
 // A function of a laid record after it was walked: its reflection, the
 // program's pure functions and computations, the record and its fields,
 // how many words it takes beside the record, whether it changes the
-// record or only reads it, the functions of the record it calls, and
+// record or only reads it, the functions of the record it calls,
 // whether it is a loop (a function that `decreases`, its body ending in
-// its own call).
+// its own call), and how many spans it only reads (the first of its
+// operands, a place and a length word each).
 record HeldReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat>, record: Handle, record_name: String, stored: GlobalRef, fields: List<HeldField>,
-    operands: Nat, changes: Bool, calls: List<HeldCall>, measured: Bool }
+    operands: Nat, changes: Bool, calls: List<HeldCall>, measured: Bool, spans: Nat }
 
 // A term applied to arguments.
 fn rt_ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
@@ -706,7 +715,7 @@ fn rt_held_callee(k: Known, held: List<HeldCall>, g: GlobalRef, name: String, ar
                 None => rt_name_of(g, name).bind(λ n => lookup(n ++ "::runs_held").bind(λ c => match c {
                     Refused(_) => pure(None),
                     Accepted(_) => lookup(n ++ "::bytes").bind(λ b => match b {
-                        Accepted(bytes) => pure(Some(HeldCall(bytes.id, g, n, operands.len()))),
+                        Accepted(bytes) => rt_call_lent(64, k, operands).bind(λ spans => pure(Some(HeldCall(bytes.id, g, n, operands.len(), spans)))),
                         Refused(_) => pure(None),
                     }),
                 })),
@@ -745,13 +754,11 @@ fn rt_held_pending(fuel: Nat, k: Known, w: HeldWalk, hs: List<Handle>) → Tac<O
     }
 }
 
-// Each operand as a variable.
+// Each operand as a variable. The spans a callee only reads come first,
+// each passed on as the function took it, in its own place with its own
+// length word (`rt_lent_args`): the callee reads the caller's file.
 fn rt_held_operands(fuel: Nat, k: Known, st: RSt, hs: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
-    match hs {
-        Nil => pure(Pair(st, [])),
-        Cons(h, rest) => rt_go(fuel, k, st, h, True).bind(λ r =>
-            rt_held_operands(fuel, k, r.fst, rest).bind(λ more => pure(Pair(more.fst, Cons(RSt::level(r.snd), more.snd))))),
-    }
+    rt_call_lent(64, k, hs).bind(λ spans => rt_lent_args(λ s a => rt_go(fuel, k, s, a, True), k, st, 1, spans, hs))
 }
 
 // Whether a call answers `Mutated`: a function that only reads the
@@ -1077,24 +1084,45 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
     }
 }
 
-// The words a function takes after its record: the body's `λ`s opened,
-// each local at levels 2 on (the span's place and its length word are 0
-// and 1), and the body under them.
-record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef }
+// What a function takes after its record: the spans it only reads, each
+// with its length word, and then words. The body's `λ`s opened, each
+// local at levels 2 on (the written span's place and its length word are
+// 0 and 1; a read span's place is its bytes' local's level), how many
+// spans are read, and the body under them.
+record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef, spans: Nat }
 
-fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef) → Tac<HeldWords> {
+fn rt_held_takes<A>() → Tac<A> {
+    rt_refuse("a function of a laid record takes, after its record, the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words")
+}
+
+// `spans`: a span may still come; `length`: the parameter is the length
+// word of the span before it.
+fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, spans: Bool, length: Bool) → Tac<HeldWords> {
     match fuel {
-        Zero => pure(HeldWords([], [], h, under)),
+        Zero => match length { True => rt_held_takes(), False => pure(HeldWords([], [], h, under, 0)) },
         Succ(f) => view(h).bind(λ v => match v {
-            HLam(dom) => k.ty(dom).bind(λ at => match (match at { Word(w) => w.same(64), _ => False }) {
-                False => rt_refuse("a function of a laid record takes 64-bit words after its record, for now"),
-                True => {
-                    let o <- open(h, "x").bind(λ c => rt_accepted("a parameter", c));
-                    let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref);
-                    pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last))
+            HLam(dom) => k.ty(dom).bind(λ at => match at {
+                Word(w) => match w.same(64) {
+                    False => rt_held_takes(),
+                    True => {
+                        let o <- open(h, "x").bind(λ c => rt_accepted("a parameter", c));
+                        let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref, spans && length, False);
+                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans))
+                    },
                 },
+                // A span that is only read: its bytes and then its length
+                // word, before any word.
+                Bytes(_) => match spans && !length {
+                    False => rt_held_takes(),
+                    True => {
+                        let o <- open(h, "span").bind(λ c => rt_accepted("a span parameter", c));
+                        let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref, True, True);
+                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, Succ(more.spans)))
+                    },
+                },
+                _ => rt_held_takes(),
             }),
-            _ => pure(HeldWords([], [], h, under)),
+            _ => match length { True => rt_held_takes(), False => pure(HeldWords([], [], h, under, 0)) },
         }),
     }
 }
@@ -1211,12 +1239,12 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     });
     let cs <- ctors(record).bind(λ c => rt_accepted("its record's constructor", c));
     let ctor <- rt_held_ctor(tname, cs);
-    let ws0 <- rt_held_words(match en.snd { None => fuel, Some(p) => p.snd }, k, o.body, 2, o.local.ref);
+    let ws0 <- rt_held_words(match en.snd { None => fuel, Some(p) => p.snd }, k, o.body, 2, o.local.ref, True, False);
     // A step takes its measure's proof after its words.
     let opened: Tac<HeldWords> = match en.snd {
         None => pure(ws0),
         Some(_) => open(ws0.body, "h").bind(λ c => rt_accepted("its step's measure proof", c)).bind(λ oh =>
-            pure(HeldWords(ws0.locals, ws0.bound, oh.body, oh.local.ref))),
+            pure(HeldWords(ws0.locals, ws0.bound, oh.body, oh.local.ref, ws0.spans))),
     };
     let ws <- opened;
     let result <- rt_held_result(k, names, record, ws.body);
@@ -1225,7 +1253,7 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
     let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
     let hf <- rt_held_fields(tname, o.local, stored, ctor.fields, Local(span.ref), Local(length.ref), length.ref);
-    let cx = HeldCx(k.lending(1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
+    let cx = HeldCx(k.lending(Succ(ws.spans)), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
     let st = RSt(2 + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), ws.bound)), k.funs);
     let w = HeldWalk(st, [], [], [], None, []);
     // A function that only reads the record is one value, its branches
@@ -1261,6 +1289,6 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
         },
     };
     let fs <- fields;
-    pure(HeldReflected(FFun(params, result.snd, r.term, 1), r.funs, r.cfuns, record_t, tname, stored,
-        fs ++ rt_held_reached(fs, rt_held_offsets(r.term, [], called)), ws.locals.len(), result.fst, r.held, match en.snd { None => False, Some(_) => True }))
+    pure(HeldReflected(FFun(params, result.snd, r.term, Succ(ws.spans)), r.funs, r.cfuns, record_t, tname, stored,
+        fs ++ rt_held_reached(fs, rt_held_offsets(r.term, [], called)), ws.locals.len(), result.fst, r.held, match en.snd { None => False, Some(_) => True }, ws.spans))
 }

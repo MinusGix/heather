@@ -96,19 +96,19 @@ theorem stored_word_leaves_hash(ctx: List<u8>, cn, at, word: u64, i: Nat, here: 
 
 theorem stored_word_leaves_count(ctx: List<u8>, cn, at, word: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat(),
     own: cn.toNat() <= ctx.len(), whole: SHA256_CONTEXT_BYTES <= cn.toNat()):
-    sha256_count(List::put_u32_be_within(ctx, cn, at, word).after, cn) = sha256_count(ctx, cn) {
+    List::put_u32_be_within(ctx, cn, at, word).after.u64_be_within(cn, Sha256::count_at) = ctx.u64_be_within(cn, Sha256::count_at) {
     let fits: (SHA256_CONTEXT_BYTES <= ctx.len()) = Nat::le_trans(SHA256_CONTEXT_BYTES, cn.toNat(), ctx.len(), whole, own);
     let after = List::put_u32_be_within(ctx, cn, at, word).after;
     let same: (Sha256::of(after).count = Sha256::of(ctx).count) =
         cong_fn(λ (c: Sha256) => c.count, Sha256::schedule_put(ctx, cn, at, word, i, here, place, inside, own, fits));
-    trans(Sha256::count_is(after, cn, whole), trans(same, sym(Sha256::count_is(ctx, cn, whole))))
+    trans(Sha256::count_read(after, cn, whole), trans(same, sym(Sha256::count_read(ctx, cn, whole))))
 }
 
 // The stream's count stored and read back.
 theorem count_stored_is_read(ctx: List<u8>, cn, count: u64, inside: SHA256_CONTEXT_BYTES <= cn.toNat(), own: cn.toNat() <= ctx.len()):
-    sha256_count(List::sha256_put_count(ctx, cn, count).after, cn) = count {
-    trans(Sha256::count_is(List::sha256_put_count(ctx, cn, count).after, cn, inside),
-        cong_fn(λ (c: Sha256) => c.count, Sha256::put_count_is(ctx, cn, count, inside, own)))
+    List::put_u64_be_within(ctx, cn, Sha256::count_at, count).after.u64_be_within(cn, Sha256::count_at) = count {
+    trans(Sha256::count_read(List::put_u64_be_within(ctx, cn, Sha256::count_at, count).after, cn, inside),
+        cong_fn(λ (c: Sha256) => c.count, Sha256::count_put(ctx, cn, count, inside, own)))
 }
 
 // The count is not at 324.
