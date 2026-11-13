@@ -274,3 +274,29 @@ since everything after `member_head` is unchanged
   effects-locality note's `greet` by dot calls, a loop, a member calling a
   member, a parent's member through a child constraint, two negative
   controls, the ambiguity, and a concrete receiver unchanged).
+
+## 9. The vector type's owner, `Vec` (2026-11-13)
+
+`[A; n]` had no name a member could be declared under, so the vector library
+was free functions. Minus ruled (2026-11-13) that its namespace is `Vec`:
+`fn Vec::at<A>({n: Nat}, self v: [A; n], …)` is called `v.at(…)` or
+`Vec::at(v, …)` (`issues/methods-on-the-vector-type.md`).
+
+- **Declaration.** `Vec` is a kernel type name for the owner rule, as `Nat`
+  and `Fin` are (`Carriers::names_a_type`). A file's own type named `Vec` is
+  answered first by its declaration, so its members attach to it.
+- **Receiver.** `type_namespace` answers `Vec` for a type that is
+  `Type::Vec` before reduction, read the way `receiver_carrier` already reads
+  it: at a literal length the whnf is a Σ-tuple no namespace owns. Only the
+  namespace moved. `Vec` is not a `Carrier`, so operator, cast, literal and
+  instance dispatch read a vector exactly as before.
+- **Two owners, one spelling.** A file that declares a type `Vec` and reaches
+  the vector's members spells both `Vec::m`. `member_head` drops a `Vec::m`
+  whose subject provably refuses the receiver (§2's `global_subject_excludes`,
+  asked only at this owner), so neither owner's members are chosen for the
+  other's values, and the call falls back as a missing member does. The same
+  base name declared by both in one scope is a duplicate, as any name is.
+- Probes: `lib/_tests/std/data/vector_methods_tests.hthr` (both spellings, an
+  open length and element type, a checking position, a receiver only a call's
+  result names, a `decreases` method, a duplicate, a missing member) and
+  `lib/_tests/std/data/vector_owner_clash_tests.hthr` (a file's own `Vec`).
