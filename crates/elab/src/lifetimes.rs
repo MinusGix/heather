@@ -579,7 +579,7 @@ pub(crate) struct Memos {
     /// which never changes once the global is committed — so it is computed
     /// once per declaration rather than once per argument. Nothing here is
     /// semantic: dropping the memo changes only how long elaboration takes.
-    pub(crate) result_only_memo: RefCell<HashMap<u32, bool>>,
+    pub(crate) result_only_memo: RefCell<HashMap<u32, Vec<usize>>>,
     /// Bare named types from finished modules, lowered once
     /// ([`Inductives::lower_named`](crate::inductive::Inductives::lower_named)); keyed by the declaration's address and
     /// whether names are read as generated, holding the Ψ length the type
