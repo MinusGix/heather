@@ -1492,7 +1492,11 @@ impl Run {
     /// The substitution that consumes every hole: each one's solution, or
     /// `unsolved(j)` for hole `j`. Entries run oldest hole first.
     fn sigma(&self, solved_shift: u32, unsolved: impl Fn(usize) -> Term) -> GlobalSubst {
+        // A shift by nothing is the solution itself, shared: this is asked
+        // for at every application a generator's expression has, and a copy
+        // of every solution each time was most of a long generator's run.
         let entries = self.holes.iter().enumerate().map(|(j, h)| GlobalEntry::Tm(match &h.sol {
+            Some(t) if solved_shift == 0 => Rc::clone(t),
             Some(t) => Rc::new(t.shift_global(solved_shift)),
             None => Rc::new(unsolved(j)),
         })).collect();
@@ -2581,12 +2585,36 @@ impl Host<'_> {
     /// goal's context of type `X`; what `wlog` makes of a hypothesis about
     /// its points before abstracting them. As with `Abstract`, a later local
     /// whose type mentions `x` keeps meaning the original one.
+    ///
+    /// `x` may also be a global `g: X`: the type `(y: X) → h[y/g]`, every
+    /// mention of the global a parameter (the constant function where there
+    /// is none). A generator proves a statement by conversion there, where
+    /// the name has no body to unfold, and applies the proof to `g`.
     fn revert_request(&self, run: &mut Run, h: u64, x: &RExpr) -> Result<u64, Fault> {
         let (at, held) = run.held(h)?;
         let (ty, level) = match held {
             Held::Type(t, l) => (run.committed_ty(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?, l),
             Held::Term(..) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
         };
+        // A global: the type with each mention of it a parameter of the
+        // global's type. What is proved at the parameter is proved of a
+        // name with no body to unfold, and is then read at the global.
+        if let RExpr::Global(_) = x {
+            let unsolved = || Fault::Ill("the global's term or type mentions a hole nothing has solved".into());
+            let mark = run.trail.len();
+            let r = match self.reify(run, x, at) {
+                Ok(r) => r,
+                Err(f) => {
+                    run.restore(mark);
+                    return Err(f);
+                }
+            };
+            let pat = run.committed_tm(&run.partial_tm(&r.term)).ok_or_else(unsolved)?;
+            let dom = Rc::new(run.committed_ty(&run.partial_ty(&r.ty)).ok_or_else(unsolved)?);
+            let cod = ty.abstract_local(&pat).unwrap_or_else(|| ty.shift_local(1));
+            let pi = Type::Pi { dom_level: r.level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+            return Ok(run.issue(at, Held::Type(pi, Level::join(r.level, level))));
+        }
         let p = self.root_local_position(run, x)?;
         let gamma = run.cx(at)?.gamma;
         let n = gamma.len();

@@ -962,6 +962,51 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    from two before it), and runs on bytes. The index is not yet spelled
    `t.f[i]`, which is surface and Minus's to choose.
 
+   **SHA-256's compression is methods of `Sha256`**
+   (`lib/native/crypto/sha256_schedule.hthr`, `sha256_working.hthr`,
+   `sha256_compression.hthr`): `expand`, `begin`,
+   `shift`, `set`, `turn`, `t1`, `rounds`, `end`, and `Sha256::run`,
+   which is the four loops in a row, each with its record theorem from
+   the generator. They are the span functions of `sha256_block.hthr`
+   with every offset and width gone, and are not the linked ones until a
+   function over a bare span can call one (the block's bytes are copied
+   in by a span function). Two things the methods needed:
+
+   - *A store at a numeral after a call.* `s.shift(0); s.working :=
+     vector_update(vector_update(s.working, 0, a), 4, e)` was refused,
+     because which entries changed was told by comparing with the
+     record's local. A field under `vector_update`s is now read as its
+     stores whether an index is a word (the checked store) or a numeral
+     inside the count (the accessor's own store where that element lies).
+   - *The pin with the callees parameters.* A function is pinned to its
+     reads and stores by a conversion against the function of the
+     record. At the callees themselves the kernel advances the newer
+     head, which is the function's side, and a loop called at a numeral
+     (`s.rounds(0)`) is unfolded there pass by pass before the other
+     side arrives at its name; `Sha256::run` ran past the budget, and
+     which orders of calls did depended on the loops. So the statement
+     is taken with every mention of a callee a parameter (`revert_into`
+     at a global, an addition to the host's `Revert`:
+     `docs/host-elaboration-interface-design.md` §26), proved by `refl`
+     under the parameters, where nothing has a body, and applied to the
+     callees (`runtime_held_straight`). It is the remedy of the callee's
+     tables and of a loop's iteration once more
+     (`issues/conversion-callee-unfolded-before-the-meet.md`).
+
+   A caller's generation carries its callee's program, and its cost
+   climbed with the depth of the chain, so the round is flat: the loop
+   calls `Sha256::t1` and `Sha256::turn`, where the span functions have a
+   `step` that calls `turn`. The methods are three modules so that each
+   is inside the library gate's rail under the test profile's binary
+   (`issues/runtime-record-function-limits.md`, the log's last entry).
+   The pin is tried at the callees first and at parameters where that
+   runs out.
+
+   Run by conversion on the block of "abc", the schedule's last word
+   and the working variables after the first round are FIPS 180-4's
+   (`sha256_compression_tests.hthr`); all sixty-four rounds are past one
+   conversion's budget, as they are for the span functions.
+
    **A loop** is built
    (`lib/_tests/native/runtime/runtime_held_loop_tests.hthr`): a
    `mut self` method that `decreases` a word's `toNat` and ends, in a

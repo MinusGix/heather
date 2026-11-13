@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance]
 area: infrastructure
 created: 2026-11-08
-updated: 2026-11-09
+updated: 2026-11-13
 ---
 
 `lib/_tests/native/runtime/runtime_tests.hthr` costs about 370 CPU-s of its
@@ -42,3 +42,7 @@ agreement proofs (see [[runtime-fn-caller-agreement-fuel]]).
 ## Log
 
 - 2026-11-09: Seen again on the frame-and-locale-foundations round's `scripts/test --pr` (fresh container, gate killed at the rail); the module checks uncapped on the branch (4 refusals matched).
+
+## Log
+
+- 2026-11-13: PR #551 met this with a new library module: SHA-256's compression as methods of `Sha256` checked in under a minute with the release binary and ran some fourteen minutes of CPU under the test profile's, nearly all of it the `runtime` generator's elaboration of callers ([[runtime-record-function-limits]]). It is three modules now (`sha256_schedule`, `sha256_working`, `sha256_compression`), each inside the rail, and the round was flattened to cut the heaviest function. The ratio between the two binaries on a generator's run is what to look at: the kernel's share was under a second per function in both.

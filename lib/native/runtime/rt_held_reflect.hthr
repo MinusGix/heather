@@ -485,10 +485,36 @@ fn rt_held_own(fuel: Nat, k: Known, record: Nat, settled: Bool, h: Handle, base:
     }
 }
 
+// The element at a numeral inside the count: the accessor's own store
+// where that element lies, with no test, as an element of an array
+// written out is stored.
+fn rt_held_at_numeral(fuel: Nat, k: Known, under: LocalRef, fname: String, e: HeldEach, o: Pair<RSt, List<HeldSet>>, i: Nat, x: Handle) → Tac<Option<Pair<RSt, List<HeldSet>>>> {
+    let what = "element " ++ decimal_name(Succ(i), i) ++ " of field `" ++ fname ++ "`";
+    let rv <- rt_go(fuel, k, o.fst, x, True);
+    let v <- assume(e.ty, "value", Some(under)).bind(λ c => rt_accepted("an element's new value's local", c));
+    let as_word <- next_spelling(rt_ap(e.wide, [Local(v.ref)])).bind(λ c => rt_accepted("an element's new value as a word", c));
+    let rr <- rt_go(fuel, k, rv.fst.with_local(v.ref.id, RSt::level(rv.snd)), as_word, True);
+    let reads <- e.term.reads(i);
+    let rd <- view(reads.fst);
+    let at: Tac<Handle> = match rd {
+        HGlobal(_, _, args) => match args.nth(2) {
+            Some(at) => pure(at),
+            None => rt_refuse("the accessor of " ++ what ++ " does not read by a span, its length word and an offset"),
+        },
+        _ => rt_refuse("the accessor of " ++ what ++ " does not read by a function of the program"),
+    };
+    let at_h <- at;
+    pure(Some(Pair(rr.fst, o.snd ++ [HeldSet(e.access(i), at_h, RSt::level(rr.snd), None)])))
+}
+
 // An array field's new value that is the field updated at indices that
 // are words, `vector_update(… vector_update(t.f, i.toNat(), x) …,
 // j.toNat(), y)`: each update a store by the accessor's checked writer,
-// the innermost first, every word computed before the first store. `None`
+// the innermost first, every word computed before the first store. An
+// index that is a numeral inside the count is the accessor's own store
+// where that element lies (`rt_held_at_numeral`), which is how an element
+// is stored after a call: there the field is not the record's local's,
+// and what changed cannot be told by comparing entries. `None`
 // where the value is not that. `settled` says the span holds the
 // function's own record (no call has changed it).
 fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, under: LocalRef, base: Option<Handle>, fname: String, e: HeldEach, value: Handle)
@@ -522,7 +548,18 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                         },
                     }),
                     Some(u) => rt_to_nat_of(u.snd.fst).bind(λ word => match word {
-                        None => pure(None),
+                        // A numeral index inside the count is the element's
+                        // own store.
+                        None => view(u.snd.fst).bind(λ iv => match iv {
+                            HLit(n) => match Succ(n).leb(e.term.count) {
+                                False => pure(None),
+                                True => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
+                                    None => pure(None),
+                                    Some(o) => rt_held_at_numeral(f, k, under, fname, e, o, n, u.snd.snd),
+                                }),
+                            },
+                            _ => pure(None),
+                        }),
                         Some(i) => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
                             None => pure(None),
                             Some(o) => {
@@ -571,7 +608,8 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
 // A call of a function that only reads the record is not reflected yet
 // (its term is the call itself, a value among values, where a call that
 // changes the record stands under `.after` and `.value`), nor is an
-// array field changed after a call.
+// array field written out anew after a call (one under `vector_update`s
+// is its stores, `rt_held_indexed`).
 
 // What the walk reads by: pure code's table, the record's type, its
 // local and the span's, the fields and what each stands for, and the
@@ -864,7 +902,7 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                                                 pure(HeldOut(later.w, own.snd ++ later.sets))
                                             },
                                             None => match r.w.now {
-                                                Some(_) => rt_refuse("it changes the array field `" ++ field.name ++ "` after a call of another function of the record, which is not stored yet"),
+                                                Some(_) => rt_refuse("it writes the array field `" ++ field.name ++ "` out anew after a call of another function of the record: store its elements with `vector_update`"),
                                                 None => {
                                                     let own <- rt_held_elements(f, k, r.w.st, field.name, e, value, List::range(e.term.count));
                                                     let later <- rt_held_do(f, cx, r.w.with_st(own.fst), Sets(base, rest, more));

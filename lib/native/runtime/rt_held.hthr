@@ -1191,6 +1191,13 @@ fn HWorld::of_record<F, G>(source: G, f: F) → F { f }
 // a parameter has no body for the kernel to unfold.
 theorem HWorld::at<A>(B: A → Type, a: A, all: (x: A) → B(x)): B(a) { all(a) }
 
+// A proof read at the statement it proves: what is proved with a callee a
+// parameter is stated with it one, and applied to the callee.
+theorem HWorld::stated(P: Type, p: P): P { p }
+
+// A value, named beside a hypothesis it is read under.
+fn HWorld::beside<H, R>(h: H, r: R) → R { r }
+
 fn HWorld::answer<R>(span: List<BitVec(8)>, value: R) → Mutated<List<BitVec(8)>, R> { Mutated(span, value) }
 
 // What a function that only reads a record answers, as one that changes

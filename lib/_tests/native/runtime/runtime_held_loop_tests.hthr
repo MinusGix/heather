@@ -108,6 +108,17 @@ runtime fn Tally::filled(mut self t: Tally, x: u64) → u64 {
     t.fill(0)
 }
 
+// A caller of three loops, each at a numeral. At the loops themselves the
+// comparison that pins a caller unfolds each one pass by pass before the
+// two sides meet, so the pin is proved with the loops parameters
+// (`runtime_held_straight`). `Sha256::run` (`sha256_compression.hthr`) is
+// the caller that ran past the budget before that.
+runtime fn Tally::thrice(mut self t: Tally) → u64 {
+    t.fill(0);
+    t.walk(0);
+    t.fill(1)
+}
+
 // What is published, restated: the code over the span agrees with the
 // function of the record wherever the span holds one.
 theorem fill_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored().Holds(own, length, t)):
@@ -118,6 +129,11 @@ theorem fill_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored(
 theorem walk_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored().Holds(own, length, t)):
     Agrees<Tally, u64>(Tally::stored(), length, Tally::walk(t, i), Tally::walk::bytes(own, length, i)) {
     Tally::walk::runs_held(own, t, length, i, holds)
+}
+
+theorem thrice_held(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::thrice(t), Tally::thrice::bytes(own, length)) {
+    Tally::thrice::runs_held(own, t, length, holds)
 }
 
 theorem filled_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):

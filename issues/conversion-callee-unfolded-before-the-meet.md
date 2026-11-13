@@ -4,7 +4,7 @@ status: open
 labels: [native,runtime-fn,performance,kernel]
 area: heather-in-heather
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 Found scaling a `runtime fn` of a laid record ([[sha256-context-type]]). Two costs of one cause: the kernel reached a callee's call on one side of a comparison before the other side had computed down to it, unfolded the callee, and compared bodies.
@@ -14,6 +14,8 @@ Found scaling a `runtime fn` of a laid record ([[sha256-context-type]]). Two cos
 **The meeting window.** `Conv::tm_w` remembers the spines a side was advanced past so the other side can meet it there (`Passed`), eight of them. A written function passes one defined head per value it binds and per store, so past about eight statements the name both sides share has been evicted, the meet fails, and both sides are compared unfolded, which is the first cost again at every read.
 
 What this round did, in the library: the generator of a function of a laid record writes the function as a function of its callees and proves each statement that is by conversion (the instance's pin, the bytes' meaning, the program's answer) at every callee, then reads it at the program's own (`HWorld::at`, rt_held.hthr). A parameter has no body to unfold. Cost is then linear in the function, and seventeen statements over seventeen fields pass.
+
+**A loop called at a numeral (2026-11-13).** A function of a laid record that calls loops of the record (`s.expand(16); s.begin(0); s.rounds(0); s.end(0)`, `Sha256::run`) is pinned against the function of the record, whose side has the newer heads. A `decreases` function at a numeral has a body that computes, so the kernel unfolds each loop pass by pass, sixty-four rounds of SHA-256 among them, before the reads-and-stores side arrives at the loop's name. Which orders of calls ran out depended on the loops (`expand, begin, rounds` pinned, `expand, rounds, end` did not), and with the starts operands of the caller every order pinned, since a loop at an open word is stuck. The library's remedy is again a parameter: the statement with every mention of a callee abstracted (`revert_into` at a global, added to the host for this), `refl` under the parameters, applied to the callees.
 
 What is left:
 

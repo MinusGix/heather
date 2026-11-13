@@ -3138,6 +3138,29 @@ fn runtime_held_each<A, B>(xs: List<A>, f: A → Tac<B>) → Tac<List<B>> {
 record HeldSaid { n: HeldNames, ts: RtTypes, bytes: Handle, rfl: Expr, yes: Expr, zero: Expr, end: Expr, record: Expr, whole: Expr, hw: Expr,
     marked_t: Handle, sound_t: Handle, sound: Expr }
 
+// A statement with every mention of each function of the record a
+// function calls a parameter, the first callee the innermost.
+fn runtime_held_reverted(name: String, stmt: Handle, cs: List<HeldCall>) → Tac<Handle> {
+    match cs {
+        Nil => pure(stmt),
+        Cons(c, rest) => revert_into(stmt, Global(c.run)).or_fail("runtime: `" ++ name ++ "`'s pin at `" ++ c.name ++ "` as a parameter: ").bind(λ h =>
+            runtime_held_reverted(name, h, rest)),
+    }
+}
+
+// A statement that is one under `n` parameters, proved by `refl` under
+// them: each parameter opened, and the proof stated at what is under it.
+fn runtime_held_under(stated, rfl: Expr, stmt: Handle, n: Nat) → Tac<Expr> {
+    match n {
+        Zero => pure(ap(stated, [Hd(stmt), ap(rfl, [Blank, Blank])])),
+        Succ(m) => {
+            let o <- open(stmt, "callee").or_fail("runtime: a pin's parameter: ");
+            let inner <- runtime_held_under(stated, rfl, o.body, m);
+            pure(Lam(o.local.ref, inner))
+        },
+    }
+}
+
 // The record-level theorem of a function that does not go round.
 fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts, s: HeldSaid) → Tac<List<Decl>> {
     let n = s.n;
@@ -3147,7 +3170,6 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let yes = s.yes;
     let zero = s.zero;
     let end = s.end;
-    let by_refl = ap(rfl, [Blank, Blank]);
     let record = s.record;
     let whole = s.whole;
     let hw = s.hw;
@@ -3181,12 +3203,41 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // The body's code is its result's by a proof that computes: the pin
     // is read along it.
     let same <- runtime_global("runtime_self");
-    // The pin, by conversion.
-    let pinned <- defeq(ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)]), spec);
-    let pin_checked <- match pinned {
-        True => pure(trivial),
-        False => runtime_held_refused(name, "its reads and stores were not found to compute to the function of the record within a comparison's budget"),
+    // The pin, by conversion, and where that runs out with each function
+    // of the record it calls a parameter. At the callees themselves the comparison reaches the
+    // function's side first, and a loop called at a numeral is unfolded
+    // there pass by pass before the reads and stores arrive at its name
+    // (`issues/conversion-callee-unfolded-before-the-meet.md`). So the
+    // function is written as its body at its operands, every mention of a callee in
+    // the statement is made a parameter (`revert_into` at a global), the
+    // statement is proved there by `refl`, and it is read at the callees.
+    let written <- body(f).or_fail("runtime: `" ++ name ++ "`'s body: ");
+    let unfolded = ap(Hd(written), Cons(Local(t0.ref), runtime_locals(xs0)));
+    let spelled = match r.changes { True => unfolded, False => ap(unchanged, [Blank, Blank, Local(t0.ref), unfolded]) };
+    // Stated beside the hypothesis the theorem ends in, so that the
+    // statement lives under the theorem's last binder and a parameter
+    // opened from it is bound where the proof stands.
+    let beside <- runtime_held_ref("HWorld::beside");
+    let pin0 <- as_type(Equation(ap(beside, [Blank, Blank, Local(holds0.ref), ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)])]), spelled))
+        .or_fail("runtime: `" ++ name ++ "`'s pin: ");
+    let pin_all <- runtime_held_reverted(name, pin0, r.calls);
+    let stated <- runtime_held_ref("HWorld::stated");
+    let pin_leaf <- runtime_held_under(stated, rfl, pin_all, r.calls.len());
+    let pin = ap(stated, Cons(Hd(pin_all), Cons(pin_leaf, r.calls.rev().map(λ c => Global(c.run)))));
+    // The pin at the callees themselves is tried first: it is the cheaper
+    // of the two where it is found (at parameters the comparison makes many
+    // times the queries), and a function whose record after a call is built
+    // whole from that call's word pins there and not at parameters
+    // (`issues/runtime-record-function-limits.md`).
+    let direct <- defeq(ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)]), spec);
+    let by_pin: Tac<Expr> = match direct {
+        True => pure(ap(rfl, [Blank, Blank])),
+        False => infer(pin).bind(λ at_parameters => match at_parameters {
+            Accepted(_) => pure(pin),
+            Refused(_) => runtime_held_refused(name, "its reads and stores were not found to compute to the function of the record within a comparison's budget"),
+        }),
     };
+    let pin_proof <- by_pin;
     // The byte meaning is the function written out, at every callee and
     // so at the program's own.
     let at <- runtime_held_ref("HWorld::at");
@@ -3196,7 +3247,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
             ap(parts.compiled_of(es), Cons(Local(own0.ref), Cons(Local(length0.ref), runtime_locals(xs0))))))
             .or_fail("runtime: `" ++ name ++ "`'s byte meaning at its callees: ").bind(λ h => pure(Hd(h))),
         λ es => ap(rfl, [Blank, ap(parts.compiled_of(es), Cons(Local(own0.ref), Cons(Local(length0.ref), runtime_locals(xs0))))]));
-    let proof = ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref), Local(holds0.ref), spec, by_refl, code, reflects]);
+    let proof = ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref), Local(holds0.ref), spec, pin_proof, code, reflects]);
     pure([
         Decl(AsValue, name ++ "::held", [], Hd(marked_t), hw),
         Decl(AsTheorem, name ++ "::sound", [], Hd(sound_t), sound_e),

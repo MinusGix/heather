@@ -84,6 +84,14 @@ runtime fn Sums::swap(mut self s: Sums, i, j: u64) → u64 {
     0
 }
 
+// An element stored at a numeral after a call of another function of the
+// record: the accessor's own store where that element lies, with no test.
+runtime fn Sums::seal(mut self s: Sums, i, w: u64) → u64 {
+    s.put(i, w);
+    s.parts := vector_update(vector_update(s.parts, 0, w.truncate(32, 32)), 3, i.truncate(32, 32));
+    w
+}
+
 theorem part_value(own: List<u8>, s: Sums, length, i: u64, holds: Sums::stored().Holds(own, length, s)):
     Sums::part::bytes(own, length, i).value = vector_get(s.parts, i.toNat(), 0).zero_extend(32) + s.count {
     sym(Sums::part::runs_held(own, s, length, i, holds).value)
@@ -115,6 +123,9 @@ theorem put_past(): Sums::put::bytes(SUMS_BYTES, 24, 4, 0x0102).after = SUMS_BYT
 theorem part_bytes(): Sums::part::bytes(SUMS_BYTES, 24, 3).value = 20 { refl }
 
 theorem part_past(): Sums::part::bytes(SUMS_BYTES, 24, 4).value = 16 { refl }
+
+// `seal` on bytes: element 1 by the checked store, then 0 and 3 by their own.
+theorem seal_bytes(): Sums::seal::bytes(SUMS_BYTES, 24, 1, 9).after = [0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
 
 theorem swap_bytes(): Sums::swap::bytes(SUMS_BYTES, 24, 0, 3).after = [0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
 

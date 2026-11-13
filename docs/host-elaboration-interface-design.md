@@ -1068,6 +1068,19 @@ additions serve it, and neither is specific to it:
   are abstracted, so the cases receive them at their own points (Lean's
   `generalizing`). Tag 34.
 
+  **At a global (2026-11-13).** `x` may be a global `g: X`, and the answer
+  is `(y: X) → h[y/g]`: every mention of the global in the type made a
+  parameter (the constant function where there is none), by the kernel's
+  syntactic abstraction of a term out of a type (`Type::abstract_local`,
+  the one motive synthesis uses). The `runtime fn` generator of a laid
+  record needed it: a function that calls loops of its record at numerals
+  is pinned to its reads and stores by a conversion, and at the callees
+  themselves the comparison unfolds a loop pass by pass before the two
+  sides meet (`issues/conversion-callee-unfolded-before-the-meet.md`). At
+  a parameter there is no body, so the statement is reverted over each
+  callee, proved by `refl` under them, and applied to the callees. Nothing
+  is trusted: the result is a type, and the kernel checks the proof of it.
+
 ## 27. A simplifier run: `Simp` (2026-11-11)
 
 - **`Simp(laws: List<Expr>, goal: Handle) → Checked<Handle>`**: a proof of

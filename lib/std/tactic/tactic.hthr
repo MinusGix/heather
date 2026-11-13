@@ -343,7 +343,10 @@ inductive Req {
     // `(y: X) → h[y/x]`, `X` the local's type. What `wlog` makes of a
     // hypothesis about its points before abstracting them, so the cases
     // receive it at their own points (Lean's `generalizing`). Refused for
-    // a term, and where `Abstract` is.
+    // a term, and where `Abstract` is. `x` may also be a global `g: X`:
+    // `(y: X) → h[y/g]`, every mention of the global a parameter, which a
+    // generator proves a statement at where the global's body must not be
+    // unfolded, and applies to `g`.
     Revert(h: Handle, x: Expr),
     // A proof of the type `goal`, by normalising it with `laws` until its
     // two sides meet, as `simp_only(laws…)` does there: each law a proof of
