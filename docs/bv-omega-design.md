@@ -105,6 +105,7 @@ classifies `t` by its head:
 | `word_of_nat(n, c)` | `word_of_nat_form`, `c` read as a form |
 | `BitVec::take_low(n, m, x)` / `drop_low(n, m, x)` | half-word leaves, their ranges, and `x.toNat() = lo.toNat() + 2^n * hi.toNat()` |
 | a definition | its reduct's, under a step budget |
+| `BitVec::band(x, y)` | a leaf, beside its range `toNat(x & y) <= m` when `y` is `ofNat(m)` with `m` a literal, else `<= toNat(y)` with `y` walked (`toNat_band_ofNat_le`, `toNat_band_le_right`; `issues/bv-omega-masked-word-bound.md`) |
 | anything else | a leaf |
 
 A definition (`double`, `times256`, `line_state_start`) is stepped through the

@@ -58,6 +58,38 @@ theorem BitVec::toNat_ofNat_le(n: Nat, x: Nat): BitVec::ofNat(x, n := n).toNat()
     j(sym(BitVec::toNat_ofNat_mod(n, x)), λ v _ => v <= x, below)
 }
 
+// A word under a mask is at most the mask, and at most the word: a bit of
+// `x & y` is set only where both are. So `x & 15` indexes a ring of sixteen
+// words (issues/bv-omega-masked-word-bound.md); `bv_omega` states the right
+// one for every `&` it meets.
+theorem BitVec::of_bit_and_le(a, b: Bool): Nat::of_bit(a && b) <= Nat::of_bit(a) {
+    match a {
+        False => trivial,
+        True => match b { False => trivial, True => trivial },
+    }
+}
+
+theorem BitVec::toNat_band_le_left(n: Nat): (x, y: BitVec(n)) → x.band(y).toNat() <= x.toNat() {
+    match n {
+        Zero => λ x y => trivial,
+        Succ(_, ih) => λ x y => Nat::add_le_mono(Nat::of_bit(x.head_bit() && y.head_bit()), Nat::of_bit(x.head_bit()),
+            x.tail_bits().band(y.tail_bits()).toNat().twice(), x.tail_bits().toNat().twice(),
+            BitVec::of_bit_and_le(x.head_bit(), y.head_bit()),
+            Nat::twice_le_twice_iff(x.tail_bits().band(y.tail_bits()).toNat(), x.tail_bits().toNat()).mpr(ih(x.tail_bits(), y.tail_bits()))),
+    }
+}
+
+theorem BitVec::toNat_band_le_right(n: Nat, x, y: BitVec(n)): x.band(y).toNat() <= y.toNat() {
+    j(sym(BitVec::band_comm(n, x, y)), λ w _ => w.toNat() <= y.toNat(), BitVec::toNat_band_le_left(n, y, x))
+}
+
+// With the mask a numeral: `(x & 15).toNat() <= 15`, the form `bv_omega`
+// states, the literal's value read past the width (`toNat_ofNat_le`).
+theorem BitVec::toNat_band_ofNat_le(n: Nat, x: BitVec(n), m: Nat): x.band(BitVec::ofNat(m)).toNat() <= m {
+    Nat::le_trans(x.band(BitVec::ofNat(m)).toNat(), BitVec::ofNat(m, n := n).toNat(), m,
+        BitVec::toNat_band_le_right(n, x, BitVec::ofNat(m)), BitVec::toNat_ofNat_le(n, m))
+}
+
 theorem BitVec::ofNat_mod(n, x: Nat): BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
     trans(BitVec::ofNat_cong(n, sym(BitVec::toNat_ofNat_mod(n, x))), BitVec::ofNat_toNat(n, BitVec::ofNat(x)))
 }

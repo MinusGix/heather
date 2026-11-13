@@ -1,0 +1,49 @@
+// Probes of members on the vector type (issues/methods-on-the-vector-type.md):
+// `[A; n]` owns the namespace `Vec`, so `fn Vec::m(…, self v: [A; n], …)`
+// declares a method that is called `v.m(…)` or `Vec::m(v, …)`. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import bool; import nat; import list; import logic; import vector;
+
+fn Vec::first<A>({n: Nat}, self v: [A; Succ(n)]) → A { head(v) }
+fn Vec::get<A>({n: Nat}, self v: [A; n], i: Nat, pad: A) → A { vector_get(v, i, pad) }
+fn Vec::at<A>({n: Nat}, self v: [A; n], i: Nat, inside: i < n) → A { vector_index(v, i, inside) }
+
+fn abc() → [Nat; 3] { [1, 2, 3] }
+
+// Both spellings, at a literal length.
+theorem dot_first(): abc().first() = 1 { refl }
+theorem qualified_first(): Vec::first(abc()) = 1 { refl }
+theorem dot_get(): abc().get(2, 0) = 3 { refl }
+theorem dot_get_past(): abc().get(5, 0) = 0 { refl }
+theorem qualified_get(): Vec::get(abc(), 1, 0) = 2 { refl }
+fn dot_let() → Nat { let v: [Nat; 2] = [7, 8]; v.get(1, 0) }
+theorem dot_let_lit(): dot_let() = 8 { refl }
+
+// A receiver at an open length and an open element type, and in a checking
+// position: the method is the function it was declared as.
+theorem open_first<A>(n: Nat, v: [A; Succ(n)]): v.first() = head(v) { refl }
+theorem open_get<A>(n: Nat, v: [A; n], i: Nat, pad: A): v.get(i, pad) = vector_get(v, i, pad) { refl }
+fn checked_at<A>({n: Nat}, v: [A; Succ(n)]) → A { v.at(0, omega) }
+
+// A receiver whose type only the call's result names.
+theorem result_receiver(): snoc(abc(), 4).get(3, 0) = 4 { refl }
+
+// A `decreases` method. Its self-call is by the base name with every
+// parameter, the rule any `decreases` function with an implicit has; the
+// qualified self-call is refused for every owner
+// (issues/type-owned-namespaces.md, 2026-09-18).
+fn Vec::sum_from({n: Nat}, self v: [Nat; n], i: Nat) → Nat decreases n - i {
+    if h: i < n { v.at(i, h) + @sum_from(n, v, i + 1) } else { 0 }
+}
+theorem sum_from_lit(): abc().sum_from(0) = 6 { refl }
+theorem sum_from_mid(): Vec::sum_from(abc(), 1) = 5 { refl }
+
+// A member of the vector namespace is declared once, as any member is.
+// expect-error: duplicate name `Vec::first`
+fn Vec::first<A>({n: Nat}, self v: [A; Succ(n)]) → A { head(v) }
+
+// A vector has no member the namespace does not declare: the call falls back
+// to the ambient name, which is not in scope.
+// expect-error: unbound
+fn missing() → Nat { abc().nowhere() }

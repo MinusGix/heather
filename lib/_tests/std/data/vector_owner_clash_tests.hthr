@@ -1,0 +1,26 @@
+// A file's own type named `Vec` beside the vector type's `Vec` namespace
+// (issues/methods-on-the-vector-type.md). The two owners share the spelling:
+// a member of either is reached only through a receiver its subject takes,
+// so the vector library's `Vec::get` is never chosen for this file's `Vec`,
+// and this file's `Vec::size` never for a vector. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import nat; import logic; import vector;
+
+fn Vec::get<A>({n: Nat}, self v: [A; n], i: Nat, pad: A) → A { vector_get(v, i, pad) }
+
+record Vec { size: Nat }
+fn Vec::doubled(self v: Vec) → Nat { v.size + v.size }
+
+// A declaration `Vec::m` attaches to the file's type, whose namespace it is.
+theorem own_doubled(): Vec(3).doubled() = 6 { refl }
+theorem own_field(): Vec(3).size = 3 { refl }
+
+// The vector's member is still reached through a vector.
+fn two() → [Nat; 2] { [4, 5] }
+theorem vector_get_still(): two().get(1, 0) = 5 { refl }
+
+// Neither owner's member is reached through the other's receiver.
+// expect-error: unbound
+fn vector_has_no_doubled() → Nat { two().doubled() }
+// expect-error: unbound
+fn record_has_no_get() → Nat { Vec(3).get(0, 0) }

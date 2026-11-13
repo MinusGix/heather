@@ -269,7 +269,7 @@ impl<'a> Walk<'a> {
         }
         let index = self.nodes.len();
         self.node_index.insert(spelled.clone(), index);
-        self.nodes.push(Node { word: spelled.clone(), width: w, kind });
+        self.nodes.push(Node { word: spelled.clone(), width: w.clone(), kind });
         if let Some((n, m, x, is_low)) = split {
             let x_source = self.elab.spell_term_source(self.cx, &x).ok_or("could not spell split word")?;
             let ns = nat_term_source(self.elab, self.cx, &n)?;
@@ -308,7 +308,36 @@ impl<'a> Walk<'a> {
                 self.bridges.push((name, statement, format!("bitvec_nat::toNat_take_drop({key})")));
             }
         }
+        if let Kind::Leaf = self.nodes[index].kind {
+            self.mask_bound(&w, word, &spelled)?;
+        }
         Ok(Some(index))
+    }
+
+    /// A word masked by another, `x & y`, is at most the mask
+    /// (issues/bv-omega-masked-word-bound.md). Its leaf gets that fact beside
+    /// its range: `<= m` when the mask is the numeral `m`, else `<= toNat(y)`,
+    /// the mask read as a word of its own.
+    fn mask_bound(&mut self, w: &str, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        let Some(args) = named_args(self.elab, word, "bitvec::BitVec::band") else { return Ok(()) };
+        let [_, x, y] = args.as_slice() else { return Ok(()) };
+        let (Some(xs), Some(ys)) = (self.elab.spell_term_source(self.cx, x), self.elab.spell_term_source(self.cx, y)) else {
+            return Ok(());
+        };
+        let value = format!("bitvec::BitVec::toNat({spelled})");
+        let numeral = named_args(self.elab, y, "bitvec::BitVec::ofNat")
+            .and_then(|args| args.get(1).and_then(|c| self.literal(c)));
+        let (statement, proof) = match numeral {
+            Some(m) => (le(&value, &m.to_string()), format!("bitvec_nat::BitVec::toNat_band_ofNat_le({w}, {xs}, {m})")),
+            None => {
+                self.word_at(w.to_string(), y)?;
+                (le(&value, &format!("bitvec::BitVec::toNat({ys})")), format!("bitvec_nat::BitVec::toNat_band_le_right({w}, {xs}, {ys})"))
+            }
+        };
+        if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+            self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
+        }
+        Ok(())
     }
 
     /// A leaf's value from the fact that states it, if one does.
