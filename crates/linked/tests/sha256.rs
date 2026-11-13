@@ -358,7 +358,8 @@ fn block_differential_long_messages() {
 
 /// The Heather function transcribed: a context and a block of any lengths,
 /// each read answering zero and each store doing nothing past its span's
-/// end, in the order `lib/native/crypto/sha256_block.hthr` makes them. On a
+/// end, in the order `lib/native/crypto/sha256_compression.hthr` makes them
+/// (the context's functions, run on the span that holds it). On a
 /// whole context and a whole block it is `compress_reference`, which
 /// `the_model_is_the_standard_on_whole_spans` holds; on short ones it is
 /// what the linked function is certified to compute.
@@ -377,7 +378,7 @@ fn model(context: &mut [u8], block: &[u8]) -> u64 {
             put(span, i.wrapping_add(k as u64), byte);
         }
     }
-    // `sha256_take_block`, `sha256_expand`, `sha256_begin`.
+    // `sha256_take_block`, `Sha256::expand`, `Sha256::begin`.
     for i in 0..64 {
         put(context, i + 64, block.get(i as usize).copied().unwrap_or(0));
     }
@@ -390,7 +391,7 @@ fn model(context: &mut [u8], block: &[u8]) -> u64 {
         let byte = context.get(i as usize).copied().unwrap_or(0);
         put(context, i + 32, byte);
     }
-    // `sha256_rounds`: `sha256_step`, `sha256_turn`, `sha256_set`.
+    // `Sha256::rounds`: `Sha256::t1`, `Sha256::turn`, `Sha256::set`.
     for t in 0..64u64 {
         let first = t1_reference(word_at(context, 60), word_at(context, 48), word_at(context, 52), word_at(context, 56), K[t as usize],
             word_at(context, t * 4 + 64));
@@ -404,7 +405,7 @@ fn model(context: &mut [u8], block: &[u8]) -> u64 {
         put_word(context, 32, a);
         put_word(context, 48, e);
     }
-    // `sha256_end`.
+    // `Sha256::end`.
     for i in 0..8 {
         let at = i * 4;
         let sum = word_at(context, at).wrapping_add(word_at(context, at + 32));

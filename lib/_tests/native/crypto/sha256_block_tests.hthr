@@ -1,18 +1,17 @@
-// Probes of `sha256_block`: the pieces `sha256_compress` is made of, on
-// literal bytes, and the round constants against the specification's table.
-// What the whole function computes on a block is held where it is linked
-// (crates/linked/tests/sha256.rs): sixty-four rounds are not run by
-// conversion here.
+// Probes of `sha256_block`: the round constants against the
+// specification's table. What the whole compression computes on a block is
+// held where it is linked (crates/linked/tests/sha256.rs), and its pieces
+// on the block of "abc" in `sha256_compression_tests.hthr`.
 //
 // And the regression of issues/runtime-link-compares-functions.md for
 // functions that only read: a caller and its callee of one Heather type,
 // both heavy. Before that issue's change the generator's link check ran
-// out of its budget on the pair; the writing pairs, plain and measured,
-// are `sha256_block`'s own (`sha256_step` and `sha256_turn`,
-// `sha256_rounds` and `sha256_step`). A measured function that only reads
-// and calls one this heavy is refused for another reason
-// (issues/runtime-measured-reader-heavy-callee.md). Tests, not library:
-// nothing imports this module.
+// out of its budget on the pair. The writing pairs were the round when it
+// was three functions over the span; it is methods of `Sha256` now
+// (`sha256_working.hthr`), linked by the record's generator. A measured
+// function that only reads and calls one this heavy is refused for another
+// reason (issues/runtime-measured-reader-heavy-callee.md). Tests, not
+// library: nothing imports this module.
 import sha256_block;
 import stored_words;
 import sha256_round;
@@ -67,7 +66,8 @@ theorem constant_past_table(): sha256_k(w(64)) = w(0xc67178f2) { refl }
 // ---------------------------------------------------------------------------
 // A caller and a callee of one type, reading
 
-// T1 of round `t` from the context, as `sha256_step` computes it.
+// T1 of round `t` from the context's bytes, as `Sha256::t1` computes it
+// from the context.
 runtime fn probe_t1(ctx: List<BitVec(8)>, cn, t: BitVec(64)) → BitVec(64) {
     sha256_t1(List::u32_be_within(ctx, cn, BitVec::ofNat(60)), List::u32_be_within(ctx, cn, BitVec::ofNat(48)), List::u32_be_within(ctx, cn, BitVec::ofNat(52)),
         List::u32_be_within(ctx, cn, BitVec::ofNat(56)), sha256_k(t), List::u32_be_within(ctx, cn, t.shift_left(2).add(BitVec::ofNat(64))))

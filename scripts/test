@@ -327,9 +327,17 @@ cli_images_warmup() {
 # (`--through`), each replaying the ones before it, then each example in a
 # process of its own, three at a time. Each process holds one module, the
 # largest (branches) about half the rail.
+#
+# The modules `crates/linked` exports from (`EXPORTS.tsv`'s first column)
+# are built the same way, a module per process: `native_linked.rs` runs a
+# `compile-x86` per export over this store, and an export whose closure is
+# several generator-heavy modules (SHA-256's stream over the context's
+# functions) would otherwise build them all under one child's rail.
 native_closure_warmup() {
   local heather module unbuilt store="$STORE_ROOT/native-test-images"
   local examples=(examples/x86-native/*.hthr) roots=()
+  local exported
+  mapfile -t exported < <(grep -v '^#' crates/linked/generated/EXPORTS.tsv | cut -f1 | sort -u)
   heather=$(node --input-type=module -e '
     import { readFileSync } from "node:fs";
     import { binaryOf } from "./scripts/run-test-targets.mjs";
@@ -338,7 +346,7 @@ native_closure_warmup() {
     echo "native warmup: no heather binary in the build; the native tests build their modules themselves"
     return 0
   fi
-  unbuilt=$("$heather" warm-native "${examples[@]}" --unbuilt --cache-dir "$store") || return 0
+  unbuilt=$("$heather" warm-native "${examples[@]}" "${exported[@]}" --unbuilt --cache-dir "$store") || return 0
   for module in $unbuilt; do
     if [[ -f "examples/x86-native/$module.hthr" ]]; then
       roots+=("examples/x86-native/$module.hthr")
@@ -347,7 +355,7 @@ native_closure_warmup() {
     (
       ulimit -v 6291456
       ulimit -t 300
-      HEATHER_KERNEL_WORKERS=1 "$heather" warm-native "${examples[@]}" \
+      HEATHER_KERNEL_WORKERS=1 "$heather" warm-native "${examples[@]}" "${exported[@]}" \
         --through "$module" --cache-dir "$store" > /dev/null
     ) || { echo "native warmup stopped at \`$module\`; the native tests report why"; return 0; }
   done

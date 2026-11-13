@@ -52,6 +52,9 @@ import function_ir_writes;
 // of a module that exports a function calling over views, and every such
 // module imports this one.
 import function_ir_rows;
+// Nor this: the certificate of an export that stores into a span states
+// its return with `Ending::returns_written`, in that module's scope.
+import rt_file_returns;
 import function_ir_run;
 import function_ir_link;
 import runtime;

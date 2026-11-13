@@ -28,7 +28,7 @@ lib/native/crypto/sha512_round.hthr	sha512_next	w2, w7, w15, w16
 lib/native/crypto/sha256_round.hthr	sha256_t1	h, e, f, g, k, w
 lib/native/crypto/sha256_round.hthr	sha256_t2	a, b, c
 lib/native/crypto/sha256_round.hthr	sha256_next	w2, w7, w15, w16
-lib/native/crypto/sha256_block.hthr	sha256_compress	ctx: span mut, block: span
+lib/native/crypto/sha256_compression.hthr	sha256_compress	ctx: span mut, block: span
 lib/native/crypto/sha256_stream.hthr	Sha256::init	ctx: span mut
 lib/native/crypto/sha256_stream.hthr	sha256_update	ctx: span mut, message: span
 lib/native/crypto/sha256_stream.hthr	sha256_finish	ctx: span mut

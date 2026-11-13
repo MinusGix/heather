@@ -6,10 +6,11 @@
 // here writes an offset or a width: `s.schedule` at `t.toNat()` is the
 // accessor's checked element where the declaration lays it.
 //
-// These are the functions `sha256_block.hthr` writes over a span, and they
-// are not yet the linked ones: `sha256_compress` copies the block's bytes
-// into the schedule first, and a function over a bare span does not call
-// a function of a record yet (issues/runtime-record-function-limits.md).
+// These are the linked ones: `sha256_compress` copies the block's bytes
+// into the schedule (`List::sha256_take_block`, a function over the span)
+// and runs `Sha256::run`'s code on the span, and the stream's functions
+// call the same code through `List::sha256_run`.
+//
 // What each publishes is the generator's: `Sha256::run::bytes`, the code's
 // function over the span, and `Sha256::run::runs_held`, that where the
 // span holds a context the code computes `Sha256::run` of it and leaves
@@ -119,4 +120,24 @@ runtime fn Sha256::run(mut self s: Sha256) → u64 {
 theorem Sha256::run_holds(own: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(own, length, s)):
     Sha256::stored().Holds(Sha256::run::bytes(own, length).after, length, Sha256::run(s).after) {
     Sha256::run::runs_held(own, s, length, holds).holds
+}
+
+// The compression as a function over a span: the context's code run where
+// the context is laid. What a caller that assembles a block in the context
+// itself calls (`sha256_stream`).
+runtime fn List::sha256_run(mut self ctx: List<u8>, cn: u64) → u64 {
+    let ran = Sha256::run::bytes(ctx, cn);
+    ctx := ran.after;
+    ran.value
+}
+
+// §6.2.2: H(i) from H(i−1) and a block. Of the context the hash value is
+// read, and it, the working variables and the schedule are written. What
+// the hash value's thirty-two bytes spell after the last block is the
+// digest.
+runtime fn sha256_compress(ctx: List<u8>, cn: u64, block: List<u8>, bn: u64) → Mutated<List<u8>, u64> {
+    let mut ctx = ctx;
+    ctx.sha256_take_block(cn, block, bn, 0);
+    let ran = ctx.sha256_run(cn);
+    Mutated(ctx, ran)
 }

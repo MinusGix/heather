@@ -191,6 +191,28 @@ fn rt_file_store(fuel: Nat, k: Known, w: FWalk, link: Handle, ops: List<Handle>)
     }
 }
 
+// The function of a laid record that `g` is the function over the span
+// of (`T::m::bytes`, published as `HWorld::of_record(T::m, …)`), by the
+// name its tables and instance are published under.
+fn rt_record_of(g: GlobalRef) → Tac<Option<String>> {
+    body(g).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(b) => view(b).bind(λ v => match v {
+            HGlobal(_, n, args) => match Known::str_same(rt_base_name(n), "of_record") {
+                False => pure(None),
+                True => match args {
+                    Cons(source, _) => view(source).bind(λ sv => match sv {
+                        HGlobal(sg, shown, _) => rt_name_of(sg, shown).bind(λ name => pure(Some(name))),
+                        _ => pure(None),
+                    }),
+                    Nil => pure(None),
+                },
+            },
+            _ => pure(None),
+        }),
+    })
+}
+
 // The program index of a called computation: its place among those so far
 // or, in the generator's mode, a runtime fn not met before, appended.
 fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
@@ -200,7 +222,13 @@ fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Ta
             False => rt_refuse("`" ++ name ++ "` writes the span and is not a computation of the program"),
             True => rt_name_of(g, name).bind(λ n => lookup(n ++ "::rt")).bind(λ c => match c {
                 Accepted(_) => pure(Pair(cfuns ++ [g.id], cfuns.len())),
-                Refused(_) => rt_refuse("`" ++ name ++ "` writes the span and is an ordinary fn: mark it `runtime fn`"),
+                // The code of a function of a laid record, called by the
+                // name it is published under (`T::m::bytes`): a computation
+                // of the program as a `runtime fn` over a span is.
+                Refused(_) => rt_record_of(g).bind(λ source => match source {
+                    Some(_) => pure(Pair(cfuns ++ [g.id], cfuns.len())),
+                    None => rt_refuse("`" ++ name ++ "` writes the span and is an ordinary fn: mark it `runtime fn`"),
+                }),
             }),
         },
     }

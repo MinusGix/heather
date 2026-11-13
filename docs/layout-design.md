@@ -506,11 +506,14 @@ the context a span holds. `sha256_block` and `sha256_stream` import it
 and reach every field by its published word:
 
 ```heather
-runtime fn List::sha256_expand(mut self ctx: List<u8>, cn, i: u64) → u64 decreases (64 - i).toNat() {
+runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64 decreases (64 - i).toNat() {
     if h: i < 64 {
-        let at = (i << 2) + Sha256::schedule_at;
+        ctx.put_within(cn, i + Sha256::schedule_at, block.byte_within(bn, i));
         …
 ```
+
+(The compression's own loops were written this way until they became
+functions of the record, §9.5 item 4.)
 
 What a body still writes is a word's place within its array
 (`Sha256::working_at + 16` is the fifth working variable), which is the
@@ -967,10 +970,21 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    `sha256_compression.hthr`): `expand`, `begin`,
    `shift`, `set`, `turn`, `t1`, `rounds`, `end`, and `Sha256::run`,
    which is the four loops in a row, each with its record theorem from
-   the generator. They are the span functions of `sha256_block.hthr`
-   with every offset and width gone, and are not the linked ones until a
-   function over a bare span can call one (the block's bytes are copied
-   in by a span function). Two things the methods needed:
+   the generator. No body has an offset or a width. **They are the
+   linked compression**: a function over a bare span calls a record
+   function's code (`Sha256::run::bytes(ctx, cn)`, a callee the span
+   reflector takes when it is a record function's, `rt_record_of`), so
+   `sha256_compress` copies the block's bytes in (a span function still)
+   and runs `Sha256::run`, and the stream's functions call the same code
+   through `List::sha256_run`. The span spellings of the schedule and
+   the rounds are deleted. Against the reference and the standard's
+   vectors the linked code is unchanged in what it computes
+   (`crates/linked/tests/sha256.rs`, short spans included); its program
+   is three functions longer and its stack, which is counted by
+   functions, deeper by as many frames. What a span
+   function proves of such a call is only its bytes: `runs_held` is not
+   carried up, since a span function states nothing about a record.
+   Two things the methods needed:
 
    - *A store at a numeral after a call.* `s.shift(0); s.working :=
      vector_update(vector_update(s.working, 0, a), 4, e)` was refused,
@@ -1001,6 +1015,15 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    (`issues/runtime-record-function-limits.md`, the log's last entry).
    The pin is tried at the callees first and at parameters where that
    runs out.
+
+   The export's certificate needed the same remedy once more. Its
+   return theorem compared the ending's word (`FTm::end_of(rest, m).word`)
+   with the function's value, and the kernel advanced the function:
+   `sha256_compress` now reaches loops called at numerals, which then ran
+   pass by pass. `compile-x86` states the theorem through
+   `Ending::returns_written` and `Ending::returns_marked`
+   (`rt_file_returns.hthr`), where the result is a parameter and the
+   comparison is of two names.
 
    Run by conversion on the block of "abc", the schedule's last word
    and the working variables after the first round are FIPS 180-4's

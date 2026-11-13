@@ -47,7 +47,7 @@ const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads",
 
 /// And what one that stores into them needs: the run of a program over a
 /// file, and the ending the generator states it with.
-const WRITTEN_IMPORTS: &[&str] = &["function_ir_run", "rt_file_loop"];
+const WRITTEN_IMPORTS: &[&str] = &["function_ir_run", "rt_file_loop", "rt_file_returns"];
 
 /// What a program and its agreement need (`heather reflect`'s module).
 pub(super) const PROGRAM_IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_compile", "bitvec", "bool", "list", "logic", "nat", "option"];
@@ -723,13 +723,13 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 }}
 ", label = f + 1, room = 120 * (f + 1), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
-            format!("compiled_returns_marked<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
+            format!("Ending::returns_marked<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {prefix}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial, loan,
-        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
         } else {
-            format!("compiled_returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
+            format!("Ending::returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {prefix}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,
-        {list}, trivial, FTm::end_of(rest, {call}), {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
         }));
     } else if lent {
         // The file is any (`now`), lying anywhere (`addresses`) under the
