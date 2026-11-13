@@ -19,6 +19,7 @@ use crate::{
 use super::receiver::OtherReading;
 use crate::application::Callables;
 use crate::dispatch::Carriers;
+use crate::dispatch::carrier::VECTOR_NAMESPACE;
 use crate::constructor::Constructors;
 use crate::dispatch::Dictionaries;
 use crate::dispatch::Projections;
@@ -457,6 +458,14 @@ impl Members<'_> {
             NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {
                 return Ok(name.to_string());
             }
+        }
+        // `Vec` is spelled by two owners: the vector type `[A; n]`
+        // (`VECTOR_NAMESPACE`) and a type a file declares under that name. A
+        // member of one is not the other's, so a member whose subject provably
+        // refuses this receiver is not reached through it, and the call falls
+        // back as a missing member does (issues/methods-on-the-vector-type.md).
+        if owner == VECTOR_NAMESPACE && self.global_subject_excludes(&qualified, &carrier, span) {
+            return Ok(name.to_string());
         }
         if self.ambient_reading_survives(cx, name, &carrier, span) {
             // A receiver owned by its head reached this point only because
