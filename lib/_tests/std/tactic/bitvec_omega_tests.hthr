@@ -184,3 +184,40 @@ theorem mask_law(x: BitVec(64)): (x & 15).toNat() <= 15 { BitVec::toNat_band_ofN
 // may be sixteen.
 // expect-error: got stuck
 theorem mask_wrong(x: BitVec(64)): (x & 16).toNat() < 16 { bv_omega }
+
+// ---- A search in a declaration's statement, beside a goal ----
+
+// A search written in a statement fills a slot of the goal world as one in
+// the body does, so it is counted with the body's `?`s; uncounted, it took
+// the `?`'s slot and the goal was an internal error. Its discharge mentions
+// the lifted proof through the statement
+// (issues/goal-hole-beside-a-search-in-the-statement.md).
+fn word_below(i: BitVec(64), inside: i.toNat() < 64 := bv_omega) → BitVec(64) { i }
+fn nat_below(n: Nat, inside: n < 64 := omega) → Nat { n }
+
+// In the result type, discharged by name.
+theorem search_in_result(j: BitVec(64), h: j < 48): word_below(j + 16, inside := bv_omega) = j + 16 {
+    ?rest
+    on ?rest := refl;
+}
+// In a parameter's type, discharged by statement.
+theorem search_in_parameter(j: BitVec(64), h: j < 48, e: word_below(j + 16, inside := bv_omega) = j + 16):
+    word_below(j + 16, inside := bv_omega) = j + 16 {
+    ?rest
+    on _: word_below(j + 16, inside := bv_omega) = j + 16 := e;
+}
+// Two searches in the statement, `omega`'s atom list among the lifted slots.
+theorem searches_in_result(j: BitVec(64), n: Nat, h: j < 48, k: n < 10):
+    word_below(j + 16, inside := bv_omega).toNat() + nat_below(n + 1, inside := omega) = (j + 16).toNat() + (n + 1) {
+    ?rest
+    on ?rest := refl;
+}
+// Inside a checking position in the body as well.
+theorem search_in_result_and_body(j: BitVec(64), h: j < 48): word_below(j + 16, inside := bv_omega) = j + 16 {
+    let below: ((j + 16).toNat() < 64) = bv_omega;
+    ?rest
+    on ?rest := refl;
+}
+// Negative control: left open, the goal is reported with its statement.
+// expect-error: unsolved goals in `search_goal_left_open`
+theorem search_goal_left_open(j: BitVec(64), h: j < 48): word_below(j + 16, inside := bv_omega) = j + 16 { ?rest }
