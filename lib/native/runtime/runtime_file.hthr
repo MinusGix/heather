@@ -231,6 +231,45 @@ fn FFun::compile_measured<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, bod
         FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
 }
 
+// A loop given as the passes its code counts (`FFun::rounds`,
+// rt_file_loop.hthr): no measure and no equation of the function's own,
+// only that `pass` is the body and `stop` what the code answers with its
+// count spent, both conversions at a closed body. This is the instance of
+// a function whose equation holds at some spans only (a function of a
+// laid record, `rt_held.hthr`).
+theorem FFun::counted_runs<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), pass: F → F, stop: F,
+    passes: (rest: List<List<BitVec(8)>>) → FFun::Passes(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
+        λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), pass),
+    stops: (rest: List<List<BitVec(8)>>) → FFun::Stops(ks.len(), ks ++ Cons(w0, wrest), res, w.tys,
+        λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), stop),
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True):
+    (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
+    (own: List<BitVec(8)>) →
+    FTm::Answers(w.tys, ks ++ Cons(w0, wrest), res, rest,
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, FFun::rounds(Fun::meas_passes(), pass, stop), rest, own),
+        λ xs => FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs).run(call, xs, Cons(own, rest))) {
+    λ rest => FFun::measured_answers(ks ++ Cons(w0, wrest), res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(),
+        FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, FFun::rounds(Fun::meas_passes(), pass, stop), rest),
+        FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent), Bool::is_true_of_eq(ok),
+        FFun::counted_sound(ks, w0, wrest, body, res, FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), lent,
+            λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), pass, stop, passes(rest), stops(rest)))
+}
+
+fn FFun::compile_counted<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
+    callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs),
+    typed: Itself(F) = Itself(FTm::Source(w.tys, lent, ks ++ Cons(w0, wrest), res)), pass: F → F, stop: F,
+    passes: (rest: List<List<BitVec(8)>>) → FFun::Passes(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
+        λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), pass),
+    stops: (rest: List<List<BitVec(8)>>) → FFun::Stops(ks.len(), ks ++ Cons(w0, wrest), res, w.tys,
+        λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), stop),
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True)
+    → CompileSpan<F>(FFun::rounds(Fun::meas_passes(), pass, stop)) {
+    CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
+        FFun::counted_runs(ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, pass, stop, passes, stops, ok))
+}
+
 // The spans a function that writes reads, at a rest of the file, as a rest
 // of their own: the file's next `lent - 1`.
 fn FFun::reads_of(lent: Nat, rest: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { Setup::spans_of(lent.pred(), rest) }
