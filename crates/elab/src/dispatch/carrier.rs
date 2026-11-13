@@ -43,6 +43,10 @@ impl Carrier {
     }
 }
 
+/// The namespace that owns the vector type `[A; n]`'s members: `fn Vec::at(…,
+/// self v: [A; n], …)` (Minus, 2026-11-13).
+pub(crate) const VECTOR_NAMESPACE: &str = "Vec";
+
 /// Carrier dispatch's part of the elaborator.
 pub(crate) struct Carriers<'e>(pub(crate) &'e Elaborator);
 
@@ -74,6 +78,7 @@ impl Carriers<'_> {
             || self.lookup_member(name).is_some()
             || name == "Nat"
             || name == "Fin"
+            || name == "Vec"
             || name == "Type"
             || name == "True"
     }
@@ -141,7 +146,17 @@ impl Carriers<'_> {
     /// namespace, for a receiver-directed member lookup. `Nat` is a kernel
     /// type with no declaration and answers for itself; anything with no
     /// nominal tag has no namespace and answers `None`.
+    ///
+    /// The vector type `[A; n]` answers `Vec` (issues/methods-on-the-vector-type.md):
+    /// read before any reduction, as `Fin` is, because its whnf at a literal
+    /// length is a Σ-tuple no namespace owns. Only the namespace: `Vec` is not a
+    /// [`Carrier`], so operator, cast and instance dispatch read a vector
+    /// exactly as before. A declared type named `Vec` shares the spelling, and
+    /// [`crate::dispatch::Members`] tells their members apart by subject.
     pub(crate) fn type_namespace(&self, cx: &Cx, ty: &Type, span: Span) -> Option<String> {
+        if matches!(&*crate::inductive::decoded(ty), Type::Vec { .. }) {
+            return Some(VECTOR_NAMESPACE.to_string());
+        }
         self.carrier_of_ty(cx, ty, span).map(|c| c.written)
     }
 
