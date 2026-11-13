@@ -41,6 +41,14 @@
 # lib/ or spawns at run time, and everything when a changed path cannot be
 # placed; docs/testing-architecture-design.md §2.2.1).
 # HEATHER_PR_AFFECTED=all runs every one.
+# Both stale-image lanes also run the `heather` binary with the kernel's
+# sampled self-checks off (HEATHER_KERNEL_SELF_CHECKS=off, read by
+# crates/cli/src/main.rs; crates/kernel/src/checks.rs): a check walks the
+# whole term a skip stepped over, and on the library's `runtime fn`
+# generator modules one check in sixteen was over twenty times the module
+# (issues/kernel-self-check-cost-on-skipped-terms.md). The test binaries'
+# own in-process kernels keep the sample, and so does every process of the
+# default lane. Set the variable yourself to choose another level.
 # --long additionally runs every slow kernel self-check on every occasion
 # (crates/kernel/src/checks.rs) in its own target directory; not a gate,
 # a sweep to run when the kernel's traversals or bounds memo changed.
@@ -94,6 +102,7 @@ if [[ "${1:-}" == --fast ]]; then
   # the exact policy does, which the master sentinel runs nightly; a round's
   # final verification is `--pr`, which runs everything this lane skips.
   export HEATHER_SEMANTIC_IMAGES=accept-stale
+  export HEATHER_KERNEL_SELF_CHECKS="${HEATHER_KERNEL_SELF_CHECKS:-off}"
   echo "fast lane: semantic test images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the full lane rebuilds them"
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
@@ -122,6 +131,7 @@ elif [[ "${1:-}" == --pr ]]; then
   shift
   TEST_LANE=pr
   export HEATHER_SEMANTIC_IMAGES=accept-stale
+  export HEATHER_KERNEL_SELF_CHECKS="${HEATHER_KERNEL_SELF_CHECKS:-off}"
   echo "pr lane: the tests the diff can affect run; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
   # The native certificate gates run when the round changed something they
   # check: the native library and the machine/OS models it is proved over,

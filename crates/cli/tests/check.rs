@@ -20,6 +20,31 @@ fn good_file_is_ok_exit_zero() {
     assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+/// `HEATHER_KERNEL_SELF_CHECKS` names one of the kernel's three levels
+/// (`heather_kernel::checks`); every level checks the same file, and
+/// anything else is refused by name before a file is read.
+#[test]
+fn the_kernel_self_check_level_is_one_of_three() {
+    let at = |level: &str| {
+        Command::new(env!("CARGO_BIN_EXE_heather"))
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+            .env("HEATHER_KERNEL_SELF_CHECKS", level)
+            .args(["check", "good.hthr"])
+            .output()
+            .expect("run heather")
+    };
+    for level in ["off", "sampled", "full"] {
+        let out = at(level);
+        assert_eq!(out.status.code(), Some(0), "{level}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "good.hthr: ok\n");
+    }
+    let out = at("none");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("HEATHER_KERNEL_SELF_CHECKS is `none`; it is `off`, `sampled` or `full`"), "{err}");
+}
+
 #[test]
 fn bad_file_prints_all_diagnostics_exit_one() {
     let out = heather(&["check", "bad.hthr"]);

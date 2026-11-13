@@ -96,7 +96,36 @@ fn report_lexer() {
     eprintln!("lexer: the linked scanner cut {cut} sources; {left} were left to the Rust lexer");
 }
 
+/// `HEATHER_KERNEL_SELF_CHECKS`: how often this process re-derives what the
+/// kernel's memos let it skip (`heather_kernel::checks`): `off`, `sampled`
+/// (the kernel's default) or `full`. The checks exist only in a build with
+/// debug assertions, so a release binary ignores the level. The kernel reads
+/// no environment itself; the binary owns its process and sets the policy.
+///
+/// A check walks the whole subtree a skip stepped over, so its cost is the
+/// subtree's size while the skip's was constant. One in sixteen of them is
+/// a few percent of most checks and over twenty times a module of `runtime
+/// fn` generators, which shift the same large closed terms again and again
+/// (`issues/kernel-self-check-cost-on-skipped-terms.md`). `scripts/test`'s
+/// stale-image lanes turn them off for the binary's runs; the exact lane
+/// keeps the sample.
+fn choose_kernel_self_checks() -> Result<(), String> {
+    use heather_kernel::checks::{set_skip_verification, SkipVerification};
+    let Ok(level) = std::env::var("HEATHER_KERNEL_SELF_CHECKS") else { return Ok(()) };
+    set_skip_verification(match level.as_str() {
+        "off" => SkipVerification::Off,
+        "sampled" => SkipVerification::Sampled,
+        "full" => SkipVerification::Full,
+        _ => return Err(format!("HEATHER_KERNEL_SELF_CHECKS is `{level}`; it is `off`, `sampled` or `full`")),
+    });
+    Ok(())
+}
+
 fn main() -> ExitCode {
+    if let Err(msg) = choose_kernel_self_checks() {
+        eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
+        return ExitCode::from(2);
+    }
     choose_lexer();
     let code = run();
     report_lexer();
