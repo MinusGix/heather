@@ -50,10 +50,10 @@
 // what that leaves, and what it owes (`HWorld::Runs`) is its own
 // agreement, which its generator published.
 //
-// Not here yet: a loop (`Again`), a lend, a byte stored outside a field
-// and a store at a computed offset (an array's element at an index that
-// is a word) are refused by `FTm::kept`; the first needs the floor of
-// docs/layout-design.md §9.3.
+// A loop (`Again`) is `rt_held_loop.hthr`'s: `FTm::kept` refuses it here,
+// and a body that ends in its own call is judged a pass at a time there.
+// Not here yet: a lend, a byte stored outside a field and a store at a
+// computed offset (an array's element at an index that is a word).
 import logic;
 import bool;
 import nat;

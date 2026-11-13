@@ -3212,7 +3212,7 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     let companion <- lookup(name ++ "::ext");
     let found: Tac<Expr> = match companion {
         Accepted(g) => pure(Global(g)),
-        Refused(_) => runtime_held_refused(name, "it has no `ext` companion, which a loop's theorem is built from"),
+        Refused(_) => runtime_held_refused(name, "it has no `ext` companion, which a loop's theorem is built from (a `decreases` function whose ending arm stores into the record gets none yet: store before the test, or in a caller)"),
     };
     let ext <- found;
     let irrel <- runtime_global(name ++ "::irrel");

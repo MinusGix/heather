@@ -5,7 +5,7 @@ labels: [native,crypto,design,ergonomics]
 area: heather-in-heather
 milestone: [crypto-hash]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 SHA-256's state is a `List<u8>` and a length word passed side by side through every function of `lib/native/crypto/sha256_block.hthr` and `sha256_stream.hthr`, with its layout (hash value at byte 0, working variables at 32, schedule or block at 64, count at 320) as numbers in the bodies. Minus's question (2026-11-12): should the context be its own type with these as functions on it. Yes, and what stands between is listed here so each part can be done where it belongs.
@@ -76,3 +76,4 @@ Done when: `crates/linked`'s SHA-256 is compiled from a module whose functions a
 
   What still keeps the other functions on the span, in the order they would fall: a call of another function of the record (the count's update is called by `sha256_take` and `sha256_close`, and `sha256_set`, `sha256_turn`, `sha256_step` are a chain of calls whose own reads are at literal indexes), then loops and an element at a word index (`sha256_expand`, `sha256_shift`, `sha256_rounds`, `sha256_end`), then a word array's bytes (`sha256_take_block`, `sha256_begin`, `sha256_push`, `sha256_zero`, `sha256_pad`) and a second span beside the record (`block`, `message`). All are listed in [[runtime-record-function-limits]].
 - 2026-11-12: PR #551: a function of the context can call another (docs/layout-design.md §9.5 item 4, first part). Left before the stream's functions are methods of `Sha256`: loops with an element at a word index, and a word array's bytes; the count's update stays a span function until its callers (`sha256_take`, a span function with a second span) are functions of the record or a span function can call one.
+- 2026-11-13: PR #551: a loop in a function of the context compiles (docs/layout-design.md §9.3, §9.5 item 4): a `mut self` method that `decreases` a word's `toNat` and ends in its own call, with stores and calls of other functions of the record each pass. No floor was needed: the loop's function over the bytes is its body iterated the passes its code counts. Left before SHA-256's loops are methods of `Sha256`: an element at an index that is a word (`sha256_expand`, `sha256_shift`, `sha256_rounds`, `sha256_end`), then a word array's bytes.

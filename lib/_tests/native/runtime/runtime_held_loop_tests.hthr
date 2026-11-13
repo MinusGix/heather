@@ -1,0 +1,177 @@
+// Probes for a loop in a function of a laid record
+// (`lib/native/runtime/rt_held_loop.hthr`; `lib/native/runtime/runtime.hthr`,
+// "A function of a laid record"; docs/layout-design.md §9.5): a `mut self`
+// method that `decreases` and ends in its own call. Its code counts its
+// passes, so its function over the bytes is its body iterated as often
+// as the code goes round (`FFun::rounds`), at every span; where the span
+// holds a record that iteration is the function of the record, which is
+// the function's own equation and never a fact about bytes. Nothing here
+// is proved by hand: each theorem restates or reads what the generator
+// published.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// ---------------------------------------------------------------------------
+// Two words, and loops over them.
+
+laid(endian := BigEndian) record Tally { count: u64, total: u64 }
+
+runtime fn Tally::bump(mut self t: Tally, by: u64) → u64 {
+    t.count := t.count + by;
+    t.count
+}
+
+// A store each pass, and a field read at the end.
+runtime fn Tally::fill(mut self t: Tally, i: u64) → u64
+    decreases (8 - i).toNat() {
+    if h: i < 8 {
+        t.total := t.total + i;
+        t.fill(i + 1)
+    } else {
+        t.count
+    }
+}
+
+// Two operands, the second carried round.
+runtime fn Tally::sum(mut self t: Tally, i, acc: u64) → u64
+    decreases (100 - i).toNat() {
+    if h: i < 100 {
+        t.total := acc;
+        t.sum(i + 1, acc + i)
+    } else {
+        acc
+    }
+}
+
+// A call of another function of the record each pass, its word stored.
+runtime fn Tally::walk(mut self t: Tally, i: u64) → u64
+    decreases (4 - i).toNat() {
+    if h: i < 4 {
+        let a = t.bump(i);
+        t.total := a;
+        t.walk(i + 1)
+    } else {
+        t.total
+    }
+}
+
+// A caller of a loop: it knows the loop by the loop's own theorem.
+runtime fn Tally::filled(mut self t: Tally, x: u64) → u64 {
+    t.count := x;
+    t.fill(0)
+}
+
+// What is published, restated: the code over the span agrees with the
+// function of the record wherever the span holds one.
+theorem fill_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::fill(t, i), Tally::fill::bytes(own, length, i)) {
+    Tally::fill::runs_held(own, t, length, i, holds)
+}
+
+theorem walk_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::walk(t, i), Tally::walk::bytes(own, length, i)) {
+    Tally::walk::runs_held(own, t, length, i, holds)
+}
+
+theorem filled_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::filled(t, x), Tally::filled::bytes(own, length, x)) {
+    Tally::filled::runs_held(own, t, length, x, holds)
+}
+
+// Read out: the record the span is left holding is the one the function
+// of the record leaves, whatever the loop did.
+theorem sum_holds(own: List<u8>, t: Tally, length, i, acc: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::stored().Holds(Tally::sum::bytes(own, length, i, acc).after, length, Tally::sum(t, i, acc).after) {
+    Tally::sum::runs_held(own, t, length, i, acc, holds).holds
+}
+
+// The program runs to the function over the bytes at every file, with no
+// premise on what the span holds.
+theorem fill_runs(span: List<u8>, rest: List<List<u8>>, place, length, x: u64):
+    program_run(Tally::fill::program, Cons(span, rest), 4, [place, length, x]) = FTm::end_of(rest, Tally::fill::bytes(span, length, x)) {
+    Tally::fill::runs_over(span, rest, place, length, x)
+}
+
+// On bytes: a count of 1 and a total of 2, and `fill` from 5 (three
+// passes, then the count).
+def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
+
+theorem fill_bytes(): Tally::fill::bytes(TALLY_BYTES, 16, 5) = Mutated([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 20], 1) { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+// expect-error: a loop that only reads the record is not taken yet
+runtime fn Tally::count_up(self t: Tally, i: u64) → u64
+    decreases (8 - i).toNat() {
+    if h: i < 8 { t.count_up(i + 1) } else { t.count }
+}
+
+// expect-error: must `decreases` a 64-bit word's `toNat`
+runtime fn Tally::slow(mut self t: Tally, i: u64) → u64
+    decreases (8 - i).toNat() + 1 {
+    if h: i < 8 {
+        t.total := i;
+        t.slow(i + 1)
+    } else {
+        t.count
+    }
+}
+
+// expect-error: a `decreases` function whose ending arm stores into the record gets none yet
+runtime fn Tally::late(mut self t: Tally, i: u64) → u64
+    decreases (8 - i).toNat() {
+    if h: i < 8 {
+        t.late(i + 1)
+    } else {
+        t.total := i;
+        i
+    }
+}

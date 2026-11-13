@@ -982,8 +982,11 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     // record as it was, and a branch around that is not a branch inside it.
     let walked: Tac<HeldEnd> = match result.fst {
         True => rt_held_tail(fuel, cx, w, ws.body),
-        False => rt_go(fuel, cx.known(w), st, ws.body, True).bind(λ rv =>
-            pure(HeldEnd(FSeg::close(FSeg::lets(rv.fst.lets), FTm::Pure(Var(rv.fst.index(RSt::level(rv.snd))))), rv.fst.funs, [], []))),
+        False => match en.snd {
+            Some(_) => rt_refuse("a loop that only reads the record is not taken yet: give it `mut self`"),
+            None => rt_go(fuel, cx.known(w), st, ws.body, True).bind(λ rv =>
+                pure(HeldEnd(FSeg::close(FSeg::lets(rv.fst.lets), FTm::Pure(Var(rv.fst.index(RSt::level(rv.snd))))), rv.fst.funs, [], []))),
+        },
     };
     let r <- walked;
     let params: List<Ty> = Cons(Word(64), Cons(Word(64), ws.locals.map(λ _ => Word(64))));

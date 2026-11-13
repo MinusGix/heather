@@ -705,7 +705,8 @@ theory's, and without it there is no expansion to prove anything about.
 What it does not say yet: that the span is as long after as before, and
 that the bytes past the record are as they were (`Holds` after says the
 length word is still inside the span, which is what the next field
-access needs); both are round 4's, with the floor. And a field narrower
+access needs); neither is needed by a loop (§9.3) and both wait for a
+client. And a field narrower
 than a word is in the theory (the marks carry a width, and the accessor's
 `kept` law is what `held_read` and `held_write` use) but not yet in
 compiled code: a function that writes a span takes and returns 64-bit
@@ -743,34 +744,48 @@ bite:
 2. **A function without a loop** has its byte meaning at every span, so
    it is an instance of the class as it is, and the agreement is a
    theorem beside it. Nothing new is needed.
-3. **A loop** needs a function of bytes that satisfies the loop's own
-   equation at every span (`FFun::Guarded`), and for a record-level loop
-   the only function there is, is the record-level one. Carried to bytes
-   it is `put(own, 0, f(get(own, 0)))` where the span holds the record,
-   and there the equation follows from the record-level one and the
-   agreement, provided a span is determined by the record it holds and
-   the bytes around it: a codec with `put(b, at, get(b, at)) = b`, which
-   holds where no byte is padding. Where the span is too short there is
-   no such function to name.
+3. **A loop** needs a function of bytes at every span, and for a
+   record-level loop the function the source names is the record-level
+   one, which says nothing where the span holds no record.
 
-So the loop round has a choice that is about the class and not about
-layout. **Recommended: a floor.** `CompileSpan` and `FFun::Guarded` learn
-one number per function, the least length of the written span they speak
-of (zero for every function there is today, so nothing existing changes
-its statement), with one new lemma, that a computation leaves its span's
-length as it was. A call hands the floor on: a callee's floor is at most
-its caller's, and a lend of a window owes the window's length. The other
-routes weighed: a proof as a parameter of a `runtime fn` (a requirement
-in the source, which is where a fact of `docs/compilation-vision.md` §2.3
-belongs in the end, and which needs dependent parameters in a language
-whose types are words), and a loop written over the span that calls held
-functions for its field work (no new theory, and the loops keep a length
-word and a span type in their source).
+**Built: the passes the code counts.** The loop's compiled code already
+counts its passes (`Fun::meas_passes`, `2^64 - 1`), and with the count
+spent it runs the body once more with the self-call answered by the first
+word it would have moved. So the code computes a function of bytes that
+needs no equation at all: the body iterated that many times,
+`FFun::rounds(n, pass, stop)`, where `pass` is the body as a function of
+the passes after it and `stop` is what answers with the count spent. It
+is total at every span, the class's statement is unchanged
+(`CompileSpan`, with a second way to build an instance,
+`FFun::compile_counted`, from `FFun::counted_sound`), and no function
+that exists changes its statement. What the iteration computes at a span
+too short to hold the record is nobody's theorem and nobody needs it.
 
-**Padding.** `Stored::put` writes zeros into padding, so a record with
-padding is not determined by its bytes the way point 3 needs. The first
-loop round takes records with no padding (SHA-256's context is one; the
-check is by evaluation). A `put` that leaves padding as it finds it makes
+Where the span holds a record, the iteration is the function of the
+record (`FFun::counted_held`, `rt_held_loop.hthr`), by an argument a pass
+at a time: a pass at the record and a pass at the bytes agree while the
+span holds the record (`Pass`, `FTm::tail_held_runs`), each pass lowers
+the measure, and the measure is below the count. What the proof takes
+from the function is its own equation at records (`FFun::HeldGuarded`:
+the body with any recursion that agrees with the function below the
+measure is the function), which the generator reads off the function's
+companions `ext` and `irrel`, and that the measure is a word's `toNat`.
+That the recursion in the body is at a lower measure is not asked for
+separately: it is read off the equation (`FFun::falls`), since an
+equation that holds for every recursion agreeing below the measure
+cannot read the recursion at or above it.
+
+This replaces the floor this section recommended before it was built
+(one number per function in `CompileSpan` and `FFun::Guarded`, the least
+length they speak of): the floor changed the class and every caller's
+obligations to say something about spans the theorem never uses. The
+other routes weighed then, a proof as a parameter of a `runtime fn` and a
+loop written over the span that calls held functions, are not needed for
+this either. An exact codec (`put(b, at, get(b, at)) = b`) is not needed:
+nothing is carried from the record back to bytes.
+
+**Padding.** `Stored::put` writes zeros into padding. Loops do not ask
+for more (above); a `put` that leaves padding as it finds it makes
 every codec a lens in the full sense (`put(b, get(b)) = b`,
 `put(put(b, x), y) = put(b, y)`) and is its own library round.
 
@@ -886,17 +901,44 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    with a store in it, operands and results other than 64-bit words,
    fields with no accessor, an element at an index that is not a
    literal, and the index spelled `t.f[i]`.
-4. **The floor and loops**: the class's floor, length preservation, the
-   loop's equation carried through an exact codec; a call of another
-   function of the record (**built**, below); an element at an index
-   that is a word (a
-   reader marked with a family of parts and a bound the body's test
-   gives); and a word array's bytes (`sha256_take_block` and
-   `sha256_begin` store bytes where words lie, which is a second part
-   over the same bytes). Then SHA-256's
+4. **Calls and loops**: a call of another function of the record
+   (**built**, below); a loop (**built**, below and §9.3); an element at
+   an index that is a word (a reader marked with a family of parts and a
+   bound the body's test gives); and a word array's bytes
+   (`sha256_take_block` and `sha256_begin` store bytes where words lie,
+   which is a second part over the same bytes). Then SHA-256's
    functions are methods of `Sha256` whole, its entry points are exported
    as methods (`linked-export-of-a-method`, merged), and
    `sha256-context-type` closes.
+
+   **A loop** is built
+   (`lib/_tests/native/runtime/runtime_held_loop_tests.hthr`): a
+   `mut self` method that `decreases` a word's `toNat` and ends, in a
+   tail `if h:`, in its own call.
+
+   - *Theory* (`rt_file_loop.hthr`, "A loop as the passes it counts";
+     `rt_held_loop.hthr`). §9.3.
+   - *Reflector* (`rt_held_reflect.hthr`). The body is read from the
+     function's step (`T::m::body`, the recursion a parameter), and its
+     own call is the walk's end as a call is: the record settled, the
+     operands made, `FTm::Again`.
+   - *Generator* (`runtime.hthr`, `runtime_held_counted`). The pass is
+     written out as a function of the passes after it and the compiled
+     function is `FFun::rounds` of it; that the pass is the body
+     (`FFun::Passes`) is by computation at every callee. Two statements
+     that read the iteration through other definitions (the link's
+     answer, and the iteration as a meaning) are proved with the
+     iteration a parameter and read at it (`HWorld::at`): compared at
+     the iteration itself, the kernel unfolds a pass on one side before
+     the other side arrives at the iteration, and once that side has
+     passed more heads than the kernel keeps (`Passed::KEPT`) the two
+     meet only at the count's end.
+
+   A loop calls other functions of the record, and a function calls a
+   loop, each by the other's theorem. Not taken: a loop that only reads
+   the record, a self-call that is not the end, and a loop whose ending
+   arm stores into the record (the `decreases` companions are not made
+   for that shape, `issues/decreases-no-companions-ending-arm-store.md`).
 
    **A call of another function of the record** is built
    (`lib/_tests/native/runtime/runtime_held_call_tests.hthr`). `t.m(x)`
