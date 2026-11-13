@@ -629,6 +629,14 @@ impl Names {
         Some(Rc::clone(&self.global(key)?.params))
     }
 
+    /// Whether some type's member `name` leaves a parameter to a search that
+    /// reads its context (`inside: … := bv_omega`): what the `decreases`
+    /// lowering asks before it elaborates a method call to learn its found
+    /// proofs (`measure::lift_found`).
+    pub(crate) fn has_searched_member_base(&self, name: &str) -> bool {
+        self.has_member_base(&searched_member_base(name))
+    }
+
     pub(crate) fn has_member_base(&self, name: &str) -> bool {
         note(name);
         self.tables
@@ -681,6 +689,11 @@ impl Names {
             .index
             .insert(&self.scope.module, &name, NameKind::Global);
         current.by_abs.insert(abs, key.clone());
+        if let Some(base) = &member_base
+            && params.iter().any(|p| p.default.as_ref().is_some_and(|d| crate::defaults::is_context_search(&d.expr)))
+        {
+            current.member_bases.insert(searched_member_base(base));
+        }
         current.globals.insert(key, GlobalInfo { abs, params });
         if let Some(base) = member_base {
             current.member_bases.insert(base);
@@ -1090,4 +1103,11 @@ mod layered_tests {
         assert!(!image.declares(image.module(), "suffix"));
         assert!(suffix.declares(suffix.module(), "suffix"));
     }
+}
+
+/// The entry of the member-base set that says a member of this base name has
+/// a parameter defaulted to a context-reading search. `#` is in no source
+/// name, so it is no member's own base.
+fn searched_member_base(base: &str) -> String {
+    format!("{base}#searched")
 }

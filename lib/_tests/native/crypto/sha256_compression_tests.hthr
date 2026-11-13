@@ -92,7 +92,7 @@ theorem abc_schedule(): vector_get(Sha256::expand(ABC, 0).after.schedule, 63, 0)
 // The working variables after the first round: a and e.
 def ABC_BEGUN: Sha256 = Sha256::begin(Sha256::expand(ABC, 0).after, 0).after;
 
-def ABC_ROUND: Sha256 = Sha256::turn(ABC_BEGUN, Sha256::t1(ABC_BEGUN, 0, vector_at(ABC_BEGUN.schedule, 0).zero_extend(32)).value).after;
+def ABC_ROUND: Sha256 = Sha256::turn(ABC_BEGUN, Sha256::t1(ABC_BEGUN, 0, ABC_BEGUN.schedule.at(0).zero_extend(32)).value).after;
 
 theorem abc_round_a(): vector_get(ABC_ROUND.working, 0, 0) = 0x5d6aebcd { refl }
 theorem abc_round_e(): vector_get(ABC_ROUND.working, 4, 0) = 0xfa2a4622 { refl }

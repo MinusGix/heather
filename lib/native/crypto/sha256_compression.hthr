@@ -19,7 +19,7 @@
 // A word is 32 bits in the context and 64 in the code, so the word
 // functions (`sha256_round.hthr`) take each `zero_extend`ed and their
 // results are `truncate`d where stored. An element at a word index is
-// `vector_at(t.f, i)` and stored by `vector_put(t.f, i, x)`, each with a
+// `t.f.at(i)` and stored by `t.f.put(i, x)`, each with a
 // proof that `i` is inside the array, found from the loop's test where it
 // is called (`stored_words.hthr`). There is no value for past the end.
 //
@@ -89,7 +89,7 @@ import sha256_working;
 runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
     decreases (64 - i).toNat() {
     if h: i < 64 {
-        let t1 = s.t1(i, vector_at(s.schedule, i).zero_extend(32));
+        let t1 = s.t1(i, s.schedule.at(i).zero_extend(32));
         s.turn(t1);
         s.rounds(i + 1)
     } else {
@@ -101,7 +101,7 @@ runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
 runtime fn Sha256::end(mut self s: Sha256, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
-        s.hash := vector_put(s.hash, i, vector_at(s.hash, i) + vector_at(s.working, i));
+        s.hash := s.hash.put(i, s.hash.at(i) + s.working.at(i));
         s.end(i + 1)
     } else {
         i

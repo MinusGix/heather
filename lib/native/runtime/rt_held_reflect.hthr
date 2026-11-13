@@ -559,9 +559,9 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
         Succ(f) => rt_held_own(f, k, record, settled, value, base, fname).bind(λ same => match same {
             True => pure(Some(Pair(st, []))),
             False => view(value).bind(λ v => {
-                // `vector_put(v, i, x, _)` is the update at a word that
+                // `v.put(i, x, _)` (`Vec::put`) is the update at a word that
                 // carries its proof: its index is the word itself.
-                let put: Bool = match v { HGlobal(_, name, _) => Known::str_same(rt_base_name(name), "vector_put"), _ => False };
+                let put: Bool = match v { HGlobal(_, name, _) => rt_vec_member(name, "put"), _ => False };
                 let update: Option<Pair<Handle, Pair<Handle, Handle>>> = match v {
                     HGlobal(_, name, args) => match put || Known::str_same(rt_base_name(name), "vector_update") {
                         False => None,
@@ -573,7 +573,7 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                 // The field with a byte of its bytes replaced at a word:
                 // the checked byte store, of the byte as a word.
                 let byte: Option<Pair<Handle, Pair<Handle, Handle>>> = match v {
-                    HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_put_byte_be") {
+                    HGlobal(_, name, args) => match rt_vec_member(name, "put_byte_be") {
                         False => None,
                         True => args.nth(0).and_then(λ inner => args.nth(1).and_then(λ i => args.nth(2).map(λ x => Pair(inner, Pair(i, x))))),
                     },
@@ -627,7 +627,7 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                             _ => pure(None),
                         }),
                         Some(i) => match put {
-                          False => rt_refuse("an element of the array field `" ++ fname ++ "` stored by `vector_update` at a word's `toNat()`, which stores nothing past the end: write `vector_put(t." ++ fname ++ ", i, x)`, whose proof that `i` is inside is found where it is called"),
+                          False => rt_refuse("an element of the array field `" ++ fname ++ "` stored by `vector_update` at a word's `toNat()`, which stores nothing past the end: write `t." ++ fname ++ ".put(i, x)`, whose proof that `i` is inside is found where it is called"),
                           True => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
                             None => pure(None),
                             Some(o) => {
@@ -792,7 +792,7 @@ fn rt_held_current(cx: HeldCx, w: HeldWalk, r: Handle) → Tac<Bool> {
 // field stored as a word, or an element of an array of them.
 fn rt_held_reads(cx: HeldCx, w: HeldWalk, h: Handle, v: Head) → Tac<Bool> {
     let element: Option<Handle> = match v {
-        HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_index") || Known::str_same(rt_base_name(name), "vector_at") || Known::str_same(rt_base_name(name), "vector_get") {
+        HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_index") || rt_vec_member(name, "at") || Known::str_same(rt_base_name(name), "vector_get") {
             True => args.nth(0),
             False => None,
         },

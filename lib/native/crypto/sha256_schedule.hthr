@@ -67,9 +67,9 @@ import rt_held_reflect;
 runtime fn Sha256::expand(mut self s: Sha256, j: u64) → u64
     decreases (48 - j).toNat() {
     if h: j < 48 {
-        s.schedule := vector_put(s.schedule, j + 16,
-            sha256_next(vector_at(s.schedule, j + 14).zero_extend(32), vector_at(s.schedule, j + 9).zero_extend(32),
-                vector_at(s.schedule, j + 1).zero_extend(32), vector_at(s.schedule, j).zero_extend(32)).truncate(32, 32));
+        s.schedule := s.schedule.put(j + 16,
+            sha256_next(s.schedule.at(j + 14).zero_extend(32), s.schedule.at(j + 9).zero_extend(32),
+                s.schedule.at(j + 1).zero_extend(32), s.schedule.at(j).zero_extend(32)).truncate(32, 32));
         s.expand(j + 1)
     } else {
         j
@@ -80,7 +80,7 @@ runtime fn Sha256::expand(mut self s: Sha256, j: u64) → u64
 runtime fn Sha256::begin(mut self s: Sha256, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
-        s.working := vector_put(s.working, i, vector_at(s.hash, i));
+        s.working := s.working.put(i, s.hash.at(i));
         s.begin(i + 1)
     } else {
         i

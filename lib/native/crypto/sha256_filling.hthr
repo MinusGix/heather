@@ -81,7 +81,7 @@ import sha256_compression;
 // is tested here and nothing is stored past the block.
 runtime fn Sha256::put(mut self s: Sha256, at, byte: u64) → u64 {
     if h: at < 64 {
-        s.schedule := vector_put_byte_be(s.schedule, at, byte.truncate(8, 56));
+        s.schedule := s.schedule.put_byte_be(at, byte.truncate(8, 56));
         at
     } else {
         at

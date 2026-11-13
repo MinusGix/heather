@@ -914,13 +914,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
 
    **An element at an index that is a word** is built
    (`lib/_tests/native/runtime/runtime_held_index_tests.hthr`):
-   `vector_at(t.f, i)` reads it and `t.f := vector_put(t.f, i, x)`
-   stores it, at an array of words, with `i` the word itself.
+   `t.f.at(i)` reads it and `t.f := t.f.put(i, x)` stores it, at an
+   array of words, with `i` the word itself. They are methods of the
+   vector type (`Vec::at`, `Vec::put`).
 
    The element **takes a proof that the index is inside**, and the
    proof is found, not written (Minus, 2026-11-13: a value for past the
-   end is a sign of too little automation). `vector_at`, `vector_put`
-   and `vector_put_byte_be` (`stored_words.hthr`) each have a last
+   end is a sign of too little automation). `Vec::at`, `Vec::put`
+   and `Vec::put_byte_be` (`stored_words.hthr`) each have a last
    parameter `inside: i.toNat() < n := bv_omega`: left out, the search
    reads the tests around the call (`if h: i < 64`) and the call is
    refused where it finds none. So a loop is written with a counter its
@@ -980,9 +981,9 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      and the accessor's laws are the codec's there. A store's offset and
      count are read off the literals that bound them, as a field's
      offset is; a read needs no such knowledge.
-   - *Reflector.* `vector_at` at a field of the record stands for the
+   - *Reflector.* `Vec::at` at a field of the record stands for the
      accessor's checked read at its index word; a field's new value that
-     is the field under `vector_put`s is one store for each, the
+     is the field under `Vec::put`s is one store for each, the
      innermost first. The index is any word the body computes, and the
      proof is not read.
    - *Generator.* An array is marked whole, by its part: one entry and

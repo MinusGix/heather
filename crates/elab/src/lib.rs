@@ -1891,6 +1891,9 @@ impl measure::BinderTys for Elaborator {
     fn default_goals(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder], call: &Expr) -> Vec<measure::FoundGoal> {
         MeasureContext(self).measure_default_goals(decl, signatures, scope, call).unwrap_or_default()
     }
+    fn member_has_context_default(&self, name: &str) -> bool {
+        self.names.has_searched_member_base(name)
+    }
     fn has_context_default(&self, callee: &str) -> bool {
         NameLookup(self).key_of_kinds(callee, &[NameKind::Global])
             .and_then(|key| self.names.global(&key).map(|g| g.params.iter()

@@ -1,7 +1,7 @@
 // Probes for an array field's element at an index that is a word, in a
 // function of a laid record (`lib/native/runtime/rt_held_reflect.hthr`,
-// docs/layout-design.md §9.5): `vector_at(t.f, i)` reads it and
-// `t.f := vector_put(t.f, i, x)` stores it, each taking a proof that `i`
+// docs/layout-design.md §9.5): `t.f.at(i)` reads it and
+// `t.f := t.f.put(i, x)` stores it, methods of the vector type, each taking a proof that `i`
 // is inside the array, found where it is called from the tests around the
 // call (`inside: i.toNat() < n := bv_omega`). There is no value for past
 // the end. The code still makes the accessor's compare, which is never
@@ -64,10 +64,10 @@ import rt_held_loop;
 laid(endian := BigEndian) record Sums { parts: [u32; 4], count: u64 }
 
 // An element read at a word, added to a word field. The test is what says
-// the word is inside, and the proof `vector_at` takes is found from it.
+// the word is inside, and the proof `at` takes is found from it.
 runtime fn Sums::tally(mut self s: Sums, i: u64) → u64 {
     if h: i < 4 {
-        s.count := vector_at(s.parts, i).zero_extend(32) + s.count;
+        s.count := s.parts.at(i).zero_extend(32) + s.count;
         i
     } else {
         i
@@ -77,7 +77,7 @@ runtime fn Sums::tally(mut self s: Sums, i: u64) → u64 {
 // An element stored at a word.
 runtime fn Sums::put(mut self s: Sums, i, w: u64) → u64 {
     if h: i < 4 {
-        s.parts := vector_put(s.parts, i, w.truncate(32, 32));
+        s.parts := s.parts.put(i, w.truncate(32, 32));
         w
     } else {
         w
@@ -88,9 +88,9 @@ runtime fn Sums::put(mut self s: Sums, i, w: u64) → u64 {
 // three.
 runtime fn Sums::mix(mut self s: Sums, i: u64) → u64 {
     if h: i < 2 {
-        let a = vector_at(s.parts, i + 1);
-        let b = vector_at(s.parts, i + 2);
-        s.parts := vector_put(s.parts, i, a + b);
+        let a = s.parts.at(i + 1);
+        let b = s.parts.at(i + 2);
+        s.parts := s.parts.put(i, a + b);
         s.count := s.count + 1;
         i
     } else {
@@ -99,7 +99,7 @@ runtime fn Sums::mix(mut self s: Sums, i: u64) → u64 {
 }
 
 // An element at a numeral: the proof is found with nothing to read.
-runtime fn Sums::third(self s: Sums) → u64 { vector_at(s.parts, 2).zero_extend(32) }
+runtime fn Sums::third(self s: Sums) → u64 { s.parts.at(2).zero_extend(32) }
 
 // An element stored at a numeral after a call of another function of the
 // record: the accessor's own store where that element lies, with no test.
@@ -155,9 +155,9 @@ laid(endian := BigEndian) record Sched { w: [u64; 8], rounds: u64 }
 runtime fn Sched::expand(mut self s: Sched, j: u64) → u64
     decreases (6 - j).toNat() {
     if h: j < 6 {
-        let a = vector_at(s.w, j + 1);
-        let b = vector_at(s.w, j);
-        s.w := vector_put(s.w, j + 2, a + b);
+        let a = s.w.at(j + 1);
+        let b = s.w.at(j);
+        s.w := s.w.put(j + 2, a + b);
         s.expand(j + 1)
     } else {
         s.rounds
@@ -180,7 +180,7 @@ theorem expand_bytes(): Sched::expand::bytes(SCHED_BYTES, 72, 0).after = [0, 0, 
 // found their own proofs and the kernel was left to compare them.
 fn spread_words(v: [u32; 64], j: u64) → [u32; 64]
     decreases (48 - j).toNat() {
-    if h: j < 48 { spread_words(vector_put(v, j + 16, vector_at(v, j)), j + 1) } else { v }
+    if h: j < 48 { spread_words(v.put(j + 16, v.at(j)), j + 1) } else { v }
 }
 
 theorem spread_unfolds(v: [u32; 64], j: u64): True { let step = spread_words_unfold(v, j); trivial }
@@ -189,14 +189,14 @@ theorem spread_unfolds(v: [u32; 64], j: u64): True { let step = spread_words_unf
 // What is refused, each by its reason.
 
 // No test says the word is inside, so no proof is found.
-// expect-error: `vector_at`'s `inside` was left to its default, which did not give
-runtime fn Sums::loose(self s: Sums, i: u64) → u64 { vector_at(s.parts, i).zero_extend(32) }
+// expect-error: `at`'s `inside` was left to its default, which did not give
+runtime fn Sums::loose(self s: Sums, i: u64) → u64 { s.parts.at(i).zero_extend(32) }
 
 // The test is too weak for the index.
-// expect-error: `vector_put`'s `inside` was left to its default, which did not give
+// expect-error: `put`'s `inside` was left to its default, which did not give
 runtime fn Sums::wide(mut self s: Sums, i, w: u64) → u64 {
     if h: i < 5 {
-        s.parts := vector_put(s.parts, i, w.truncate(32, 32));
+        s.parts := s.parts.put(i, w.truncate(32, 32));
         w
     } else {
         w
@@ -208,7 +208,7 @@ runtime fn Sums::wide(mut self s: Sums, i, w: u64) → u64 {
 // (issues/runtime-record-function-limits.md).
 // expect-error: a value of its reflection is of a form that is not written out yet
 runtime fn Sums::part(self s: Sums, i: u64) → u64 {
-    if h: i < 4 { vector_at(s.parts, i).zero_extend(32) + s.count } else { s.count }
+    if h: i < 4 { s.parts.at(i).zero_extend(32) + s.count } else { s.count }
 }
 
 // The total read, which answers a value past the end, is not an element's.
@@ -229,7 +229,7 @@ runtime fn Sums::dropped(mut self s: Sums, i, w: u64) → u64 {
 // store of a byte, where the word store is four.
 runtime fn Sums::tag(mut self s: Sums, i, b: u64) → u64 {
     if h: i < 16 {
-        s.parts := vector_put_byte_be(s.parts, i, b.truncate(8, 56));
+        s.parts := s.parts.put_byte_be(i, b.truncate(8, 56));
         i
     } else {
         i
@@ -246,4 +246,4 @@ theorem tag_held(own: List<u8>, s: Sums, length, i, b: u64, holds: Sums::stored(
 theorem tag_bytes(): Sums::tag::bytes(SUMS_BYTES, 24, 6, 0xab).after = [0, 0, 0, 1, 0, 0, 0xab, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
 theorem tag_past(): Sums::tag::bytes(SUMS_BYTES, 24, 16, 0xab).after = SUMS_BYTES { refl }
 // And at the record: the second word with its third byte replaced.
-theorem tag_word(): vector_put_byte_be([1, 2, 3, 4], 6, BitVec::ofNat(0xab)) = [1, 0xab02, 3, 4] { refl }
+theorem tag_word(): Vec::put_byte_be([1, 2, 3, 4], 6, BitVec::ofNat(0xab)) = [1, 0xab02, 3, 4] { refl }

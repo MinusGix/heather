@@ -159,6 +159,9 @@ pub(crate) trait BinderTys {
     fn default_goals(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[Binder], call: &Expr) -> Vec<FoundGoal>;
     /// Whether the global `callee` has a parameter defaulted to such a search.
     fn has_context_default(&self, callee: &str) -> bool;
+    /// Whether some type's member of this base name has one: a method call
+    /// `v.name(…)` may then leave a proof to it.
+    fn member_has_context_default(&self, name: &str) -> bool;
 }
 
 /// A proof a call leaves to its parameter's default: the parameter, the goal
@@ -397,6 +400,9 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
             if let ExprKind::Var(n) = callee && n != name && tys.has_context_default(n) {
                 any = true;
             }
+        }
+        if let ExprKind::Dot { name: member, args: Some(_), .. } = &x.kind && tys.member_has_context_default(member) {
+            any = true;
         }
     };
     for s in &decl.body.stmts {
@@ -2668,14 +2674,15 @@ impl<'a> Rewrite<'a> {
                 tyargs,
                 args,
                 named,
-            } => ExprKind::Dot {
-                recv: Box::new(self.expr(recv)),
-                name: name.clone(),
-                tyargs: tyargs.clone(),
-                args: args
-                    .as_ref()
-                    .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
-                named: named
+            } => {
+                // A method call that may leave a proof to a search
+                // (`v.at(i)`): asked as a call of a global is.
+                let given = if self.found_only && args.is_some() && self.tys.member_has_context_default(name) {
+                    self.found_proofs(e, named)
+                } else {
+                    Vec::new()
+                };
+                let mut named: Vec<heather_syntax::NamedArg> = named
                     .iter()
                     .map(|n| heather_syntax::NamedArg {
                         name: n.name.clone(),
@@ -2683,8 +2690,18 @@ impl<'a> Rewrite<'a> {
                         expr: self.expr(&n.expr),
                         span: n.span,
                     })
-                    .collect(),
-            },
+                    .collect();
+                named.extend(given);
+                ExprKind::Dot {
+                    recv: Box::new(self.expr(recv)),
+                    name: name.clone(),
+                    tyargs: tyargs.clone(),
+                    args: args
+                        .as_ref()
+                        .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
+                    named,
+                }
+            }
             ExprKind::Index { recv, idx } => ExprKind::Index {
                 recv: Box::new(self.expr(recv)),
                 idx: Box::new(self.expr(idx)),
