@@ -111,15 +111,17 @@ fn HeldCall::add(cs: List<HeldCall>, c: HeldCall) → List<HeldCall> {
 // A function of a laid record after it was walked: its reflection, the
 // program's pure functions and computations, the record and its fields,
 // how many words it takes beside the record, whether it changes the
-// record or only reads it, and the functions of the record it calls.
+// record or only reads it, the functions of the record it calls, and
+// whether it is a loop (a function that `decreases`, its body ending in
+// its own call).
 record HeldReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat>, record: Handle, record_name: String, stored: GlobalRef, fields: List<HeldField>,
-    operands: Nat, changes: Bool, calls: List<HeldCall> }
+    operands: Nat, changes: Bool, calls: List<HeldCall>, measured: Bool }
 
 // A term applied to arguments.
 fn rt_ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
 
 fn rt_held_ends<A>() → Tac<A> {
-    rt_refuse("a function of a laid record ends in `Mutated(record, value)`, or in a `match` on a `Bool` whose arms do")
+    rt_refuse("a function of a laid record ends in `Mutated(record, value)`, in a `match` on a `Bool` whose arms do, or (where it `decreases`) in its own call")
 }
 
 // The accessor of a field's codec: the instance `Accessor<B>(codec)`, by
@@ -432,11 +434,13 @@ fn rt_held_stores(fuel: Nat, k: Known, w: HeldStored, sets: List<HeldSet>) → T
 // What the walk reads by: pure code's table, the record's type, its
 // local and the span's, the fields and what each stands for, and the
 // local a new one is assumed under, and the terms the body being walked
-// is (a branch's scrutinee and arms, or an end).
-record HeldCx { k: Known, names: FileNames, ty: Nat, record: Nat, span: Nat, fs: List<HeldField>, named: List<FieldTerm>, under: LocalRef, roots: List<Handle> }
+// is (a branch's scrutinee and arms, or an end). `ih` is the local a
+// function that `decreases` calls itself through, in its step.
+record HeldCx { k: Known, names: FileNames, ty: Nat, record: Nat, span: Nat, fs: List<HeldField>, named: List<FieldTerm>, under: LocalRef, roots: List<Handle>,
+    ih: Option<Nat> }
 
 // The walk of the body `roots` are: what a call's reads are looked for in.
-fn HeldCx::rooted(self cx: HeldCx, roots: List<Handle>) → HeldCx { HeldCx(cx.k, cx.names, cx.ty, cx.record, cx.span, cx.fs, cx.named, cx.under, roots) }
+fn HeldCx::rooted(self cx: HeldCx, roots: List<Handle>) → HeldCx { HeldCx(cx.k, cx.names, cx.ty, cx.record, cx.span, cx.fs, cx.named, cx.under, roots, cx.ih) }
 
 // Where the walk is: the pure walk's state, the stores and calls so far
 // (the last first), the program's computations, the calls made, the call
@@ -799,6 +803,28 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
                     },
                 }
             },
+            // The function's own call, in its step: the record it is made
+            // on is stored, and the loop goes round on the span's place,
+            // its length word and the call's words.
+            HLocal(x, args) => match cx.ih.map(λ i => i.same(x.id)).unwrap_or(False) {
+                False => rt_held_ends(),
+                True => match args {
+                    Nil => rt_refuse("a loop's own call without its record"),
+                    Cons(after, more) => {
+                        let operands = more.take(more.len().pred());
+                        let at = cx.rooted(Cons(after, operands));
+                        let settled <- rt_held_do(f, at, w, Settle(after));
+                        let ready <- rt_held_do(f, at, settled.w, Ready(operands));
+                        let still <- rt_held_still(settled.w, ready.w);
+                        let k = cx.known(ready.w);
+                        let ro <- rt_held_operands(f, k, ready.w.st, operands);
+                        let done <- rt_held_stores(f, k, HeldStored(ro.fst, ready.w.segs, ready.w.cfuns), settled.sets);
+                        let st = done.st;
+                        pure(HeldEnd(FSeg::close(FSeg::lets(st.lets) ++ done.segs,
+                            FTm::Again(Cons(st.index(0), Cons(st.index(1), ro.snd.map(λ l => st.index(l)))))), st.funs, done.cfuns, ready.w.held))
+                    },
+                },
+            },
             _ => rt_held_ends(),
         }),
     }
@@ -811,7 +837,7 @@ record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Ha
 
 fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef) → Tac<HeldWords> {
     match fuel {
-        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Zero => pure(HeldWords([], [], h, under)),
         Succ(f) => view(h).bind(λ v => match v {
             HLam(dom) => k.ty(dom).bind(λ at => match (match at { Word(w) => w.same(64), _ => False }) {
                 False => rt_refuse("a function of a laid record takes 64-bit words after its record, for now"),
@@ -901,9 +927,24 @@ fn rt_held_reached(fs: List<HeldField>, offsets: List<Nat>) → List<HeldField> 
 }
 
 // The function `g`, whose first parameter is the record.
-fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef) → Tac<HeldReflected> {
+// A function that `decreases` is read from its step `g::body`, `λ k again
+// record x… h => …`, its recursion `again(record′, y…, p)`.
+fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) → Tac<HeldReflected> {
     let fuel = 4096;
-    let b0 <- body(g).bind(λ c => rt_accepted("its body", c));
+    let step <- lookup(name ++ "::body");
+    let entered: Tac<Pair<Handle, Option<Pair<Nat, Nat>>>> = match step {
+        Refused(_) => body(g).bind(λ c => rt_accepted("its body", c)).bind(λ b => pure(Pair(b, None))),
+        Accepted(s) => {
+            let t <- infer(Global(g)).bind(λ c => rt_accepted("its type", c));
+            let n <- rt_arity(fuel, t);
+            let sb <- body(s).bind(λ c => rt_accepted("its step's body", c));
+            let o1 <- open(sb, "k").bind(λ c => rt_accepted("its step's bound", c));
+            let o2 <- open(o1.body, "again").bind(λ c => rt_accepted("its step's recursion", c));
+            pure(Pair(o2.body, Some(Pair(o2.local.ref.id, n.pred()))))
+        },
+    };
+    let en <- entered;
+    let b0 = en.fst;
     let o <- open(b0, "record").bind(λ c => rt_accepted("its record parameter", c));
     let record = o.local.ty;
     let rv <- view(record);
@@ -919,14 +960,21 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef) → Tac<HeldRef
     });
     let cs <- ctors(record).bind(λ c => rt_accepted("its record's constructor", c));
     let ctor <- rt_held_ctor(tname, cs);
-    let ws <- rt_held_words(fuel, k, o.body, 2, o.local.ref);
+    let ws0 <- rt_held_words(match en.snd { None => fuel, Some(p) => p.snd }, k, o.body, 2, o.local.ref);
+    // A step takes its measure's proof after its words.
+    let opened: Tac<HeldWords> = match en.snd {
+        None => pure(ws0),
+        Some(_) => open(ws0.body, "h").bind(λ c => rt_accepted("its step's measure proof", c)).bind(λ oh =>
+            pure(HeldWords(ws0.locals, ws0.bound, oh.body, oh.local.ref))),
+    };
+    let ws <- opened;
     let result <- rt_held_result(k, names, record, ws.body);
     let word <- as_type(rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(64)])).bind(λ c => rt_accepted("a word's type", c));
     let bytes <- as_type(rt_ap(Global(GlobalRef(k.list)), [rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(8)])])).bind(λ c => rt_accepted("a span's type", c));
     let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
     let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
     let hf <- rt_held_fields(tname, o.local, stored, ctor.fields, Local(span.ref), Local(length.ref));
-    let cx = HeldCx(k.lending(1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body]);
+    let cx = HeldCx(k.lending(1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
     let st = RSt(2 + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), ws.bound)), k.funs);
     let w = HeldWalk(st, [], [], [], None, []);
     // A function that only reads the record is one value, its branches
@@ -943,6 +991,22 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef) → Tac<HeldRef
         Some(g) => match r.held.filter(λ c => c.bytes.same(g)) { Nil => False, Cons(_, _) => True },
         None => False,
     });
-    pure(HeldReflected(FFun(params, result.snd, r.term, 1), r.funs, r.cfuns, record, tname, stored,
-        hf.fields ++ rt_held_reached(hf.fields, rt_held_offsets(r.term, [], called)), ws.locals.len(), result.fst, r.held))
+    // The record's type as a handle under no binder: `record` lives under
+    // a step's.
+    let record_t <- as_type(Global(rg.fst)).bind(λ c => rt_accepted("its record's type", c));
+    // And its fields' terms likewise, read again at a record under none.
+    let fields: Tac<List<HeldField>> = match en.snd {
+        None => pure(hf.fields),
+        Some(_) => {
+            let cs1 <- ctors(record_t).bind(λ c => rt_accepted("its record's constructor", c));
+            let ctor1 <- rt_held_ctor(tname, cs1);
+            let record1 <- assume(Hd(record_t), "record", None).bind(λ c => rt_accepted("a record's local", c));
+            let span1 <- assume(Hd(bytes), "span", Some(record1.ref)).bind(λ c => rt_accepted("a span's local", c));
+            let length1 <- assume(Hd(word), "length", Some(span1.ref)).bind(λ c => rt_accepted("a length word's local", c));
+            rt_held_fields(tname, record1, stored, ctor1.fields, Local(span1.ref), Local(length1.ref)).bind(λ h => pure(h.fields))
+        },
+    };
+    let fs <- fields;
+    pure(HeldReflected(FFun(params, result.snd, r.term, 1), r.funs, r.cfuns, record_t, tname, stored,
+        fs ++ rt_held_reached(fs, rt_held_offsets(r.term, [], called)), ws.locals.len(), result.fst, r.held, match en.snd { None => False, Some(_) => True }))
 }
