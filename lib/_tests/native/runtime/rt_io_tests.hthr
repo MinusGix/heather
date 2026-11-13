@@ -57,15 +57,15 @@ theorem echo_reflected(): True { by reflects_io_as(["Io::echo_once"], [], [], [e
 // The pin: the computation means the method, world and all, at every world
 // and buffer.
 theorem echo_reflects(io: Io, buf: List<BitVec(8)>):
-    echo_rt().meaning(ETm::plain_world())(io)(buf) = Io::echo_once(io, buf) { refl }
+    echo_rt().meaning(ETm::plain_world(), [])(io)(buf) = Io::echo_once(io, buf) { refl }
 
 // Run at a piped world: "hi" comes back out.
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 fn piped() → Io { Io::of(World::piped([[b(104), b(105)]])) }
 fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
 
-theorem echo_writes(): echo_rt().meaning(ETm::plain_world())(piped())(zeros()).after.sent(Io::stdout()) = [b(104), b(105)] { refl }
-theorem echo_result(): echo_rt().meaning(ETm::plain_world())(piped())(zeros()).value = BitVec::ofNat(2) { refl }
+theorem echo_writes(): echo_rt().meaning(ETm::plain_world(), [])(piped())(zeros()).after.sent(Io::stdout()) = [b(104), b(105)] { refl }
+theorem echo_result(): echo_rt().meaning(ETm::plain_world(), [])(piped())(zeros()).value = BitVec::ofNat(2) { refl }
 
 // A computation whose write names the buffer before the read filled it is
 // another program: the pin refuses it.
@@ -76,7 +76,7 @@ fn echo_stale_rt() → EFun {
 }
 // expect-error(kernel): the kernel rejected `echo_stale_misreflects`: NotConvertible
 theorem echo_stale_misreflects(io: Io, buf: List<BitVec(8)>):
-    echo_stale_rt().meaning(ETm::plain_world())(io)(buf) = Io::echo_once(io, buf) { refl }
+    echo_stale_rt().meaning(ETm::plain_world(), [])(io)(buf) = Io::echo_once(io, buf) { refl }
 
 // ---------------------------------------------------------------------------
 // The reflector over more shapes.
@@ -110,7 +110,7 @@ fn read_file_rt() → EFun {
 theorem read_file_reflected(): True { by reflects_io_as(["Io::read_file"], [], [], [read_file_rt()]) }
 
 theorem read_file_reflects(io: Io, path: List<BitVec(8)>, buf: List<BitVec(8)>):
-    read_file_rt().meaning(ETm::plain_world())(io)(path, buf) = Io::read_file(io, path, buf) { refl }
+    read_file_rt().meaning(ETm::plain_world(), [])(io)(path, buf) = Io::read_file(io, path, buf) { refl }
 
 // A method that never calls: `Pure`, the world unchanged.
 fn Io::no_call(mut self io: Io, n: BitVec(64)) → BitVec(64) { n.add(n) }
@@ -120,7 +120,7 @@ theorem no_call_reflected(): True {
 }
 
 theorem no_call_reflects(io: Io, n: BitVec(64)):
-    EFun([Word(64)], Word(64), Pure(Prim(Add(64), [0, 0]))).meaning(ETm::plain_world())(io)(n) = Io::no_call(io, n) { refl }
+    EFun([Word(64)], Word(64), Pure(Prim(Add(64), [0, 0]))).meaning(ETm::plain_world(), [])(io)(n) = Io::no_call(io, n) { refl }
 
 // ---------------------------------------------------------------------------
 // Linearity: what the reflector refuses, at the call.

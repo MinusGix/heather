@@ -75,7 +75,7 @@ fn echo_locs() → List<Loc> { [InBuffer(0)] }
 
 fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
 
-fn echo_lowered() → Option<ELowered> { echo_all_prog().lower(ETm::plain_world(), echo_g(), echo_locs(), 1) }
+fn echo_lowered() → Option<ELowered> { echo_all_prog().lower(ETm::plain_world(), [], echo_g(), echo_locs(), 1) }
 
 theorem echo_all_lowers(): lowers(echo_lowered()) = True { refl }
 
@@ -116,7 +116,7 @@ theorem echo_surface_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(E
 }
 
 // The program's meaning runs to the same end.
-fn echo_meaning() → Partial(Mutated<Io, BitVec(64)>) { echo_all_prog().sem(ETm::plain_world(), echo_g(), Pair(zeros(), trivial), piped()) }
+fn echo_meaning() → Partial(Mutated<Io, BitVec(64)>) { echo_all_prog().sem(ETm::plain_world(), [], echo_g(), Pair(zeros(), trivial), piped()) }
 
 theorem echo_meaning_sent(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), echo_meaning(), λ m => m.after.sent(Io::stdout())),
     [b(104), b(105), b(121), b(111)]) { Returns(30, refl) }
@@ -133,10 +133,10 @@ theorem echo_meaning_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(E
 fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(call, perform)(start(buf)),
             λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
-        λ io => echo_all_prog().sem(ETm::plain_world(), echo_g(), Pair(buf, trivial), io))
+        λ io => echo_all_prog().sem(ETm::plain_world(), [], echo_g(), Pair(buf, trivial), io))
 {
-    echo_all_prog().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), perform, start(buf), Pair(buf, trivial),
+    echo_all_prog().lower_reads(ETm::plain_world(), [], echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(0, call), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
@@ -146,12 +146,12 @@ fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
 // The buffer rebound to itself as it was before the read wrote over it
 // (variable 8): gone, so refused.
 theorem stale_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
-    ELoop::While(going(), pass_body(), [3, 8], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+    ELoop::While(going(), pass_body(), [3, 8], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), [], echo_g(), echo_locs(), 1)) = False { refl }
 
 // A condition that is a word, not a bit.
 theorem word_cond_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
-    ELoop::While(Var(0), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+    ELoop::While(Var(0), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), [], echo_g(), echo_locs(), 1)) = False { refl }
 
 // `n` rebound to the buffer.
 theorem code_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
-    ELoop::While(going(), pass_body(), [4, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+    ELoop::While(going(), pass_body(), [4, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), [], echo_g(), echo_locs(), 1)) = False { refl }

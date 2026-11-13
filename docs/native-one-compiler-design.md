@@ -1424,6 +1424,32 @@ Each is a PR and ends with something that runs.
       otherwise be built twice; the U5 note finds they nest instead
       (its §2.8), so the node is built once, in its own round
       (`issues/rt-io-calls-functions.md`), and does not wait on U5.
+    - *4c-5 (built 2026-11-12):* that node. `ETm::Lend(f, cap, buf,
+      args, body)` lends buffer variable `buf` and word variables `args`
+      to function `f` of a table of lent functions (`Lent`: an arity and
+      a run returning the bytes left and a word), and binds the bytes and
+      the word. Its meaning is the table's run, the world unchanged; its
+      lowering is `Compute` of a region `Call(base + f, ids, next)`, the
+      functions lent numbered after the world's pure ones. Every earlier
+      variable on the buffer is gone afterwards (`Loc::forget_all`), so a
+      read of the bytes before the call is refused. The soundness theorems
+      take one more hypothesis, `ETm::LentsAgree`: the program's function
+      `base + f`, lent the file's first buffer, answers as the table's run
+      and leaves the rest of the file. The lowering checks the buffer is
+      the first (the prefix limit, `issues/source-buffers-as-views.md`).
+      `Kept` at a buffer is now `env.buffers.nth(id) = Some(v)`, so a
+      buffer's being there is part of the invariant. A loop's condition
+      was moved to a fresh word at one bit, which the compiler refuses;
+      a bit whose region's last node writes it at one bit now stays in
+      that port (`ETm::placed`, `ETm::bit_kept_sound`). *Runs:* `tr` as
+      one `ELoop` over `Io` (read, `Lend` to `raise_span`, write, while
+      the count is nonzero) is proved to read as its meaning, compiles
+      (`tr_lend_source`), and matches GNU tr
+      (`lib/_tests/native/runtime/rt_io_lend_tests.hthr`,
+      `native_tools.rs`). *Not here:* the reflector does not read a call
+      of a `runtime fn` on a buffer as `Lend`, and it reads no loops yet;
+      a failed write cannot end the computation with status 1, since
+      `ETm` has no exit.
   - *Step 4d, with U5:* `write-elf`'s own byte nodes move to the shared
     lowering. A program's own region reaches its buffers by the data
     region's addresses, as immediates; the shared lowering reads a home

@@ -336,7 +336,7 @@ theorem ELoop::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc
                 InBuffer(b2) => λ c1 c2 => match b.eq_dec(b2) as λ q => ELoop::MovesHold(tys, Cons(Bytes(c), rest), Cons(InBuffer(b), ds), Cons(InBuffer(b2), ss),
                         match q as λ _ => Option<Stmt> { Inl(_) => Some(more), Inr(_) => None }) {
                     Inl(e) => ELoop::move_stay_sound(tys, Bytes(c), rest, InBuffer(b), ds, InBuffer(b2), ss, more, ih,
-                        λ env v (k: env.buffer(b2) = v) => j(sym(e), λ x _ => env.buffer(x) = v, k), c2, refl),
+                        λ env v (k: env.buffers.nth(b2) = Some(v)) => j(sym(e), λ x _ => env.buffers.nth(x) = Some(v), k), c2, refl),
                     Inr(_) => trivial,
                 },
                 Gone => λ _ _ => trivial,
@@ -402,22 +402,22 @@ fn ELoop::go<S>(b: Bool, s: S) → Step<S, S> {
 
 // One pass: the body, the state rebound from where it ends, and the
 // condition tested again.
-fn ELoop::step(w: rt::World, g: List<Ty>, cond: Tm, body: ETm, rebind: List<Nat>) →
+fn ELoop::step(w: rt::World, ls: List<Lent>, g: List<Ty>, cond: Tm, body: ETm, rebind: List<Nat>) →
     rt::Env(w.tys, g) → Io → Mutated<Io, Step<rt::Env(w.tys, g), rt::Env(w.tys, g)>>
 {
-    λ vals io => Mutated(body.sem_end(w, g, vals, io).after,
+    λ vals io => Mutated(body.sem_end(w, ls, g, vals, io).after,
         ELoop::go(ELoop::truth(w.tys, Tm::ty(cond, w, g),
-                Tm::sem(cond, w, g, ELoop::gather(w.tys, body.ctx_end(w, g), body.sem_end(w, g, vals, io).value, g, rebind))),
-            ELoop::gather(w.tys, body.ctx_end(w, g), body.sem_end(w, g, vals, io).value, g, rebind)))
+                Tm::sem(cond, w, g, ELoop::gather(w.tys, body.ctx_end(w, g), body.sem_end(w, ls, g, vals, io).value, g, rebind))),
+            ELoop::gather(w.tys, body.ctx_end(w, g), body.sem_end(w, ls, g, vals, io).value, g, rebind)))
 }
 
 // `while cond { body }`: nothing when the condition fails at the start,
 // else the passes until it fails, for as long as that takes.
-fn ELoop::run_while(w: rt::World, g: List<Ty>, cond: Tm, body: ETm, rebind: List<Nat>, vals: rt::Env(w.tys, g), io: Io) →
+fn ELoop::run_while(w: rt::World, ls: List<Lent>, g: List<Ty>, cond: Tm, body: ETm, rebind: List<Nat>, vals: rt::Env(w.tys, g), io: Io) →
     Partial(Mutated<Io, rt::Env(w.tys, g)>)
 {
     match ELoop::truth(w.tys, Tm::ty(cond, w, g), Tm::sem(cond, w, g, vals)) {
-        True => Io::iterate(Io::total(ELoop::step(w, g, cond, body, rebind)), vals, io),
+        True => Io::iterate(Io::total(ELoop::step(w, ls, g, cond, body, rebind)), vals, io),
         False => CRet(Mutated(io, vals)),
     }
 }
@@ -425,12 +425,12 @@ fn ELoop::run_while(w: rt::World, g: List<Ty>, cond: Tm, body: ETm, rebind: List
 // The meaning: world threading in `Partial`, at the code the program
 // returns. A function of the context, so that the recursion is on the
 // program.
-fn ELoop::sem(self p: ELoop, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Partial(Mutated<Io, p.ty(w, g).sem(w.tys)>) {
+fn ELoop::sem(self p: ELoop, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Partial(Mutated<Io, p.ty(w, g).sem(w.tys)>) {
     match p {
-        Done(t) => λ g vals io => CRet(t.sem(w, g, vals, io)),
-        Seq(t, rest) => λ g vals io => rest.sem(w, t.ctx_end(w, g), t.sem_end(w, g, vals, io).value, t.sem_end(w, g, vals, io).after),
-        While(cond, body, rebind, rest) => λ g vals io => CoTree::bind(Events::none(), ELoop::run_while(w, g, cond, body, rebind, vals, io),
-            λ m => rest.sem(w, g, m.value, m.after)),
+        Done(t) => λ g vals io => CRet(t.sem(w, ls, g, vals, io)),
+        Seq(t, rest) => λ g vals io => rest.sem(w, ls, t.ctx_end(w, g), t.sem_end(w, ls, g, vals, io).value, t.sem_end(w, ls, g, vals, io).after),
+        While(cond, body, rebind, rest) => λ g vals io => CoTree::bind(Events::none(), ELoop::run_while(w, ls, g, cond, body, rebind, vals, io),
+            λ m => rest.sem(w, ls, g, m.value, m.after)),
     }
 }
 
@@ -452,18 +452,18 @@ fn ELoop::loop_stmt(c: Lowered, body: Stmt, moves: Stmt) → Stmt {
     Then(Compute(c.region), Branch(c.result, Repeat(ELoop::pass(c, body, moves), c.result), ELoop::skip()))
 }
 
-fn ELoop::lower(self p: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat) → Option<ELowered> {
+fn ELoop::lower(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat) → Option<ELowered> {
     match p {
-        Done(t) => t.lower(w, g, locs, next),
-        Seq(t, rest) => t.lower(w, g, locs, next).and_then(λ lt =>
-            rest.lower(w, t.ctx_end(w, g), lt.locs, lt.next).and_then(λ lr =>
+        Done(t) => t.lower(w, ls, g, locs, next),
+        Seq(t, rest) => t.lower(w, ls, g, locs, next).and_then(λ lt =>
+            rest.lower(w, ls, t.ctx_end(w, g), lt.locs, lt.next).and_then(λ lr =>
                 Some(ELowered(Then(lt.stmt, lr.stmt), lr.result, lr.next, lr.locs)))),
         While(cond, body, rebind, rest) => ELoop::check_bit(Tm::ty(cond, w, g)).and_then(λ _ =>
             ETm::lower_value(cond, w, g, locs, next).and_then(λ c =>
-            body.lower(w, g, locs, next).and_then(λ lb =>
+            body.lower(w, ls, g, locs, next).and_then(λ lb =>
             ELoop::sources(body.ctx_end(w, g), lb.locs, g, rebind).and_then(λ srcs =>
             ELoop::moves(g, locs, srcs).and_then(λ mv =>
-            rest.lower(w, g, locs, next).and_then(λ lr =>
+            rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                 Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs)))))))),
     }
 }
@@ -516,29 +516,31 @@ fn ELoop::back(t: Ty, tys: Nat → RecInfo, result: Nat, m: Mutated<Io, Flow>) �
 // What a lowering promises: from any environment holding the variables, at
 // any world, the statements' threading, its value read back, is the
 // program's meaning up to silent steps.
-fn ELoop::LowerHolds(self p: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<ELowered>) → Type {
+fn ELoop::LowerHolds(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<ELowered>) → Type {
     match r {
         None => True,
-        Some(l) => (call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) → (perform: PerformsCo()) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
+        Some(l) => (call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) →
+            ETm::LentsAgree(w.sigs.len(), ls, call) → (perform: PerformsCo()) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             Eutt<Mutated<Io, p.ty(w, g).sem(w.tys)>>(Events::none(),
                 CoTree::map(Events::none(), l.stmt.run(call, perform)(env, io), λ m => ELoop::back(p.ty(w, g), w.tys, l.result, m)),
-                p.sem(w, g, vals, io)),
+                p.sem(w, ls, g, vals, io)),
     }
 }
 
 // The rest of a program after a statement that left `flow`: its lowering's
 // promise, where the flow goes on holding the rest's variables.
-fn ELoop::rest_holds(rest: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, lr: ELowered,
-    rh: ELoop::LowerHolds(rest, w, g, locs, next, Some(lr)), call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)), perform: PerformsCo(),
+fn ELoop::rest_holds(rest: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, lr: ELowered,
+    rh: ELoop::LowerHolds(rest, w, ls, g, locs, next, Some(lr)), call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    lents: ETm::LentsAgree(w.sigs.len(), ls, call), perform: PerformsCo(),
     below: LocsBelow(locs, next), pos: 0 < next, vals: rt::Env(w.tys, g)) → (flow: Flow) → (io: Io) → flow.KeepsAll(w.tys, g, locs, vals) →
     Eutt<Mutated<Io, rest.ty(w, g).sem(w.tys)>>(Events::none(),
         CoTree::map(Events::none(), Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), Mutated(io, flow)),
             λ m => ELoop::back(rest.ty(w, g), w.tys, lr.result, m)),
-        rest.sem(w, g, vals, io))
+        rest.sem(w, ls, g, vals, io))
 {
     λ flow => match flow {
-        Onward(env) => λ io held => rh(call, still, agree, perform, env, vals, io, held, below, pos),
+        Onward(env) => λ io held => rh(call, still, agree, lents, perform, env, vals, io, held, below, pos),
         Exited(_) => λ io never => false_elim(never),
     }
 }
@@ -629,22 +631,23 @@ theorem ELoop::body_step(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, 
 
 // A whole pass: the source's and the meaning's leave the same world and go
 // on together.
-theorem ELoop::pass_rel(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, cond: Tm, c: Lowered,
+theorem ELoop::pass_rel(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, cond: Tm, c: Lowered,
     vh: ETm::ValueHolds(cond, w, g, locs, next, Some(c)), eb: Tm::ty(cond, w, g) = Bit,
-    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)), below: LocsBelow(locs, next), pos: 0 < next,
-    body: ETm, lb: ELowered, bh: ETm::LowerHolds(body, w, g, locs, next, Some(lb)), rebind: List<Nat>, srcs: List<Loc>, mv: Stmt,
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    lents: ETm::LentsAgree(w.sigs.len(), ls, call), below: LocsBelow(locs, next), pos: 0 < next,
+    body: ETm, lb: ELowered, bh: ETm::LowerHolds(body, w, ls, g, locs, next, Some(lb)), rebind: List<Nat>, srcs: List<Loc>, mv: Stmt,
     sh: ELoop::SourcesHold(w.tys, body.ctx_end(w, g), lb.locs, g, rebind, Some(srcs)), mh: ELoop::MovesHold(w.tys, g, locs, srcs, Some(mv))):
     (env: Env) → (vals: rt::Env(w.tys, g)) → ELoop::Held(w.tys, g, locs)(env, vals) → (io: Io) →
-    (ELoop::pass_total(call, c, lb.stmt, mv)(env, io).after = ELoop::step(w, g, cond, body, rebind)(vals, io).after) ∧
+    (ELoop::pass_total(call, c, lb.stmt, mv)(env, io).after = ELoop::step(w, ls, g, cond, body, rebind)(vals, io).after) ∧
     Io::StepRel(ELoop::Held(w.tys, g, locs), ELoop::Left(w.tys, g, locs),
-        ELoop::pass_total(call, c, lb.stmt, mv)(env, io).value, ELoop::step(w, g, cond, body, rebind)(vals, io).value)
+        ELoop::pass_total(call, c, lb.stmt, mv)(env, io).value, ELoop::step(w, ls, g, cond, body, rebind)(vals, io).value)
 {
     λ env vals held io => {
-        let bres = bh.right(call, still, agree, env, vals, io, held, below, pos);
+        let bres = bh.right(call, still, agree, lents, env, vals, io, held, below, pos);
         let mb = Stmt::thread(lb.stmt, call, env, io);
         let r = ELoop::body_step(w, g, locs, next, cond, c, vh, eb, call, still, agree, below, pos, body.ctx_end(w, g), lb.locs, rebind, srcs, mv, sh, mh,
-            body.sem_end(w, g, vals, io).value, mb.value, mb.after, bres.right.left);
-        ⟨trans(r.left, trans(bres.left.left, sym(body.sem_end_after(w, g, vals, io)))), r.right⟩
+            body.sem_end(w, ls, g, vals, io).value, mb.value, mb.after, bres.right.left);
+        ⟨trans(r.left, trans(bres.left.left, sym(body.sem_end_after(w, ls, g, vals, io)))), r.right⟩
     }
 }
 
@@ -653,75 +656,75 @@ theorem ELoop::pass_rel(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, c
 
 // A loop-free computation: its statements return what their threading
 // does, which lands where the meaning does.
-theorem ELoop::done_holds(t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat): (r: Option<ELowered>) →
-    ETm::LowerHolds(t, w, g, locs, next, r) → ELoop::LowerHolds(ELoop::Done(t), w, g, locs, next, r) {
+theorem ELoop::done_holds(t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat): (r: Option<ELowered>) →
+    ETm::LowerHolds(t, w, ls, g, locs, next, r) → ELoop::LowerHolds(ELoop::Done(t), w, ls, g, locs, next, r) {
     λ r => match r {
         None => λ _ => trivial,
-        Some(l) => λ h call still agree perform env vals io held below pos => {
+        Some(l) => λ h call still agree lents perform env vals io held below pos => {
             let m = Stmt::thread(l.stmt, call, env, io);
-            let lands = h.right(call, still, agree, env, vals, io, held, below, pos).left;
+            let lands = h.right(call, still, agree, lents, env, vals, io, held, below, pos).left;
             let ty = t.ty(w, g);
-            let same: (ELoop::back(ty, w.tys, l.result, m) = t.sem(w, g, vals, io)) =
+            let same: (ELoop::back(ty, w.tys, l.result, m) = t.sem(w, ls, g, vals, io)) =
                 eq2<Io, ty.sem(w.tys), Mutated<Io, ty.sem(w.tys)>>(λ a x => Mutated(a, x), lands.left,
-                    m.value.read_back_keeps(ty, w.tys, l.result, t.sem(w, g, vals, io).value, lands.right));
+                    m.value.read_back_keeps(ty, w.tys, l.result, t.sem(w, ls, g, vals, io).value, lands.right));
             Eutt::trans(Events::none(),
                 CoTree::map(Events::none(), l.stmt.run(call, perform)(env, io), λ m2 => ELoop::back(ty, w.tys, l.result, m2)),
-                CRet(ELoop::back(ty, w.tys, l.result, m)), CRet(t.sem(w, g, vals, io)),
+                CRet(ELoop::back(ty, w.tys, l.result, m)), CRet(t.sem(w, ls, g, vals, io)),
                 ELoop::bind_ret<Mutated<Io, Flow>, Mutated<Io, ty.sem(w.tys)>>(l.stmt.run(call, perform)(env, io), m,
                     λ m2 => CRet(ELoop::back(ty, w.tys, l.result, m2)), Stmt::run_straight(l.stmt, call, perform, h.left, env, io)),
-                ELoop::eutt_of_eq<Mutated<Io, ty.sem(w.tys)>>(CRet(ELoop::back(ty, w.tys, l.result, m)), CRet(t.sem(w, g, vals, io)),
+                ELoop::eutt_of_eq<Mutated<Io, ty.sem(w.tys)>>(CRet(ELoop::back(ty, w.tys, l.result, m)), CRet(t.sem(w, ls, g, vals, io)),
                     cong_fn(λ (x: Mutated<Io, ty.sem(w.tys)>) => CRet(x), same)))
         },
     }
 }
 
 // A loop-free computation, then the rest from where it ends.
-theorem ELoop::seq_holds(t: ETm, rest: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat,
-    lt: ELowered, ht: ETm::LowerHolds(t, w, g, locs, next, Some(lt)),
-    lr: ELowered, hr: ELoop::LowerHolds(rest, w, t.ctx_end(w, g), lt.locs, lt.next, Some(lr))):
-    ELoop::LowerHolds(ELoop::Seq(t, rest), w, g, locs, next, Some(ELowered(Then(lt.stmt, lr.stmt), lr.result, lr.next, lr.locs)))
+theorem ELoop::seq_holds(t: ETm, rest: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat,
+    lt: ELowered, ht: ETm::LowerHolds(t, w, ls, g, locs, next, Some(lt)),
+    lr: ELowered, hr: ELoop::LowerHolds(rest, w, ls, t.ctx_end(w, g), lt.locs, lt.next, Some(lr))):
+    ELoop::LowerHolds(ELoop::Seq(t, rest), w, ls, g, locs, next, Some(ELowered(Then(lt.stmt, lr.stmt), lr.result, lr.next, lr.locs)))
 {
-    λ call still agree perform env vals io held below pos => {
+    λ call still agree lents perform env vals io held below pos => {
         let ce = t.ctx_end(w, g);
         let mt = Stmt::thread(lt.stmt, call, env, io);
-        let res = ht.right(call, still, agree, env, vals, io, held, below, pos);
+        let res = ht.right(call, still, agree, lents, env, vals, io, held, below, pos);
         let ty = rest.ty(w, ce);
         let k = λ (m: Mutated<Io, Flow>) => CoTree::map(Events::none(), Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), m),
             λ m2 => ELoop::back(ty, w.tys, lr.result, m2));
-        let ve = t.sem_end(w, g, vals, io);
-        let after: (mt.after = ve.after) = trans(res.left.left, sym(t.sem_end_after(w, g, vals, io)));
+        let ve = t.sem_end(w, ls, g, vals, io);
+        let after: (mt.after = ve.after) = trans(res.left.left, sym(t.sem_end_after(w, ls, g, vals, io)));
         let pos2: (0 < lt.next) = Nat::lt_of_lt_of_le(0, next, lt.next, pos, res.right.right.right);
-        let rest_at = ELoop::rest_holds(rest, w, ce, lt.locs, lt.next, lr, hr, call, still, agree, perform, res.right.right.left, pos2, ve.value,
+        let rest_at = ELoop::rest_holds(rest, w, ls, ce, lt.locs, lt.next, lr, hr, call, still, agree, lents, perform, res.right.right.left, pos2, ve.value,
             mt.value, mt.after, res.right.left);
         Eutt::trans(Events::none(),
             CoTree::map(Events::none(), Stmt::run(Then(lt.stmt, lr.stmt), call, perform)(env, io), λ m2 => ELoop::back(ty, w.tys, lr.result, m2)),
             CoTree::bind(Events::none(), lt.stmt.run(call, perform)(env, io), k),
-            rest.sem(w, ce, ve.value, ve.after),
+            rest.sem(w, ls, ce, ve.value, ve.after),
             ELoop::bind_map<Mutated<Io, Flow>, Mutated<Io, Flow>, Mutated<Io, ty.sem(w.tys)>>(lt.stmt.run(call, perform)(env, io),
                 λ m => Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), m), λ m2 => ELoop::back(ty, w.tys, lr.result, m2)),
-            Eutt::trans(Events::none(), CoTree::bind(Events::none(), lt.stmt.run(call, perform)(env, io), k), k(mt), rest.sem(w, ce, ve.value, ve.after),
+            Eutt::trans(Events::none(), CoTree::bind(Events::none(), lt.stmt.run(call, perform)(env, io), k), k(mt), rest.sem(w, ls, ce, ve.value, ve.after),
                 ELoop::bind_ret<Mutated<Io, Flow>, Mutated<Io, ty.sem(w.tys)>>(lt.stmt.run(call, perform)(env, io), mt, k,
                     Stmt::run_straight(lt.stmt, call, perform, ht.left, env, io)),
-                j(after, λ y _ => Eutt<Mutated<Io, ty.sem(w.tys)>>(Events::none(), k(mt), rest.sem(w, ce, ve.value, y)), rest_at)))
+                j(after, λ y _ => Eutt<Mutated<Io, ty.sem(w.tys)>>(Events::none(), k(mt), rest.sem(w, ls, ce, ve.value, y)), rest_at)))
     }
 }
 
 // A loop, then the rest from the state it leaves.
-theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat,
+theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat,
     eb: Tm::ty(cond, w, g) = Bit, c: Lowered, vh: ETm::ValueHolds(cond, w, g, locs, next, Some(c)),
-    lb: ELowered, bh: ETm::LowerHolds(body, w, g, locs, next, Some(lb)),
+    lb: ELowered, bh: ETm::LowerHolds(body, w, ls, g, locs, next, Some(lb)),
     srcs: List<Loc>, sh: ELoop::SourcesHold(w.tys, body.ctx_end(w, g), lb.locs, g, rebind, Some(srcs)),
     mv: Stmt, mh: ELoop::MovesHold(w.tys, g, locs, srcs, Some(mv)),
-    lr: ELowered, hr: ELoop::LowerHolds(rest, w, g, locs, next, Some(lr))):
-    ELoop::LowerHolds(ELoop::While(cond, body, rebind, rest), w, g, locs, next,
+    lr: ELowered, hr: ELoop::LowerHolds(rest, w, ls, g, locs, next, Some(lr))):
+    ELoop::LowerHolds(ELoop::While(cond, body, rebind, rest), w, ls, g, locs, next,
         Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs)))
 {
-    λ call still agree perform env vals io held below pos => {
+    λ call still agree lents perform env vals io held below pos => {
         let cr = c.result;
         let ty = rest.ty(w, g);
         let pass = ELoop::pass(c, lb.stmt, mv);
         let branch = Branch(cr, Repeat(pass, cr), ELoop::skip());
-        let KE = λ (m: Mutated<Io, rt::Env(w.tys, g)>) => rest.sem(w, g, m.value, m.after);
+        let KE = λ (m: Mutated<Io, rt::Env(w.tys, g)>) => rest.sem(w, ls, g, m.value, m.after);
         let KR = λ (m: Mutated<Io, Flow>) => CoTree::map(Events::none(), Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), m),
             λ m2 => ELoop::back(ty, w.tys, lr.result, m2));
         let ran = vh.right(call, still, agree, env, vals, held, below, pos);
@@ -733,10 +736,10 @@ theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, 
         let straight: pass.straight().IsTrue() = Bool::is_true_and_intro(lb.stmt.straight(), Then(mv, Compute(c.region)).straight(), bh.left,
             Bool::is_true_and_intro(mv.straight(), True, mh.left, trivial));
         let fS = ELoop::pass_total(call, c, lb.stmt, mv);
-        let fE = ELoop::step(w, g, cond, body, rebind);
+        let fE = ELoop::step(w, ls, g, cond, body, rebind);
         let stepS = λ (e: Env) (io2: Io) => CoTree::bind(Events::none(), pass.run(call, perform)(e, io2), λ m => Stmt::pass_step(cr, m));
         let rest_at = λ (flow: Flow) (v2: rt::Env(w.tys, g)) (q: ELoop::Left(w.tys, g, locs)(flow, v2)) (io2: Io) =>
-            ELoop::rest_holds(rest, w, g, locs, next, lr, hr, call, still, agree, perform, below, pos, v2, flow, io2, q);
+            ELoop::rest_holds(rest, w, ls, g, locs, next, lr, hr, call, still, agree, lents, perform, below, pos, v2, flow, io2, q);
         // The loop and the meaning's `while`, at the condition's value.
         let at: Eutt<Mutated<Io, ty.sem(w.tys)>>(Events::none(),
                 CoTree::bind(Events::none(), match truth as λ _ => Partial(Mutated<Io, Flow>) {
@@ -766,19 +769,19 @@ theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, 
                                 Stmt::thread(pass, call, e, io2), λ m => Stmt::pass_step(cr, m), Stmt::run_straight(pass, call, perform, straight, e, io2)),
                             env1, io)),
                     Io::iterate_rel(fS, fE, ELoop::Held(w.tys, g, locs), ELoop::Left(w.tys, g, locs),
-                        ELoop::pass_rel(w, g, locs, next, cond, c, vh, eb, call, still, agree, below, pos, body, lb, bh, rebind, srcs, mv, sh, mh),
+                        ELoop::pass_rel(w, ls, g, locs, next, cond, c, vh, eb, call, still, agree, lents, below, pos, body, lb, bh, rebind, srcs, mv, sh, mh),
                         KR, KE, rest_at, env1, vals, held1, io)),
                 False => {
                     let env2 = env1.compute(call, ELoop::nothing());
                     let held2 = locs_hold_same(w.tys, env1, env2, g, locs, vals, ELoop::skip_same(env1, call, locs), held1);
                     Eutt::trans(Events::none(),
                         CoTree::bind(Events::none(), CRet(Mutated(io, Onward(env2))), KR),
-                        rest.sem(w, g, vals, io),
+                        rest.sem(w, ls, g, vals, io),
                         CoTree::bind(Events::none(), CRet(Mutated(io, vals)), KE),
                         Eutt::trans(Events::none(), CoTree::bind(Events::none(), CRet(Mutated(io, Onward(env2))), KR), KR(Mutated(io, Onward(env2))),
-                            rest.sem(w, g, vals, io),
+                            rest.sem(w, ls, g, vals, io),
                             Eutt::bind_ret_l(Events::none(), Mutated(io, Onward(env2)), KR), rest_at(Onward(env2), vals, held2, io)),
-                        Eutt::sym(Events::none(), CoTree::bind(Events::none(), CRet(Mutated(io, vals)), KE), rest.sem(w, g, vals, io),
+                        Eutt::sym(Events::none(), CoTree::bind(Events::none(), CRet(Mutated(io, vals)), KE), rest.sem(w, ls, g, vals, io),
                             Eutt::bind_ret_l(Events::none(), Mutated(io, vals), KE)))
                 },
             };
@@ -788,11 +791,11 @@ theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, 
             CoTree::map(Events::none(), Stmt::run(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), call, perform)(env, io),
                 λ m2 => ELoop::back(ty, w.tys, lr.result, m2)),
             CoTree::bind(Events::none(), loop_run, KR),
-            ELoop::sem(ELoop::While(cond, body, rebind, rest), w, g, vals, io),
+            ELoop::sem(ELoop::While(cond, body, rebind, rest), w, ls, g, vals, io),
             ELoop::bind_map<Mutated<Io, Flow>, Mutated<Io, Flow>, Mutated<Io, ty.sem(w.tys)>>(loop_run,
                 λ m => Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), m), λ m2 => ELoop::back(ty, w.tys, lr.result, m2)),
             Eutt::trans(Events::none(), CoTree::bind(Events::none(), loop_run, KR), CoTree::bind(Events::none(), branch_run, KR),
-                ELoop::sem(ELoop::While(cond, body, rebind, rest), w, g, vals, io),
+                ELoop::sem(ELoop::While(cond, body, rebind, rest), w, ls, g, vals, io),
                 Eutt::bind_cong_l(Events::none(), loop_run, branch_run, KR,
                     Eutt::bind_ret_l(Events::none(), Mutated(io, Onward(env1)),
                         λ m => Stmt::then_run(λ io2 env2 => branch.run(call, perform)(env2, io2), m))),
@@ -801,63 +804,63 @@ theorem ELoop::while_holds(cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop, 
                             True => Stmt::run(Repeat(pass, cr), call, perform)(env1, io),
                             False => Stmt::run(ELoop::skip(), call, perform)(env1, io),
                         }, KR),
-                        ELoop::sem(ELoop::While(cond, body, rebind, rest), w, g, vals, io)), at)))
+                        ELoop::sem(ELoop::While(cond, body, rebind, rest), w, ls, g, vals, io)), at)))
     }
 }
 
 // The theorem, by induction over the program.
-theorem ELoop::lower_sound(self p: ELoop, w: rt::World): (g: List<Ty>) → (locs: List<Loc>) → (next: Nat) →
-    ELoop::LowerHolds(p, w, g, locs, next, p.lower(w, g, locs, next)) {
+theorem ELoop::lower_sound(self p: ELoop, w: rt::World, ls: List<Lent>): (g: List<Ty>) → (locs: List<Loc>) → (next: Nat) →
+    ELoop::LowerHolds(p, w, ls, g, locs, next, p.lower(w, ls, g, locs, next)) {
     match p {
-        Done(t) => λ g locs next => ELoop::done_holds(t, w, g, locs, next, t.lower(w, g, locs, next), t.lower_sound(w, g, locs, next)),
+        Done(t) => λ g locs next => ELoop::done_holds(t, w, ls, g, locs, next, t.lower(w, ls, g, locs, next), t.lower_sound(w, ls, g, locs, next)),
         Seq(t, rest) => λ g locs next => {
-            let P = λ (r: Option<ELowered>) => ELoop::LowerHolds(ELoop::Seq(t, rest), w, g, locs, next, r);
-            Option::and_then_elim(P, trivial, t.lower(w, g, locs, next),
-                λ lt => rest.lower(w, t.ctx_end(w, g), lt.locs, lt.next).and_then(λ lr =>
+            let P = λ (r: Option<ELowered>) => ELoop::LowerHolds(ELoop::Seq(t, rest), w, ls, g, locs, next, r);
+            Option::and_then_elim(P, trivial, t.lower(w, ls, g, locs, next),
+                λ lt => rest.lower(w, ls, t.ctx_end(w, g), lt.locs, lt.next).and_then(λ lr =>
                     Some(ELowered(Then(lt.stmt, lr.stmt), lr.result, lr.next, lr.locs))),
-                λ lt e_lt => Option::and_then_elim(P, trivial, rest.lower(w, t.ctx_end(w, g), lt.locs, lt.next),
+                λ lt e_lt => Option::and_then_elim(P, trivial, rest.lower(w, ls, t.ctx_end(w, g), lt.locs, lt.next),
                     λ lr => Some(ELowered(Then(lt.stmt, lr.stmt), lr.result, lr.next, lr.locs)),
-                    λ lr e_lr => ELoop::seq_holds(t, rest, w, g, locs, next, lt,
-                        j(e_lt, λ r _ => ETm::LowerHolds(t, w, g, locs, next, r), t.lower_sound(w, g, locs, next)), lr,
-                        j(e_lr, λ r _ => ELoop::LowerHolds(rest, w, t.ctx_end(w, g), lt.locs, lt.next, r),
-                            rest.lower_sound(w, t.ctx_end(w, g), lt.locs, lt.next)))))
+                    λ lr e_lr => ELoop::seq_holds(t, rest, w, ls, g, locs, next, lt,
+                        j(e_lt, λ r _ => ETm::LowerHolds(t, w, ls, g, locs, next, r), t.lower_sound(w, ls, g, locs, next)), lr,
+                        j(e_lr, λ r _ => ELoop::LowerHolds(rest, w, ls, t.ctx_end(w, g), lt.locs, lt.next, r),
+                            rest.lower_sound(w, ls, t.ctx_end(w, g), lt.locs, lt.next)))))
         },
         While(cond, body, rebind, rest) => λ g locs next => {
-            let P = λ (r: Option<ELowered>) => ELoop::LowerHolds(ELoop::While(cond, body, rebind, rest), w, g, locs, next, r);
+            let P = λ (r: Option<ELowered>) => ELoop::LowerHolds(ELoop::While(cond, body, rebind, rest), w, ls, g, locs, next, r);
             Option::and_then_elim(P, trivial, ELoop::check_bit(Tm::ty(cond, w, g)), λ _ =>
                 ETm::lower_value(cond, w, g, locs, next).and_then(λ c =>
-                body.lower(w, g, locs, next).and_then(λ lb =>
+                body.lower(w, ls, g, locs, next).and_then(λ lb =>
                 ELoop::sources(body.ctx_end(w, g), lb.locs, g, rebind).and_then(λ srcs =>
                 ELoop::moves(g, locs, srcs).and_then(λ mv =>
-                rest.lower(w, g, locs, next).and_then(λ lr =>
+                rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs))))))), λ eb _ =>
             Option::and_then_elim(P, trivial, ETm::lower_value(cond, w, g, locs, next), λ c =>
-                body.lower(w, g, locs, next).and_then(λ lb =>
+                body.lower(w, ls, g, locs, next).and_then(λ lb =>
                 ELoop::sources(body.ctx_end(w, g), lb.locs, g, rebind).and_then(λ srcs =>
                 ELoop::moves(g, locs, srcs).and_then(λ mv =>
-                rest.lower(w, g, locs, next).and_then(λ lr =>
+                rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs)))))), λ c e_c =>
-            Option::and_then_elim(P, trivial, body.lower(w, g, locs, next), λ lb =>
+            Option::and_then_elim(P, trivial, body.lower(w, ls, g, locs, next), λ lb =>
                 ELoop::sources(body.ctx_end(w, g), lb.locs, g, rebind).and_then(λ srcs =>
                 ELoop::moves(g, locs, srcs).and_then(λ mv =>
-                rest.lower(w, g, locs, next).and_then(λ lr =>
+                rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs))))), λ lb e_lb =>
             Option::and_then_elim(P, trivial, ELoop::sources(body.ctx_end(w, g), lb.locs, g, rebind), λ srcs =>
                 ELoop::moves(g, locs, srcs).and_then(λ mv =>
-                rest.lower(w, g, locs, next).and_then(λ lr =>
+                rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs)))), λ srcs e_srcs =>
             Option::and_then_elim(P, trivial, ELoop::moves(g, locs, srcs), λ mv =>
-                rest.lower(w, g, locs, next).and_then(λ lr =>
+                rest.lower(w, ls, g, locs, next).and_then(λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs))), λ mv e_mv =>
-            Option::and_then_elim(P, trivial, rest.lower(w, g, locs, next), λ lr =>
+            Option::and_then_elim(P, trivial, rest.lower(w, ls, g, locs, next), λ lr =>
                     Some(ELowered(Then(ELoop::loop_stmt(c, lb.stmt, mv), lr.stmt), lr.result, lr.next, lr.locs)), λ lr e_lr =>
-                ELoop::while_holds(cond, body, rebind, rest, w, g, locs, next, eb, c,
+                ELoop::while_holds(cond, body, rebind, rest, w, ls, g, locs, next, eb, c,
                     j(e_c, λ r _ => ETm::ValueHolds(cond, w, g, locs, next, r), ETm::value_sound(cond, w, g, locs, next)),
-                    lb, j(e_lb, λ r _ => ETm::LowerHolds(body, w, g, locs, next, r), body.lower_sound(w, g, locs, next)),
+                    lb, j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, g, locs, next, r), body.lower_sound(w, ls, g, locs, next)),
                     srcs, j(e_srcs, λ r _ => ELoop::SourcesHold(w.tys, body.ctx_end(w, g), lb.locs, g, rebind, r),
                         ELoop::sources_sound(w.tys, body.ctx_end(w, g), lb.locs, g, rebind)),
                     mv, j(e_mv, λ r _ => ELoop::MovesHold(w.tys, g, locs, srcs, r), ELoop::moves_sound(w.tys, g, locs, srcs)),
-                    lr, j(e_lr, λ r _ => ELoop::LowerHolds(rest, w, g, locs, next, r), rest.lower_sound(w, g, locs, next)))))))))
+                    lr, j(e_lr, λ r _ => ELoop::LowerHolds(rest, w, ls, g, locs, next, r), rest.lower_sound(w, ls, g, locs, next)))))))))
         },
     }
 }
@@ -868,13 +871,14 @@ theorem ELoop::lower_sound(self p: ELoop, w: rt::World): (g: List<Ty>) → (locs
 // The lowered statements' tree, read against any world, with the value read
 // back from its word, agrees with the program's meaning up to silent
 // steps, loops and all, from an environment that holds the variables.
-fn ELoop::lower_reads(self p: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: p.lower(w, g, locs, next) = Some(l),
-    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
+fn ELoop::lower_reads(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: p.lower(w, ls, g, locs, next) = Some(l),
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    lents: ETm::LentsAgree(w.sigs.len(), ls, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
     held: LocsHold(w.tys, env, g, locs, vals), below: LocsBelow(locs, next), pos: 0 < next) →
     Io::Reads<p.ty(w, g).sem(w.tys)>(CoTree::map(Events::linux(), l.stmt.denote_co(call, perform)(env), λ flow => flow.read_back(p.ty(w, g), w.tys, l.result)),
-        λ io => p.sem(w, g, vals, io))
+        λ io => p.sem(w, ls, g, vals, io))
 {
-    let holds = j(lowered, λ r _ => ELoop::LowerHolds(p, w, g, locs, next, r), p.lower_sound(w, g, locs, next));
+    let holds = j(lowered, λ r _ => ELoop::LowerHolds(p, w, ls, g, locs, next, r), p.lower_sound(w, ls, g, locs, next));
     let ty = p.ty(w, g);
     let bound = Io::reads_bind<Flow, ty.sem(w.tys)>(l.stmt.denote_co(call, perform)(env), λ io => l.stmt.run(call, perform)(env, io),
         λ flow => CRet(flow.read_back(ty, w.tys, l.result)), λ flow io => CRet(Mutated(io, flow.read_back(ty, w.tys, l.result))),
@@ -882,6 +886,6 @@ fn ELoop::lower_reads(self p: ELoop, w: rt::World, g: List<Ty>, locs: List<Loc>,
     λ io => Eutt::trans(Events::none(),
         Io::against_co(CoTree::map(Events::linux(), l.stmt.denote_co(call, perform)(env), λ flow => flow.read_back(ty, w.tys, l.result)), io),
         CoTree::map(Events::none(), l.stmt.run(call, perform)(env, io), λ m => ELoop::back(ty, w.tys, l.result, m)),
-        p.sem(w, g, vals, io),
-        bound(io), holds(call, still, agree, perform, env, vals, io, held, below, pos))
+        p.sem(w, ls, g, vals, io),
+        bound(io), holds(call, still, agree, lents, perform, env, vals, io, held, below, pos))
 }

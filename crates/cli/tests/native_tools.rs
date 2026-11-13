@@ -184,6 +184,31 @@ fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The same tr as one computation over `Io` (`tr_lend_source`,
+/// lib/_tests/native/runtime/rt_io_lend_tests.hthr): a loop that reads,
+/// lends the buffer to `raise_span` (`ETm::Lend`), and writes what the
+/// function left, lowered by the proved `rt_io` lowering. A computation
+/// over `Io` has no exit, so a failed write does not end it with 1 as GNU's
+/// does; that case is not asked of it (issues/rt-io-exit-on-failed-write.md).
+#[test]
+fn compiled_tr_lowered_from_one_io_computation_runs_as_gnu_tr() {
+    let dir = scratch("tr-lend");
+    let binary = dir.join("tr");
+    write_program("lib/_tests/native/runtime/rt_io_lend_tests.hthr", "tr_lend_source", &binary, false);
+    let mut random = Bytes::seeded("tr-lend");
+    let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"hello, World! az AZ `{@[\n", &every, &text, &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(&mut gnu_tr(), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tr exits 0 at the end of its input");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A procedure and a function in one file, the procedure's body calling the
 /// function and `main` both: 'a' and 'b' raised and summed is the status
 /// (`raised_twice_runs`).
