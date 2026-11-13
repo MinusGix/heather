@@ -400,3 +400,66 @@ theorem List::put_u64_be_at_within_past(self span: List<u8>, length, base, count
         },
     })(refl)
 }
+
+// ---------------------------------------------------------------------------
+// A byte of an array of words
+
+// A word's low byte stored at `i`, under the span's length word.
+runtime fn List::put_byte_within(mut self span: List<u8>, length, i, byte: u64) → u64 {
+    span.put_within(length, i, byte.truncate(8, 56));
+    byte
+}
+
+// A word's low byte stored as byte `i` of the `bytes` bytes from `base`;
+// nothing is stored where there is no such byte. The checked store of a
+// byte into an array of words, by the array's bytes.
+runtime fn List::put_byte_at_within(mut self span: List<u8>, length, base, bytes, i, byte: u64) → u64 {
+    if i < bytes { span.put_byte_within(length, base + i, byte) } else { byte }
+}
+
+// Inside the count and the length word, it is the one entry stored.
+theorem List::put_byte_at_within_stored(self span: List<u8>, length, base, bytes, i, byte: u64, below: i.toNat() < bytes.toNat(),
+    inside: base.toNat() + i.toNat() < length.toNat()):
+    List::put_byte_at_within(span, length, base, bytes, i, byte) = Mutated(span.update(base.toNat() + i.toNat(), λ _ => byte.truncate(8, 56)), byte) {
+    let at = base + i;
+    let v: u8 = byte.truncate(8, 56);
+    let yes: (i.unsigned_lt_bit(bytes) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, bytes, below);
+    let sum: ((base + BitVec::ofNat(i.toNat())).toNat() = base.toNat() + i.toNat()) = BitVec::toNat_add_below(64, base, length, i.toNat(), inside);
+    let place: (at.toNat() = base.toNat() + i.toNat()) = j(BitVec::ofNat_toNat(64, i), λ w _ => (base + w).toNat() = base.toNat() + i.toNat(), sum);
+    let taken: ((match i.unsigned_lt_bit(bytes) { False => Mutated(span, byte), True => List::put_byte_within(span, length, at, byte) }) = List::put_byte_within(span, length, at, byte)) =
+        rewrite(yes, refl);
+    let stored: (span.with_byte_within(length, at, v) = span.update(base.toNat() + i.toNat(), λ _ => v)) =
+        trans(span.with_byte_within_inside(length, at, v, j(sym(place), λ n _ => n < length.toNat(), inside)), cong_fn(λ (n: Nat) => span.update(n, λ _ => v), place));
+    trans(taken, cong_fn(λ (s: List<u8>) => Mutated(s, byte), stored))
+}
+
+// Past the count nothing is stored.
+theorem List::put_byte_at_within_past(self span: List<u8>, length, base, bytes, i, byte: u64, past: bytes.toNat() <= i.toNat()):
+    List::put_byte_at_within(span, length, base, bytes, i, byte) = Mutated(span, byte) {
+    (match i.unsigned_lt_bit(bytes) as λ b => i.unsigned_lt_bit(bytes) = b →
+        (match b { False => Mutated(span, byte), True => List::put_byte_within(span, length, base + i, byte) }) = Mutated(span, byte) {
+        False => λ _ => refl,
+        True => λ yes => {
+            let below: (i.toNat() < bytes.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, bytes, yes);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+// An array of big-endian words of four bytes with byte `i` of its bytes
+// replaced: the word that byte lies in, with it changed
+// (`BitVec::with_byte_be`), and the array where it has no such byte.
+fn vector_with_byte_be({n: Nat}, v: [u32; n], i: Nat, b: u8) → [u32; n] {
+    vector_update(v, i.div(4), BitVec::with_byte_be(4, vector_get(v, i.div(4), BitVec::ofNat(0)), i.mod(4), b))
+}
+
+// The checked byte store as a term a reflector applies and reads the
+// operands of.
+fn List::byte_write_at(span: List<u8>, length, base, bytes, i, byte: u64) → Mutated<List<u8>, u64> {
+    List::put_byte_at_within(span, length, base, bytes, i, byte)
+}
+
+// A byte as the word the checked byte store takes: the same, for a
+// reflector to apply.
+fn List::byte_word(b: u8) → u64 { b.zero_extend(56) }

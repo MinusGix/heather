@@ -11,12 +11,10 @@
 //
 // A block is assembled in the schedule's first sixteen words, where the
 // compression wants it, and a block's words are their bytes with the most
-// significant first. So a byte of the block is a quarter of a word:
-// `Sha256::put` reads the word, replaces the byte (`u32_be_with_byte`, by
-// the byte's place in its word, compiled code having no shift by a word)
-// and stores the word. That is three steps where a store of one byte
-// would do; a byte of a word array as a place of its own is not built
-// (issues/runtime-record-function-limits.md).
+// significant first. So a byte of the block is a byte of a word:
+// `Sha256::put` is the schedule with that byte replaced
+// (`vector_with_byte_be`, `stored_words.hthr`), and its code is one store
+// of a byte under a test of the index.
 //
 // What the `runtime` generator reads (issues/runtime-generator-imports.md).
 import function_ir_lower;
@@ -76,21 +74,10 @@ import sha256_schedule;
 import sha256_working;
 import sha256_compression;
 
-// `word` with its byte at `place` replaced, the most significant byte
-// being place 0: what a store of one byte does to the big-endian word it
-// lies in.
-runtime fn u32_be_with_byte(word, place, byte: u64) → u64 {
-    if place < 2 {
-        if place < 1 { (word & 0x00ffffff) | ((byte & 0xff) << 24) } else { (word & 0xff00ffff) | ((byte & 0xff) << 16) }
-    } else {
-        if place < 3 { (word & 0xffff00ff) | ((byte & 0xff) << 8) } else { (word & 0xffffff00) | (byte & 0xff) }
-    }
-}
-
-// Byte `at` of the schedule's bytes: of a block, its byte `at`.
+// Byte `at` of the schedule's bytes: of a block, its byte `at`. One store
+// of a byte, where the declaration lays the schedule.
 runtime fn Sha256::put(mut self s: Sha256, at, byte: u64) → u64 {
-    s.schedule := vector_update(s.schedule, (at >> 2).toNat(),
-        u32_be_with_byte(vector_get(s.schedule, (at >> 2).toNat(), 0).zero_extend(32), at & 3, byte).truncate(32, 32));
+    s.schedule := vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56));
     at
 }
 

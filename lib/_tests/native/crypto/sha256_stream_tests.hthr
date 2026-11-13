@@ -131,7 +131,19 @@ theorem pad_short_runs_nothing(): List::u32_be_within(Sha256::pad::bytes(ones(),
 
 // A byte's place in its word: the most significant is place 0, and the
 // other three bytes stay.
-theorem with_byte_first(): u32_be_with_byte(w(0x11223344), w(0), w(0xab)) = w(0xab223344) { refl }
-theorem with_byte_last(): u32_be_with_byte(w(0x11223344), w(3), w(0xab)) = w(0x112233ab) { refl }
-// Only the operand's low byte is stored.
-theorem with_byte_low_byte(): u32_be_with_byte(w(0x11223344), w(1), w(0x1ab)) = w(0x11ab3344) { refl }
+theorem with_byte_first(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 0, b(0xab)) = BitVec::ofNat(0xab223344) { refl }
+theorem with_byte_last(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 3, b(0xab)) = BitVec::ofNat(0x112233ab) { refl }
+// Past the word's bytes it is the word.
+theorem with_byte_past(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 4, b(0xab)) = BitVec::ofNat(0x11223344) { refl }
+
+// `Sha256::put` is what the generator says of it: a span that holds a
+// context is left holding the context with that byte of its schedule
+// replaced.
+theorem put_holds(span: List<BitVec(8)>, s: Sha256, length, at, byte: BitVec(64), holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::stored().Holds(Sha256::put::bytes(span, length, at, byte).after, length,
+        s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }) {
+    Sha256::put::runs_held(span, s, length, at, byte, holds).holds
+}
+// On bytes it is one byte changed, and none past the schedule's.
+theorem put_one_byte(): words_from(Sha256::put::bytes(ones(), w(328), w(6), w(0xab)).after, [0xffffffff, 0xffffffff, 0xffffabff], 60) = True { refl }
+theorem put_past_the_schedule(): Sha256::put::bytes(ones(), w(328), w(256), w(0xab)).after = ones() { refl }

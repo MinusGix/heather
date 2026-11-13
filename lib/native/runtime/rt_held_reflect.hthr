@@ -81,11 +81,16 @@ import rt_file_reflect;
 // codec and the instance).
 record HeldAccess { reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, ty: Expr, part: Expr, codec: Expr, instance: Expr }
 
+// The checked store of a byte into an array of big-endian words of four
+// bytes (`List::put_byte_at_within`): its global, and the word the
+// array's count in bytes is, as its call has it.
+record HeldBytes { writer: GlobalRef, writer_name: String, count: Handle }
+
 // An array field by an index that is a word: the globals of its codec's
 // checked reader and writer of an element, the array's part of the
 // record, and the words it begins at and its count is, as the accessor's
 // call has them.
-record HeldAt { reader: Nat, writer: GlobalRef, writer_name: String, part: Expr, base: Handle, count: Handle }
+record HeldAt { reader: Nat, writer: GlobalRef, writer_name: String, part: Expr, base: Handle, count: Handle, bytes: Option<HeldBytes> }
 
 // An array field whose elements' codec has an accessor: what its
 // elements stand for where they are read (`ElementTerm`), the accessor's
@@ -235,6 +240,26 @@ fn rt_held_element_codec(fuel: Nat, fname: String, e: Expr) → Tac<Handle> {
     }
 }
 
+// The checked byte store of an array whose elements' checked store is the
+// big-endian four-byte word's, where the module has it in scope.
+fn rt_held_bytes(fname: String, writer_at_name: String, span, len, base, bytes: Expr) → Tac<Option<HeldBytes>> {
+    match Known::str_same(rt_base_name(writer_at_name), "put_u32_be_at_within") {
+        False => pure(None),
+        True => lookup("List::byte_write_at").bind(λ found => match found {
+            Refused(_) => pure(None),
+            Accepted(g) => {
+                let spelled <- next_spelling(rt_ap(Global(g), [span, len, base, bytes, len, len])).bind(λ c => rt_accepted("the checked store of a byte of `" ++ fname ++ "`", c));
+                let sv <- view(spelled);
+                let read: Option<HeldBytes> = match sv {
+                    HGlobal(wg, wname, args) => args.nth(3).map(λ n => HeldBytes(wg, wname, n)),
+                    _ => None,
+                };
+                pure(read)
+            },
+        }),
+    }
+}
+
 // The elements of an array field, where their codec has an accessor.
 // Where element `i` lies is the place of its part: the field's, then the
 // element's in the array.
@@ -275,9 +300,10 @@ fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalR
                     };
                     match ends {
                         None => rt_refuse("the accessor of an element of field `" ++ fname ++ "` does not read by a span, its length word, an array's offset, its count and an index"),
-                        Some(be) => pure(Some(HeldEach(ElementTerm(count, base, second - base, c.read, c.narrow, c.read_at, under), c.reader, c.writer, c.writer_name, c.wide, Hd(element),
-                            c.codec, c.instance, Hd(own), then_of, element_of, rt_ap(Global(index_g), [Hd(element), Hd(length)]), Hd(inside),
-                            HeldAt(c.reader_at, c.writer_at, c.writer_at_name, part, be.fst, be.snd)))),
+                        Some(be) => rt_held_bytes(fname, c.writer_at_name, span, len, word(base), word(4 * count)).bind(λ bytes =>
+                            pure(Some(HeldEach(ElementTerm(count, base, second - base, c.read, c.narrow, c.read_at, under), c.reader, c.writer, c.writer_name, c.wide, Hd(element),
+                                c.codec, c.instance, Hd(own), then_of, element_of, rt_ap(Global(index_g), [Hd(element), Hd(length)]), Hd(inside),
+                                HeldAt(c.reader_at, c.writer_at, c.writer_at_name, part, be.fst, be.snd, bytes))))),
                     }
                 },
             }
@@ -531,7 +557,34 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                     },
                     _ => None,
                 };
-                match update {
+                // The field with a byte of its bytes replaced at a word:
+                // the checked byte store, of the byte as a word.
+                let byte: Option<Pair<Handle, Pair<Handle, Handle>>> = match v {
+                    HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_with_byte_be") {
+                        False => None,
+                        True => args.nth(0).and_then(λ inner => args.nth(1).and_then(λ i => args.nth(2).map(λ x => Pair(inner, Pair(i, x))))),
+                    },
+                    _ => None,
+                };
+                match byte {
+                  Some(u) => rt_to_nat_of(u.snd.fst).bind(λ word => match word {
+                    None => rt_refuse("a byte of the array field `" ++ fname ++ "` at an index that is not a word's `toNat()`: write `vector_with_byte_be(t." ++ fname ++ ", i.toNat(), b)`"),
+                    Some(i) => match e.at.bytes {
+                        None => rt_refuse("a byte of the array field `" ++ fname ++ "`: the checked byte store is of an array of big-endian words of four bytes (import `stored_words`)"),
+                        Some(by) => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
+                            None => pure(None),
+                            Some(o) => {
+                                let ri <- rt_go(f, k, o.fst, i, True);
+                                let widen <- lookup("List::byte_word").bind(λ c => rt_accepted("a byte as a word (import `stored_words`)", c));
+                                let as_word <- next_spelling(App(Global(widen), Hd(u.snd.snd))).bind(λ c => rt_accepted("a byte's new value as a word", c));
+                                let rr <- rt_go(f, k, ri.fst, as_word, True);
+                                pure(Some(Pair(rr.fst, o.snd ++ [HeldSet(e.access(0), e.at.base, RSt::level(rr.snd),
+                                    Some(HeldIndexed(by.writer, by.writer_name, e.at.base, by.count, RSt::level(ri.snd))))])))
+                            },
+                        }),
+                    },
+                  }),
+                  None => match update {
                     // Read through a record just built (a statement before
                     // this one rebuilt the record) and through a name.
                     None => rt_field_read(value).bind(λ read => match read {
@@ -573,6 +626,7 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                             },
                         }),
                     }),
+                  },
                 }
             }),
         }),

@@ -304,6 +304,24 @@ theorem Stored::put_le_bytes(k: Nat, bytes: List<u8>, at: Nat, w: BitVec(8 * k),
     List::put_window_update_from(vector_entries(w.bytes_le(k)), bytes, at, rewrite(vector_entries_len(k, w.bytes_le(k)), fits))
 }
 
+// A big-endian word of four bytes stored with one byte of what was there
+// replaced is that byte stored: what a store of one byte does to the word
+// it lies in.
+theorem Stored::u32_be_put_with_byte(bytes: List<u8>, at, r: Nat, b: u8, below: r < 4, fits: 4 + at <= bytes.len()):
+    Stored::u32_be().put(bytes, at, BitVec::with_byte_be(4, Stored::u32_be().get(bytes, at), r, b)) = bytes.update(at + r, λ _ => b) {
+    let zero: u8 = BitVec::ofNat(0);
+    let entries = bytes.vector_at(at, 4, zero);
+    let read: (Stored::u32_be().get(bytes, at) = BitVec::of_bytes_be(entries)) = Stored::get_be_bytes(4, bytes, at);
+    let back: (BitVec::of_bytes_be(entries).bytes_be(4) = entries) = BitVec::bytes_be_of_bytes_be(4, entries);
+    let changed: (BitVec::with_byte_be(4, Stored::u32_be().get(bytes, at), r, b) = BitVec::of_bytes_be(vector_update(entries, r, b))) =
+        rewrite(read, rewrite(back, refl));
+    let again: (BitVec::of_bytes_be(vector_update(entries, r, b)).bytes_be(4) = vector_update(entries, r, b)) = BitVec::bytes_be_of_bytes_be(4, vector_update(entries, r, b));
+    let stored: (Stored::u32_be().put(bytes, at, BitVec::of_bytes_be(vector_update(entries, r, b))) = bytes.update_from(at, vector_entries(vector_update(entries, r, b)))) =
+        trans(Stored::put_be_bytes(4, bytes, at, BitVec::of_bytes_be(vector_update(entries, r, b)), fits),
+            cong_fn(λ (v: [u8; 4]) => bytes.update_from(at, vector_entries(v)), again));
+    trans(cong_fn(λ (x: u32) => Stored::u32_be().put(bytes, at, x), changed), trans(stored, bytes.update_from_one_of_four(at, r, b, zero, below)))
+}
+
 // Padding does not move the value.
 theorem Stored::get_padded<A>(self s: Stored<A>, bytes: List<u8>, at: Nat): s.padded().get(bytes, at) = s.get(bytes, at) {
     let room: s.layout.size <= s.layout.stride() = s.layout.stride_ge();

@@ -239,3 +239,82 @@ theorem HWorld::stores_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: 
             λ y _ => whole.Holds(y, FTm::word(hw.fw.w.tys, g, env, length), p.with(a, vector_update(p.of(a), FTm::word(hw.fw.w.tys, g, env, i).toNat(), B.narrow(FTm::word(hw.fw.w.tys, g, env, v))))),
             codec.held_store(n, p, same, FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), here, counted, own, FTm::word(hw.fw.w.tys, g, env, length), a, FTm::word(hw.fw.w.tys, g, env, v), holds)), trivial)
 }
+
+// The checked store of a byte into an array of big-endian words of four
+// bytes leaves the span holding the record with that byte of the array
+// replaced: the store is the word's store with the byte changed
+// (`Stored::u32_be_put_with_byte`), and the word's store is the
+// element's.
+theorem Stored::held_put_byte<A>({whole: Stored<A>}, n: Nat, p: Part<A, [u32; n]>(whole), same: Stored::u32_be().array(n) = p.codec,
+    base, bytes, i: u64, place: base.toNat() = p.offset, counted: bytes.toNat() = 4 * n, own: List<u8>, len: u64, a: A, byte: u64, holds: whole.Holds(own, len, a)):
+    whole.Holds(List::put_byte_at_within(own, len, base, bytes, i, byte).after, len, p.with(a, vector_with_byte_be(p.of(a), i.toNat(), byte.truncate(8, 56)))) {
+    let codec = Stored::u32_be();
+    let m = i.toNat();
+    let k = m.div(4);
+    let r = m.mod(4);
+    let v: u8 = byte.truncate(8, 56);
+    let zero: u32 = BitVec::ofNat(0);
+    let x: u32 = BitVec::with_byte_be(4, vector_get(p.of(a), k, zero), r, v);
+    let parts: (k * 4 + r = m) = m.div_mul_add_mod(4);
+    let small: (r < 4) = m.mod_lt(4);
+    let past_end: (n <= k → whole.Holds(List::put_byte_at_within(own, len, base, bytes, i, byte).after, len, p.with(a, vector_update(p.of(a), k, x)))) = λ past => {
+        let beyond: (bytes.toNat() <= m) = j(sym(counted), λ c _ => c <= m, omega);
+        let left: (List::put_byte_at_within(own, len, base, bytes, i, byte).after = own) =
+            cong_fn(λ (w: Mutated<List<u8>, u64>) => w.after, own.put_byte_at_within_past(len, base, bytes, i, byte, beyond));
+        let kept: (a = p.with(a, p.of(a))) = j(holds.right.right, λ y _ => y = p.with(y, p.of(y)), p.with_of(own, 0));
+        let same_record: (a = p.with(a, vector_update(p.of(a), k, x))) =
+            trans(kept, cong_fn(λ (w: [u32; n]) => p.with(a, w), sym(vector_update_past(n, p.of(a), k, x, past))));
+        j(sym(left), λ bytes_after _ => whole.Holds(bytes_after, len, p.with(a, vector_update(p.of(a), k, x))),
+            j(same_record, λ y _ => whole.Holds(own, len, y), holds))
+    };
+    match k.lt_trichotomy(n) {
+        Inl(below) => {
+            let e = p.element_in(n, codec, same, k, below);
+            let e_codec: (e.codec = codec) = p.element_in_codec(n, codec, same, k, below);
+            let e_offset: (e.offset = k * 4 + p.offset) = p.element_in_offset(n, codec, same, k, below);
+            let within: (4 + (k * 4 + p.offset) <= whole.layout.size) =
+                j(e_offset, λ o _ => 4 + o <= whole.layout.size, j(e_codec, λ c _ => c.layout.size + e.offset <= whole.layout.size, e.within));
+            let lent: (whole.layout.size <= len.toNat()) = holds.left;
+            let spans: (len.toNat() <= own.len()) = holds.right.left;
+            let under: (m < bytes.toNat()) = j(sym(counted), λ c _ => m < c, omega);
+            let inside: (base.toNat() + m < len.toNat()) = omega;
+            let there: (base.toNat() + m = e.offset + r) = omega;
+            let read: (codec.get(own, e.offset) = vector_get(p.of(a), k, zero)) =
+                trans(cong_fn(λ (s: Stored<u32>) => s.get(own, e.offset), sym(e_codec)), trans(e.reads(own, 0),
+                    trans(cong_fn(λ (y: A) => e.of(y), holds.right.right),
+                        trans(p.element_in_of(n, codec, same, k, below, a), sym(vector_get_inside(n, p.of(a), k, zero, below))))));
+            let replaced: (codec.put(own, e.offset, BitVec::with_byte_be(4, codec.get(own, e.offset), r, v)) = own.update(e.offset + r, λ _ => v)) =
+                Stored::u32_be_put_with_byte(own, e.offset, r, v, small, omega);
+            let stored: (List::put_byte_at_within(own, len, base, bytes, i, byte).after = codec.put(own, e.offset, x)) =
+                trans(cong_fn(λ (w: Mutated<List<u8>, u64>) => w.after, own.put_byte_at_within_stored(len, base, bytes, i, byte, under, inside)),
+                    trans(cong_fn(λ (o: Nat) => own.update(o, λ _ => v), there),
+                        trans(sym(replaced), cong_fn(λ (w: u32) => codec.put(own, e.offset, BitVec::with_byte_be(4, w, r, v)), read))));
+            let held: whole.Holds(codec.put(own, e.offset, x), len, e.with(a, x)) = codec.held_put(e, e_codec, own, len, a, x, holds);
+            j(sym(stored), λ bytes_after _ => whole.Holds(bytes_after, len, p.with(a, vector_update(p.of(a), k, x))),
+                j(p.element_in_with(n, codec, same, k, below, a, x), λ y _ => whole.Holds(codec.put(own, e.offset, x), len, y), held))
+        },
+        Inr(rest) => match rest {
+            Inl(at_end) => past_end(omega),
+            Inr(beyond) => past_end(omega),
+        },
+    }
+}
+
+// Such an array in the mark of the checked byte store: where it begins,
+// its count in bytes, and the array with a byte replaced.
+fn Part::byte_entry<A>({whole: Stored<A>}, n: Nat, self p: Part<A, [u32; n]>(whole)) → Pair<Nat, List<Pair<Nat, A → BitVec(64) → BitVec(64) → A>>> {
+    HWorld::array_entry(p.offset, 4 * n, λ (a: A) (i: BitVec(64)) (byte: BitVec(64)) => p.with(a, vector_with_byte_be(p.of(a), i.toNat(), byte.truncate(8, 56))))
+}
+
+theorem HWorld::stores_bytes_array<A>(self hw: HWorld<A>, {whole: Stored<A>}, n: Nat, p: Part<A, [u32; n]>(whole), same: Stored::u32_be().array(n) = p.codec, f: Nat,
+    bridge: (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            FTm::called(hw.fw, g, env, f, [place, length, b, c, i, v], own).after)
+        = (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            List::put_byte_at_within(own, FTm::word(hw.fw.w.tys, g, env, length), FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), FTm::word(hw.fw.w.tys, g, env, v)).after)):
+    FTm::Fields(p.byte_entry(n).snd, λ (count: Nat) (set: A → BitVec(64) → BitVec(64) → A) => hw.Stores(whole, f, 64, p.byte_entry(n).fst, count, set)) {
+    And(λ place length b c i v own a g env holds here counted =>
+        j(sym(cong_fn(λ (r: (place: Nat) → (length: Nat) → (b: Nat) → (c: Nat) → (i: Nat) → (v: Nat) → (own: List<u8>) → (g: List<Ty>) → Env(hw.fw.w.tys, g) → List<u8>) =>
+                r(place, length, b, c, i, v, own, g, env), bridge)),
+            λ y _ => whole.Holds(y, FTm::word(hw.fw.w.tys, g, env, length), p.with(a, vector_with_byte_be(p.of(a), FTm::word(hw.fw.w.tys, g, env, i).toNat(), FTm::word(hw.fw.w.tys, g, env, v).truncate(8, 56)))),
+            Stored::held_put_byte(n, p, same, FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), here, counted, own, FTm::word(hw.fw.w.tys, g, env, length), a, FTm::word(hw.fw.w.tys, g, env, v), holds)), trivial)
+}

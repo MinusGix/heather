@@ -1032,13 +1032,19 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    (`sha256_absorb`, `sha256_take_block`), and those store nothing
    themselves: each byte goes through `Sha256::push::bytes` or
    `Sha256::put::bytes`. A byte of the block is a quarter of a schedule
-   word, and with no byte of a word array as a place, `put` reads the
-   word, replaces the byte by its place (`u32_be_with_byte`, four arms,
-   there being no shift by a word in compiled code) and stores the word.
-   That is the honest cost of the missing piece, paid per byte of
-   message; the piece is a byte store into an array of words whose
-   record meaning is that same replacement
-   (`issues/runtime-record-function-limits.md`). One more limit met:
+   word, and `put` is one store of it:
+   `s.schedule := vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56))`,
+   the array with byte `at mod 4` of word `at div 4` replaced, most
+   significant first. Its code is the checked byte accessor over the
+   array's bytes (`List::put_byte_at_within`, `stored_words.hthr`: one
+   byte at `base + at` under `at < 4 * count`, nothing past it), on the
+   store mark the word store already had, so the layout holds no second
+   part over the same bytes. What makes it sound is one lemma about the
+   codec, that a word stored with one byte replaced is that byte stored
+   (`Stored::u32_be_put_with_byte`), and one for every array
+   (`Stored::held_put_byte`, `HWorld::stores_bytes_array`). Taken for
+   big-endian words of four bytes at an index that is a word; a byte
+   read is not built. One more limit met:
    `close` takes the count as a parameter, since a field read before a
    call and used after it is reflected as read after, and the pin does
    not see that the call leaves it.

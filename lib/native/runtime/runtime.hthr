@@ -3024,7 +3024,7 @@ fn runtime_held_arrays(fs: List<HeldField>, pick: HeldEach → Bool) → List<He
 // fn` is.
 record HeldNames { plain: Expr, reader_of: Expr, apart: Expr, writer_of: Expr, marked: Expr, none: Expr, more: Expr, bound: Expr, owed: Expr, sound_of: Expr,
     agrees: Expr, read_entry: Expr, write_entry: Expr, reads_field: Expr, writes_field: Expr, held: Expr, kept: Expr, bind_onto: Expr, holds: Expr, agreement: Expr,
-    reader_at: Expr, writer_at: Expr, index_entry: Expr, store_entry: Expr, indexes_array: Expr, stores_array: Expr }
+    reader_at: Expr, writer_at: Expr, index_entry: Expr, store_entry: Expr, indexes_array: Expr, stores_array: Expr, byte_entry: Expr, stores_bytes_array: Expr }
 
 fn runtime_held_names() → Tac<HeldNames> {
     pure(HeldNames(<- runtime_held_ref("Reader::plain"), <- runtime_held_ref("Reader::of"), <- runtime_held_ref("Writer::apart"), <- runtime_held_ref("Writer::of"),
@@ -3033,7 +3033,8 @@ fn runtime_held_names() → Tac<HeldNames> {
         <- runtime_held_ref("Stored::write_entry"), <- runtime_held_ref("HWorld::reads_field"), <- runtime_held_ref("HWorld::writes_field"), <- runtime_held_ref("FTm::held"),
         <- runtime_held_ref("FTm::kept"), <- runtime_held_ref("Ty::bind_onto"), <- runtime_held_ref("Stored::Holds"), <- runtime_held_ref("Agrees"),
         <- runtime_held_ref("Reader::indexed"), <- runtime_held_ref("Writer::indexed"), <- runtime_held_ref("Stored::index_entry"), <- runtime_held_ref("Stored::store_entry"),
-        <- runtime_held_ref("HWorld::indexes_array"), <- runtime_held_ref("HWorld::stores_array")))
+        <- runtime_held_ref("HWorld::indexes_array"), <- runtime_held_ref("HWorld::stores_array"), <- runtime_held_ref("Part::byte_entry"),
+        <- runtime_held_ref("HWorld::stores_bytes_array")))
 }
 
 // A function of the record that the function calls, as its mark: how
@@ -3390,6 +3391,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // marked whole, by where it begins and its count.
     let readers_at: List<List<HeldEach>> = r.funs.map(λ g => runtime_held_arrays(r.fields, λ e => e.at.reader.same(g)));
     let writers_at: List<List<HeldEach>> = r.cfuns.map(λ g => runtime_held_arrays(r.fields, λ e => e.at.writer.id.same(g)));
+    // And the arrays of words whose checked byte store it is, each by
+    // where it begins and its count in bytes.
+    let writers_bytes: List<List<HeldEach>> = r.cfuns.map(λ g => runtime_held_arrays(r.fields, λ e => match e.at.bytes { None => False, Some(by) => by.writer.id.same(g) }));
+    let byte_array: HeldEach → Expr = λ e => ap(n.byte_entry, [record, whole, NatLit(e.term.count), e.at.part]);
     let array: Expr → HeldEach → Expr = λ of e => ap(of, [record, e.ty, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part]);
     let readers_e = runtime_held_list(n.more, n.none, List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
         Nil => match readers_at.nth(j).unwrap_or([]) {
@@ -3413,7 +3418,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
         Some(run) => run,
         None => match writers.nth(j).unwrap_or([]) {
             Nil => match writers_at.nth(j).unwrap_or([]) {
-                Nil => ap(n.apart, [record]),
+                Nil => match writers_bytes.nth(j).unwrap_or([]) {
+                    Nil => ap(n.apart, [record]),
+                    Cons(e, more) => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(byte_array))]),
+                },
                 Cons(e, more) => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.store_entry, e)))]),
             },
             Cons(a, more) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.write_entry, a)))]),
@@ -3449,7 +3457,11 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let owes_writers = runtime_held_tuple(n.owed, end, List::range(writers.len()).map(λ j => match rans.nth(j).unwrap_or(None) {
         Some(ran) => ran,
         None => match writers.nth(j).unwrap_or([]) {
-            Nil => owes_at(n.stores_array, j, writers_at.nth(j).unwrap_or([])),
+            Nil => match writers_at.nth(j).unwrap_or([]) {
+                Nil => runtime_held_tuple(n.owed, end, writers_bytes.nth(j).unwrap_or([]).map(λ e =>
+                    ap(n.stores_bytes_array, [record, hw, whole, NatLit(e.term.count), e.at.part, by_refl, NatLit(j), by_refl]))),
+                Cons(e, more) => owes_at(n.stores_array, j, Cons(e, more)),
+            },
             Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(n.writes_field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
         },
     }));

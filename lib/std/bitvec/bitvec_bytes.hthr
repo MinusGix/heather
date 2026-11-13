@@ -71,6 +71,11 @@ theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_
     trans(rewrite(BitVec::bytes_le_of_bytes_le(k, reverse(bytes)), refl), reverse_reverse(k, bytes))
 }
 
+// A word with its byte `r` replaced, byte 0 the most significant: the
+// word of its bytes with that one changed, and the word where it has no
+// such byte.
+fn BitVec::with_byte_be(k: Nat, self w: BitVec(8 * k), r: Nat, b: u8) → BitVec(8 * k) { BitVec::of_bytes_be(vector_update(w.bytes_be(k), r, b)) }
+
 // ---------------------------------------------------------------------------
 // Bytes joined and split by shifts, as compiled code does both
 

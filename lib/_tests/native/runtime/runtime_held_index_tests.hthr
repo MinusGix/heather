@@ -165,3 +165,32 @@ runtime fn Sums::third(self s: Sums) → u64 { vector_get(s.parts, 2, 0).zero_ex
 
 // expect-error: with a value past the end that is not 0
 runtime fn Sums::padded(self s: Sums, i: u64) → u64 { vector_get(s.parts, i.toNat(), 7).zero_extend(32) }
+
+// ---------------------------------------------------------------------------
+// A byte of an array of words
+
+// A byte of the array's bytes replaced at a word: one checked store of a
+// byte, where the word store is four.
+runtime fn Sums::tag(mut self s: Sums, i, b: u64) → u64 {
+    s.parts := vector_with_byte_be(s.parts, i.toNat(), b.truncate(8, 56));
+    i
+}
+
+theorem tag_held(own: List<u8>, s: Sums, length, i, b: u64, holds: Sums::stored().Holds(own, length, s)):
+    Agrees<Sums, u64>(Sums::stored(), length, Sums::tag(s, i, b), Sums::tag::bytes(own, length, i, b)) {
+    Sums::tag::runs_held(own, s, length, i, b, holds)
+}
+
+// On bytes: byte 6 is the third byte of the second word, and nothing is
+// stored past the array's sixteen bytes, where the count lies.
+theorem tag_bytes(): Sums::tag::bytes(SUMS_BYTES, 24, 6, 0xab).after = [0, 0, 0, 1, 0, 0, 0xab, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 16] { refl }
+theorem tag_past(): Sums::tag::bytes(SUMS_BYTES, 24, 16, 0xab).after = SUMS_BYTES { refl }
+// And at the record: the second word with its third byte replaced.
+theorem tag_word(): vector_with_byte_be([1, 2, 3, 4], 6, BitVec::ofNat(0xab)) = [1, 0xab02, 3, 4] { refl }
+
+// A byte at a numeral is not read as a store yet.
+// expect-error: a byte of the array field `parts` at an index that is not a word's `toNat()`
+runtime fn Sums::tag_sixth(mut self s: Sums, b: u64) → u64 {
+    s.parts := vector_with_byte_be(s.parts, 6, b.truncate(8, 56));
+    b
+}

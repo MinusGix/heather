@@ -408,3 +408,56 @@ theorem List::put_window_update_from<A>(ys: List<A>): (xs: List<A>) → (at: Nat
         },
     }
 }
+
+// A list's four entries from `o` stored back over it with one of them
+// replaced: the one store. By the four cases: what a word's bytes stored
+// with one byte changed comes to (`Stored::u32_be_put_with_byte`).
+theorem List::update_from_one_of_four<A>(self xs: List<A>, o, r: Nat, b, pad: A, below: r < 4):
+    xs.update_from(o, vector_entries(vector_update(xs.vector_at(o, 4, pad), r, b))) = xs.update(o + r, λ _ => b) {
+    let o1 = Succ(o);
+    let o2 = Succ(o1);
+    let o3 = Succ(o2);
+    let f0 = λ (_: A) => xs.nth(o).unwrap_or(pad);
+    let f1 = λ (_: A) => xs.nth(o1).unwrap_or(pad);
+    let f2 = λ (_: A) => xs.nth(o2).unwrap_or(pad);
+    let f3 = λ (_: A) => xs.nth(o3).unwrap_or(pad);
+    let g = λ (_: A) => b;
+    let k0: (xs.update(o, f0) = xs) = xs.update_same(pad, o);
+    let k1: (xs.update(o1, f1) = xs) = xs.update_same(pad, o1);
+    let k2: (xs.update(o2, f2) = xs) = xs.update_same(pad, o2);
+    let k3: (xs.update(o3, f3) = xs) = xs.update_same(pad, o3);
+    match r {
+        Zero => {
+            let s = xs.update(o, g);
+            let a1: (s.update(o1, f1) = s) = xs.update_other_same(o, o1, b, pad, omega);
+            let a2: (s.update(o2, f2) = s) = xs.update_other_same(o, o2, b, pad, omega);
+            let a3: (s.update(o3, f3) = s) = xs.update_other_same(o, o3, b, pad, omega);
+            let chain: (s.update(o1, f1).update(o2, f2).update(o3, f3) = s) = rewrite(a1, rewrite(a2, a3));
+            chain
+        },
+        Succ(r1) => match r1 {
+            Zero => {
+                let s = xs.update(o1, g);
+                let a2: (s.update(o2, f2) = s) = xs.update_other_same(o1, o2, b, pad, omega);
+                let a3: (s.update(o3, f3) = s) = xs.update_other_same(o1, o3, b, pad, omega);
+                let chain: (xs.update(o, f0).update(o1, g).update(o2, f2).update(o3, f3) = s) = rewrite(k0, rewrite(a2, a3));
+                chain
+            },
+            Succ(r2) => match r2 {
+                Zero => {
+                    let s = xs.update(o2, g);
+                    let a3: (s.update(o3, f3) = s) = xs.update_other_same(o2, o3, b, pad, omega);
+                    let chain: (xs.update(o, f0).update(o1, f1).update(o2, g).update(o3, f3) = s) = rewrite(k0, rewrite(k1, a3));
+                    chain
+                },
+                Succ(r3) => match r3 {
+                    Zero => {
+                        let chain: (xs.update(o, f0).update(o1, f1).update(o2, f2).update(o3, g) = xs.update(o3, g)) = rewrite(k0, rewrite(k1, rewrite(k2, refl)));
+                        chain
+                    },
+                    Succ(_) => false_elim(below),
+                },
+            },
+        },
+    }
+}
