@@ -33,6 +33,8 @@ fn c1(v: [u32; 64], j: u64) → [u32; 64]
 3. An index form that checks its bound and keeps no proof in the term (`v[i]` at a word). Cheap, and the term is what it is today, but the proof is then not there for a compiler that would drop the code's test with it.
 4. The kernel's order at a same head (`issues/runtime-link-compares-functions.md`, Minus's).
 
+**Notes for direction 1** (read 2026-11-13, nothing built). The proofs need not be shared to be cheap: it may be enough that each is an application of an opaque declaration, since two different opaque heads fail to compare at once and the kernel then unfolds the call that ignores them. That was not tested with two different lemmas (both companions elaborate the same source, so a written lemma is the same term in each); the test that passed had the same lemma on both sides. The elaborator cannot add a declaration in the middle of a body: `resolve.rs`'s mints (`mint_open`, `mint_pending`) are recorded while a body is elaborated and committed between declarations, and the body keeps the inline term. So the lift is a pass over the syntax before the body, as `measure.rs`'s `lift_obligation` is: a call of a global with a defaulted parameter left out (`names.global(owner).params[i].default`) owes that parameter's type at the call's arguments, over the binders and hypotheses in scope at the site, which `lift_obligation` already collects for a self-call.
+
 ## Done when
 
 A loop over `[u32; 64]` whose body reads and stores at indices with found proofs has its companions, and `Sha256::expand` written with them compiles.
