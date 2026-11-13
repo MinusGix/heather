@@ -42,30 +42,24 @@ Notes for one area sit beside it and load when a session works there:
 | A round's **final** verification; any change touching `lib/`, the kit or the generators | `scripts/test --pr` |
 | A change to what the elaborator infers | plain `scripts/test`, or the library sweep, before it merges |
 | A change to the image format, the caches or the loader (`crates/cache`, `crates/cli/src/semantic.rs`) | plain `scripts/test` |
-| A change to the kernel's traversals or bounds memo | `scripts/test --long` as a sweep, not a gate |
+| A change to the kernel's traversals or bounds memo | `scripts/test --long` (own target dir) as a sweep, not a gate |
 
-Why the lanes are cut this way: `docs/testing-architecture-design.md`.
+The header of `scripts/test` says exactly what each lane runs and skips; why
+the lanes are cut this way is `docs/testing-architecture-design.md`.
 
-- **`--fast`** skips the whole-library acceptance tests, the perturbed-library
-  mutation controls and the native x86 certificate gates
-  (`crates/cli/tests/native*.rs`), and replays semantic test images an earlier
-  compiler build wrote (vouched for by the verdict store at
-  `target/decl-cache` or kernel-rechecked; the current frontend is not re-run
-  on unchanged library modules, and a module whose dependency changed in a way
-  it did not observe has its image moved instead,
-  `docs/module-interface-cutoff-design.md`). What it skips is the `SKIP` list
-  in `scripts/test`.
-- **`--pr`** runs the test files its diff from `origin/master` can affect
-  (Cargo's dep-info, family members one by one, every run-time reader of
-  `lib/` on a `lib/` change; anything it cannot place runs everything;
-  `HEATHER_PR_AFFECTED=all` forces all, §2.2.1 of the design note), over the
-  same replayed images, and the native x86 certificate gates
-  (`crates/cli/tests/native*.rs`) shrink to one smoke unless the diff touches
-  what they check (`lib/native`, the machine/OS models,
-  `crates/cli/src/native`, the kernel; `HEATHER_PR_NATIVE=all` forces them).
-- **Plain `scripts/test`** is the exact image policy: it re-elaborates every
-  library module after a compiler edit. It is the nightly master sentinel's
-  lane; run it yourself only for the two rows above that name it.
+- **`--fast` and `--pr` replay semantic images an earlier compiler build
+  wrote** instead of re-elaborating unchanged library modules (a module
+  whose dependency changed in a way it did not observe has its image moved,
+  `docs/module-interface-cutoff-design.md`). Plain
+  `scripts/test` is the exact image policy, which re-elaborates every library
+  module after a compiler edit; it is the nightly master sentinel's lane, so
+  run it yourself only for the two rows above that name it.
+- **`--fast`** also skips the whole-library acceptance tests, the mutation
+  controls and the native x86 certificate gates
+  (`crates/cli/tests/native*.rs`): the `SKIP` list in `scripts/test`.
+- **`--pr`** runs only the test files its diff from `origin/master` can
+  affect, and one smoke of the native gates unless the diff touches what they
+  check. `HEATHER_PR_AFFECTED=all` and `HEATHER_PR_NATIVE=all` force the rest.
 - **A change to what the elaborator infers re-elaborates the whole library
   before it merges**: motive synthesis, the unifier, instance choice,
   defaults, any tactic or rewrite the library already calls. The fast and PR
@@ -75,8 +69,6 @@ Why the lanes are cut this way: `docs/testing-architecture-design.md`.
   release binary and no `--accept-stale-images`, capped per file, three at a
   time. Group failures by the location of their first error: most are
   importers of one broken module.
-- **`--long`** (own target dir) also runs every slow kernel self-check every
-  time (`crates/kernel/src/checks.rs`; the default samples one in sixteen).
 
 ## Running the suite
 
@@ -107,12 +99,10 @@ Why the lanes are cut this way: `docs/testing-architecture-design.md`.
   default) out of `target/`, so worktrees of this repo can share them
   (`issues/shared-cache-dir.md`). Never point two worktrees at one
   `CARGO_TARGET_DIR`: Cargo's mtime freshness then runs the other's build.
-- **Cloud containers prebuild at session start**: `scripts/session-start`
-  (the SessionStart hook in `.claude/settings.json`, active only when
-  `CLAUDE_CODE_REMOTE=true`) installs mold and starts `cargo test --workspace
-  --no-run` in the background, logging to `target/session-prebuild.log`. A
-  first `scripts/test` that says it is waiting on Cargo's lock is waiting on
-  that build, not stuck. `HEATHER_NO_PREBUILD=1` skips it.
+- **Cloud containers prebuild at session start** (`scripts/session-start`,
+  logging to `target/session-prebuild.log`). A first `scripts/test` that says
+  it is waiting on Cargo's lock is waiting on that build, not stuck.
+  `HEATHER_NO_PREBUILD=1` skips it.
 
 ## Read before choosing or designing
 
@@ -121,12 +111,9 @@ Why the lanes are cut this way: `docs/testing-architecture-design.md`.
   a round works on. Every open issue carries `area:` (and `milestone:` when it
   serves one); `scripts/issue areas` is the overview.
 - **Compilation design starts from `docs/compilation-vision.md`**: the
-  settled principles (certificate logical, everything else operational;
-  untrusted search over checked witnesses; prove the generator, not the
-  copies; disciplines as libraries; opt-in, syntax-keyed `Compile(f)`) and
-  the picture (languages producing `Compile(f)`, facts as side-proofs the
-  compiler finds). A native, `runtime fn`, `Compile`, `datarepr` or pass
-  round reads it before designing, and extends it rather than re-deriving it.
+  settled principles and the picture. A native, `runtime fn`, `Compile`,
+  `datarepr` or pass round reads it before designing, and extends it rather
+  than re-deriving it.
 - **Writing proofs: `docs/proof-patterns.md`** has the rules rounds kept
   rediscovering (closed verdicts as `b = True` by `refl`, never `refl`
   between two computations, neutral parameters, stage theorems, what `omega`
@@ -154,12 +141,11 @@ Why the lanes are cut this way: `docs/testing-architecture-design.md`.
   --expectations`, which the gate passes (§4.3); in Rust,
   `support::assert_refused` with a `Refusal`. Never a bare `is_err()`.
 - **Module lists in Rust are closures, not hand edits**: a list of
-  `("name", include_str!(…))` library modules is marked `// lib-closure:
-  <roots>… [minus <roots>…]` and written by `scripts/lib-closures --fix`
-  from the imports; `crates/cli/tests/lib_closures.rs` holds marked lists to
-  the loader. After adding an `import` to a listed module, run the script.
-  It also fails on a `lib/` module nothing reaches (the whole-library
-  gate's orphan lint, in a second), and `scripts/test` runs it first.
+  `("name", include_str!(…))` library modules marked `// lib-closure: …` is
+  written by `scripts/lib-closures --fix` from the imports (the script's
+  header has the marker's grammar). After adding an `import` to a listed
+  module, run it. It also fails on a `lib/` module nothing reaches, and
+  `scripts/test` runs it first.
 - **Tactics build `Tac` values through calls**: `pure(a)`, `ask(r)`,
   `ask_then(r, k)`, never `Pure(…)`/`Ask(…)` as a value (patterns are
   free). A written tier-2 constructor re-spells `Tac`'s `W` encoding for the

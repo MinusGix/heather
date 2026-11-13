@@ -9,11 +9,9 @@
   area's module defines `Area<'e>(&'e Elaborator)` for its `&self` methods and
   `AreaMut<'e>(&'e mut Elaborator)` for its `&mut self` ones, both
   dereferencing to the elaborator, and another area calls
-  `Area(self).method(…)` (`crates/elab/src/lib.rs`'s module doc has the
-  pattern and what differs: `self.0.clone()`, `self.0.a` for split borrows).
-  rustc compiles all of one `Self` type's methods as one unit, wherever the
-  `impl` blocks are written, so a method on `Elaborator` recompiles with
-  everything else on it.
+  `Area(self).method(…)`. `crates/elab/src/lib.rs`'s module doc has the
+  pattern, what differs from writing on `Elaborator`, and why (one `Self`
+  type's methods compile as one unit).
 - **`scripts/codegen-units`** lists a build's units by size and what fills
   them; a unit that has grown back shows there.
 - `scripts/rustc-wrapper` (wired in `.cargo/config.toml`) turns rustc's

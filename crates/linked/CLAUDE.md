@@ -11,14 +11,8 @@ repository root.
   a row whose binary and import closure are unchanged is not recompiled) and
   the Rust declarations with them (`generated/exports.rs`, never edited:
   `crates/cli/tests/linked_exports.rs`).
-- **A new export** is a line in the table (module, function, parameters, a
-  span of bytes it reads as `name: span` and one it stores into as
-  `name: span mut`; a method is named by its path, `List::f`, and exported
-  under the symbol the path derives, `list_f`, or one written as
-  `sym = List::f`; a fourth column names the export whose program the
-  function is a function of, and it is then a label in that export's file,
-  not a file), a wrapper in `src/`, and tests against an independent
-  reference. Run `scripts/linked` before writing the wrapper: the compiler
+- **A new export** is a line in the table (its header states the columns), a
+  wrapper in `src/`, and tests against an independent reference. Run `scripts/linked` before writing the wrapper: the compiler
   links this crate, so a wrapper of a symbol not yet generated stops the build
   that would generate it.
 - **A value the Rust reads the linked code's answers with** is a `def` of the
