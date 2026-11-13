@@ -21,7 +21,7 @@ theorem climb_step(acc, j: BitVec(64), h: j < 48): climb(acc, j) = climb(acc + w
 // internal: more goals than the pre-count reserved
 ```
 
-The statement gives a parameter's proof by a search (`inside := bv_omega`) and the body leaves a goal `?`. The report should be the goal with its statement; instead the goal arena runs out of the slots counted for the declaration. Seen 2026-11-13 while writing a probe for PR #551 (the probe was written another way); not reduced further, so the search in the statement may not be the needed part.
+The statement gives a parameter's proof by a search (`inside := bv_omega`) and the body leaves a goal `?`. The report should be the goal with its statement; instead the goal arena runs out of the slots counted for the declaration. Seen 2026-11-13 while writing a probe for PR #607 (the probe was written another way); not reduced further, so the search in the statement may not be the needed part.
 
 ## Done when
 
