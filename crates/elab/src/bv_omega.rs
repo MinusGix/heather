@@ -643,6 +643,16 @@ impl<'w, 'a> Emitter<'w, 'a> {
         self.obligations.len() - 1
     }
 
+    /// Whether a Nat's syntax reads the word `n`.
+    fn syn_reads(syn: &NatSyn, n: usize) -> bool {
+        match syn {
+            NatSyn::Add(x, y, _, _) => Self::syn_reads(x, n) || Self::syn_reads(y, n),
+            NatSyn::Scale(_, _, x, _) => Self::syn_reads(x, n),
+            NatSyn::Word(w) => *w == n,
+            _ => false,
+        }
+    }
+
     /// Where `n`'s bound comes from: a parent when one passes it down, the
     /// range when `n` is a leaf, else `omega` at `n` itself.
     fn plan_bound(&mut self, n: usize, seen: &mut HashSet<usize>) {
@@ -659,7 +669,11 @@ impl<'w, 'a> Emitter<'w, 'a> {
             from
         } else if let Some(i) = self.stated.iter().position(|b| {
             let (p, q) = &self.forms[n];
+            // Not a bound stated of `n` itself: reading it would need
+            // `n`'s fact, which needs this bound (`h: (j + 16).toNat() < 64`
+            // says nothing about whether `j + 16` wrapped).
             q.is_zero() && Self::syn_form(&self.forms, &b.syn) == *p && b.fits(&self.walk.nodes[n].width)
+                && !Self::syn_reads(&b.syn, n)
         }) {
             BoundFrom::Stated(i)
         } else {

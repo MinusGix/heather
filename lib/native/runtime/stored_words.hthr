@@ -454,6 +454,36 @@ fn vector_with_byte_be({n: Nat}, v: [u32; n], i: Nat, b: u8) → [u32; n] {
     vector_update(v, i.div(4), BitVec::with_byte_be(4, vector_get(v, i.div(4), BitVec::ofNat(0)), i.mod(4), b))
 }
 
+// ---------------------------------------------------------------------------
+// An entry at an index that is a word, with the proof it is inside
+//
+// What a `runtime fn` writes for `v[i]` at a word `i`. Each takes the
+// proof that the index is inside, `inside`, as a parameter with a default:
+// left out, `bv_omega` finds it from what the call's context states (a
+// loop's test `if h: i < 64`, a parameter `h: i < 4`), and the call is
+// refused where it finds none. So nothing reads or stores past the end,
+// and no value stands for an entry that is not there.
+//
+// Each is defined as the total function beside it (`vector_get` at 0,
+// `vector_update`, `vector_with_byte_be`), which is what a function of a
+// laid record's code computes: the code still tests the index, a test the
+// proof says is never failed. `vector_at_index` reads the entry as
+// `vector_index` at the proof.
+
+// Entry `i` of an array of words.
+fn vector_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: i.toNat() < n := bv_omega) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
+
+// The array with `a` at entry `i`.
+fn vector_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: i.toNat() < n := bv_omega) → [A; n] { vector_update(v, i.toNat(), a) }
+
+// An array of big-endian words of four bytes with byte `i` of its bytes
+// replaced.
+fn vector_put_byte_be({n: Nat}, v: [u32; n], i: u64, b: u8, inside: i.toNat() < 4 * n := bv_omega) → [u32; n] { vector_with_byte_be(v, i.toNat(), b) }
+
+theorem vector_at_index({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: i.toNat() < n): vector_at(v, i, inside := inside) = vector_index(v, i.toNat(), inside) {
+    vector_get_inside(n, v, i.toNat(), BitVec::ofNat(0), inside)
+}
+
 // The checked byte store as a term a reflector applies and reads the
 // operands of.
 fn List::byte_write_at(span: List<u8>, length, base, bytes, i, byte: u64) → Mutated<List<u8>, u64> {

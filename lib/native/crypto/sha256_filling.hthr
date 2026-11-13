@@ -74,11 +74,18 @@ import sha256_schedule;
 import sha256_working;
 import sha256_compression;
 
-// Byte `at` of the schedule's bytes: of a block, its byte `at`. One store
-// of a byte, where the declaration lays the schedule.
+// Byte `at` of the block's sixty-four: one store of a byte, where the
+// declaration lays the schedule. The test is what says `at` is inside:
+// every caller passes a fill below 64, a fact a function of the record
+// cannot be handed yet (issues/runtime-record-function-limits.md), so it
+// is tested here and nothing is stored past the block.
 runtime fn Sha256::put(mut self s: Sha256, at, byte: u64) → u64 {
-    s.schedule := vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56));
-    at
+    if h: at < 64 {
+        s.schedule := vector_put_byte_be(s.schedule, at, byte.truncate(8, 56));
+        at
+    } else {
+        at
+    }
 }
 
 // One byte into the block at `fill`, and the block run when that fills

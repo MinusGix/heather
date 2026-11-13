@@ -1888,6 +1888,15 @@ impl measure::BinderTys for Elaborator {
     fn infer_local(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder], expr: &Expr) -> Option<Ty> {
         MeasureContext(self).infer_measure_local(decl, signatures, scope, expr)
     }
+    fn default_goals(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder], call: &Expr) -> Vec<measure::FoundGoal> {
+        MeasureContext(self).measure_default_goals(decl, signatures, scope, call).unwrap_or_default()
+    }
+    fn has_context_default(&self, callee: &str) -> bool {
+        NameLookup(self).key_of_kinds(callee, &[NameKind::Global])
+            .and_then(|key| self.names.global(&key).map(|g| g.params.iter()
+                .any(|p| p.default.as_ref().is_some_and(|d| defaults::is_context_search(&d.expr)))))
+            .unwrap_or(false)
+    }
 }
 
 /// Kernel workers a fresh elaborator uses when `HEATHER_KERNEL_WORKERS` is

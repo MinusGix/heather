@@ -89,6 +89,11 @@ pub(crate) struct ModulePass {
     /// belongs to whoever has the source text to render it against, and that
     /// is the caller (§3).
     pub(crate) warnings: RefCell<Vec<Warning>>,
+    /// While `Some`, every omitted parameter default that is elaborated is
+    /// recorded with its goal as source, in elaboration order: how the
+    /// `decreases` lowering learns what a call's found proof proves
+    /// (`MeasureContext::measure_default_goals`). Only a query's clone sets it.
+    pub(crate) default_goals: RefCell<Option<Vec<crate::defaults::DefaultGoal>>>,
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     pub(crate) omega_reports: RefCell<Vec<OmegaReport>>,
@@ -131,6 +136,7 @@ impl ModulePass {
             container_decls: RefCell::new(Vec::new()),
             container_at: Cell::new(0),
             warnings: RefCell::new(Vec::new()),
+            default_goals: RefCell::new(None),
             omega_reports: RefCell::new(Vec::new()),
             omega_failure_reports: RefCell::new(Vec::new()),
             pending_derived: RefCell::new(Vec::new()),
@@ -166,6 +172,8 @@ impl ModulePass {
             container_decls,
             container_at,
             warnings,
+            // The recording query's own: a rollback inside it keeps the record.
+            default_goals: _,
             omega_reports,
             omega_failure_reports,
             pending_derived,
@@ -214,6 +222,8 @@ impl ModulePass {
             container_decls: _,
             container_at: _,
             warnings,
+            // Set by a query on its own clone.
+            default_goals: _,
             omega_reports,
             omega_failure_reports,
             pending_derived,
@@ -268,6 +278,7 @@ impl Clone for ModulePass {
             container_decls: self.container_decls.clone(),
             container_at: self.container_at.clone(),
             warnings: self.warnings.clone(),
+            default_goals: RefCell::new(None),
             omega_reports: self.omega_reports.clone(),
             omega_failure_reports: self.omega_failure_reports.clone(),
             pending_derived: self.pending_derived.clone(),

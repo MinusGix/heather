@@ -19,8 +19,9 @@
 // A word is 32 bits in the context and 64 in the code, so the word
 // functions (`sha256_round.hthr`) take each `zero_extend`ed and their
 // results are `truncate`d where stored. An element at a word index is
-// read with a value for past the end (`vector_get(…, 0)`): the code tests
-// the index, so no method here owes a bound.
+// `vector_at(t.f, i)` and stored by `vector_put(t.f, i, x)`, each with a
+// proof that `i` is inside the array, found from the loop's test where it
+// is called (`stored_words.hthr`). There is no value for past the end.
 //
 // The schedule and the working variables' start are `sha256_schedule.hthr`
 // and a round is `sha256_working.hthr`: three modules, so that no one
@@ -88,7 +89,7 @@ import sha256_working;
 runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
     decreases (64 - i).toNat() {
     if h: i < 64 {
-        let t1 = s.t1(i);
+        let t1 = s.t1(i, vector_at(s.schedule, i).zero_extend(32));
         s.turn(t1);
         s.rounds(i + 1)
     } else {
@@ -100,7 +101,7 @@ runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
 runtime fn Sha256::end(mut self s: Sha256, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
-        s.hash := vector_update(s.hash, i.toNat(), vector_get(s.hash, i.toNat(), 0) + vector_get(s.working, i.toNat(), 0));
+        s.hash := vector_put(s.hash, i, vector_at(s.hash, i) + vector_at(s.working, i));
         s.end(i + 1)
     } else {
         i
@@ -110,7 +111,7 @@ runtime fn Sha256::end(mut self s: Sha256, i: u64) → u64
 // The compression of the block whose sixteen words are the schedule's
 // first: H(i) where H(i−1) was.
 runtime fn Sha256::run(mut self s: Sha256) → u64 {
-    s.expand(16);
+    s.expand(0);
     s.begin(0);
     s.rounds(0);
     s.end(0)

@@ -612,6 +612,19 @@ impl DeclarationsMut<'_> {
         // candidate bound, then again with just the ones the obligations
         // quantify, so a body whose obligations never read one keeps the
         // plain match it was written with.
+        // A proof a call leaves to a search that reads its context is found
+        // once, in a declaration of its own, so the body and the companions
+        // name one term (`measure::lift_found`). Where the checker refuses a
+        // lifted proof the declaration is lowered as written, and the proof
+        // is searched for at its call as before.
+        let with_found;
+        let decl = match measure::lift_found(decl, &self_name, &measure, self.0) {
+            Some((lifted, proofs)) if proofs.iter().all(|p| self.elab_decl_one(&p.decl, Some(&p.obligations)).is_ok()) => {
+                with_found = lifted;
+                &with_found
+            }
+            _ => decl,
+        };
         let mut auto = measure::AutoEqs::All;
         let mut family = measure::lower(decl, &self_name, &measure, omega_available, self.0, true, &auto)?;
         if family.auto_candidates > 0 {

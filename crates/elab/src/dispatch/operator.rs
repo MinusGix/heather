@@ -434,14 +434,25 @@ impl Operators<'_> {
     /// checking-only call.
     fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
         let mut carrier = None;
+        // An operand that fails to infer only because a tactic in it (a
+        // parameter's default search) wants a goal slot this attempt has not
+        // reserved has a type on the next attempt. The probe's rollback
+        // forgets the request, so it is made again outside it: the
+        // declaration then restarts instead of reporting an operator with no
+        // carrier (issues/operator-on-call-with-defaulted-argument.md).
+        let mut wanted = 0;
         let leaf = operator_carrier_leaf(args.first()?, |leaf| {
             if AppUnify(self).is_checking_only(cx, leaf) {
                 return true;
             }
             let Some(found) = self.probe(|| {
-                let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
+                let Ok((_, ty, _)) = self.elab_infer(cx, leaf) else {
+                    wanted = self.attempt.goal_arena.requested_base().max(wanted);
+                    return None;
+                };
                 Some(Carriers(self).carrier_of_ty(cx, &ty, span))
             }) else {
+                self.attempt.goal_arena.request_base(wanted);
                 return true;
             };
             carrier = found;

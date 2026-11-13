@@ -27,3 +27,4 @@ Found 2026-11-13 in PR #551's thread, where an indexed read carries its bound as
 ## Log
 
 - 2026-11-13: Filed. Scratch reproduction in `/mnt/project-files/wip/ix2-ext-probe.hthr`'s history; the two functions above are the whole of it.
+- 2026-11-13: Two causes, both fixed on PR #551. A defaulted parameter is recorded as an implicit one, and one that no other parameter's type mentions made the call "deferred for a result-only implicit" (`Callables::call_defers_for_result_only`), so the operator's carrier probe passed over it: a parameter with a default is now no reason to wait for an expected type. And a carrier probe whose operand fails only because a search in it wants a goal slot the attempt has not reserved lost the restart request to its own rollback: `op_carrier_head` makes the request again outside the probe, so the declaration restarts with the slot. Probe: `two_below` in `lib/_tests/std/tactic/bitvec_omega_tests.hthr`.

@@ -60,17 +60,19 @@ import rt_held;
 import rt_held_fields;
 import rt_held_reflect;
 
-// Schedule words `t` to 63, each from the four before it that §6.2.2
-// step 1 names.
-runtime fn Sha256::expand(mut self s: Sha256, t: u64) → u64
-    decreases (64 - t).toNat() {
-    if h: t < 64 {
-        s.schedule := vector_update(s.schedule, t.toNat(),
-            sha256_next(vector_get(s.schedule, (t - 2).toNat(), 0).zero_extend(32), vector_get(s.schedule, (t - 7).toNat(), 0).zero_extend(32),
-                vector_get(s.schedule, (t - 15).toNat(), 0).zero_extend(32), vector_get(s.schedule, (t - 16).toNat(), 0).zero_extend(32)).truncate(32, 32));
-        s.expand(t + 1)
+// Schedule words 16 to 63, each from the four before it that §6.2.2
+// step 1 names. Pass `j` writes word `j + 16` from words `j + 14`,
+// `j + 9`, `j + 1` and `j`: counted so, the loop's test is what says
+// every index is inside the schedule, and each proof is found from it.
+runtime fn Sha256::expand(mut self s: Sha256, j: u64) → u64
+    decreases (48 - j).toNat() {
+    if h: j < 48 {
+        s.schedule := vector_put(s.schedule, j + 16,
+            sha256_next(vector_at(s.schedule, j + 14).zero_extend(32), vector_at(s.schedule, j + 9).zero_extend(32),
+                vector_at(s.schedule, j + 1).zero_extend(32), vector_at(s.schedule, j).zero_extend(32)).truncate(32, 32));
+        s.expand(j + 1)
     } else {
-        t
+        j
     }
 }
 
@@ -78,16 +80,17 @@ runtime fn Sha256::expand(mut self s: Sha256, t: u64) → u64
 runtime fn Sha256::begin(mut self s: Sha256, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 {
-        s.working := vector_update(s.working, i.toNat(), vector_get(s.hash, i.toNat(), 0));
+        s.working := vector_put(s.working, i, vector_at(s.hash, i));
         s.begin(i + 1)
     } else {
         i
     }
 }
 
-// T1 of round `t`, from h, e, f, g, the constant and the schedule word.
+// T1 of round `t`, from h, e, f, g, the constant and the schedule word
+// `w`, which the round's loop reads where its test says `t` is inside.
 // It stores nothing; it takes `mut self` because a function of the record
 // that another calls does.
-runtime fn Sha256::t1(mut self s: Sha256, t: u64) → u64 {
-    sha256_t1(vector_index(s.working, 7, trivial).zero_extend(32), vector_index(s.working, 4, trivial).zero_extend(32), vector_index(s.working, 5, trivial).zero_extend(32), vector_index(s.working, 6, trivial).zero_extend(32), sha256_k(t), vector_get(s.schedule, t.toNat(), 0).zero_extend(32))
+runtime fn Sha256::t1(mut self s: Sha256, t, w: u64) → u64 {
+    sha256_t1(vector_index(s.working, 7, trivial).zero_extend(32), vector_index(s.working, 4, trivial).zero_extend(32), vector_index(s.working, 5, trivial).zero_extend(32), vector_index(s.working, 6, trivial).zero_extend(32), sha256_k(t), w)
 }

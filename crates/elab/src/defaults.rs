@@ -98,6 +98,15 @@ impl Defaults<'_> {
                 shifted: Default::default(),
             }));
         }
+        if let Some(goals) = self.pass.default_goals.borrow_mut().as_mut() {
+            goals.push(DefaultGoal {
+                owner: owner.clone(),
+                index,
+                name: name.clone(),
+                goal: self.spell_type_source(cx, expected),
+                default: default.expr.clone(),
+            });
+        }
         let _scope = self.use_scope(&default.scope);
         self.elab_check(&hidden, &default.expr, expected, lvl).map_err(|error| ElabError::Elab {
             msg: format!("`{callee}`'s `{name}` was left to its default, which did not give `{goal}` here: {}; \
@@ -241,6 +250,26 @@ pub(crate) fn is_param_default(e: &Expr) -> bool {
 ///
 /// A user declaration that shadows one of these names makes a default that
 /// names it a value no check here reaches; the call still checks it.
+/// One omitted default as a call elaborated it: whose parameter, the goal it
+/// was checked at (as source in the call's context, where it has one) and the
+/// default's expression.
+#[derive(Clone)]
+pub(crate) struct DefaultGoal {
+    pub(crate) owner: String,
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    pub(crate) goal: Option<String>,
+    pub(crate) default: Expr,
+}
+
+/// Whether a default is a proof search that reads its context: the same call
+/// elaborated twice may then give two proof terms, which is why a `decreases`
+/// body's are lifted into declarations of their own
+/// (issues/found-proof-differs-across-recursion-companions.md).
+pub(crate) fn is_context_search(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Var(v) if matches!(v.as_str(), "omega" | "bv_omega" | "linarith" | "nlinarith" | "positivity"))
+}
+
 pub(crate) fn is_discharge(e: &Expr) -> bool {
     const SEARCHES: [&str; 9] = ["omega", "positivity", "ring", "linarith", "nlinarith", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
     const TACTICS: [&str; 11] = ["omega", "ring", "linarith", "nlinarith", "rewrite", "subst", "simp_only", "simp_show", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];

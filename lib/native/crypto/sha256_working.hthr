@@ -69,7 +69,7 @@ import sha256_schedule;
 runtime fn Sha256::shift(mut self s: Sha256, i: u64) → u64
     decreases (7 - i).toNat() {
     if h: i < 7 {
-        s.working := vector_update(s.working, (7 - i).toNat(), vector_get(s.working, (6 - i).toNat(), 0));
+        s.working := vector_put(s.working, 7 - i, vector_at(s.working, 6 - i));
         s.shift(i + 1)
     } else {
         i
