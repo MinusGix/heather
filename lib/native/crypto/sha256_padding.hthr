@@ -1,0 +1,88 @@
+// The end of a message, as functions of the context (FIPS 180-4 §5.1.1,
+// issues/sha256-context-type.md): the padding and the length, over the
+// block's bytes of `sha256_filling.hthr`.
+//
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import function_ir_lower;
+import function_ir_lower_calls;
+import nat_map;
+import rt_held_loop;
+import x86_64_asm;
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha2;
+import sha256_round;
+import sha256_block;
+import stored_words;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_filling;
+
+// §5.1.1's one bit and its zeros after a block filled to `fill`: the byte
+// 0x80, zeros to the block's end, and, where that leaves no room for the
+// eight bytes of the length, the block run and a block of zeros begun.
+runtime fn Sha256::pad(mut self s: Sha256, fill: u64) → u64 {
+    s.put(fill, 0x80);
+    s.zero(fill + 1);
+    if fill < 56 {
+        fill
+    } else {
+        s.run();
+        s.zero(0);
+        fill
+    }
+}
+
+// The end of a message of `count` bytes: the padding, the length in bits
+// as the block's last two words, and the last block run. The count is a
+// parameter: read from the context here it would be read after the
+// padding's stores, and the pin does not see that those leave it
+// (issues/runtime-record-function-limits.md).
+runtime fn Sha256::close(mut self s: Sha256, count: u64) → u64 {
+    s.pad(count & 63);
+    s.schedule := vector_update(vector_update(s.schedule, 14, (count >> 29).truncate(32, 32)), 15, (count << 3).truncate(32, 32));
+    s.run()
+}

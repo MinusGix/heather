@@ -57,6 +57,8 @@ import sha256_block;
 import sha256_schedule;
 import sha256_working;
 import sha256_compression;
+import sha256_filling;
+import sha256_padding;
 import stored_words;
 import vector;
 import bitvec_bytes;
@@ -96,24 +98,14 @@ theorem Sha256::init_holds(span: List<u8>, s: Sha256, length: u64, holds: Sha256
     Sha256::init::runs_held(span, s, length, holds).holds
 }
 
-// One byte into the block at `fill`, and the block run when that fills
-// it. Answers how full the block then is.
-runtime fn List::sha256_push(mut self ctx: List<u8>, cn, fill, byte: u64) → u64 {
-    ctx.put_within(cn, fill + Sha256::schedule_at, byte.truncate(8, 56));
-    if fill = 63 {
-        ctx.sha256_run(cn);
-        0
-    } else {
-        fill + 1
-    }
-}
-
-// The message's bytes from `j`, each pushed.
+// The message's bytes from `j`, each pushed into the context's block
+// (`Sha256::push`, run on the span).
 runtime fn List::sha256_absorb(mut self ctx: List<u8>, cn: u64, message: List<u8>, mn, j, fill: u64) → u64
     decreases (mn - j).toNat() {
     if h: j < mn {
-        let fill = ctx.sha256_push(cn, fill, message.byte_within(mn, j).zero_extend(56));
-        ctx.sha256_absorb(cn, message, mn, j + 1, fill)
+        let pushed = Sha256::push::bytes(ctx, cn, fill, message.byte_within(mn, j).zero_extend(56));
+        ctx := pushed.after;
+        ctx.sha256_absorb(cn, message, mn, j + 1, pushed.value)
     } else {
         fill
     }
@@ -135,47 +127,35 @@ runtime fn sha256_update(ctx: List<u8>, cn: u64, message: List<u8>, mn: u64) →
     Mutated(ctx, count)
 }
 
-// Zeros in the block from `i` to its end.
-runtime fn List::sha256_zero(mut self ctx: List<u8>, cn, i: u64) → u64 decreases (64 - i).toNat() {
+// The message has ended (`Sha256::close`, run on the span). The digest is
+// then the hash value's thirty-two bytes. The count is read here, before
+// any store.
+runtime fn sha256_finish(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
+    let closed = Sha256::close::bytes(ctx, cn, sha256_count(ctx, cn));
+    Mutated(closed.after, closed.value)
+}
+
+// The block's sixty-four bytes into the context's block.
+runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64
+    decreases (64 - i).toNat() {
     if h: i < 64 {
-        ctx.put_within(cn, i + Sha256::schedule_at, 0);
-        ctx.sha256_zero(cn, i + 1)
+        let put = Sha256::put::bytes(ctx, cn, i, block.byte_within(bn, i).zero_extend(56));
+        ctx := put.after;
+        ctx.sha256_take_block(cn, block, bn, i + 1)
     } else {
         i
     }
 }
 
-// §5.1.1's one bit and its zeros after a block filled to `fill`: the byte
-// 0x80, zeros to the block's end, and, where that leaves no room for the
-// eight bytes of the length, the block run and a block of zeros begun.
-runtime fn List::sha256_pad(mut self ctx: List<u8>, cn, fill: u64) → u64 {
-    ctx.put_within(cn, fill + Sha256::schedule_at, 0x80);
-    ctx.sha256_zero(cn, fill + 1);
-    if fill < 56 {
-        fill
-    } else {
-        ctx.sha256_run(cn);
-        ctx.sha256_zero(cn, 0);
-        fill
-    }
-}
-
-// The end of a message of `count` bytes: the padding, the length in bits
-// as the block's last eight bytes, and the last block run. The count is a
-// parameter for `sha256_take`'s reason.
-runtime fn List::sha256_close(mut self ctx: List<u8>, cn, count: u64) → u64 {
-    ctx.sha256_pad(cn, count & 63);
-    ctx.put_u32_be_within(cn, Sha256::schedule_at + 56, count >> 29);
-    ctx.put_u32_be_within(cn, Sha256::schedule_at + 60, count << 3);
-    ctx.sha256_run(cn)
-}
-
-// The message has ended. The digest is then the hash value's thirty-two
-// bytes.
-runtime fn sha256_finish(ctx: List<u8>, cn: u64) → Mutated<List<u8>, u64> {
+// §6.2.2: H(i) from H(i−1) and a block. Of the context the hash value is
+// read, and it, the working variables and the schedule are written. What
+// the hash value's thirty-two bytes spell after the last block is the
+// digest.
+runtime fn sha256_compress(ctx: List<u8>, cn: u64, block: List<u8>, bn: u64) → Mutated<List<u8>, u64> {
     let mut ctx = ctx;
-    let ran = ctx.sha256_close(cn, sha256_count(ctx, cn));
-    Mutated(ctx, ran)
+    ctx.sha256_take_block(cn, block, bn, 0);
+    let ran = Sha256::run::bytes(ctx, cn);
+    Mutated(ran.after, ran.value)
 }
 
 // The stream's own accessors are the record's: the count `sha256_update`

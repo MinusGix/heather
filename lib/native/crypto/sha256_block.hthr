@@ -1,22 +1,9 @@
-// What SHA-256's compression takes from outside its context, as compiled
-// code (issues/sha2-compress-native.md, stage C1 of
-// docs/native-lexer-crypto-roadmap.md): the round constants, and a block's
-// sixty-four bytes stored where the schedule begins (FIPS 180-4 §6.2.2).
-//
-// The context is a `Sha256` (`sha256_context.hthr`): the hash value's
-// eight words, the working variables' eight and the schedule's
-// sixty-four, each word four bytes with the most significant first, and
-// the stream's count. The compression itself is functions of that record
-// (`sha256_schedule.hthr`, `sha256_working.hthr`,
-// `sha256_compression.hthr`, where `sha256_compress` is). What stays a
-// function over the span is the block's copy: it stores bytes where the
-// schedule's words lie, a block's words being their bytes, and a word
-// array read as bytes is not a function of the record yet
-// (issues/runtime-record-function-limits.md).
-//
-// Not proved here: that the compiled function is `Sha2::compress`. What it
-// computes is held to an independent implementation and to the standard's
-// vectors where it is linked (crates/linked/tests/sha256.rs).
+// SHA-256's round constants as compiled code (FIPS 180-4 §4.2.2,
+// issues/sha2-compress-native.md, stage C1 of
+// docs/native-lexer-crypto-roadmap.md). The compression is functions of
+// its context, a `Sha256` (`sha256_context.hthr`): `sha256_schedule.hthr`,
+// `sha256_working.hthr`, `sha256_compression.hthr`; `sha256_compress`, the
+// linked function, is in `sha256_stream.hthr`.
 import logic;
 import bool;
 import nat;
@@ -123,17 +110,5 @@ runtime fn sha256_k(t: u64) → u64 {
                 }
             }
         }
-    }
-}
-
-// The block's sixty-four bytes stored where the schedule begins: its
-// first sixteen words, a block's words being their bytes.
-runtime fn List::sha256_take_block(mut self ctx: List<u8>, cn: u64, block: List<u8>, bn, i: u64) → u64
-    decreases (64 - i).toNat() {
-    if h: i < 64 {
-        ctx.put_within(cn, i + Sha256::schedule_at, block.byte_within(bn, i));
-        ctx.sha256_take_block(cn, block, bn, i + 1)
-    } else {
-        i
     }
 }

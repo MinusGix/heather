@@ -974,9 +974,9 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    linked compression**: a function over a bare span calls a record
    function's code (`Sha256::run::bytes(ctx, cn)`, a callee the span
    reflector takes when it is a record function's, `rt_record_of`), so
-   `sha256_compress` copies the block's bytes in (a span function still)
-   and runs `Sha256::run`, and the stream's functions call the same code
-   through `List::sha256_run`. The span spellings of the schedule and
+   `sha256_compress` takes the block's bytes in and runs `Sha256::run`,
+   and the stream's functions reach the same code through the context's
+   own (below). The span spellings of the schedule and
    the rounds are deleted. Against the reference and the standard's
    vectors the linked code is unchanged in what it computes
    (`crates/linked/tests/sha256.rs`, short spans included); its program
@@ -1024,6 +1024,24 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    `Ending::returns_written` and `Ending::returns_marked`
    (`rt_file_returns.hthr`), where the result is a parameter and the
    comparison is of two names.
+
+   **The stream's stores are the context's too**
+   (`sha256_filling.hthr`, `sha256_padding.hthr`): `Sha256::put` (a byte of the block),
+   `push`, `zero`, `pad` and `close`. What stays a function over the span
+   is what reads a second span, the message or the block
+   (`sha256_absorb`, `sha256_take_block`), and those store nothing
+   themselves: each byte goes through `Sha256::push::bytes` or
+   `Sha256::put::bytes`. A byte of the block is a quarter of a schedule
+   word, and with no byte of a word array as a place, `put` reads the
+   word, replaces the byte by its place (`u32_be_with_byte`, four arms,
+   there being no shift by a word in compiled code) and stores the word.
+   That is the honest cost of the missing piece, paid per byte of
+   message; the piece is a byte store into an array of words whose
+   record meaning is that same replacement
+   (`issues/runtime-record-function-limits.md`). One more limit met:
+   `close` takes the count as a parameter, since a field read before a
+   call and used after it is reflected as read after, and the pin does
+   not see that the call leaves it.
 
    Run by conversion on the block of "abc", the schedule's last word
    and the working variables after the first round are FIPS 180-4's

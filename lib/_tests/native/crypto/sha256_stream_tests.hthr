@@ -1,10 +1,52 @@
-// Probes of `sha256_stream`: what its pieces leave in a context of literal
+// Probes of `sha256_stream` and `sha256_filling`: what their pieces leave in a context of literal
 // bytes, short of running a block, which is sixty-four rounds and is not
 // run by conversion here. The initial hash value is held to the
 // specification's. That the three exports together compute SHA-256 is held
 // where they are linked (crates/linked/tests/sha256.rs). Tests, not
 // library: nothing imports this module.
 import sha256_stream;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import sha256_round;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_filling;
+import sha256_padding;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import sha256_context;
+import rt_file_reflect;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
 import sha256_block;
 import stored_words;
 import sha2;
@@ -56,8 +98,8 @@ theorem init_leaves_the_rest(): List::u32_be_within(Sha256::init::bytes(ones(), 
 
 // A byte lands at `fill` in the block, which is byte 64 of the context,
 // and the block is one fuller.
-theorem push_lands(): List::u32_be_within(List::sha256_push(blank(), w(328), w(5), w(0xab)).after, w(328), w(68)) = w(0x00ab0000) { refl }
-theorem push_counts(): List::sha256_push(blank(), w(328), w(5), w(0xab)).value = w(6) { refl }
+theorem push_lands(): List::u32_be_within(Sha256::push::bytes(blank(), w(328), w(5), w(0xab)).after, w(328), w(68)) = w(0x00ab0000) { refl }
+theorem push_counts(): Sha256::push::bytes(blank(), w(328), w(5), w(0xab)).value = w(6) { refl }
 
 // Three bytes of a message from an empty block.
 theorem absorb_three(): List::u32_be_within(List::sha256_absorb(blank(), w(328), [b(0x61), b(0x62), b(0x63)], w(3), w(0), w(0)).after, w(328), w(64)) =
@@ -79,10 +121,17 @@ theorem update_counts(): sha256_count(sha256_update(Sha256::init::bytes(blank(),
 // The padding
 
 // Zeros from `i` to the block's end and nowhere else.
-theorem zero_to_the_end(): words_from(List::sha256_zero(ones(), w(328), w(60)).after, [0xffffffff, 0x00000000, 0xffffffff], 120) = True { refl }
+theorem zero_to_the_end(): words_from(Sha256::zero::bytes(ones(), w(328), w(60)).after, [0xffffffff, 0x00000000, 0xffffffff], 120) = True { refl }
 
 // After three bytes: 0x80 at the fourth, zeros after it, the three as
 // they were, and no block run.
-theorem pad_short(): words_from(List::sha256_pad(ones(), w(328), w(3)).after, [0xffffff80, 0x00000000], 64) = True { refl }
-theorem pad_short_to_the_end(): List::u32_be_within(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(124)) = w(0) { refl }
-theorem pad_short_runs_nothing(): List::u32_be_within(List::sha256_pad(ones(), w(328), w(3)).after, w(328), w(0)) = w(0xffffffff) { refl }
+theorem pad_short(): words_from(Sha256::pad::bytes(ones(), w(328), w(3)).after, [0xffffff80, 0x00000000], 64) = True { refl }
+theorem pad_short_to_the_end(): List::u32_be_within(Sha256::pad::bytes(ones(), w(328), w(3)).after, w(328), w(124)) = w(0) { refl }
+theorem pad_short_runs_nothing(): List::u32_be_within(Sha256::pad::bytes(ones(), w(328), w(3)).after, w(328), w(0)) = w(0xffffffff) { refl }
+
+// A byte's place in its word: the most significant is place 0, and the
+// other three bytes stay.
+theorem with_byte_first(): u32_be_with_byte(w(0x11223344), w(0), w(0xab)) = w(0xab223344) { refl }
+theorem with_byte_last(): u32_be_with_byte(w(0x11223344), w(3), w(0xab)) = w(0x112233ab) { refl }
+// Only the operand's low byte is stored.
+theorem with_byte_low_byte(): u32_be_with_byte(w(0x11223344), w(1), w(0x1ab)) = w(0x11ab3344) { refl }
