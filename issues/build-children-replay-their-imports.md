@@ -27,3 +27,7 @@ Release binary at #553 plus the name-record fix, quiet four-core cloud box, `--b
 ## Done when
 
 The summed child time of a cold library build is within a tenth of the same build done in one process per folder.
+
+## Log
+
+- 2026-11-13: Measured again with the self-checks off ([[kernel-self-check-cost-on-skipped-terms]]): the replays are now half of the build step over a stale seed (560 s of 1125 s of child time), about 35 ms per (module, import) pair over 16,000 pairs. Stack samples of a warm replay put a third of it in `ModuleDelta::relocate` under `load_into`: every import's delta is rebuilt node by node for the child's world, since a constant is an absolute position and nearly every term names one. A child that stays alive would save the decode and not this. What the seed can save instead is in [[sentinel-seed-follows-master]].

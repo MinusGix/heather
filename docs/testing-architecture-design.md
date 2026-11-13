@@ -365,4 +365,17 @@ optimisation from "checked nightly" to "proven".
   run, and the session files an issue naming the first failing merge.
 - **Seeding**: on a fresh cloud box `scripts/test` first unpacks the
   sentinel's stores (`scripts/sentinel seed`). Images only: a seeded image
-  is rechecked on replay, a seeded verdict would not be.
+  is rechecked on replay, a seeded verdict would not be. (The CLI stores
+  keep their verdict file inside the store directory, so the seed has
+  carried those two files since it began: an open decision in
+  `issues/sentinel-seed-follows-master.md`.)
+- **The seed is the images the run used**, not the stores: a store keeps
+  every image of earlier trees until its budget is spent, and the seed had
+  grown to ten times the library's images.
+- **`scripts/sentinel refresh`** publishes the same stores from a checkout
+  whose tree is master's, without running anything, under the last green
+  run's manifest. The gate over a store that matches master replays in
+  seconds; over a seed some dozens of commits behind it elaborates every
+  module master changed and every module those changes keep from being
+  moved, in each fresh container again. A session that has just run a lane
+  over master holds exactly the images the next container needs.
