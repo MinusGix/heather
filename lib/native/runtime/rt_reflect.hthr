@@ -100,8 +100,19 @@ record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> 
 // The elements of an array field, each a word its codec's accessor reads:
 // element `i` of `count` lies at the word `base + i * stride`, and a read
 // of it at a literal index stands for `narrow` of `read` at that word
-// (`read` and `narrow` are applied to it, and to the word read).
-record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr }
+// (`read` and `narrow` are applied to it, and to the word read). A read
+// at an index that is a word, `vector_get(x.f, i.toNat(), 0)`, stands for
+// `narrow` of `read_at` at the word the array begins at, its count and
+// the index: the accessor's checked read, 0 past the count.
+// `under` is the local a new one is assumed under where the terms live.
+record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr, read_at: Expr, under: LocalRef }
+
+// What an element's read stands for: a term, and for a read at a word
+// the local that stands in it for the index beside the index itself. The
+// index is under the body's binders and the accessor's terms under the
+// span's, so the term has a local of the span's for it, and the walk
+// binds that local to the index's variable.
+record ElementRead { term: Handle, index: Option<Pair<Nat, Handle>> }
 
 // What a field `field` of the local `of` stands for: a term, or for an
 // array its elements' terms. `FieldNow(of, call)` says the record the
@@ -632,6 +643,30 @@ fn ElementTerm::reads(self e: ElementTerm, i: Nat) → Tac<Pair<Handle, Handle>>
     pure(Pair(read, value))
 }
 
+// The accessor's checked read of the element at the word `i`, at the
+// element's type.
+fn ElementTerm::reads_at(self e: ElementTerm, i: Handle) → Tac<ElementRead> {
+    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    let bitvec <- lookup("BitVec").bind(λ c => rt_accepted("`BitVec`", c));
+    let word_t <- as_type(App(Global(bitvec), NatLit(64))).bind(λ c => rt_accepted("a word's type", c));
+    let x <- assume(Hd(word_t), "index", Some(e.under)).bind(λ c => rt_accepted("an index's local", c));
+    let word: Nat → Expr = λ n => App(App(Global(of_nat), NatLit(64)), NatLit(n));
+    let read <- next_spelling(App(App(App(e.read_at, word(e.base)), word(e.count)), Local(x.ref))).bind(λ c => rt_accepted("an accessor's read of an element at a word", c));
+    let value <- next_spelling(App(e.narrow, Hd(read))).bind(λ c => rt_accepted("an accessor's read at its element's width", c));
+    pure(ElementRead(value, Some(Pair(x.ref.id, i))))
+}
+
+// The word a term is the `toNat()` of, if it is one.
+fn rt_to_nat_of(i: Handle) → Tac<Option<Handle>> {
+    view(i).bind(λ v => {
+        let word: Option<Handle> = match v {
+            HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "toNat") { True => args.nth(0), False => None },
+            _ => None,
+        };
+        pure(word)
+    })
+}
+
 // The call whose record a local's fields are now read off, if one has
 // been made (`FieldNow`).
 fn Known::now_at(named: List<FieldTerm>) → Option<Pair<Nat, Handle>> {
@@ -702,14 +737,46 @@ fn rt_field_of_local(k: Known, h: Handle) → Tac<Option<Pair<Nat, String>>> {
     })
 }
 
+// An element of an array field the setup named, read at an index that is
+// a word: `vector_get(x.f, i.toNat(), 0)` stands for the accessor's
+// checked read of the array at `i`.
+fn rt_element_at(k: Known, args: List<Handle>) → Tac<Option<ElementRead>> {
+    match args.nth(0) {
+        None => pure(None),
+        Some(v) => match args.nth(1) {
+            None => pure(None),
+            Some(i) => match args.nth(2) {
+                None => pure(None),
+                Some(pad) => rt_field_of_local(k, v).bind(λ field => match field {
+                    None => pure(None),
+                    Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
+                        None => pure(None),
+                        Some(e) => rt_to_nat_of(i).bind(λ word => match word {
+                            None => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` at an index that is not a word's `toNat()`: write `vector_get(t." ++ p.snd ++ ", i.toNat(), 0)`, or `vector_index` at a literal"),
+                            Some(w) => {
+                                let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+                                let same <- defeq(Hd(pad), App(e.narrow, App(App(Global(of_nat), NatLit(64)), NatLit(0))));
+                                match same {
+                                    False => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` with a value past the end that is not 0: the code answers 0 there"),
+                                    True => e.reads_at(w).bind(λ r => pure(Some(r))),
+                                }
+                            },
+                        }),
+                    },
+                }),
+            },
+        },
+    }
+}
+
 // An element of an array field the setup named, read at a literal index:
 // `vector_index(x.f, i, _)` stands for the accessor's read where element
 // `i` lies.
-fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Handle>> {
+fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<ElementRead>> {
     match k.named {
         Nil => pure(None),
         Cons(_, _) => match Known::str_same(rt_base_name(name), "vector_index") {
-            False => pure(None),
+            False => match Known::str_same(rt_base_name(name), "vector_get") { False => pure(None), True => rt_element_at(k, args) },
             True => match args.nth(0) {
                 None => pure(None),
                 Some(v) => match args.nth(1) {
@@ -720,7 +787,7 @@ fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Handle>
                             None => pure(None),
                             Some(e) => rt_literal(i).bind(λ n => match Succ(n).leb(e.count) {
                                 False => rt_refuse("element " ++ decimal_name(Succ(n), n) ++ " of the array field `" ++ p.snd ++ "`, which has fewer"),
-                                True => e.reads(n).bind(λ r => pure(Some(r.snd))),
+                                True => e.reads(n).bind(λ r => pure(Some(ElementRead(r.snd, None)))),
                             }),
                         },
                     }),
@@ -1408,11 +1475,20 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Cons(r, rest) => match rest {
                                     Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
                                     Cons(_, _) => rt_element(k, name, args).bind(λ element => match element {
-                                        Some(u) => rt_go(f, k, st.with_handles([]), u, True).bind(λ rr => {
-                                            let back = rr.fst.with_handles(st.handles);
-                                            let kept = match rr.snd { Var(l) => back.binding(h, l), _ => back };
-                                            pure(kept.finish(h, operand, rr.snd))
-                                        }),
+                                        Some(u) => {
+                                            // An index that is a word is
+                                            // computed first, and the
+                                            // term's local stands for it.
+                                            let indexed: Tac<RSt> = match u.index {
+                                                None => pure(st),
+                                                Some(ix) => rt_go(f, k, st, ix.snd, True).bind(λ ri => pure(ri.fst.with_local(ix.fst, RSt::level(ri.snd)))),
+                                            };
+                                            indexed.bind(λ s1 => rt_go(f, k, s1.with_handles([]), u.term, True).bind(λ rr => {
+                                                let back = rr.fst.with_handles(s1.handles);
+                                                let kept = match rr.snd { Var(l) => back.binding(h, l), _ => back };
+                                                pure(kept.finish(h, operand, rr.snd))
+                                            }))
+                                        },
                                         None => rt_unknown(name),
                                     }),
                                 },

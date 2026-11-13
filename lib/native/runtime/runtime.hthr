@@ -3030,17 +3030,32 @@ fn runtime_held_reached(fs: List<HeldField>, pick: HeldAccess → Bool) → List
     }
 }
 
+// The array fields whose checked element accessor a function of the
+// program is.
+fn runtime_held_arrays(fs: List<HeldField>, pick: HeldEach → Bool) → List<HeldEach> {
+    match fs {
+        Nil => [],
+        Cons(f, rest) => match f.each {
+            None => runtime_held_arrays(rest, pick),
+            Some(e) => match pick(e) { True => Cons(e, runtime_held_arrays(rest, pick)), False => runtime_held_arrays(rest, pick) },
+        },
+    }
+}
+
 // The names the publication applies, each looked up where the `runtime
 // fn` is.
 record HeldNames { plain: Expr, reader_of: Expr, apart: Expr, writer_of: Expr, marked: Expr, none: Expr, more: Expr, bound: Expr, owed: Expr, sound_of: Expr,
-    agrees: Expr, read_entry: Expr, write_entry: Expr, reads_field: Expr, writes_field: Expr, held: Expr, kept: Expr, bind_onto: Expr, holds: Expr, agreement: Expr }
+    agrees: Expr, read_entry: Expr, write_entry: Expr, reads_field: Expr, writes_field: Expr, held: Expr, kept: Expr, bind_onto: Expr, holds: Expr, agreement: Expr,
+    reader_at: Expr, writer_at: Expr, index_entry: Expr, store_entry: Expr, indexes_array: Expr, stores_array: Expr }
 
 fn runtime_held_names() → Tac<HeldNames> {
     pure(HeldNames(<- runtime_held_ref("Reader::plain"), <- runtime_held_ref("Reader::of"), <- runtime_held_ref("Writer::apart"), <- runtime_held_ref("Writer::of"),
         <- runtime_held_ref("HWorld::marked"), <- runtime_held_ref("HWorld::none"), <- runtime_held_ref("HWorld::more"), <- runtime_held_ref("HWorld::bound"),
         <- runtime_held_ref("HWorld::owed"), <- runtime_held_ref("Sound::of"), <- runtime_held_ref("FFun::held_agrees"), <- runtime_held_ref("Stored::read_entry"),
         <- runtime_held_ref("Stored::write_entry"), <- runtime_held_ref("HWorld::reads_field"), <- runtime_held_ref("HWorld::writes_field"), <- runtime_held_ref("FTm::held"),
-        <- runtime_held_ref("FTm::kept"), <- runtime_held_ref("Ty::bind_onto"), <- runtime_held_ref("Stored::Holds"), <- runtime_held_ref("Agrees")))
+        <- runtime_held_ref("FTm::kept"), <- runtime_held_ref("Ty::bind_onto"), <- runtime_held_ref("Stored::Holds"), <- runtime_held_ref("Agrees"),
+        <- runtime_held_ref("Reader::indexed"), <- runtime_held_ref("Writer::indexed"), <- runtime_held_ref("Stored::index_entry"), <- runtime_held_ref("Stored::store_entry"),
+        <- runtime_held_ref("HWorld::indexes_array"), <- runtime_held_ref("HWorld::stores_array")))
 }
 
 // A function of the record that the function calls, as its mark: how
@@ -3342,9 +3357,17 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // Each function's mark: the fields whose accessor it is.
     let readers: List<List<HeldAccess>> = r.funs.map(λ g => runtime_held_reached(r.fields, λ a => a.reader.same(g)));
     let writers: List<List<HeldAccess>> = r.cfuns.map(λ g => runtime_held_reached(r.fields, λ a => a.writer.id.same(g)));
-    let readers_e = runtime_held_list(n.more, n.none, readers.map(λ fs => match fs {
-        Nil => ap(n.plain, [record]),
-        Cons(_, _) => ap(n.reader_of, [record, runtime_held_list(n.more, n.none, fs.map(λ a => entry(n.read_entry, a)))]),
+    // And the arrays whose checked element accessor it is: an array is
+    // marked whole, by where it begins and its count.
+    let readers_at: List<List<HeldEach>> = r.funs.map(λ g => runtime_held_arrays(r.fields, λ e => e.at.reader.same(g)));
+    let writers_at: List<List<HeldEach>> = r.cfuns.map(λ g => runtime_held_arrays(r.fields, λ e => e.at.writer.id.same(g)));
+    let array: Expr → HeldEach → Expr = λ of e => ap(of, [record, e.ty, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part]);
+    let readers_e = runtime_held_list(n.more, n.none, List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
+        Nil => match readers_at.nth(j).unwrap_or([]) {
+            Nil => ap(n.plain, [record]),
+            Cons(e, more) => ap(n.reader_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.index_entry, e)))]),
+        },
+        Cons(a, more) => ap(n.reader_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.read_entry, a)))]),
     }));
     // A computation that is a function of the record is marked with that
     // function.
@@ -3360,7 +3383,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let writers_e = runtime_held_list(n.more, n.none, List::range(writers.len()).map(λ j => match runs.nth(j).unwrap_or(None) {
         Some(run) => run,
         None => match writers.nth(j).unwrap_or([]) {
-            Nil => ap(n.apart, [record]),
+            Nil => match writers_at.nth(j).unwrap_or([]) {
+                Nil => ap(n.apart, [record]),
+                Cons(e, more) => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.store_entry, e)))]),
+            },
             Cons(a, more) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.write_entry, a)))]),
         },
     }));
@@ -3369,9 +3395,15 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // Held as holes solved by them, so that each is one term wherever it
     // stands.
     let hw <- runtime_held(marked, "`" ++ name ++ "`'s marks");
+    // What an array's checked accessor owes: one application of the
+    // array's lemma, at the array's part and the function's place.
+    let owes_at: Expr → Nat → List<HeldEach> → Expr = λ lemma j es =>
+        runtime_held_tuple(n.owed, end, es.map(λ e => ap(lemma, [record, e.ty, hw, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part, by_refl, NatLit(j), by_refl])));
     let owes: Expr → List<List<HeldAccess>> → Expr = λ field fss =>
-        runtime_held_tuple(n.owed, end, List::range(fss.len()).map(λ j =>
-            runtime_held_tuple(n.owed, end, fss.nth(j).unwrap_or([]).map(λ a => ap(field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl])))));
+        runtime_held_tuple(n.owed, end, List::range(fss.len()).map(λ j => match fss.nth(j).unwrap_or([]) {
+            Nil => owes_at(n.indexes_array, j, readers_at.nth(j).unwrap_or([])),
+            Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
+        }));
     let q <- runtime_quoting(ts);
     let at_all <- runtime_held_ref("HWorld::at");
     let ran_names = HeldRan(<- runtime_held_ref("HWorld::Var"), <- runtime_held_ref("HWorld::Scope"), <- runtime_held_ref("HWorld::EnvAt"),
@@ -3387,7 +3419,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     });
     let owes_writers = runtime_held_tuple(n.owed, end, List::range(writers.len()).map(λ j => match rans.nth(j).unwrap_or(None) {
         Some(ran) => ran,
-        None => runtime_held_tuple(n.owed, end, writers.nth(j).unwrap_or([]).map(λ a => ap(n.writes_field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
+        None => match writers.nth(j).unwrap_or([]) {
+            Nil => owes_at(n.stores_array, j, writers_at.nth(j).unwrap_or([])),
+            Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(n.writes_field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
+        },
     }));
     let sound = ap(n.sound_of, [record, hw, whole, owes(n.reads_field, readers), owes_writers]);
     let sound_t <- infer(sound).or_fail("runtime: `" ++ name ++ "`: what its accessors owe at the record's fields (a field's accessor is a function of the program that reads or stores its codec's word): ");

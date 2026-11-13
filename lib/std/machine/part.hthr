@@ -204,6 +204,51 @@ fn Part::element<A>(s: Stored<A>, n, i: Nat, inside: i < n) → Part<[A; n], A>(
         })
 }
 
+// What is true of an array's element as a part is true of it read at any
+// codec that is the array's: a part's own codec is the array's by an
+// equation, and the element is carried along it.
+theorem Part::element_moved<B>(s: Stored<B>, n, i: Nat, inside: i < n, P: (c: Stored<[B; n]>) → Part<[B; n], B>(c) → Type, at: P(s.array(n), Part::element(s, n, i, inside)),
+    c: Stored<[B; n]>, same: s.array(n) = c): P(c, j(same, λ c2 _ => Part<[B; n], B>(c2), Part::element(s, n, i, inside))) {
+    j(same, λ c2 q => P(c2, j(q, λ c3 _ => Part<[B; n], B>(c3), Part::element(s, n, i, inside))), at)
+}
+
+// Element `i` of an array that is a part of a whole, as a part of the
+// whole.
+fn Part::element_in<A, B>({whole: Stored<A>}, n: Nat, self p: Part<A, [B; n]>(whole), s: Stored<B>, same: s.array(n) = p.codec, i: Nat, inside: i < n) → Part<A, B>(whole) {
+    p.then(j(same, λ c _ => Part<[B; n], B>(c), Part::element(s, n, i, inside)))
+}
+
+// It is stored as an element is, a stride on for each index from where
+// the array begins; it is the array's entry, and the whole with it
+// replaced is the whole with the array updated there.
+theorem Part::element_in_codec<A, B>({whole: Stored<A>}, n: Nat, self p: Part<A, [B; n]>(whole), s: Stored<B>, same: s.array(n) = p.codec, i: Nat, inside: i < n):
+    p.element_in(n, s, same, i, inside).codec = s {
+    Part::element_moved(s, n, i, inside, λ (c: Stored<[B; n]>) (t: Part<[B; n], B>(c)) => t.codec = s, refl, p.codec, same)
+}
+
+theorem Part::element_in_offset<A, B>({whole: Stored<A>}, n: Nat, self p: Part<A, [B; n]>(whole), s: Stored<B>, same: s.array(n) = p.codec, i: Nat, inside: i < n):
+    p.element_in(n, s, same, i, inside).offset = i * s.layout.stride() + p.offset {
+    cong_fn(λ (k: Nat) => k + p.offset,
+        Part::element_moved(s, n, i, inside, λ (c: Stored<[B; n]>) (t: Part<[B; n], B>(c)) => t.offset = i * s.layout.stride(), refl, p.codec, same))
+}
+
+theorem Part::element_in_of<A, B>({whole: Stored<A>}, n: Nat, self p: Part<A, [B; n]>(whole), s: Stored<B>, same: s.array(n) = p.codec, i: Nat, inside: i < n, a: A):
+    p.element_in(n, s, same, i, inside).of(a) = vector_index(p.of(a), i, inside) {
+    Part::element_moved(s, n, i, inside, λ (c: Stored<[B; n]>) (t: Part<[B; n], B>(c)) => (v: [B; n]) → t.of(v) = vector_index(v, i, inside), λ v => refl, p.codec, same)(p.of(a))
+}
+
+theorem Part::element_in_with<A, B>({whole: Stored<A>}, n: Nat, self p: Part<A, [B; n]>(whole), s: Stored<B>, same: s.array(n) = p.codec, i: Nat, inside: i < n, a: A, b: B):
+    p.element_in(n, s, same, i, inside).with(a, b) = p.with(a, vector_update(p.of(a), i, b)) {
+    cong_fn(λ (v: [B; n]) => p.with(a, v),
+        Part::element_moved(s, n, i, inside, λ (c: Stored<[B; n]>) (t: Part<[B; n], B>(c)) => (v: [B; n]) → (x: B) → t.with(v, x) = vector_update(v, i, x), λ v x => refl,
+            p.codec, same)(p.of(a), b))
+}
+
+// A whole is itself with a part of it replaced by that part.
+theorem Part::with_of<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), bytes: List<u8>, at: Nat): whole.get(bytes, at) = p.with(whole.get(bytes, at), p.of(whole.get(bytes, at))) {
+    trans(p.frames(bytes, bytes, at, refl, refl), cong_fn(λ (b: B) => p.with(whole.get(bytes, at), b), p.reads(bytes, at)))
+}
+
 // A part of the fields is a part of the record.
 fn Part::field<F, R, B>({fields: Stored<F>}, self p: Part<F, B>(fields), to: F → R, from: R → F, back: (r: R) → to(from(r)) = r, forth: (f: F) → from(to(f)) = f) →
     Part<R, B>(fields.record(to, from, back)) {

@@ -193,6 +193,35 @@ fn vector_update<A>({n: Nat}, v: [A; n], i: Nat, a: A) → [A; n] {
     })(v, i)
 }
 
+// Entry `i` of a vector, and `pad` where it has no such entry: the read
+// beside `vector_update`, total as it is.
+fn vector_get<A>({n: Nat}, v: [A; n], i: Nat, pad: A) → A {
+    (match n as λ m => [A; m] → Nat → A {
+        Zero => λ v i => pad,
+        Succ(_, ih) => λ v i => match i { Zero => head(v), Succ(j) => ih(tail(v), j) },
+    })(v, i)
+}
+
+theorem vector_get_inside<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → (inside: i < n) → vector_get(v, i, pad) = vector_index(v, i, inside) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (pad: A) → (inside: i < m) → vector_get(v, i, pad) = vector_index(v, i, inside) {
+        Zero => λ v i pad inside => false_elim(inside),
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ pad inside => refl,
+            Succ(j) => λ pad inside => ih(tail(v), j, pad, inside),
+        },
+    }
+}
+
+theorem vector_get_past<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → n <= i → vector_get(v, i, pad) = pad {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (pad: A) → m <= i → vector_get(v, i, pad) = pad {
+        Zero => λ v i pad past => refl,
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ pad past => false_elim(past),
+            Succ(j) => λ pad past => ih(tail(v), j, pad, past),
+        },
+    }
+}
+
 // It is the entry of the vector's list.
 theorem vector_entries_nth<A>(n: Nat): (v: [A; n]) → (i: Nat) → (inside: i < n) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
     match n as λ m => (v: [A; m]) → (i: Nat) → (inside: i < m) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
@@ -250,4 +279,10 @@ theorem vector_ext<A>(n: Nat): (v, w: [A; n]) → ((j: Nat) → (inside: j < n) 
             both
         },
     }
+}
+
+// An update past the vector's end changes nothing.
+theorem vector_update_past<A>(n: Nat, v: [A; n], i: Nat, a: A, past: n <= i): vector_update(v, i, a) = v {
+    vector_ext(n, vector_update(v, i, a), v, λ j inside => vector_index_update_other(n, v, i, j, a, inside, λ same =>
+        i.lt_irrefl(i.lt_of_lt_of_le(n, i, j(same, λ k _ => k < n, inside), past))))
 }

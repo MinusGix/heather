@@ -899,17 +899,68 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
    What it does not take yet is
    `issues/runtime-record-function-limits.md`: a branch before the end
    with a store in it, operands and results other than 64-bit words,
-   fields with no accessor, an element at an index that is not a
-   literal, and the index spelled `t.f[i]`.
+   fields with no accessor, and the index spelled `t.f[i]`.
 4. **Calls and loops**: a call of another function of the record
    (**built**, below); a loop (**built**, below and §9.3); an element at
-   an index that is a word (a reader marked with a family of parts and a
-   bound the body's test gives); and a word array's bytes
+   an index that is a word (**built**, below); and a word array's bytes
    (`sha256_take_block` and `sha256_begin` store bytes where words lie,
    which is a second part over the same bytes). Then SHA-256's
    functions are methods of `Sha256` whole, its entry points are exported
    as methods (`linked-export-of-a-method`, merged), and
    `sha256-context-type` closes.
+
+   **An element at an index that is a word** is built
+   (`lib/_tests/native/runtime/runtime_held_index_tests.hthr`):
+   `vector_get(t.f, i.toNat(), 0)` reads it and `t.f := vector_update(t.f,
+   i.toNat(), x)` stores it, at an array of words.
+
+   The element is the **total** one. `vector_get` answers its pad past
+   the vector's end and `vector_update` changes nothing there, and the
+   code does the same: it tests the index against the array's count,
+   reads 0 past it and stores nothing. So the function of the record
+   has no bound to prove at the access, the span function needs none to
+   be the record function, and a loop's body is the same term whether or
+   not its test bounds the index. The alternative, an index with a proof
+   (`vector_index(v, i.toNat(), inside)`), saves the comparison and
+   costs a proof parameter in compiled code, and the bound a schedule's
+   `w[t - 16]` needs is not the one its loop's test gives; the
+   comparison a proof would make unnecessary is item 5's.
+
+   - *Library.* A codec's accessor has a checked element reader and
+     writer beside its word's (`Accessor`'s `read_at`, `write_at`,
+     `stored_accessor.hthr`): the span's place and length word, the word
+     the array begins at, its count, the index, and for a store the
+     word. For big-endian words they are `runtime fn`s of two lines over
+     the word accessors (`List::u32_be_at_within`, `stored_words.hthr`),
+     with two laws each: inside the count it is the codec's `get` or
+     `put` a stride on for each index, past it 0 or nothing. Nothing is
+     compiled per array or per field.
+   - *Theory* (`rt_held.hthr`). Two more marks: a pure function may be
+     an indexed reader (`Indexes`) and a computation an indexed writer
+     (`Stores`), each with the arrays it reaches, an array by the offset
+     it begins at and then its count, and what it stands for a function
+     of the record and the index word. The held meaning of a call reads
+     the element off the record at the word its index variable is. What
+     a mark owes at an array (`HWorld::Indexes`, `HWorld::Stores`) is
+     proved once, for every record, array field and codec with an
+     accessor (`Stored::held_index`, `Stored::held_store`,
+     `rt_held_fields.hthr`): element `i` of an array that is a part of
+     the whole is a part of the whole (`Part::element_in`, `part.hthr`),
+     and the accessor's laws are the codec's there. A store's offset and
+     count are read off the literals that bound them, as a field's
+     offset is; a read needs no such knowledge.
+   - *Reflector.* `vector_get` at a field of the record and a word's
+     `toNat()` stands for the accessor's checked read; a field's new
+     value that is the field under `vector_update`s at words is one
+     store for each, the innermost first. The index is any word the body
+     computes.
+   - *Generator.* An array is marked whole, by its part: one entry and
+     one application of the array's lemma, whatever its count.
+
+   A loop over an array compiles with its record theorem (the probes'
+   `Sched::expand` is the shape of SHA-256's message schedule, each word
+   from two before it), and runs on bytes. The index is not yet spelled
+   `t.f[i]`, which is surface and Minus's to choose.
 
    **A loop** is built
    (`lib/_tests/native/runtime/runtime_held_loop_tests.hthr`): a

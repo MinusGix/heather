@@ -65,6 +65,20 @@ class Accessor<A>(codec: Stored<A>) {
     reads: (span: List<u8>) → (length, i: u64) → i.toNat() + codec.layout.size <= length.toNat() → read(span, length, i) = wide(codec.get(span, i.toNat())),
     writes: (span: List<u8>) → (length, i, word: u64) → i.toNat() + codec.layout.size <= length.toNat() → length.toNat() <= span.len() →
         write(span, length, i, word) = Mutated(codec.put(span, i.toNat(), narrow(word)), word),
+    // An element of an array of the codec's values, by an index that is a
+    // word: the array's first byte, its count and the index. The code
+    // tests the index against the count, so past the count the read
+    // answers the word of no value and the store stores nothing.
+    read_at: List<u8> → u64 → u64 → u64 → u64 → u64,
+    write_at: List<u8> → u64 → u64 → u64 → u64 → u64 → Mutated<List<u8>, u64>,
+    reads_at: (span: List<u8>) → (length, base, count, i: u64) → i.toNat() < count.toNat() →
+        i.toNat() * codec.layout.stride() + base.toNat() + codec.layout.size <= length.toNat() →
+        read_at(span, length, base, count, i) = wide(codec.get(span, i.toNat() * codec.layout.stride() + base.toNat())),
+    reads_past: (span: List<u8>) → (length, base, count, i: u64) → count.toNat() <= i.toNat() → read_at(span, length, base, count, i) = wide(narrow(0)),
+    writes_at: (span: List<u8>) → (length, base, count, i, word: u64) → i.toNat() < count.toNat() →
+        i.toNat() * codec.layout.stride() + base.toNat() + codec.layout.size <= length.toNat() → length.toNat() <= span.len() →
+        write_at(span, length, base, count, i, word) = Mutated(codec.put(span, i.toNat() * codec.layout.stride() + base.toNat(), narrow(word)), word),
+    writes_past: (span: List<u8>) → (length, base, count, i, word: u64) → count.toNat() <= i.toNat() → write_at(span, length, base, count, i, word) = Mutated(span, word),
 }
 
 instance Accessor<BitVec(32)>(Stored::u32_be()) {
@@ -75,6 +89,12 @@ instance Accessor<BitVec(32)>(Stored::u32_be()) {
     write := λ span length i word => List::put_u32_be_within(span, length, i, word),
     reads := λ span length i inside => span.u32_be_within_stored(length, i, inside),
     writes := λ span length i word inside own => span.put_u32_be_within_stored(length, i, word, inside, own),
+    read_at := λ span length base count i => span.u32_be_at_within(length, base, count, i),
+    write_at := λ span length base count i word => List::put_u32_be_at_within(span, length, base, count, i, word),
+    reads_at := λ span length base count i below inside => span.u32_be_at_within_stored(length, base, count, i, below, inside),
+    reads_past := λ span length base count i past => span.u32_be_at_within_past(length, base, count, i, past),
+    writes_at := λ span length base count i word below inside own => span.put_u32_be_at_within_stored(length, base, count, i, word, below, inside, own),
+    writes_past := λ span length base count i word past => span.put_u32_be_at_within_past(length, base, count, i, word, past),
 }
 
 instance Accessor<BitVec(64)>(Stored::u64_be()) {
@@ -85,6 +105,12 @@ instance Accessor<BitVec(64)>(Stored::u64_be()) {
     write := λ span length i word => List::put_u64_be_within(span, length, i, word),
     reads := λ span length i inside => span.u64_be_within_stored(length, i, inside),
     writes := λ span length i word inside own => span.put_u64_be_within_stored(length, i, word, inside, own),
+    read_at := λ span length base count i => span.u64_be_at_within(length, base, count, i),
+    write_at := λ span length base count i word => List::put_u64_be_at_within(span, length, base, count, i, word),
+    reads_at := λ span length base count i below inside => span.u64_be_at_within_stored(length, base, count, i, below, inside),
+    reads_past := λ span length base count i past => span.u64_be_at_within_past(length, base, count, i, past),
+    writes_at := λ span length base count i word below inside own => span.put_u64_be_at_within_stored(length, base, count, i, word, below, inside, own),
+    writes_past := λ span length base count i word past => span.put_u64_be_at_within_past(length, base, count, i, word, past),
 }
 
 // The members as functions of the codec. A generator applies these: a
@@ -92,6 +118,12 @@ instance Accessor<BitVec(64)>(Stored::u64_be()) {
 fn Stored::word_read<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, i: u64) → u64 { A.read(span, length, i) }
 
 fn Stored::word_write<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, i, word: u64) → Mutated<List<u8>, u64> { A.write(span, length, i, word) }
+
+fn Stored::word_read_at<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, base, count, i: u64) → u64 { A.read_at(span, length, base, count, i) }
+
+fn Stored::word_write_at<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, base, count, i, word: u64) → Mutated<List<u8>, u64> {
+    A.write_at(span, length, base, count, i, word)
+}
 
 fn Stored::word_of<A: Accessor(codec)>(self codec: Stored<A>, a: A) → u64 { A.wide(a) }
 

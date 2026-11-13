@@ -104,3 +104,138 @@ theorem HWorld::writes_field<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: 
             λ y _ => whole.Holds(y, FTm::word(hw.fw.w.tys, g, env, length), p.with(a, B.narrow(FTm::word(hw.fw.w.tys, g, env, v)))),
             codec.held_write(p, same, FTm::word(hw.fw.w.tys, g, env, i), here, own, FTm::word(hw.fw.w.tys, g, env, length), a, FTm::word(hw.fw.w.tys, g, env, v), holds))
 }
+
+// ---------------------------------------------------------------------------
+// An array's element at an index that is a word. The accessor tests the
+// index against the count it is handed, so what it reads is the vector's
+// total entry (`vector_get`, the word of no value past the end) and what
+// it stores is the vector's total update (`vector_update`, nothing past
+// the end): a function of the record, with no bound to prove at the call.
+
+// The span, holding a record, with a value stored where a part of the
+// record lies holds the record with the part replaced.
+theorem Stored::held_put<A, B>({whole: Stored<A>}, self codec: Stored<B>, p: Part<A, B>(whole), same: p.codec = codec, own: List<u8>, n: u64, a: A, b: B,
+    holds: whole.Holds(own, n, a)): whole.Holds(codec.put(own, p.offset, b), n, p.with(a, b)) {
+    let within: (codec.layout.size + p.offset <= whole.layout.size) = j(same, λ c _ => c.layout.size + p.offset <= whole.layout.size, p.within);
+    let lent: (whole.layout.size <= n.toNat()) = holds.left;
+    let spans: (n.toNat() <= own.len()) = holds.right.left;
+    let fits: (whole.layout.size <= own.len()) = omega;
+    let room: (codec.layout.size + p.offset <= own.len()) = omega;
+    let long: (codec.put(own, p.offset, b).len() = own.len()) = codec.len_put(own, p.offset, b, room);
+    let got: (whole.get(p.codec.put(own, p.offset, b), 0) = p.with(whole.get(own, 0), b)) = p.get_put(own, 0, b, fits);
+    let at_codec: (whole.get(codec.put(own, p.offset, b), 0) = p.with(whole.get(own, 0), b)) =
+        j(same, λ c _ => whole.get(c.put(own, p.offset, b), 0) = p.with(whole.get(own, 0), b), got);
+    And(lent, And(j(sym(long), λ k _ => n.toNat() <= k, spans), trans(at_codec, cong_fn(λ (x: A) => p.with(x, b), holds.right.right))))
+}
+
+// The accessor's read of an array's element at a word is the total entry
+// of the array the span's record has, as the accessor's word.
+theorem Stored::held_index<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec,
+    base, count, i: u64, place: base.toNat() = p.offset, counted: count.toNat() = n, own: List<u8>, len: u64, a: A, holds: whole.Holds(own, len, a)):
+    B.read_at(own, len, base, count, i) = B.wide(vector_get(p.of(a), i.toNat(), B.narrow(0))) {
+    let k = i.toNat();
+    let stride = codec.layout.stride();
+    let past_end: (n <= k → B.read_at(own, len, base, count, i) = B.wide(vector_get(p.of(a), k, B.narrow(0)))) = λ past =>
+        trans(B.reads_past(own, len, base, count, i, j(sym(counted), λ m _ => m <= k, past)),
+            cong_fn(λ (x: B) => B.wide(x), sym(vector_get_past(n, p.of(a), k, B.narrow(0), past))));
+    match k.lt_trichotomy(n) {
+        Inl(below) => {
+            let e = p.element_in(n, codec, same, k, below);
+            let e_codec: (e.codec = codec) = p.element_in_codec(n, codec, same, k, below);
+            let e_offset: (e.offset = k * stride + p.offset) = p.element_in_offset(n, codec, same, k, below);
+            let within: (codec.layout.size + (k * stride + p.offset) <= whole.layout.size) =
+                j(e_offset, λ o _ => codec.layout.size + o <= whole.layout.size, j(e_codec, λ c _ => c.layout.size + e.offset <= whole.layout.size, e.within));
+            let lent: (whole.layout.size <= len.toNat()) = holds.left;
+            let inside: (k * stride + base.toNat() + codec.layout.size <= len.toNat()) = omega;
+            let there: (k * stride + base.toNat() = e.offset) = trans(cong_fn(λ (o: Nat) => k * stride + o, place), sym(e_offset));
+            let read: (codec.get(own, k * stride + base.toNat()) = e.of(whole.get(own, 0))) =
+                trans(cong_fn(λ (o: Nat) => codec.get(own, o), there), trans(cong_fn(λ (s: Stored<B>) => s.get(own, e.offset), sym(e_codec)), e.reads(own, 0)));
+            let entry: (e.of(whole.get(own, 0)) = vector_get(p.of(a), k, B.narrow(0))) =
+                trans(cong_fn(λ (x: A) => e.of(x), holds.right.right),
+                    trans(p.element_in_of(n, codec, same, k, below, a), sym(vector_get_inside(n, p.of(a), k, B.narrow(0), below))));
+            trans(B.reads_at(own, len, base, count, i, j(sym(counted), λ m _ => k < m, below), inside), cong_fn(λ (x: B) => B.wide(x), trans(read, entry)))
+        },
+        Inr(rest) => match rest {
+            Inl(at_end) => past_end(omega),
+            Inr(beyond) => past_end(omega),
+        },
+    }
+}
+
+// The accessor's store of a word into an array's element at a word leaves
+// the span holding the record with the array updated there.
+theorem Stored::held_store<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec,
+    base, count, i: u64, place: base.toNat() = p.offset, counted: count.toNat() = n, own: List<u8>, len: u64, a: A, word: u64, holds: whole.Holds(own, len, a)):
+    whole.Holds(B.write_at(own, len, base, count, i, word).after, len, p.with(a, vector_update(p.of(a), i.toNat(), B.narrow(word)))) {
+    let k = i.toNat();
+    let stride = codec.layout.stride();
+    let past_end: (n <= k → whole.Holds(B.write_at(own, len, base, count, i, word).after, len, p.with(a, vector_update(p.of(a), k, B.narrow(word))))) = λ past => {
+        let left: (B.write_at(own, len, base, count, i, word).after = own) =
+            cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, B.writes_past(own, len, base, count, i, word, j(sym(counted), λ m _ => m <= k, past)));
+        let kept: (a = p.with(a, p.of(a))) = j(holds.right.right, λ x _ => x = p.with(x, p.of(x)), p.with_of(own, 0));
+        let same_record: (a = p.with(a, vector_update(p.of(a), k, B.narrow(word)))) =
+            trans(kept, cong_fn(λ (v: [B; n]) => p.with(a, v), sym(vector_update_past(n, p.of(a), k, B.narrow(word), past))));
+        j(sym(left), λ bytes _ => whole.Holds(bytes, len, p.with(a, vector_update(p.of(a), k, B.narrow(word)))),
+            j(same_record, λ x _ => whole.Holds(own, len, x), holds))
+    };
+    match k.lt_trichotomy(n) {
+        Inl(below) => {
+            let e = p.element_in(n, codec, same, k, below);
+            let e_codec: (e.codec = codec) = p.element_in_codec(n, codec, same, k, below);
+            let e_offset: (e.offset = k * stride + p.offset) = p.element_in_offset(n, codec, same, k, below);
+            let within: (codec.layout.size + (k * stride + p.offset) <= whole.layout.size) =
+                j(e_offset, λ o _ => codec.layout.size + o <= whole.layout.size, j(e_codec, λ c _ => c.layout.size + e.offset <= whole.layout.size, e.within));
+            let lent: (whole.layout.size <= len.toNat()) = holds.left;
+            let spans: (len.toNat() <= own.len()) = holds.right.left;
+            let inside: (k * stride + base.toNat() + codec.layout.size <= len.toNat()) = omega;
+            let there: (k * stride + base.toNat() = e.offset) = trans(cong_fn(λ (o: Nat) => k * stride + o, place), sym(e_offset));
+            let stored: (B.write_at(own, len, base, count, i, word).after = codec.put(own, e.offset, B.narrow(word))) =
+                trans(cong_fn(λ (m: Mutated<List<u8>, u64>) => m.after, B.writes_at(own, len, base, count, i, word, j(sym(counted), λ m _ => k < m, below), inside, spans)),
+                    cong_fn(λ (o: Nat) => codec.put(own, o, B.narrow(word)), there));
+            let held: whole.Holds(codec.put(own, e.offset, B.narrow(word)), len, e.with(a, B.narrow(word))) = codec.held_put(e, e_codec, own, len, a, B.narrow(word), holds);
+            j(sym(stored), λ bytes _ => whole.Holds(bytes, len, p.with(a, vector_update(p.of(a), k, B.narrow(word)))),
+                j(p.element_in_with(n, codec, same, k, below, a, B.narrow(word)), λ x _ => whole.Holds(codec.put(own, e.offset, B.narrow(word)), len, x), held))
+        },
+        Inr(rest) => match rest {
+            Inl(at_end) => past_end(omega),
+            Inr(beyond) => past_end(omega),
+        },
+    }
+}
+
+// An array in the marks of its accessor's indexed reader and writer:
+// where it begins, its count, and its element at a word.
+fn Stored::index_entry<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole)) → Pair<Nat, List<Pair<Nat, A → BitVec(64) → BitVec(64)>>> {
+    HWorld::array_entry(p.offset, n, λ (a: A) (i: BitVec(64)) => B.wide(vector_get(p.of(a), i.toNat(), B.narrow(0))))
+}
+
+fn Stored::store_entry<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole)) → Pair<Nat, List<Pair<Nat, A → BitVec(64) → BitVec(64) → A>>> {
+    HWorld::array_entry(p.offset, n, λ (a: A) (i: BitVec(64)) (word: BitVec(64)) => p.with(a, vector_update(p.of(a), i.toNat(), B.narrow(word))))
+}
+
+// What each owes there, as the marks ask it: one proof for the array's
+// one count.
+theorem HWorld::indexes_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: Stored<A>}, codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec, f: Nat,
+    bridge: (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) => FTm::read(hw.fw, own, f, [place, length, b, c, i], g, env))
+        = (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.w.sigs, f).result, B.read_at(own, FTm::word(hw.fw.w.tys, g, env, length), FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i))))):
+    FTm::Fields(codec.index_entry(n, p).snd, λ (count: Nat) (get: A → BitVec(64) → BitVec(64)) => hw.Indexes(whole, f, 64, codec.index_entry(n, p).fst, count, get)) {
+    And(λ place length b c i own a g env holds here counted =>
+        trans(cong_fn(λ (r: (place: Nat) → (length: Nat) → (b: Nat) → (c: Nat) → (i: Nat) → (own: List<u8>) → (g: List<Ty>) → Env(hw.fw.w.tys, g) → Sig::at(hw.fw.w.sigs, f).result.sem(hw.fw.w.tys)) =>
+                r(place, length, b, c, i, own, g, env), bridge),
+            cong_fn(λ (w: BitVec(64)) => Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.w.sigs, f).result, w),
+                codec.held_index(n, p, same, FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), here, counted, own, FTm::word(hw.fw.w.tys, g, env, length), a, holds))), trivial)
+}
+
+theorem HWorld::stores_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: Stored<A>}, codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec, f: Nat,
+    bridge: (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            FTm::called(hw.fw, g, env, f, [place, length, b, c, i, v], own).after)
+        = (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            B.write_at(own, FTm::word(hw.fw.w.tys, g, env, length), FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), FTm::word(hw.fw.w.tys, g, env, v)).after)):
+    FTm::Fields(codec.store_entry(n, p).snd, λ (count: Nat) (set: A → BitVec(64) → BitVec(64) → A) => hw.Stores(whole, f, 64, codec.store_entry(n, p).fst, count, set)) {
+    And(λ place length b c i v own a g env holds here counted =>
+        j(sym(cong_fn(λ (r: (place: Nat) → (length: Nat) → (b: Nat) → (c: Nat) → (i: Nat) → (v: Nat) → (own: List<u8>) → (g: List<Ty>) → Env(hw.fw.w.tys, g) → List<u8>) =>
+                r(place, length, b, c, i, v, own, g, env), bridge)),
+            λ y _ => whole.Holds(y, FTm::word(hw.fw.w.tys, g, env, length), p.with(a, vector_update(p.of(a), FTm::word(hw.fw.w.tys, g, env, i).toNat(), B.narrow(FTm::word(hw.fw.w.tys, g, env, v))))),
+            codec.held_store(n, p, same, FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), here, counted, own, FTm::word(hw.fw.w.tys, g, env, length), a, FTm::word(hw.fw.w.tys, g, env, v), holds)), trivial)
+}

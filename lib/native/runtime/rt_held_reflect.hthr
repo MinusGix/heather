@@ -41,6 +41,12 @@
 // and no others: the offsets its accessors are called at are read off
 // the reflection.
 //
+// At an index that is a word, `vector_get(t.f, i.toNat(), 0)` stands for
+// the accessor's checked read of the array (the word it begins at, its
+// count and the index; 0 past the count), and a field whose new value is
+// the field under `vector_update`s at words is one checked store for
+// each. The array is then marked whole, by its part.
+//
 // A function may call another function of the record that was compiled
 // as one (`t.m(x)` at a `runtime fn T::m(mut self t: T, …)` declared
 // before it): the call is the callee's code over the span, on the span's
@@ -75,13 +81,19 @@ import rt_file_reflect;
 // codec and the instance).
 record HeldAccess { reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, ty: Expr, part: Expr, codec: Expr, instance: Expr }
 
+// An array field by an index that is a word: the globals of its codec's
+// checked reader and writer of an element, the array's part of the
+// record, and the words it begins at and its count is, as the accessor's
+// call has them.
+record HeldAt { reader: Nat, writer: GlobalRef, writer_name: String, part: Expr, base: Handle, count: Handle }
+
 // An array field whose elements' codec has an accessor: what its
 // elements stand for where they are read (`ElementTerm`), the accessor's
 // globals and terms, its element's type and count, the field as a term
 // of the record's local, and the terms an element's part and an entry of
 // a vector are built by (each applied to an index and `trivial`).
 record HeldEach { term: ElementTerm, reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, ty: Expr, codec: Expr, instance: Expr,
-    own: Expr, then_of: Expr, element_of: Expr, index_of: Expr, inside: Expr }
+    own: Expr, then_of: Expr, element_of: Expr, index_of: Expr, inside: Expr, at: HeldAt }
 
 // A field: its name, where it lies (the word `T::f_at`), its accessor,
 // if its codec has one, and its elements' if it is an array of words.
@@ -134,7 +146,8 @@ fn rt_held_ends<A>() → Tac<A> {
 // accessor's globals and terms, its read and its narrowing as terms to
 // apply (to an offset, and to the word read), and the part's value read
 // at `at`.
-record HeldCodec { reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, codec: Expr, instance: Expr, read: Expr, narrow: Expr, value: Handle }
+record HeldCodec { reader: Nat, writer: GlobalRef, writer_name: String, wide: Expr, codec: Expr, instance: Expr, read: Expr, narrow: Expr, value: Handle,
+    read_at: Expr, reader_at: Nat, writer_at: GlobalRef, writer_at_name: String }
 
 fn rt_held_codec(what: String, ty: Handle, part: Expr, span, length: Expr, at: Expr) → Tac<Option<HeldCodec>> {
     let stores <- lookup("Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
@@ -157,9 +170,24 @@ fn rt_held_codec(what: String, ty: Handle, part: Expr, span, length: Expr, at: E
             let value <- next_spelling(App(narrows, Hd(rd))).bind(λ c => rt_accepted("an accessor's read at its field's width", c));
             let rv <- view(rd);
             let wv <- view(wr);
+            // The checked reader and writer of an element at a word.
+            let read_at <- lookup("Stored::word_read_at").bind(λ c => rt_accepted("an accessor's read of an element", c));
+            let write_at <- lookup("Stored::word_write_at").bind(λ c => rt_accepted("an accessor's store of an element", c));
+            let reads_at = rt_ap(Global(read_at), of ++ [span, length]);
+            let rda <- next_spelling(rt_ap(reads_at, [at, at, at])).bind(λ c => rt_accepted("an accessor's read of an element", c));
+            let wra <- next_spelling(rt_ap(Global(write_at), of ++ [span, length, at, at, at, length])).bind(λ c => rt_accepted("an accessor's store of an element", c));
+            let rav <- view(rda);
+            let wav <- view(wra);
             match rv {
                 HGlobal(rg, _, _) => match wv {
-                    HGlobal(wg, wname, _) => pure(Some(HeldCodec(rg.id, wg, wname, rt_ap(Global(wide), of), codec, Hd(inst), reads, narrows, value))),
+                    HGlobal(wg, wname, _) => match rav {
+                        HGlobal(rag, _, _) => match wav {
+                            HGlobal(wag, waname, _) => pure(Some(HeldCodec(rg.id, wg, wname, rt_ap(Global(wide), of), codec, Hd(inst), reads, narrows, value,
+                                reads_at, rag.id, wag, waname))),
+                            _ => rt_refuse("the accessor of " ++ what ++ "'s codec does not store an element by a function of the program"),
+                        },
+                        _ => rt_refuse("the accessor of " ++ what ++ "'s codec does not read an element by a function of the program"),
+                    },
                     _ => rt_refuse("the accessor of " ++ what ++ "'s codec does not store by a function of the program"),
                 },
                 _ => rt_refuse("the accessor of " ++ what ++ "'s codec does not read by a function of the program"),
@@ -210,7 +238,7 @@ fn rt_held_element_codec(fuel: Nat, fname: String, e: Expr) → Tac<Handle> {
 // The elements of an array field, where their codec has an accessor.
 // Where element `i` lies is the place of its part: the field's, then the
 // element's in the array.
-fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalRef, part: Expr, element: Handle, length: Handle, span, len: Expr) → Tac<Option<HeldEach>> {
+fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalRef, part: Expr, element: Handle, length: Handle, span, len: Expr, under: LocalRef) → Tac<Option<HeldEach>> {
     let count <- rt_literal(length);
     let then_g <- lookup("Part::then").bind(λ c => rt_accepted("a part of a part (import `part`)", c));
     let element_g <- lookup("Part::element").bind(λ c => rt_accepted("an array's element as a part (import `part`)", c));
@@ -232,9 +260,27 @@ fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalR
             let next: Tac<Nat> = match more { Zero => pure(base), Succ(_) => numeral(place_of(1)).bind(λ c => rt_accepted("where the second element of `" ++ fname ++ "` lies", c)) };
             let second <- next;
             let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
-            let found <- rt_held_codec("an element of field `" ++ fname ++ "`", element, part_of(0), span, len, rt_ap(Global(of_nat), [NatLit(64), NatLit(base)]));
-            pure(found.map(λ c => HeldEach(ElementTerm(count, base, second - base, c.read, c.narrow), c.reader, c.writer, c.writer_name, c.wide, Hd(element), c.codec, c.instance,
-                Hd(own), then_of, element_of, rt_ap(Global(index_g), [Hd(element), Hd(length)]), Hd(inside))))
+            let word: Nat → Expr = λ n => rt_ap(Global(of_nat), [NatLit(64), NatLit(n)]);
+            let found <- rt_held_codec("an element of field `" ++ fname ++ "`", element, part_of(0), span, len, word(base));
+            match found {
+                None => pure(None),
+                Some(c) => {
+                    // The words the array begins at and its count is, as a
+                    // call of the checked reader has them.
+                    let spelled <- next_spelling(rt_ap(c.read_at, [word(base), word(count), len])).bind(λ s => rt_accepted("an accessor's read of an element of `" ++ fname ++ "`", s));
+                    let sv <- view(spelled);
+                    let ends: Option<Pair<Handle, Handle>> = match sv {
+                        HGlobal(_, _, args) => args.nth(2).and_then(λ b => args.nth(3).map(λ n => Pair(b, n))),
+                        _ => None,
+                    };
+                    match ends {
+                        None => rt_refuse("the accessor of an element of field `" ++ fname ++ "` does not read by a span, its length word, an array's offset, its count and an index"),
+                        Some(be) => pure(Some(HeldEach(ElementTerm(count, base, second - base, c.read, c.narrow, c.read_at, under), c.reader, c.writer, c.writer_name, c.wide, Hd(element),
+                            c.codec, c.instance, Hd(own), then_of, element_of, rt_ap(Global(index_g), [Hd(element), Hd(length)]), Hd(inside),
+                            HeldAt(c.reader_at, c.writer_at, c.writer_at_name, part, be.fst, be.snd)))),
+                    }
+                },
+            }
         },
     }
 }
@@ -242,7 +288,7 @@ fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalR
 // The fields of the record, and what a read of each stands for.
 record HeldFields { fields: List<HeldField>, named: List<FieldTerm> }
 
-fn rt_held_fields(tname: String, record: LocalInfo, stored: GlobalRef, fs: List<FieldInfo>, span, length: Expr) → Tac<HeldFields> {
+fn rt_held_fields(tname: String, record: LocalInfo, stored: GlobalRef, fs: List<FieldInfo>, span, length: Expr, under: LocalRef) → Tac<HeldFields> {
     match fs {
         Nil => pure(HeldFields([], [])),
         Cons(f, rest) => match f.ty {
@@ -252,10 +298,10 @@ fn rt_held_fields(tname: String, record: LocalInfo, stored: GlobalRef, fs: List<
                 let at <- resolve(tname ++ "::" ++ f.name ++ "_at").bind(λ c => rt_accepted("where field `" ++ f.name ++ "` lies", c));
                 let part_g <- lookup(tname ++ "::" ++ f.name ++ "_part").bind(λ c => rt_accepted("the part of field `" ++ f.name ++ "`", c));
                 let array <- rt_held_array(ty);
-                let more <- rt_held_fields(tname, record, stored, rest, span, length);
+                let more <- rt_held_fields(tname, record, stored, rest, span, length, under);
                 match array {
                     Some(a) => {
-                        let each <- rt_held_each(tname, f.name, record, stored, Global(part_g), a.fst, a.snd, span, length);
+                        let each <- rt_held_each(tname, f.name, record, stored, Global(part_g), a.fst, a.snd, span, length, under);
                         let named = match each { None => more.named, Some(e) => Cons(FieldEach(record.ref.id, f.name, e.term), more.named) };
                         pure(HeldFields(Cons(HeldField(f.name, at, None, each), more.fields), named))
                     },
@@ -328,9 +374,15 @@ fn rt_held_base(record: Nat, fs: List<HeldField>, values: List<Handle>) → Tac<
     }
 }
 
+// An element of an array stored at an index that is a word: the
+// accessor's checked writer, the words the array begins at and its count
+// is, and the variable the index is.
+record HeldIndexed { writer: GlobalRef, writer_name: String, base: Handle, count: Handle, level: Nat }
+
 // A field that changed: its accessor, where it lies, and the variable
-// its new value's word is.
-record HeldSet { access: HeldAccess, at: Handle, level: Nat }
+// its new value's word is; and for an element at a word, how it is
+// stored (`index`).
+record HeldSet { access: HeldAccess, at: Handle, level: Nat, index: Option<HeldIndexed> }
 
 // An entry of a vector as the term that is there: `vector_index` read
 // through its definition, one entry of the vector at a step.
@@ -374,7 +426,7 @@ fn rt_held_elements(fuel: Nat, k: Known, st: RSt, fname: String, e: HeldEach, va
                     };
                     let at_h <- at;
                     let later <- rt_held_elements(fuel, k, r.fst, fname, e, value, rest);
-                    pure(Pair(later.fst, Cons(HeldSet(e.access(i), at_h, RSt::level(r.snd)), later.snd)))
+                    pure(Pair(later.fst, Cons(HeldSet(e.access(i), at_h, RSt::level(r.snd), None), later.snd)))
                 },
             }
         },
@@ -388,15 +440,105 @@ record HeldStored { st: RSt, segs: List<FSeg>, cfuns: List<Nat> }
 fn rt_held_stores(fuel: Nat, k: Known, w: HeldStored, sets: List<HeldSet>) → Tac<HeldStored> {
     match sets {
         Nil => pure(w),
-        Cons(s, rest) => {
-            let found <- rt_file_callee(k, w.cfuns, s.access.writer, s.access.writer_name);
-            let ra <- rt_go(fuel, k, w.st, s.at, True);
-            let st = ra.fst;
-            rt_held_stores(fuel, k,
-                HeldStored(st.written(Succ(st.depth)),
-                    Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(ra.snd)), st.index(s.level)]), FSeg::lets(st.lets) ++ w.segs), found.fst),
-                rest)
+        Cons(s, rest) => match s.index {
+            None => {
+                let found <- rt_file_callee(k, w.cfuns, s.access.writer, s.access.writer_name);
+                let ra <- rt_go(fuel, k, w.st, s.at, True);
+                let st = ra.fst;
+                rt_held_stores(fuel, k,
+                    HeldStored(st.written(Succ(st.depth)),
+                        Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(ra.snd)), st.index(s.level)]), FSeg::lets(st.lets) ++ w.segs), found.fst),
+                    rest)
+            },
+            Some(x) => {
+                let found <- rt_file_callee(k, w.cfuns, x.writer, x.writer_name);
+                let rb <- rt_go(fuel, k, w.st, x.base, True);
+                let rc <- rt_go(fuel, k, rb.fst, x.count, True);
+                let st = rc.fst;
+                rt_held_stores(fuel, k,
+                    HeldStored(st.written(Succ(st.depth)),
+                        Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(rb.snd)), st.index(RSt::level(rc.snd)), st.index(x.level), st.index(s.level)]),
+                            FSeg::lets(st.lets) ++ w.segs), found.fst),
+                    rest)
+            },
         },
+    }
+}
+
+// Whether a term is the array field `fname` of the record a store is
+// made onto: the field of the record a built record is built on, or,
+// where every field of the built record is new, of the record the span
+// holds.
+fn rt_held_own(fuel: Nat, k: Known, record: Nat, settled: Bool, h: Handle, base: Option<Handle>, fname: String) → Tac<Bool> {
+    match base {
+        Some(_) => rt_held_kept(fuel, k, h, base, fname),
+        None => match settled {
+            False => pure(False),
+            True => rt_field_read(h).bind(λ read => match read {
+                None => pure(False),
+                Some(p) => match Known::str_same(rt_base_name(p.snd), fname) {
+                    False => pure(False),
+                    True => view(p.fst).bind(λ v => pure(match v { HLocal(y, args) => match args { Nil => y.id.same(record), Cons(_, _) => False }, _ => False })),
+                },
+            }),
+        },
+    }
+}
+
+// An array field's new value that is the field updated at indices that
+// are words, `vector_update(… vector_update(t.f, i.toNat(), x) …,
+// j.toNat(), y)`: each update a store by the accessor's checked writer,
+// the innermost first, every word computed before the first store. `None`
+// where the value is not that. `settled` says the span holds the
+// function's own record (no call has changed it).
+fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, under: LocalRef, base: Option<Handle>, fname: String, e: HeldEach, value: Handle)
+    → Tac<Option<Pair<RSt, List<HeldSet>>>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(f) => rt_held_own(f, k, record, settled, value, base, fname).bind(λ same => match same {
+            True => pure(Some(Pair(st, []))),
+            False => view(value).bind(λ v => {
+                let update: Option<Pair<Handle, Pair<Handle, Handle>>> = match v {
+                    HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_update") {
+                        False => None,
+                        True => args.nth(0).and_then(λ inner => args.nth(1).and_then(λ i => args.nth(2).map(λ x => Pair(inner, Pair(i, x))))),
+                    },
+                    _ => None,
+                };
+                match update {
+                    // Read through a record just built (a statement before
+                    // this one rebuilt the record) and through a name.
+                    None => rt_field_read(value).bind(λ read => match read {
+                        Some(p) => rt_field_of_value(k, p.fst, p.snd).bind(λ built => match built {
+                            Some(u) => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u),
+                            None => pure(None),
+                        }),
+                        None => match v {
+                            HOther => next_spelling(Hd(value)).bind(λ c => match c {
+                                Accepted(u) => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u),
+                                Refused(_) => pure(None),
+                            }),
+                            _ => pure(None),
+                        },
+                    }),
+                    Some(u) => rt_to_nat_of(u.snd.fst).bind(λ word => match word {
+                        None => pure(None),
+                        Some(i) => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
+                            None => pure(None),
+                            Some(o) => {
+                                let ri <- rt_go(f, k, o.fst, i, True);
+                                let rv <- rt_go(f, k, ri.fst, u.snd.snd, True);
+                                let x <- assume(e.ty, "value", Some(under)).bind(λ c => rt_accepted("an element's new value's local", c));
+                                let as_word <- next_spelling(rt_ap(e.wide, [Local(x.ref)])).bind(λ c => rt_accepted("an element's new value as a word", c));
+                                let rr <- rt_go(f, k, rv.fst.with_local(x.ref.id, RSt::level(rv.snd)), as_word, True);
+                                pure(Some(Pair(rr.fst, o.snd ++ [HeldSet(e.access(0), e.at.base, RSt::level(rr.snd),
+                                    Some(HeldIndexed(e.at.writer, e.at.writer_name, e.at.base, e.at.count, RSt::level(ri.snd))))])))
+                            },
+                        }),
+                    }),
+                }
+            }),
+        }),
     }
 }
 
@@ -544,7 +686,10 @@ fn rt_held_current(cx: HeldCx, w: HeldWalk, r: Handle) → Tac<Bool> {
 // field stored as a word, or an element of an array of them.
 fn rt_held_reads(cx: HeldCx, w: HeldWalk, h: Handle, v: Head) → Tac<Bool> {
     let element: Option<Handle> = match v {
-        HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_index") { True => args.nth(0), False => None },
+        HGlobal(_, name, args) => match Known::str_same(rt_base_name(name), "vector_index") || Known::str_same(rt_base_name(name), "vector_get") {
+            True => args.nth(0),
+            False => None,
+        },
         _ => None,
     };
     match element {
@@ -710,13 +855,23 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                             still.bind(λ _ => match field.access {
                                 None => match field.each {
                                     None => rt_refuse("it changes the field `" ++ field.name ++ "`, whose codec has no accessor: only a field stored as a word, or an array of them, is written for now"),
-                                    Some(e) => match r.w.now {
-                                        Some(_) => rt_refuse("it changes the array field `" ++ field.name ++ "` after a call of another function of the record, which is not stored yet"),
-                                        None => {
-                                            let own <- rt_held_elements(f, k, r.w.st, field.name, e, value, List::range(e.term.count));
-                                            let later <- rt_held_do(f, cx, r.w.with_st(own.fst), Sets(base, rest, more));
-                                            pure(HeldOut(later.w, own.snd ++ later.sets))
-                                        },
+                                    Some(e) => {
+                                        let settled: Bool = match r.w.now { None => True, Some(_) => False };
+                                        let indexed <- rt_held_indexed(f, k, r.w.st, cx.record, settled, cx.under, base, field.name, e, value);
+                                        match indexed {
+                                            Some(own) => {
+                                                let later <- rt_held_do(f, cx, r.w.with_st(own.fst), Sets(base, rest, more));
+                                                pure(HeldOut(later.w, own.snd ++ later.sets))
+                                            },
+                                            None => match r.w.now {
+                                                Some(_) => rt_refuse("it changes the array field `" ++ field.name ++ "` after a call of another function of the record, which is not stored yet"),
+                                                None => {
+                                                    let own <- rt_held_elements(f, k, r.w.st, field.name, e, value, List::range(e.term.count));
+                                                    let later <- rt_held_do(f, cx, r.w.with_st(own.fst), Sets(base, rest, more));
+                                                    pure(HeldOut(later.w, own.snd ++ later.sets))
+                                                },
+                                            },
+                                        }
                                     },
                                 },
                                 // The value at its own width, and then the
@@ -730,7 +885,7 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                                     let word <- next_spelling(rt_ap(a.wide, [Local(v.ref)])).bind(λ c => rt_accepted("a field's new value as a word", c));
                                     let rr <- rt_go(f, k, rv.fst.with_local(v.ref.id, RSt::level(rv.snd)), word, True);
                                     let later <- rt_held_do(f, cx, r.w.with_st(rr.fst), Sets(base, rest, more));
-                                    pure(HeldOut(later.w, Cons(HeldSet(a, field.at, RSt::level(rr.snd)), later.sets)))
+                                    pure(HeldOut(later.w, Cons(HeldSet(a, field.at, RSt::level(rr.snd), None), later.sets)))
                                 },
                             })
                         }),
@@ -883,13 +1038,17 @@ fn rt_held_ctor(tname: String, cs: List<CtorInfo>) → Tac<CtorInfo> {
 }
 
 // The offsets a function's accessors are called at, where they are
-// literals: a call's third operand, after the span's place and its
-// length word. `known` is the literal that bound each variable, the most
+// literals: the third operand, after the span's place and its length
+// word, of a call of as many operands as a field's accessor takes (an
+// element's checked accessor takes more, and its third is its array's). `known` is the literal that bound each variable, the most
 // recent first.
-fn rt_held_third(args: List<Nat>, known: List<Option<Nat>>) → List<Nat> {
-    match args.nth(2) {
-        None => [],
-        Some(i) => match known.nth(i) { Some(lit) => match lit { Some(n) => [n], None => [] }, None => [] },
+fn rt_held_third(args: List<Nat>, operands: Nat, known: List<Option<Nat>>) → List<Nat> {
+    match args.len().same(operands) {
+        False => [],
+        True => match args.nth(2) {
+            None => [],
+            Some(i) => match known.nth(i) { Some(lit) => match lit { Some(n) => [n], None => [] }, None => [] },
+        },
     }
 }
 
@@ -899,14 +1058,14 @@ fn rt_held_offsets(t: FTm, known: List<Option<Nat>>, held: List<Nat>) → List<N
     match t {
         Pure(_) => [],
         Let(e, body) => match e {
-            Call(_, args) => rt_held_third(args, known) ++ rt_held_offsets(body, Cons(None, known), held),
+            Call(_, args) => rt_held_third(args, 3, known) ++ rt_held_offsets(body, Cons(None, known), held),
             Lit(_, n) => rt_held_offsets(body, Cons(Some(n), known), held),
             _ => rt_held_offsets(body, Cons(None, known), held),
         },
         If(_, yes, no) => rt_held_offsets(yes, known, held) ++ rt_held_offsets(no, known, held),
         IfEq(_, yes, no) => rt_held_offsets(yes, known, held) ++ rt_held_offsets(no, known, held),
         Put(_, _, _, body) => rt_held_offsets(body, known, held),
-        Call(f, args, body) => (match rt_held_has(held, f) { True => [], False => rt_held_third(args, known) }) ++ rt_held_offsets(body, Cons(None, known), held),
+        Call(f, args, body) => (match rt_held_has(held, f) { True => [], False => rt_held_third(args, 4, known) }) ++ rt_held_offsets(body, Cons(None, known), held),
         Again(_) => [],
         Lend(_, _, _, _) => [],
     }
@@ -973,7 +1132,7 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     let bytes <- as_type(rt_ap(Global(GlobalRef(k.list)), [rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(8)])])).bind(λ c => rt_accepted("a span's type", c));
     let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
     let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
-    let hf <- rt_held_fields(tname, o.local, stored, ctor.fields, Local(span.ref), Local(length.ref));
+    let hf <- rt_held_fields(tname, o.local, stored, ctor.fields, Local(span.ref), Local(length.ref), length.ref);
     let cx = HeldCx(k.lending(1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
     let st = RSt(2 + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), ws.bound)), k.funs);
     let w = HeldWalk(st, [], [], [], None, []);
@@ -1006,7 +1165,7 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
             let record1 <- assume(Hd(record_t), "record", None).bind(λ c => rt_accepted("a record's local", c));
             let span1 <- assume(Hd(bytes), "span", Some(record1.ref)).bind(λ c => rt_accepted("a span's local", c));
             let length1 <- assume(Hd(word), "length", Some(span1.ref)).bind(λ c => rt_accepted("a length word's local", c));
-            rt_held_fields(tname, record1, stored, ctor1.fields, Local(span1.ref), Local(length1.ref)).bind(λ h => pure(h.fields))
+            rt_held_fields(tname, record1, stored, ctor1.fields, Local(span1.ref), Local(length1.ref), length1.ref).bind(λ h => pure(h.fields))
         },
     };
     let fs <- fields;
