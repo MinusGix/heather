@@ -700,6 +700,67 @@ theorem Tm::literal_known(self e: Tm, fw: FWorld, own: List<BitVec(8)>, g: List<
     }
 }
 
+// A call a held function may make keeps the agreement: the held answer
+// is the call's, and the span the call leaves holds the record the held
+// meaning goes on with. What a writer's mark and a held callee's owe is
+// read here, for a term that ends and for a pass of a loop alike.
+theorem FTm::call_kept<A>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), f: Nat, args: List<Nat>, len: Nat,
+    known: List<Option<Pair<Ty, Nat>>>, lent: Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).IsTrue(), g: List<Ty>,
+    env: Env(hw.fw.w.tys, g), knows: FTm::Knows(hw.fw.w.tys, g, env, known), own: List<BitVec(8)>, a: A,
+    holds: whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a)):
+    (FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value) = FTm::called(hw.fw, g, env, f, args, own).value)
+        ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), FTm::held_state(hw, f, args, g, env, a)) {
+    let by_case: ((w: Writer<A>) → w.Owes(λ (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+            λ (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run)) →
+        w.lent(hw.fw.w.tys, args, len, known).IsTrue() →
+        (w.answer(hw.fw.w.tys, args, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value)
+            = FTm::called(hw.fw, g, env, f, args, own).value)
+        ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), w.state(hw.fw.w.tys, args, g, env, a))) =
+        λ w => match w {
+            Apart => λ _ never => false_elim(never),
+            Writes(width, fields) => λ writes lent => {
+                let two = FTm::write_args(args, len).is_true_and(FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(args)), lent);
+                And(refl, FTm::write_args_elim(args, len,
+                    λ (xs: List<Nat>) => FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(xs)).IsTrue() →
+                        whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
+                            Writes(width, fields).state(hw.fw.w.tys, xs, g, env, a)),
+                    λ place i v => λ found =>
+                        FTm::field_case(fields, λ (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+                            FTm::word(hw.fw.w.tys, g, env, i).toNat(),
+                            λ (o: Option<A → BitVec(width) → A>) => ((match o { None => False, Some(_) => True }).IsTrue() →
+                                whole.Holds(FTm::called(hw.fw, g, env, f, [place, len, i, v], own).after, FTm::word(hw.fw.w.tys, g, env, len),
+                                    match o {
+                                        None => a,
+                                        Some(set) => set(a, Ty::cast(hw.fw.w.tys, Ty::at(g, v), Word(width), Env::get(hw.fw.w.tys, g, env, v))),
+                                    })),
+                            λ never => false_elim(never),
+                            λ set promise _ => promise(place, len, i, v, own, a, g, env, holds, refl),
+                            writes)(FTm::known_found(hw.fw.w.tys, g, env, known, knows, fields, i, found)),
+                    two.left)(two.right))
+            },
+            Runs(words, run) => λ runs lent =>
+                FTm::run_args_elim(args, len, words,
+                    λ (xs: List<Nat>) => (Runs(words, run).answer(hw.fw.w.tys, xs, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, xs, own).value)
+                            = FTm::called(hw.fw, g, env, f, xs, own).value)
+                        ∧ whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
+                            Runs(words, run).state(hw.fw.w.tys, xs, g, env, a)),
+                    λ place rest long => {
+                        let agrees = FTm::shaped(words, λ (r: List<Nat>) => (own: List<BitVec(8)>) → (a: A) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+                                whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a) →
+                                Agrees<A, Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                                    Mutated(run(a, FTm::words(hw.fw.w.tys, g, env, r)).after,
+                                        Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.fsigs, f).result, run(a, FTm::words(hw.fw.w.tys, g, env, r)).value)),
+                                    FTm::called(hw.fw, g, env, f, Cons(place, Cons(len, r)), own)),
+                            runs(place, len), rest, long)(own, a, g, env, holds);
+                        And(agrees.value, agrees.holds)
+                    },
+                    lent),
+        };
+    by_case(Writer::at(hw.writers, f),
+        Writer::all_at(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
+            λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run), sound.writers, f), lent)
+}
+
 theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole)): (len: Nat) → (known: List<Option<Pair<Ty, Nat>>>) →
     t.kept(hw, len, known).IsTrue() → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) → FTm::Knows(hw.fw.w.tys, g, env, known) →
     (own: List<BitVec(8)>) → (a: A) → whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a) →
@@ -751,55 +812,7 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
         Put(_, _, _, _) => λ len known kept => false_elim(kept),
         Call(f, args, body) => λ len known kept g env knows own a holds => {
             let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.kept(hw, Succ(len), Cons(None, known)), kept);
-            let by_case: ((w: Writer<A>) → w.Owes(λ (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
-                    λ (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run)) →
-                w.lent(hw.fw.w.tys, args, len, known).IsTrue() →
-                (w.answer(hw.fw.w.tys, args, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value)
-                    = FTm::called(hw.fw, g, env, f, args, own).value)
-                ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), w.state(hw.fw.w.tys, args, g, env, a))) =
-                λ w => match w {
-                    Apart => λ _ never => false_elim(never),
-                    Writes(width, fields) => λ writes lent => {
-                        let two = FTm::write_args(args, len).is_true_and(FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(args)), lent);
-                        And(refl, FTm::write_args_elim(args, len,
-                            λ (xs: List<Nat>) => FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(xs)).IsTrue() →
-                                whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
-                                    Writes(width, fields).state(hw.fw.w.tys, xs, g, env, a)),
-                            λ place i v => λ found =>
-                                FTm::field_case(fields, λ (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
-                                    FTm::word(hw.fw.w.tys, g, env, i).toNat(),
-                                    λ (o: Option<A → BitVec(width) → A>) => ((match o { None => False, Some(_) => True }).IsTrue() →
-                                        whole.Holds(FTm::called(hw.fw, g, env, f, [place, len, i, v], own).after, FTm::word(hw.fw.w.tys, g, env, len),
-                                            match o {
-                                                None => a,
-                                                Some(set) => set(a, Ty::cast(hw.fw.w.tys, Ty::at(g, v), Word(width), Env::get(hw.fw.w.tys, g, env, v))),
-                                            })),
-                                    λ never => false_elim(never),
-                                    λ set promise _ => promise(place, len, i, v, own, a, g, env, holds, refl),
-                                    writes)(FTm::known_found(hw.fw.w.tys, g, env, known, knows, fields, i, found)),
-                            two.left)(two.right))
-                    },
-                    Runs(words, run) => λ runs lent =>
-                        FTm::run_args_elim(args, len, words,
-                            λ (xs: List<Nat>) => (Runs(words, run).answer(hw.fw.w.tys, xs, g, env, a, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, xs, own).value)
-                                    = FTm::called(hw.fw, g, env, f, xs, own).value)
-                                ∧ whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(hw.fw.w.tys, g, env, len),
-                                    Runs(words, run).state(hw.fw.w.tys, xs, g, env, a)),
-                            λ place rest long => {
-                                let agrees = FTm::shaped(words, λ (r: List<Nat>) => (own: List<BitVec(8)>) → (a: A) → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
-                                        whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a) →
-                                        Agrees<A, Sig::at(hw.fw.fsigs, f).result.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
-                                            Mutated(run(a, FTm::words(hw.fw.w.tys, g, env, r)).after,
-                                                Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.fsigs, f).result, run(a, FTm::words(hw.fw.w.tys, g, env, r)).value)),
-                                            FTm::called(hw.fw, g, env, f, Cons(place, Cons(len, r)), own)),
-                                    runs(place, len), rest, long)(own, a, g, env, holds);
-                                And(agrees.value, agrees.holds)
-                            },
-                            lent),
-                };
-            let got = by_case(Writer::at(hw.writers, f),
-                Writer::all_at(hw.writers, λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set),
-                    λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run), sound.writers, f), both.left);
+            let got = FTm::call_kept(hw, whole, sound, f, args, len, known, both.left, g, env, knows, own, a, holds);
             let ran = body.held_runs(hw, whole, sound, Succ(len), Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
                 Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
                 FTm::knows_more(hw.fw.w.tys, g, env, known, knows, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value),
