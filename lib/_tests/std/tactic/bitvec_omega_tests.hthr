@@ -129,3 +129,30 @@ theorem binder_phantom_declines(xs: List<Phantom(3)>, k, t: Nat, v: Phantom(3),
     short: t < xs.update(k, λ (_: Phantom(3)) => v).len()): t < xs.update(k, λ (_: Phantom(3)) => v).len() + 1 {
     omega
 }
+
+// ---- A word under a mask is at most the mask (issues/bv-omega-masked-word-bound.md) ----
+
+// The index into a ring of sixteen words.
+theorem mask_ring_index(i: BitVec(64)): (i & 15).toNat() < 16 { bv_omega }
+// The masked word itself taken apart: a message-schedule read `W[(t - 3) & 15]`.
+theorem mask_of_difference(t: BitVec(64)): ((t - 3) & 15).toNat() < 16 { bv_omega }
+// At an open width, the mask's numeral read past the width.
+theorem mask_open_width(n: Nat, x: BitVec(n)): (x & BitVec::ofNat(15)).toNat() < 16 { bv_omega }
+// A literal masked word.
+theorem mask_literal(): (BitVec::ofNat(37, n := 64) & BitVec::ofNat(15)).toNat() < 16 { bv_omega }
+// A mask that is not a numeral bounds by its own value.
+theorem mask_by_word(x, m: BitVec(64)): (x & m).toNat() <= m.toNat() { bv_omega }
+// Inside arithmetic: two masked words cannot overflow their sum.
+theorem mask_sum(x, y: BitVec(64)): ((x & 15) + (y & 15)).toNat() < 31 { bv_omega }
+// In a checking position.
+theorem mask_checking(i: BitVec(64)): (i & 15).toNat() + 1 <= 16 {
+    let below: ((i & 15).toNat() + 1 <= 16) = bv_omega;
+    below
+}
+// The law, cited by name.
+theorem mask_law(x: BitVec(64)): (x & 15).toNat() <= 15 { BitVec::toNat_band_ofNat_le(64, x, 15) }
+
+// Negative control: sixteen is no mask of the low four bits, and `x & 16`
+// may be sixteen.
+// expect-error: got stuck
+theorem mask_wrong(x: BitVec(64)): (x & 16).toNat() < 16 { bv_omega }
