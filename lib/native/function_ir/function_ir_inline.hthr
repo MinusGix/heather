@@ -36,6 +36,7 @@ import bool;
 import list;
 import logic;
 import nat;
+import omega;
 import option;
 
 // ---------------------------------------------------------------------------
