@@ -21,6 +21,8 @@ import x86_64_stack;
 import x86_64_kept;
 import x86_64_asm;
 import x86_64_asm_runs;
+import memory;
+import bitvec_shift_nat;
 import bitvec;
 import bool;
 import list;
@@ -415,6 +417,100 @@ theorem Site::lea_lands<M>(self site: Site<M>, s: MachineState<M>, from: Nat, le
     trans(lea_rip_result(lea, s),
         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 7, lea.displacement), here),
             jumps_forward(site.origin, from, 7, lea.displacement, to, lands)))
+}
+
+// Eight resident code bytes read as their word through a data access that
+// sees code (`Stack.sees_code`), below the canonical boundary: a word of a
+// constant table placed in the code.
+theorem Stack::code_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    b0, b1, b2, b3, b4, b5, b6, b7: BitVec(8), rest: List<BitVec(8)>, start: BitVec(64),
+    resident: CodeResident(fetch, memory, Cons(b0, Cons(b1, Cons(b2, Cons(b3, Cons(b4, Cons(b5, Cons(b6, Cons(b7, rest)))))))), start)):
+    (start.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, start) = Some(immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7))) {
+    let r1 = resident.right.right.right;
+    let r2 = r1.right.right.right;
+    let r3 = r2.right.right.right;
+    let r4 = r3.right.right.right;
+    let r5 = r4.right.right.right;
+    let r6 = r5.right.right.right;
+    let r7 = r6.right.right.right;
+    let s0 = stack.sees_code(memory, start, resident.left);
+    let s7 = stack.sees_code(memory, next_rip(start, 7), r7.left);
+    let e0: (data.read(memory, next_rip(start, 0)) = Some(b0)) = trans(s0.left, resident.right.left);
+    let e1: (data.read(memory, next_rip(start, 1)) = Some(b1)) = trans(stack.sees_code(memory, next_rip(start, 1), r1.left).left, r1.right.left);
+    let e2: (data.read(memory, next_rip(start, 2)) = Some(b2)) = trans(stack.sees_code(memory, next_rip(start, 2), r2.left).left, r2.right.left);
+    let e3: (data.read(memory, next_rip(start, 3)) = Some(b3)) = trans(stack.sees_code(memory, next_rip(start, 3), r3.left).left, r3.right.left);
+    let e4: (data.read(memory, next_rip(start, 4)) = Some(b4)) = trans(stack.sees_code(memory, next_rip(start, 4), r4.left).left, r4.right.left);
+    let e5: (data.read(memory, next_rip(start, 5)) = Some(b5)) = trans(stack.sees_code(memory, next_rip(start, 5), r5.left).left, r5.right.left);
+    let e6: (data.read(memory, next_rip(start, 6)) = Some(b6)) = trans(stack.sees_code(memory, next_rip(start, 6), r6.left).left, r6.right.left);
+    let e7: (data.read(memory, next_rip(start, 7)) = Some(b7)) = trans(s7.left, r7.right.left);
+    let top: (Succ(Nat::pow(2, 47)) <= Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let low = s0.right;
+    let last: (next_rip(start, 7).toNat() = start.toNat() + 7) = BitVec::offset_toNat(64, start, 7, omega(low, top));
+    let high = s7.right;
+    ⟨omega(last, high), word_of_eight(data.read(memory, next_rip(start, 0)), data.read(memory, next_rip(start, 1)),
+        data.read(memory, next_rip(start, 2)), data.read(memory, next_rip(start, 3)), data.read(memory, next_rip(start, 4)),
+        data.read(memory, next_rip(start, 5)), data.read(memory, next_rip(start, 6)), data.read(memory, next_rip(start, 7)),
+        b0, b1, b2, b3, b4, b5, b6, b7, e0, e1, e2, e3, e4, e5, e6, e7)⟩
+}
+
+// A table of words laid out in the code, little-endian, entry by entry,
+// and its entry `index` as the load reads it (zero past the end, where a
+// read is never placed).
+fn table_bytes(entries: List<Nat>) → List<BitVec(8)> {
+    match entries { Nil => [], Cons(entry, rest) => word_bytes(BitVec::ofNat(entry)) ++ table_bytes(rest) }
+}
+fn table_word(entries: List<Nat>, index: Nat) → BitVec(64) {
+    BitVec::ofNat(match entries.nth(index) { None => 0, Some(entry) => entry })
+}
+theorem table_bytes_length(entries: List<Nat>): table_bytes(entries).len() = 8 * entries.len() {
+    match entries {
+        Nil => refl,
+        Cons(entry, rest) => {
+            let inner = table_bytes_length(rest);
+            trans(List::len_append(word_bytes(BitVec::ofNat(entry)), table_bytes(rest)), omega(inner))
+        },
+    }
+}
+
+// Entry `index` of a resident table reads as its word, below the canonical
+// boundary.
+theorem Stack::table_word_at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    entries: List<Nat>): (index: Nat) → (start: BitVec(64)) → CodeResident(fetch, memory, table_bytes(entries), start) → index < entries.len() →
+    (next_rip(start, 8 * index).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        (read_word(data, memory, next_rip(start, 8 * index)) = Some(table_word(entries, index))) {
+    match entries {
+        Nil => λ index start resident inside => { let bad: False = omega(inside); false_elim(bad) },
+        Cons(entry, rest) => λ index start resident inside => {
+            let w = BitVec::ofNat(entry, n := 64);
+            let parts = resident_split(fetch, memory, word_bytes(w), table_bytes(rest), start, resident);
+            match index {
+                Zero => {
+                    let got = stack.code_word(memory, imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w),
+                        imm_byte6(w), imm_byte7(w), table_bytes(rest), start, resident);
+                    ⟨got.left, trans(got.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), immediate_bytes_roundtrip(w)))⟩
+                },
+                Succ(k) => {
+                    let later = stack.table_word_at(memory, rest, k, next_rip(start, 8), parts.right, omega(inside));
+                    let moved: (next_rip(next_rip(start, 8), 8 * k) = next_rip(start, 8 * Succ(k))) =
+                        trans(rip_compose(start, 8, 8 * k), rip_count(start, omega));
+                    j(moved, λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, a) = Some(table_word(rest, k))), later)
+                },
+            }
+        },
+    }
+}
+
+// The indexed address is `index` words past the base, when eight times the
+// index does not wrap.
+theorem indexed_address_at(load: IndexedWordLoad, gprs: Gprs, start: BitVec(64), index: Nat,
+    base_at: read_gpr(load.base.gpr(), gprs) = start, index_at: read_gpr(load.index.gpr(), gprs).toNat() = index,
+    small: index * 8 < Nat::pow(2, 64)): indexed_address(load, gprs) = next_rip(start, 8 * index) {
+    let x = read_gpr(load.index.gpr(), gprs);
+    let fits: (x.toNat() * Nat::pow(2, 3) < Nat::pow(2, 64)) = j(sym(index_at), λ v _ => v * Nat::pow(2, 3) < Nat::pow(2, 64), small);
+    let shifted: (x.shift_left(3).toNat() = 8 * index) = trans(BitVec::toNat_shift_left(64, x, 3, fits), omega(index_at));
+    trans(sym(BitVec::iter_add_eq_add(64, read_gpr(load.base.gpr(), gprs), x.shift_left(3))),
+        trans(BitVec::cong_iterate_increment_count(64, read_gpr(load.base.gpr(), gprs), shifted),
+            BitVec::cong_iterate_increment(64, 8 * index, base_at)))
 }
 
 // The word at entry `index` of a table at `base` (`IndexedWordLoad`), as a
