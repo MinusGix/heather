@@ -611,6 +611,37 @@ impl Rewrites<'_> {
         if let (Term::Succ(p), Term::Succ(n)) = (pat, &**t) {
             return self.match_spine(cx, p, n, k, binds, deferred);
         }
+        // A function literal whose body holds a variable (`λ _ => b` in
+        // `xs.update(i, λ _ => b)`): matched node by node below its binder.
+        if matches!((pat, &**t), (Term::Lam { .. }, Term::Lam { .. })) && crate::strengthen_tm(&cx.gamma, pat, k).is_none() {
+            return self.match_deep(cx, pat, t, k, 0, binds);
+        }
+        // A constructor value (`[B]`, `Cons(B, Nil)`): its label's payload
+        // and its children, an injection's value.
+        if let (Term::Supf { label: pl, children: pc, .. }, Term::Supf { label: tl, children: tc, .. }) = (pat, &**t) {
+            let (tl, tc) = (Rc::clone(tl), Rc::clone(tc));
+            return self.match_spine(cx, pl, &tl, k, binds, deferred) && self.match_spine(cx, pc, &tc, k, binds, deferred);
+        }
+        if let (Some((pi, pv)), Some((ti, tv))) = (crate::spelling::inj_of(pat), crate::spelling::inj_of(t))
+            && pi == ti
+        {
+            let tv = Rc::clone(tv);
+            return self.match_spine(cx, pv, &tv, k, binds, deferred);
+        }
+        // A record built (`(s with { schedule = … })` is `Sha256(s.hash,
+        // s.working, …, s.count)`) binds field by field.
+        if let (Some((pa, pb)), Some((ta, tb))) = (crate::spelling::pair_of(pat), crate::spelling::pair_of(t)) {
+            let (ta, tb) = (Rc::clone(ta), Rc::clone(tb));
+            return self.match_spine(cx, pa, &ta, k, binds, deferred) && self.match_spine(cx, pb, &tb, k, binds, deferred);
+        }
+        // A field read (`run(s).after.hash`) binds what it reads from: the
+        // law's variable may occur only below the projection.
+        if let (Some((pf, pp)), Some((tf, tp))) = (crate::spelling::proj_of(pat), crate::spelling::proj_of(t))
+            && pf == tf
+        {
+            let tp = Rc::clone(tp);
+            return self.match_spine(cx, pp, &tp, k, binds, deferred);
+        }
         match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
             (Some((pf, pa)), Some((tf, ta))) => {
                 let (tf, ta) = (Rc::clone(tf), Rc::clone(ta));
@@ -979,6 +1010,13 @@ fn keyable_head(head: &Term) -> bool {
 fn same_key(pat: &Term, t: &Term, k: u32) -> bool {
     let (ph, pargs) = crate::spelling::app_spine(pat);
     let (th, targs) = crate::spelling::app_spine(t);
+    // A field read is keyed by what it reads from (`s.hash`'s `s`).
+    if pargs.is_empty()
+        && targs.is_empty()
+        && let (Some((pf, pp)), Some((tf, tp))) = (crate::spelling::proj_of(ph), crate::spelling::proj_of(th))
+    {
+        return pf == tf && same_key(pp, tp, k);
+    }
     if pargs.len() != targs.len() {
         return false;
     }

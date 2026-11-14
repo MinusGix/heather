@@ -25,7 +25,6 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
         ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
         // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
-        ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),

@@ -3019,7 +3019,15 @@ impl Host<'_> {
         }
         let root = &run.scopes[0].cx;
         if !root.names.iter_inner().any(|n| n == name) {
-            if let Some((term, ty, level)) = self.raw_global(name) {
+            // A qualified key, as `name_of` spells one, denotes its
+            // declaration wherever its module is in the import closure, as
+            // for `Lookup`: a registered set of laws (a `SimpSet`) reaches a
+            // `by` through modules that need not import the lemma's.
+            let reached = crate::names::split_qual(name)
+                .filter(|(module, base)| self.names.reaches(module) && self.names.declares(module, base))
+                .and_then(|_| self.names.global(name))
+                .and_then(|info| self.raw_global_at(info.abs as usize));
+            if let Some((term, ty, level)) = reached.or_else(|| self.raw_global(name)) {
                 let n = root.gamma.len() as u32;
                 return Ok(run.issue(0, Held::Term(term.shift_local(n), ty.shift_local(n), level)));
             }
