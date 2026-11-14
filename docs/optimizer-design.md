@@ -336,7 +336,44 @@ point.
 Learn is then three things. An arm starts from the facts before the
 conditional and its condition as a constant. A comparison whose operands'
 ranges decide it derives that constant (a rule). And a conditional on a
-bit the facts say is constant is its arm (`Plan::Take`).
+bit the facts say is constant is its arm (`Plan::Arm`).
+
+A loop's body is replayed from no facts, since a pass may start from any
+state, with one exception that needs no invariant to be stated: a state
+word whose next value is itself keeps its range through every pass, so the
+body starts from the ranges of those inputs and the loop's outputs keep
+them (`Facts::carry`, `loop_kept`). A span's length handed round a loop is
+such a word. A range of a word a pass changes (an index that counts) is
+the loop law's to carry (§6), and is not built.
+
+**Tested, as built.** A function's lengths are its parameters, and nothing
+in the function bounds them, so its length tests are decided only under an
+assumption. The answer built is Tested: a stage that puts fresh nodes and
+a conditional at the function's entry, both arms the body
+(`function_ir_guard.hthr`). It is sound with no premise, because nodes that
+only compute can always be satisfied, and it learns nothing; the arm the
+test's bit takes simply starts with that bit as a fact, and the replayer
+derives the rest. What to test is the search's to choose: a parameter that
+words are compared below is a length, and the least value deciding every
+such comparison is the bound (`Function::guard`).
+
+The test is the first stage a function goes through, before inlining. The
+arm for a span too short is then the function as it was written, its calls
+still calls, and inlining, tidying and deciding all work in the other arm
+alone. A test put after inlining holds the inlined body twice, and that
+copy is what the planner, the emission's statement and the code size each
+pay for; put first, the plain copy is the small one. The search still has
+to see the inlined body to know what to test, so it inlines and tidies a
+copy with no test first and asks that (`Function::find_guarded`). A
+function small enough to be inlined gets no test of its own: whoever it is
+inlined into tests for it, and the test of the callee it would have
+carried is decided there.
+
+Required is the answer that removes the test: the callers prove the bound
+and the function is specialised under it. It needs a law this one does
+not have (agreement under a premise on the arguments, and a plain copy of
+every function a specialised one reaches for the caller that cannot prove
+it), and is the next step for these tests.
 
 This builds on what exists: facts as propositions with several producers,
 searched cheapest first, with a budget, is the facts-on-demand prototype
@@ -455,7 +492,8 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 | 1, leaf frames | not built |
 | 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
 | 3, inline | built, and run by `compile-x86`: §9.1 |
-| 4 to 7 | not built |
+| 4, requests | built for ranges, with the answers In scope, Decided and Tested: §5.1, §9.1. Required, and a range of a word a loop changes, are not |
+| 5 to 7 | not built |
 
 ### 9.1 What is built, as built
 
@@ -492,19 +530,41 @@ not do what the old one did. The walk that finds the list
 (`program_reached`) is not trusted; the certificate states the list as a
 literal and checks closedness by evaluation.
 
+**Ranges, and the test at a function's entry (step 4).** The replayer's
+facts are node equations and ranges (`Fact::Within`), its rules derive a
+range from ranges and a comparison's bit from two (`function_ir_rules.hthr`),
+`Plan::Arm` replaces a conditional on a decided bit by its arm, and a
+decided bit a load or a store needs is written after its comparison as a
+one-bit constant, which the lowering folds into what an arm taken would
+have told it (`File::know_bit`). `function_ir_guard.hthr` is the stage that
+tests at the entry, and `function_ir_learn.hthr` the search: one walk that
+keeps each word's range and writes down only the derivations a decided
+comparison needs. §5.1 has the reasons.
+
 **The search is not trusted, and is evaluated.** `function_ir_optimize.hthr`:
-`optimize_stage()` is inline, then tidy, or no plan;
-`Function::optimized(callees, wanted)` finds a function's plans and the
-function they make. `compile-x86` evaluates it a function at a time,
-callees first, reads the answer back as source (`function_ir_spelled.hthr`:
+`optimize_stage()` is six stages in turn, each with a plan or none: the
+test at the entry, inline, read through copies, drop what nothing reads,
+decide tests, drop again. Each stage has its search, a method of the
+function the stages before it made (`Function::find_guarded`,
+`find_inlined`, `find_copied`, `find_swept`, `find_learned`, and the ones
+named `…_past` that work only past a test). `compile-x86` evaluates them a
+function at a time, callees first, and a stage at a time, reads each
+answer back as source (`function_ir_spelled.hthr`:
 the spelling is numbers, a character's code or a marked number the compiler
 writes in decimal, because a decimal digit made in Heather is a long
-division and a function's source is mostly numbers), and states both as
-literals; the certificate's statement is that the stage
-makes the one from the other, checked by evaluation, a function a statement
-(`Stage::run_next`). What the search made is kept only where the lowering
-takes it with the planner's placement (`Function::lowers`); otherwise the
-function stays as it is. Then the unreached functions are emptied, and the
+division and a function's source is mostly numbers), and states plan and
+function as literals; the certificate's statement is that the stage
+makes the one from the other, checked by evaluation, a stage of a function
+a statement, which `optimize_made` joins into the function's and
+`Stage::run_next` into the program's. A stage a statement keeps each
+statement well inside the kernel's fuel, and a refusal names its stage.
+
+A function is inlined and tidied with no test first. Where the search then
+asks for a test, the function is made again with the test first, and that
+is kept where it is within the search's room and the lowering takes it
+with the planner's placement (`Function::fits`, `Function::lowers`); else
+the function with no test and whatever its own tests decide; else that
+function as tidied; else the function as it is. Then the unreached functions are emptied, and the
 two facts compose (`ProgramRewrites::then`) into the one the return
 theorems take, at each exported function. Those theorems take the two
 programs apart
@@ -530,6 +590,17 @@ checks it needs are of the program made, the run is the published one's.
   every caller and a theorem this one does not give.
 - Tidying leaves empty regions where it dropped nodes; they cost nothing in
   the code and something to read.
+- A function tested at its entry keeps its plain arm's callees alive, so
+  fewer functions are emptied, and each such function tests again what its
+  caller tested. Required removes both (§5.1).
+- A range is not carried for a word a loop's passes change, so a test of a
+  counting index against a length stays. A table read as a chain of tests
+  (SHA-256's constants) stays until the table is a node.
+- The planner and the emission cost a function more than in proportion to
+  its size, and the largest function sets the compile's peak memory
+  (issues/compile-x86-address-space-margin.md). Using the placement the
+  planner made when the lowering was asked, in place of planning again,
+  is the first saving there.
 
 **What it buys, as a shape** (`scripts/bench-native` counts instructions
 exactly; its saved baseline has the numbers, and the pull requests record
@@ -540,6 +611,12 @@ by loads and stores of words in the lent spans and by the register moves
 around them, which is steps 4 and 5's ground. The scanner, which has few
 small callees, gains a few percent. Code size grows with inlining and
 comes part of the way back with emptying.
+
+Step 4 decides most of the length tests outside the constants' table and
+removes about a tenth more of the instructions executed. Code size grows
+again: each tested function carries its plain arm, and the callees that
+arm calls are no longer emptied. Most of the compares that still run are
+the table's chain and the tests of indexes that count in a loop.
 
 ## 10. Machine instructions added for the optimizer
 

@@ -42,7 +42,39 @@ compiler writes in decimal itself (`lib/native/function_ir/function_ir_spelled.h
 steps, time, and the process's peak resident and mapped memory during it,
 which is how the read was found.
 
+## After the optimizer's step 4 (2026-11-14)
+
+A function tested at its entry is larger (its plain arm, and the tested
+arm with its inlined callees), and the largest function's planning grew
+with it. Same measurement, cold store:
+
+| | peak mapped | peak resident |
+|---|---|---|
+| the test put after inlining (the inlined body twice) | past 8 GiB (killed in `…_opt_taken_9`); 9.4 GiB under a 14 GiB rail, and `…_emits_9` then ran out of the kernel's fuel | 5.3 GiB |
+| the test put first (the plain arm is the function as written) | 7.96 GiB | 4.3 to 4.5 GiB |
+
+So the compile fits the rail with about 0.2 GiB to spare. The two largest
+reads are still the planner's on function 9, `…_opt_taken_tested_9` and
+`…_plan_9`, about seven and six million steps.
+
+What was ruled out: a branch planning itself again when it loses an output
+(`StructuredRegion::plan_in`). Planning only the outermost such branch
+again gave the same steps and the same code, so no function here pays for
+that. What the read trace shows instead is the planner's steps a node
+growing with the function's size (a few thousand a node in a function of
+compares and constants, tens of thousands in the function with the most
+inlined), which points at what the planner asks of the lowering's file at
+every node (`File::known` is a list, scanned), not at the planner's own
+passes: the reads of a function's continuation at every `Compose` were
+measured at under a third of the planning.
+
 ## What is left
+
+- The planner runs twice on every function the optimizer keeps: once when
+  the lowering is asked whether it takes the function (`Function::lowers`)
+  and once for the placement the certificate states (`…_plan_k`). Keeping
+  the first answer removes about a quarter of the compile's evaluation, though
+  not its peak.
 
 - The margin under the rail is still thin (about 0.7 GiB of address space
   on this program), and it is the allocator's reservations, not use. A
