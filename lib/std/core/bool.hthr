@@ -539,3 +539,15 @@ theorem Bool::convoy_false<A>(b: Bool, yes: (b = True) → A, no: (b = False) �
     ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = no(e) {
     Bool::taken_false(b, e, f := yes, g := no)
 }
+
+// A test without an equation (`if P`, `match b`) at a bit a hypothesis
+// gives is the arm it picks. A definition's branch equations (`f::True`,
+// `f::False`) are these, one per test on the way to the branch
+// (issues/definition-branch-equations.md).
+theorem Bool::picked_true<A>(b: Bool, yes, no: A, e: b = True): (match b { True => yes, False => no }) = yes {
+    j(e, λ w _ => (match b { True => yes, False => no }) = (match w { True => yes, False => no }), refl)
+}
+
+theorem Bool::picked_false<A>(b: Bool, yes, no: A, e: b = False): (match b { True => yes, False => no }) = no {
+    j(e, λ w _ => (match b { True => yes, False => no }) = (match w { True => yes, False => no }), refl)
+}

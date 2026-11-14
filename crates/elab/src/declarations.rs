@@ -12,7 +12,7 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalS
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, InstanceDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::{
-    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, datarepr,
+    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, branch_equations, datarepr,
     emission_walk, err, gate, inductive, loops, meaning, measure, names, partial, pool, recursion,
     recursion_at_top_hoisted, sealing, statements, stats,
 };
@@ -70,7 +70,66 @@ impl DeclarationsMut<'_> {
     }
 
     pub(crate) fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
-        self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_decl_owned(decl))
+        self.scoped(|s| &mut s.member_owner, owner, |me| {
+            DeclarationsMut(me).elab_decl_owned(decl)?;
+            // A definition's own equations, one per branch of the test its
+            // body is (`branch_equations`): beside every `fn` that has one,
+            // so a proof cites `f::True` and never restates `f`.
+            if decl.decreases.is_none() && decl.partial.is_none() && branch_equations::candidate(decl) && !loops::has_loop(decl) {
+                DeclarationsMut(me).elab_branch_equations(decl);
+            }
+            Ok(())
+        })
+    }
+
+    /// `f::True`, `f::False`, … (`branch_equations`), after `f`. Never an
+    /// error: the generator is untrusted, so an equation the checker refuses
+    /// leaves `f` as it is, with the reason recorded under the designed
+    /// spelling for a reference to report. A condition read as a `Bool`
+    /// where it is not a proposition (`if xs.is_empty()`) is tried second,
+    /// as the elaborator tries it.
+    fn elab_branch_equations(&mut self, decl: &Decl) {
+        let needs = ["bool::Bool::convoy_true", "bool::Bool::picked_true", "bool::decide_bit_of", "bool::decide_bit_of_not"];
+        if needs.iter().any(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
+            return;
+        }
+        let self_name = base_name(&decl.name).to_string();
+        let warn_mark = self.pass.warnings.borrow().len();
+        let mut why = String::new();
+        for reading in [branch_equations::Reading::Proposition, branch_equations::Reading::Bool] {
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading) {
+                Ok(e) => e,
+                Err(e) => {
+                    why = e;
+                    break;
+                }
+            };
+            let built = self.session_transaction(|me| {
+                for eq in &equations {
+                    me.elab_decl_one(&eq.decl, None).map_err(|e| {
+                        ElabError::Elab { msg: format!("the generated `{}` was refused ({e})", eq.designed), span: eq.decl.span }
+                    })?;
+                }
+                Ok(())
+            });
+            self.pass.warnings.borrow_mut().truncate(warn_mark);
+            match built {
+                Ok(()) => {
+                    for eq in &equations {
+                        if !matches!(NameLookup(self).resolve_declared(&eq.designed), NameRes::Found(_)) {
+                            self.designate_access(&eq.designed, &eq.decl.name);
+                        }
+                    }
+                    return;
+                }
+                // The proposition reading's refusal is the one to report: the
+                // `Bool` reading is a fallback for conditions that are not one.
+                Err(e) if why.is_empty() => why = e.to_string(),
+                Err(_) => {}
+            }
+        }
+        self.pass.unfold_refusals.borrow_mut().insert(format!("{}::True", decl.name), why.clone());
+        self.pass.unfold_refusals.borrow_mut().insert(format!("{}::False", decl.name), why);
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {

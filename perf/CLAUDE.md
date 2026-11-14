@@ -8,6 +8,10 @@ when it is). These are the tools for a round that does measure.
   the headline number is the scaling exponent, not the time.
   `docs/benchmarking.md` explains "regressed" and why the harness is
   first-party (the kernel has zero dependencies, dev-dependencies included).
+- **The emitted code's speed: `scripts/bench-native`** (`docs/native-benchmarking.md`):
+  the linked SHA-256 and scanner against Rust references, and the
+  optimizer's counter, instructions per block (callgrind, exact). A pass
+  that changes emitted code reports that counter's move.
 - **Cloud timings are the reference**: record and compare
   on the cloud box, counters first (`docs/cloud-benchmarks.md`). To
   hillclimb on a slow native or library cost, use **`scripts/bench-probes`**:

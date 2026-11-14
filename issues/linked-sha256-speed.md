@@ -60,9 +60,8 @@ a choice yet.
   once (the `for` thread's note on PR #618).
 - (3) is the source: the same specification can be met by a rotating
   index, and `Sha256::run_spec` says what has to stay true.
-- A case in `perf/bench/cases.tsv` or `scripts/bench` for bytes a second,
-  beside the scanner's ([[linked-scanner-speed-unmeasured]]), so the ratio
-  is tracked.
+- ~~A case for bytes a second, beside the scanner's, so the ratio is
+  tracked.~~ Done: `scripts/bench-native` (below).
 
 ## Done when
 
@@ -70,6 +69,28 @@ The ratio to the cache's scalar path is small enough that
 [[sha256-linked-into-cache]] is a decision about trust and not about time,
 and the number is tracked.
 
+## Tracked
+
+`scripts/bench-native` (`docs/native-benchmarking.md`) prints the table and
+records it in `crates/linked/benches/baseline.tsv`: ns per block and MB/s of
+the linked code; the same for a Rust mirror of the Heather source
+(`crates/linked/benches/native/mirror.rs`, held to the linked code byte for
+byte), a textbook scalar Rust and the `sha2` crate, each at opt-level 3 and
+0; **instructions per block of the linked compression, counted exactly by
+callgrind, with a breakdown by kind** (the optimizer's counter; `--check`
+fails when it rises); `compile-x86`'s cold and warm time per SHA-256 export;
+and the scanner's MB/s and instructions per byte against the Rust lexer.
+A pass that changes emitted code reports the counter's move and re-records.
+
 ## Log
 
+- 2026-11-14: The first snapshot (cloud box): linked compression 215,898
+  instructions and 3,814 calls a block, frame loads and stores 28% of them;
+  about 12,500 ns a block. The mirror at opt-level 3 is about 2,800 ns and
+  at opt-level 0 about 33,000, so our compiler already beats rustc without
+  optimization on the same source by about 2.7 times, and LLVM's optimizer
+  is about 4.4 times better than ours on it. Textbook 250 ns, `sha2` with
+  the SHA extensions 40. Compiling a SHA-256 export from an empty store
+  takes one to three minutes, and 2 to 12 s over a warm one. Scanner
+  37 MB/s and 453 instructions a byte, against the lexer's 101 MB/s and 121.
 - 2026-11-14: Cause (2), first half, is fixed: a call saves only the registers whose values are read after it ([[function-ir-verified-live-spills]], closed). The compression went from 216,000 to 175,969 instructions a block and the scanner from 5.11e9 to 3.57e9 over `lib/`, and time moved about 5% on each: the saves were cheap instructions. What the profile's shares do not show is which instructions are on the dependent path; the word accessors (four byte loads, shifts and tests behind a call) and the working variables' moves through memory are. The design the remaining steps follow is `docs/optimizer-design.md`.
