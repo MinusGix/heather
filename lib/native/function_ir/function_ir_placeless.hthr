@@ -30,6 +30,7 @@
 // answered and the file left are the same at every address word (§2.6,
 // U4 step 4b).
 
+import bitvec_bytes;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -300,6 +301,11 @@ theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Va
         SignResize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), agree(from, source, Inl(refl))),
         TableRead(_, _, bits, index, entries) => λ agree w => cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := w),
             agree(bits, index, Inl(refl))),
+        WideLoad(bytes, _, buffer, index) => λ agree w => cong_fn(
+            λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(buffers, buffer, x.toNat(), bytes).toNat(), n := w), agree(64, index, Inl(refl))),
+        WideStore(bytes, _, buffer, index, _) => λ agree w => cong_fn(
+            λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(buffers, buffer, x.toNat(), bytes).toNat(), n := w), agree(64, index, Inl(refl))),
+        ByteSwap(_, _, source) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.swap_bytes(), agree(w, source, Inl(refl))),
     }
 }
 
@@ -751,6 +757,18 @@ theorem Node::run_apart(self node: Node, buffers: Buffers(), hidden: List<Nat>, 
                     load_value(file(values(64, index), values(64, value)), buffer, index, values),
                     load_value(file(other(64, index), other(64, value)), buffer, index, other),
                     λ w => eq2(λ (x: BitVec(64)) (y: BitVec(64)) => word_value(byte_word(buffer_byte(file(x, y), buffer, x.toNat())), w),
+                        at_index, at_value)), eq2(file, at_index, at_value)⟩
+            },
+            WideStore(bytes, output, buffer, index, value) => λ _ clear => {
+                let at_index: (other(64, index) = values(64, index)) =
+                    apart(64, index, disjoint_mem(hidden, [index, value], clear, index, Inl(refl)));
+                let at_value: (other(8 * bytes, value) = values(8 * bytes, value)) =
+                    apart(8 * bytes, value, disjoint_mem(hidden, [index, value], clear, value, Inr(Inl(refl))));
+                let file = λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => store_word(buffers, buffer, x.toNat(), bytes, y);
+                ⟨Valuation::set_apart(hidden, values, other, apart, output,
+                    wide_value(file(values(64, index), values(8 * bytes, value)), buffer, index, bytes, values),
+                    wide_value(file(other(64, index), other(8 * bytes, value)), buffer, index, bytes, other),
+                    λ w => eq2(λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => BitVec::ofNat(buffer_word(file(x, y), buffer, x.toNat(), bytes).toNat(), n := w),
                         at_index, at_value)), eq2(file, at_index, at_value)⟩
             },
             _ => λ no _ => absurd(no),

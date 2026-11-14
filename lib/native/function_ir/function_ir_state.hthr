@@ -24,11 +24,13 @@ import function_ir;
 import function_ir_eval;
 import nat_map;
 import bitvec;
+import bitvec_bytes;
 import bool;
 import list;
 import logic;
 import nat;
 import option;
+import vector;
 
 // A region's words and the buffers beside them.
 record State { values: Valuation(), buffers: Buffers() }
@@ -62,6 +64,46 @@ theorem buffer_bytes_store_other(buffers: Buffers(), buffer, index: Nat, byte: B
     cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
 }
 
+// Bytes stored from `index` of buffer `buffer`, the first at `index` and
+// each where the buffer has one: one `store_byte` after another.
+fn store_bytes(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); k]) → Buffers() {
+    (match k as λ m => Buffers() → Nat → [BitVec(8); m] → Buffers() {
+        Zero => λ file at bytes => file,
+        Succ(_, ih) => λ file at bytes => ih(store_byte(file, buffer, at, head(bytes)), Succ(at), tail(bytes)),
+    })(buffers, index, bytes)
+}
+
+// A word of `bytes` bytes stored from `index`, the least significant
+// first: what `WideStore` does to the file.
+fn store_word(buffers: Buffers(), buffer, index, bytes: Nat, word: BitVec(8 * bytes)) → Buffers() {
+    store_bytes(bytes, buffers, buffer, index, word.bytes_le(bytes))
+}
+
+// The first byte is stored at `index`, then the rest from the next.
+theorem store_bytes_succ(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); Succ(k)]):
+    store_bytes(Succ(k), buffers, buffer, index, bytes) = store_bytes(k, store_byte(buffers, buffer, index, head(bytes)), buffer, Succ(index), tail(bytes)) {
+    refl
+}
+
+// From no buffers there is nothing to store into.
+theorem store_bytes_nil(k: Nat): (buffer, index: Nat) → (bytes: [BitVec(8); k]) → store_bytes(k, Nil, buffer, index, bytes) = Nil {
+    match k as λ m => (buffer, index: Nat) → (bytes: [BitVec(8); m]) → store_bytes(m, Nil, buffer, index, bytes) = Nil {
+        Zero => λ buffer index bytes => refl,
+        Succ(j, ih) => λ buffer index bytes => ih(buffer, Succ(index), tail(bytes)),
+    }
+}
+
+// A four-byte word is four byte stores, at `index + 0` to `index + 3`, its
+// bytes low first.
+theorem store_word_four(buffers: Buffers(), buffer, index: Nat, word: BitVec(32)):
+    store_word(buffers, buffer, index, 4, word) =
+        store_byte(store_byte(store_byte(store_byte(buffers, buffer, index, vector_get(word.bytes_le(4), 0, BitVec::zero())),
+            buffer, index + 1, vector_get(word.bytes_le(4), 1, BitVec::zero())),
+            buffer, index + 2, vector_get(word.bytes_le(4), 2, BitVec::zero())),
+            buffer, index + 3, vector_get(word.bytes_le(4), 3, BitVec::zero())) {
+    refl
+}
+
 // ---------------------------------------------------------------------------
 // Nodes
 
@@ -71,6 +113,11 @@ fn Node::run(self node: Node, values: Valuation(), buffers: Buffers()) → State
         BufferStore(output, buffer, index, value) => {
             let after = store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value)));
             State(Valuation::set(values, output, load_value(after, buffer, index, values)), after)
+        },
+        WideLoad(bytes, output, buffer, index) => State(Valuation::set(values, output, wide_value(buffers, buffer, index, bytes, values)), buffers),
+        WideStore(bytes, output, buffer, index, value) => {
+            let after = store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value));
+            State(Valuation::set(values, output, wide_value(after, buffer, index, bytes, values)), after)
         },
         _ => State(node.step(values), buffers),
     }
@@ -88,7 +135,7 @@ fn run_nodes(nodes: List<Node>, values: Valuation(), buffers: Buffers()) → Sta
 
 // Whether a node touches no buffer.
 fn Node::pure(self node: Node) → Bool {
-    match node { BufferLoad(_, _, _) => False, BufferStore(_, _, _, _) => False, _ => True }
+    match node { BufferLoad(_, _, _) => False, BufferStore(_, _, _, _) => False, WideLoad(_, _, _, _) => False, WideStore(_, _, _, _, _) => False, _ => True }
 }
 
 fn nodes_pure(nodes: List<Node>) → Bool {
@@ -117,6 +164,9 @@ theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(),
         Resize(_, _, _, _) => λ _ => refl,
         SignResize(_, _, _, _) => λ _ => refl,
         TableRead(_, _, _, _, _) => λ _ => refl,
+        WideLoad(_, _, _, _) => λ no => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no => false_elim(no),
+        ByteSwap(_, _, _) => λ _ => refl,
     }(pure)
 }
 
@@ -141,6 +191,13 @@ theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, 
         Resize(_, _, _, _) => refl,
         SignResize(_, _, _, _) => refl,
         TableRead(_, _, _, _, _) => refl,
+        WideLoad(_, _, _, _) => refl,
+        WideStore(bytes, output, buffer, index, value) => {
+            let empty = store_bytes_nil(bytes, buffer, values(64, index).toNat(), values(8 * bytes, value).bytes_le(bytes));
+            j(sym(empty), λ file _ => State(Valuation::set(values, output, wide_value(file, buffer, index, bytes, values)), file) =
+                State(Valuation::set(values, output, wide_value(Nil, buffer, index, bytes, values)), Nil), refl)
+        },
+        ByteSwap(_, _, _) => refl,
     }
 }
 

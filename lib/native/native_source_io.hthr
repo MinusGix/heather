@@ -297,6 +297,9 @@ theorem Node::step_pure(self node: Node, values: Valuation(), buffers: Buffers()
         Resize(_, _, _, _) => λ _ => refl,
         SignResize(_, _, _, _) => λ _ => refl,
         TableRead(_, _, _, _, _) => λ _ => refl,
+        WideLoad(_, _, _, _) => λ no => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no => false_elim(no),
+        ByteSwap(_, _, _) => λ _ => refl,
     }(pure)
 }
 

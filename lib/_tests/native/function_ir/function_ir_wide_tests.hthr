@@ -1,0 +1,131 @@
+// Probes of the wide accesses and the byte swap (`WideLoad`, `WideStore`,
+// `ByteSwap`; docs/optimizer-design.md, step 5): a word of a buffer's bytes
+// read low byte first and zero past the end, a word stored as that many
+// byte stores, and the big-endian read compiled code makes a byte at a
+// time is the swap of the little-endian word. At literal files and words,
+// at a neutral file and index, in checking positions, and with negative
+// controls. Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import bitvec;
+import bitvec_bytes;
+import bitvec_resize;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import vector;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+
+// ---------------------------------------------------------------------------
+// A wide load
+
+// load4(i): the four bytes of buffer 0 from `i`, as a word.
+fn load4() → Function {
+    Function(parameters := [0], body := leaf([WideLoad(4, 1, 0, 0), Resize(32, 64, 2, 1)]), result := 2)
+}
+
+theorem load4_evaluable(): program_evaluable([load4()]).IsTrue() { trivial }
+
+// The least significant byte is the first.
+theorem load4_runs(): program_run([load4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(1)]) = Ending(w(0x05040302), [[b(1), b(2), b(3), b(4), b(5)]]) { refl }
+
+// Past the buffer's end each byte reads zero, as a byte load's does.
+theorem load4_past(): program_run([load4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(3)]) = Ending(w(0x0504), [[b(1), b(2), b(3), b(4), b(5)]]) { refl }
+
+// The control: the first byte is not the most significant.
+theorem load4_not_big_endian(same: program_run([load4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(1)]) = Ending(w(0x02030405), [[b(1), b(2), b(3), b(4), b(5)]])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => answer.word.eq_bit(w(0x05040302)), same);
+    absurd(verdict)
+}
+
+// At a neutral file and index, byte `k` of the word is the buffer's byte
+// `index + k`, and one byte is what `BufferLoad` reads.
+theorem wide_load_byte(buffers: Buffers(), index: Nat):
+    vector_get(buffer_word(buffers, 0, index, 4).bytes_le(4), 2, BitVec::zero()) = buffer_byte(buffers, 0, index + 2) {
+    buffer_word_byte(buffers, 0, index, 4, 2, trivial)
+}
+
+theorem wide_load_one(buffers: Buffers(), index: Nat): buffer_word(buffers, 0, index, 1) = buffer_byte(buffers, 0, index) {
+    buffer_word_one(buffers, 0, index)
+}
+
+// The node's equation, in a checking position, at a neutral valuation.
+theorem wide_load_holds(buffers: Buffers(), values: Valuation(),
+    held: values(32, 1) = buffer_word(buffers, 0, values(64, 0).toNat(), 4)): NodeHolds(values, WideLoad(4, 1, 0, 0), buffers := buffers) {
+    held
+}
+
+// ---------------------------------------------------------------------------
+// The big-endian read
+
+// The four bytes from `index`, joined by shifts with the first the most
+// significant, as `u32_be_within` joins them, are the swap of the wide
+// load's word: the identity the optimizer's rule rests on.
+fn byte_at(buffers: Buffers(), i: Nat) → BitVec(8) { buffer_bytes(buffers, 0).nth(i).unwrap_or(BitVec::zero()) }
+
+theorem be_read_is_swapped_load(buffers: Buffers(), index: Nat):
+    (byte_at(buffers, index).zero_extend(56) << 24 | byte_at(buffers, Succ(index)).zero_extend(56) << 16
+        | byte_at(buffers, Succ(Succ(index))).zero_extend(56) << 8 | byte_at(buffers, Succ(Succ(Succ(index)))).zero_extend(56))
+        = buffer_word(buffers, 0, index, 4).byte_swap(4).zero_extend(32) {
+    BitVec::be_join_32_swap(byte_at(buffers, index), byte_at(buffers, Succ(index)), byte_at(buffers, Succ(Succ(index))), byte_at(buffers, Succ(Succ(Succ(index)))))
+}
+
+// be4(i): the big-endian word at `i`, as one load and a swap.
+fn be4() → Function {
+    Function(parameters := [0], body := leaf([WideLoad(4, 1, 0, 0), ByteSwap(32, 2, 1), Resize(32, 64, 3, 2)]), result := 3)
+}
+
+theorem be4_runs(): program_run([be4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(1)]) = Ending(w(0x02030405), [[b(1), b(2), b(3), b(4), b(5)]]) { refl }
+
+// ---------------------------------------------------------------------------
+// A wide store
+
+// store4(i, v): `v`'s low four bytes from `i` of buffer 0, low first,
+// returning the word then there.
+fn store4() → Function {
+    Function(parameters := [0, 1], body := leaf([Resize(64, 32, 2, 1), WideStore(4, 3, 0, 0, 2), Resize(32, 64, 4, 3)]), result := 4)
+}
+
+theorem store4_evaluable(): program_evaluable([store4()]).IsTrue() { trivial }
+
+theorem store4_runs(): program_run([store4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(1), w(0x0a0b0c0d)]) =
+    Ending(w(0x0a0b0c0d), [[b(1), b(0x0d), b(0x0c), b(0x0b), b(0x0a)]]) { refl }
+
+// Past the end only the bytes inside land, and the word then there reads
+// zero above them.
+theorem store4_past(): program_run([store4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(3), w(0x0a0b0c0d)]) =
+    Ending(w(0x0c0d), [[b(1), b(2), b(3), b(0x0d), b(0x0c)]]) { refl }
+
+// At a neutral file the store is the byte stores at `index + 0` to
+// `index + 3` (`store_word_four`), and what the run answers is what the
+// meaning allows.
+theorem store4_allowed(file: Buffers(), i, v: BitVec(64)):
+    program_effects([store4()])(file, 0, [i, v], program_run([store4()], file, 0, [i, v]).word,
+        program_run([store4()], file, 0, [i, v]).buffers) {
+    program_run_effects([store4()], trivial, file, 0, [i, v], trivial)
+}
+
+// The control: a wide store is not a store of its low byte alone.
+theorem store4_not_one_byte(same: program_run([store4()], [[b(1), b(2), b(3), b(4), b(5)]], 0, [w(1), w(0x0a0b0c0d)]) =
+    Ending(w(0x0d), [[b(1), b(0x0d), b(3), b(4), b(5)]])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 2).eq_bit(b(0x0c)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// The swap alone
+
+theorem swap_holds(values: Valuation(), held: values(32, 1) = values(32, 0).swap_bytes()): NodeHolds(values, ByteSwap(32, 1, 0)) { held }
+
+// At width 32 the node's swap is the four-byte swap, so twice is the word.
+theorem swap_twice(x: BitVec(32)): x.swap_bytes().swap_bytes() = x {
+    trans(BitVec::swap_bytes_32(x.swap_bytes()), trans(cong_fn(λ (y: BitVec(32)) => y.byte_swap(4), BitVec::swap_bytes_32(x)), BitVec::byte_swap_byte_swap(4, x)))
+}

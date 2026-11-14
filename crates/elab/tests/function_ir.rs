@@ -39,6 +39,10 @@ const MODULES: &[(&str, &str)] = &[
     ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("vector", include_str!("../../../lib/std/data/vector.hthr")),
     ("list_window", include_str!("../../../lib/std/data/list_window.hthr")),
+    // A wide load's word is its bytes read little-endian (`bitvec_bytes`).
+    ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
+    ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
     ("function_ir", FUNCTION_IR),
     ("function_ir_certificates", FUNCTION_IR_CERTIFICATES),
 ];
