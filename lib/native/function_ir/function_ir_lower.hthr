@@ -14,6 +14,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bitvec_bytes;
 import bitvec_resize;
 import bool;
 import list;
@@ -68,6 +69,11 @@ inductive Known {
     Compared(id: Nat, op: CompareOp, left: Nat, right: Nat),
     Truth(id: Nat),
     Falsity(id: Nat),
+    // The word `id` is the word `base` plus the constant `value`, as a
+    // 64-bit sum: what an immediate ADD leaves, so that a test of the sum
+    // reads as a test of the base plus a constant (a wide access's last
+    // byte, function_ir_lower_reads).
+    Offset(id: Nat, base: Nat, value: Nat),
 }
 
 fn Known::Holds(self known: Known, values: Valuation()) → Type {
@@ -76,6 +82,7 @@ fn Known::Holds(self known: Known, values: Valuation()) → Type {
         Compared(id, op, left, right) => op.Holds(values, id, left, right),
         Truth(id) => values(1, id).head_bit() = True,
         Falsity(id) => values(1, id).head_bit() = False,
+        Offset(id, base, value) => values(64, id) = values(64, base).add(BitVec::ofNat(value)),
     }
 }
 
@@ -431,6 +438,7 @@ fn known_value(known: List<Known>, id: Nat) → Option<Nat> {
             Compared(_, _, _, _) => known_value(rest, id),
             Truth(_) => known_value(rest, id),
             Falsity(_) => known_value(rest, id),
+            Offset(_, _, _) => known_value(rest, id),
         },
     }
 }
@@ -449,6 +457,7 @@ theorem known_value_holds(values: Valuation(), id, value: Nat, known: List<Known
             Compared(_, _, _, _) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
             Truth(_) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
             Falsity(_) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
+            Offset(_, _, _) => λ found holds => known_value_holds(values, id, value, rest, found, holds.right),
         },
     }
 }
@@ -467,6 +476,7 @@ fn known_comparison(known: List<Known>, id: Nat) → Option<Comparison> {
             },
             Truth(_) => known_comparison(rest, id),
             Falsity(_) => known_comparison(rest, id),
+            Offset(_, _, _) => known_comparison(rest, id),
         },
     }
 }
@@ -486,6 +496,7 @@ theorem known_comparison_holds(values: Valuation(), id: Nat, compared: Compariso
             }),
             Truth(_) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
             Falsity(_) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
+            Offset(_, _, _) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
         },
     }
 }
@@ -1103,7 +1114,7 @@ fn File::add_known(self file: File, destination: Gpr, output, operand, value: Na
             Some(_) => match add_immediate(destination, value) {
                 None => None,
                 Some(instruction) => Some(moved.then(Lowered([instruction],
-                    moved.file.write(destination, Some(Held(output, Word)))))),
+                    moved.file.write(destination, Some(Held(output, Word))).know(Offset(output, operand, value))))),
             },
         },
     }
@@ -1117,15 +1128,17 @@ theorem add_known_after<M>(values: Valuation(), moved: Lowered, destination: Gpr
     here: FoundAt(moved.file, Held(operand, Word), destination), instruction: Instruction,
     chosen: add_immediate(destination, value) = Some(instruction)):
     Keeps<M>(values, moved.file, AddsKnown(values, output, operand, value),
-        Lowered([instruction], moved.file.write(destination, Some(Held(output, Word)))))
+        Lowered([instruction], moved.file.write(destination, Some(Held(output, Word))).know(Offset(output, operand, value))))
 {
     λ s represents holds =>
         j(sym(add_immediate_adds<M>(destination, value, s, instruction, chosen)),
-            λ gprs _ => moved.file.write(destination, Some(Held(output, Word))).Represents(values, gprs),
-            moved.file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-                read_gpr(destination, s.gprs).add(BitVec::ofNat(value)), represents,
-                trans(holds, j(here.rep(values, s.gprs, represents),
-                    λ x _ => values(64, operand).add(BitVec::ofNat(value)) = x.add(BitVec::ofNat(value)), refl))))
+            λ gprs _ => moved.file.write(destination, Some(Held(output, Word))).know(Offset(output, operand, value)).Represents(values, gprs),
+            moved.file.write(destination, Some(Held(output, Word))).represents_know(values,
+                write_gpr(destination, read_gpr(destination, s.gprs).add(BitVec::ofNat(value)), s.gprs), Offset(output, operand, value),
+                moved.file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
+                    read_gpr(destination, s.gprs).add(BitVec::ofNat(value)), represents,
+                    trans(holds, j(here.rep(values, s.gprs, represents),
+                        λ x _ => values(64, operand).add(BitVec::ofNat(value)) = x.add(BitVec::ofNat(value)), refl))), holds))
 }
 
 theorem File::add_known_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, operand, value: Nat):
@@ -1140,7 +1153,7 @@ theorem File::add_known_keeps<M>(self file: File, values: Valuation(), destinati
                 Some(_) => match add_immediate(destination, value) {
                     None => None,
                     Some(instruction) => Some(moved.then(Lowered([instruction],
-                        moved.file.write(destination, Some(Held(output, Word)))))),
+                        moved.file.write(destination, Some(Held(output, Word))).know(Offset(output, operand, value))))),
                 },
             },
         }) {
@@ -1150,7 +1163,7 @@ theorem File::add_known_keeps<M>(self file: File, values: Valuation(), destinati
             Some(here) => match chosen: add_immediate(destination, value) {
                 None => trivial,
                 Some(instruction) => keeps_then<M>(values, file, facts, moved,
-                    Lowered([instruction], moved.file.write(destination, Some(Held(output, Word)))), moved_keeps,
+                    Lowered([instruction], moved.file.write(destination, Some(Held(output, Word))).know(Offset(output, operand, value))), moved_keeps,
                     add_known_after<M>(values, moved, destination, output, operand, value, here, instruction, chosen)),
             },
         },
@@ -2516,6 +2529,39 @@ theorem File::resize_keeps<M>(self file: File, values: Valuation(), from, to: Na
 }
 
 // ---------------------------------------------------------------------------
+// A byte swap: `BSWAP r32` on a 32-bit value held narrow, its four bytes
+// reversed and the upper half left zero.
+
+// A narrow word's swap, zero-extended, is what `BSWAP r32` leaves of the
+// word that holds it.
+theorem bswap_narrow(x: BitVec(32)): bswap32_value(x.zero_extend(32)) = x.byte_swap(4).zero_extend(32) { refl }
+
+theorem in_place_bswap<M>(destination: Gpr): InPlace<M>([Bswap32(destination)], destination, bswap32_value) {
+    λ s query => refl
+}
+
+fn File::byte_swap(self file: File, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.reshaped([Bswap32(destination)], Narrow(32), Narrow(32), destination, output, source)
+}
+
+theorem File::byte_swap_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, ByteSwap(32, output, source)), file.byte_swap(destination, output, source))
+{
+    keeps_given<M>(values, file, Reshapes(values, Narrow(32), Narrow(32), output, source, bswap32_value),
+        NodeHolds(values, ByteSwap(32, output, source)), file.byte_swap(destination, output, source),
+        λ gprs represents holds => λ a (rep: values(32, source).resize(64) = a) => {
+            let x = values(32, source);
+            let swapped: (values(32, output).resize(64) = x.byte_swap(4).zero_extend(32)) =
+                trans(cong_fn(λ (y: BitVec(32)) => y.resize(64), trans(holds, BitVec::swap_bytes_32(x))),
+                    BitVec::resize_zero_extend(32, 32, x.byte_swap(4)));
+            trans(swapped, trans(sym(bswap_narrow(x)),
+                cong_fn(bswap32_value, trans(sym(BitVec::resize_zero_extend(32, 32, x)), rep))))
+        },
+        file.reshaped_keeps<M>(values, [Bswap32(destination)], bswap32_value, Narrow(32), Narrow(32), destination, output, source,
+            in_place_bswap<M>(destination)))
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 // What only the word has yet (a signed comparison, an arithmetic right
@@ -2617,7 +2663,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         // (`function_ir_lower_reads`); this file lowers neither.
         WideLoad(_, _, _, _) => None,
         WideStore(_, _, _, _, _) => None,
-        ByteSwap(_, _, _) => None,
+        // A swap of 32 bits held narrow; the 64-bit swap is not lowered yet.
+        ByteSwap(width, output, source) => at_width(32, width, width.eq_dec(32), file.byte_swap(destination, output, source), None),
     }
 }
 
@@ -2718,7 +2765,8 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         TableRead(_, _, _, _, _) => trivial,
         WideLoad(_, _, _, _) => trivial,
         WideStore(_, _, _, _, _) => trivial,
-        ByteSwap(_, _, _) => trivial,
+        ByteSwap(width, output, source) => at_width_keeps<M>(values, file, 32, width, λ w => NodeHolds(values, ByteSwap(w, output, source)),
+            width.eq_dec(32), file.byte_swap(destination, output, source), None, file.byte_swap_keeps<M>(values, destination, output, source), trivial),
     }
 }
 

@@ -72,6 +72,24 @@ theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_
     trans(rewrite(BitVec::bytes_le_of_bytes_le(k, reverse(bytes)), refl), reverse_reverse(k, bytes))
 }
 
+// A word whose low bit is rebuilt from its tail.
+theorem BitVec::cons_back(n: Nat, x: BitVec(Succ(n)), {rest: BitVec(n)}, same: rest = x.tail_bits()): rest.cons_bit(x.head_bit()) = x {
+    trans(BitVec::cons_bit_cong(n, refl, same, a := x.head_bit(), b := x.head_bit()), BitVec::cons_head_tail(n, x))
+}
+
+// A byte joined to nothing is the byte (at width 8, where `0 + 8` reads 8).
+theorem BitVec::concat_nil_byte(x: u8): x.concat(BitVec::nil()) = x {
+    let t1 = x.tail_bits(); let t2 = t1.tail_bits(); let t3 = t2.tail_bits(); let t4 = t3.tail_bits();
+    let t5 = t4.tail_bits(); let t6 = t5.tail_bits(); let t7 = t6.tail_bits();
+    BitVec::cons_back(7, x, BitVec::cons_back(6, t1, BitVec::cons_back(5, t2, BitVec::cons_back(4, t3, BitVec::cons_back(3, t4,
+        BitVec::cons_back(2, t5, BitVec::cons_back(1, t6, BitVec::cons_back(0, t7, refl))))))))
+}
+
+// Four bytes, low first, are their concatenation.
+theorem BitVec::of_bytes_le_four(b0, b1, b2, b3: u8): BitVec::of_bytes_le([b0, b1, b2, b3]) = b0.concat(b1.concat(b2.concat(b3))) {
+    cong_fn(λ (top: u8) => b0.concat(b1.concat(b2.concat(top))), BitVec::concat_nil_byte(b3))
+}
+
 // A word with its byte `r` replaced, byte 0 the most significant: the
 // word of its bytes with that one changed, and the word where it has no
 // such byte.

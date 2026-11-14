@@ -704,6 +704,16 @@ theorem buffer_word_one(buffers: Buffers(), buffer, start: Nat): buffer_word(buf
     sym(buffer_byte_entry(buffers, buffer, start))
 }
 
+// Four bytes of it are the four bytes joined, the first lowest.
+theorem buffer_word_four(buffers: Buffers(), buffer, start: Nat):
+    buffer_word(buffers, buffer, start, 4) = buffer_byte(buffers, buffer, start).concat(buffer_byte(buffers, buffer, start + 1).concat(
+        buffer_byte(buffers, buffer, start + 2).concat(buffer_byte(buffers, buffer, start + 3)))) {
+    let entry = λ (k: Nat) => buffer_bytes(buffers, buffer).nth(k).unwrap_or(BitVec::zero());
+    trans(BitVec::of_bytes_le_four(entry(start), entry(start + 1), entry(start + 2), entry(start + 3)),
+        rewrite(buffer_byte_entry(buffers, buffer, start), buffer_byte_entry(buffers, buffer, start + 1),
+            buffer_byte_entry(buffers, buffer, start + 2), buffer_byte_entry(buffers, buffer, start + 3), refl))
+}
+
 // A byte as a word, zero-extended, as a load leaves it in a register.
 fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
 

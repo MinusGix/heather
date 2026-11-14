@@ -1025,6 +1025,58 @@ fn File::emit_table(self file: File, saves: Nat, prog: Prog, nodes: List<Node>, 
     }
 }
 
+// A word of four bytes from a lent buffer (`WideLoad(4, …)`, the first
+// node of its leaf, `function_ir_lower_reads`): refused unless the path
+// knows the index below the home's length and some `index + 3` below it
+// too (`File::span_bounded`), so all four bytes are inside; then as a byte
+// load, the address formed and `MOV r32, [base]`, the word held at width 32.
+fn File::wide_at(self file: File, saves: Nat, prog: Prog, home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    match file.bounded(wide.index, home.length) && file.span_bounded(wide.index, home.length, 3) {
+        False => None,
+        True => match file.address(destination, home.base, wide.index) {
+            None => None,
+            Some(address) => match leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
+                False => None,
+                True => Some(Emitted(At(At(prog, 0, Block(address.code)), 0, asm_dword_load(DwordLoad(destination, destination))),
+                    address.file.write(destination, Some(Held(wide.output, Narrow(32)))), placement, names)),
+            },
+        },
+    }
+}
+
+// From the first of the buffer's homes that serves, as a byte load does.
+fn File::wide_from(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, wide: WideLeaf, destination: Gpr, placement: List<Place>,
+    names: Nat) → Option<Emitted> {
+    match homes {
+        Nil => None,
+        Cons(home, rest) => match home.buffer.same(wide.buffer) {
+            False => file.wide_from(saves, prog, rest, wide, destination, placement, names),
+            True => match file.wide_at(saves, prog, home, wide, destination, placement, names) {
+                None => file.wide_from(saves, prog, rest, wide, destination, placement, names),
+                Some(emitted) => Some(emitted),
+            },
+        },
+    }
+}
+
+// The load into the register its place names, then the nodes after it as
+// a block, from the file the load leaves.
+fn File::emit_wide(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, nodes: List<Node>, wide: WideLeaf, placement: List<Place>,
+    names: Nat) → Option<Emitted> {
+    match placement {
+        Nil => None,
+        Cons(place, rest) => match place {
+            Folded => None,
+            Saving(_) => None,
+            Into(destination) => match file.wide_from(saves, prog, homes, wide, destination, rest, names) {
+                None => None,
+                Some(loaded) => emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names),
+            },
+        },
+    }
+}
+
 // A leaf that reads no buffer: its nodes as a block, or, when the last
 // reads a constant table, the nodes before it then the read.
 fn emit_blind_leaf(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat) → Option<Emitted> {
@@ -1035,10 +1087,14 @@ fn emit_blind_leaf(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placem
 }
 
 // A leaf that stores nothing: one load of a buffer the scope has a home
-// for (`function_ir_lower_reads`), or nodes that read none.
+// for (`function_ir_lower_reads`), a word of four bytes from one and the
+// nodes after it, or nodes that read none.
 fn emit_quiet_leaf(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>) → Option<Emitted> {
     match leaf_load(nodes) {
-        None => match nodes_blind(nodes) { False => None, True => emit_blind_leaf(saves, prog, file, nodes, placement, names) },
+        None => match leaf_wide(nodes) {
+            None => match nodes_blind(nodes) { False => None, True => emit_blind_leaf(saves, prog, file, nodes, placement, names) },
+            Some(wide) => file.emit_wide(saves, prog, homes, nodes, wide, placement, names),
+        },
         Some(load) => file.emit_load(saves, prog, homes, load, placement, names),
     }
 }
@@ -1452,10 +1508,67 @@ theorem emit_blind_leaf_grows(saves: Nat, prog: Prog, file: File, nodes: List<No
     }
 }
 
+theorem File::wide_at_grows(self file: File, saves: Nat, prog: Prog, home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>,
+    names: Nat): Grows(prog, file.wide_at(saves, prog, home, wide, destination, placement, names)) {
+    match file.bounded(wide.index, home.length) && file.span_bounded(wide.index, home.length, 3) {
+        False => trivial,
+        True => match file.address(destination, home.base, wide.index) {
+            None => trivial,
+            Some(address) => match leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
+                False => trivial,
+                True => prog.within_step(At(prog, 0, Block(address.code)), 0, asm_dword_load(DwordLoad(destination, destination)),
+                    prog.within_then(0, Block(address.code))),
+            },
+        },
+    }
+}
+
+theorem File::wide_from_grows(self file: File, saves: Nat, prog: Prog, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat,
+    homes: List<Lent>): Grows(prog, file.wide_from(saves, prog, homes, wide, destination, placement, names)) {
+    match homes {
+        Nil => trivial,
+        Cons(home, rest) => match home.buffer.same(wide.buffer) {
+            False => file.wide_from_grows(saves, prog, wide, destination, placement, names, rest),
+            True => (match file.wide_at(saves, prog, home, wide, destination, placement, names) as λ e => Grows(prog, e) →
+                Grows(prog, match e {
+                    None => file.wide_from(saves, prog, rest, wide, destination, placement, names),
+                    Some(emitted) => Some(emitted),
+                }) {
+                None => λ _ => file.wide_from_grows(saves, prog, wide, destination, placement, names, rest),
+                Some(emitted) => λ grown => grown,
+            })(file.wide_at_grows(saves, prog, home, wide, destination, placement, names)),
+        },
+    }
+}
+
+theorem File::emit_wide_grows(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, nodes: List<Node>, wide: WideLeaf,
+    placement: List<Place>, names: Nat): Grows(prog, file.emit_wide(saves, prog, homes, nodes, wide, placement, names)) {
+    match placement {
+        Nil => trivial,
+        Cons(place, rest) => match place {
+            Folded => trivial,
+            Saving(_) => trivial,
+            Into(destination) => (match file.wide_from(saves, prog, homes, wide, destination, rest, names) as λ e => Grows(prog, e) →
+                Grows(prog, match e {
+                    None => None,
+                    Some(loaded) => emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names),
+                }) {
+                None => λ _ => trivial,
+                Some(loaded) => λ grown => grows_trans(prog, loaded, grown,
+                    emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names),
+                    emit_kept_nodes_grows(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names)),
+            })(file.wide_from_grows(saves, prog, wide, destination, rest, names, homes)),
+        },
+    }
+}
+
 theorem emit_quiet_leaf_grows(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
     Grows(prog, emit_quiet_leaf(saves, prog, file, nodes, placement, names, homes)) {
     match leaf_load(nodes) {
-        None => match nodes_blind(nodes) { False => trivial, True => emit_blind_leaf_grows(saves, prog, file, nodes, placement, names) },
+        None => match leaf_wide(nodes) {
+            None => match nodes_blind(nodes) { False => trivial, True => emit_blind_leaf_grows(saves, prog, file, nodes, placement, names) },
+            Some(wide) => file.emit_wide_grows(saves, prog, homes, nodes, wide, placement, names),
+        },
         Some(load) => match placement as λ p => Grows(prog, file.emit_load(saves, prog, homes, load, p, names)) {
             Nil => trivial,
             Cons(place, rest) => match place as λ q => Grows(prog, file.emit_load(saves, prog, homes, load, Cons(q, rest), names)) {
@@ -1869,6 +1982,245 @@ theorem File::load_from_emits<M>(self file: File, saves: Nat, site: Site<M>, lai
     }
 }
 
+// ---------------------------------------------------------------------------
+// A word of four bytes from a lent buffer
+
+// One piece of code after another, the second from the file the first
+// leaves; the second's facts are carried through the first.
+theorem emits_in_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, First, Second: Type, first, out: Emitted,
+    first_emits: EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, First, first),
+    second_emits: EmitsIn<M>(saves, site, stack, values, d, s0, first.prog, first.file, Second, out)):
+    EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, First ∧ Second, out) {
+    ⟨prog.within_trans(first.prog, out.prog, first_emits.left, second_emits.left),
+     λ within => site.moves_trans(stack.writes, prog_len(prog), prog_len(first.prog), prog_len(out.prog),
+        λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ (First ∧ Second)) ∧ stack.Framed(saves, d, s0, s),
+        λ (x: MachineState<M>) => (first.file.Represents(values, x.gprs) ∧ Second) ∧ stack.Framed(saves, d, s0, x),
+        λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t),
+        site.moves_weaken(stack.writes, prog_len(prog), prog_len(first.prog),
+            λ (x: MachineState<M>) => ((file.Represents(values, x.gprs) ∧ First) ∧ stack.Framed(saves, d, s0, x)) ∧ Second,
+            λ (t: MachineState<M>) => (first.file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t)) ∧ Second,
+            λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ (First ∧ Second)) ∧ stack.Framed(saves, d, s0, s),
+            λ (x: MachineState<M>) => (first.file.Represents(values, x.gprs) ∧ Second) ∧ stack.Framed(saves, d, s0, x),
+            site.moves_carry(stack.writes, prog_len(prog), prog_len(first.prog),
+                λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ First) ∧ stack.Framed(saves, d, s0, x),
+                λ (t: MachineState<M>) => first.file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t), Second,
+                first_emits.right(first.prog.within_trans(out.prog, site.program, second_emits.left, within))),
+            λ s h => ⟨⟨⟨h.left.left, h.left.right.left⟩, h.right⟩, h.left.right.right⟩,
+            λ t h => ⟨⟨h.left.left, h.right⟩, h.left.right⟩),
+        second_emits.right(within))⟩
+}
+
+// The address formed, then the doubleword loaded over it. The path knows
+// the index below the length and `index + 3` below it too; the span lent
+// lies below the canonical boundary, so the length is far below `2^64` and
+// the sum did not wrap: all four bytes are the buffer's.
+theorem wide_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, file: File,
+    home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat, same: home.buffer = wide.buffer,
+    bounded: file.bounded(wide.index, home.length).IsTrue(), spanned: file.span_bounded(wide.index, home.length, 3).IsTrue(),
+    address: Lowered, addressed: Addressed<M>(values, file, destination, home.base, wide.index, address),
+    kept: leaves_all(address.code, body_kept(saves)).IsTrue() ∧ destination.apart(body_kept(saves)).IsTrue()):
+    EmitsIn<M>(saves, site, stack, values, d, s0, prog, file,
+        wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
+        Emitted(At(At(prog, 0, Block(address.code)), 0, asm_dword_load(DwordLoad(destination, destination))),
+            address.file.write(destination, Some(Held(wide.output, Narrow(32)))), placement, names)) {
+    let facts = wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers);
+    let formed = At(prog, 0, Block(address.code));
+    let the_load = DwordLoad(destination, destination);
+    let loaded = At(formed, 0, asm_dword_load(the_load));
+    let out_file = address.file.write(destination, Some(Held(wide.output, Narrow(32))));
+    let index = values(64, wide.index);
+    let sum = values(64, home.base).add(index);
+    let a = address_of(lending.addresses, home.buffer);
+    let xs = buffer_bytes(lending.buffers, home.buffer);
+    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ framed(g, m);
+    let mid = λ (g: Gprs) (m: M) => ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = sum)) ∧
+        (facts ∧ (index.toNat() + 3 < values(64, home.length).toNat()))) ∧ framed(g, m);
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    ⟨prog.within_step(formed, 0, asm_dword_load(the_load), prog.within_then(0, Block(address.code))),
+     λ within => {
+        let formed_in = formed.within_before(0, asm_dword_load(the_load), site.program, within);
+        site.moves_trans(stack.writes, prog_len(prog), prog_len(formed), prog_len(loaded),
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (s: MachineState<M>) => mid(s.gprs, s.memory),
+            λ (t: MachineState<M>) => out_file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t),
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(address.code), pre, mid,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), formed_in.witness, prog, 0, address.code, formed_in.proof,
+                    site.program.block_reads_at(laid, formed_in.witness, prog, 0, address.code, formed_in.proof),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => mid(g, memory),
+                    λ x held => {
+                        let home_holds = held.left.right.right;
+                        let short: (values(64, home.length).toNat() <= xs.len()) =
+                            j(sym(home_holds.right), λ w _ => w.toNat() <= xs.len(), BitVec::toNat_ofNat_le(64, xs.len()));
+                        let readable = lent(home.buffer)(memory, held.right.right);
+                        let below: (index.toNat() < values(64, home.length).toNat()) =
+                            file.bounded_sound(values, x.gprs, wide.index, home.length, held.left.left, bounded);
+                        let no_wrap: (index.toNat() + 3 < Nat::pow(2, 64)) = omega(below, short, readable.left, top);
+                        ⟨⟨addressed(x, held.left.left),
+                            ⟨held.left.right,
+                             file.span_bounded_sound(values, x.gprs, wide.index, home.length, 3, held.left.left, no_wrap, spanned)⟩⟩,
+                         ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(address.code, x).gprs, held.right.left,
+                            execute_block_kept<M>(address.code, x, body_kept(saves), kept.left)), held.right.right⟩⟩
+                    })),
+            site.moves_dword_load(stack.writes, site.program.laid_out_fits(laid), within.witness, formed, 0, the_load, within.proof,
+                λ (s: MachineState<M>) => mid(s.gprs, s.memory),
+                λ (t: MachineState<M>) => out_file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t),
+                λ s held => {
+                    let home_holds = held.left.right.left.right;
+                    let short: (values(64, home.length).toNat() <= xs.len()) =
+                        j(sym(home_holds.right), λ w _ => w.toNat() <= xs.len(), BitVec::toNat_ofNat_le(64, xs.len()));
+                    let span: (index.toNat() + 3 < xs.len()) = omega(held.left.right.right, short);
+                    let readable = lent(home.buffer)(s.memory, held.right.right);
+                    let base = next_rip(a, index.toNat());
+                    let start: (a.add(index) = base) = sym(BitVec::iter_add_eq_add(64, a, index));
+                    let at_sum: (read_gpr(destination, s.gprs) = a.add(index)) =
+                        trans(held.left.left.right, cong_fn(λ (b: BitVec(64)) => b.add(index), home_holds.left));
+                    let at: (read_gpr(destination, s.gprs) = base) = trans(at_sum, start);
+                    let in0: (index.toNat() < xs.len()) = omega(span);
+                    let in1: (index.toNat() + 1 < xs.len()) = omega(span);
+                    let in2: (index.toNat() + 2 < xs.len()) = omega(span);
+                    let b0 = buffer_byte(lending.buffers, home.buffer, index.toNat());
+                    let b1 = buffer_byte(lending.buffers, home.buffer, index.toNat() + 1);
+                    let b2 = buffer_byte(lending.buffers, home.buffer, index.toNat() + 2);
+                    let b3 = buffer_byte(lending.buffers, home.buffer, index.toNat() + 3);
+                    let r0: (site.data.read(s.memory, base) = Some(b0)) =
+                        trans(readable.right(index.toNat(), in0), buffer_byte_at(lending.buffers, home.buffer, index.toNat(), in0));
+                    let r1: (site.data.read(s.memory, next_rip(base, 1)) = Some(b1)) =
+                        trans(readable.right(index.toNat() + 1, in1), buffer_byte_at(lending.buffers, home.buffer, index.toNat() + 1, in1));
+                    let r2: (site.data.read(s.memory, next_rip(base, 2)) = Some(b2)) =
+                        trans(readable.right(index.toNat() + 2, in2), buffer_byte_at(lending.buffers, home.buffer, index.toNat() + 2, in2));
+                    let r3: (site.data.read(s.memory, next_rip(base, 3)) = Some(b3)) =
+                        trans(readable.right(index.toNat() + 3, span), buffer_byte_at(lending.buffers, home.buffer, index.toNat() + 3, span));
+                    let dword = imm32_from_bytes(b0, b1, b2, b3);
+                    let read: (read_dword(site.data, s.memory, base) = Some(dword)) =
+                        dword_of_four(site.data.read(s.memory, base), site.data.read(s.memory, next_rip(base, 1)),
+                            site.data.read(s.memory, next_rip(base, 2)), site.data.read(s.memory, next_rip(base, 3)), b0, b1, b2, b3, r0, r1, r2, r3);
+                    let word: (values(32, wide.output) = dword) =
+                        trans(j(sym(same), λ b _ => values(32, wide.output) = buffer_word(lending.buffers, b, index.toNat(), 4),
+                                held.left.right.left.left),
+                            buffer_word_four(lending.buffers, home.buffer, index.toNat()));
+                    let written: (values(32, wide.output).resize(64) = dword.zero_extend(32)) =
+                        trans(cong_fn(λ (w: BitVec(32)) => w.resize(64), word), BitVec::resize_zero_extend(32, 32, dword));
+                    Exists(dword, ⟨j(sym(at_sum), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47),
+                            stack.lent_four(d + 64, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, span)),
+                        ⟨j(sym(at), λ x _ => read_dword(site.data, s.memory, x) = Some(dword), read),
+                         ⟨address.file.represents_write(values, s.gprs, destination, Some(Held(wide.output, Narrow(32))), dword.zero_extend(32),
+                            held.left.left.left, written),
+                          ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, write_gpr(destination, dword.zero_extend(32), s.gprs), held.right.left,
+                            kept_write(body_kept(saves), destination, dword.zero_extend(32), s.gprs, kept.right)), held.right.right⟩⟩⟩⟩)
+                }))
+     }⟩
+}
+
+theorem File::wide_at_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>,
+    names: Nat, same: home.buffer = wide.buffer):
+    MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
+        wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
+        file.wide_at(saves, prog, home, wide, destination, placement, names)) {
+    let facts = wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers);
+    match inside: file.bounded(wide.index, home.length) && file.span_bounded(wide.index, home.length, 3) {
+        False => trivial,
+        True => {
+            let both = Bool::is_true_and(file.bounded(wide.index, home.length), file.span_bounded(wide.index, home.length, 3),
+                is_true_of_eq(file.bounded(wide.index, home.length) && file.span_bounded(wide.index, home.length, 3), inside));
+            (match file.address(destination, home.base, wide.index) as λ a =>
+                a.All(λ (out: Lowered) => Addressed<M>(values, file, destination, home.base, wide.index, out)) →
+                MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, match a {
+                    None => None,
+                    Some(address) => match leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
+                        False => None,
+                        True => Some(Emitted(At(At(prog, 0, Block(address.code)), 0, asm_dword_load(DwordLoad(destination, destination))),
+                            address.file.write(destination, Some(Held(wide.output, Narrow(32)))), placement, names)),
+                    },
+                }) {
+                None => λ _ => trivial,
+                Some(address) => λ addressed =>
+                    match kept: leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)) {
+                        False => trivial,
+                        True => wide_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, file, home, wide, destination, placement,
+                            names, same, both.left, both.right, address, addressed,
+                            Bool::is_true_and(leaves_all(address.code, body_kept(saves)), destination.apart(body_kept(saves)),
+                                is_true_of_eq(leaves_all(address.code, body_kept(saves)) && destination.apart(body_kept(saves)), kept))),
+                    },
+            })(file.address_addressed<M>(values, destination, home.base, wide.index))
+        },
+    }
+}
+
+theorem File::wide_from_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat,
+    homes: List<Lent>):
+    MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
+        wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
+        file.wide_from(saves, prog, homes, wide, destination, placement, names)) {
+    match homes {
+        Nil => trivial,
+        Cons(home, rest) => {
+            let all = wide.Holds(values, lending.buffers) ∧ HomesHold(Cons(home, rest), values, lending.addresses, lending.buffers);
+            let later = may_emit_in_weaken<M>(saves, site, stack, values, d, s0, prog, file,
+                wide.Holds(values, lending.buffers) ∧ HomesHold(rest, values, lending.addresses, lending.buffers), all,
+                λ held => ⟨held.left, held.right.right⟩, file.wide_from(saves, prog, rest, wide, destination, placement, names),
+                file.wide_from_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, wide, destination, placement, names, rest));
+            match same: home.buffer.same(wide.buffer) {
+                False => later,
+                True => (match file.wide_at(saves, prog, home, wide, destination, placement, names) as λ e =>
+                    MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
+                        wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers), e) →
+                    MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, all, match e {
+                        None => file.wide_from(saves, prog, rest, wide, destination, placement, names),
+                        Some(emitted) => Some(emitted),
+                    }) {
+                    None => λ _ => later,
+                    Some(emitted) => λ emits => emits_in_weaken<M>(saves, site, stack, values, d, s0, prog, file,
+                        wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers), all,
+                        λ held => ⟨held.left, held.right.left⟩, emitted, emits),
+                })(file.wide_at_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, home, wide, destination, placement, names,
+                    home.buffer.same_sound(wide.buffer, same))),
+            }
+        },
+    }
+}
+
+theorem File::emit_wide_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
+    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, homes: List<Lent>, nodes: List<Node>, wide: WideLeaf,
+    placement: List<Place>, names: Nat):
+    MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
+        (wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)) ∧ NodesHold(values, nodes_rest(nodes)),
+        file.emit_wide(saves, prog, homes, nodes, wide, placement, names)) {
+    let loads = wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
+    let facts = loads ∧ NodesHold(values, nodes_rest(nodes));
+    match placement as λ p => MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, file.emit_wide(saves, prog, homes, nodes, wide, p, names)) {
+        Nil => trivial,
+        Cons(place, rest) => match place as λ q =>
+            MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, file.emit_wide(saves, prog, homes, nodes, wide, Cons(q, rest), names)) {
+            Folded => trivial,
+            Saving(_) => trivial,
+            Into(destination) => (match file.wide_from(saves, prog, homes, wide, destination, rest, names) as λ e =>
+                MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, loads, e) →
+                MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, match e {
+                    None => None,
+                    Some(loaded) => emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names),
+                }) {
+                None => λ _ => trivial,
+                Some(loaded) => λ first =>
+                    (match emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names) as λ e =>
+                        MayEmitIn<M>(saves, site, stack, values, d, s0, loaded.prog, loaded.file, NodesHold(values, nodes_rest(nodes)), e) →
+                        MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, e) {
+                        None => λ _ => trivial,
+                        Some(out) => λ second => emits_in_seq<M>(saves, site, stack, values, d, s0, prog, file, loads,
+                            NodesHold(values, nodes_rest(nodes)), loaded, out, first, second),
+                    })(emit_kept_nodes_emits<M>(saves, site, laid, stack, values, d, s0, loaded.prog, loaded.file, nodes_rest(nodes),
+                        loaded.placement, loaded.names)),
+            })(file.wide_from_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, wide, destination, rest, names, homes)),
+        },
+    }
+}
+
 theorem TableLeaf::fits_sound(self table: TableLeaf, ok: table.fits().IsTrue()):
     (table.width = 64) ∧ ((Nat::pow(2, table.bits) <= table.entries.len()) ∧ ((table.bits <= 64) ∧
         (BitVec::ofNat(8 * table.entries.len(), n := 32).sign_extend(32).toNat() = 8 * table.entries.len()))) {
@@ -2067,16 +2419,34 @@ theorem emit_quiet_leaf_emits<M>(saves: Nat, site: Site<M>, laid: site.program.l
     let facts = NodesHoldOver(lending.buffers, values, nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers);
     (match leaf_load(nodes) as λ found => leaf_load(nodes) = found →
         MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, match found {
-            None => match nodes_blind(nodes) { False => None, True => emit_blind_leaf(saves, prog, file, nodes, placement, names) },
+            None => match leaf_wide(nodes) {
+                None => match nodes_blind(nodes) { False => None, True => emit_blind_leaf(saves, prog, file, nodes, placement, names) },
+                Some(wide) => file.emit_wide(saves, prog, homes, nodes, wide, placement, names),
+            },
             Some(load) => file.emit_load(saves, prog, homes, load, placement, names),
         }) {
-        None => λ _ => match pure: nodes_blind(nodes) {
-            False => trivial,
-            True => may_emit_in_weaken<M>(saves, site, stack, values, d, s0, prog, file, NodesHold(values, nodes), facts,
-                λ held => nodes_hold_blind(values, lending.buffers, nodes, is_true_of_eq(nodes_blind(nodes), pure), held.left),
-                emit_blind_leaf(saves, prog, file, nodes, placement, names),
-                emit_blind_leaf_emits<M>(saves, site, laid, stack, values, d, s0, prog, file, nodes, placement, names)),
-        },
+        None => λ _ => (match leaf_wide(nodes) as λ w => leaf_wide(nodes) = w →
+            MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, match w {
+                None => match nodes_blind(nodes) { False => None, True => emit_blind_leaf(saves, prog, file, nodes, placement, names) },
+                Some(wide) => file.emit_wide(saves, prog, homes, nodes, wide, placement, names),
+            }) {
+            None => λ _ => match pure: nodes_blind(nodes) {
+                False => trivial,
+                True => may_emit_in_weaken<M>(saves, site, stack, values, d, s0, prog, file, NodesHold(values, nodes), facts,
+                    λ held => nodes_hold_blind(values, lending.buffers, nodes, is_true_of_eq(nodes_blind(nodes), pure), held.left),
+                    emit_blind_leaf(saves, prog, file, nodes, placement, names),
+                    emit_blind_leaf_emits<M>(saves, site, laid, stack, values, d, s0, prog, file, nodes, placement, names)),
+            },
+            Some(wide) => λ found => may_emit_in_weaken<M>(saves, site, stack, values, d, s0, prog, file,
+                (wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)) ∧
+                    NodesHold(values, nodes_rest(nodes)), facts,
+                λ held => {
+                    let parts = leaf_wide_holds(values, lending.buffers, nodes, wide, found, held.left);
+                    ⟨⟨parts.left, held.right⟩, parts.right⟩
+                },
+                file.emit_wide(saves, prog, homes, nodes, wide, placement, names),
+                file.emit_wide_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, homes, nodes, wide, placement, names)),
+        })(refl),
         Some(load) => λ found => may_emit_in_weaken<M>(saves, site, stack, values, d, s0, prog, file,
             load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), facts,
             λ held => ⟨leaf_load_holds(values, lending.buffers, nodes, load, found, held.left), held.right⟩,
