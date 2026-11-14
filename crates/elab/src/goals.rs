@@ -621,6 +621,24 @@ impl GoalArena {
         Ok((goal.cx.clone(), goal.ty.clone(), goal.level.clone()))
     }
 
+    /// How a reader is shown a reference to slot `k`
+    /// (`display::Speller::goal_slot`): a lifted proof by the tactic that
+    /// found it (only `bv_omega` lifts one, `checking.rs`), a goal by its
+    /// name. A named value (`omega`'s atom list) and the padding past the
+    /// allocated slots have no spelling.
+    pub(super) fn slot_spelling(&self, k: usize) -> Option<String> {
+        if k as u32 >= self.base {
+            return None;
+        }
+        let goals = self.entries.try_borrow().ok()?;
+        let goal = goals.get(k)?;
+        match &goal.state {
+            GoalState::Proved(_) => Some("bv_omega".to_string()),
+            GoalState::Open | GoalState::Solved(_) => Some(format!("?{}", goal.name)),
+            GoalState::Transparent(..) => None,
+        }
+    }
+
     pub(super) fn outstanding(&self) -> Vec<(usize, Cx, Type, Level)> {
         self.entries
             .borrow()

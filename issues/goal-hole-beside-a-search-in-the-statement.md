@@ -4,7 +4,7 @@ status: closed
 labels: [elaboration,goals,diagnostics]
 area: language
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 ```heather
@@ -35,3 +35,4 @@ The declaration above reports its open goal, with a probe in `lib/_tests`.
   2. Once reported, the goal could not be discharged when its proof mentions the lifted slot through the statement (`on ?rest := refl` there): `solve_goals` strengthened the discharge out of the goal world with `0` for every slot, the lifted one included, and the kernel refused `0` as the proof of `toNat(j + 16) < 64`. Discharges are now kept in the goal world and re-scoped by `lift_proved` with the lifted slots as the constants it commits, like a lifted proof.
 
   Probes: `lib/_tests/std/tactic/bitvec_omega_tests.hthr`, "A search in a declaration's statement, beside a goal" (result type, parameter type, `omega`'s atom list, body and statement together, and the open goal as the negative control). Left: the reported statement spells the lifted proof as its slot (`inside := u3^{·; x1; x0}`), not as `bv_omega`.
+- 2026-11-14: The leftover spelling is fixed (Minus asked 2026-11-14): a reader's goal report spells a lifted proof's slot as `bv_omega` and an open goal's as `?name` (`Speller::goal_slot`, `GoalArena::slot_spelling`), and a defaulted parameter's argument that does not spell, `omega`'s inline certificate, as `…` rather than letting its raw form spend the fallback budget and turn the whole statement into the kernel term (`Speller::defaulted_argument`). The spelling for re-parsing is unchanged: there `bv_omega` would search again and `?g` raise a goal. Probes beside the earlier ones, matched by statement.
