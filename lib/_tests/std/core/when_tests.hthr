@@ -1,0 +1,117 @@
+// Probes of `When<T, P>` (lib/std/core/when.hthr, docs/when-design.md):
+// stage 1's two users written through `When::of` by hand, a word read and a
+// checked word addition, at a literal and a neutral argument, an open element
+// type, a checking position, and negative controls
+// (docs/testing-generated-terms.md). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import when;
+import pair; import vector; import bitvec; import bitvec_nat; import stored_words;
+
+// ---------------------------------------------------------------------------
+// The constructors and members at closed values.
+
+theorem present_val(h, k: 1 <= 2): Present<Nat, 1 <= 2>(7, h).val(k) = 7 { refl }
+theorem present_option(h: True): Present<Nat, True>(7, h).option() = Some(7) { refl }
+theorem absent_option(n: ¬False): Absent<Nat, False>(n).option() = None { refl }
+theorem present_map(h: True): Present<Nat, True>(7, h).map(λ x => x + 1).option() = Some(8) { refl }
+theorem absent_unwrap(n: ¬False): Absent<Nat, False>(n).unwrap_or(3) = 3 { refl }
+
+// ---------------------------------------------------------------------------
+// User 1: a word of an array, read where it is (`Vec::at`, PR #607).
+
+fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64) → When<BitVec(w), i.toNat() < n> {
+    When::of(λ h => v.at(i, inside := h))
+}
+
+fn three() → [u64; 3] { [10, 20, 30] }
+
+// A literal index inside and outside.
+theorem word_at_inside(): word_at(three(), 1).option() = Some(20) { refl }
+theorem word_at_outside(): word_at(three(), 3).option() = None { refl }
+theorem word_at_outside_absent(): word_at(three(), 7).is_present() = False { refl }
+
+// A neutral index: the test agrees with `Vec::at`, which does not look at its
+// proof, so `same` is `refl`.
+theorem word_at_val({w, n: Nat}, v: [BitVec(w); n], i: u64, h: i.toNat() < n): word_at(v, i).val(h) = v.at(i, inside := h) {
+    When::of_val(λ h => v.at(i, inside := h), λ a b => refl, h)
+}
+
+theorem word_at_option({w, n: Nat}, v: [BitVec(w); n], i: u64, h: i.toNat() < n): word_at(v, i).option() = Some(v.at(i, inside := h)) {
+    When::of_option(λ h => v.at(i, inside := h), λ a b => refl, h)
+}
+
+theorem word_at_none({w, n: Nat}, v: [BitVec(w); n], i: u64, h: ¬(i.toNat() < n)): word_at(v, i).option() = None {
+    When::of_option_none(λ h => v.at(i, inside := h), h)
+}
+
+// Exactly when the index is inside.
+theorem word_at_present_iff({w, n: Nat}, v: [BitVec(w); n], i: u64): word_at(v, i).is_present() = True ↔ i.toNat() < n {
+    When::is_present_iff(word_at(v, i))
+}
+
+// A checking position: the branch's proof is what the read takes.
+fn word_or_zero({n: Nat}, v: [u64; n], i: u64) → u64 {
+    match word_at(v, i) { Present(x, _) => x, Absent(_) => 0 }
+}
+
+fn word_again({n: Nat}, v: [u64; n], i: u64) → u64 {
+    match word_at(v, i) { Present(_, h) => v.at(i, inside := h), Absent(_) => 0 }
+}
+
+theorem word_or_zero_lit(): word_or_zero(three(), 2) = 30 { refl }
+theorem word_again_lit(): word_again(three(), 5) = 0 { refl }
+
+// ---------------------------------------------------------------------------
+// User 2: a checked word addition. `add_within` is the proof-taking
+// primitive, and its specification is on it, not on the `When`.
+
+fn add_within(a, b: u64, fits: a.toNat() + b.toNat() < Nat::pow(2, 64) := bv_omega) → u64 { a + b }
+
+theorem add_within_toNat(a, b: u64, fits: a.toNat() + b.toNat() < Nat::pow(2, 64)): add_within(a, b, fits := fits).toNat() = a.toNat() + b.toNat() {
+    toNat_add(64, a, b, fits)
+}
+
+fn checked_add(a, b: u64) → When<u64, a.toNat() + b.toNat() < Nat::pow(2, 64)> {
+    When::of(λ h => add_within(a, b, fits := h))
+}
+
+theorem checked_add_small(): checked_add(2, 3).option() = Some(5) { refl }
+theorem checked_add_wraps(): checked_add(18446744073709551615, 1).is_present() = False { refl }
+
+theorem checked_add_val(a, b: u64, h: a.toNat() + b.toNat() < Nat::pow(2, 64)): checked_add(a, b).val(h).toNat() = a.toNat() + b.toNat() {
+    trans(j(sym(When::of_val(λ h => add_within(a, b, fits := h), λ x y => refl, h)), λ y _ => y.toNat() = add_within(a, b, fits := h).toNat(), refl),
+        add_within_toNat(a, b, h))
+}
+
+// ---------------------------------------------------------------------------
+// An open element type, through the Nat-indexed `vector_index`, which does
+// use its proof: `same` asks that `i < n`'s proofs are one, which the kernel
+// sees because `Le` reduces to a unit at closed and to a shared stuck term at
+// open arguments (docs/when-design.md §7).
+
+fn entry<A>({n: Nat}, v: [A; n], i: Nat) → When<A, i < n> {
+    When::of(λ h => vector_index(v, i, h))
+}
+
+theorem entry_lit<A>(x, y, z: A): entry<A>([x, y, z], 1).option() = Some(y) { refl }
+theorem entry_past<A>(x, y: A): entry<A>([x, y], 2).option() = None { refl }
+
+// Chaining: two reads, absent when either index is past the end.
+fn both<A>({n: Nat}, v: [A; n], i, k: Nat) → When<Pair<A, A>, i < n ∧ k < n> {
+    entry(v, i).and_then(λ a hi => entry(v, k).and_then(λ b hk => Present(Pair(a, b), And(hi, hk)), λ h => h.right),
+        λ h => h.left)
+}
+
+theorem both_lit(): both<Nat>([1, 2, 3], 0, 2).option() = Some(Pair(1, 3)) { refl }
+theorem both_past(): both<Nat>([1, 2, 3], 0, 3).is_present() = False { refl }
+
+// ---------------------------------------------------------------------------
+// Negative controls.
+
+// An index past the end gives no value.
+// expect-error(kernel)
+theorem word_at_outside_some(): word_at(three(), 3).option() = Some(0) { refl }
+
+// `val` takes the condition, and nothing else stands for it.
+// expect-error(mismatch)
+fn val_without(v: [u64; 3], i: u64) → u64 { word_at(v, i).val(trivial) }
