@@ -220,6 +220,7 @@ mod literals;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
+mod branch_equations;
 mod meaning;
 mod measure_context;
 mod metaprograms;
@@ -2483,6 +2484,11 @@ impl Elaborator {
             };
             if let Some(f) = name.strip_suffix("_unfold") {
                 return NameRes::Restricted(format!("no unfolding equation for `{f}`: {why}{see}"));
+            }
+            if name.ends_with("::True") || name.ends_with("::False") {
+                return NameRes::Restricted(format!(
+                    "no branch equation `{name}` (issues/definition-branch-equations.md): {why}"
+                ));
             }
             return NameRes::Restricted(format!(
                 "no step equation `{name}` (docs/decreases-unfolding-design.md §6.1): {why}"

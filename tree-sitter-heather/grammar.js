@@ -1,5 +1,6 @@
-// Heather's CST is maintained here. Fixed words and symbols are mirrored in
-// syntax-inventory.json and checked against the Rust lexer/parser by
+// Heather's CST is maintained here. Fixed words are mirrored in
+// syntax-inventory.json and fixed symbols are the token kinds' table
+// (lib/lang/lexer/lexer_kinds.hthr), checked against this by
 // scripts/check-tree-sitter; do not grow a second lexical inventory here.
 
 const PREC = {

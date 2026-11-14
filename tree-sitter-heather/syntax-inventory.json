@@ -7,13 +7,5 @@
     "requires", "assuming", "section", "self", "split", "split_all",
     "theorem", "generate", "def", "break", "continue", "return", "while", "Squash", "squash_ind", "decreases", "decreasing", "with", "varies", "interface", "unfolding", "partial"
   ],
-  "punctuation": [
-    "(", ")", "{", "}", "[", "]", "⟨", "⟩", "|", ",", ":", ";", "@", "$", ".", "->", "→",
-    "=>", "⊢", "|-", "=", ":=", "::", ">", "λ", "∥", "⟦", "⟧", "<-", "←"
-  ],
-  "fixed_operators": [
-    "+", "-", "!", "~", "++", "*", "/", "%", "&", "⊕", "<<", ">>", "<", "<=", "&&", "||", "∙", "⊔", "⊓", "≈", "¬", "∧", "∨", "↔",
-    "<->", "∀", "∃", "∑", "∏", "≠", "^", "⁻¹", "↑"
-  ],
   "rejected_fixed_tokens": ["=="]
 }

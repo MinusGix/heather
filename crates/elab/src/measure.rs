@@ -496,14 +496,14 @@ struct Clean {
     hint: Option<String>,
 }
 
-fn var(name: &str, span: Span) -> Expr {
+pub(crate) fn var(name: &str, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Var(name.to_string()),
         span,
     }
 }
 
-fn app(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
+pub(crate) fn app(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
     Expr {
         kind: ExprKind::App {
             head: Box::new(head),
@@ -529,7 +529,7 @@ fn lt_ty(a: Expr, b: Expr, span: Span) -> Ty {
     of_expr(app(var("nat::Nat::Lt", span), vec![a, b], span))
 }
 
-fn arrow(binder: Option<String>, dom: Ty, cod: Ty, span: Span) -> Ty {
+pub(crate) fn arrow(binder: Option<String>, dom: Ty, cod: Ty, span: Span) -> Ty {
     Ty {
         kind: TyKind::Fn {
             binder,
@@ -585,7 +585,7 @@ fn value_params(decl: &Decl) -> Vec<Param> {
 /// A reference to a companion with the declaration's type parameters pinned
 /// (`g<A, B>`) rather than left to unification, since a companion's leading
 /// arguments are `Nat`s that mention none of them.
-fn companion_ref(decl: &Decl, name: &str, span: Span) -> Expr {
+pub(crate) fn companion_ref(decl: &Decl, name: &str, span: Span) -> Expr {
     let head = var(name, span);
     if decl.tyvars.is_empty() {
         return head;
@@ -630,7 +630,7 @@ fn companion(decl: &Decl, name: String, params: Vec<Param>, result: Ty, body: Bl
     }
 }
 
-fn block(result: Expr, span: Span) -> Block {
+pub(crate) fn block(result: Expr, span: Span) -> Block {
     Block {
         stmts: Vec::new(),
         result: Box::new(result),
@@ -3213,7 +3213,7 @@ pub(crate) fn unfold_name(name: &str) -> String {
     format!("{name}_unfold")
 }
 
-fn eq_ty(a: Expr, b: Expr, span: Span) -> Ty {
+pub(crate) fn eq_ty(a: Expr, b: Expr, span: Span) -> Ty {
     Ty {
         kind: TyKind::Eq(Box::new(a), Box::new(b)),
         span,
@@ -3227,7 +3227,7 @@ fn eq_expr(a: Expr, b: Expr, span: Span) -> Expr {
     }
 }
 
-fn lam(binders: &[&str], body: Expr, span: Span) -> Expr {
+pub(crate) fn lam(binders: &[&str], body: Expr, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Lam {
             binders: binders
