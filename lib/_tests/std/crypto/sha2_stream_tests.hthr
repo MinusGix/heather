@@ -1,0 +1,26 @@
+// Probes of `sha2_stream`: a message fed a byte at a time is the bytes
+// fed, a count's low six bits are its block's fill, and words spelled as
+// bytes read back. Tests, not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import bitvec;
+import vector;
+import sha2;
+import sha2_stream;
+
+theorem fed_three(): Sha2Feed(Nil, Nil, 63).bytes([0x61, 0x62, 0x63]).message() = [0x61, 0x62, 0x63] { refl }
+
+// The sixty-fourth byte completes a block.
+theorem fed_last(full: List<List<u8>>, tail: List<u8>, b: u8): Sha2Feed(full, tail, 0).byte(b).full = full ++ [tail ++ [b]] { refl }
+
+theorem fill_of_130(count: u64, is: count = 130): (count & 63).toNat() = 2 { Sha2::fill_of_count(count, 2, 2, is, trivial) }
+
+theorem two_words(a, b: u32): Sha2::sha256().words(Sha2::spelled([a, b])) = [a, b] { Sha2::words_spelled([a, b]) }
+
+// Sixty-four is a whole block, not a fill.
+// expect-error(mismatch)
+theorem fill_of_whole_block(count: u64, is: count = 64): (count & 63).toNat() = 64 { Sha2::fill_of_count(count, 0, 64, is, trivial) }

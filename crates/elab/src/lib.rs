@@ -211,6 +211,7 @@ mod infinitary;
 mod inductive;
 mod spelling;
 mod sum_layout;
+mod tested;
 mod lgg;
 mod solution_check;
 mod lint;

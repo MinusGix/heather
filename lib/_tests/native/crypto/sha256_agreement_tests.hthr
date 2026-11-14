@@ -1,0 +1,40 @@
+// Probes of `sha256_agreement`: the compression's agreement with the
+// specification as a client reads it. A context that starts a message and
+// holds its one block is left with the specification's hash of that
+// message; the conversion probes (`sha256_compression_tests.hthr`) stop at
+// the first round, and this is all sixty-four. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import bitvec;
+import vector;
+import sha2;
+import sha256_context;
+import sha256_compression;
+import sha256_agreement;
+
+theorem first_block(s: Sha256, block: List<u32>, starts: vector_entries(s.schedule).take(16) = block,
+    fresh: Sha256::state(s.hash) = Sha2::sha256().start()):
+    Sha256::state(Sha256::run(s).after.hash) = Sha2::sha256().compress(Sha2::sha256().start(), block) {
+    trans(Sha256::run_spec(s),
+        trans(cong_fn(λ (b: List<u32>) => Sha2::sha256().compress(Sha256::state(s.hash), b), starts),
+            cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, block), fresh)))
+}
+
+theorem one_block_message(s: Sha256, message: List<u8>, block: List<u32>, one: Sha2::sha256().blocks(message) = [block],
+    starts: vector_entries(s.schedule).take(16) = block, fresh: Sha256::state(s.hash) = Sha2::sha256().start()):
+    Sha256::state(Sha256::run(s).after.hash) = Sha2::sha256().hash(message) {
+    trans(first_block(s, block, starts, fresh),
+        sym(Sha2::sha256().hash_of_block(message, block, Sha2::sha256().compress(Sha2::sha256().start(), block), one, refl)))
+}
+
+// A message of two blocks is not hashed by one compression.
+// expect-error: but `blocks(sha256, message) = [block]` is expected here
+theorem two_block_message(s: Sha256, message: List<u8>, block: List<u32>, two: Sha2::sha256().blocks(message) = [block, block],
+    starts: vector_entries(s.schedule).take(16) = block, fresh: Sha256::state(s.hash) = Sha2::sha256().start()):
+    Sha256::state(Sha256::run(s).after.hash) = Sha2::sha256().hash(message) {
+    one_block_message(s, message, block, two, starts, fresh)
+}

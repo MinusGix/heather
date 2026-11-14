@@ -67,3 +67,12 @@ theorem BitVec::run_up_invariant<S>({w: Nat}, g: S → BitVec(w) → S, Inv: S �
         },
     }
 }
+
+// The common case at `u64` with `Mutated(s, i)` as the exit, the count of
+// passes left given: what a `mut self` loop over a word returns.
+theorem BitVec::counts_up<S>(f: S → u64 → Mutated<S, u64>, step: S → u64 → S, bound: u64,
+    steps: (s: S) → (i: u64) → i < bound → f(s, i) = f(step(s, i), i + 1),
+    ends: (s: S) → (i: u64) → ¬(i < bound) → f(s, i) = Mutated(s, i),
+    n: Nat): (s: S) → (i: u64) → i.toNat() + n = bound.toNat() → f(s, i) = Mutated(BitVec::run_up(step, s, i, n), bound) {
+    BitVec::loop_up_from(f, step, λ (s: S) (i: u64) => Mutated(s, i), bound, steps, ends, n)
+}

@@ -1044,9 +1044,47 @@ impl Speller<'_> {
             Term::GlobalTm { var, subst } => self
                 .global(*var, subst)
                 .map(|(n, _)| n)
+                .or_else(|| self.goal_slot(*var))
                 .unwrap_or_else(|| self.raw_tm(t)),
             _ => self.raw_tm(t),
         }
+    }
+
+    /// A defaulted parameter's argument, as a reader sees it: spelled when
+    /// it spells, `…` when it does not. What fills a defaulted proof is
+    /// usually a search's certificate (`omega`'s, inline in the term), whose
+    /// raw form would spend the whole fallback budget and turn the statement
+    /// around it into the kernel wall. The spelling for re-parsing keeps the
+    /// ordinary rule, since `…` does not re-parse.
+    fn defaulted_argument(&self, a: &Term, d: u32) -> String {
+        if self.qualified || self.rough.is_some() {
+            return self.tm(a, d);
+        }
+        let (nodes, fallbacks) = (self.nodes.get(), self.fallbacks.get());
+        let spelled = self.tm(a, d);
+        if self.fallbacks.get() == fallbacks {
+            return spelled;
+        }
+        self.nodes.set(nodes);
+        self.fallbacks.set(fallbacks);
+        "…".to_string()
+    }
+
+    /// A reference to a slot of the declaration's goal world, spelled for a
+    /// reader by what fills it: a lifted `bv_omega` proof as `bv_omega`, the
+    /// search the source wrote, and a goal as `?name`. A statement that
+    /// mentions a search (`f(x, inside := bv_omega)`) otherwise shows the
+    /// slot's kernel reference `u3^{·; x1; x0}`
+    /// (issues/goal-hole-beside-a-search-in-the-statement.md). Not when the
+    /// spelling is re-parsed: there `bv_omega` would search again and `?g`
+    /// would raise a goal, so the slot declines like any unspellable node.
+    fn goal_slot(&self, var: GlobalVar) -> Option<String> {
+        if self.qualified {
+            return None;
+        }
+        let abs = self.el.global_abs_of(var)?;
+        let slot = abs.checked_sub(self.el.psi().bindings.len())?;
+        self.el.attempt.goal_arena.slot_spelling(slot)
     }
 
     /// A nullary `fn` in a type position, spelled as its call, `Inner()`:
@@ -1676,7 +1714,7 @@ impl Speller<'_> {
                         types.push(self.tm(a, d + 1));
                     }
                 }
-                Some(Shown::Named(name)) => named.push(format!("{name} := {}", self.tm(a, d + 1))),
+                Some(Shown::Named(name)) => named.push(format!("{name} := {}", self.defaulted_argument(a, d + 1))),
                 Some(Shown::Explicit) | None => shown.push(self.tm(a, d + 1)),
             }
         }

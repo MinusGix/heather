@@ -1,0 +1,197 @@
+// `When<T, P>`: a `T` that is there exactly when `P` holds
+// (docs/when-design.md). It is a decision of `P` that carries a value on its
+// yes side: `When<Unit, P>` is a decision of `P`, and nobody supplies a
+// decision procedure for `P` in general, since whoever built the value
+// decided this case. With the proof the value is taken (`w.val(h)`); without
+// it a `match` puts the reader in the branch, with `P` or `¬P` in hand.
+//
+// Heather keeps proof relevance, so a `match` on a `When` eliminates into
+// `Type` and `holds`/`fails` are ordinary fields. Every member below reduces
+// as soon as its subject is a constructor, whatever the proofs inside are:
+// none of them compares two proofs. A `When` is meant to be transient (built,
+// then consumed by `match`, `val` or a chain); a specification belongs on the
+// proof-taking function a `When` is made from (docs/when-design.md §3, §7).
+
+import logic; import bool; import option;
+
+inductive When<T, P> { Present(value: T, holds: P), Absent(fails: ¬P) }
+
+// The value, given the condition. The `Absent` arm cannot be reached: its
+// refutation meets the proof.
+fn When::val<T, P>(self w: When<T, P>, holds: P) → T {
+    match w { Present(value, _) => value, Absent(fails) => false_elim(fails(holds)) }
+}
+
+// The decision a `When` is.
+fn When::decision<T, P>(self w: When<T, P>) → P ∨ ¬P {
+    match w { Present(_, holds) => Inl(holds), Absent(fails) => Inr(fails) }
+}
+
+fn When::is_present<T, P>(self w: When<T, P>) → Bool {
+    match w { Present(_, _) => True, Absent(_) => False }
+}
+
+// The value as an `Option`, forgetting why.
+fn When::option<T, P>(self w: When<T, P>) → Option<T> {
+    match w { Present(value, _) => Some(value), Absent(_) => None }
+}
+
+fn When::unwrap_or<T, P>(self w: When<T, P>, fallback: T) → T {
+    match w { Present(value, _) => value, Absent(_) => fallback }
+}
+
+fn When::map<T, U, P>(self w: When<T, P>, f: T → U) → When<U, P> {
+    match w { Present(value, holds) => Present(f(value), holds), Absent(fails) => Absent(fails) }
+}
+
+// The condition restated: the same value under an equivalent condition.
+fn When::restate<T, P, Q>(self w: When<T, P>, to: Q → P, from: P → Q) → When<T, Q> {
+    match w {
+        Present(value, holds) => Present(value, from(holds)),
+        Absent(fails) => Absent(λ (q: Q) => fails(to(q))),
+    }
+}
+
+// Chaining (docs/when-design.md §6): the continuation sees the value and its
+// condition, and `back` is why an absent `w` makes the result absent, since a
+// `Q` that implies `P` is refuted by `¬P`.
+fn When::and_then<T, U, P, Q>(self w: When<T, P>, k: T → P → When<U, Q>, back: Q → P) → When<U, Q> {
+    match w {
+        Present(value, holds) => k(value, holds),
+        Absent(fails) => Absent(λ (q: Q) => fails(back(q))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test, then build: the tested form of a proof-taking function `f`.
+// `When::of(f)` is the term `if h: P { Present(f(h), h) } else { Absent(h) }`,
+// a match on the decision's bit, so compiled code is the compare a programmer
+// would write (docs/decidable-if-expression-design.md).
+fn When::of<P: Decide, T>(f: P → T) → When<T, P> {
+    if h: P { Present(f(h), h) } else { Absent(h) }
+}
+
+// `When::of` with its bit and the bit's equation as parameters. A proof about
+// `When::of(f)` cases on a stuck bit, and casing an `if h:` whose branch uses
+// `h` is refused today (issues/if-evidence-proof-by-cases.md): motive
+// synthesis abstracts the bit everywhere but inside `decide_true`'s type.
+// Here the bit is a parameter, so the case split is an ordinary one, and
+// `When::of(f)` is this function at the bit and `refl` (`of_unfold`).
+fn When::of_bit<P: Decide, T>(f: P → T, bit: Bool, e: decide_bit<P>() = bit) → When<T, P> {
+    match bit as λ c => decide_bit<P>() = c → When<T, P> {
+        True => λ e => Present(f(decide_true<P>(e)), decide_true<P>(e)),
+        False => λ e => Absent(decide_false<P>(e)),
+    }(e)
+}
+
+theorem When::of_unfold<P: Decide, T>(f: P → T): When::of<P, T>(f) = When::of_bit<P, T>(f, decide_bit<P>(), refl) { refl }
+
+theorem When::of_bit_cases<P: Decide, T>(f: P → T, M: When<T, P> → Type,
+    yes: (holds: P) → M(Present(f(holds), holds)), no: (fails: ¬P) → M(Absent(fails)),
+    bit: Bool, e: decide_bit<P>() = bit): M(When::of_bit<P, T>(f, bit, e)) {
+    match bit as λ c => (e: decide_bit<P>() = c) → M(When::of_bit<P, T>(f, c, e)) {
+        True => λ e => yes(decide_true<P>(e)),
+        False => λ e => no(decide_false<P>(e)),
+    }(e)
+}
+
+// The elimination a client of `When::of` proves by: a statement that holds
+// of every `Present(f(h), h)` and every `Absent(n)` holds of the test.
+theorem When::of_cases<P: Decide, T>(f: P → T, M: When<T, P> → Type,
+    yes: (holds: P) → M(Present(f(holds), holds)), no: (fails: ¬P) → M(Absent(fails))): M(When::of<P, T>(f)) {
+    When::of_bit_cases<P, T>(f, M, yes, no, decide_bit<P>(), refl)
+}
+
+// ---------------------------------------------------------------------------
+// Laws a client cites.
+
+theorem When::val_present<T, P>(value: T, holds, h: P): Present<T, P>(value, holds).val(h) = value { refl }
+
+theorem When::map_val<T, U, P>(w: When<T, P>, f: T → U, h: P): w.map(f).val(h) = f(w.val(h)) {
+    match w {
+        Present(_, _) => refl,
+        Absent(fails) => false_elim(fails(h)),
+    }
+}
+
+theorem When::restate_val<T, P, Q>(w: When<T, P>, to: Q → P, from: P → Q, h: Q): w.restate(to, from).val(h) = w.val(to(h)) {
+    match w {
+        Present(_, _) => refl,
+        Absent(fails) => false_elim(fails(to(h))),
+    }
+}
+
+theorem When::and_then_present<T, U, P, Q>(value: T, holds: P, k: T → P → When<U, Q>, back: Q → P):
+    Present<T, P>(value, holds).and_then(k, back) = k(value, holds) { refl }
+
+theorem When::and_then_absent<T, U, P, Q>(w: When<T, P>, k: T → P → When<U, Q>, back: Q → P, fails: ¬P):
+    w.and_then(k, back).is_present() = False {
+    match w {
+        Present(_, holds) => false_elim(fails(holds)),
+        Absent(_) => refl,
+    }
+}
+
+// Exactly when `P`: a `When` holds a value if and only if its condition holds.
+theorem When::holds_of_present<T, P>(w: When<T, P>, e: w.is_present() = True): P {
+    match w as λ x => x.is_present() = True → P {
+        Present(_, holds) => λ _ => holds,
+        Absent(_) => λ (no: False = True) => absurd(no),
+    }(e)
+}
+
+theorem When::present_of_holds<T, P>(w: When<T, P>, h: P): w.is_present() = True {
+    match w {
+        Present(_, _) => refl,
+        Absent(fails) => false_elim(fails(h)),
+    }
+}
+
+theorem When::is_present_iff<T, P>(w: When<T, P>): w.is_present() = True ↔ P {
+    Iff(mp := λ e => When::holds_of_present(w, e), mpr := λ h => When::present_of_holds(w, h))
+}
+
+// The same, through `option`: `Some` exactly when `P`, and then its value is
+// the one `val` takes.
+theorem When::option_val<T, P>(w: When<T, P>, h: P): w.option() = Some(w.val(h)) {
+    match w {
+        Present(_, _) => refl,
+        Absent(fails) => false_elim(fails(h)),
+    }
+}
+
+theorem When::option_some_iff<T, P>(w: When<T, P>): (∃ v: T, w.option() = Some(v)) ↔ P {
+    Iff(mp := λ (s: ∃ v: T, w.option() = Some(v)) => (match w as λ x => x.option() = Some(s.witness) → P {
+            Present(_, holds) => λ _ => holds,
+            Absent(_) => λ no => Option::none_ne_some(s.witness, no, P),
+        })(s.proof),
+        mpr := λ h => Exists(witness := w.val(h), proof := When::option_val(w, h)))
+}
+
+// A refuted condition leaves nothing.
+theorem When::option_none<T, P>(w: When<T, P>, fails: ¬P): w.option() = None {
+    match w {
+        Present(_, holds) => false_elim(fails(holds)),
+        Absent(_) => refl,
+    }
+}
+
+// The test agrees with the proof-taking function, where that function does
+// not look at its proof (`same`: `Vec::at` and checked arithmetic pass
+// `refl`). Without `same` the two sides take `f` at two proofs, and Heather
+// does not identify them in general (docs/when-design.md §7).
+theorem When::of_val<P: Decide, T>(f: P → T, same: (a, b: P) → f(a) = f(b), h: P): When::of<P, T>(f).val(h) = f(h) {
+    When::of_cases<P, T>(f, λ w => w.val(h) = f(h),
+        λ holds => same(holds, h),
+        λ fails => false_elim(fails(h)))
+}
+
+theorem When::of_option<P: Decide, T>(f: P → T, same: (a, b: P) → f(a) = f(b), h: P): When::of<P, T>(f).option() = Some(f(h)) {
+    When::of_cases<P, T>(f, λ w => w.option() = Some(f(h)),
+        λ holds => j(same(holds, h), λ y _ => Some(f(holds)) = Some(y), refl),
+        λ fails => false_elim(fails(h)))
+}
+
+theorem When::of_option_none<P: Decide, T>(f: P → T, fails: ¬P): When::of<P, T>(f).option() = None {
+    When::option_none(When::of<P, T>(f), fails)
+}

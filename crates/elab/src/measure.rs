@@ -2311,6 +2311,16 @@ impl<'a> Rewrite<'a> {
         self.infer_local(e)
     }
 
+    /// [`Self::scrut_ty`] for the scrutinee of a `match` with `arms`: a call
+    /// under `When`'s constructors has the type of its test
+    /// (docs/when-design.md §4), as the `match` elaborates it.
+    fn match_scrut_ty(&self, e: &Expr, arms: &[Arm]) -> Option<Ty> {
+        match crate::tested::tested_marker(e, arms) {
+            Some(marked) => self.infer_local(&marked),
+            None => self.scrut_ty(e),
+        }
+    }
+
     /// Bind one arm pattern, typing its binders from the scrutinee's type
     /// through [`BinderTys`]; a position the oracle declines binds untyped,
     /// which only costs the sites whose statements name it their lifting.
@@ -2616,7 +2626,7 @@ impl<'a> Rewrite<'a> {
                         eqbind = Some(format!("__dec_meq{n}"));
                     }
                 }
-                let scrut_ty = self.scrut_ty(scrut);
+                let scrut_ty = self.match_scrut_ty(scrut, arms);
                 let arms = arms
                     .iter()
                     .map(|a| {
@@ -3764,7 +3774,7 @@ impl Respell<'_> {
         // The rewrite's own alias for a computed scrutinee, named and typed as
         // `Rewrite::expr` names it, so that obligations below lift over the
         // binders `f#body`'s lifted over.
-        let scrut_ty = self.rw.scrut_ty(scrut);
+        let scrut_ty = self.rw.match_scrut_ty(scrut, arms);
         let depth0 = self.rw.scope.len();
         // As there, a scrutinee whose type the walk cannot write keeps no
         // alias.
@@ -4150,7 +4160,7 @@ impl Respell<'_> {
             // the nested ones' numbers in step.
             self.rw.auto_n += 1;
         }
-        let scrut_ty = self.rw.scrut_ty(scrut);
+        let scrut_ty = self.rw.match_scrut_ty(scrut, arms);
         let stated = match &scrut.kind {
             ExprKind::Var(v) => self.rw.scrut_aliases.iter().rev()
                 .find(|(n, _)| n == v).map(|(_, e)| e.clone()),

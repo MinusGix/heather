@@ -92,15 +92,15 @@ record Target {
     // it saved, its return address, then its caller's frame and so on up);
     // and how many calls deeper it may go, each needing a return address,
     // at most six saved registers and a frame. Below them all is room for
-    // a function a region calls (each takes 120 bytes a level and the CALL a
-    // word, within 128 a function) and for one return address more: a call
+    // a function a region calls (each takes 144 bytes a level and the CALL a
+    // word, within 152 a function) and for one return address more: a call
     // with no room left is refused in the callee's entry, after its CALL.
     // `main`'s frame is the stack's top, with nothing above it.
     index: Nat,
     frames: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: (room * (8 * (words + 7)) + 128 * functions.len()) + 8 <= index,
+    roomy: (room * (8 * (words + 7)) + 144 * functions.len()) + 8 <= index,
 }
 
 fn Target::layout(self t: Target) → Layout {

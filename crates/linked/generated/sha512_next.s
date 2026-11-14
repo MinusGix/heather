@@ -1,6 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: sha512_next(word, word, word, word) -> word
-# stack: 360 bytes below the return address
+# stack: 408 bytes below the return address
 .text
 .globl sha512_next
 .type sha512_next, @function
