@@ -151,8 +151,8 @@ a method's receiver), so the call is first elaborated in a probe that stops
 at the condition's default and records its goal; `P` is then bound, as a
 `let` binds a type, to a name the rewritten call's binder is annotated with:
 `When::of(λ (h: P) => f(args, name := h))`. The route is taken only where
-the expected type's head is `When` (after a name lookup that a module which
-cannot name `When` pays alone) or the call is a scrutinee under `Present`/
+the expected type's head is `When` (read structurally from its inductive's
+tag; §11 has the cost) or the call is a scrutinee under `Present`/
 `Absent`; it costs one more elaboration of the call's arguments. It gives the proof by name, so the found-proof
 lifting of #607 has nothing to lift here. This reads the expected type at
 calls with a context-search default, so it re-elaborates the whole library
@@ -388,8 +388,9 @@ language` and log rulings there.
   binders, so the scan reads both.
 - `if let Present(x) = w { … } else { … }` and `match w { Present(x) => …,
   _ => … }`: a `Present` pattern with one binder gets the proof as
-  `__when_holds`, and a `_` arm beside a `Present` arm with no `Absent` arm
-  becomes `Absent(__when_fails)` (`Tested::complete_arms`, taken only when
+  `__when_holds_N`, and a `_` arm beside a `Present` arm with no `Absent` arm
+  becomes `Absent(__when_fails_N)`, `N` the scrutinee's place, so a nested
+  test does not shadow an outer one (`nth_nested`) (`Tested::complete_arms`, taken only when
   the name `Present` resolves to `When`'s constructor). So the success block
   has `P` and the `else` block `¬P`, for `known`, `omega` and a written
   `known` alike. For `When` alone (§10's question, still open).
@@ -406,10 +407,18 @@ language` and log rulings there.
   `When::and_then(e', λ v __when_holds_N => K'[v], λ q => known)`, with `e'`
   the tested form when `e` is a proof-taking call (§4) and `K'` the
   continuation wrapped as `Present(value, known)` unless it already gives a
-  `When` (a further `?`, or a written `Present`/`Absent`). A `Result`
+  `When`. That is read by type, not spelling: a further `?` is the walk's
+  own, and any other tail is inferred once in a probe (`Tested::when_tail`),
+  kept as written when it is a `When` (a call returning one, `tail_by_type`)
+  or does not infer alone (a written `Present(x, known)`), and wrapped
+  otherwise. Only a `?`'s tail pays the second elaboration. A `Result`
   function is untouched: its expected type is no `When`.
 - `known` builds a conjunction side by side, so `Q = P₁ ∧ P₂` is found from
   the two proofs the `?`s bound, and `back: Q → Pᵢ` is a side of `q`.
+- `known`'s cost is a shape to watch: it tries every name in scope, innermost
+  first, with an inference and a conversion each, so one `known` grows
+  linearly with the scope. A conjunction is recognised by its declaring
+  module (`logic::And`), not its name alone.
 - Probes: `first_two` (two tests, `1 < n` found by `omega` from them),
   `pair_sum` (the conjunction), `both_of` (on `When` values at open types),
   `written_tail`, and the refusal `too_strong` (a stated condition the tests
@@ -421,9 +430,9 @@ language` and log rulings there.
 **Stage 5** (coercion to `T`).
 
 - `Tested::coerce`, called from the checking fallback after inference, in
-  front of the mismatch note: when the module can name `When` (one name
-  lookup, the only cost a module without `When` pays), the inferred type is
-  a `When<T, P>` (by its inductive), the expected type is not a `When`, and
+  front of the mismatch note: when the inferred type is a `When<T, P>` (read
+  from its inductive's tag and declaring module, with no name lookup), the
+  expected type is not a `When`, and
   `T` converts to the expected type, the term is bound to a private alias
   and `alias.val()` is checked at the expected type, so `P` is found by
   `known`. Its refusal says "this is a `When`, used where its value is
