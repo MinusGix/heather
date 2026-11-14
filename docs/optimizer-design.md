@@ -690,10 +690,23 @@ the function's, and `Stage::run_next` joins the functions' into the
 program's. A plan a statement keeps each statement well inside the
 kernel's fuel, and a refusal names its plan.
 
+Every read, a search's or the planner's, the emission's and the bytes',
+is remembered in the store beside the module images, keyed by the text
+it stands on (the binary's elaborator and kernel, the sources, every
+module defined before it, the name read), and written only once the
+certificate it went into has checked (`crates/cli/src/native/answers.rs`).
+Nothing read is trusted, so a stale answer could only be a certificate
+that does not check. A module is elaborated only when a read misses, so a
+compile over the store a first one wrote evaluates and elaborates none of
+its probes, and costs what loading the library and replaying the
+certificate do (issues/optimizer-search-answers-memo.md).
+
 A function is inlined and tidied with no test first. Where the search then
 asks for a test, the function is made again with the test first, and that
 is kept where it is within the search's room and the lowering takes it
-with the planner's placement (`Function::fits`, `Function::lowers`); else
+with the planner's placement (`Function::fits`, and the placement with
+which the lowering takes it, `…_opt_placed`, which is then the program's
+placement of that function and is not planned again); else
 the function with no test and whatever its own tests decide; else that
 function as tidied; else the function as it is. Then the unreached functions are emptied, and the
 two facts compose (`ProgramRewrites::then`) into the one the return
@@ -745,9 +758,9 @@ checks it needs are of the program made, the run is the published one's.
   store reads its low byte alone: that goes with the word store (step 5).
 - The planner and the emission cost a function more than in proportion to
   its size, and the largest function sets the compile's peak memory
-  (issues/compile-x86-address-space-margin.md). Using the placement the
-  planner made when the lowering was asked, in place of planning again,
-  is the first saving there.
+  (issues/compile-x86-address-space-margin.md). A kept function is
+  planned once now (the placement the lowering was asked with is the
+  program's), but planned and emitted inside that one read.
 
 **What it buys, as a shape** (`scripts/bench-native` counts instructions
 exactly; its saved baseline has the numbers, and the pull requests record
