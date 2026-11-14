@@ -1,6 +1,6 @@
 ---
 title: bv_omega does not bound a word that appears only in a toNat hypothesis
-status: open
+status: closed
 labels: [tactics,bitvec]
 area: tactics
 created: 2026-11-14
@@ -28,3 +28,7 @@ let next: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
 **Wanted:** every `toNat` atom of a fixed-width word that reaches Omega,
 from the goal or from a hypothesis it reads, carries its bound. The
 `top` line then goes.
+
+## Log
+
+- 2026-11-14: 2026-11-14: fixed by PR #632: omega states every word atom's range at a literal width, from the goal or a fact, so bv_omega's side condition gets mn.toNat() < 2^64. The top line in Sha256::absorb_from is gone ([[omega-opens-closed-terms]]).

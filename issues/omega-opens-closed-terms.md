@@ -1,6 +1,6 @@
 ---
 title: omega opens closed calls, products at a successor, arithmetic definitions and word ranges
-status: open
+status: closed
 labels: [tactics,omega]
 area: tactics
 milestone: [tac-arith]
@@ -32,3 +32,7 @@ bounded and named in the failure report when the bound stops it:
 **Done when** the bindings that exist only to open a term are gone from the
 SHA-256 agreement modules and `docs/proof-patterns.md` §3 says what `omega`
 opens. Design: `docs/omega-measure-reduction-design.md` §22.
+
+## Log
+
+- 2026-11-14: 2026-11-14: built in PR #632 (design §22). The bindings that only opened a term are removed from sha2_stream, sha256_stream_agreement and bitvec_concat (14 lines).
