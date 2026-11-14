@@ -87,3 +87,7 @@ measured at under a third of the planning.
   it, each a gigabyte resident while it runs.
 - The elaborated library the compile starts from is itself about 2.9 GiB
   resident on a cold store.
+
+## Log
+
+- 2026-11-14: The time side of the optimizer's reads is its own issue: [[optimizer-search-answers-memo]] (a warm compile evaluates every search again; remembering an answer is safe because the certificate checks what it made).
