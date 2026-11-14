@@ -2726,10 +2726,20 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // `call_saves`).
 inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), Spilling(mask: Nat) }
 
+// A bit that is a constant is known true or false, which is what an arm
+// taken on it knows: a decided comparison's bit written after it
+// (docs/optimizer-design.md §5.1) is read here.
+fn File::know_bit(self file: File, output, value: Nat) → Option<Lowered> {
+    match value {
+        Zero => Some(Lowered([], file.know(Falsity(output)))),
+        Succ(more) => match more { Zero => Some(Lowered([], file.know(Truth(output)))), Succ(_) => None },
+    }
+}
+
 fn Node::fold(self node: Node, file: File) → Option<Lowered> {
     match node {
-        Const(width, output, value) => word_only(width, width.eq_dec(64),
-            Some(Lowered([], file.know(Constant(output, value))))),
+        Const(width, output, value) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            Some(Lowered([], file.know(Constant(output, value)))), file.know_bit(output, value), None),
         UnsignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
             Some(Lowered([], file.know(Compared(output, Below, left, right))))),
         SignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
@@ -2746,14 +2756,28 @@ theorem File::know_keeps<M>(self file: File, values: Valuation(), known: Known):
     λ s represents holds => file.represents_know(values, s.gprs, known, represents, holds)
 }
 
+theorem File::know_bit_keeps<M>(self file: File, values: Valuation(), output, value: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, Const(1, output, value)), file.know_bit(output, value))
+{
+    match value {
+        Zero => λ s represents holds => file.represents_know(values, s.gprs, Falsity(output), represents,
+            cong_fn(λ (b: BitVec(1)) => b.head_bit(), holds)),
+        Succ(more) => match more {
+            Zero => λ s represents holds => file.represents_know(values, s.gprs, Truth(output), represents,
+                cong_fn(λ (b: BitVec(1)) => b.head_bit(), holds)),
+            Succ(_) => trivial,
+        },
+    }
+}
+
 theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
     MayKeep<M>(values, file, NodeHolds(values, node), node.fold(file))
 {
     match node {
-        Const(width, output, value) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64),
-            Some(Lowered([], file.know(Constant(output, value)))),
-            file.know_keeps<M>(values, Constant(output, value))),
+        Const(width, output, value) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64), width.eq_dec(1),
+            Some(Lowered([], file.know(Constant(output, value)))), file.know_bit(output, value), None,
+            file.know_keeps<M>(values, Constant(output, value)), file.know_bit_keeps<M>(values, output, value), λ _ => trivial),
         Move(_, _, _) => trivial,
         Add(_, _, _, _) => trivial,
         Sub(_, _, _, _) => trivial,

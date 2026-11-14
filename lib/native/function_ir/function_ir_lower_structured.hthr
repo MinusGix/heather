@@ -650,17 +650,29 @@ fn reads_drop(reads: Reads(), ids: List<Nat>) → Reads() {
 
 fn reads_from(ids: List<Nat>) → Reads() { reads_add(MEmpty, ids) }
 
+fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
+
+// The nodes of a block the lowering is to know and have no code for. A
+// word's constant nothing reads as a register (an add's immediate). A
+// comparison no register reads: one a single branch tests, where it is the
+// last of its block, and one no branch tests, which is there for what it
+// says (the bound of a load whose test was decided,
+// docs/optimizer-design.md §5.1). A bit's constant nothing reads, which
+// says that of a comparison before it.
 fn node_folds(nodes: List<Node>, reads, conditions: Reads()) → List<Nat> {
     match nodes {
         Nil => [],
         Cons(node, rest) => {
             let later = node_folds(rest, reads, conditions);
-            let compared = λ (output: Nat) => match !reads_has(reads, output) && reads_count(conditions, output).same(1) {
+            let compared = λ (output: Nat) => match !reads_has(reads, output)
+                && ((reads_count(conditions, output).same(1) && rest.is_empty()) || !reads_has(conditions, output)) {
                 False => later,
                 True => Cons(output, later),
             };
+            let unread = λ (output: Nat) => !(reads_has(reads, output) || reads_has(conditions, output));
             match node {
-                Const(width, output, value) => match width.same(64) && !(reads_has(reads, output) || reads_has(conditions, output)) && add_immediate(Rax, value).is_some() {
+                Const(width, output, value) => match (width.same(64) && unread(output) && add_immediate(Rax, value).is_some())
+                    || (width.same(1) && unread(output) && value.leb(1)) {
                     False => later,
                     True => Cons(output, later),
                 },
@@ -692,15 +704,14 @@ fn StructuredRegion::folds(self region: StructuredRegion, outputs: List<Nat>) �
     region.folds_in(reads_from(region.register_reads() ++ outputs), reads_from(region.conditions()))
 }
 
-// A node's placement entry: folded where the planner chose to (a
-// comparison only last in its block), else the register `choose_by`
-// gives.
-fn Node::folded(self node: Node, folds: Reads(), last: Bool) → Bool {
+// A node's placement entry: folded where the planner chose to, else the
+// register `choose_by` gives.
+fn Node::folded(self node: Node, folds: Reads()) → Bool {
     match node {
         Const(_, output, _) => reads_has(folds, output),
-        UnsignedLessThan(_, output, _, _) => last && reads_has(folds, output),
-        SignedLessThan(_, output, _, _) => last && reads_has(folds, output),
-        Equal(_, output, _, _) => last && reads_has(folds, output),
+        UnsignedLessThan(_, output, _, _) => reads_has(folds, output),
+        SignedLessThan(_, output, _, _) => reads_has(folds, output),
+        Equal(_, output, _, _) => reads_has(folds, output),
         _ => False,
     }
 }
@@ -722,8 +733,6 @@ fn Planned::joined(self first: Planned, rest: Planned) → Planned { Planned(fir
 fn Planned::met(self yes: Planned, no: Planned, known: List<Known>) → Planned {
     Planned(yes.placement ++ no.placement, yes.file.meet(no.file, known))
 }
-
-fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
 
 // The file after a node the leaf lowering has no code for: a load leaves
 // its byte in the register chosen, and so does a store, which names the
@@ -766,7 +775,7 @@ fn plan_block(nodes: List<Node>, file: File, live: Reads(), entries: List<Port>,
     match nodes {
         Nil => Planned([], file),
         Cons(node, rest) => shared(reads_drop(live, node.reads()), λ (later: Reads()) => {
-            let chosen = match node.folded(folds, rest.is_empty()) {
+            let chosen = match node.folded(folds) {
                 True => Folded,
                 False => Into(node.choose_by(file, λ (id: Nat) => reads_has(live, id), λ (id: Nat) => reads_has(later, id),
                     entries, registers, pool, λ (id: Nat) => reads_has(crossed, id), kept_clear(apart, registers))),

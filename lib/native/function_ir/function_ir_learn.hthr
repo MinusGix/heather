@@ -1,0 +1,438 @@
+// The search for what a function's own tests already say
+// (docs/optimizer-design.md §5.1), and for the test worth making at its
+// entry. Nothing here is trusted or proved: what it finds is a plan the
+// replayer checks (`function_ir_replay.hthr`) by the rules of
+// `function_ir_rules.hthr`, and a guard `function_ir_guard.hthr` checks.
+//
+// One walk of a function keeps, for each word, the range its node and its
+// operands' ranges give it, and the rule's step that derives that range
+// (`Seen::pass`). A comparison whose operands' ranges lie apart is decided:
+// the walk writes the derivations the rule reads, then the rule, and a
+// conditional on the bit is its arm (`Plan::Arm`). An arm starts from what
+// its bit says of the comparison's operands (`Seen::taking`). A loop's body
+// starts from the ranges of the inputs its passes keep (`Seen::carried`).
+// Where a load or a store indexes by a comparison's left operand, the
+// decided bit is written after the comparison as a constant, which is what
+// the lowering reads the bound from.
+//
+// A parameter that words are compared below is a length, and the least
+// value that would decide every such comparison met is the bound to test at
+// the function's entry (`Function::guard`). The compiler asks that of a
+// function once it is inlined and tidied, which is where its tests are, and
+// puts the test on the function as written (`Function::guard_over`,
+// `Function::find_guarded` in `function_ir_optimize.hthr`).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import function_ir_stage;
+import function_ir_fresh;
+import function_ir_guard;
+import function_ir_replay;
+import function_ir_rules;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import option;
+import pair;
+
+// How a word's range reaches the replayer's facts: the rule's step, and
+// the words whose ranges the rule reads.
+record How { needs: List<Nat>, step: Step }
+
+record Seen {
+    // The comparison that writes a bit.
+    made: NatMap<Node>,
+    // What is known of a word, and how.
+    range: NatMap<Range>,
+    how: NatMap<How>,
+    // The words whose range the steps written so far derive.
+    proved: NatMap<Bool>,
+    // The bits known constant.
+    bits: NatMap<Bool>,
+    // What the arms entered owe, written with the first decision after.
+    pending: List<Step>,
+    // The words a load or a store indexes by.
+    indexes: NatMap<Bool>,
+    // The parameter of the function a word is, through moves and what a
+    // loop does not change.
+    origin: NatMap<Nat>,
+    // For a parameter, the least value that would have every comparison
+    // met so far of a word with it be one: a parameter words are compared
+    // below is a length, and a test that it is long enough is the one worth
+    // making. Kept through arms and loops.
+    wants: NatMap<Nat>,
+}
+
+fn Seen::start(indexes: NatMap<Bool>) → Seen {
+    Seen(NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), [], indexes, NatMap::empty(), NatMap::empty())
+}
+
+fn Seen::wanting(self seen: Seen, wants: NatMap<Nat>) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, wants)
+}
+
+// `id` is the word `source` is.
+fn Seen::from(self seen: Seen, id, source: Nat) → Seen {
+    match nat_map_get(seen.origin, source) {
+        None => seen,
+        Some(parameter) => Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes,
+            nat_map_set(seen.origin, id, parameter), seen.wants),
+    }
+}
+
+fn Seen::of_parameters(self seen: Seen, parameters: List<Nat>) → Seen {
+    match parameters {
+        Nil => seen,
+        Cons(parameter, rest) => Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes,
+            nat_map_set(seen.origin, parameter, parameter), seen.wants).of_parameters(rest),
+    }
+}
+
+// No bound past this is worth a test at a function's entry.
+fn want_most() → Nat { 4294967296 }
+
+// A word was compared below the word `id`: if that is a parameter, the
+// comparison is one where it is at least `least`.
+fn Seen::want(self seen: Seen, id, least: Nat) → Seen {
+    match nat_map_get(seen.origin, id) {
+        None => seen,
+        Some(parameter) => match least.leb(want_most()) {
+            False => seen,
+            True => match nat_map_get(seen.wants, parameter) {
+                None => seen.wanting(nat_map_set(seen.wants, parameter, least)),
+                Some(already) => match least.leb(already) { True => seen, False => seen.wanting(nat_map_set(seen.wants, parameter, least)) },
+            },
+        },
+    }
+}
+
+fn Seen::of(self seen: Seen, id: Nat) → Range { match nat_map_get(seen.range, id) { None => Range::any(), Some(range) => range } }
+
+fn flagged(flags: NatMap<Bool>, id: Nat) → Bool { match nat_map_get(flags, id) { None => False, Some(flag) => flag } }
+
+// A word's range, which `step` derives from the ranges of `needs`.
+fn Seen::learn(self seen: Seen, id: Nat, range: Range, needs: List<Nat>, step: Step) → Seen {
+    Seen(seen.made, nat_map_set(seen.range, id, range), nat_map_set(seen.how, id, How(needs, step)), seen.proved, seen.bits, seen.pending,
+        seen.indexes, seen.origin, seen.wants)
+}
+
+record Explained { steps: List<Step>, proved: NatMap<Bool> }
+
+// The steps that derive the ranges of `ids` not yet derived, what each
+// reads first.
+fn explain(fuel: Nat, how: NatMap<How>, proved: NatMap<Bool>, ids: List<Nat>) → Explained {
+    match fuel {
+        Zero => Explained([], proved),
+        Succ(less) => match ids {
+            Nil => Explained([], proved),
+            Cons(id, rest) => match flagged(proved, id) {
+                True => explain(less, how, proved, rest),
+                False => match nat_map_get(how, id) {
+                    None => explain(less, how, proved, rest),
+                    Some(found) => shared(explain(less, how, proved, found.needs), λ first =>
+                        shared(explain(less, how, nat_map_set(first.proved, id, True), rest), λ later =>
+                            Explained(first.steps ++ Cons(found.step, later.steps), later.proved))),
+                },
+            },
+        },
+    }
+}
+
+// What follows a node's own step, and what is known after it.
+record Passed { after: List<Step>, seen: Seen }
+
+// A bit decided: what is owed, the derivations the rule reads, the rule,
+// and what to write into the code.
+fn Seen::decided(self seen: Seen, c: Nat, bit: Bool, needs: List<Nat>, step: Step, emit: List<Step>) → Passed {
+    shared(explain(100, seen.how, seen.proved, needs), λ why =>
+        Passed(seen.pending ++ (why.steps ++ Cons(step, emit)),
+            Seen(seen.made, seen.range, seen.how, why.proved, nat_map_set(seen.bits, c, bit), [], seen.indexes, seen.origin, seen.wants)))
+}
+
+// A comparison: decided where its operands' ranges lie apart. Where a load
+// or a store indexes by its left, the bit is written after it, which is
+// what the lowering reads (docs/optimizer-design.md §5.1).
+fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
+    shared(Seen(nat_map_set(seen.made, c, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants), λ noted =>
+        shared(seen.of(l), λ a => shared(seen.of(r), λ b => match Succ(a.high).leb(b.low) {
+            True => noted.decided(c, True, [l, r], Derive(7, [c, l, r, a.high, b.low]),
+                match flagged(seen.indexes, l) { True => [Emit(Const(1, c, 1))], False => [] }),
+            False => match b.high.leb(a.low) {
+                True => noted.decided(c, False, [l, r], Derive(8, [c, l, r, a.low, b.high]), []),
+                False => Passed([], noted.want(r, Succ(a.high))),
+            },
+        })))
+}
+
+fn Seen::pass(self seen: Seen, node: Node) → Passed {
+    match node {
+        Const(w, o, v) => match w.same(64) && v.leb(word_top()) {
+            True => Passed([], seen.learn(o, Range(v, v), [], Derive(2, [o, v]))),
+            False => Passed([], seen),
+        },
+        Move(w, o, s) => match w.same(64) {
+            False => Passed([], seen),
+            True => match nat_map_get(seen.range, s) {
+                None => Passed([], seen.from(o, s)),
+                Some(a) => Passed([], seen.learn(o, a, [s], Derive(3, [o, s, a.low, a.high])).from(o, s)),
+            },
+        },
+        Add(w, o, l, r) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
+                True => Passed([], seen.learn(o, Range(a.low + b.low, a.high + b.high), [l, r], Derive(4, [o, l, r, a.low, a.high, b.low, b.high]))),
+                False => Passed([], seen),
+            })),
+        },
+        ShiftLeft(w, o, v, n) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(v), λ a => shared(Nat::pow(2, n), λ scale => match (a.high * scale).leb(word_top()) {
+                True => Passed([], seen.learn(o, Range(a.low * scale, a.high * scale), [v], Derive(5, [o, v, n, a.low, a.high]))),
+                False => Passed([], seen),
+            })),
+        },
+        Resize(from, to, o, s) => match to.same(64) && from.leb(63) {
+            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])))),
+            False => Passed([], seen),
+        },
+        UnsignedLessThan(w, c, l, r) => match w.same(64) { True => seen.compared(c, l, r, node), False => Passed([], seen) },
+        BitOr(w, o, _, _) => match w.same(1) {
+            True => Passed([], Seen(nat_map_set(seen.made, o, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants)),
+            False => Passed([], seen),
+        },
+        _ => Passed([], seen),
+    }
+}
+
+record Swept { steps: List<Step>, seen: Seen }
+
+fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
+    match nodes {
+        Nil => Swept([], seen),
+        Cons(node, rest) => shared(seen.pass(node), λ here => shared(learn_nodes(here.seen, rest), λ later =>
+            Swept(Cons(Keep, here.after ++ later.steps), later.seen))),
+    }
+}
+
+// A range a rule's step derives.
+record Narrower { range: Range, step: Step }
+
+// What a comparison's bit says of its operands in the arm taken where it
+// is `bit`: each one's range, where that is narrower than what is known.
+record Narrowed { left: Option<Narrower>, right: Option<Narrower> }
+
+fn narrowing(c, l, r: Nat, bit: Bool, a, b: Range) → Narrowed {
+    match bit {
+        True => Narrowed(
+            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [c, l, r, b.high - 1]))), False => None },
+            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [c, l, r, a.low]))), False => None }),
+        False => Narrowed(
+            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [c, l, r, b.low]))), False => None },
+            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [c, l, r, a.high]))), False => None }),
+    }
+}
+
+fn narrower_set(ranges: NatMap<Range>, id: Nat, found: Option<Narrower>) → NatMap<Range> {
+    match found { None => ranges, Some(narrower) => nat_map_set(ranges, id, narrower.range) }
+}
+
+fn narrower_step(found: Option<Narrower>) → List<Step> { match found { None => [], Some(narrower) => [narrower.step] } }
+
+// The same, owed with the derivations the steps read.
+fn Seen::narrowed(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowing(c, l, r, bit, seen.of(l), seen.of(r)), λ found =>
+        Seen(seen.made, narrower_set(narrower_set(seen.range, l, found.left), r, found.right), seen.how,
+            nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
+            seen.pending ++ (why.steps ++ (narrower_step(found.left) ++ narrower_step(found.right))), seen.indexes, seen.origin, seen.wants)))
+}
+
+// Steps owed with the next decision.
+fn Seen::owing(self seen: Seen, steps: List<Step>) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending ++ steps, seen.indexes, seen.origin, seen.wants)
+}
+
+// Where the bit `c` is `bit`: what a comparison's bit says of its operands,
+// and a clear or's of the bits it is of (to a depth: a test of several
+// bounds is a few).
+fn Seen::taking_in(self seen: Seen, depth, c: Nat, bit: Bool) → Seen {
+    shared(Seen(seen.made, seen.range, seen.how, seen.proved, nat_map_set(seen.bits, c, bit), seen.pending, seen.indexes, seen.origin, seen.wants), λ known =>
+        match nat_map_get(seen.made, c) {
+            None => known,
+            Some(node) => match node {
+                UnsignedLessThan(_, _, l, r) => known.narrowed(c, l, r, bit),
+                BitOr(_, _, a, b) => match bit {
+                    True => known,
+                    False => match depth {
+                        Zero => known,
+                        Succ(less) => known.owing([Derive(13, [c, a, b]), Derive(14, [c, a, b])]).taking_in(less, a, False).taking_in(less, b, False),
+                    },
+                },
+                _ => known,
+            },
+        })
+}
+
+// In the arm taken where the bit `c` is `bit`.
+fn Seen::taking(self seen: Seen, c: Nat, bit: Bool) → Seen { seen.taking_in(8, c, bit) }
+
+fn ranged(ranges: NatMap<Range>, id: Nat) → Bool { match nat_map_get(ranges, id) { None => False, Some(_) => True } }
+
+// The inputs of a loop whose range its passes keep: those a parameter that
+// is its own next starts from.
+fn Seen::kept(self seen: Seen, inputs, parameters, next: List<Nat>) → List<Nat> {
+    match inputs {
+        Nil => [],
+        Cons(input, more) => match parameters {
+            Nil => [],
+            Cons(parameter, others) => match next {
+                Nil => [],
+                Cons(after, later) => match parameter.same(after) && ranged(seen.range, input) {
+                    True => Cons(input, seen.kept(more, others, later)),
+                    False => seen.kept(more, others, later),
+                },
+            },
+        },
+    }
+}
+
+// Those ranges as ranges of `ids`, which the replayer's facts say: of the
+// parameters as it enters the body, of the outputs after the loop.
+fn Seen::carried(self seen: Seen, inputs, parameters, next, ids: List<Nat>, into: Seen) → Seen {
+    match inputs {
+        Nil => into,
+        Cons(input, more) => match parameters {
+            Nil => into,
+            Cons(parameter, others) => match next {
+                Nil => into,
+                Cons(after, later) => match ids {
+                    Nil => into,
+                    Cons(id, further) => shared(seen.carried(more, others, later, further, into), λ rest => match parameter.same(after) {
+                        False => rest,
+                        True => shared(match nat_map_get(seen.origin, input) {
+                            None => rest.origin,
+                            Some(word) => nat_map_set(rest.origin, id, word),
+                        }, λ origin => match nat_map_get(seen.range, input) {
+                            None => Seen(rest.made, rest.range, rest.how, rest.proved, rest.bits, rest.pending, rest.indexes, origin, rest.wants),
+                            Some(range) => Seen(rest.made, nat_map_set(rest.range, id, range), rest.how, nat_map_set(rest.proved, id, True),
+                                rest.bits, rest.pending, rest.indexes, origin, rest.wants),
+                        }),
+                    }),
+                },
+            },
+        },
+    }
+}
+
+record Learned { plan: Plan, seen: Seen }
+
+// A plan that derives what decides a comparison, has a conditional on a
+// decided bit be its arm, and writes a decided bound after its comparison.
+fn StructuredRegion::learn(self region: StructuredRegion, seen: Seen) → Learned {
+    match region {
+        Dataflow(body) => shared(learn_nodes(seen, body.nodes), λ s => Learned(Nodes(s.steps), s.seen)),
+        Sequence(prefix, continuation) => shared(learn_nodes(seen, prefix.nodes), λ s =>
+            shared(continuation.learn(s.seen), λ c => Learned(Then(s.steps, c.plan), c.seen))),
+        Compose(prefix, continuation) => shared(prefix.learn(seen), λ a =>
+            shared(continuation.learn(a.seen), λ c => Learned(Both(a.plan, c.plan), c.seen))),
+        Conditional(_, condition, _, _, when_true, when_false) => match nat_map_get(seen.bits, condition) {
+            Some(bit) => shared(match bit { True => when_true.learn(seen), False => when_false.learn(seen) }, λ arm =>
+                Learned(Arm(bit, arm.plan), seen.wanting(arm.seen.wants))),
+            None => shared(when_true.learn(seen.taking(condition, True)), λ yes =>
+                shared(when_false.learn(seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
+                    Learned(Arms(yes.plan, no.plan), seen.wanting(no.seen.wants)))),
+        },
+        Call(_, _, _) => Learned(Same, seen),
+        Loop(inputs, _, parameters, _, body, _, next, outputs, _) => shared(seen.kept(inputs, parameters, next), λ kept =>
+            shared(explain(100, seen.how, seen.proved, kept), λ why =>
+                shared(body.learn(seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes).wanting(seen.wants))), λ inner =>
+                    match seen.pending ++ why.steps {
+                        Nil => Learned(Body(inner.plan), seen.carried(inputs, parameters, next, outputs, seen.wanting(inner.seen.wants))),
+                        Cons(step, steps) => Learned(Derived(Cons(step, steps), inner.plan), seen.carried(inputs, parameters, next, outputs,
+                            Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, inner.seen.wants))),
+                    }))),
+        Lend(_, _, _, _) => Learned(Same, seen),
+    }
+}
+
+fn nodes_indexes(nodes: List<Node>, found: NatMap<Bool>) → NatMap<Bool> {
+    match nodes {
+        Nil => found,
+        Cons(node, rest) => nodes_indexes(rest, match node {
+            BufferLoad(_, _, index) => nat_map_set(found, index, True),
+            BufferStore(_, _, index, _) => nat_map_set(found, index, True),
+            _ => found,
+        }),
+    }
+}
+
+fn StructuredRegion::indexes(self region: StructuredRegion, found: NatMap<Bool>) → NatMap<Bool> {
+    match region {
+        Dataflow(body) => nodes_indexes(body.nodes, found),
+        Sequence(prefix, continuation) => continuation.indexes(nodes_indexes(prefix.nodes, found)),
+        Compose(prefix, continuation) => continuation.indexes(prefix.indexes(found)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.indexes(when_true.indexes(found)),
+        Call(_, _, _) => found,
+        Loop(_, _, _, _, body, _, _, _, _) => body.indexes(found),
+        Lend(_, _, _, _) => found,
+    }
+}
+
+// What a function's search starts from: the words its loads and stores
+// index by, and its parameters as themselves.
+fn Function::seen(self function: Function) → Seen {
+    Seen::start(function.body.indexes(NatMap::empty())).of_parameters(function.parameters)
+}
+
+fn Function::learn_plan(self function: Function) → Plan { shared(function.body.learn(function.seen()), λ learned => learned.plan) }
+
+// The conditionals a plan replaces by an arm.
+fn Plan::decided(self plan: Plan) → Nat {
+    match plan {
+        Same => 0,
+        Nodes(_) => 0,
+        Then(_, rest) => rest.decided(),
+        Both(first, second) => first.decided() + second.decided(),
+        Arms(when_true, when_false) => when_true.decided() + when_false.decided(),
+        Arm(_, arm) => Succ(arm.decided()),
+        Body(body) => body.decided(),
+        Derived(_, body) => body.decided(),
+        Args(_) => 0,
+        Inputs(_, body) => body.decided(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What to test at a function's entry
+
+// The nodes of a test: a comparison of each parameter with a wanted bound
+// with that bound, at ids from `next`, each or'd into the bit before it.
+record Tests { nodes: List<Node>, bit: Option<Nat>, next: Nat }
+
+fn tests_of(parameters: List<Nat>, wants: NatMap<Nat>, so_far: Tests) → Tests {
+    match parameters {
+        Nil => so_far,
+        Cons(parameter, rest) => match nat_map_get(wants, parameter) {
+            None => tests_of(rest, wants, so_far),
+            Some(least) => shared(so_far.next, λ k => tests_of(rest, wants, match so_far.bit {
+                None => Tests(so_far.nodes ++ [Const(64, k, least), UnsignedLessThan(64, k + 1, parameter, k)], Some(k + 1), k + 2),
+                Some(bit) => Tests(so_far.nodes ++ [Const(64, k, least), UnsignedLessThan(64, k + 1, parameter, k), BitOr(1, k + 2, bit, k + 1)],
+                    Some(k + 2), k + 3),
+            })),
+        },
+    }
+}
+
+// The test of every bound the function's undecided comparisons wait on, if
+// there is one, at ids from `top`.
+fn Function::guard_over(self function: Function, top: Nat) → Option<Guard> {
+    shared(function.body.learn(function.seen()), λ learned =>
+        shared(tests_of(function.parameters, learned.seen.wants, Tests([], None, top)), λ tests =>
+            match tests.bit { None => None, Some(bit) => Some(Guard(top, tests.nodes, bit)) }))
+}
+
+fn Function::guard(self function: Function) → Option<Guard> { function.guard_over(function.top()) }

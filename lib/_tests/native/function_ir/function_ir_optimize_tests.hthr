@@ -1,10 +1,11 @@
 // Probes of the optimizer as the compiler runs it
 // (lib/native/function_ir/function_ir_optimize.hthr, docs/optimizer-design.md
-// §3, §9): what the search finds for a program, callees first; the stage
-// making the functions it found from the plans it found; a function left as
-// it is; what the lowering is asked; the functions a root reaches before
-// and after; and what the compiler reads. Tests, not library: nothing
-// imports this module.
+// §3, §9): what each stage's search finds for a program, callees first; the
+// stages making the functions found from the plans found, a stage a
+// statement; a function left as it is; a function whose bounds tests a
+// test at its entry decides, and what the lowering makes of it; the
+// functions a root reaches before and after; and what the compiler reads.
+// Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
 import function_ir_writes;
@@ -14,6 +15,8 @@ import function_ir_inline;
 import function_ir_replay;
 import function_ir_rules;
 import function_ir_tidy;
+import function_ir_guard;
+import function_ir_learn;
 import function_ir_prune;
 import function_ir_spelled;
 import function_ir_optimize;
@@ -28,6 +31,9 @@ import string;
 
 fn nodes(ns: List<Node>) → StructuredRegion { StructuredRegion::of_nodes(ns) }
 
+fn made(found: Option<Found>) → Option<Function> { found.map(λ (f: Found) => f.made) }
+fn read(found: Option<Found>) → String { spelled_text(found_spelled(found)) }
+
 // Function 2 is x ↦ (x ^ 7) + x by a call of function 1, x ↦ x ^ 7, which
 // calls function 0, the exclusive or.
 fn xor() → Function { Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2) }
@@ -35,33 +41,69 @@ fn seven() → Function { Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0
 fn top() → Function { Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2) }
 fn three() → List<Function> { [top(), seven(), xor()] }
 
-// Nothing to inline in function 0, and nothing to tidy.
-fn xor_plan() → Pair<Inlines, Pair<Plan, Plan>> { Pair(Inlines(3, Stay), Pair(Nodes([Keep]), Nodes([Keep]))) }
+// Function 0 has no call to inline, no test to decide and no length to
+// test; its other plans keep it as it is.
+theorem xor_inlined(): made(xor().find_inlined([], Wanted::usual())) = None { refl }
+theorem xor_copied(): made(xor().find_copied()) = Some(xor()) { refl }
+theorem xor_guarded(): made(xor().find_guarded(xor(), Wanted::usual())) = None { refl }
+theorem xor_learned(): made(xor().find_learned()) = None { refl }
 
-theorem xor_found(): xor().optimized([], Wanted::usual()) = Optimized(Some(xor_plan()), xor()) { refl }
+// Function 1 with its call inlined: the callee's body at ids from 3, its
+// parameters and result bound by moves.
+fn seven_inlines() → Inlines { Inlines(3, Both(Stay, Here(3))) }
 
-// Function 1 with its call inlined: the exclusive or reads the caller's
-// own values, and the moves of the arguments are gone. The move of the
-// result stays: 2 is the function's result.
-fn seven_plan() → Pair<Inlines, Pair<Plan, Plan>> {
-    Pair(Inlines(3, Both(Stay, Here(3))),
-        Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))),
-            Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))))
+fn seven_inlined() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]),
+        Compose(nodes([Move(64, 3, 0), Move(64, 4, 1)]), Compose(nodes([BitXor(64, 5, 3, 4)]), nodes([Move(64, 2, 5)])))), 2)
 }
+
+theorem seven_found(): made(seven().find_inlined([xor()], Wanted::usual())) = Some(seven_inlined()) { refl }
+
+// The exclusive or reads the caller's own values,
+fn seven_copies() → Plan { Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))) }
+
+fn seven_copied() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]),
+        Compose(nodes([Move(64, 3, 0), Move(64, 4, 1)]), Compose(nodes([BitXor(64, 5, 0, 1)]), nodes([Move(64, 2, 5)])))), 2)
+}
+
+theorem seven_read_through(): made(seven_inlined().find_copied()) = Some(seven_copied()) { refl }
+
+// and the moves of the arguments are gone. The move of the result stays:
+// 2 is the function's result.
+fn seven_dead() → Plan { Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))) }
 
 fn seven_made() → Function {
     Function([0], Compose(nodes([Const(64, 1, 7)]), Compose(nodes([]), Compose(nodes([BitXor(64, 5, 0, 1)]), nodes([Move(64, 2, 5)])))), 2)
 }
 
-theorem seven_found(): seven().optimized([xor()], Wanted::usual()) = Optimized(Some(seven_plan()), seven_made()) { refl }
+theorem seven_swept(): made(seven_copied().find_swept()) = Some(seven_made()) { refl }
 
-// Function 2 takes function 1 as the search left it, so no call is left in
+fn seven_passes() → Passes() { passes(None, Some(seven_inlines()), Some(seven_copies()), Some(seven_dead()), None, None) }
+
+// What a certificate states of a function: each stage's statement, a
+// stage that found nothing keeping the function, and the six as one
+// (`optimize_made`).
+theorem seven_stage_1(): guard_stage().maybe().rewrite([xor()], seven(), None) = Some(seven()) { refl }
+theorem seven_stage_2(): inline_stage().maybe().rewrite([xor()], seven(), Some(seven_inlines())) = Some(seven_inlined()) { refl }
+theorem seven_stage_3(): replay_stage(rules()).maybe().rewrite([xor()], seven_inlined(), Some(seven_copies())) = Some(seven_copied()) { refl }
+theorem seven_stage_4(): replay_stage(rules()).maybe().rewrite([xor()], seven_copied(), Some(seven_dead())) = Some(seven_made()) { refl }
+theorem seven_stage_5(): replay_stage(rules()).maybe().rewrite([xor()], seven_made(), None) = Some(seven_made()) { refl }
+
+theorem seven_staged(): optimize_stage().rewrite([xor()], seven(), seven_passes()) = Some(seven_made()) {
+    optimize_made([xor()], seven(), seven(), seven_inlined(), seven_copied(), seven_made(), seven_made(), seven_made(),
+        None, Some(seven_inlines()), Some(seven_copies()), Some(seven_dead()), None, None,
+        seven_stage_1(), seven_stage_2(), seven_stage_3(), seven_stage_4(), seven_stage_5(), seven_stage_5())
+}
+
+// Function 2 takes function 1 as the stages left it, so no call is left in
 // it and every move is read through: the sum reads the exclusive or.
-fn top_plan() → Pair<Inlines, Pair<Plan, Plan>> {
-    Pair(Inlines(3, Both(Here(6), Stay)),
-        Pair(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
-                Nodes([Swap(8, 0)])),
-            Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))))
+fn top_passes() → Passes() {
+    passes(None, Some(Inlines(3, Both(Here(6), Stay))),
+        Some(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
+            Nodes([Swap(8, 0)]))),
+        Some(Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))),
+        None, None)
 }
 
 fn top_made() → Function {
@@ -70,36 +112,37 @@ fn top_made() → Function {
         nodes([Add(64, 2, 8, 0)])), 2)
 }
 
-theorem top_found(): top().optimized([seven_made(), xor()], Wanted::usual()) = Optimized(Some(top_plan()), top_made()) { refl }
+theorem top_found(): made(top().find_inlined([seven_made(), xor()], Wanted::usual()))
+    .and_then(λ (f: Function) => made(f.find_copied())).and_then(λ (f: Function) => made(f.find_swept())) = Some(top_made()) { refl }
 
 fn three_made() → List<Function> { [top_made(), seven_made(), xor()] }
 
-// The stage makes those functions from those plans: what a certificate
-// states, a function a statement (`Stage::run_next`).
-theorem three_run(): optimize_stage().run(three(), [Some(top_plan()), Some(seven_plan()), Some(xor_plan())]) = Some(three_made()) { refl }
+// The stage makes those functions from those plans,
+theorem three_run(): optimize_stage().run(three(), [top_passes(), seven_passes(), no_passes()]) = Some(three_made()) { refl }
 
-// And the program made does at each function whatever the program did.
+// and the program made does at each function whatever the program did.
 theorem three_keeps(f: Nat): ProgramRewrites(three(), three_made(), f) {
-    optimize_stage().run_rewrites(three(), [Some(top_plan()), Some(seven_plan()), Some(xor_plan())], three_made(), three_run(), f)
+    optimize_stage().run_rewrites(three(), [top_passes(), seven_passes(), no_passes()], three_made(), three_run(), f)
 }
 
 // No plan is the function itself.
-theorem three_kept(): optimize_stage().run(three(), [None, None, None]) = Some(three()) { refl }
+theorem three_kept(): optimize_stage().run(three(), [no_passes(), no_passes(), no_passes()]) = Some(three()) { refl }
 
 // A function kept among functions rewritten: function 2 as it is still
 // calls function 1.
-theorem three_some(): optimize_stage().run(three(), [None, Some(seven_plan()), None]) = Some([top(), seven_made(), xor()]) { refl }
+theorem three_some(): optimize_stage().run(three(), [no_passes(), seven_passes(), no_passes()]) = Some([top(), seven_made(), xor()]) { refl }
 
 // A plan in another shape than the function's is refused.
-theorem shape_refused(): optimize_stage().run(three(), [Some(seven_plan()), None, None]) = None { refl }
+theorem shape_refused(): optimize_stage().run(three(), [seven_passes(), no_passes(), no_passes()]) = None { refl }
 
-// A function that would be larger than the room asked for is left as it is.
-theorem no_room(): top().optimized([seven_made(), xor()], Wanted(40, 1)) = Optimized(None, top()) { refl }
+// With nothing small enough to inline, there is nothing to inline.
+theorem none_small(): made(top().find_inlined([seven_made(), xor()], Wanted(0, 400))) = None { refl }
 
-// With nothing small enough to inline, a function's plans keep it.
-theorem none_small(): top().optimized([seven_made(), xor()], Wanted(0, 400)).function = top() { refl }
-
-// The lowering takes what the search made, with the planner's placement.
+// What the compiler asks before it keeps what the stages made: whether it
+// is within the room asked for, and whether the lowering takes it with the
+// planner's placement.
+theorem made_fits(): top_made().fits(Wanted::usual()) = True { refl }
+theorem no_room(): top_made().fits(Wanted(40, 1)) = False { refl }
 theorem made_lowers(): top_made().lowers(2, [0, 0, 0]) = True { refl }
 
 // Function 2 reaches all three functions before, and itself alone after:
@@ -123,13 +166,161 @@ theorem three_cut_dead(): ProgramRewrites(three_made(), prune(three_made(), λ n
     prune_rewrites(λ n => n.among([2]), three_made(), refl, 1, refl)
 }
 
-// What the compiler reads: the plans on one line, the function on the next.
-theorem seven_spelled(): spelled_text(Optimized(Some(seven_plan()), seven_made()).spelled()) =
-    "Some(Pair(Inlines(3, Both(Stay, Here(3))), Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))), Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+// What the compiler reads of a search: `None`, or the plan on one line and
+// the function on the next.
+theorem seven_read(): read(seven().find_inlined([xor()], Wanted::usual())) =
+    "Inlines(3, Both(Stay, Here(3)))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Move(64, 3, 0), Move(64, 4, 1)], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
     refl
 }
 
-theorem kept_spelled(): spelled_text(Optimized(None, xor()).spelled()) =
-    "None\nFunction([0, 1], Dataflow(Region(Ports([]), [BitXor(64, 2, 0, 1)], Ports([]))), 2, 0)" {
+theorem swept_read(): read(seven_copied().find_swept()) =
+    "Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
     refl
 }
+
+theorem none_read(): read(xor().find_inlined([], Wanted::usual())) = "None" { refl }
+
+// ---------------------------------------------------------------------------
+// Bounds tests decided by a test at the entry (step 4)
+
+// Byte i and byte i + 8 of a span added, for i below 8, or zero. The
+// span's home is 0, its length 1, i is 2.
+fn pair_sum() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
+                Conditional(Ports([]), 5, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
+                        Conditional(Ports([]), 8, Ports([]), Ports([Port(13, 64)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)])),
+                            nodes([Const(64, 13, 0)])))),
+                    nodes([Const(64, 13, 0)]))),
+            nodes([Const(64, 13, 0)]))), 13, 1)
+}
+
+fn pair_guard() → Guard { Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15) }
+
+// A search that inlines callees of size 4 or less: `pair_sum` is larger,
+// so nothing inlines it and a test at its entry is its own to make.
+fn narrow() → Wanted { Wanted(4, 400) }
+
+// The test is kept: past it two tests are decided, where none was.
+theorem pair_tested(): made(pair_sum().find_guarded(pair_sum(), narrow())) = Some(pair_sum().guarded(pair_guard())) { refl }
+
+theorem pair_guard_read(): read(pair_sum().find_guarded(pair_sum(), narrow())).take(69) =
+    "Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15)\nF" { refl }
+
+// A function small enough to be inlined is given no test: whoever it is
+// inlined into tests for it.
+theorem pair_small(): made(pair_sum().find_guarded(pair_sum(), Wanted::usual())) = None { refl }
+
+// The arm past the test with its two decided conditionals gone: each
+// comparison stays, with its bit written after it.
+fn pair_fast() → StructuredRegion {
+    Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
+                Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1), Const(1, 8, 1)]),
+                    Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
+            nodes([Const(64, 13, 0)])))
+}
+
+fn pair_made() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body, pair_fast())), 13, 1)
+}
+
+theorem pair_learned(): made(pair_sum().guarded(pair_guard()).find_learned_past()) = Some(pair_made()) { refl }
+
+// The sweep after it keeps a comparison its written bit speaks of, though
+// nothing reads either.
+theorem pair_swept(): made(pair_made().find_swept_past()) = Some(pair_made()) { refl }
+
+// The lowering takes it: a load's bounds test is the comparison of its
+// index with the buffer's length and that comparison's bit known true,
+// which the written bit is.
+theorem pair_lowers(): pair_made().lowers(0, [1]) = True { refl }
+
+// It does not take the function with a written bit left out: the load
+// after it has no test.
+fn pair_unsaid() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body,
+            Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+                Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
+                        Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
+                    nodes([Const(64, 13, 0)]))))), 13, 1)
+}
+
+theorem unsaid_refused(): pair_unsaid().lowers(0, [1]) = False { refl }
+
+// And the replayer does not write a bit no fact gives: a certificate could
+// not state that function as made from `pair_sum`.
+theorem unproved_bit(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 5, 2, 1)], [Keep, Emit(Const(1, 5, 1))]).map(λ r => r.nodes) = None { refl }
+
+// The whole of it as one stage's statement.
+theorem pair_staged(): optimize_stage().rewrite([], pair_sum(),
+    passes(Some(pair_guard()), None, None, None, Some(pair_sum().guarded(pair_guard()).learn_plan().plain_kept()), None)) = Some(pair_made()) { refl }
+
+// ---------------------------------------------------------------------------
+// The test comes before the inlining: the plain arm keeps its calls
+
+// The byte at i of a span, or zero, and a function adding bytes 3 and 7 by
+// two calls of it. The first call's result is moved out of the register a
+// call answers in before the second.
+fn byte_at() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, 1)
+}
+
+fn two() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 2, 3)]), Compose(Call(0, [0, 1, 2], 3),
+        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5), nodes([Add(64, 6, 7, 5)]))))), 6, 1)
+}
+
+// A search that inlines `byte_at` and nothing as large as `two` with it
+// inlined.
+fn tight() → Wanted { Wanted(8, 400) }
+
+theorem byte_untested(): made(byte_at().find_guarded(byte_at(), tight())) = None { refl }
+
+// `two` inlined and tidied with no test is where its tests are, both of an
+// index against the length.
+fn two_tidied() → Option<Function> {
+    made(two().find_inlined([byte_at()], tight())).and_then(λ (f: Function) => made(f.find_copied())).and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+theorem two_undecided(): two_tidied().map(λ (f: Function) => f.learn_plan().decided()) = Some(0) { refl }
+
+// That function asks for a test of the length against 8, and the test is
+// put on `two` as written: both arms are its body, calls and all.
+fn two_guard() → Guard { Guard(20, [Const(64, 20, 8), UnsignedLessThan(64, 21, 1, 20)], 21) }
+
+theorem two_tested(): two_tidied().and_then(λ (f: Function) => made(f.find_guarded(two(), tight()))) = Some(two().guarded(two_guard())) { refl }
+
+// The stages after it work in the arm past the test alone. There the
+// calls are inlined, both tests are decided, and the moves that bound the
+// calls' arguments and results are gone; the other arm is `two`'s body
+// still.
+fn two_made() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 20, 8), UnsignedLessThan(64, 21, 1, 20)]),
+        Conditional(Ports([]), 21, Ports([]), Ports([Port(6, 64)]), two().body,
+            Compose(nodes([Const(64, 2, 3)]),
+                Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 25, 2, 1), Const(1, 25, 1)]), nodes([BufferLoad(27, 0, 2)])), nodes([]))),
+                    Compose(nodes([Const(64, 4, 7)]),
+                        Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 31, 4, 1), Const(1, 31, 1)]), nodes([BufferLoad(33, 0, 4)])), nodes([]))),
+                            nodes([Add(64, 6, 27, 33)]))))))), 6, 1)
+}
+
+theorem two_found(): made(two().guarded(two_guard()).find_inlined_past([byte_at()], tight()))
+    .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+    .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(two_made()) { refl }
+
+// The inlining's plan has no site in the plain arm.
+theorem two_inlines_read(): read(two().guarded(two_guard()).find_inlined_past([byte_at()], tight())).take(97) =
+    "Inlines(22, Both(Stay, Arms(Stay, Both(Stay, Both(Here(6), Both(Stay, Both(Here(6), Stay)))))))\nF" { refl }
+
+// The lowering takes it as the program's second function.
+theorem two_lowers(): two_made().lowers(1, [1, 1]) = True { refl }

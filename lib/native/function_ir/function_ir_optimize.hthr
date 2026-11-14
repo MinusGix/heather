@@ -1,14 +1,14 @@
-// The optimizer as the compiler runs it (docs/optimizer-design.md §3, §9):
-// one stage that inlines a function's wanted calls and tidies what that
-// leaves, a plan a function; the search that finds a function's plan; and
-// what the compiler reads of it.
+// The optimizer as the compiler runs it (docs/optimizer-design.md §3, §5.1,
+// §9): the stages a function goes through in turn, each with a plan or
+// none; the searches that find a function's plans; and what the compiler
+// reads of them.
 //
-// The stage is the theorem. The search is not trusted: it proposes a plan
+// The stages are the theorem. A search is not trusted: it proposes a plan
 // and the function the plan makes, the compiler states both in the
 // certificate as literals, and the kernel checks that the stage makes the
-// one from the other (`Stage::run_next`, a function a statement). A
-// function the search has no plan for, or whose rewriting the lowering
-// refuses with the planner's placement, is left as it is: no plan is the
+// one from the other, a stage of a function a statement (`optimize_made`
+// joins a function's, `Stage::run_next` the functions'). A stage whose
+// search finds nothing leaves the function as it is: no plan is the
 // function itself (`Stage::maybe`).
 import function_ir;
 import function_ir_eval;
@@ -23,6 +23,8 @@ import function_ir_inline;
 import function_ir_replay;
 import function_ir_rules;
 import function_ir_tidy;
+import function_ir_guard;
+import function_ir_learn;
 import function_ir_prune;
 import function_ir_spelled;
 import x86_64_asm;
@@ -37,58 +39,231 @@ import pair;
 import string;
 
 // ---------------------------------------------------------------------------
-// The stage
+// The stages
 
-// A function's plans: where to inline, then what to read through and what
-// to drop; or none, and the function stays as it is.
-fn Passes() → Type { Option<Pair<Inlines, Pair<Plan, Plan>>> }
+// A function's plans, one for each stage in turn: a test at its entry;
+// where to inline; what to read through; what to drop; what its tests
+// decide; what to drop then. None where a stage leaves the function as it
+// is.
+//
+// The test comes first, so that the arm for a span too short is the
+// function as it was written, its calls still calls, and what is inlined
+// and tidied and decided is the other arm alone: the plain copy a test
+// costs is the small one.
+fn Passes() → Type { Pair<Pair<Pair<Pair<Pair<Option<Guard>, Option<Inlines>>, Option<Plan>>, Option<Plan>>, Option<Plan>>, Option<Plan>> }
 
-fn optimize_stage() → Stage<Passes()> { inline_stage().then(tidy_stage(rules())).maybe() }
+fn passes(guard: Option<Guard>, inlines: Option<Inlines>, copies, dead, learn, swept: Option<Plan>) → Passes() {
+    Pair(Pair(Pair(Pair(Pair(guard, inlines), copies), dead), learn), swept)
+}
+
+// No stage has a plan: the function stays as it is.
+fn no_passes() → Passes() { passes(None, None, None, None, None, None) }
+
+fn optimize_stage() → Stage<Passes()> {
+    guard_stage().maybe().then(inline_stage().maybe()).then(replay_stage(rules()).maybe()).then(replay_stage(rules()).maybe())
+        .then(replay_stage(rules()).maybe()).then(replay_stage(rules()).maybe())
+}
+
+// What each stage makes of what the one before made, the stages make of
+// the function.
+theorem optimize_made(callees: List<Function>, f0, f1, f2, f3, f4, f5, f6: Function, guard: Option<Guard>, inlines: Option<Inlines>,
+    copies, dead, learn, swept: Option<Plan>,
+    m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1),
+    m2: inline_stage().maybe().rewrite(callees, f1, inlines) = Some(f2),
+    m3: replay_stage(rules()).maybe().rewrite(callees, f2, copies) = Some(f3),
+    m4: replay_stage(rules()).maybe().rewrite(callees, f3, dead) = Some(f4),
+    m5: replay_stage(rules()).maybe().rewrite(callees, f4, learn) = Some(f5),
+    m6: replay_stage(rules()).maybe().rewrite(callees, f5, swept) = Some(f6)):
+    optimize_stage().rewrite(callees, f0, passes(guard, inlines, copies, dead, learn, swept)) = Some(f6) {
+    let s1 = guard_stage().maybe();
+    let r = replay_stage(rules()).maybe();
+    let s2 = s1.then(inline_stage().maybe());
+    let s3 = s2.then(r);
+    let s4 = s3.then(r);
+    let s5 = s4.then(r);
+    let a2 = s1.then_made(inline_stage().maybe(), callees, f0, f1, f2, guard, inlines, m1, m2);
+    let a3 = s2.then_made(r, callees, f0, f2, f3, Pair(guard, inlines), copies, a2, m3);
+    let a4 = s3.then_made(r, callees, f0, f3, f4, Pair(Pair(guard, inlines), copies), dead, a3, m4);
+    let a5 = s4.then_made(r, callees, f0, f4, f5, Pair(Pair(Pair(guard, inlines), copies), dead), learn, a4, m5);
+    s5.then_made(r, callees, f0, f5, f6, Pair(Pair(Pair(Pair(guard, inlines), copies), dead), learn), swept, a5, m6)
+}
 
 // ---------------------------------------------------------------------------
-// The search (not trusted)
+// Plans spelled for a certificate to state
+
+fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
+    match step {
+        Keep => spell_text("Keep"),
+        Drop => spell_text("Drop"),
+        Emit(node) => spell_call("Emit", [node.spelled()]),
+        Derive(rule, args) => spell_call("Derive", [spell_number(rule), spell_numbers(args)]),
+        Swap(a, b) => spell_of("Swap", [a, b]),
+    }
+}
+
+fn spell_steps(steps: List<Step>) → List<Nat> → List<Nat> { spell_list(steps.map(λ (step: Step) => step.spelled())) }
+
+fn Plan::spelled(self plan: Plan) → List<Nat> → List<Nat> {
+    match plan {
+        Same => spell_text("Same"),
+        Nodes(steps) => spell_call("Nodes", [spell_steps(steps)]),
+        Then(steps, rest) => spell_call("Then", [spell_steps(steps), rest.spelled()]),
+        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
+        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
+        Arm(taken, arm) => spell_call("Arm", [taken.spelled(), arm.spelled()]),
+        Body(body) => spell_call("Body", [body.spelled()]),
+        Derived(steps, body) => spell_call("Derived", [spell_steps(steps), body.spelled()]),
+        Args(arguments) => spell_call("Args", [spell_numbers(arguments)]),
+        Inputs(inputs, body) => spell_call("Inputs", [spell_numbers(inputs), body.spelled()]),
+    }
+}
+
+fn Sites::spelled(self sites: Sites) → List<Nat> → List<Nat> {
+    match sites {
+        Stay => spell_text("Stay"),
+        Here(room) => spell_of("Here", [room]),
+        Then(rest) => spell_call("Then", [rest.spelled()]),
+        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
+        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
+        Body(body) => spell_call("Body", [body.spelled()]),
+    }
+}
+
+fn Inlines::spelled(self inlines: Inlines) → List<Nat> → List<Nat> {
+    spell_call("Inlines", [spell_number(inlines.bound), inlines.sites.spelled()])
+}
+
+fn Guard::spelled(self guard: Guard) → List<Nat> → List<Nat> {
+    spell_call("Guard", [spell_number(guard.bound), spell_list(guard.nodes.map(λ (node: Node) => node.spelled())), spell_number(guard.condition)])
+}
+
+// ---------------------------------------------------------------------------
+// The searches (not trusted)
 
 // What a search is asked for: callees no larger than `small` are inlined,
-// and a function that would be larger than `room` afterwards is left as it
-// is. A function's rewriting is one statement of a certificate, and the
-// kernel's fuel is a statement's, so there is a size past which the
-// statement would not check.
+// and a function larger than `room` once that is tidied is left as it is.
+// A stage of a function is one statement of a certificate, and the
+// kernel's fuel is a statement's, so there is a size past which a statement
+// would not check.
 record Wanted { small: Nat, room: Nat }
 
 fn Wanted::usual() → Wanted { Wanted(40, 400) }
 
-// The plans a search found and the function they make. The plans' type is
-// written out, not `Passes()`: a value is read back by its field's type.
-record Optimized { plan: Option<Pair<Inlines, Pair<Plan, Plan>>>, function: Function }
+fn Function::fits(self function: Function, wanted: Wanted) → Bool { function.body.size().leb(wanted.room) }
 
-// A function with its wanted calls inlined and the result tidied, and the
-// plans that say so; the function as it is where a pass has no plan for
-// it. `callees` are the functions before it as the search left them, so
-// what is inlined is already tidied.
-fn Function::optimized(self function: Function, callees: List<Function>, wanted: Wanted) → Optimized {
-    shared(Inlines(function.top(), function.body.inline_all(callees, inline_small(wanted.small))), λ inlines =>
-        shared(inline_function(callees, function, inlines), λ inlined => match inlined {
-            None => Optimized(None, function),
-            Some(mid) => shared(mid.tidy_plan(rules()), λ found => match found {
-                None => Optimized(None, function),
-                Some(tidy) => shared(tidy_stage(rules()).rewrite(callees, mid, tidy), λ made => match made {
-                    None => Optimized(None, function),
-                    Some(new) => match new.body.size().leb(wanted.room) {
-                        True => Optimized(Some(Pair(inlines, tidy)), new),
-                        False => Optimized(None, function),
-                    },
-                }),
-            }),
-        }))
+// What a stage's search found: its plan, spelled, and the function the
+// stage makes of it.
+record Found { plan: List<Nat> → List<Nat>, made: Function }
+
+fn Sites::idle(self sites: Sites) → Bool {
+    match sites {
+        Stay => True,
+        Here(_) => False,
+        Then(rest) => rest.idle(),
+        Both(first, second) => first.idle() && second.idle(),
+        Arms(when_true, when_false) => when_true.idle() && when_false.idle(),
+        Body(body) => body.idle(),
+    }
+}
+
+// The function with its wanted calls inlined, where it has one. `callees`
+// are the functions before it as the stages left them, so what is inlined
+// is already tidied.
+fn Function::find_inlines(self function: Function, callees: List<Function>, inlines: Inlines) → Option<Found> {
+    match inlines.sites.idle() {
+        True => None,
+        False => inline_function(callees, function, inlines).map(λ made => Found(inlines.spelled(), made)),
+    }
+}
+
+fn Function::find_inlined(self function: Function, callees: List<Function>, wanted: Wanted) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.inline_all(callees, inline_small(wanted.small))))
+}
+
+// The sites of a function under a test at its entry, with none in the arm
+// where the test fails.
+fn Sites::past_test(self sites: Sites) → Sites {
+    match sites { Both(test, rest) => match rest { Arms(_, past) => Both(test, Arms(Stay, past)), _ => sites }, _ => sites }
+}
+
+// The same of a function under a test at its entry (`find_guarded`), in the
+// arm past the test alone: the other keeps its calls.
+fn Function::find_inlined_past(self function: Function, callees: List<Function>, wanted: Wanted) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.inline_all(callees, inline_small(wanted.small)).past_test()))
+}
+
+fn Function::find_replayed(self function: Function, plan: Plan) → Option<Found> {
+    replay_function(rules(), function, plan).map(λ made => Found(plan.spelled(), made))
+}
+
+// Every node, call and loop reading through the copies before it.
+fn Function::find_copied(self function: Function) → Option<Found> { function.find_replayed(function.copy_plan()) }
+
+// What nothing reads dropped.
+fn Function::find_swept(self function: Function) → Option<Found> { function.find_replayed(function.dead_plan()) }
+
+// A plan of a function under a test at its entry that leaves the arm where
+// the test fails as it is: that arm is the function as it was written,
+// which the lowering took.
+fn Plan::plain_kept(self plan: Plan) → Plan {
+    match plan { Both(test, rest) => match rest { Arms(_, past) => Both(test, Arms(Same, past)), _ => plan }, _ => plan }
+}
+
+// The same two of a function under a test at its entry, in the arm past
+// the test alone.
+fn Function::find_copied_past(self function: Function) → Option<Found> { function.find_replayed(function.copy_plan().plain_kept()) }
+fn Function::find_swept_past(self function: Function) → Option<Found> { function.find_replayed(function.dead_plan().plain_kept()) }
+
+// The arm past a guard's test, in the plan of a function so tested.
+fn Plan::past_test(self plan: Plan) → Plan {
+    match plan { Both(_, rest) => match rest { Arms(_, past) => past, _ => Same }, _ => Same }
+}
+
+// `plain` under a test of its lengths at its entry. The function asked is
+// `plain` as the inlining and tidying stages leave it without a test, which
+// is where the tests to decide are: the test is the one that function
+// wants, and it is put where the arm past it then decides more tests than
+// the function decides without one. Not in a function small enough to be
+// inlined: whoever it is inlined into tests for it.
+fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted) → Option<Found> {
+    match tidied.body.size().leb(wanted.small) {
+        True => None,
+        False => tidied.guard_over(plain.top().max(tidied.top())).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
+            match Succ(tidied.learn_plan().decided()).leb(tested.learn_plan().past_test().decided()) {
+                True => guard_function(plain, guard).map(λ made => Found(guard.spelled(), made)),
+                False => None,
+            })),
+    }
+}
+
+// The function with the conditionals its own tests decide replaced by
+// their arms, where there is one.
+fn Function::find_learned(self function: Function) → Option<Found> {
+    shared(function.learn_plan(), λ plan => match plan.decided() { Zero => None, Succ(_) => function.find_replayed(plan) })
+}
+
+// The same of a function under a test at its entry, in the arm past the
+// test alone.
+fn Function::find_learned_past(self function: Function) → Option<Found> {
+    shared(function.learn_plan().plain_kept(), λ plan => match plan.decided() { Zero => None, Succ(_) => function.find_replayed(plan) })
 }
 
 // Whether the lowering takes a function with the planner's placement, as
 // the program's function `k` under its counts of lent buffers. The
-// compiler asks this of what a search made before it keeps it: the planner
-// can run out of registers in a function that inlining made larger
+// compiler asks this of what the searches made before it keeps it: the
+// planner can run out of registers in a function that inlining made larger
 // (issues/function-ir-planner-register-pressure.md).
 fn Function::lowers(self function: Function, k: Nat, counts: List<Nat>) → Bool {
     match function.emit_lent(Start, k, function.plan(), counts.len(), counts) { None => False, Some(_) => True }
+}
+
+// `None`, or the plan on one line and the function on the next, as the
+// numbers the compiler's evaluator reads (`function_ir_spelled.hthr`).
+fn found_spelled(found: Option<Found>) → List<Nat> {
+    match found {
+        None => spell_text("None", []),
+        Some(stage) => stage.plan(spell_text("\n", stage.made.spelled()([]))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,54 +291,4 @@ fn program_reached(functions: List<Function>, roots: List<Nat>) → List<Nat> {
             False => program_reached(earlier, roots),
         },
     }
-}
-
-// ---------------------------------------------------------------------------
-// What a search found, spelled for a certificate to state
-
-fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
-    match step {
-        Keep => spell_text("Keep"),
-        Drop => spell_text("Drop"),
-        Emit(node) => spell_call("Emit", [node.spelled()]),
-        Derive(rule, args) => spell_call("Derive", [spell_number(rule), spell_numbers(args)]),
-        Swap(a, b) => spell_of("Swap", [a, b]),
-    }
-}
-
-fn spell_steps(steps: List<Step>) → List<Nat> → List<Nat> { spell_list(steps.map(λ (step: Step) => step.spelled())) }
-
-fn Plan::spelled(self plan: Plan) → List<Nat> → List<Nat> {
-    match plan {
-        Same => spell_text("Same"),
-        Nodes(steps) => spell_call("Nodes", [spell_steps(steps)]),
-        Then(steps, rest) => spell_call("Then", [spell_steps(steps), rest.spelled()]),
-        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
-        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
-        Body(body) => spell_call("Body", [body.spelled()]),
-        Args(arguments) => spell_call("Args", [spell_numbers(arguments)]),
-        Inputs(inputs, body) => spell_call("Inputs", [spell_numbers(inputs), body.spelled()]),
-    }
-}
-
-fn Sites::spelled(self sites: Sites) → List<Nat> → List<Nat> {
-    match sites {
-        Stay => spell_text("Stay"),
-        Here(room) => spell_of("Here", [room]),
-        Then(rest) => spell_call("Then", [rest.spelled()]),
-        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
-        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
-        Body(body) => spell_call("Body", [body.spelled()]),
-    }
-}
-
-// The plan on one line and the function on the next, as the numbers the
-// compiler's evaluator reads (`function_ir_spelled.hthr`).
-fn Optimized::spelled(self found: Optimized) → List<Nat> {
-    (match found.plan {
-        None => spell_text("None"),
-        Some(passes) => spell_call("Some", [spell_call("Pair", [
-            spell_call("Inlines", [spell_number(passes.fst.bound), passes.fst.sites.spelled()]),
-            spell_call("Pair", [passes.snd.fst.spelled(), passes.snd.snd.spelled()])])]),
-    })(spell_text("\n", found.function.spelled()([])))
 }

@@ -163,6 +163,15 @@ fn Stage::then<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Pair<P, Q
         })
 }
 
+// What two stages make in turn, the stage of both makes: a certificate
+// states each stage's step on a function as a statement of its own, and
+// this joins them.
+theorem Stage::then_made<P, Q>(self first: Stage<P>, second: Stage<Q>, callees: List<Function>, old, mid, new: Function, p: P, q: Q,
+    made: first.rewrite(callees, old, p) = Some(mid), after: second.rewrite(callees, mid, q) = Some(new)):
+    first.then(second).rewrite(callees, old, Pair(p, q)) = Some(new) {
+    trans(cong_fn<Option<Function>, Option<Function>>(λ o => o.and_then(λ m => second.rewrite(callees, m, q)), made), after)
+}
+
 // A stage that may leave a function as it is: no plan is the function
 // itself. A search that finds nothing for a function, or whose finding
 // something later refuses, falls back to this.

@@ -1,0 +1,193 @@
+// Probes of ranges as facts and of the search that learns them
+// (lib/native/function_ir/function_ir_replay.hthr, function_ir_rules.hthr,
+// function_ir_learn.hthr, docs/optimizer-design.md §5.1): a conditional
+// replaced by the arm its test is proved to take, what the replayer
+// refuses, the test the search puts at a function's entry and the plan it
+// finds past it, and a loop whose passes keep a range. Tests, not library:
+// nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_guard;
+import function_ir_learn;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn nodes(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), ns, Ports([]))) }
+
+// ---------------------------------------------------------------------------
+// The replayer: an arm taken by a proof
+
+// if i < 16 { j = 64 + i; if j < 128 { load } else { 0 } } else { 0 }
+fn inner_test() → StructuredRegion {
+    Compose(nodes([Const(64, 1, 16), UnsignedLessThan(64, 2, 0, 1)]),
+        Conditional(Ports([]), 2, Ports([]), Ports([Port(9, 64)]),
+            Compose(nodes([Const(64, 3, 64), Add(64, 4, 3, 0), Const(64, 5, 128), UnsignedLessThan(64, 6, 4, 5)]),
+                Conditional(Ports([]), 6, Ports([]), Ports([Port(9, 64)]), nodes([BufferLoad(9, 0, 4)]), nodes([Const(64, 9, 0)]))),
+            nodes([Const(64, 9, 0)])))
+}
+
+// In the arm where i < 16: i is at most 15 (`below_left`), so j is from 64
+// to 79 (`within_add`), which is below 128 (`below_yes`). The bit is
+// written after its comparison, for the lowering's bounds test to read,
+// and the conditional is its arm.
+fn inner_plan() → Plan {
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [1, 16]), Derive(9, [2, 0, 1, 15]), Derive(2, [3, 64]),
+        Derive(4, [4, 3, 0, 64, 64, 0, 15]), Derive(2, [5, 128]), Derive(7, [6, 4, 5, 79, 128]), Emit(Const(1, 6, 1))]), Arm(True, Same)), Same))
+}
+
+theorem inner_decided(): replay_region(rules(), inner_test(), Facts::none(), inner_plan()).map(λ r => r.region) = Some(
+    Compose(nodes([Const(64, 1, 16), UnsignedLessThan(64, 2, 0, 1)]),
+        Conditional(Ports([]), 2, Ports([]), Ports([Port(9, 64)]),
+            Compose(nodes([Const(64, 3, 64), Add(64, 4, 3, 0), Const(64, 5, 128), UnsignedLessThan(64, 6, 4, 5), Const(1, 6, 1)]),
+                nodes([BufferLoad(9, 0, 4)])),
+            nodes([Const(64, 9, 0)])))) { refl }
+
+// Not without the outer test's bound: the sum's rule asks for i's range.
+theorem unbounded(): replay_region(rules(), inner_test(), Facts::none(),
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [3, 64]), Derive(4, [4, 3, 0, 64, 64, 0, 15])]), Same), Same))).map(λ r => r.region) = None { refl }
+
+// Not an arm whose bit no fact gives.
+theorem unknown_arm(): replay_region(rules(), inner_test(), Facts::none(), Both(Nodes([]), Arm(True, Same))).map(λ r => r.region) = None { refl }
+
+// Not the other arm.
+theorem wrong_arm(): replay_region(rules(), inner_test(), Facts::none(),
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [1, 16]), Derive(9, [2, 0, 1, 15]), Derive(2, [3, 64]),
+        Derive(4, [4, 3, 0, 64, 64, 0, 15]), Derive(2, [5, 128]), Derive(7, [6, 4, 5, 79, 128])]), Arm(False, Same)), Same))).map(λ r => r.region) = None { refl }
+
+// A sum that may wrap has no range.
+theorem wraps(): replay(rules(), Facts::none(), [Const(64, 1, 18446744073709551615), Const(64, 2, 1), Add(64, 3, 1, 2)],
+    [Keep, Keep, Keep, Derive(2, [1, 18446744073709551615]), Derive(2, [2, 1]),
+        Derive(4, [3, 1, 2, 18446744073709551615, 18446744073709551615, 1, 1])]).map(λ r => r.nodes) = None { refl }
+
+// ---------------------------------------------------------------------------
+// The search: a test at the entry, and what is decided past it
+
+// Byte i and byte i + 8 of a span added, for i below 8, or zero. The
+// span's home is 0, its length 1, i is 2.
+fn pair_sum() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
+                Conditional(Ports([]), 5, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
+                        Conditional(Ports([]), 8, Ports([]), Ports([Port(13, 64)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)])),
+                            nodes([Const(64, 13, 0)])))),
+                    nodes([Const(64, 13, 0)]))),
+            nodes([Const(64, 13, 0)]))), 13, 1)
+}
+
+// Nothing is decided as the function stands: the length is any word.
+theorem pair_alone(): pair_sum().learn_plan().decided() = 0 { refl }
+
+// The largest index compared with the length is 15, so the search asks
+// whether the length is below 16.
+fn pair_guard() → Guard { Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15) }
+
+theorem pair_guarded(): pair_sum().guard() = Some(pair_guard()) { refl }
+
+// Where it is not, both comparisons with the length are decided: i is
+// below 8 and the length is at least 16 (`above_left`); i + 8 is at most
+// 15.
+fn pair_plan() → Plan {
+    Both(Nodes([Keep, Keep]), Arms(
+        Both(Nodes([Keep, Keep]), Arms(Both(Nodes([Keep]), Arms(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]),
+            Arms(Both(Nodes([Keep]), Nodes([Keep])), Nodes([Keep])))), Nodes([Keep]))), Nodes([Keep]))),
+        Both(Nodes([Keep, Keep]), Arms(
+            Both(Nodes([Keep, Derive(2, [14, 16]), Derive(11, [15, 1, 14, 16]), Derive(2, [3, 8]), Derive(9, [4, 2, 3, 7]),
+                    Derive(7, [5, 2, 1, 7, 16]), Emit(Const(1, 5, 1))]),
+                Arm(True, Both(Nodes([Keep]), Both(Nodes([Keep, Keep, Derive(4, [7, 2, 3, 0, 7, 8, 8]), Derive(7, [8, 7, 1, 15, 16]), Emit(Const(1, 8, 1))]),
+                    Arm(True, Both(Nodes([Keep]), Nodes([Keep]))))))),
+            Nodes([Keep])))))
+}
+
+theorem pair_learned(): pair_sum().guarded(pair_guard()).learn_plan() = pair_plan() { refl }
+theorem pair_decides(): pair_plan().decided() = 2 { refl }
+
+// The function the replayer makes of that plan: the arm for a short span
+// is the function as it was, and the other tests i alone.
+theorem pair_made(): replay_function(rules(), pair_sum().guarded(pair_guard()), pair_plan()) = Some(Function([0, 1, 2],
+    Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body,
+            Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+                Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
+                        Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1), Const(1, 8, 1)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
+                    nodes([Const(64, 13, 0)]))))), 13, 1)) { refl }
+
+// A length compared with nothing the function indexes by asks for no test.
+fn no_index() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 2, 8), UnsignedLessThan(64, 3, 1, 2)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(4, 64)]), nodes([Const(64, 4, 1)]), nodes([Const(64, 4, 0)]))), 4)
+}
+
+theorem no_guard(): no_index().guard() = None { refl }
+
+// ---------------------------------------------------------------------------
+// A loop keeps the range of a word its passes hand on unchanged
+
+// The first sixteen bytes of a span added. The loop's state is the home,
+// the length, i and the sum; a pass tests i < 16 and i < length.
+fn first16() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 2, 0), Const(64, 3, 0), Const(64, 9, 16)]),
+        Loop([0, 1, 2, 3], 9, [10, 11, 12, 13], 14,
+            Compose(nodes([UnsignedLessThan(64, 20, 14, 14), Const(64, 21, 16), UnsignedLessThan(64, 22, 12, 21)]),
+                Conditional(Ports([]), 22, Ports([]), Ports([Port(16, 64), Port(17, 64)]),
+                    Compose(nodes([UnsignedLessThan(64, 15, 12, 11)]),
+                        Conditional(Ports([]), 15, Ports([]), Ports([Port(16, 64), Port(17, 64)]),
+                            Compose(nodes([BufferLoad(18, 0, 12)]), nodes([Add(64, 16, 13, 18), Const(64, 19, 1), Add(64, 17, 12, 19)])),
+                            nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
+                    nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
+            20, [10, 11, 17, 16], [4, 5, 6, 7], 8)), 7, 1)
+}
+
+fn first_guard() → Guard { Guard(23, [Const(64, 23, 16), UnsignedLessThan(64, 24, 1, 23)], 24) }
+
+theorem first_guarded(): first16().guard() = Some(first_guard()) { refl }
+
+// Past the test the length is at least 16 before the loop, the loop's
+// second word is its own next, so it is at least 16 in every pass
+// (`Derived`: the range is proved where the loop starts).
+fn first_loop() → StructuredRegion {
+    Loop([0, 1, 2, 3], 9, [10, 11, 12, 13], 14,
+        Compose(nodes([UnsignedLessThan(64, 20, 14, 14), Const(64, 21, 16), UnsignedLessThan(64, 22, 12, 21)]),
+            Conditional(Ports([]), 22, Ports([]), Ports([Port(16, 64), Port(17, 64)]),
+                Compose(nodes([UnsignedLessThan(64, 15, 12, 11), Const(1, 15, 1)]),
+                    Compose(nodes([BufferLoad(18, 0, 12)]), nodes([Add(64, 16, 13, 18), Const(64, 19, 1), Add(64, 17, 12, 19)]))),
+                nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
+        20, [10, 11, 17, 16], [4, 5, 6, 7], 8)
+}
+
+theorem first_made(): replay_function(rules(), first16().guarded(first_guard()), first16().guarded(first_guard()).learn_plan()) =
+    Some(Function([0, 1], Compose(nodes([Const(64, 23, 16), UnsignedLessThan(64, 24, 1, 23)]),
+        Conditional(Ports([]), 24, Ports([]), Ports([Port(7, 64)]), first16().body,
+            Compose(nodes([Const(64, 2, 0), Const(64, 3, 0), Const(64, 9, 16)]), first_loop()))), 7, 1)) { refl }
+
+// A loop whose passes change that word keeps no range of it: the same
+// body's test is not decided where the next length is the sum.
+fn drifting() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 2, 0), Const(64, 3, 0), Const(64, 9, 16)]),
+        Loop([0, 1, 2, 3], 9, [10, 11, 12, 13], 14,
+            Compose(nodes([UnsignedLessThan(64, 20, 14, 14), Const(64, 21, 16), UnsignedLessThan(64, 22, 12, 21)]),
+                Conditional(Ports([]), 22, Ports([]), Ports([Port(16, 64), Port(17, 64)]),
+                    Compose(nodes([UnsignedLessThan(64, 15, 12, 11)]),
+                        Conditional(Ports([]), 15, Ports([]), Ports([Port(16, 64), Port(17, 64)]),
+                            Compose(nodes([BufferLoad(18, 0, 12)]), nodes([Add(64, 16, 13, 18), Const(64, 19, 1), Add(64, 17, 12, 19)])),
+                            nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
+                    nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
+            20, [10, 16, 17, 16], [4, 5, 6, 7], 8)), 7, 1)
+}
+
+theorem drifting_undecided(): drifting().guarded(first_guard()).learn_plan().decided() = 0 { refl }
+
+// And the replayer refuses the plan that decides it.
+theorem drifting_refused(): replay_function(rules(), drifting().guarded(first_guard()), first16().guarded(first_guard()).learn_plan()) = None { refl }

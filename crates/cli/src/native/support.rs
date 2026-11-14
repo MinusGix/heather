@@ -81,6 +81,8 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("bitvec_ring", include_str!("../../../../lib/std/bitvec/bitvec_ring.hthr")),
     ("function_ir_rules", include_str!("../../../../lib/native/function_ir/function_ir_rules.hthr")),
     ("function_ir_tidy", include_str!("../../../../lib/native/function_ir/function_ir_tidy.hthr")),
+    ("function_ir_guard", include_str!("../../../../lib/native/function_ir/function_ir_guard.hthr")),
+    ("function_ir_learn", include_str!("../../../../lib/native/function_ir/function_ir_learn.hthr")),
     ("function_ir_prune", include_str!("../../../../lib/native/function_ir/function_ir_prune.hthr")),
     ("function_ir_optimize", include_str!("../../../../lib/native/function_ir/function_ir_optimize.hthr")),
 ];

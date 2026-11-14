@@ -133,16 +133,37 @@ fn Live::add(self live: Live, id: Nat) → Live { Live(nat_map_set(live.by, id, 
 fn Live::add_all(self live: Live, ids: List<Nat>) → Live { match ids { Nil => live, Cons(id, rest) => live.add(id).add_all(rest) } }
 fn Live::add_ports(self live: Live, ports: Ports) → Live { live.add_all(ports.entries.map(λ (port: Port) => port.id)) }
 
+fn live_either(a, b: NatMap<Bool>) → NatMap<Bool> {
+    match a {
+        MEmpty => b,
+        MNode(here, even, odd) => match b {
+            MEmpty => a,
+            MNode(there, other_even, other_odd) => MNode(match here { None => there, Some(_) => here }, live_either(even, other_even), live_either(odd, other_odd)),
+        },
+    }
+}
+
+// What is read after a point on either of two paths from it.
+fn Live::either(self live: Live, other: Live) → Live { Live(live_either(live.by, other.by)) }
+
 record DeadSteps { steps: List<Step>, live: Live }
 
-// From the last node back: a node is dropped where it is no store and
-// nothing after it reads what it writes.
+// A bit's constant: what a decided comparison's bit is written as after it
+// (docs/optimizer-design.md §5.1). It says something of the node that
+// writes the bit, so it is kept, and so is that node.
+fn Node::says(self node: Node) → Bool { match node { Const(width, _, _) => width.same(1), _ => False } }
+
+// From the last node back: a node is dropped where it is no store, says
+// nothing of another, and nothing after it reads what it writes.
 fn dead_steps(nodes: List<Node>, live: Live) → DeadSteps {
     match nodes {
         Nil => DeadSteps(Nil, live),
-        Cons(node, rest) => shared(dead_steps(rest, live), λ later => match node.stores() || later.live.has(node_output(node).id) {
-            True => DeadSteps(Cons(Keep, later.steps), later.live.add_all(node.reads())),
-            False => DeadSteps(Cons(Drop, later.steps), later.live),
+        Cons(node, rest) => shared(dead_steps(rest, live), λ later => match node.says() {
+            True => DeadSteps(Cons(Keep, later.steps), later.live.add(node_output(node).id)),
+            False => match node.stores() || later.live.has(node_output(node).id) {
+                True => DeadSteps(Cons(Keep, later.steps), later.live.add_all(node.reads())),
+                False => DeadSteps(Cons(Drop, later.steps), later.live),
+            },
         }),
     }
 }
@@ -150,9 +171,11 @@ fn dead_steps(nodes: List<Node>, live: Live) → DeadSteps {
 record DeadPlan { plan: Plan, live: Live }
 
 // A plan that drops every such node, and what the region reads. An arm is
-// swept with what the other reads counted as read after it, and a loop's
-// body with what is read after the loop: more is kept than need be, never
-// less.
+// swept with what is read after the conditional, whatever the other arm
+// reads: under a test at a function's entry the two arms write the same
+// ids, and what one arm reads of them the other may not. A loop's body is
+// swept with what is read after the loop counted as read after a pass:
+// more is kept than need be, never less.
 fn StructuredRegion::dead_plan(self region: StructuredRegion, live: Live) → DeadPlan {
     match region {
         Dataflow(body) => shared(dead_steps(body.nodes, live.add_ports(body.outputs)), λ r => DeadPlan(Nodes(r.steps), r.live.add_ports(body.inputs))),
@@ -160,8 +183,9 @@ fn StructuredRegion::dead_plan(self region: StructuredRegion, live: Live) → De
             shared(dead_steps(prefix.nodes, c.live.add_ports(prefix.outputs)), λ r => DeadPlan(Then(r.steps, c.plan), r.live.add_ports(prefix.inputs)))),
         Compose(prefix, continuation) => shared(continuation.dead_plan(live), λ c =>
             shared(prefix.dead_plan(c.live), λ a => DeadPlan(Both(a.plan, c.plan), a.live))),
-        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => shared(when_true.dead_plan(live.add_ports(outputs)), λ a =>
-            shared(when_false.dead_plan(a.live), λ b => DeadPlan(Arms(a.plan, b.plan), b.live.add(condition).add_ports(inputs).add_ports(arguments)))),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => shared(live.add_ports(outputs), λ after =>
+            shared(when_true.dead_plan(after), λ a => shared(when_false.dead_plan(after), λ b =>
+                DeadPlan(Arms(a.plan, b.plan), a.live.either(b.live).add(condition).add_ports(inputs).add_ports(arguments))))),
         Call(_, arguments, _) => DeadPlan(Same, live.add_all(arguments)),
         Loop(inputs, bound, _, _, body, exit, next, _, _) => shared(body.dead_plan(live.add_all(Cons(exit, next))), λ b =>
             DeadPlan(Body(b.plan), b.live.add_all(Cons(bound, inputs)))),
