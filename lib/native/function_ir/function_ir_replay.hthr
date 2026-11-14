@@ -361,15 +361,48 @@ theorem Node::pure_runs(self node: Node, values: Valuation(), file: Buffers()): 
     }
 }
 
+// A byte read as a word is below 256.
+theorem byte_word_within(byte: BitVec(8)): Range(0, 255).Holds(byte_word(byte)) {
+    ⟨trivial, j(BitVec::ofNat_toNat_zero_extend(8, 56, byte), λ w _ => w.toNat() <= 255,
+        Nat::le_trans(BitVec::ofNat(byte.toNat(), n := 64).toNat(), byte.toNat(), 255, BitVec::toNat_ofNat_le(64, byte.toNat()),
+            BitVec::toNat_lt_pow(8, byte)))⟩
+}
+
+// The word a load or a store writes: a byte of a buffer.
+fn Node::byte_output(self node: Node) → Option<Nat> {
+    match node { BufferLoad(output, _, _) => Some(output), BufferStore(output, _, _, _) => Some(output), _ => None }
+}
+
+theorem Node::byte_output_within(self node: Node, values: Valuation(), before, after: Buffers(), output: Nat):
+    node.byte_output() = Some(output) → node.Runs(values, before, after) → Range(0, 255).Holds(values(64, output)) {
+    match node {
+        BufferLoad(o, buffer, index) => λ is ran => j(Option::some_inj(o, output, is), λ id _ => Range(0, 255).Holds(values(64, id)),
+            j(sym(ran.left), λ w _ => Range(0, 255).Holds(w), byte_word_within(buffer_byte(before, buffer, values(64, index).toNat())))),
+        BufferStore(o, buffer, index, _) => λ is ran => j(Option::some_inj(o, output, is), λ id _ => Range(0, 255).Holds(values(64, id)),
+            j(sym(ran.right), λ w _ => Range(0, 255).Holds(w), byte_word_within(buffer_byte(after, buffer, values(64, index).toNat())))),
+        _ => λ is _ => absurd(is),
+    }
+}
+
 // The facts after a node of the old body: its equation, where it touches
-// no buffer.
-fn Facts::learn(self facts: Facts, node: Node) → Facts { match node.pure() { True => facts.add(node), False => facts } }
+// no buffer, and of a load or a store that the word it writes is a byte.
+fn Facts::learn(self facts: Facts, node: Node) → Facts {
+    match node.pure() {
+        True => facts.add(node),
+        False => match node.byte_output() { None => facts, Some(output) => facts.bound(output, Range(0, 255)) },
+    }
+}
 
 theorem Facts::learn_hold(self facts: Facts, values: Valuation(), node: Node, before, after: Buffers(), held: facts.Hold(values),
     ran: node.Runs(values, before, after)): facts.learn(node).Hold(values) {
-    (match node.pure() as λ b => node.pure() = b → (match b { True => facts.add(node), False => facts }).Hold(values) {
+    (match node.pure() as λ b => node.pure() = b →
+        (match b { True => facts.add(node), False => match node.byte_output() { None => facts, Some(output) => facts.bound(output, Range(0, 255)) } }).Hold(values) {
         True => λ p => facts.add_hold(values, held, node, node.pure_holds(values, before, after, p, ran)),
-        False => λ _ => held,
+        False => λ _ => (match node.byte_output() as λ found => node.byte_output() = found →
+            (match found { None => facts, Some(output) => facts.bound(output, Range(0, 255)) }).Hold(values) {
+            None => λ _ => held,
+            Some(output) => λ is => facts.bound_hold(values, held, output, Range(0, 255), node.byte_output_within(values, before, after, output, is, ran)),
+        })(refl),
     })(refl)
 }
 

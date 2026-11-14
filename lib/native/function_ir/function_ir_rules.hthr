@@ -149,6 +149,62 @@ theorem within_narrow_sound(o, s, from, high: Nat, fits: Nat::pow(2, from).leb(S
     }
 }
 
+// A word narrowed and widened again is itself where it was within the
+// narrow width: the two resizes are a move.
+fn narrow_back(b, a, s, from, high: Nat) → Clause {
+    Clause([Is(Resize(64, from, a, s)), Is(Resize(from, 64, b, a)), Within(s, 0, high)], Is(Move(64, b, s)))
+}
+
+theorem narrow_back_sound(b, a, s, from, high: Nat, fits: Succ(high).leb(Nat::pow(2, from)) = True): narrow_back(b, a, s, from, high).Sound() {
+    λ values held => {
+        let x = values(64, s);
+        let below: (x.toNat() < Nat::pow(2, from)) = Nat::le_trans(Succ(x.toNat()), Succ(high), Nat::pow(2, from), held.right.right.left.right,
+            leb_below(Succ(high), Nat::pow(2, from), fits));
+        let narrow: (values(from, a).toNat() = x.toNat()) =
+            trans(cong_fn(λ (w: BitVec(from)) => w.toNat(), held.left), BitVec::toNat_ofNat(from, x.toNat(), below));
+        trans(held.right.left, trans(cong_fn(λ (n: Nat) => BitVec::ofNat(n, n := 64), narrow), BitVec::ofNat_toNat(64, x)))
+    }
+}
+
+// An or is at most its operands added, which is exact where they share no
+// bit: bytes joined by shifts stay within the word they make.
+fn within_or(o, l, r, a, b: Nat) → Clause {
+    Clause([Is(BitOr(64, o, l, r)), Within(l, 0, a), Within(r, 0, b)], Within(o, 0, a + b))
+}
+
+theorem within_or_sound(o, l, r, a, b: Nat): within_or(o, l, r, a, b).Sound() {
+    λ values held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let sum: (x.bor(y).toNat() <= a + b) = Nat::le_trans(x.bor(y).toNat(), x.toNat() + y.toNat(), a + b, BitVec::toNat_bor_le_add(64, x, y),
+            Nat::add_le_mono(x.toNat(), a, y.toNat(), b, held.right.left.right, held.right.right.left.right));
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= a + b), ⟨trivial, sum⟩)
+    }
+}
+
+// An and is at most either operand.
+fn within_and(o, l, r, a: Nat) → Clause { Clause([Is(BitAnd(64, o, l, r)), Within(l, 0, a)], Within(o, 0, a)) }
+
+theorem within_and_sound(o, l, r, a: Nat): within_and(o, l, r, a).Sound() {
+    λ values held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= a),
+            ⟨trivial, Nat::le_trans(x.band(y).toNat(), x.toNat(), a, BitVec::toNat_band_le_left(64, x, y), held.right.left.right)⟩)
+    }
+}
+
+fn within_and_right(o, l, r, b: Nat) → Clause { Clause([Is(BitAnd(64, o, l, r)), Within(r, 0, b)], Within(o, 0, b)) }
+
+theorem within_and_right_sound(o, l, r, b: Nat): within_and_right(o, l, r, b).Sound() {
+    λ values held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= b),
+            ⟨trivial, Nat::le_trans(x.band(y).toNat(), y.toNat(), b, BitVec::toNat_band_le_right(64, x, y), held.right.left.right)⟩)
+    }
+}
+
 // What an unsigned comparison's bit is, as a statement of its operands.
 theorem below_bit(values: Valuation(), c, l, r: Nat, holds: NodeHolds(values, UnsignedLessThan(64, c, l, r)), bit: Bool,
     is: values(1, c) = BitVec::ofBool(bit)): values(64, l).unsigned_lt_bit(values(64, r)) = bit {
@@ -311,5 +367,12 @@ fn rules() → List<Rule> {
         // 13
         Rule::when(always, λ n => or_clear_left(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_clear_left_sound(num(n, 0), num(n, 1), num(n, 2))),
         Rule::when(always, λ n => or_clear_right(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_clear_right_sound(num(n, 0), num(n, 1), num(n, 2))),
+        // 15
+        Rule::when(λ n => Succ(num(n, 4)).leb(Nat::pow(2, num(n, 3))), λ n => narrow_back(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n ok => narrow_back_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), ok)),
+        Rule::when(always, λ n => within_or(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n _ => within_or_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4))),
+        Rule::four(within_and, within_and_sound),
+        Rule::four(within_and_right, within_and_right_sound),
     ]
 }
