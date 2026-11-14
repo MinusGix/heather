@@ -223,6 +223,17 @@ fn nth_refuted({n: Nat}, v: [Nat; n], i: Nat) → Nat {
     if let Present(x) = v.nth(i) { x } else { let no: ¬(i < n) = known; 0 }
 }
 
+// Nested tests: each `if let` binds its own proof, so the inner one does
+// not hide the outer one from `known`, in the inner block or its `else`.
+fn nth_nested({n: Nat}, v: [Nat; n], i, k: Nat) → Nat {
+    if let Present(_) = v.nth(i) {
+        if let Present(_) = v.nth(k) { v.nth(i) + v.nth(k) } else { v.nth(i) }
+    } else { 0 }
+}
+theorem nth_nested_both(): nth_nested(small(), 0, 2) = 12 { refl }
+theorem nth_nested_outer(): nth_nested(small(), 1, 9) = 6 { refl }
+theorem nth_nested_none(): nth_nested(small(), 9, 0) = 0 { refl }
+
 // What follows from the condition is found by the arithmetic behind it.
 fn nth_before({n: Nat}, v: [Nat; n], i: Nat) → Nat {
     if let Present(x) = v.nth(i) { if h: 1 <= i { v.nth(i - 1) } else { x } } else { 0 }
@@ -271,11 +282,21 @@ fn written_tail({n: Nat}, v: [Nat; n]) → When<Nat, 0 < n> {
     Present(a + 1, known)
 }
 
+// A tail that is a `When` by its type, not by its spelling, is not
+// wrapped again: `?`'s continuation gives the helper's `When` as it is.
+fn tail_helper({n: Nat}, v: [Nat; n], a: Nat) → When<Nat, 1 < n> { v.nth(1) }
+fn tail_by_type({n: Nat}, v: [Nat; n]) → When<Nat, 1 < n> {
+    let a = v.nth(0)?;
+    tail_helper(v, a)
+}
+
 theorem first_two_lit(): first_two(small()).option() = Some(11) { refl }
 theorem first_two_short(): first_two([4]).is_present() = False { refl }
 theorem pair_sum_lit(): pair_sum(small(), 0, 2).option() = Some(12) { refl }
 theorem pair_sum_past(): pair_sum(small(), 0, 3).is_present() = False { refl }
 theorem written_tail_lit(): written_tail(small()).option() = Some(6) { refl }
+theorem tail_by_type_lit(): tail_by_type(small()).option() = Some(6) { refl }
+theorem tail_by_type_short(): tail_by_type([4]).is_present() = False { refl }
 theorem both_of_absent(h: True, n: ¬False): both_of(Present<Nat, True>(1, h), Absent<Nat, False>(n)).is_present() = False { refl }
 
 // ---------------------------------------------------------------------------

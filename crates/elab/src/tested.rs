@@ -126,6 +126,11 @@ fn when_arm(arms: &[heather_syntax::Arm]) -> Option<&str> {
     })
 }
 
+/// Is `ind` `logic::And`?
+fn is_and_ind(ind: &crate::inductive::Inductive) -> bool {
+    ind.name == "And" && ind.scope.module == "logic"
+}
+
 /// Is `ind` `when::When`?
 fn is_when_ind(ind: &crate::inductive::Inductive) -> bool {
     ind.name == "When" && ind.scope.module == "when"
@@ -332,8 +337,9 @@ impl Tested<'_> {
 
     /// A `match` on `When`'s constructors whose arms leave the proofs out
     /// (docs/when-design.md §5): `Present(x)` binds its proof as
-    /// `__when_holds`, and the `_` arm beside it (an `if let`'s `else`) is
-    /// `Absent`, binding the refutation as `__when_fails`. The names are
+    /// `__when_holds_N`, and the `_` arm beside it (an `if let`'s `else`) is
+    /// `Absent`, binding the refutation as `__when_fails_N`, with `N` the
+    /// scrutinee's place. The names are
     /// private, like `__if_bitN`, and visible to a tactic and to `known`.
     fn complete_arms(&self, e: &Expr) -> Option<Expr> {
         let ExprKind::Match { form, motive, scrut, arms, eqbind, generated } = &e.kind else { return None };
@@ -349,16 +355,19 @@ impl Tested<'_> {
             return None;
         }
         let bind = |name: &str, span: Span| heather_syntax::Pat::Var { name: name.to_string(), span };
+        // Suffixed by the scrutinee's place, as `?`'s are: a nested test's
+        // proof must not shadow an outer one, which `known` finds by name.
+        let (holds, fails) = (format!("__when_holds_{}", scrut.span.start), format!("__when_fails_{}", scrut.span.start));
         let arms = arms
             .iter()
             .map(|a| {
                 let mut a = a.clone();
                 if short(&a) {
-                    a.binders.push(bind("__when_holds", a.span));
+                    a.binders.push(bind(&holds, a.span));
                 } else if a.default && wild {
                     a.default = false;
                     a.ctor = "Absent".to_string();
-                    a.binders = vec![bind("__when_fails", a.span)];
+                    a.binders = vec![bind(&fails, a.span)];
                 }
                 a
             })
@@ -408,6 +417,9 @@ impl Tested<'_> {
     /// `When` is expected, or a `match` on `When`'s constructors whose
     /// scrutinee is a call.
     pub(crate) fn tested_check(&self, cx: &Cx, e: &Expr, expected: &Type) -> R<Option<(Cx, Expr)>> {
+        if let Some(value) = self.when_tail(cx, e) {
+            return Ok(Some((cx.clone(), value)));
+        }
         if matches!(&e.kind, ExprKind::Match { arms, .. } if when_arm(arms).is_some_and(|c| self.names_when(c))) {
             return self.tested_match(cx, e);
         }
@@ -418,6 +430,32 @@ impl Tested<'_> {
             return Ok(None);
         }
         self.tested(cx, e)
+    }
+}
+
+impl Tested<'_> {
+    /// A [`TAIL`] marker checked at the continuation's `When<U, Q>`: the
+    /// value as written when it is a `When` by its type, or when it does not
+    /// infer alone (a written `Present(x, known)` needs its expected type);
+    /// else `When::Present(value, known)`. The value is inferred once in a
+    /// probe and then checked, so only a `?`'s tail pays a second
+    /// elaboration.
+    fn when_tail(&self, cx: &Cx, e: &Expr) -> Option<Expr> {
+        let ExprKind::App { head, args, .. } = &e.kind else { return None };
+        let (ExprKind::Var(v), [value]) = (&head.kind, args.as_slice()) else { return None };
+        if v != TAIL {
+            return None;
+        }
+        let is_when = self.probe(|| self.elab_infer(cx, value).ok().map(|(_, ty, _)| self.is_when(cx, &ty)));
+        if is_when != Some(false) {
+            return Some(value.clone());
+        }
+        let span = value.span;
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span };
+        Some(Expr {
+            kind: ExprKind::App { head: Box::new(var("When::Present")), args: vec![value.clone(), var(KNOWN)], named: vec![], explicit: false, goal_oriented: false },
+            span,
+        })
     }
 }
 
@@ -443,7 +481,7 @@ impl Tested<'_> {
             };
             let Ok((_, ty, _)) = self.resolve_reading(cx, name, span) else { continue };
             let mut candidates = vec![var.clone()];
-            if goal_combinators::type_inductive(self, cx, &ty).is_some_and(|ind| ind.name == "And") {
+            if goal_combinators::type_inductive(self, cx, &ty).is_some_and(|ind| is_and_ind(&ind)) {
                 candidates.push(side("left"));
                 candidates.push(side("right"));
             }
@@ -458,7 +496,7 @@ impl Tested<'_> {
         }
         // A conjunction is found side by side: `?`'s stated condition is the
         // conjunction of what its tests proved.
-        if goal_combinators::type_inductive(self, cx, expected).is_some_and(|ind| ind.name == "And") {
+        if goal_combinators::type_inductive(self, cx, expected).is_some_and(|ind| is_and_ind(&ind)) {
             let pair = Expr {
                 kind: ExprKind::App {
                     head: Box::new(Expr { kind: ExprKind::Var("And".to_string()), span }),
@@ -504,14 +542,15 @@ fn tail(e: &Expr) -> &Expr {
     }
 }
 
-/// Is `e` already a `When`, as the walk writes or the writer did: a nested
-/// propagation, or `Present(…)`/`Absent(…)`.
-fn gives_when(e: &Expr) -> bool {
+/// Is `e`'s value a further `?`, which the walk itself makes a `When`?
+fn propagates(e: &Expr) -> bool {
     let ExprKind::App { head, .. } = &tail(e).kind else { return false };
-    let ExprKind::Var(name) = &head.kind else { return false };
-    let short = name.rsplit("::").next().unwrap_or(name);
-    name == PROPAGATE || short == "Present" || short == "Absent"
+    matches!(&head.kind, ExprKind::Var(name) if name == PROPAGATE)
 }
+
+/// `\0when-tail(e)`: a `?` continuation's value, made a `When` by its type
+/// when it is checked ([`Tested::when_tail`]).
+const TAIL: &str = "\0when-tail";
 
 impl Tested<'_> {
     /// `K[w?]` where a `When<U, Q>` is wanted (docs/when-design.md §6):
@@ -522,7 +561,8 @@ impl Tested<'_> {
     ///
     /// `w` is tested when it is a proof-taking call (§4). The continuation's
     /// value is wrapped as `Present(value, known)` unless it is a `When`
-    /// already (a further `?`, or a written `Present`/`Absent`); `known`
+    /// already, by its type (a further `?`, a written `Present`/`Absent`, a
+    /// call returning one: [`Self::when_tail`]); `known`
     /// finds `Q` from the proofs the `?`s bound, building a conjunction side
     /// by side, and `back: Q → P` from `q`.
     pub(crate) fn tested_propagation(&self, cx: &Cx, e: &Expr, expected: &Type) -> R<Option<(Cx, Expr)>> {
@@ -546,7 +586,7 @@ impl Tested<'_> {
             span,
         };
         let build = |wrap: bool| {
-            let body = if wrap { call("Present", vec![(**body).clone(), var(KNOWN)]) } else { (**body).clone() };
+            let body = if wrap { call(TAIL, vec![(**body).clone()]) } else { (**body).clone() };
             let mut binders = binders.clone();
             binders.push(LamBinder { name: holds.clone(), ty: None, implicit: false, span });
             let continuation = Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span };
@@ -559,7 +599,7 @@ impl Tested<'_> {
             };
             call("When::and_then", vec![input.clone(), continuation, back])
         };
-        Ok(Some((bound, build(!gives_when(body)))))
+        Ok(Some((bound, build(!propagates(body)))))
     }
 }
 
