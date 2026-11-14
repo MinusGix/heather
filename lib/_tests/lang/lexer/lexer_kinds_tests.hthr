@@ -1,0 +1,22 @@
+// The token kinds' table (`lib/lang/lexer/lexer_kinds.hthr`): what its two
+// checks answer where the table would be wrong. The theorems that it is
+// right are in the module.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import bitvec; import bool; import list; import logic; import nat; import option; import string; import utf8;
+import lexer_scan; import lexer_tokens; import lexer_kinds;
+
+// Numbered from anything but 1, the table is not numbered.
+theorem kinds_not_numbered_from_two(): TokenKind::numbered(TOKEN_KINDS, 2) = False { refl }
+
+// A spelling is a whole token of one kind: `<=` is not a `<`, `>>` from
+// the start is the shift and not a `>`, and `!=` is refused, so it spells
+// nothing.
+theorem cuts_lt_eq_is_not_lt(): TokenKind::cuts(KIND_LT, "<=") = False { refl }
+theorem cuts_shift_is_not_gt(): TokenKind::cuts(KIND_GT, ">>") = False { refl }
+theorem cuts_shift(): TokenKind::cuts(KIND_SHR, ">>") = True { refl }
+theorem cuts_not_equal_refused(): TokenKind::cuts(KIND_BANG, "!=") = False { refl }
+
+// A class has no spellings in the table, and `cuts` reads its tokens all
+// the same.
+theorem cuts_a_name(): TokenKind::cuts(KIND_IDENT, "abc") = True { refl }
+theorem cuts_a_name_and_more(): TokenKind::cuts(KIND_IDENT, "a b") = False { refl }

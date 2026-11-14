@@ -24,7 +24,9 @@ Tree-sitter, and verifies the fixed lexical inventory.
 
 When Heather gains a keyword or fixed symbol, update the Rust parser/lexer and
 `syntax-inventory.json` in the same change. The drift check will name whichever
-side is stale. CST productions remain hand-maintained in `grammar.js`; they
+side is stale. The fixed symbols are exactly the spellings of the token kinds'
+table, `TOKEN_KINDS` in `lib/lang/lexer/lexer_kinds.hthr` (read from the Rust
+`scripts/linked` generates from it, `crates/linked/generated/kinds.rs`). CST productions remain hand-maintained in `grammar.js`; they
 must not be generated mechanically from the recursive-descent parser.
 
 ## Release

@@ -524,11 +524,9 @@ theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(id
     }
 }
 
-theorem Env::with_own_words(self env: Env): env.with_words(env.words) = env { match env { Env(_, _, _) => refl } }
-
 theorem Target::held_placed(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), placed: t.Placed(env, m),
     slotted: t.homes.slotted(live).IsTrue(), rsp: read_gpr(Rsp, g) = t.frame()): t.Held(live, env, g, m) {
-    Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, sym(env.with_own_words())), ⟨λ i m2 =>
+    Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, refl), ⟨λ i m2 =>
         j(sym(t.homes.slotted_home(live, slotted, i, m2)), λ h _ => (match h {
             InSlot => env.words.get_or(i, 0),
             InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),

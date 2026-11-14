@@ -1,0 +1,53 @@
+import logic;
+import list;
+import vector;
+
+// A record is its fields rebuilt, by conversion. A record lowers to a Σ
+// spine — the nominal tag (an `sEq`, irrelevant), the fields, a closing
+// `Unit` (docs/inductive-tier0-lowering.md §3) — and the kernel has η at
+// all three (crates/kernel/DESIGN.md), so `R(r.a, r.b) ≡ r` for a neutral
+// `r` with no lemma and no `match`. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+
+record Feed { full: List<List<Nat>>, tail: List<Nat>, room: Nat }
+
+record Pt<A> { x: A, y: A }
+
+record Sized { n: Nat, v: [Nat; n] }
+
+record Boxed { f: Nat → Nat, n: Nat }
+
+theorem feed_rebuilt(f: Feed): Feed(f.full, f.tail, f.room) = f { refl }
+
+theorem feed_rebuilt_sym(f: Feed): f = Feed(f.full, f.tail, f.room) { refl }
+
+// An open type parameter.
+theorem pt_rebuilt<A>(p: Pt<A>): Pt(p.x, p.y) = p { refl }
+
+// A field whose type mentions an earlier field.
+theorem sized_rebuilt(s: Sized): Sized(s.n, s.v) = s { refl }
+
+// A function field, as itself and η-expanded.
+theorem boxed_rebuilt(b: Boxed): Boxed(b.f, b.n) = b { refl }
+theorem boxed_rebuilt_lam(b: Boxed): Boxed(λ k => b.f(k), b.n) = b { refl }
+
+// The prelude's `Mutated`, which `mut self` methods end in.
+theorem mutated_rebuilt<S, V>(m: Mutated<S, V>): Mutated(m.after, m.value) = m { refl }
+
+// A receiver headed by a call that does not reduce (a global, not a local).
+fn corner(n: Nat) → Pt<Nat> { match n { Zero => Pt(0, 1), Succ(k) => Pt(k, n) } }
+theorem call_rebuilt(n: Nat): Pt(corner(n).x, corner(n).y) = corner(n) { refl }
+
+// Under a function, and in a type: the rebuilt record and the record are
+// interchangeable wherever either is expected.
+fn room_of(f: Feed) → Nat { f.room }
+theorem under_call(f: Feed): room_of(Feed(f.full, f.tail, f.room)) = room_of(f) { refl }
+
+fn Level(p: Pt<Nat>) → Type { p.x = p.y }
+fn level_of(p: Pt<Nat>, h: Level(p)) → Level(p) { h }
+fn rebuilt_in_type(p: Pt<Nat>, h: Level(Pt(p.x, p.y))) → Level(p) { level_of(p, h) }
+fn rebuilt_in_argument(p: Pt<Nat>, h: Level(p)) → Level(Pt(p.x, p.y)) { level_of(Pt(p.x, p.y), h) }
+
+// Negative control: η rebuilds the fields in place, not in any order.
+// expect-error(kernel): NotConvertible
+theorem swapped(p: Pt<Nat>): Pt(p.y, p.x) = p { refl }
