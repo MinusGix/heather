@@ -191,6 +191,92 @@ theorem word_load_result<M>(load: WordLoad, word: BitVec(64), before: MachineSta
     read_gpr(load.destination, word_load_after(load, word, before).gprs) = word {
     read_gpr_after_write(load.destination, word, before.gprs)
 }
+// Normal-path MOV r32, dword [base] (Intel SDM Vol. 2B, MOV: 8B /r without
+// REX.W), over the word load's ModRM/SIB/displacement subset. Its four
+// bytes are read low first, and the 32-bit destination's upper half is
+// cleared (Vol. 1 §3.4.1.1: a 32-bit operand's result is zero-extended into
+// the 64-bit register). A REX without W is always written, as the byte
+// store's is, so the length depends only on the base.
+record DwordLoad { destination: Gpr, base: Gpr }
+
+fn dword_load_bytes(load: DwordLoad) → List<BitVec(8)> {
+    List::append<BitVec(8)>([rex_plain_rr(load.base, load.destination), BitVec::ofNat(0x8b),
+        byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
+            gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
+            byte_load_displaced(load.base), False)],
+        List::append<BitVec(8)>(
+            match byte_load_sib(load.base) { True => [BitVec::ofNat(0x24)], False => [] },
+            match byte_load_displaced(load.base) { True => [BitVec::ofNat(0)], False => [] }))
+}
+fn dword_of_reads(o0, o1, o2, o3: Option<BitVec(8)>) → Option<BitVec(32)> {
+    match o0 { None => None, Some(b0) => match o1 { None => None, Some(b1) => match o2 { None => None, Some(b2) =>
+    match o3 { None => None, Some(b3) => Some(imm32_from_bytes(b0, b1, b2, b3)) } } } }
+}
+fn read_dword<M>(access: ByteReadAccess<M>, memory: M, address: BitVec(64)) → Option<BitVec(32)> {
+    dword_of_reads(access.read(memory, address), access.read(memory, next_rip(address, 1)),
+        access.read(memory, next_rip(address, 2)), access.read(memory, next_rip(address, 3)))
+}
+// Four bytes present read as their doubleword.
+theorem dword_of_four(o0, o1, o2, o3: Option<BitVec(8)>, b0, b1, b2, b3: BitVec(8),
+    e0: o0 = Some(b0), e1: o1 = Some(b1), e2: o2 = Some(b2), e3: o3 = Some(b3)):
+    dword_of_reads(o0, o1, o2, o3) = Some(imm32_from_bytes(b0, b1, b2, b3)) {
+    let goal = Some(imm32_from_bytes(b0, b1, b2, b3));
+    j(sym(e0), λ x _ => dword_of_reads(x, o1, o2, o3) = goal,
+    j(sym(e1), λ x _ => dword_of_reads(Some(b0), x, o2, o3) = goal,
+    j(sym(e2), λ x _ => dword_of_reads(Some(b0), Some(b1), x, o3) = goal,
+    j(sym(e3), λ x _ => dword_of_reads(Some(b0), Some(b1), Some(b2), x) = goal, refl))))
+}
+fn dword_load_after<M>(load: DwordLoad, dword: BitVec(32), before: MachineState<M>) → MachineState<M> {
+    MachineState(gprs := write_gpr(load.destination, dword.zero_extend(32), before.gprs),
+        flags := before.flags, rip := next_rip(before.rip, dword_load_bytes(load).len()), memory := before.memory)
+}
+// All four bytes lie below the canonical boundary, so none wraps.
+record DwordLoadStep<M>(access: ByteReadAccess<M>, load: DwordLoad, dword: BitVec(32),
+    before, after: MachineState<M>) {
+    canonical: read_gpr(load.base, before.gprs).toNat() + 4 <= Nat::pow(2, 47),
+    present: read_dword(access, before.memory, read_gpr(load.base, before.gprs)) = Some(dword),
+    execution: after = dword_load_after(load, dword, before),
+}
+
+theorem dword_load_same<M>(access: ByteReadAccess<M>, load: DwordLoad,
+    before, first, second: MachineState<M>, left, right: BitVec(32),
+    left_step: DwordLoadStep<M>(access, load, left, before, first),
+    right_step: DwordLoadStep<M>(access, load, right, before, second)):
+    first = second {
+    let dword = Option::some_inj(left, right, trans(sym(left_step.present), right_step.present));
+    trans(left_step.execution,
+        trans(cong_fn(λ value => dword_load_after(load, value, before), dword), sym(right_step.execution)))
+}
+
+evidence theorem dword_load_after_respects_defined<M>({load: DwordLoad}, {dword: BitVec(32)}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, dword_load_after<M>(load, dword)) {
+    same_defined_respects(dword_load_after<M>(load, dword), λ state => refl)
+}
+
+theorem dword_load_respects_defined<M>(access: ByteReadAccess<M>, load: DwordLoad,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    left_dword, right_dword: BitVec(32), before_same: SameDefinedState<M>(before_left, before_right),
+    left: DwordLoadStep<M>(access, load, left_dword, before_left, after_left),
+    right: DwordLoadStep<M>(access, load, right_dword, before_right, after_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), SameDefinedState::gprs(before_same));
+    let read_same = trans(
+        cong_fn(λ (memory: M) => read_dword(access, memory, read_gpr(load.base, before_left.gprs)), SameDefinedState::memory(before_same)),
+        cong_fn(λ (at: BitVec(64)) => read_dword(access, before_right.memory, at), address));
+    let dword = Option::some_inj(left_dword, right_dword, trans(sym(left.present), trans(read_same, right.present)));
+    calc {
+        after_left ≈ dword_load_after(load, left_dword, before_left) := SameDefinedState::of_equal(left.execution),
+        ≈ dword_load_after(load, left_dword, before_right) := rel_cong(before_same),
+        ≈ dword_load_after(load, right_dword, before_right) :=
+            SameDefinedState::of_equal(cong_fn(λ value => dword_load_after(load, value, before_right), dword)),
+        ≈ after_right := SameDefinedState::of_equal(sym(right.execution)),
+    }
+}
+
+theorem dword_load_result<M>(load: DwordLoad, dword: BitVec(32), before: MachineState<M>):
+    read_gpr(load.destination, dword_load_after(load, dword, before).gprs) = dword.zero_extend(32) {
+    read_gpr_after_write(load.destination, dword.zero_extend(32), before.gprs)
+}
 // Normal-path MOV r64, qword [base + index*8] (REX.W 8B /r, ModRM mod 00
 // r/m 100, SIB scale 11): the word at entry `index` of a table of words at
 // `base`, as a constant table is read (issues/rt-fixed-arrays-and-tables.md).

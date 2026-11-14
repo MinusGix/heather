@@ -43,33 +43,48 @@ fn word_bytes(value: BitVec(64)) → List<BitVec(8)> {
 // register is encodable (SIL and DIL need one; AH to BH are never meant).
 record ByteStore { base: Gpr, source: Gpr }
 
-fn rex_plain_rr(rm, reg: Gpr) → BitVec(8) {
-    byte_from_fields(gpr_extended(rm), False, gpr_extended(reg), False, False, False, True, False)
-}
 fn byte_store_bytes(store: ByteStore) → List<BitVec(8)> {
     [rex_plain_rr(store.base, store.source), BitVec::ofNat(0x88),
      byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
         gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False)]
 }
 
+// MOV dword [base], source (89 /r without REX.W, Intel SDM Vol. 2B, MOV):
+// the source's low four bytes, low first. Its REX is always written, as
+// the byte store's is, so it is three bytes for every register.
+record DwordStore { base: Gpr, source: Gpr }
+
+fn dword_store_bytes(store: DwordStore) → List<BitVec(8)> {
+    [rex_plain_rr(store.base, store.source), BitVec::ofNat(0x89),
+     byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
+        gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False)]
+}
+
+// The bytes a word's low half occupies in memory, low first.
+fn dword_bytes(value: BitVec(64)) → List<BitVec(8)> {
+    [imm_byte0(value), imm_byte1(value), imm_byte2(value), imm_byte3(value)]
+}
+
 inductive MemoryStore {
     StoreWord(store: WordStore),
     StoreByte(store: ByteStore),
+    StoreDword(store: DwordStore),
 }
 fn memory_store_bytes(store: MemoryStore) → List<BitVec(8)> {
-    match store { StoreWord(word) => word_store_bytes(word), StoreByte(byte) => byte_store_bytes(byte) }
+    match store { StoreWord(word) => word_store_bytes(word), StoreByte(byte) => byte_store_bytes(byte), StoreDword(dword) => dword_store_bytes(dword) }
 }
 fn memory_store_base(store: MemoryStore) → Gpr {
-    match store { StoreWord(word) => word.base, StoreByte(byte) => byte.base }
+    match store { StoreWord(word) => word.base, StoreByte(byte) => byte.base, StoreDword(dword) => dword.base }
 }
 fn memory_store_width(store: MemoryStore) → Nat {
-    match store { StoreWord(_) => 8, StoreByte(_) => 1 }
+    match store { StoreWord(_) => 8, StoreByte(_) => 1, StoreDword(_) => 4 }
 }
 // What a store writes: the source's eight bytes, or its low one.
 fn memory_store_data(store: MemoryStore, gprs: Gprs) → List<BitVec(8)> {
     match store {
         StoreWord(word) => word_bytes(read_gpr(word.source, gprs)),
         StoreByte(byte) => [imm_byte0(read_gpr(byte.source, gprs))],
+        StoreDword(dword) => dword_bytes(read_gpr(dword.source, gprs)),
     }
 }
 
@@ -87,6 +102,9 @@ fn word_store_after<M>(writes: ByteWrites<M>, store: WordStore, before: MachineS
 }
 fn byte_store_after<M>(writes: ByteWrites<M>, store: ByteStore, before: MachineState<M>) → MachineState<M> {
     memory_store_after(writes, StoreByte(store), before)
+}
+fn dword_store_after<M>(writes: ByteWrites<M>, store: DwordStore, before: MachineState<M>) → MachineState<M> {
+    memory_store_after(writes, StoreDword(store), before)
 }
 
 evidence theorem memory_store_respects_defined<M>({writes: ByteWrites<M>}, {store: MemoryStore}):
@@ -145,4 +163,12 @@ theorem byte_store_step<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>, store: 
     writable: writes.writable(before.memory, read_gpr(store.base, before.gprs), 1)):
     StoreStep(fetch, writes, before, byte_store_after(writes, store, before)) {
     Exists(StoreByte(store), ⟨plain, ⟨fetched, ⟨writable, refl⟩⟩⟩)
+}
+
+theorem dword_store_step<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>, store: DwordStore, before: MachineState<M>,
+    plain: store_base_plain(store.base) = True,
+    fetched: FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, dword_store_bytes(store))),
+    writable: writes.writable(before.memory, read_gpr(store.base, before.gprs), 4)):
+    StoreStep(fetch, writes, before, dword_store_after(writes, store, before)) {
+    Exists(StoreDword(store), ⟨plain, ⟨fetched, ⟨writable, refl⟩⟩⟩)
 }

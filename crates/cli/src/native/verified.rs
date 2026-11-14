@@ -1466,6 +1466,7 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                             let op = *["OpShl", "OpShr", "OpSar"].get(take()? as usize).ok_or_else(bad)?;
                             format!("ShiftImm({op}, {}, {})", gpr(take()?)?, word(8, take()?))
                         }
+                        16 => format!("Bswap32({})", gpr(take()?)?),
                         _ => return Err(bad()),
                     };
                     instructions.push(instruction);

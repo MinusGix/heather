@@ -657,6 +657,52 @@ theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fit
 }
 
 // ---------------------------------------------------------------------------
+// A doubleword read and stored
+
+// MOV r32, [base] and MOV [base], r32 as pieces: neither needs its own
+// `Asm` item, since what a run over one does is the theorem below.
+fn asm_dword_load(load: DwordLoad) → Asm { Piece(dword_load_bytes(load), dword_load_bytes(load).len(), refl) }
+fn asm_dword_store(store: DwordStore) → Asm { Piece(dword_store_bytes(store), 3, refl) }
+
+// The doubleword load at a label: the four bytes at the base read low
+// first, below the canonical boundary, the destination's upper half cleared.
+theorem Site::moves_dword_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: DwordLoad, at: asm_back(site.program, k) = At(before, name, asm_dword_load(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(32)>(λ dword =>
+        (read_gpr(load.base, s.gprs).toNat() + 4 <= Nat::pow(2, 47)) ∧
+        ((read_dword(site.data, s.memory, read_gpr(load.base, s.gprs)) = Some(dword)) ∧ post(dword_load_after(load, dword, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + dword_load_bytes(load).len(), pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = dword_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitDwordLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, asm_dword_load(load), at, here),
+             Exists(found.witness, DwordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), dword_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// A register's low four bytes stored at a label, through a plain base, to
+// four writable bytes that keep the code.
+theorem Site::moves_dword_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: DwordStore, at: asm_back(site.program, k) = At(before, name, asm_dword_store(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 4) ∧
+        (site.Resident(dword_store_after(writes, store, s).memory) ∧ post(dword_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds, resident);
+        let after = dword_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(dword_store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, asm_dword_store(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Calls
 
 // A function at offset `entry`: entered with the stack pointer at offset `i`
