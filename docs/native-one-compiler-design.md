@@ -883,11 +883,14 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
     which the function compiler would refuse later with less to say.
   - *A call of a function that writes and is not in the table.*
   - *Another computation called last, directly.* The body's end would
-    be the callee's record, not a record of its `.after` and `.value`,
-    and the kernel has no η for records, so the pin could not be a
-    conversion. Calling it and returning its word is the spelling that
-    reflects; only the self-call is direct, because the recursor's `ih`
-    is what the continuation of `tail_sem` stands for.
+    be the callee's record, not a record of its `.after` and `.value`.
+    This was refused on the belief that the kernel has no η for records;
+    it has (a record is a Σ spine, `lib/_tests/lang/record_eta_tests.hthr`),
+    so `Mutated(c.after, c.value) ≡ c` and the pin can be a conversion
+    (issues/reflect-tail-call-of-computation.md). Calling it and returning
+    its word is the spelling that reflects today; only the self-call is
+    direct, because the recursor's `ih` is what the continuation of
+    `tail_sem` stands for.
 
 - *A loop is the measured recursion, with the file carried.* A writing
   loop is a method that calls itself last (`raise_from` at `i + 1`); the

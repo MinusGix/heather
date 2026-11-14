@@ -125,6 +125,16 @@ property of Heather.
   `evidence theorem`. Not reached yet:
   a goal a named `match h: test` left unfolded past its `≈`, which is
   restated in a one-step `calc` ([[case-split-unfolds-the-goals-relation]]).
+- **A record is its fields rebuilt, by conversion: write no `T::eta`.**
+  `R(r.a, r.b) = r` is `refl` for a neutral `r`, at an open type
+  parameter, a dependent or function-valued field, a receiver headed by a
+  call, and in any type that mentions either side: a record lowers to the
+  Σ spine of its tag, fields and `Unit` (`docs/inductive-tier0-lowering.md`
+  §3), and the kernel has η at all three. A `match r { R(_, _) => refl }`
+  lemma, or a `cong_fn` that only rebuilds a record, is a step to delete
+  (`lib/_tests/lang/record_eta_tests.hthr`). The same η makes a state
+  record a fine induction variable: quantify over the record, not over its
+  fields.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
@@ -327,7 +337,8 @@ Not diagnosed well yet:
   fire.
 - `scripts/fmt` on new or edited `.hthr` files.
 - New surface syntax: `scripts/check-tree-sitter`, and new lexer symbols in
-  tree-sitter-heather/syntax-inventory.json.
+  tree-sitter-heather/syntax-inventory.json and the token kinds' table
+  (`lib/lang/lexer/lexer_kinds.hthr`, `crates/linked/CLAUDE.md`).
 
 ## 7. Measuring a proof's cost
 

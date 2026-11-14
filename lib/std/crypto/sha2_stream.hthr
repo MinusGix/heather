@@ -459,8 +459,6 @@ theorem Sha2Feed::message_bytes(bs: List<u8>): (f: Sha2Feed) → f.bytes(bs).mes
     }
 }
 
-theorem Sha2Feed::eta(self f: Sha2Feed): Sha2Feed(f.full, f.tail, f.room) = f { match f { Sha2Feed(_, _, _) => refl } }
-
 // A count's low six bits are how many bytes its block holds.
 theorem Sha2::fill_of_count(count: u64, q, r: Nat, counted: count = BitVec::ofNat(64 * q + r), below: r < 64): (count & 63).toNat() = r {
     let n = 64 * q + r;

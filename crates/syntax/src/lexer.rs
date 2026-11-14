@@ -589,10 +589,20 @@ pub fn lex_rust(src: &str) -> Result<Vec<Tok>, LexError> {
 /// (`issues/self-lexer-linked.md`).
 pub type Scan = fn(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)>;
 
+/// A token's kind as a scanner numbers it: `crates/linked/generated/kinds.rs`,
+/// which `scripts/linked` writes from the table `TOKEN_KINDS` of
+/// `lib/lang/lexer/lexer_kinds.hthr`, and which `heather_linked::scanner::Kind`
+/// is too. A file and not a dependency: this crate does not depend on the
+/// linked one ([`Scan`]).
+pub mod scan_kind {
+    include!("../../linked/generated/kinds.rs");
+}
+pub use scan_kind::Kind as ScanKind;
+
 /// The code [`Scan`] gives whitespace.
-pub const SCAN_SPACE: u64 = 67;
+pub const SCAN_SPACE: u64 = ScanKind::Space.code();
 /// The code [`Scan`] gives a comment.
-pub const SCAN_COMMENT: u64 = 68;
+pub const SCAN_COMMENT: u64 = ScanKind::Comment.code();
 
 static SCANNER: std::sync::OnceLock<Scan> = std::sync::OnceLock::new();
 
@@ -645,29 +655,44 @@ pub fn lex_while_scanned(scan: Scan, src: &str, keep: impl FnMut(&Tok) -> bool) 
     toks
 }
 
-/// The code a scanner gives a token of this kind: `lexer_scan.hthr`'s
-/// `KIND_*` constants, which `heather_linked::scanner::Kind` also numbers
-/// (`crates/linked/tests/scanner.rs` holds the three to each other).
-#[rustfmt::skip]
+/// The code a scanner gives a token of this kind: its [`ScanKind`]'s.
 pub fn scan_code(kind: &TokKind) -> u64 {
-    match kind {
-        TokKind::Ident(_) => 1, TokKind::Num(_) | TokKind::SuffixedNum(..) => 2, TokKind::Scaled(_) => 3, TokKind::Char(_) => 4,
-        TokKind::Str(_) => 5, TokKind::ArgSlot(_) => 6, TokKind::Hole(_) => 7, TokKind::LParen => 8,
-        TokKind::RParen => 9, TokKind::LBrace => 10, TokKind::RBrace => 11, TokKind::Comma => 12,
-        TokKind::Colon => 13, TokKind::Semi => 14, TokKind::At => 15, TokKind::Dot => 16,
-        TokKind::Plus => 17, TokKind::Minus => 18, TokKind::Bang => 19, TokKind::PlusPlus => 20,
-        TokKind::Star => 21, TokKind::Lt => 22, TokKind::LtEq => 23, TokKind::Gt => 24,
-        TokKind::LBracket => 25, TokKind::RBracket => 26, TokKind::LSemantic => 27, TokKind::RSemantic => 28,
-        TokKind::LAngle => 29, TokKind::RAngle => 30, TokKind::Pipe => 31, TokKind::Amp => 32,
-        TokKind::Slash => 33, TokKind::Percent => 34, TokKind::Shl => 35, TokKind::Shr => 36,
-        TokKind::Arrow => 37, TokKind::FatArrow => 38, TokKind::Turnstile => 39, TokKind::AmpAmp => 40,
-        TokKind::PipePipe => 41, TokKind::NormBar => 42, TokKind::Bullet => 43, TokKind::Approx => 44,
-        TokKind::Caret => 45, TokKind::SupInverse => 46, TokKind::Join => 47, TokKind::Meet => 48,
-        TokKind::Neg => 49, TokKind::Wedge => 50, TokKind::Vee => 51, TokKind::Iff => 52,
-        TokKind::LArrow => 53, TokKind::Exists => 54, TokKind::BigSum => 55, TokKind::BigProd => 56,
-        TokKind::UpArrow => 57, TokKind::Forall => 58, TokKind::Dollar => 59, TokKind::Lambda => 60,
-        TokKind::Eq => 61, TokKind::Ne => 62, TokKind::EqEq => 63, TokKind::ColonEq => 64,
-        TokKind::ColonColon => 65, TokKind::Eof => 66, TokKind::OPlus => 69, TokKind::Tilde => 70,
+    kind.scan_kind().code()
+}
+
+impl TokKind {
+    /// The kind a scanner cuts this token as. The numbering is the
+    /// generated [`ScanKind`]'s, so this names kinds and never numbers them;
+    /// that every [`ScanKind`] but the two a lexer drops is some token's is
+    /// `crates/linked/tests/scanner.rs`.
+    #[rustfmt::skip]
+    pub fn scan_kind(&self) -> ScanKind {
+        match self {
+            TokKind::Ident(_) => ScanKind::Ident, TokKind::Num(_) | TokKind::SuffixedNum(..) => ScanKind::Num,
+            TokKind::Scaled(_) => ScanKind::Scaled, TokKind::Char(_) => ScanKind::Char, TokKind::Str(_) => ScanKind::Str,
+            TokKind::ArgSlot(_) => ScanKind::ArgSlot, TokKind::Hole(_) => ScanKind::Hole, TokKind::LParen => ScanKind::LParen,
+            TokKind::RParen => ScanKind::RParen, TokKind::LBrace => ScanKind::LBrace, TokKind::RBrace => ScanKind::RBrace,
+            TokKind::Comma => ScanKind::Comma, TokKind::Colon => ScanKind::Colon, TokKind::Semi => ScanKind::Semi,
+            TokKind::At => ScanKind::At, TokKind::Dot => ScanKind::Dot, TokKind::Plus => ScanKind::Plus,
+            TokKind::Minus => ScanKind::Minus, TokKind::Bang => ScanKind::Bang, TokKind::PlusPlus => ScanKind::PlusPlus,
+            TokKind::Star => ScanKind::Star, TokKind::Lt => ScanKind::Lt, TokKind::LtEq => ScanKind::LtEq,
+            TokKind::Gt => ScanKind::Gt, TokKind::LBracket => ScanKind::LBracket, TokKind::RBracket => ScanKind::RBracket,
+            TokKind::LSemantic => ScanKind::LSemantic, TokKind::RSemantic => ScanKind::RSemantic,
+            TokKind::LAngle => ScanKind::LAngle, TokKind::RAngle => ScanKind::RAngle, TokKind::Pipe => ScanKind::Pipe,
+            TokKind::Amp => ScanKind::Amp, TokKind::Slash => ScanKind::Slash, TokKind::Percent => ScanKind::Percent,
+            TokKind::Shl => ScanKind::Shl, TokKind::Shr => ScanKind::Shr, TokKind::Arrow => ScanKind::Arrow,
+            TokKind::FatArrow => ScanKind::FatArrow, TokKind::Turnstile => ScanKind::Turnstile,
+            TokKind::AmpAmp => ScanKind::AmpAmp, TokKind::PipePipe => ScanKind::PipePipe, TokKind::NormBar => ScanKind::NormBar,
+            TokKind::Bullet => ScanKind::Bullet, TokKind::Approx => ScanKind::Approx, TokKind::Caret => ScanKind::Caret,
+            TokKind::SupInverse => ScanKind::SupInverse, TokKind::Join => ScanKind::Join, TokKind::Meet => ScanKind::Meet,
+            TokKind::Neg => ScanKind::Neg, TokKind::Wedge => ScanKind::Wedge, TokKind::Vee => ScanKind::Vee,
+            TokKind::Iff => ScanKind::Iff, TokKind::LArrow => ScanKind::LArrow, TokKind::Exists => ScanKind::Exists,
+            TokKind::BigSum => ScanKind::BigSum, TokKind::BigProd => ScanKind::BigProd, TokKind::UpArrow => ScanKind::UpArrow,
+            TokKind::Forall => ScanKind::Forall, TokKind::Dollar => ScanKind::Dollar, TokKind::Lambda => ScanKind::Lambda,
+            TokKind::Eq => ScanKind::Eq, TokKind::Ne => ScanKind::Ne, TokKind::EqEq => ScanKind::EqEq,
+            TokKind::ColonEq => ScanKind::ColonEq, TokKind::ColonColon => ScanKind::ColonColon, TokKind::Eof => ScanKind::Eof,
+            TokKind::OPlus => ScanKind::OPlus, TokKind::Tilde => ScanKind::Tilde,
+        }
     }
 }
 

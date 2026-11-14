@@ -1,8 +1,8 @@
 // Probes of conditions taken squashed (docs/strict-conditions-design.md):
 // two calls that differ only in a squashed proof are equal by `refl`, a
 // proof of `P` is accepted where `∥P∥` is expected, and a `decreases`
-// body whose found proofs are squashed keeps its unfolding equation without
-// lifting them. Tests, not library: nothing outside lib/_tests imports
+// body whose found proofs are squashed keeps its unfolding equation whether
+// or not they are lifted. Tests, not library: nothing outside lib/_tests imports
 // this module.
 import vector;
 import bitvec;
@@ -56,8 +56,10 @@ fn word_at_twice({n: Nat}, v: [u32; n], i: u64, inside: ∥i.toNat() < n∥) →
 // `decreases` bodies (issues/found-proof-differs-across-recursion-companions.md)
 
 // The issue's reproduction, a read at `j + 14` stored at `j + 16`, with
-// both conditions squashed: each companion finds its own proofs, and
-// nothing is lifted.
+// both conditions squashed. The proofs are lifted (`squashed_spread#found_N`),
+// which the equation no longer needs: it is so that the search runs once
+// and not at every copy of the body the companions spell
+// (issues/squashed-found-proof-searched-per-copy.md).
 fn squashed_spread(v: [u32; 64], j: u64) → [u32; 64]
     decreases (48 - j).toNat() {
     if h: j < 48 { squashed_spread(word_put(v, j + 16, word_at(v, j + 14)), j + 1) } else { v }
@@ -65,6 +67,19 @@ fn squashed_spread(v: [u32; 64], j: u64) → [u32; 64]
 theorem squashed_spread_unfolds(v: [u32; 64], j: u64):
     squashed_spread(v, j) = (if h: j < 48 { squashed_spread(word_put(v, j + 16, word_at(v, j + 14)), j + 1) } else { v })
 { squashed_spread::unfold(v, j) }
+
+// The same with squashed conditions whose default is a block, which the
+// lifting does not know: each companion finds its own proofs, nothing is
+// lifted, and the equation holds because squashed proofs convert.
+fn block_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: ∥i.toNat() < n∥ := { bv_omega }) → BitVec(w) { word_at(v, i, inside := inside) }
+fn block_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: ∥i.toNat() < n∥ := { bv_omega }) → [A; n] { word_put(v, i, a, inside := inside) }
+fn block_spread(v: [u32; 64], j: u64) → [u32; 64]
+    decreases (48 - j).toNat() {
+    if h: j < 48 { block_spread(block_put(v, j + 16, block_at(v, j + 14)), j + 1) } else { v }
+}
+theorem block_spread_unfolds(v: [u32; 64], j: u64):
+    block_spread(v, j) = (if h: j < 48 { block_spread(block_put(v, j + 16, block_at(v, j + 14)), j + 1) } else { v })
+{ block_spread_unfold(v, j) }
 
 // Negative control: relevant conditions whose default is not a context
 // search the lifting knows (a block), so nothing is lifted, and the

@@ -124,8 +124,6 @@ theorem Function::relabel_run(self function: Function, call: Writers(), links: N
 // ---------------------------------------------------------------------------
 // A function that only reads, run among functions that write
 
-theorem Ending::eta(self e: Ending): Ending(e.word, e.buffers) = e { match e { Ending(_, _) => refl } }
-
 // Calls that fit a table are of the functions the table names.
 theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: Nat → Option<Nat>, among: Nat → Bool,
     named: (k: Nat) → (n: Nat) → arity_fits(arity(k), n).IsTrue() → among(k).IsTrue()):
@@ -160,7 +158,7 @@ theorem Function::run_still(self function: Function, call: Writers(), buffers: B
     cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
         function.body.run_quiet_among(call, Writers::words(call, buffers), buffers, among,
             λ f ok words => j(still(f, ok, words), λ held _ => call(buffers, f, words) = Ending(call(buffers, f, words).word, held),
-                sym(call(buffers, f, words).eta())),
+                refl),
             quiet, fits, Valuation::bind(Valuation::zero(), function.parameters, arguments)))
 }
 

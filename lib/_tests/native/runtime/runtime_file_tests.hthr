@@ -110,9 +110,8 @@ theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
             λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
-                sym(trans(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
-                        hyp([place, y1, y2], s, refl, p)),
-                    FTm::mutated_eta(raise_from(s, y1, y2))))),
+                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                        hyp([place, y1, y2], s, refl, p)))),
             span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
 }
 
