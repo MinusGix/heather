@@ -1,0 +1,64 @@
+// Probes of the `else` that knows why (docs/when-design.md §5, §10; Minus
+// 2026-11-14: every type, every field): when a `_` arm stands for exactly one
+// constructor, as an `if let`'s `else` on a two-constructor type does, that
+// constructor's fields are bound in it under names the source cannot spell,
+// so `known`, `omega` and the other searches read them. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import bool; import nat; import omega; import result; import when;
+
+// A decision: the `else` of `Inl(h)` knows `¬(n <= m)`.
+fn le_or_gap(n, m: Nat) → Nat {
+    if let Inl(_) = n.le_dec(m) { 0 } else { let gap: ¬(n <= m) = known; n - m }
+}
+theorem le_or_gap_le(): le_or_gap(2, 5) = 0 { refl }
+theorem le_or_gap_gt(): le_or_gap(7, 5) = 2 { refl }
+
+// The other way round, and found by `omega` rather than named.
+fn lt_of_not_le(n, m: Nat) → Bool {
+    if let Inr(_) = n.le_dec(m) { let below: m < n = omega; True } else { False }
+}
+theorem lt_of_not_le_lit(): lt_of_not_le(7, 5) = True { refl }
+
+// Nested: each `else` binds its own constructor's field, so the inner one
+// does not hide the outer one. Before the fields were named, both were `_`
+// binders in the context, and `known` saw only the innermost.
+fn parity_both(n, m: Nat) → Nat {
+    if let Inl(_) = n.even_dec() { 0 } else {
+        if let Inl(_) = m.even_dec() { 1 } else {
+            let a: ¬Nat::Even(n) = known;
+            let b: ¬Nat::Even(m) = known;
+            2
+        }
+    }
+}
+theorem parity_both_lit(): parity_both(3, 5) = 2 { refl }
+
+// A type of the module's own: the `else` of `Open` knows the gate is shut.
+inductive Gate(n: Nat) { Open(k: Nat), Shut(closed: n = 0) }
+fn gate_or(n: Nat, g: Gate(n)) → Nat {
+    if let Open(k) = g { k } else { let shut: (n = 0) = known; n }
+}
+theorem gate_or_open(): gate_or(3, Open(7)) = 7 { refl }
+theorem gate_or_shut(e: 0 = 0): gate_or(0, Shut(e)) = 0 { refl }
+
+// With three constructors and two written, `_` is still one constructor.
+inductive Three(n: Nat) { One, Two(x: Nat), Empty(none: n = 0) }
+fn three_small(n: Nat, t: Three(n)) → Nat {
+    match t { One => 1, Two(x) => x, _ => { let e: (n = 0) = known; n } }
+}
+theorem three_small_lit(e: 0 = 0): three_small(0, Empty(e)) = 0 { refl }
+
+// A `_` covering two constructors binds nothing: no single reason.
+// expect-error: known
+fn two_left(n: Nat, t: Three(n)) → Nat {
+    match t { One => 0, _ => { let e: (n = 0) = known; n } }
+}
+
+// A data field: `Err`'s value is bound and unused, and the value is as
+// before.
+fn res_or(r: Result<Nat, Bool>, d: Nat) → Nat {
+    if let Ok(v) = r { v } else { d }
+}
+theorem res_or_ok(): res_or(Ok(4), 0) = 4 { refl }
+theorem res_or_err(): res_or(Err(True), 9) = 9 { refl }

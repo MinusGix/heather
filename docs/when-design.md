@@ -287,8 +287,9 @@ language` and log rulings there.
 ## 10. Open, for Minus when it matters
 
 - The name (`When` here).
-- Whether `if let`'s negative evidence is for `When` alone or for every
-  type of that shape.
+- ~~Whether `if let`'s negative evidence is for `When` alone or for every
+  type of that shape.~~ Minus 2026-11-14: every type, every field (§11,
+  "The `else` that knows why").
 
 ## 11. What was built
 
@@ -448,3 +449,26 @@ language` and log rulings there.
   route reads the inferred type's tag first and adds no name lookup, so a
   module that never meets a `When` pays one structural read per inferred
   check. The numbers are in the issue's log.
+
+**The `else` that knows why** (Minus 2026-11-14, §10's second question:
+every type, every field).
+
+- Found first: the pattern compiler already expanded a `_` arm that stands
+  for one constructor into that constructor with `_` binders, and `_` is a
+  real binder in the context. So an `else` on a two-constructor type
+  already held the other constructor's fields, and `known` and `omega` read
+  them. What failed was nesting: every such field was named `_`, so an
+  inner `else` hid the outer one's facts.
+- Built (`patterns.rs`, `emit_top`): when the `_` row stands for exactly one
+  constructor (the uncovered constructors are one), its fields are bound as
+  `__else_N_j` (`N` the arm's place, `j` the field), for every type and every
+  field, data included. Where `_` covers several constructors it binds
+  nothing, as there is no single reason. The kernel term is the same: only
+  the binders' names change. Probes: `lib/_tests/std/core/else_evidence_tests.hthr`
+  (decisions, a type of the module's own, three constructors with one left,
+  nested `else`s, and the refused two-left case).
+- Not built: the equation `scrutinee = Ctor(fields)` in the `else` (where
+  the fields came from). The success block gets it only when named
+  (`if let h: …`), because binding it is a convoy, which changes the term;
+  `issues/if-let-negative-evidence.md` owns the `¬Matches` form.
+

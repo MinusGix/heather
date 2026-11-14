@@ -56,3 +56,11 @@ name in a way that gives it unrelated types without clear branch scopes.
   a desired feature, but its existential `Matches` proposition is materially
   larger than the V1 one-row match and therefore has its own owner.
 - 2026-08-19: UNBLOCKED when positional `if let` V1 landed.
+- 2026-11-14: A narrower, positive form is built (`docs/when-design.md` §11,
+  "The `else` that knows why", Minus: every type, every field): a `_` arm
+  standing for exactly one constructor binds that constructor's fields under
+  `__else_N_j`. For a two-constructor type that is the negative evidence's
+  content without a `Matches` proposition. This issue's general form (several
+  remaining constructors, the equation to the scrutinee, a nameable binder)
+  stays open.
+
