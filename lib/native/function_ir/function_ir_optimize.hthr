@@ -10,6 +10,10 @@
 // joins a function's, `Stage::run_next` the functions'). A stage whose
 // search finds nothing leaves the function as it is: no plan is the
 // function itself (`Stage::maybe`).
+//
+// A load of a word that bytes are joined into is put by the inlining
+// stage's `Sites::Put` (`Function::find_worded`): the walk of
+// `function_ir_learn` then finds the join a move of the load's word.
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -249,6 +253,91 @@ fn Function::find_learned(self function: Function) → Option<Found> {
 // test alone.
 fn Function::find_learned_past(self function: Function) → Option<Found> {
     shared(function.learn_plan().plain_kept(), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan) })
+}
+
+// The loads asked for after the byte load `after`, each a leaf of its own
+// with its swap and its widening: the load is first in its leaf and its
+// narrow word stays in it, which is what the lowering asks. Ids from `by`.
+fn asked_leaves(asked: List<Asked>, after, by: Nat) → List<List<Node>> {
+    match asked {
+        Nil => [],
+        Cons(want, rest) => match want.after.same(after) {
+            True => Cons([WideLoad(4, by, want.buffer, want.at), ByteSwap(32, Succ(by), by), Resize(32, 64, Succ(Succ(by)), Succ(by))],
+                asked_leaves(rest, after, by + 3)),
+            False => asked_leaves(rest, after, by),
+        },
+    }
+}
+
+fn nodes_asked(nodes: List<Node>, asked: List<Asked>, by: Nat) → List<List<Node>> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match node {
+            BufferLoad(output, _, _) => shared(asked_leaves(asked, output, by), λ here => here ++ nodes_asked(rest, asked, by + 3 * here.len())),
+            _ => nodes_asked(rest, asked, by),
+        },
+    }
+}
+
+// Where to put them, in the region's shape, and the bound after: the ids
+// are taken as `inline_region` gives them.
+record Worded { sites: Sites, bound: Nat }
+
+fn StructuredRegion::worded(self region: StructuredRegion, asked: List<Asked>, by: Nat) → Worded {
+    match region {
+        Dataflow(body) => match nodes_asked(body.nodes, asked, by) {
+            Nil => Worded(Stay, by),
+            Cons(leaf, leaves) => Worded(Put(3 * Succ(leaves.len()), Cons(leaf, leaves)), by + 3 * Succ(leaves.len())),
+        },
+        Sequence(_, continuation) => shared(continuation.worded(asked, by), λ c => Worded(Then(c.sites), c.bound)),
+        Compose(prefix, continuation) => shared(prefix.worded(asked, by), λ a =>
+            shared(continuation.worded(asked, a.bound), λ c => Worded(Both(a.sites, c.sites), c.bound))),
+        Conditional(_, _, _, _, when_true, when_false) => shared(when_true.worded(asked, by), λ a =>
+            shared(when_false.worded(asked, a.bound), λ c => Worded(Arms(a.sites, c.sites), c.bound))),
+        Call(_, _, _) => Worded(Stay, by),
+        Loop(_, _, _, _, body, _, _, _, _) => shared(body.worded(asked, by), λ b => Worded(Body(b.sites), b.bound)),
+        Lend(_, _, _, _) => Worded(Stay, by),
+    }
+}
+
+fn nodes_byte_loads(nodes: List<Node>) → Nat {
+    match nodes { Nil => 0, Cons(node, rest) => match node { BufferLoad(_, _, _) => Succ(nodes_byte_loads(rest)), _ => nodes_byte_loads(rest) } }
+}
+
+// The byte loads of a region.
+fn StructuredRegion::byte_loads(self region: StructuredRegion) → Nat {
+    match region {
+        Dataflow(body) => nodes_byte_loads(body.nodes),
+        Sequence(prefix, continuation) => nodes_byte_loads(prefix.nodes) + continuation.byte_loads(),
+        Compose(prefix, continuation) => prefix.byte_loads() + continuation.byte_loads(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.byte_loads() + when_false.byte_loads(),
+        Call(_, _, _) => 0,
+        Loop(_, _, _, _, body, _, _, _, _) => body.byte_loads(),
+        Lend(_, _, _, _) => 0,
+    }
+}
+
+// The loads a function's joins of bytes wait on (`Seen::meeting`): none
+// without four byte loads to join, which is known without a walk.
+fn Function::asked(self function: Function) → List<Asked> {
+    match function.body.byte_loads().leb(3) {
+        True => [],
+        False => shared(function.body.learn(function.seen()), λ learned => learned.seen.wants.words),
+    }
+}
+
+// The function with a load of four bytes put where four byte loads are
+// joined into a word, for the walk to find the join a move of
+// (`find_learned`). Nothing reads the load until then, and the sweep takes
+// it back where no walk does.
+fn Function::find_worded(self function: Function, callees: List<Function>) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(), function.top()).sites))
+}
+
+// The same of a function under a test at its entry, in the arm past the
+// test alone.
+fn Function::find_worded_past(self function: Function, callees: List<Function>) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(), function.top()).sites.past_test()))
 }
 
 // Whether the lowering takes a function with the planner's placement, as

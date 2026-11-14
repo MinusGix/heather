@@ -11,7 +11,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
     ("function_ir_loop", include_str!("../../../../lib/native/function_ir/function_ir_loop.hthr")),
     ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
-    ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
     ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
     ("transition", include_str!("../../../../lib/std/relation/transition.hthr")),
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
@@ -21,7 +20,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("linux_x86_64_entry", include_str!("../../../../lib/std/os/linux/linux_x86_64_entry.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
     ("result", include_str!("../../../../lib/std/core/result.hthr")),
-    ("bitvec_bytes", include_str!("../../../../lib/std/bitvec/bitvec_bytes.hthr")),
     ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),
     ("span_set", include_str!("../../../../lib/std/data/set/span_set.hthr")),
     ("memory", include_str!("../../../../lib/std/machine/memory.hthr")),
@@ -30,7 +28,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("set_solve", include_str!("../../../../lib/std/data/set/set_solve.hthr")),
     ("set_ops", include_str!("../../../../lib/std/data/set/set_ops.hthr")),
     ("bitvec_concat", include_str!("../../../../lib/std/bitvec/bitvec_concat.hthr")),
-    ("bitvec_resize", include_str!("../../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("bitvec_shift_nat", include_str!("../../../../lib/std/bitvec/bitvec_shift_nat.hthr")),
     ("simp_laws", include_str!("../../../../lib/std/tactic/simp_laws.hthr")),
 ];

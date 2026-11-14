@@ -398,6 +398,40 @@ theorem BitVec::init_shift_left(n: Nat, u: BitVec(Succ(n)), count: Nat):
     }
 }
 
+// `|` and a shift left: an or is associative, and a shift of an or is the
+// or of the shifts (a bit shifted out of one side is shifted out of the
+// other too, so no width is asked of either).
+theorem BitVec::bor_assoc(n: Nat): (x, y, z: BitVec(n)) → x.bor(y).bor(z) = x.bor(y.bor(z)) {
+    match n {
+        Zero => λ x y z => refl,
+        Succ(k, ih) => λ x y z => BitVec::cons_bit_cong(k, Bool::or_assoc(x.head_bit(), y.head_bit(), z.head_bit()),
+            ih(x.tail_bits(), y.tail_bits(), z.tail_bits())),
+    }
+}
+
+theorem BitVec::init_bor(n: Nat): (x, y: BitVec(Succ(n))) → x.bor(y).init() = x.init().bor(y.init()) {
+    match n {
+        Zero => λ x y => refl,
+        Succ(k, ih) => λ x y => BitVec::cons_bit_cong(k, refl, ih(x.tail_bits(), y.tail_bits()), a := x.head_bit() || y.head_bit(),
+            b := x.head_bit() || y.head_bit()),
+    }
+}
+
+theorem BitVec::shift_left_one_bor(n: Nat): (x, y: BitVec(n)) → x.bor(y).shift_left_one() = x.shift_left_one().bor(y.shift_left_one()) {
+    match n {
+        Zero => λ x y => refl,
+        Succ(k) => λ x y => BitVec::cons_bit_cong(k, refl, BitVec::init_bor(k, x, y), a := False, b := False),
+    }
+}
+
+theorem BitVec::shift_left_bor({n: Nat}, self x: BitVec(n), y: BitVec(n), count: Nat):
+    x.bor(y).shift_left(count) = x.shift_left(count).bor(y.shift_left(count)) {
+    match count {
+        Zero => refl,
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(n)) => z.shift_left_one(), ih), BitVec::shift_left_one_bor(n, x.shift_left(k), y.shift_left(k))),
+    }
+}
+
 theorem BitVec::init_snoc(n: Nat): (w: BitVec(n)) → (b: Bool) → w.snoc(b).init() = w {
     match n {
         Zero => λ w b => refl,

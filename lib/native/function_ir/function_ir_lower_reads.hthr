@@ -217,6 +217,7 @@ fn known_bounded(all, known: List<Known>, index, length: Nat) → Bool {
         Nil => False,
         Cons(here, rest) => match here {
             Constant(_, _) => known_bounded(all, rest, index, length),
+            Offset(_, _, _) => known_bounded(all, rest, index, length),
             Compared(_, _, _, _) => known_bounded(all, rest, index, length),
             Truth(id) => truth_bounds(all, id, index, length) || known_bounded(all, rest, index, length),
             Falsity(_) => known_bounded(all, rest, index, length),
@@ -231,6 +232,7 @@ theorem known_bounded_sound(values: Valuation(), all: List<Known>, index, length
         Nil => λ no _ => false_elim(no),
         Cons(here, rest) => match here {
             Constant(_, _) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
+            Offset(_, _, _) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
             Compared(_, _, _, _) => λ ok part => known_bounded_sound(values, all, index, length, holds, rest, ok, part.right),
             Truth(id) => λ ok part =>
                 match Bool::is_true_or(truth_bounds(all, id, index, length), known_bounded(all, rest, index, length), ok) {
@@ -249,6 +251,73 @@ theorem File::bounded_sound(self file: File, values: Valuation(), gprs: Gprs, in
     represents: file.Represents(values, gprs), bounded: file.bounded(index, length).IsTrue()):
     values(64, index).toNat() < values(64, length).toNat() {
     known_bounded_sound(values, file.known, index, length, represents.right, file.known, bounded, represents.right)
+}
+
+// ---------------------------------------------------------------------------
+// A span: the word `k` bytes past `index` is inside too
+
+// Some `t` the path knows is `index` plus `k` (`Known::Offset`, from an
+// `Add` of a known constant) is known below `length`.
+fn known_span(all, known: List<Known>, index, length, k: Nat) → Bool {
+    match known {
+        Nil => False,
+        Cons(here, rest) => match here {
+            Constant(_, _) => known_span(all, rest, index, length, k),
+            Offset(id, base, value) =>
+                (base.same(index) && (value.same(k) && known_bounded(all, all, id, length))) || known_span(all, rest, index, length, k),
+            Compared(_, _, _, _) => known_span(all, rest, index, length, k),
+            Truth(_) => known_span(all, rest, index, length, k),
+            Falsity(_) => known_span(all, rest, index, length, k),
+        },
+    }
+}
+
+// The sum is in `Nat`: with `index + k` below `2^64` the add did not wrap,
+// so `t` below `length` is `index + k` below it.
+theorem known_span_sound(values: Valuation(), all: List<Known>, index, length, k: Nat, holds: KnownHold(values, all),
+    no_wrap: values(64, index).toNat() + k < Nat::pow(2, 64), known: List<Known>):
+    known_span(all, known, index, length, k).IsTrue() → KnownHold(values, known) →
+    values(64, index).toNat() + k < values(64, length).toNat() {
+    match known {
+        Nil => λ no _ => false_elim(no),
+        Cons(here, rest) => match here {
+            Constant(_, _) => λ ok part => known_span_sound(values, all, index, length, k, holds, no_wrap, rest, ok, part.right),
+            Offset(id, base, value) => λ ok part =>
+                match Bool::is_true_or(base.same(index) && (value.same(k) && known_bounded(all, all, id, length)),
+                    known_span(all, rest, index, length, k), ok) {
+                    Inl(now) => {
+                        let first = Bool::is_true_and(base.same(index), value.same(k) && known_bounded(all, all, id, length), now);
+                        let second = Bool::is_true_and(value.same(k), known_bounded(all, all, id, length), first.right);
+                        let at_base: (base = index) = base.same_sound(index, eq_true_of_is_true(base.same(index), first.left));
+                        let at_value: (value = k) = value.same_sound(k, eq_true_of_is_true(value.same(k), second.left));
+                        let below: (values(64, id).toNat() < values(64, length).toNat()) =
+                            known_bounded_sound(values, all, id, length, holds, all, second.right, holds);
+                        let sum: (values(64, id) = values(64, index).add(BitVec::ofNat(k))) =
+                            j(at_base, λ b _ => values(64, id) = values(64, b).add(BitVec::ofNat(k)),
+                                j(at_value, λ v _ => values(64, id) = values(64, base).add(BitVec::ofNat(v)), part.left));
+                        let exact: (values(64, id).toNat() = values(64, index).toNat() + k) =
+                            trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), trans(sum, BitVec::add_ofNat_r(64, values(64, index), k))),
+                                BitVec::toNat_ofNat(64, values(64, index).toNat() + k, no_wrap));
+                        j(exact, λ x _ => x < values(64, length).toNat(), below)
+                    },
+                    Inr(later) => known_span_sound(values, all, index, length, k, holds, no_wrap, rest, later, part.right),
+                },
+            Compared(_, _, _, _) => λ ok part => known_span_sound(values, all, index, length, k, holds, no_wrap, rest, ok, part.right),
+            Truth(_) => λ ok part => known_span_sound(values, all, index, length, k, holds, no_wrap, rest, ok, part.right),
+            Falsity(_) => λ ok part => known_span_sound(values, all, index, length, k, holds, no_wrap, rest, ok, part.right),
+        },
+    }
+}
+
+// The path knows the `k` bytes past `index` are below `length` too: some
+// `t = index + k` was tested below it.
+fn File::span_bounded(self file: File, index, length, k: Nat) → Bool { known_span(file.known, file.known, index, length, k) }
+
+theorem File::span_bounded_sound(self file: File, values: Valuation(), gprs: Gprs, index, length, k: Nat,
+    represents: file.Represents(values, gprs), no_wrap: values(64, index).toNat() + k < Nat::pow(2, 64),
+    bounded: file.span_bounded(index, length, k).IsTrue()):
+    values(64, index).toNat() + k < values(64, length).toNat() {
+    known_span_sound(values, file.known, index, length, k, represents.right, no_wrap, file.known, bounded, represents.right)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +380,7 @@ fn known_at_most(all, known: List<Known>, low, high: Nat) → Bool {
         Nil => False,
         Cons(here, rest) => match here {
             Constant(_, _) => known_at_most(all, rest, low, high),
+            Offset(_, _, _) => known_at_most(all, rest, low, high),
             Compared(_, _, _, _) => known_at_most(all, rest, low, high),
             Truth(_) => known_at_most(all, rest, low, high),
             Falsity(id) => falsity_at_most(all, id, low, high) || known_at_most(all, rest, low, high),
@@ -324,6 +394,7 @@ theorem known_at_most_sound(values: Valuation(), all: List<Known>, low, high: Na
         Nil => λ no _ => false_elim(no),
         Cons(here, rest) => match here {
             Constant(_, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
+            Offset(_, _, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
             Compared(_, _, _, _) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
             Truth(_) => λ ok part => known_at_most_sound(values, all, low, high, holds, rest, ok, part.right),
             Falsity(id) => λ ok part =>
@@ -461,7 +532,7 @@ theorem leaf_load_holds(values: Valuation(), buffers: Buffers(), nodes: List<Nod
 
 // A leaf with no load means what it means over no buffers, which is what
 // the lowering of its nodes is proved against.
-fn Node::reads_buffer(self node: Node) → Bool { match node { BufferLoad(_, _, _) => True, _ => False } }
+fn Node::reads_buffer(self node: Node) → Bool { match node { BufferLoad(_, _, _) => True, WideLoad(_, _, _, _) => True, _ => False } }
 
 fn nodes_blind(nodes: List<Node>) → Bool {
     match nodes { Nil => True, Cons(node, rest) => !node.reads_buffer() && nodes_blind(rest) }
@@ -471,6 +542,7 @@ theorem Node::holds_blind(self node: Node, values: Valuation(), buffers: Buffers
     (!node.reads_buffer()).IsTrue() → NodeHolds(values, node, buffers := buffers) → NodeHolds(values, node) {
     match node {
         BufferLoad(_, _, _) => λ no _ => false_elim(no),
+        WideLoad(_, _, _, _) => λ no _ => false_elim(no),
         _ => λ _ holds => holds,
     }
 }
@@ -483,6 +555,125 @@ theorem nodes_hold_blind(values: Valuation(), buffers: Buffers(), nodes: List<No
             let both = Bool::is_true_and(!node.reads_buffer(), nodes_blind(rest), pure);
             ⟨node.holds_blind(values, buffers, both.left, holds.left), nodes_hold_blind(values, buffers, rest, both.right, holds.right)⟩
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A word of four bytes: the first node of its leaf
+
+// `WideLoad(4, …)` first, the nodes after it reading no buffer: the
+// address, the doubleword loaded into the place the load names, held
+// zero-extended at width 32 (`Narrow(32)`), then the rest as a block
+// (`function_ir_lower_calls`, `File::emit_wide`). The rest holds the
+// load's consumers, since a narrow value does not cross a leaf.
+record WideLeaf { output: Nat, buffer: Nat, index: Nat }
+
+fn Node::as_wide(self node: Node) → Option<WideLeaf> {
+    match node {
+        WideLoad(bytes, output, buffer, index) => match bytes.same(4) { False => None, True => Some(WideLeaf(output, buffer, index)) },
+        _ => None,
+    }
+}
+
+fn leaf_wide(nodes: List<Node>) → Option<WideLeaf> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match nodes_blind(rest) { False => None, True => node.as_wide() },
+    }
+}
+
+// The nodes after the first.
+fn nodes_rest(nodes: List<Node>) → List<Node> { match nodes { Nil => Nil, Cons(_, rest) => rest } }
+
+fn WideLeaf::Holds(self wide: WideLeaf, values: Valuation(), buffers: Buffers()) → Type {
+    values(32, wide.output) = buffer_word(buffers, wide.buffer, values(64, wide.index).toNat(), 4)
+}
+
+theorem Node::as_wide_holds(self node: Node, values: Valuation(), buffers: Buffers(), wide: WideLeaf):
+    node.as_wide() = Some(wide) → NodeHolds(values, node, buffers := buffers) → wide.Holds(values, buffers) {
+    match node {
+        WideLoad(bytes, output, buffer, index) => (match bytes.same(4) as λ b => bytes.same(4) = b →
+            (match b { False => None, True => Some(WideLeaf(output, buffer, index)) }) = Some(wide) →
+            (values(8 * bytes, output) = buffer_word(buffers, buffer, values(64, index).toNat(), bytes)) → wide.Holds(values, buffers) {
+            False => λ _ no _ => absurd(no),
+            True => λ four found holds => {
+                let at: (bytes = 4) = bytes.same_sound(4, four);
+                j(found, λ o _ => o.All(λ (w: WideLeaf) => w.Holds(values, buffers)),
+                    j(at, λ k _ => values(8 * k, output) = buffer_word(buffers, buffer, values(64, index).toNat(), k), holds))
+            },
+        })(refl),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+theorem leaf_wide_holds(values: Valuation(), buffers: Buffers(), nodes: List<Node>, wide: WideLeaf):
+    leaf_wide(nodes) = Some(wide) → NodesHoldOver(buffers, values, nodes) →
+    wide.Holds(values, buffers) ∧ NodesHold(values, nodes_rest(nodes)) {
+    match nodes {
+        Nil => λ no _ => absurd(no),
+        Cons(node, rest) => match blind: nodes_blind(rest) {
+            False => λ no _ => absurd(no),
+            True => λ found holds => ⟨node.as_wide_holds(values, buffers, wide, found, holds.left),
+                nodes_hold_blind(values, buffers, rest, j(sym(blind), λ c _ => c.IsTrue(), trivial), holds.right)⟩,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A table read: the last node of its leaf
+
+// A leaf whose last node reads a constant table (`TableRead`): the nodes
+// before it lower as one block, then the table sits in the code and the
+// word at the index is loaded from it (`function_ir_lower_calls`,
+// `File::emit_table`).
+record TableLeaf { width: Nat, output: Nat, bits: Nat, index: Nat, entries: List<Nat> }
+
+fn Node::as_table(self node: Node) → Option<TableLeaf> {
+    match node { TableRead(width, output, bits, index, entries) => Some(TableLeaf(width, output, bits, index, entries)), _ => None }
+}
+
+fn leaf_table(nodes: List<Node>) → Option<TableLeaf> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match rest { Nil => node.as_table(), Cons(_, _) => leaf_table(rest) },
+    }
+}
+
+// The nodes before the last.
+fn nodes_front(nodes: List<Node>) → List<Node> {
+    match nodes {
+        Nil => Nil,
+        Cons(node, rest) => match rest { Nil => Nil, Cons(_, _) => Cons(node, nodes_front(rest)) },
+    }
+}
+
+fn TableLeaf::Holds(self table: TableLeaf, values: Valuation()) → Type {
+    values(table.width, table.output) = BitVec::ofNat(table_entry(table.entries, values(table.bits, table.index).toNat()))
+}
+
+theorem Node::as_table_holds(self node: Node, values: Valuation(), table: TableLeaf):
+    node.as_table() = Some(table) → NodeHolds(values, node) → table.Holds(values) {
+    match node {
+        TableRead(_, _, _, _, _) => λ found holds =>
+            j(found, λ o _ => o.All(λ (t: TableLeaf) => t.Holds(values)), holds),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+theorem leaf_table_holds(values: Valuation(), table: TableLeaf, nodes: List<Node>):
+    leaf_table(nodes) = Some(table) → NodesHold(values, nodes) → NodesHold(values, nodes_front(nodes)) ∧ table.Holds(values) {
+    match nodes {
+        Nil => λ no _ => absurd(no),
+        Cons(node, rest) => (match rest as λ r =>
+            (leaf_table(r) = Some(table) → NodesHold(values, r) → NodesHold(values, nodes_front(r)) ∧ table.Holds(values)) →
+            leaf_table(Cons(node, r)) = Some(table) → NodesHold(values, Cons(node, r)) →
+                NodesHold(values, nodes_front(Cons(node, r))) ∧ table.Holds(values) {
+            Nil => λ _ found holds => ⟨trivial, node.as_table_holds(values, table, found, holds.left)⟩,
+            Cons(_, _) => λ later found holds => {
+                let inner = later(found, holds.right);
+                ⟨⟨holds.left, inner.left⟩, inner.right⟩
+            },
+        })(leaf_table_holds(values, table, rest)),
     }
 }
 

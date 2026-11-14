@@ -105,6 +105,12 @@ fn Node::shown(self node: Node) → String {
         Resize(f, t, o, a) => refusal_number(o) ++ " = resize" ++ refusal_number(f) ++ "to" ++ refusal_number(t) ++ " " ++ refusal_number(a),
         SignResize(f, t, o, a) =>
             refusal_number(o) ++ " = sign_resize" ++ refusal_number(f) ++ "to" ++ refusal_number(t) ++ " " ++ refusal_number(a),
+        TableRead(w, o, k, i, entries) => refusal_number(o) ++ " = table" ++ refusal_number(w) ++ " of " ++ refusal_number(entries.len())
+            ++ " at " ++ refusal_number(i) ++ " (" ++ refusal_number(k) ++ " bits)",
+        WideLoad(n, o, b, i) => refusal_number(o) ++ " = load" ++ refusal_number(n) ++ "bytes of buffer " ++ refusal_number(b) ++ " at " ++ refusal_number(i),
+        WideStore(n, o, b, i, v) => refusal_number(o) ++ " = store" ++ refusal_number(n) ++ "bytes to buffer " ++ refusal_number(b) ++ " at "
+            ++ refusal_number(i) ++ " of " ++ refusal_number(v),
+        ByteSwap(w, o, a) => refusal_number(o) ++ " = byte_swap" ++ refusal_number(w) ++ " " ++ refusal_number(a),
     }
 }
 

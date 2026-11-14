@@ -39,6 +39,10 @@ fn Node::spelled_node(self node: Node) → List<Nat> {
         BufferStore(output, buffer, index, value) => [14, output, buffer, index, value],
         Resize(from, to, output, source) => [15, from, to, output, source],
         SignResize(from, to, output, source) => [16, from, to, output, source],
+        TableRead(width, output, bits, index, entries) => Cons(17, Cons(width, Cons(output, Cons(bits, Cons(index, Cons(entries.len(), entries)))))),
+        WideLoad(bytes, output, buffer, index) => [18, bytes, output, buffer, index],
+        WideStore(bytes, output, buffer, index, value) => [19, bytes, output, buffer, index, value],
+        ByteSwap(width, output, source) => [20, width, output, source],
     }
 }
 

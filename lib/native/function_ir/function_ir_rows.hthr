@@ -47,7 +47,11 @@ fn marks_or(left, right: List<Bool>) → List<Bool> {
 fn nodes_stored(nodes: List<Node>, marks: List<Bool>) → List<Bool> {
     match nodes {
         Nil => marks,
-        Cons(node, rest) => nodes_stored(rest, match node { BufferStore(_, buffer, _, _) => marks_with(marks, buffer), _ => marks }),
+        Cons(node, rest) => nodes_stored(rest, match node {
+            BufferStore(_, buffer, _, _) => marks_with(marks, buffer),
+            WideStore(_, _, buffer, _, _) => marks_with(marks, buffer),
+            _ => marks,
+        }),
     }
 }
 

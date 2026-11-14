@@ -195,8 +195,9 @@ lend, a conditional and a loop forget (`Facts::forget`;
 valuation's facts). A rule's premises and conclusion are read over both,
 so a rule about memory is a clause like any other, and the first is that
 two loads at one index with no store between are one word (`load_again`).
-Stores that pass over a load at another index, and a store after a store,
-are not built.
+What is kept of the buffers is a load or a word that is bytes of one
+joined (`Memory`; §4.1 has the second). Stores that pass over a load at
+another index, and a store after a store, are not built.
 
 A fifth step, `Again`, writes the next node as a move of an id the facts
 say the same computation wrote: common subexpressions, as the pass that
@@ -251,6 +252,55 @@ conventional compiler:
   a tool can enumerate small terms, keep the pairs that agree on test inputs,
   prove them by a bit-level decision, and keep those that lower the cost.
   Not early work, but the design leaves the door open at no cost.
+
+### 4.1 A fact every spelling reaches: bytes joined into a word
+
+A word read from a span a byte at a time can be written many ways: the
+shifts before the ors or between them, the ors nested left or right,
+either operand first, the bytes loaded in any order. A rule from each
+shape to one load would be a list of shapes, and the next program would
+have another. What is built instead is one fact that all of them reach
+(`function_ir_rules.hthr`, rules 29 to 33):
+
+> `Joined(o, f, i, n, sh)`: the word `o` is the `n` bytes of buffer `f`
+> from the index `i`, the first the most significant, shifted left by `sh`
+> (`buffer_join`, in `function_ir.hthr`).
+
+- A byte load is a join of one byte, unshifted.
+- A shift of a join is the join shifted further.
+- An or of two joins is the longer join where the two are side by side:
+  the second starts in the buffer where the first ends (two orders between
+  the index words, §5.1, say so as numbers), and the first is shifted past
+  the second's bytes. Either operand may be first.
+- Four bytes unshifted are the word one load of four bytes reads at that
+  index, with its bytes swapped: a word that is such a join and the
+  widened swap of such a load are the same word, so the join is a move.
+
+Each is a clause with a short proof over two lemmas (joined bytes split
+anywhere, and four joined are one load swapped). Nothing in them names an
+order of evaluation, so the same four rules take a word assembled in any
+of the ways above, and a join of two, three or five bytes is the same fact
+at another count: a rule for a two-byte or an eight-byte load, or for the
+little-endian order, is one more clause against the same fact.
+
+It is a fact about the buffers, so it lives with the loads remembered
+(§3.2) and is forgotten where they are. The search that finds joins is a
+few lines of the walk that already keeps ranges and orders
+(`function_ir_learn.hthr`, `Seen::meeting`); where four bytes are joined
+and the code has no load of the word, the search asks for one, and the
+stage that inlines puts it after the last of the byte loads
+(`Sites::Put`, which may add nodes that only compute, at new ids, and so
+needs no law beyond inlining's). The next walk then finds the join a move
+of the load's word, and the sweep takes the byte loads, the shifts and the
+ors.
+
+The lowering takes a load of four bytes only where the path knows the
+first and the last byte inside the span, which is what the tests of the
+byte loads said before they went: the comparison of the base and that of
+the last byte's index stay, each with its bit written after it (§5.1), and
+the comparisons of the bytes between are dropped with their sums once no
+load reads them. A store of a word is the same design with a law for
+lending a span to a store of several bytes, which is not chosen yet.
 
 ## 5. Requests: asking for a proof
 
@@ -556,7 +606,7 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 | 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
 | 3, inline | built, and run by `compile-x86`: §9.1 |
 | 4, requests | built for ranges, with the answers In scope, Decided and Tested: §5.1, §9.1. Required, and a range of a word a loop changes, are not |
-| 5, memory rules and the word load | begun: a narrowing within its range is a move; loads since the last store are facts; orders between words decide the tests of a word's bytes under one test at the entry (§3.2, §5.1, §9.1). The word load's nodes and instructions are built in their own pull request; the rule joining four byte loads into one is not built |
+| 5, memory rules and the word load | built for loads: a narrowing within its range is a move; loads since the last store are facts; orders between words decide the tests of a word's bytes under one test at the entry; bytes joined into a word are one load (§3.2, §4.1, §5.1, §9.1). The word store waits on a lending law for stores of several bytes; a store that passes a load, and a store after a store, are not built |
 | 6 and 7 | not built |
 
 ### 9.1 What is built, as built
@@ -727,6 +777,14 @@ with indexes its callers compute. The entry test there removes the four
 tests a call ran and adds its own, a gain of a percent or two; what it
 buys is that the loads are then provably in bounds together.
 
+With them in bounds together, the four byte loads, the shifts and the ors
+are one load and a swap (§4.1). The compiler runs, after the searches
+above and only where a join is found: put the load (`find_worded`), decide
+again (which finds the join a move), read through, sweep, then decide and
+sweep once more, which drops the comparisons no access reads any more. It
+keeps the result where the lowering takes it and the function before it
+where not.
+
 ## 10. Machine instructions added for the optimizer
 
 Minus, 2026-11-14: instructions may be added to the machine model as steps
@@ -742,7 +800,15 @@ manual does).
 
 | Instruction and forms | Used by | Model | Checked how |
 |---|---|---|---|
-| (none yet) | | | |
+| `MOV r32, [base]` (REX `8B /r`, every base and destination; SIB for RSP and R12, a zero displacement for RBP and R13) | a load of four bytes from a lent span (`WideLoad(4, …)`), step 5 | `DwordLoad`, `DwordLoadStep` (`x86_64_data_read.hthr`): four bytes read low first, the destination's upper half cleared, no flag changed; all four addresses below the canonical boundary | SDM Vol. 2B, MOV. Bytes of all 256 forms equal to `as`'s under `{rex}`. On the processor: edge and random operands, the destination holding other bits before, RSP-class and RBP-class bases, flags read back unchanged |
+| `MOV [base], r32` (REX `89 /r`, every plain base and source) | a store of four bytes (`WideStore(4, …)`); the lowering does not emit it until the lending law for such stores is chosen | `DwordStore`, `dword_store_step` (`x86_64_store.hthr`): the source's low four bytes written low first, nothing else | SDM Vol. 2B, MOV. Bytes of all 192 forms equal to `as`'s. On the processor: the four bytes and the twenty around them compared, flags unchanged |
+| `BSWAP r32` (REX `0F C8+rd`, every register) | the swap after a load of a big-endian word (`ByteSwap(32, …)`) | `Bswap32`, `bswap32_value` (`x86_64.hthr`): the low four bytes reversed, the upper half cleared, no flag changed | SDM Vol. 2A, BSWAP. Bytes of all 16 forms equal to `as`'s. On the processor: edge and random operands with the upper half set, a register past R8, flags unchanged |
+| `MOV r64, [base + index*8]` (REX.W `8B /r` with a SIB byte; no RBP or R13 base, no RSP index) | a read of a constant table placed in the code (`TableRead`), the constant-tables pull request | `IndexedWordLoad`, `IndexedWordLoadStep` (`x86_64_data_read.hthr`): eight bytes read at the base and the index shifted by three, added as words; no flag changed | SDM Vol. 2B, MOV, and Vol. 2A §2.1.5 for the SIB byte. Bytes of all 3,360 forms equal to `as`'s. On the processor: random indexes, an index with high bits set and a negative one (the sum wraps as the model's does), R12 as base with R13 as index, flags unchanged |
+
+The first three were added and first checked by the wide-access work
+(`lib/_tests/std/arch/x86_64/x86_64_wide_access_tests.hthr` states the
+assembler's bytes and the processor's results as theorems); the checks
+above were run again, independently, when the optimizer took them in.
 
 ## 11. Where the ideas come from
 

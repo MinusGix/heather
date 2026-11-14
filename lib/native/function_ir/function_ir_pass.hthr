@@ -30,6 +30,7 @@
 // shifts of known numbers need `ofNat`'s arithmetic at every width
 // (issues/function-ir-pass-arithmetic-folds.md).
 
+import bitvec_bytes;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -218,6 +219,11 @@ fn List::compared(self facts: List<Fact>, left, right: Nat, decide: Nat → Nat 
     Option::both(facts.known(left), facts.known(right), λ a c => Some(decide(a, c).bit()))
 }
 
+// A table's entry at a known index, the index read at its width.
+fn List::read_table(self facts: List<Fact>, bits, index: Nat, entries: List<Nat>) → Option<Nat> {
+    match facts.known(index) { None => None, Some(a) => Some(table_entry(entries, BitVec::ofNat(a, n := bits).toNat())) }
+}
+
 // A bitwise operation of two known bits.
 fn List::combined(self facts: List<Fact>, left, right: Nat, op: Bool → Bool → Bool) → Option<Nat> {
     Option::both(facts.known_bit(left), facts.known_bit(right), λ x y => Some(op(x, y).bit()))
@@ -244,6 +250,10 @@ fn Node::folded(self node: Node, facts: List<Fact>) → Option<Nat> {
         BufferStore(_, _, _, _) => None,
         Resize(_, _, _, _) => None,
         SignResize(_, _, _, _) => None,
+        TableRead(_, _, bits, index, entries) => facts.read_table(bits, index, entries),
+        WideLoad(_, _, _, _) => None,
+        WideStore(_, _, _, _, _) => None,
+        ByteSwap(_, _, _) => None,
     }
 }
 
@@ -278,6 +288,19 @@ theorem List::combined_value(self facts: List<Fact>, values: Valuation(), held: 
         }, folded)
 }
 
+theorem List::read_table_value(self facts: List<Fact>, values: Valuation(), held: facts.Hold(values), bits, index: Nat, entries: List<Nat>, v: Nat,
+    found: facts.read_table(bits, index, entries) = Some(v)):
+    (w: Nat) → BitVec::ofNat(table_entry(entries, values(bits, index).toNat()), n := w) = BitVec::ofNat(v) {
+    (match facts.known(index) as λ k => facts.known(index) = k →
+            (match k as λ _ => Option<Nat> { None => None, Some(a) => Some(table_entry(entries, BitVec::ofNat(a, n := bits).toNat())) }) = Some(v) →
+            (w: Nat) → BitVec::ofNat(table_entry(entries, values(bits, index).toNat()), n := w) = BitVec::ofNat(v) {
+        None => λ _ none => absurd(none),
+        Some(a) => λ at same w => trans(
+            cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := w), facts.known_holds(values, held, index, a, at, bits)),
+            cong_fn<Nat, BitVec(w)>(λ n => BitVec::ofNat(n), Option::some_inj(table_entry(entries, BitVec::ofNat(a, n := bits).toNat()), v, same))),
+    })(refl, found)
+}
+
 // What a node folds to is its value, at every width.
 theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation(), held: facts.Hold(values), v: Nat, folded: node.folded(facts) = Some(v)):
     (w: Nat) → node.value(values)(w) = BitVec::ofNat(v) {
@@ -305,6 +328,10 @@ theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation
         BufferStore(_, _, _, _) => λ none => absurd(none),
         Resize(_, _, _, _) => λ none => absurd(none),
         SignResize(_, _, _, _) => λ none => absurd(none),
+        TableRead(_, _, bits, index, entries) => λ found => facts.read_table_value(values, held, bits, index, entries, v, found),
+        WideLoad(_, _, _, _) => λ none => absurd(none),
+        WideStore(_, _, _, _, _) => λ none => absurd(none),
+        ByteSwap(_, _, _) => λ none => absurd(none),
     })(folded)
 }
 
@@ -328,6 +355,10 @@ theorem Node::folded_pure(self node: Node, facts: List<Fact>, v: Nat, folded: no
         BufferStore(_, _, _, _) => absurd(folded),
         Resize(_, _, _, _) => trivial,
         SignResize(_, _, _, _) => trivial,
+        TableRead(_, _, _, _, _) => trivial,
+        WideLoad(_, _, _, _) => absurd(folded),
+        WideStore(_, _, _, _, _) => absurd(folded),
+        ByteSwap(_, _, _) => trivial,
     }
 }
 
@@ -369,6 +400,13 @@ theorem Node::value_agree(self node: Node, values, other: Valuation(), agree: no
             agree(index, Inl(refl), 64)),
         Resize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := w), agree(source, Inl(refl), from)),
         SignResize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), agree(source, Inl(refl), from)),
+        TableRead(_, _, bits, index, entries) => λ agree w => cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := w),
+            agree(index, Inl(refl), bits)),
+        WideLoad(bytes, _, buffer, index) => λ agree w => cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(Nil, buffer, x.toNat(), bytes).toNat(), n := w),
+            agree(index, Inl(refl), 64)),
+        WideStore(bytes, _, buffer, index, _) => λ agree w => cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(Nil, buffer, x.toNat(), bytes).toNat(), n := w),
+            agree(index, Inl(refl), 64)),
+        ByteSwap(_, _, source) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.swap_bytes(), agree(source, Inl(refl), w)),
     })(agree)
 }
 
@@ -418,6 +456,20 @@ theorem Node::runs_alike(self node: Node, values, other: Valuation(), buffers: B
         },
         Resize(from, to, output, source) => λ agree => Resize(from, to, output, source).runs_alike_pure(values, other, buffers, agree, trivial),
         SignResize(from, to, output, source) => λ agree => SignResize(from, to, output, source).runs_alike_pure(values, other, buffers, agree, trivial),
+        TableRead(width, output, bits, index, entries) => λ agree => TableRead(width, output, bits, index, entries).runs_alike_pure(values, other, buffers, agree, trivial),
+        WideLoad(bytes, output, buffer, index) => λ agree => ⟨refl, λ w =>
+            trans(Valuation::set_here(other, output, wide_value(buffers, buffer, index, bytes, other), w),
+                trans(cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(buffers, buffer, x.toNat(), bytes).toNat(), n := w), agree(index, Inl(refl), 64)),
+                    sym(Valuation::set_here(values, output, wide_value(buffers, buffer, index, bytes, values), w))))⟩,
+        WideStore(bytes, output, buffer, index, value) => λ agree => {
+            let i = agree(index, Inl(refl), 64);
+            let v = agree(value, Inr(Inl(refl)), 8 * bytes);
+            ⟨eq2(λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => store_word(buffers, buffer, x.toNat(), bytes, y), i, v), λ w =>
+                trans(Valuation::set_here(other, output, wide_value(store_word(buffers, buffer, other(64, index).toNat(), bytes, other(8 * bytes, value)), buffer, index, bytes, other), w),
+                    trans(eq2(λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => BitVec::ofNat(buffer_word(store_word(buffers, buffer, x.toNat(), bytes, y), buffer, x.toNat(), bytes).toNat(), n := w), i, v),
+                        sym(Valuation::set_here(values, output, wide_value(store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value)), buffer, index, bytes, values), w))))⟩
+        },
+        ByteSwap(width, output, source) => λ agree => ByteSwap(width, output, source).runs_alike_pure(values, other, buffers, agree, trivial),
     })(agree)
 }
 
@@ -443,6 +495,11 @@ theorem Node::run_keeps(self node: Node, values: Valuation(), buffers: Buffers()
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
         Resize(from, to, output, source) => Valuation::set_other(values, output, Resize(from, to, output, source).value(values), w, id, ne),
         SignResize(from, to, output, source) => Valuation::set_other(values, output, SignResize(from, to, output, source).value(values), w, id, ne),
+        TableRead(width, output, bits, index, entries) => Valuation::set_other(values, output, TableRead(width, output, bits, index, entries).value(values), w, id, ne),
+        WideLoad(bytes, output, buffer, index) => Valuation::set_other(values, output, wide_value(buffers, buffer, index, bytes, values), w, id, ne),
+        WideStore(bytes, output, buffer, index, value) => Valuation::set_other(values, output,
+            wide_value(store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value)), buffer, index, bytes, values), w, id, ne),
+        ByteSwap(width, output, source) => Valuation::set_other(values, output, ByteSwap(width, output, source).value(values), w, id, ne),
     }
 }
 

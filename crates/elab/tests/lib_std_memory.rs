@@ -30,6 +30,7 @@ const MODULES: &[(&str, &str)] = &[
         "bitvec_nat",
         include_str!("../../../lib/std/bitvec/bitvec_nat.hthr"),
     ),
+    ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("vector", include_str!("../../../lib/std/data/vector.hthr")),
     (
         "bitvec_bytes",

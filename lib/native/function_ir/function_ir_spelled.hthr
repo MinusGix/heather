@@ -71,6 +71,10 @@ fn Node::spelled(self node: Node) → List<Nat> → List<Nat> {
         BufferStore(o, b, i, v) => spell_of("BufferStore", [o, b, i, v]),
         Resize(f, t, o, a) => spell_of("Resize", [f, t, o, a]),
         SignResize(f, t, o, a) => spell_of("SignResize", [f, t, o, a]),
+        TableRead(w, o, n, i, es) => spell_call("TableRead", [spell_number(w), spell_number(o), spell_number(n), spell_number(i), spell_numbers(es)]),
+        WideLoad(n, o, b, i) => spell_of("WideLoad", [n, o, b, i]),
+        WideStore(n, o, b, i, v) => spell_of("WideStore", [n, o, b, i, v]),
+        ByteSwap(w, o, a) => spell_of("ByteSwap", [w, o, a]),
     }
 }
 

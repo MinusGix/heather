@@ -43,3 +43,17 @@ theorem store_reads_kept(): List::optimised([Const(64, 1, 0), Const(64, 2, 65), 
 // A word live after the leaf is never dropped.
 // expect-error: `refl` needs both sides to be definitionally equal
 theorem live_dropped(): List::optimised([Const(64, 0, 1)], [0]) = [] { refl }
+
+// A table read at a known index is the entry: one rule, the index read at
+// its width (6 at two bits is 2).
+theorem table_read_folds(): List::optimised([Const(2, 1, 6), TableRead(64, 0, 2, 1, [10, 20, 30, 40])], [0])
+    = [Const(64, 0, 30)] { refl }
+
+// At an index the pass does not know, the read stays.
+theorem table_read_kept(): List::optimised([TableRead(64, 0, 2, 1, [10, 20, 30, 40])], [0])
+    = [TableRead(64, 0, 2, 1, [10, 20, 30, 40])] { refl }
+
+// Negative control: the fold reads the entry the index names, not another.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem table_read_folds_not_first(): List::optimised([Const(2, 1, 2), TableRead(64, 0, 2, 1, [10, 20, 30, 40])], [0])
+    = [Const(64, 0, 10)] { refl }

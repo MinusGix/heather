@@ -9,6 +9,7 @@
 // big-endian forms are the little-endian ones read through `reverse`.
 
 import bitvec;
+import bitvec_resize;
 import bool;
 import list;
 import logic;
@@ -71,6 +72,24 @@ theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_
     trans(rewrite(BitVec::bytes_le_of_bytes_le(k, reverse(bytes)), refl), reverse_reverse(k, bytes))
 }
 
+// A word whose low bit is rebuilt from its tail.
+theorem BitVec::cons_back(n: Nat, x: BitVec(Succ(n)), {rest: BitVec(n)}, same: rest = x.tail_bits()): rest.cons_bit(x.head_bit()) = x {
+    trans(BitVec::cons_bit_cong(n, refl, same, a := x.head_bit(), b := x.head_bit()), BitVec::cons_head_tail(n, x))
+}
+
+// A byte joined to nothing is the byte (at width 8, where `0 + 8` reads 8).
+theorem BitVec::concat_nil_byte(x: u8): x.concat(BitVec::nil()) = x {
+    let t1 = x.tail_bits(); let t2 = t1.tail_bits(); let t3 = t2.tail_bits(); let t4 = t3.tail_bits();
+    let t5 = t4.tail_bits(); let t6 = t5.tail_bits(); let t7 = t6.tail_bits();
+    BitVec::cons_back(7, x, BitVec::cons_back(6, t1, BitVec::cons_back(5, t2, BitVec::cons_back(4, t3, BitVec::cons_back(3, t4,
+        BitVec::cons_back(2, t5, BitVec::cons_back(1, t6, BitVec::cons_back(0, t7, refl))))))))
+}
+
+// Four bytes, low first, are their concatenation.
+theorem BitVec::of_bytes_le_four(b0, b1, b2, b3: u8): BitVec::of_bytes_le([b0, b1, b2, b3]) = b0.concat(b1.concat(b2.concat(b3))) {
+    cong_fn(λ (top: u8) => b0.concat(b1.concat(b2.concat(top))), BitVec::concat_nil_byte(b3))
+}
+
 // A word with its byte `r` replaced, byte 0 the most significant: the
 // word of its bytes with that one changed, and the word where it has no
 // such byte.
@@ -104,4 +123,51 @@ theorem BitVec::be_join_64(b0, b1, b2, b3, b4, b5, b6, b7: u8):
     (BitVec::of_bytes_be([b0, b1, b2, b3]).zero_extend(32) << 32 | BitVec::of_bytes_be([b4, b5, b6, b7]).zero_extend(32))
         = BitVec::of_bytes_be([b0, b1, b2, b3, b4, b5, b6, b7]) {
     BitVec::bor_concat_above(0, 32, 32, BitVec::of_bytes_be([b4, b5, b6, b7]), BitVec::of_bytes_be([b0, b1, b2, b3]))
+}
+
+// ---------------------------------------------------------------------------
+// A word's bytes reversed
+
+// The bytes of a `k`-byte word in the other order: its big-endian bytes
+// read as little-endian, as `BSWAP` does to a register.
+fn BitVec::byte_swap(k: Nat, self w: BitVec(8 * k)) → BitVec(8 * k) { BitVec::of_bytes_le(w.bytes_be(k)) }
+
+// Swapping twice gives the word back.
+theorem BitVec::byte_swap_byte_swap(k: Nat, w: BitVec(8 * k)): w.byte_swap(k).byte_swap(k) = w {
+    let bytes = w.bytes_le(k);
+    let swapped: (w.byte_swap(k).byte_swap(k) = BitVec::of_bytes_le(reverse(reverse(bytes)))) =
+        cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(reverse(v)), BitVec::bytes_le_of_bytes_le(k, reverse(bytes)));
+    trans(swapped, trans(cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(v), reverse_reverse(k, bytes)), BitVec::of_bytes_le_bytes_le(k, w)))
+}
+
+// The little-endian word of some bytes, swapped, is their big-endian word,
+// and the other way round.
+theorem BitVec::byte_swap_of_bytes_le(k: Nat, bytes: [BitVec(8); k]): BitVec::of_bytes_le(bytes).byte_swap(k) = BitVec::of_bytes_be(bytes) {
+    cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(reverse(v)), BitVec::bytes_le_of_bytes_le(k, bytes))
+}
+
+theorem BitVec::byte_swap_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_bytes_be(bytes).byte_swap(k) = BitVec::of_bytes_le(bytes) {
+    trans(cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(reverse(v)), BitVec::bytes_le_of_bytes_le(k, reverse(bytes))),
+        cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(v), reverse_reverse(k, bytes)))
+}
+
+// Four bytes joined by shifts, the first the most significant, are the
+// swap of the word that holds them low byte first: one load of the four
+// and a `BSWAP` read what compiled code reads a byte at a time.
+theorem BitVec::be_join_32_swap(b0, b1, b2, b3: u8):
+    (b0.zero_extend(56) << 24 | b1.zero_extend(56) << 16 | b2.zero_extend(56) << 8 | b3.zero_extend(56))
+        = BitVec::of_bytes_le([b0, b1, b2, b3]).byte_swap(4).zero_extend(32) {
+    trans(BitVec::be_join_32(b0, b1, b2, b3), sym(cong_fn<u32, u64>(λ x => x.zero_extend(32), BitVec::byte_swap_of_bytes_le(4, [b0, b1, b2, b3]))))
+}
+
+// A word of any width with its whole bytes reversed: the `ByteSwap` node's
+// meaning, at the widths it lowers (32 and 64) the swap above.
+fn BitVec::swap_bytes({n: Nat}, self w: BitVec(n)) → BitVec(n) { w.resize(8 * (n / 8)).byte_swap(n / 8).resize(n) }
+
+theorem BitVec::swap_bytes_32(w: u32): w.swap_bytes() = w.byte_swap(4) {
+    trans(BitVec::resize_self(32, w.resize(32).byte_swap(4)), cong_fn(λ (x: u32) => x.byte_swap(4), BitVec::resize_self(32, w)))
+}
+
+theorem BitVec::swap_bytes_64(w: u64): w.swap_bytes() = w.byte_swap(8) {
+    trans(BitVec::resize_self(64, w.resize(64).byte_swap(8)), cong_fn(λ (x: u64) => x.byte_swap(8), BitVec::resize_self(64, w)))
 }

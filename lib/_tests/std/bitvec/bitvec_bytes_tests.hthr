@@ -1,0 +1,30 @@
+// Probes for a word's bytes reversed (`BitVec::byte_swap`, `swap_bytes`).
+import bitvec;
+import bitvec_bytes;
+import bitvec_resize;
+import list;
+import logic;
+import nat;
+
+// A literal word: its four bytes come back in the other order, as the CPU's
+// `BSWAP` leaves them.
+theorem byte_swap_literal_32(): BitVec::ofNat(0x12345678, n := 32).byte_swap(4) = BitVec::ofNat(0x78563412) { refl }
+
+theorem byte_swap_literal_64(): BitVec::ofNat(0x0102030405060708, n := 64).byte_swap(8) = BitVec::ofNat(0x0807060504030201) { refl }
+
+// At a neutral width the node's meaning is the swap of the word's whole
+// bytes, and twice is the word.
+theorem swap_bytes_twice_32(w: u32): w.swap_bytes().swap_bytes() = w {
+    trans(BitVec::swap_bytes_32(w.swap_bytes()),
+        trans(cong_fn(λ (x: u32) => x.byte_swap(4), BitVec::swap_bytes_32(w)), BitVec::byte_swap_byte_swap(4, w)))
+}
+
+// In a checking position: a neutral word's swap is what the big-endian
+// reading of its little-endian bytes says.
+theorem byte_swap_of_bytes(b0, b1, b2, b3: u8): BitVec::of_bytes_le([b0, b1, b2, b3]).byte_swap(4) = BitVec::of_bytes_be([b0, b1, b2, b3]) {
+    BitVec::byte_swap_of_bytes_le(4, [b0, b1, b2, b3])
+}
+
+// A negative control: the swap is not the word itself.
+// expect-error: NotConvertible
+theorem byte_swap_not_identity(): BitVec::ofNat(0x12345678, n := 32).byte_swap(4) = BitVec::ofNat(0x12345678) { refl }

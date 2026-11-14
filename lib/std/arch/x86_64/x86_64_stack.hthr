@@ -244,6 +244,11 @@ record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
     // Every word of it reads as some word, whatever was stored there: what
     // a frame not yet written holds.
     readable: (memory: M) → (i: Nat) → i + 8 <= size → Exists<BitVec(64)>(λ word => read_word(data, memory, next_rip(low, i)) = Some(word)),
+    // Code reads as data, below the canonical boundary: a constant table
+    // placed in the code is read where it was fetched from
+    // (issues/rt-fixed-arrays-and-tables.md).
+    sees_code: (memory: M) → (a: BitVec(64)) → fetch.executable(memory, a) = True →
+        (data.read(memory, a) = fetch.read_byte(memory, a)) ∧ (a.toNat() < Nat::pow(2, 47)),
 }
 
 fn Stack::at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat) → BitVec(64) {
@@ -399,6 +404,20 @@ theorem Stack::lent_address<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
         BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
     ⟨j(sym(address), λ x _ => x.toNat() < Nat::pow(2, 47), omega(value, readable.left, inside)),
      j(sym(address), λ x _ => data.read(memory, x) = xs.nth(index.toNat()), readable.right(index.toNat(), inside))⟩
+}
+
+// The same register addresses four bytes of the span when the last is
+// inside, all below the canonical boundary: what a doubleword load asks of
+// its base.
+theorem Stack::lent_four<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, entry: M, lent: stack.Lends(i, a, xs, entry), index: BitVec(64), memory: M,
+    wrote: stack.Wrote(i, entry, memory), inside: index.toNat() + 3 < xs.len()): a.add(index).toNat() + 4 <= Nat::pow(2, 47) {
+    let readable = lent(memory, wrote);
+    let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
+        BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
+    j(sym(address), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47), omega(value, readable.left, inside))
 }
 
 // ---------------------------------------------------------------------------
