@@ -29,6 +29,7 @@ import list;
 import logic;
 import nat;
 import option;
+import pair;
 
 // Whatever `old` may do over the functions `callees`, `new` may.
 fn Rewrites(callees: List<Function>, old, new: Function) → Type {
@@ -145,6 +146,20 @@ theorem Stage::run_then<P, Q>(first: Stage<P>, second: Stage<Q>, functions, betw
     program_effects(new, before, f, arguments, result, after) {
     second.run_sound(between, more, new, then, before, f, arguments, result, after,
         first.run_sound(functions, plans, between, ran, before, f, arguments, result, after, did))
+}
+
+// Two stages as one: a function rewritten by the first and then by the
+// second, both over its callees as the pair left them. So the first reads
+// callees the second has been over already, where two runs one after the
+// other would have it read the first's alone; and a program rewritten by
+// both is stated once a function.
+fn Stage::then<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Pair<P, Q>> {
+    Stage(λ callees old plan => first.rewrite(callees, old, plan.fst).and_then(λ mid => second.rewrite(callees, mid, plan.snd)),
+        λ callees old plan new made arguments result before after ran => {
+            let a = Option::and_then_some(first.rewrite(callees, old, plan.fst), λ (mid: Function) => second.rewrite(callees, mid, plan.snd), new, made);
+            second.sound(callees, a.witness, plan.snd, new, a.proof.right, arguments, result, before, after,
+                first.sound(callees, old, plan.fst, a.witness, a.proof.left, arguments, result, before, after, ran))
+        })
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,90 @@
+// Probes of tidying (lib/native/function_ir/function_ir_tidy.hthr,
+// docs/optimizer-design.md §3.1): what inlining leaves read through its
+// copies and the copies dropped; a buffer read brought back to the shape
+// the lowering accepts; a call and a loop fed the ids their arguments
+// copied; the plans the searchers find; and the stage's theorem. Tests,
+// not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_tidy;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+
+fn nodes(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), ns, Ports(Nil))) }
+
+// x ↦ (5 + x) + 5 with its call of the sum inlined
+// (`function_ir_inline_tests`): 4 and 5 are moves of the arguments, 2 a
+// move of the callee's result.
+fn inlined() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 5)]), Compose(
+        Compose(nodes([Move(64, 4, 1), Move(64, 5, 0)]), Compose(nodes([Add(64, 6, 4, 5)]), nodes([Move(64, 2, 6)]))),
+        nodes([Add(64, 3, 2, 1)]))), 3)
+}
+
+fn inlined_plan() → Pair<Plan, Plan> {
+    Pair(Both(Nodes([Keep]), Both(Both(Nodes([Keep, Keep]), Both(Nodes([Swap(1, 0)]), Nodes([Keep]))), Nodes([Swap(6, 1)]))),
+        Both(Nodes([Keep]), Both(Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Drop]))), Nodes([Keep]))))
+}
+
+// The sums read the caller's own values, and the three moves are gone.
+fn inlined_tidied() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 5)]), Compose(Compose(nodes([]), Compose(nodes([Add(64, 6, 1, 0)]), nodes([]))), nodes([Add(64, 3, 6, 1)]))), 3)
+}
+
+theorem inlined_run(): tidy_stage(rules()).run([inlined()], [inlined_plan()]) = Some([inlined_tidied()]) { refl }
+
+theorem inlined_found(): inlined().tidy_plan(rules()) = Some(inlined_plan()) { refl }
+
+// The stage's theorem: the tidied function does whatever the function did.
+theorem inlined_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    did: program_effects([inlined()], before, f, arguments, result, after)): program_effects([inlined_tidied()], before, f, arguments, result, after) {
+    tidy_stage(rules()).run_sound([inlined()], [inlined_plan()], [inlined_tidied()], inlined_run(), before, f, arguments, result, after, did)
+}
+
+// A function lent one buffer, parameters 0 and 1 its address and length,
+// as inlining leaves a read of it: the index and the length are copies, so
+// the test compares two copies and the load is at one. Tidied, the test
+// compares the index with the buffer's own length and the load is at the
+// index, which is the shape the lowering takes for a load in bounds; the
+// call takes the ids its arguments copied.
+fn reader() → Function {
+    Function([0, 1, 2], Compose(nodes([Move(64, 3, 1), Move(64, 4, 2), UnsignedLessThan(64, 5, 4, 3)]),
+        Conditional(Ports([]), 5, Ports([]), Ports([]),
+            Compose(nodes([BufferLoad(6, 0, 4), Move(64, 7, 6)]), Compose(Call(0, [7, 4], 8), nodes([Move(64, 9, 8)]))),
+            nodes([Const(64, 9, 0)]))), 9, 1)
+}
+
+fn reader_tidied() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
+        Conditional(Ports([]), 5, Ports([]), Ports([]),
+            Compose(nodes([BufferLoad(6, 0, 2)]), Compose(Call(0, [6, 2], 8), nodes([Move(64, 9, 8)]))),
+            nodes([Const(64, 9, 0)]))), 9, 1)
+}
+
+theorem reader_run(): reader().tidy_plan(rules()).and_then(λ plan => tidy_stage(rules()).rewrite([], reader(), plan)) = Some(reader_tidied()) { refl }
+
+// A loop started from a copy starts from what it copies, and a copy in its
+// pass is read through there.
+fn looper() → Function {
+    Function([0, 1], Compose(nodes([Move(64, 2, 0)]), Loop([2], 1, [3], 4, nodes([Move(64, 5, 3), Add(64, 6, 5, 5), Const(1, 7, 1)]), 7, [6], [8], 9)), 8)
+}
+
+theorem looper_run(): looper().tidy_plan(rules()).and_then(λ plan => tidy_stage(rules()).rewrite([], looper(), plan)) =
+    Some(Function([0, 1], Compose(nodes([]), Loop([0], 1, [3], 4, nodes([Add(64, 6, 3, 3), Const(1, 7, 1)]), 7, [6], [8], 9)), 8)) { refl }
+
+// A store is never dropped, though nothing reads what it writes; a load
+// nothing reads is.
+theorem store_kept(): Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferStore(4, 0, 2, 2), Const(64, 5, 0)]), 5, 1).dead_plan() =
+    Nodes([Drop, Keep, Keep]) { refl }
+
+// A copy at one width is not read through at another.
+theorem width_kept(): Function([0], nodes([Move(64, 1, 0), Add(32, 2, 1, 1)]), 2).copy_plan() = Nodes([Keep, Keep]) { refl }
