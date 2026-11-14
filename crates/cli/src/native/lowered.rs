@@ -51,6 +51,11 @@ impl Reader<'_> {
             14 => ("BufferStore", 4),
             15 => ("Resize", 4),
             16 => ("SignResize", 4),
+            // A table read: four fields, then its entries as a counted list.
+            17 => {
+                let fields = join(&self.take(4)?);
+                return Ok(format!("TableRead({fields}, {})", self.ids()?));
+            }
             tag => return Err(format!("node tag {tag}")),
         };
         Ok(format!("{name}({})", join(&self.take(fields)?)))

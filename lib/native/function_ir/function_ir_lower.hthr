@@ -2611,6 +2611,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         Resize(from, to, output, source) => file.resize(from, to, destination, output, source),
         // A sign extension has no narrow form yet.
         SignResize(_, _, _, _) => None,
+        // A table read is memory too: its lowering is the next step.
+        TableRead(_, _, _, _, _) => None,
     }
 }
 
@@ -2708,6 +2710,7 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         BufferStore(_, _, _, _) => trivial,
         Resize(from, to, output, source) => file.resize_keeps<M>(values, from, to, destination, output, source),
         SignResize(_, _, _, _) => trivial,
+        TableRead(_, _, _, _, _) => trivial,
     }
 }
 
@@ -2776,6 +2779,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         BufferStore(_, _, _, _) => trivial,
         Resize(_, _, _, _) => trivial,
         SignResize(_, _, _, _) => trivial,
+        TableRead(_, _, _, _, _) => trivial,
     }
 }
 
@@ -3190,6 +3194,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         BufferStore(_, _, index, value) => [index, value],
         Resize(_, _, _, source) => [source],
         SignResize(_, _, _, source) => [source],
+        TableRead(_, _, _, index, _) => [index],
     }
 }
 

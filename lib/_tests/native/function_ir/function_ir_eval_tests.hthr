@@ -3,6 +3,7 @@
 // and refuses what `evaluable` does.
 import function_ir;
 import function_ir_eval;
+import bitvec;
 import bool;
 import list;
 import option;
@@ -57,3 +58,16 @@ fn unknown_call() → Function { of(Call(5, [0], 1)) }
 
 theorem unknown_call_refused(): unknown_call().scan(no_calls()) = False { refl }
 theorem unknown_call_not_evaluable(): unknown_call().evaluable(no_calls()) = False { refl }
+
+// A table read: the argument's low two bits pick one of four entries
+// (`TableRead`, issues/rt-fixed-arrays-and-tables.md), so 5 reads entry 1
+// and 7 entry 3.
+fn table_lookup() → Function {
+    of(nodes([Resize(64, 2, 2, 0), TableRead(64, 1, 2, 2, [10, 20, 30, 40])]))
+}
+
+theorem table_lookup_evaluable(): table_lookup().evaluable(no_calls()) = True { refl }
+theorem table_lookup_five(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(5)]) = BitVec::ofNat(20) { refl }
+theorem table_lookup_seven(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(7)]) = BitVec::ofNat(40) { refl }
+// Negative control: not the entry at the untruncated index.
+theorem table_lookup_not_past(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(1)]).eq_bit(BitVec::ofNat(10)) = False { refl }

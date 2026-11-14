@@ -116,6 +116,7 @@ theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(),
         BufferStore(_, _, _, _) => λ no => false_elim(no),
         Resize(_, _, _, _) => λ _ => refl,
         SignResize(_, _, _, _) => λ _ => refl,
+        TableRead(_, _, _, _, _) => λ _ => refl,
     }(pure)
 }
 
@@ -139,6 +140,7 @@ theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, 
         BufferStore(_, _, _, _) => refl,
         Resize(_, _, _, _) => refl,
         SignResize(_, _, _, _) => refl,
+        TableRead(_, _, _, _, _) => refl,
     }
 }
 
