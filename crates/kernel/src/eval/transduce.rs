@@ -1477,11 +1477,15 @@ impl<'a, 'v> Eval<'a, 'v> {
                 rests[i] = Some(next);
             }
         }
-        // One unit per bit (design §8), charged once the fold is known to
-        // fire: strictly less than the structural path spends on the same
-        // bits, so no verdict fuel allows today becomes a refusal — and an
-        // attempt that declines has not spent the word's worth twice.
-        self.spend_n(u64::from(read))?;
+        // One unit for the run (design §8), as a literal's entry is one: a
+        // run is at most one machine word (`BIT_RUN_WIDTH_CAP`), and the
+        // table is applied to it in a bounded number of native operations,
+        // so the charge is per word, as the work is. It is strictly less
+        // than the structural path spends on the same bits, so no verdict
+        // fuel allows today becomes a refusal; it is charged once the fold
+        // is known to fire, so an attempt that declines has spent nothing
+        // here. A wider vector is one run per word, each charged.
+        self.spend()?;
 
         // The `Nat` state the residual fold starts from.
         let mut carried_end: Option<&'v TmClo<'v>> = None;
