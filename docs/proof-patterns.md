@@ -278,6 +278,18 @@ property of Heather.
   keep the goal as written, say so with `as λ _ => <goal>`: an arm
   proved about the unreduced call is refused by the kernel once the
   split specialises the goal.
+- **A loop counting a word up to a bound is proved by its step equations
+  and `BitVec::loop_up`, not by unfolding.** A `decreases` function whose
+  body is one test with an equation (`if h: P { … } else { … }`, `match h:
+  b { True => …, False => … }`) gets `f::step(x̄, h: P)` for the arm that
+  calls it again and `f::done(x̄, h: ¬P)` for the one that stops. Give
+  `BitVec::loop_up` the step as a function `g(s, i)` with its found proofs
+  dropped (`vector_update`/`vector_get` for `v.put(i, x)`/`v.at(i)`, which
+  is what they unfold to) and the two equations; it answers the loop as
+  the exit at the bound from `BitVec::run_up(g, s, i, k)`, which at a
+  closed count computes, and `BitVec::run_up_invariant` carries what each
+  step keeps (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`,
+  `issues/loop-invariant-rules.md`).
 
 ## 5. Names and syntax
 

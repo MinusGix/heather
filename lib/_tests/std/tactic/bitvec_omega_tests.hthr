@@ -152,7 +152,7 @@ fn climb(acc, j: BitVec(64)) → BitVec(64)
     decreases (48 - j).toNat() {
     if h: j < 48 { climb(acc + word_below(j + 16), j + 1) } else { acc }
 }
-theorem climb_unfolds(acc, j: BitVec(64)): True { let step = climb_unfold(acc, j); trivial }
+theorem climb_unfolds(acc, j: BitVec(64)): True { let step = climb::unfold(acc, j); trivial }
 
 // expect-error: `word_below`'s `inside` was left to its default, which did not give
 fn climb_loose(j: BitVec(64)) → BitVec(64) { word_below(j + 16) }

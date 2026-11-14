@@ -328,7 +328,13 @@ theorem count_down_step(s: CdState, h: s.m.leb(0) = False):
     count_down(s) = (match h: Nat::leb(s.m, 0) {
         True => s,
         False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
-    }) { count_down_unfold(s) }
+    }) { count_down::unfold(s) }
+// And the arm the test picks, under the test (issues/loop-invariant-rules.md):
+// `count_down::step` where it recurses, `count_down::done` where it stops.
+theorem count_down_steps(s: CdState, h: s.m.leb(0) = False): count_down(s) = count_down(CdState(s.m - 1, Cons(s.m, s.out))) {
+    count_down::step(s, h)
+}
+theorem count_down_stops(s: CdState, h: s.m.leb(0) = True): count_down(s) = s { count_down::done(s, h) }
 // A plain `match` on a computed scrutinee owes each arm its equation, and
 // `omega` reads it there though nothing names it
 // (docs/dependent-match-compiler-design.md §4, issues/match-equation-in-every-arm.md):
@@ -353,7 +359,7 @@ fn half(n: Nat) → Nat decreases n {
     }
 }
 theorem half_step(n: Nat, h: n.leb(1) = False): half(n) = Succ(half(n - 2)) {
-    j(h, λ b _ => half(n) = (match b { True => 0, False => Succ(half(n - 2)) }), half_unfold(n))
+    j(h, λ b _ => half(n) = (match b { True => 0, False => Succ(half(n - 2)) }), half::unfold(n))
 }
 theorem half_seven(): half(7) = 3 { refl }
 // Through a Bool definition and its `let`s, at the top and inside a guard.
