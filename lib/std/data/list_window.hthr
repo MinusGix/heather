@@ -461,3 +461,31 @@ theorem List::update_from_one_of_four<A>(self xs: List<A>, o, r: Nat, b, pad: A,
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reading through `++` and `rev`
+
+theorem List::nth_append_below<A>(self xs: List<A>, ys: List<A>): (i: Nat) → i < xs.len() → (xs ++ ys).nth(i) = xs.nth(i) {
+    match xs {
+        Nil => λ i below => false_elim(below),
+        Cons(_, t) => λ i => match i { Zero => λ _ => refl, Succ(k) => λ below => t.nth_append_below(ys, k, below) },
+    }
+}
+
+// The element `i` from the front of a reversed list is the one `i` from the back.
+theorem List::nth_rev<A>(self xs: List<A>): (i, k: Nat) → i + k + 1 = xs.len() → xs.rev().nth(i) = xs.nth(k) {
+    match xs {
+        Nil => λ i k e => false_elim(omega),
+        Cons(h, t) => λ i k => match k {
+            Zero => λ e => {
+                let turned = t.rev_len();
+                let at: (0 + t.rev().len() = i) = omega;
+                j(at, λ m _ => (t.rev() ++ [h]).nth(m) = Some(h), t.rev().nth_append_r([h], 0))
+            },
+            Succ(k2) => λ e => {
+                let turned = t.rev_len();
+                trans(t.rev().nth_append_below([h], i, omega), t.nth_rev(i, k2, omega))
+            },
+        },
+    }
+}

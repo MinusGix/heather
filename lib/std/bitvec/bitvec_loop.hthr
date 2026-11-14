@@ -1,0 +1,36 @@
+// Loops that count a word up to a bound. A function by `decreases` whose
+// test is `i < bound` and whose tail call is at `i + 1` is its step
+// iterated: `BitVec::counts_up` takes its two unfoldings (below the bound
+// one step, past it the answer) and gives its value from any `i` in closed
+// form. The induction is here once, so a loop's proof is its two step
+// equations (issues/loop-invariant-rules.md).
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+
+// The state after `n` passes from `i`.
+fn BitVec::iterate_up<S>(step: S → u64 → S, s: S, i: u64, n: Nat) → S {
+    match n { Zero => s, Succ(m) => BitVec::iterate_up(step, step(s, i), i + 1, m) }
+}
+
+theorem BitVec::counts_up<S>(f: S → u64 → Mutated<S, u64>, step: S → u64 → S, bound: u64,
+    steps: (s: S) → (i: u64) → i.toNat() < bound.toNat() → f(s, i) = f(step(s, i), i + 1),
+    ends: (s: S) → (i: u64) → bound.toNat() <= i.toNat() → f(s, i) = Mutated(s, i),
+    n: Nat): (s: S) → (i: u64) → i.toNat() + n = bound.toNat() → f(s, i) = Mutated(BitVec::iterate_up(step, s, i, n), bound) {
+    match n {
+        Zero => λ s i e => {
+            let last: (i = bound) = bv_omega;
+            trans(ends(s, i, omega), cong_fn(λ (k: u64) => Mutated(s, k), last))
+        },
+        Succ(m, ih) => λ s i e => {
+            let range: (bound.toNat() < Nat::pow(2, 64)) = BitVec::toNat_lt_pow(64, bound);
+            let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+            trans(steps(s, i, omega), ih(step(s, i), i + 1, omega))
+        },
+    }
+}

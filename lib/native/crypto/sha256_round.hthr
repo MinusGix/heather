@@ -191,3 +191,21 @@ theorem sha256_next_spec(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, 
                 cong_fn(λ (v: u32) => sha256_wide(v), narrow))),
         sha256_wide_low(sha256_next_narrow(a1, a6, a14, a15))))
 }
+
+// A schedule word of any window is the compiled word of the four it reads.
+theorem sha256_next_at(W: List<u32>):
+    Sha2::sha256().next_word(W) =
+        sha256_next(sha256_wide(Sha2::sha256().window_word(W, 1)), sha256_wide(Sha2::sha256().window_word(W, 6)),
+            sha256_wide(Sha2::sha256().window_word(W, 14)), sha256_wide(Sha2::sha256().window_word(W, 15))).truncate(32, 32) {
+    let a1: u32 = Sha2::sha256().window_word(W, 1);
+    let a6: u32 = Sha2::sha256().window_word(W, 6);
+    let a14: u32 = Sha2::sha256().window_word(W, 14);
+    let a15: u32 = Sha2::sha256().window_word(W, 15);
+    let narrow: (sha256_next_narrow(sha256_wide(a1).truncate(32, 32), sha256_wide(a6).truncate(32, 32),
+            sha256_wide(a14).truncate(32, 32), sha256_wide(a15).truncate(32, 32)) = sha256_next_narrow(a1, a6, a14, a15)) =
+        rewrite(sha256_wide_low(a1), sha256_wide_low(a6), sha256_wide_low(a14), sha256_wide_low(a15), refl);
+    sym(trans(cong_fn(λ (v: u64) => v.truncate(32, 32),
+            trans(sha256_next_low(sha256_wide(a1), sha256_wide(a6), sha256_wide(a14), sha256_wide(a15)),
+                cong_fn(λ (v: u32) => sha256_wide(v), narrow))),
+        sha256_wide_low(sha256_next_narrow(a1, a6, a14, a15))))
+}

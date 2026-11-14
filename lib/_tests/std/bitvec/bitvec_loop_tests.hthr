@@ -1,0 +1,44 @@
+// Probes of `bitvec_loop`: a counting loop that is not SHA-256's, given in
+// closed form by its two unfoldings and `BitVec::counts_up`. Tests, not
+// library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import bitvec_loop;
+import bitvec_omega;
+import omega;
+
+fn twos(s, i: u64) → Mutated<u64, u64> decreases (5 - i).toNat() {
+    if h: i < 5 { twos(s + 2, i + 1) } else { Mutated(s, i) }
+}
+
+theorem twos_step(s, i: u64, below: i.toNat() < 5): twos(s, i) = twos(s + 2, i + 1) {
+    let e: (i.unsigned_lt_bit(5) = True) = bv_omega;
+    trans(twos_unfold(s, i), Bool::convoy_true(i.unsigned_lt_bit(5), twos(s + 2, i + 1), Mutated(s, i), e))
+}
+
+theorem twos_done(s, i: u64, past: 5 <= i.toNat()): twos(s, i) = Mutated(s, i) {
+    let e: (i.unsigned_lt_bit(5) = False) = bv_omega;
+    trans(twos_unfold(s, i), Bool::convoy_false(i.unsigned_lt_bit(5), twos(s + 2, i + 1), Mutated(s, i), e))
+}
+
+theorem twos_all(s: u64): twos(s, 0) = Mutated(s + 2 + 2 + 2 + 2 + 2, 5) {
+    BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
+        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 5, s, 0, refl)
+}
+
+// From the middle, with the passes left counted.
+theorem twos_from_three(s: u64): twos(s, 3) = Mutated(s + 2 + 2, 5) {
+    BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
+        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 2, s, 3, refl)
+}
+
+// A wrong count of passes is not an instance: the lemma asks `i + n = bound`.
+// expect-error: needs both sides to be definitionally equal
+theorem twos_miscounted(s: u64): twos(s, 3) = Mutated(s + 2 + 2 + 2, 5) {
+    BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
+        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 3, s, 3, refl)
+}
