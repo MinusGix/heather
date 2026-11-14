@@ -789,3 +789,67 @@ either; that is the fact reader's limit, not the split's. Probes:
 facts alike, so no atom splits; what moves is that `s.take(k).base` now
 meets `s.base`. Probes and refused controls (`call_field_false`,
 `field_call_apart`) are in `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 22. Opening what the search is given (2026-11-14)
+
+`issues/omega-opens-closed-terms.md`, `issues/bv-omega-hypothesis-word-bound.md`.
+The linked SHA-256's agreement proofs bound a `let … = refl` before nearly
+every arithmetic step, each one restating a term so `omega` would read it as
+arithmetic. Each such binding is a shape the reflection now opens itself,
+before the search, and each opening is bounded:
+
+- **A word's range.** Every atom `toNat(w)` at a literal width `n` brings
+  `toNat(w) < 2^n` (`bitvec::BitVec::toNat_lt_pow`), whether it is met in
+  the goal or only in a fact. It is stated beside the facts, as a division
+  atom's bounds are, so it never widens what a relevance layer reads. A
+  width that is not a literal brings nothing, and the range is skipped
+  where the lemma is not in scope. `bv_omega`'s inner `omega` calls inherit
+  this, which is what its side condition over a word met only in a fact
+  (`j < mn` with `mn` nowhere else) lacked.
+- **A closed call computes to its numeral** under
+  `NUMERAL_COMPUTATION_STEPS` (a few thousand). A call stuck on a local
+  stops long before it, so only a computation that keeps going pays it.
+  `u64::ofNat(0).toNat()` needs a few hundred steps, which the earlier
+  256-step probe did not give it.
+- **`a * Succ(b)` is `a * b + a`**, by `mul`'s definition (it recurses on
+  its right), so an induction hypothesis about `a * b` meets the step's
+  goal. A literal factor was already a scale.
+- **A call is named at the parts of its arguments.** §2 named a reduct's
+  leaves against the call at the fields of an argument that *is* a
+  constructor. The candidates are now also the fields of an argument that
+  *computes* to one (`ending(z, l)` is `Cons(0x80, zero_bytes(z) ++ …)`), and,
+  two calls deep, an argument's own candidates (`spelled(Cons(w, rest))`
+  names `spelled(rest)`). `computed_successor` uses them, and a leaf that
+  computes to successors is peeled (up to sixteen) without spending the
+  depth until what is left converts to a candidate or spells:
+  `spelled(Cons(w, rest)).len()` is four successors of
+  `spelled(rest).len()`.
+- **A base case that is a parameter or a numeral** is a reduct §2 keeps:
+  `x.doubled(0)` is `x`. A literal argument (`NatLit`) now passes §2's
+  gate, as `Zero` did.
+- **A definition followed to its arithmetic.** The weak head of
+  `be_value([b0, b1, b2, b3])` is past the arithmetic, since `+` itself
+  unfolds to its eliminator. When the weak head names nothing, the head
+  reducts are walked (`Unfold::ArithmeticBody`, 256 reducts) for the first
+  whose head is `+`, `*`, `div`, `mod` or a successor and whose leaves are
+  named. A leaf that is a β-redex (a fold's step function applied to its
+  accumulator) is contracted at no cost to the depth. The operations the
+  reader reads, splits or keeps as atoms on purpose (`+`, `*`, `pow`, `-`,
+  `div`, `mod`, `min`, `max`) are never unfolded this way, and a power keeps
+  the probe's small evaluation budget: `closed_power` stays the gate on
+  what the kernel is asked to evaluate (`omega_wide_constants`'s
+  `costly_power` control).
+
+What a bound stops is named in the failure report, after the residual:
+`left as atoms by a bound [`…` did not compute within 4096 steps]`, or
+`… reached no arithmetic within 256 unfolding steps`. That is the line to
+read before binding a `refl` by hand: it says which term to state, and
+which budget a library change would have to move.
+
+Probes and refused controls are in `lib/_tests/std/tactic/omega_tests.hthr`
+("Terms opened before the search") and
+`lib/_tests/std/tactic/bitvec_omega_tests.hthr` ("Every word's range").
+Each opening is also reached by the kernel's conversion when it checks the
+certificate, which spells the original term and converts it at the
+normalized row: the cost of `docs/proof-patterns.md` §3 (records at a literal program) applies,
+so the budgets above stay small.

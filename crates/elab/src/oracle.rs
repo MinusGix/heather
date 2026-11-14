@@ -234,6 +234,14 @@ impl SemanticOracle {
         eval::nat_value(term, gamma, defs, self.fuel.min(steps)).ok().flatten()
     }
 
+    /// [`Self::nat_value`], telling a term that computed to something other
+    /// than a numeral (`Ok(None)`) from one the budget stopped (`Err(())`).
+    pub(crate) fn nat_value_within(&self, gamma: &LocalCtx, term: &Rc<Term>, steps: u64) -> Result<Option<u64>, ()> {
+        let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
+        let defs = Defs::transparent(&self.world);
+        eval::nat_value(term, gamma, defs, self.fuel.min(steps)).map_err(|_| ())
+    }
+
     /// This oracle with its fuel capped at `steps`, for a speculative
     /// question whose "no" is as good as a spent budget.
     pub(crate) fn bounded(&self, steps: u64) -> Self {
@@ -433,6 +441,12 @@ pub(crate) enum Unfold {
     /// headed by (issues/unifier-lazy-delta.md). A bound on one hop, not on
     /// the chain: each hop is taken only at a mismatch.
     NextHead,
+    /// A call `omega` would otherwise take as an atom, followed until its
+    /// head is arithmetic (`+`, `*`, `div`, `mod`, a successor): a
+    /// definition whose body is arithmetic, or a fold over a list of known
+    /// length (`be_value([b0, b1, b2, b3])`). Past the budget the call stays
+    /// an atom, named in omega's failure report.
+    ArithmeticBody,
     /// A tactic's `Spell`: a term followed through its head definition until
     /// a call is at the head again, which may run a small decision (a
     /// `match` on `Nat::equation(64, w)` at a literal) on the way.
@@ -449,6 +463,7 @@ impl Unfold {
             Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
             Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
             Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead | Unfold::RecursiveArm => 64,
+            Unfold::ArithmeticBody => 256,
             Unfold::FamilyEncoding | Unfold::Spelling => 1024,
         }
     }
