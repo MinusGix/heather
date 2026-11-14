@@ -39,3 +39,4 @@ accepts a proof of `P` (a search, a tactic, or an inferred proof) where
 ## Log
 
 - 2026-11-14: 2026-11-14: PR #614 merged. Minus's rulings on the three open points: the surface is the type `∥P∥` alone, with no binder marker; he is unsure about the kernel bridge `∥Empty∥ → Empty`, so it is not built (a squashed bound still cannot rule a case out, and `Vec::at` stays the total read); `measure::lift_found` stays.
+- 2026-11-14: A squashed found proof is lifted again, for cost and not for the equation: left at its call it was searched for at every copy of the body the recursion's companions spell ([[squashed-found-proof-searched-per-copy]]).

@@ -131,10 +131,12 @@ impl MeasureContext<'_> {
             let mut file = heather_syntax::parse_file(&wrapper).ok()?;
             let Item::Decl(parsed) = file.items.pop()? else { return None; };
             let mut ty = parsed.result;
-            // A condition the callee takes squashed (`∥P∥`) is compared
-            // irrelevantly, so two searches finding two terms convert and
-            // the proof stays where it is (docs/strict-conditions-design.md §5).
-            if matches!(ty.kind, heather_syntax::TyKind::Squash(_)) { continue; }
+            // A condition the callee takes squashed (`∥P∥`) is lifted too,
+            // at its squashed type. Two searches finding two terms would
+            // convert there (docs/strict-conditions-design.md §5), so this
+            // is for cost alone: the companions spell the body many times
+            // over, and a proof left at its call is searched for at every
+            // copy (issues/squashed-found-proof-searched-per-copy.md).
             ty.span = call.span;
             found.push(measure::FoundGoal { name: goal.name.clone(), goal: ty, default: goal.default.clone() });
         }
