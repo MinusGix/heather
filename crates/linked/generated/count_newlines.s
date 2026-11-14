@@ -1,6 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: count_newlines(span, word) -> word
-# stack: 240 bytes below the return address
+# stack: 272 bytes below the return address
 .text
 .globl count_newlines
 .type count_newlines, @function

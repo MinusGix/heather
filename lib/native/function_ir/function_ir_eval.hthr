@@ -171,10 +171,6 @@ fn Valuation::bind(values: Valuation(), ids: List<Nat>) → List<BitVec(64)> →
     }
 }
 
-theorem words_of_len(values: Valuation(), ids: List<Nat>): words_of(values, ids).len() = ids.len() {
-    match ids { Nil => refl, Cons(_, rest) => cong_fn(λ (n: Nat) => Succ(n), words_of_len(values, rest)) }
-}
-
 // Valuations agreeing at 64 on `ids` read the same words there.
 theorem words_agree(ids: List<Nat>, values, other: Valuation(), h: (id: Nat) → Mem(id, ids) → other(64, id) = values(64, id)):
     words_of(other, ids) = words_of(values, ids) {

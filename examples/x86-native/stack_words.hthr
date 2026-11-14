@@ -1,0 +1,21 @@
+import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// Eight words: the seventh and eighth passed on the stack above the return
+// address (issues/function-call-past-six-words.md), by its caller here and
+// by the Rust that calls `eight`.
+runtime fn spread(a, b, c, d, e, f, g, h: BitVec(64)) → BitVec(64) {
+    a.add(b).bxor(c).sub(d).add(e.bxor(f)).sub(g).bxor(h)
+}
+
+runtime fn eight(a, b, c, d, e, f, g, h: BitVec(64)) → BitVec(64) {
+    spread(h, g, f, e, d, c, b, a).add(spread(a, b, c, d, e, f, g, h))
+}

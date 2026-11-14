@@ -341,7 +341,7 @@ theorem each_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 2], addresses, [five(), tens()], [True]).spans())):
     Site<M>(fetch, data, each_machine(), last, origin).Returns(stack, asm_labels(each_machine())(2),
-        λ (i: Nat) (s: MachineState<M>) => (ArgsIn([a, w(5), c, w(5), w(1)], argument_registers(), s.gprs) ∧ 120 * 2 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), c, w(5), w(1)], i, s) ∧ 136 * 2 <= i) ∧
             stack.LentOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), top, 1, [a, w(5), c, w(5), w(1)], [five(), tens()])(i, s),
         stack.AnsweredOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()])) {
     compiled_returns_marked<M>(each_program(), plan_program(each_program()), [2, 2], addresses, [[True], [True]], each_machine(),
