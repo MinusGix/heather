@@ -3987,8 +3987,9 @@ impl Parser {
             if matches!(self.peek(), TokKind::ColonEq) {
                 if crate::imperative::place_root(&expr).is_none() {
                     return Err(ParseError {
-                        msg: "only a place is assigned: a local, `x := e`, or a field path of one, \
-                              `x.f := e` (docs/sequencing-surface-design.md §20)".into(),
+                        msg: "only a place is assigned: a local, `x := e`, a field path of one, \
+                              `x.f := e`, or an element of one, `x.f[i] := e` \
+                              (docs/sequencing-surface-design.md §20, §21)".into(),
                         span: expr.span,
                     });
                 }

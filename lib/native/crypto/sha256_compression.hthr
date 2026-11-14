@@ -85,36 +85,30 @@ import rt_held_reflect;
 import sha256_schedule;
 import sha256_working;
 
-// Rounds `i` to 63: T1, then T2 and the working variables' turn.
-runtime fn Sha256::rounds(mut self s: Sha256, i: u64) → u64
-    decreases (64 - i).toNat() {
-    if h: i < 64 {
-        let t1 = s.t1(i, s.schedule.at(i).zero_extend(32));
+// The sixty-four rounds: T1, then T2 and the working variables' turn.
+runtime fn Sha256::rounds(mut self s: Sha256) → u64 {
+    for i in 0..64 {
+        let t1 = s.t1(i, s.schedule[i].zero_extend(32));
         s.turn(t1);
-        s.rounds(i + 1)
-    } else {
-        i
     }
+    64
 }
 
 // The hash value with the working variables added, word by word (step 4).
-runtime fn Sha256::end(mut self s: Sha256, i: u64) → u64
-    decreases (8 - i).toNat() {
-    if h: i < 8 {
-        s.hash := s.hash.put(i, s.hash.at(i) + s.working.at(i));
-        s.end(i + 1)
-    } else {
-        i
+runtime fn Sha256::end(mut self s: Sha256) → u64 {
+    for i in 0..8 {
+        s.hash[i] := s.hash[i] + s.working[i];
     }
+    8
 }
 
 // The compression of the block whose sixteen words are the schedule's
 // first: H(i) where H(i−1) was.
 runtime fn Sha256::run(mut self s: Sha256) → u64 {
-    s.expand(0);
-    s.begin(0);
-    s.rounds(0);
-    s.end(0)
+    s.expand();
+    s.begin();
+    s.rounds();
+    s.end()
 }
 
 // A span that held a context is left holding the context compressed.

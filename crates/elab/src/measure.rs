@@ -404,6 +404,9 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
         if let ExprKind::Dot { name: member, args: Some(_), .. } = &x.kind && tys.member_has_context_default(member) {
             any = true;
         }
+        if let ExprKind::Index { .. } = &x.kind && tys.member_has_context_default("at") {
+            any = true;
+        }
     };
     for s in &decl.body.stmts {
         match s {
@@ -2701,6 +2704,21 @@ impl<'a> Rewrite<'a> {
                         .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
                     named,
                 }
+            }
+            // `v[i]` at a word index is `v.at(i)` (`inference::index_by_method`),
+            // whose proof is lifted as the method call's is.
+            ExprKind::Index { recv, idx } if self.found_only && self.tys.member_has_context_default("at") && {
+                let at = Expr {
+                    kind: ExprKind::Dot { recv: recv.clone(), name: "at".into(), tyargs: vec![], args: Some(vec![(**idx).clone()]), named: vec![] },
+                    span: e.span,
+                };
+                !self.found_proofs(&at, &[]).is_empty()
+            } => {
+                let at = Expr {
+                    kind: ExprKind::Dot { recv: recv.clone(), name: "at".into(), tyargs: vec![], args: Some(vec![(**idx).clone()]), named: vec![] },
+                    span: e.span,
+                };
+                return self.expr(&at);
             }
             ExprKind::Index { recv, idx } => ExprKind::Index {
                 recv: Box::new(self.expr(recv)),

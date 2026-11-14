@@ -1336,3 +1336,87 @@ the receiver itself, never on a field of it.
   `runtime fn` cannot hold one. The update is `C(…)` over projections,
   which is the identity on the other fields by the record's η; the layout
   work is what makes that a store into one field's bytes.
+
+## 21. Ranges over words, and elements at a word, as built (2026-11-14)
+
+SHA-256 as compiled methods (`lib/native/crypto/`) wrote its loops as
+hand recursions, `decreases (48 - j).toNat()` with `if h: j < 48 { …;
+s.expand(j + 1) } else { j }`, and its elements as `s.schedule.at(j + 14)`
+and `s.schedule := s.schedule.put(j, x)`. The surface had `for i in a..b`
+(§17) and `xs[i]` (docs/surface-fin-indexing-design.md §5), but a range
+listed `Nat`s and an index was a `Fin`. Now:
+
+```heather
+runtime fn Sha256::expand(mut self s: Sha256) → u64 {
+    for j in 0..48 {
+        s.schedule[j + 16] := sha256_next(s.schedule[j + 14].zero_extend(32), …);
+    }
+    48
+}
+```
+
+### 21.1 A range over words is a counted recursion
+
+`for i in lo..hi` whose bounds are words (`u64`, `BitVec(w)`) is lifted
+(`crates/elab/src/loops.rs`, `lift_counted`) to a `decreases` function
+over `i` with the body under the test:
+
+```heather
+fn f#run(c̄, v̄, i: W) → S decreases (hi - i).toNat() {
+    if i < hi { body; f#run(c̄, v̄′, i + 1) } else { v̄ }
+}
+```
+
+and the loop to `f#run(c̄, v̄, lo)`. The test is written as an `if` whose
+branches do not name its evidence (a match on the comparison's bit with
+the bit's equation bound), so a proof the body leaves to a search (an
+element's `inside`) reads `i < hi` from it, as it reads a hand-written
+`if h:`. Not a fold over a list of words: a list has no word bound to
+find a proof from, and a `runtime fn` compiles a counted recursion
+already (`docs/layout-design.md` §9.3).
+
+**At a `mut self` receiver it is a method.** Where the loop's state is
+exactly the receiver of a `mut self` method `T::f`, the recursion is a
+`mut self` method of `T`, `T::f_loop` (`T::f_loop2`, … with several
+loops), `→ W` returning the count where it stopped, and the loop is the
+receiver after `x.f_loop(c̄, lo)`. It is a member under a name of its
+own, not a minted `f#run`, because a generator over it and a proof about
+it name it as they name `T::f`. Under a prefix generator
+(`runtime fn T::f`), the generator runs over each such method before
+`T::f` (`HostMut::elab_prefixed`), so the loop compiles exactly as a
+hand-written counted method does, and `T::f` calls it.
+
+**A range of numerals** (`0..48`) lists `Nat`s as before, and counts
+`u64` words where the declaration is refused at `Nat`
+(`DeclarationsMut::elab_loop_decl`): a body that indexes an array at the
+counter, or adds it to a word, needs it to be one. A refusal at both
+reports the `Nat` reading with the word reading's reason beside it.
+
+### 21.2 An element at a word
+
+`xs[i]` whose index infers at a type that is not `Fin` is the
+receiver's `at` method, `xs.at(i)` (`inference::index_by_method`): for
+`[A; n]` that is `Vec::at`, which finds its proof that `i` is inside
+(`stored_words.hthr`). A numeral, and an index that only checks (`FZ`),
+keep the kernel's `nth` at `Fin(n)`, and so does an index the method
+refuses where `nth` takes it (a `Fin` behind a definition).
+
+`xs[i] := e` is a place (§20 extended): `p[i] := e` is `p := p.put(i,
+e)`, written by the parser (`place_update`), so `x.f[i] := e` nests into
+the record update. A `decreases` body's `xs[i]` has its found proof
+lifted as `xs.at(i)`'s is (`measure::lift_found`).
+
+### 21.3 Not built
+
+- `break`, `continue` and `return` in a loop over words (refused by name).
+- A loop over words whose state is the receiver and other locals: it is
+  lifted as a plain `f#run` returning the state, which a `runtime fn`
+  does not compile.
+- A `mut self` method whose result is only its receiver (`→ ()`): each
+  SHA-256 step returns its count. And the method a loop is lifted to is
+  called by a one-call function, which the linked code keeps as a call
+  (five per block in `sha256_compress`); inlining a function whose body
+  is one call would remove it.
+- `xs[i]` at a numeral on `[A; n]` in a `runtime fn` is the kernel's
+  `nth`, which the reflector does not read; the SHA-256 round still
+  writes `vector_index(s.working, 7, trivial)`.

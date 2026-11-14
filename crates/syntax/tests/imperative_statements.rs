@@ -303,9 +303,14 @@ fn a_field_path_of_a_mutable_local_is_a_place() {
     // The method's own name called on a field is not the body's own call.
     let field = parsed("fn P::f(mut self p: P, n: Nat) -> Nat { match n { Zero => 0, Succ(k) => p.left.f(k) } }");
     assert!(!field.contains("\\0mutated_whole"), "{field}");
-    // What is no place: a path through a call or an index, and a place
-    // whose local is not mutable.
-    for src in ["fn f(p: P) -> Nat { let mut q = p; q.left.get() := 1; 0 }", "fn f(p: P) -> Nat { let mut q = p; q.items[0] := 1; 0 }"] {
+    // A path through an index is a place: `q.items[i] := e` stores through
+    // the field's own `put` (§21).
+    let index = parsed("fn f(p: P, i: u64) -> Nat { let mut q = p; q.items[i] := 1; 0 }");
+    assert!(index.contains("\"put\""), "{index}");
+    assert!(index.contains("RecordUpdate"), "{index}");
+    // What is no place: a path through a call, and a place whose local is
+    // not mutable.
+    for src in ["fn f(p: P) -> Nat { let mut q = p; q.left.get() := 1; 0 }", "fn f(p: P) -> Nat { let mut q = p; q.left.get()[0] := 1; 0 }"] {
         let error = parse_file(src).expect_err(src);
         assert!(error.msg.contains("only a place is assigned"), "{src}: {}", error.msg);
     }

@@ -61,30 +61,24 @@ import rt_held_fields;
 import rt_held_reflect;
 
 // Schedule words 16 to 63, each from the four before it that §6.2.2
-// step 1 names. Pass `j` writes word `j + 16` from words `j + 14`,
-// `j + 9`, `j + 1` and `j`: counted so, the loop's test is what says
-// every index is inside the schedule, and each proof is found from it.
-runtime fn Sha256::expand(mut self s: Sha256, j: u64) → u64
-    decreases (48 - j).toNat() {
-    if h: j < 48 {
-        s.schedule := s.schedule.put(j + 16,
-            sha256_next(s.schedule.at(j + 14).zero_extend(32), s.schedule.at(j + 9).zero_extend(32),
-                s.schedule.at(j + 1).zero_extend(32), s.schedule.at(j).zero_extend(32)).truncate(32, 32));
-        s.expand(j + 1)
-    } else {
-        j
+// step 1 names: pass `j` writes word `j + 16` from words `j + 14`,
+// `j + 9`, `j + 1` and `j`. The loop's range is what says every index is
+// inside the schedule, and each proof is found from it. The count of
+// words written.
+runtime fn Sha256::expand(mut self s: Sha256) → u64 {
+    for j in 0..48 {
+        s.schedule[j + 16] := sha256_next(s.schedule[j + 14].zero_extend(32), s.schedule[j + 9].zero_extend(32),
+            s.schedule[j + 1].zero_extend(32), s.schedule[j].zero_extend(32)).truncate(32, 32);
     }
+    48
 }
 
 // The working variables from the hash value (step 2).
-runtime fn Sha256::begin(mut self s: Sha256, i: u64) → u64
-    decreases (8 - i).toNat() {
-    if h: i < 8 {
-        s.working := s.working.put(i, s.hash.at(i));
-        s.begin(i + 1)
-    } else {
-        i
+runtime fn Sha256::begin(mut self s: Sha256) → u64 {
+    for i in 0..8 {
+        s.working[i] := s.hash[i];
     }
+    8
 }
 
 // T1 of round `t`, from h, e, f, g, the constant and the schedule word

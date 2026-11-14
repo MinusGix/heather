@@ -307,6 +307,11 @@ pub(crate) struct DynamicScope {
     /// `List::append`), whose other members a bare name may name
     /// ([`NameLookup::owner_member`](crate::name_lookup::NameLookup::owner_member)).
     pub(crate) member_owner: Option<String>,
+    /// While a declaration under a prefix generator is elaborated: the
+    /// counted loops its body lifted as `mut self` methods
+    /// (`crates/elab/src/loops.rs`), which the generator runs over too.
+    /// `None` everywhere else.
+    pub(crate) loop_methods: Option<Vec<String>>,
     /// The declaration being elaborated, if its recursion plan is
     /// [`recursion::RecursionPlan::Misplaced`]: its recursion name, the
     /// parameter, and the refusal a self-call lowered on it raises
@@ -451,6 +456,7 @@ impl DynamicScope {
     pub(crate) fn cells(&self) -> ScopeCells {
         let DynamicScope {
             member_owner: _,
+            loop_methods: _,
             misplaced_recursion,
             recursion_at_top: _,
             recursion_at_top_surface: _,

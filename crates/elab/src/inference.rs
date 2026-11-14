@@ -670,7 +670,36 @@ impl Inference<'_> {
             }
             // `xs[i]` — infers, since the element type comes off the receiver
             // (docs/surface-fin-indexing-design.md §5.2).
-            ExprKind::Index { recv, idx } => vec::elab_nth(self.0, cx, recv, idx, e.span),
+            // An index that is not a `Fin` (a word, `v[i + 1]` with `i: u64`)
+            // is the receiver's own `at` method, `v.at(i)`, whose proof that
+            // `i` is inside is found where it is written
+            // (docs/sequencing-surface-design.md §21).
+            ExprKind::Index { recv, idx } => match index_by_method(self.0, cx, idx) {
+                true => {
+                    let call = Expr {
+                        kind: ExprKind::Dot { recv: recv.clone(), name: "at".into(), tyargs: vec![], args: Some(vec![(**idx).clone()]), named: vec![] },
+                        span: e.span,
+                    };
+                    // An index whose type is `Fin` behind a definition is
+                    // still the kernel's `nth`, where the method is refused.
+                    if self.probe(|| self.elab_infer_written(cx, &call, expected).is_err())
+                        && self.probe(|| vec::elab_nth(self.0, cx, recv, idx, e.span).is_ok())
+                    {
+                        return vec::elab_nth(self.0, cx, recv, idx, e.span);
+                    }
+                    self.elab_infer_written(cx, &call, expected).map_err(|err| match err {
+                        crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                            msg: format!(
+                                "an index that is not a `Fin` is the receiver's `at` method, `xs.at(i)` \
+                                 (`Vec::at` takes a `u64` and finds its proof, `import stored_words`): {msg}"
+                            ),
+                            span,
+                        },
+                        other => other,
+                    })
+                }
+                false => vec::elab_nth(self.0, cx, recv, idx, e.span),
+            },
             ExprKind::Dot {
                 recv,
                 name,
@@ -2119,4 +2148,17 @@ impl Inference<'_> {
         let value = (*self.whnf_tm(cx, &converted, span)?).clone();
         Ok(Literals(self).collection_literal_spine(cx, value, elems.len()))
     }
+}
+
+/// Is `xs[i]` the method call `xs.at(i)`? Where the index infers at a type
+/// that is not `Fin`. A numeral, and an index whose type is not inferred
+/// (`FZ`, `FS(i)`, which only check), keep the kernel's `nth` at `Fin(n)`.
+fn index_by_method(elab: &Elaborator, cx: &Cx, idx: &Expr) -> bool {
+    if matches!(idx.kind, ExprKind::Num(_)) {
+        return false;
+    }
+    elab.probe(|| match elab.elab_infer(cx, idx) {
+        Ok((_, ty, _)) => !matches!(&*crate::inductive::decoded(&ty), Type::Fin { .. }),
+        Err(_) => false,
+    })
 }
