@@ -24,10 +24,13 @@
 //! with it the three refusals that are about a value and not a shape: an
 //! exponent past a machine integer, a `\u{…}` that is not a scalar value,
 //! and an argument-slot index past a machine word. Every other refusal of
-//! `heather_syntax::lex` is a refusal here, and `tests/scanner.rs` holds the
-//! two to each other on every file of the library.
+//! `heather_syntax::lex` is a refusal here, with its reason
+//! (`heather_syntax::lexer::ScanRefusal`, numbered as the module's
+//! `REFUSED_*`) and the offset it is refused at, which are all the lexer's
+//! message needs; `tests/scanner.rs` holds the two to each other on every
+//! file of the library, messages included.
 
-use crate::constants::TOKEN_END_BITS;
+use crate::constants::{REFUSAL_AT_BITS, TOKEN_END_BITS};
 use crate::exports;
 
 /// What [`step`] is given after the last byte, and for any word that is not
@@ -38,9 +41,17 @@ pub const END: u64 = 256;
 /// scan refuses if there was none.
 pub const DEAD: u64 = 0;
 
-/// The state of a refusal no earlier accept can excuse (`12abc`, an
-/// unterminated string).
+/// The number of a state that refuses: a refusal no earlier accept can
+/// excuse (`12abc`, an unterminated string). Its reason is the bits above
+/// the number, where an accepting state has its kind: [`failed`],
+/// [`accept`].
 pub const FAIL: u64 = 2;
+
+/// Whether a state refuses.
+#[inline]
+pub fn failed(state: u64) -> bool {
+    state & 0xff == FAIL
+}
 
 /// One byte in a state. The low eight bits of a state name it and the bits
 /// above them are the kind it accepts, zero for none.
@@ -54,7 +65,8 @@ pub fn step(state: u64, byte: u64) -> u64 {
     exports::scan_step(state, byte)
 }
 
-/// The kind of the token that ends in this state, or zero.
+/// The kind of the token that ends in this state, or zero; in a state that
+/// refuses, the reason.
 #[inline]
 pub fn accept(state: u64) -> u64 {
     exports::scan_accept(state)
@@ -84,9 +96,13 @@ pub struct Token {
     pub end: usize,
 }
 
-/// A refusal: the offset of the token that could not be scanned.
+/// A refusal: where the token that could not be scanned starts, the
+/// reason's code (`lexer_scan.hthr`'s `REFUSED_*`), and the offset it was
+/// refused at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Refused {
+    pub start: usize,
+    pub reason: u64,
     pub at: usize,
 }
 
@@ -116,10 +132,15 @@ impl Iterator for Scanner<'_> {
         }
         while self.at < self.source.len() {
             let start = self.at;
-            let scanned = token(self.source, start, self.previous).and_then(|(code, end)| Some((Kind::of_code(code)?, end)));
-            let Some((kind, end)) = scanned else {
-                self.finished = true;
-                return Some(Err(Refused { at: start }));
+            let (kind, end) = match token(self.source, start, self.previous) {
+                Ok((code, end)) => match Kind::of_code(code) {
+                    Some(kind) => (kind, end),
+                    None => unreachable!("the automaton accepts no kind numbered {code}"),
+                },
+                Err((reason, at)) => {
+                    self.finished = true;
+                    return Some(Err(Refused { start, reason, at }));
+                }
             };
             self.previous = kind.code();
             self.at = end;
@@ -139,23 +160,27 @@ pub fn tokens(source: &[u8]) -> Result<Vec<Token>, Refused> {
 
 /// The longest token of `source` from `at`, after a token of kind
 /// `previous` (zero at the start of the source): its kind's code and where
-/// it ends. `None` is a refusal: the automaton refused, or stopped having
-/// accepted nothing.
+/// it ends; or the refusal, its reason's code and the offset it was refused
+/// at: the byte that took the automaton to [`FAIL`], the source's length
+/// where [`END`] did, or `at` where it stopped having accepted nothing.
 ///
 /// This is `scan_token` of `lexer_span.hthr`, the whole loop in one call:
 /// the automaton runs from [`begin`]`(previous)` until it stops, and is
-/// given [`END`] once after the last byte. It answers one word, the kind
-/// above the end, and zero for a refusal, which no token's word is (a kind
-/// is not zero). An end fits its bits: a span is lent below 2^47.
+/// given [`END`] once after the last byte. It answers one word: the kind
+/// above the end, or zero above the reason above the offset, which no
+/// token's word is (a kind is not zero). An offset fits its bits: a span
+/// is lent below 2^47.
 ///
-/// The word is read apart as `token_word_kind` and `token_word_end` of
-/// `lexer_span.hthr` read it back, and `token_word_nonzero` is why zero is
-/// only a refusal; [`TOKEN_END_BITS`] is the module's own, generated.
+/// The word is read apart as `token_word_kind`, `token_word_end` and
+/// `refusal_word_parts` of `lexer_span.hthr` read it back;
+/// [`TOKEN_END_BITS`] and [`REFUSAL_AT_BITS`] are the module's own,
+/// generated.
 #[inline]
-pub fn token(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+pub fn token(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
     let word = exports::scan_token(source, at as u64, previous);
-    if word == 0 {
-        return None;
+    let kind = word >> TOKEN_END_BITS;
+    if kind == 0 {
+        return Err(((word >> REFUSAL_AT_BITS) & 0xff, (word & ((1 << REFUSAL_AT_BITS) - 1)) as usize));
     }
-    Some((word >> TOKEN_END_BITS, (word & ((1 << TOKEN_END_BITS) - 1)) as usize))
+    Ok((kind, (word & ((1 << TOKEN_END_BITS) - 1)) as usize))
 }

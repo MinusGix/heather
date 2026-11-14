@@ -214,6 +214,116 @@ pub struct LexError {
     pub span: Span,
 }
 
+// The messages a source is refused with, one function each, so that the
+// lexer and a scanner's refusal ([`ScanRefusal`]) say the same thing at the
+// same place: the lexer finds where, the scanner names it, and both build
+// the error here.
+
+fn refused(msg: String, start: usize, end: usize) -> LexError {
+    LexError { msg, span: Span { start, end } }
+}
+
+/// The radix of the numeral at `start` and its name, by its prefix.
+fn numeral_radix(bytes: &[u8], start: usize) -> (u32, &'static str) {
+    match (bytes[start], bytes.get(start + 1)) {
+        (b'0', Some(b'x')) => (16, "hexadecimal"),
+        (b'0', Some(b'o')) => (8, "octal"),
+        (b'0', Some(b'b')) => (2, "binary"),
+        _ => (10, "decimal"),
+    }
+}
+
+/// The byte at `at` is no digit of the numeral that starts at `start`.
+fn digit_error(src: &str, start: usize, at: usize) -> LexError {
+    let bad = src.as_bytes()[at] as char;
+    let (_, name) = numeral_radix(src.as_bytes(), start);
+    let article = if name == "octal" { "an" } else { "a" };
+    refused(format!("invalid digit `{bad}` in {article} {name} numeral: {}", &src[start..=at]), at, at + 1)
+}
+
+/// The `_` at `at` does not sit between two digits.
+fn underscore_error(src: &str, start: usize, at: usize) -> LexError {
+    refused(format!("a `_` in a numeral must sit between two digits: {}", &src[start..=at]), at, at + 1)
+}
+
+/// The radix prefix at `start` has no digit after it.
+fn no_digits_error(src: &str, start: usize) -> LexError {
+    let (_, name) = numeral_radix(src.as_bytes(), start);
+    refused(format!("`{}` needs at least one {name} digit", &src[start..start + 2]), start, start + 2)
+}
+
+/// The byte at `at` continues the literal that starts at `start` and ends
+/// there.
+fn after_literal_error(src: &str, start: usize, at: usize) -> LexError {
+    refused(format!("invalid character `{}` after the literal `{}`", src.as_bytes()[at] as char, &src[start..at]), at, at + 1)
+}
+
+/// The width suffix whose letter is at `letter` has a leading zero, and its
+/// digits end at `end`.
+fn leading_zeros_error(src: &str, start: usize, letter: usize, end: usize) -> LexError {
+    refused(format!("a width suffix is written without leading zeros: {}", &src[start..end]), letter, end)
+}
+
+/// The literal opened at `open` is closed by no delimiter on its line.
+fn unterminated_error(open: usize, delim: u8) -> LexError {
+    let what = if delim == b'\'' { "character" } else { "string" };
+    refused(format!("unterminated {what} literal: no closing `{}`", delim as char), open, open + 1)
+}
+
+/// The character literal `start..end` holds `count` scalar values, not one.
+fn char_count_error(src: &str, start: usize, end: usize, count: usize) -> LexError {
+    refused(
+        format!(
+            "a character literal holds exactly one scalar value, and `{}` holds {count}: \
+             write a string literal `\"…\"` for a sequence",
+            &src[start..end]
+        ),
+        start,
+        end,
+    )
+}
+
+/// The source ends at `at`, after the `\` of an escape in the literal
+/// opened at `open`.
+fn escape_end_error(open: usize, at: usize) -> LexError {
+    refused("a literal ends inside an escape".into(), open, at)
+}
+
+/// The character at `at`, after a `\`, begins no escape.
+fn unknown_escape_error(src: &str, at: usize) -> LexError {
+    let bad = src[at..].chars().next().unwrap_or('\\');
+    refused(
+        format!("unknown escape `\\{bad}`: the escapes are \\n \\t \\r \\\\ \\' \\\" \\0 and \\u{{hex}}"),
+        at - 1,
+        at + bad.len_utf8(),
+    )
+}
+
+/// The `\u` whose `u` is at `at` has no `{` after it.
+fn escape_brace_error(at: usize) -> LexError {
+    refused("`\\u` needs a braced hexadecimal scalar value, as in `\\u{1F600}`".into(), at - 1, at + 1)
+}
+
+/// The `\u{…}` escape whose `\` is at `slash` is stopped at `at` by what is
+/// no hexadecimal digit and no `}`.
+fn escape_hex_error(src: &str, slash: usize, at: usize) -> LexError {
+    // The character that stopped the digits, whole: it need not be one
+    // byte (`"\u{4∀"`), and a slice may not end inside it.
+    let stop = at + src[at..].chars().next().map_or(0, char::len_utf8);
+    refused(format!("`{}` is not a `\\u{{hex}}` escape", &src[slash..stop]), slash, stop)
+}
+
+/// The character at `start` begins no token.
+fn unexpected_error(src: &str, start: usize) -> LexError {
+    // The whole character, not its first byte: `δ` is two.
+    let ch = src[start..].chars().next().unwrap_or(src.as_bytes()[start] as char);
+    refused(format!("unexpected character {ch:?}"), start, start + ch.len_utf8())
+}
+
+fn bang_eq_error(start: usize) -> LexError {
+    refused("unexpected character '!' in `!=`; write `≠` for inequality".into(), start, start + 2)
+}
+
 /// One numeral starting at `start` (an ASCII digit). Returns the value and
 /// the byte offset just past the numeral.
 ///
@@ -228,12 +338,8 @@ pub struct LexError {
 /// a machine integer refuses a larger numeral itself, where it knows why.
 fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
     let bytes = src.as_bytes();
-    let (radix, name, mut i) = match (bytes[start], bytes.get(start + 1)) {
-        (b'0', Some(b'x')) => (16u32, "hexadecimal", start + 2),
-        (b'0', Some(b'o')) => (8, "octal", start + 2),
-        (b'0', Some(b'b')) => (2, "binary", start + 2),
-        _ => (10, "decimal", start),
-    };
+    let (radix, _) = numeral_radix(bytes, start);
+    let mut i = if radix == 10 { start } else { start + 2 };
     let digits_start = i;
     let mut value = Numeral::ZERO;
     let mut digits = 0usize;
@@ -247,10 +353,7 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
             let after_digit = digits > 0 && !previous_was_separator;
             let before_digit = bytes.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric());
             if !after_digit || !before_digit {
-                return Err(LexError {
-                    msg: format!("a `_` in a numeral must sit between two digits: {}", &src[start..=i]),
-                    span: Span { start: i, end: i + 1 },
-                });
+                return Err(underscore_error(src, start, i));
             }
             previous_was_separator = true;
             i += 1;
@@ -267,17 +370,9 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
         }
         let digit = match (b as char).to_digit(36) {
             Some(d) if d < radix => u64::from(d),
-            _ => {
-                let bad = b as char;
-                let msg = if radix == 10 && digits > 0 {
-                    // `12abc`: a letter glued to a decimal numeral is
-                    // not a suffix Heather knows.
-                    format!("invalid digit `{bad}` in a decimal numeral: {}", &src[start..=i])
-                } else {
-                    format!("invalid digit `{bad}` in {} {name} numeral: {}", if name == "octal" { "an" } else { "a" }, &src[start..=i])
-                };
-                return Err(LexError { msg, span: Span { start: i, end: i + 1 } });
-            }
+            // `12abc`: a letter glued to a decimal numeral is not a suffix
+            // Heather knows.
+            _ => return Err(digit_error(src, start, i)),
         };
         value = value.mul_add(u64::from(radix), digit);
         digits += 1;
@@ -287,11 +382,8 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
     if digits == 0 {
         // Only a radix prefix can get here: a decimal numeral starts with
         // a digit, which is its first digit.
-        debug_assert!(radix != 10);
-        return Err(LexError {
-            msg: format!("`{}` needs at least one {name} digit", &src[start..digits_start]),
-            span: Span { start, end: digits_start },
-        });
+        debug_assert!(radix != 10 && digits_start == start + 2);
+        return Err(no_digits_error(src, start));
     }
     if width_suffix_at(bytes, i) {
         return lex_width_suffix(src, start, i).map(|(suffix, end)| (Lexed::Suffixed(value, suffix), end));
@@ -349,10 +441,7 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
         }
     }
     if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-        return Err(LexError {
-            msg: format!("invalid character `{}` after the literal `{}`", bytes[i] as char, &src[start..i]),
-            span: Span { start: i, end: i + 1 },
-        });
+        return Err(after_literal_error(src, start, i));
     }
     Ok((Lexed::Scaled(ScaledLit { mant: value, exp: exp + shift, hex: radix == 16 }), i))
 }
@@ -384,16 +473,10 @@ fn lex_width_suffix(src: &str, start: usize, at: usize) -> Result<(String, usize
         i += 1;
     }
     if bytes[at + 1] == b'0' && i > at + 2 {
-        return Err(LexError {
-            msg: format!("a width suffix is written without leading zeros: {}", &src[start..i]),
-            span: Span { start: at, end: i },
-        });
+        return Err(leading_zeros_error(src, start, at, i));
     }
     if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-        return Err(LexError {
-            msg: format!("invalid character `{}` after the literal `{}`", bytes[i] as char, &src[start..i]),
-            span: Span { start: i, end: i + 1 },
-        });
+        return Err(after_literal_error(src, start, i));
     }
     Ok((src[at..i].to_string(), i))
 }
@@ -436,10 +519,7 @@ fn fraction_follows(bytes: &[u8], i: usize, radix: u32) -> bool {
 fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexError> {
     let bytes = src.as_bytes();
     let Some(&b) = bytes.get(i) else {
-        return Err(LexError {
-            msg: "a literal ends inside an escape".into(),
-            span: Span { start: open, end: i },
-        });
+        return Err(escape_end_error(open, i));
     };
     let simple = match b {
         b'n' => Some('\n'),
@@ -455,19 +535,10 @@ fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexErro
         return Ok((c, i + 1));
     }
     if b != b'u' {
-        let bad = src[i..].chars().next().unwrap_or('\\');
-        return Err(LexError {
-            msg: format!(
-                "unknown escape `\\{bad}`: the escapes are \\n \\t \\r \\\\ \\' \\\" \\0 and \\u{{hex}}"
-            ),
-            span: Span { start: i - 1, end: i + bad.len_utf8() },
-        });
+        return Err(unknown_escape_error(src, i));
     }
     if bytes.get(i + 1) != Some(&b'{') {
-        return Err(LexError {
-            msg: "`\\u` needs a braced hexadecimal scalar value, as in `\\u{1F600}`".into(),
-            span: Span { start: i - 1, end: i + 1 },
-        });
+        return Err(escape_brace_error(i));
     }
     let digits_start = i + 2;
     let mut end = digits_start;
@@ -478,13 +549,7 @@ fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexErro
         end += 1;
     }
     if end == digits_start || bytes.get(end) != Some(&b'}') {
-        // The character that stopped the digits, whole: it need not be one
-        // byte (`"\u{4∀"`), and a slice may not end inside it.
-        let stop = end + src[end..].chars().next().map_or(0, char::len_utf8);
-        return Err(LexError {
-            msg: format!("`{}` is not a `\\u{{hex}}` escape", &src[i - 1..stop]),
-            span: Span { start: i - 1, end: stop },
-        });
+        return Err(escape_hex_error(src, i - 1, end));
     }
     let span = Span { start: i - 1, end: end + 1 };
     let text = &src[i - 1..end + 1];
@@ -512,15 +577,11 @@ fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexErro
 /// delimiter; the returned offset is just past the closing one.
 fn lex_quoted(src: &str, open: usize, delim: u8) -> Result<(String, usize), LexError> {
     let bytes = src.as_bytes();
-    let what = if delim == b'\'' { "character" } else { "string" };
     let mut out = String::new();
     let mut i = open + 1;
     loop {
         let Some(&b) = bytes.get(i) else {
-            return Err(LexError {
-                msg: format!("unterminated {what} literal: no closing `{}`", delim as char),
-                span: Span { start: open, end: open + 1 },
-            });
+            return Err(unterminated_error(open, delim));
         };
         if b == delim {
             return Ok((out, i + 1));
@@ -529,10 +590,7 @@ fn lex_quoted(src: &str, open: usize, delim: u8) -> Result<(String, usize), LexE
         // what makes a missing delimiter legible: without this the scan runs
         // to the end of the file and blames whatever it happens to stop at.
         if b == b'\n' {
-            return Err(LexError {
-                msg: format!("unterminated {what} literal: no closing `{}`", delim as char),
-                span: Span { start: open, end: open + 1 },
-            });
+            return Err(unterminated_error(open, delim));
         }
         if b == b'\\' {
             let (c, next) = lex_escape(src, open, i + 1)?;
@@ -577,7 +635,8 @@ pub fn lex_rust(src: &str) -> Result<Vec<Tok>, LexError> {
 
 /// A scanner the lexer can be run by: the longest token of `source` from
 /// `at`, after a token whose kind's code is `previous` (zero at the start),
-/// as that kind's code and where it ends; `None` where it refuses. The
+/// as that kind's code and where it ends; or where it refuses, as the
+/// reason's code ([`ScanRefusal`]) and the offset it refused at. The kind
 /// codes are [`scan_code`]'s, with [`SCAN_SPACE`] and [`SCAN_COMMENT`] for
 /// what a lexer drops.
 ///
@@ -587,7 +646,180 @@ pub fn lex_rust(src: &str) -> Result<Vec<Tok>, LexError> {
 /// ([`install_scanner`], or [`lex_scanned`] for one call), so the lexer and
 /// everything built on it compile the same with and without it
 /// (`issues/self-lexer-linked.md`).
-pub type Scan = fn(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)>;
+pub type Scan = fn(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)>;
+
+/// Why a scanner refuses a token, numbered as `lexer_scan.hthr`'s
+/// `REFUSED_*` (`crates/linked/tests/scanner.rs` holds the two to each
+/// other). Each is one of this lexer's messages, and with where the token
+/// starts and where the scanner refused (the byte that took its automaton
+/// to `FAIL`, or the source's length where its end did) it is the whole of
+/// it: [`ScanRefusal::error`]. The comments say which byte the message is
+/// about, from the one refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ScanRefusal {
+    /// The character the token starts with begins no token.
+    Unexpected = 1,
+    /// `!=`.
+    BangEq = 2,
+    /// The byte refused is no digit of the numeral's radix.
+    Digit = 3,
+    /// The letter before it began nothing, and is no digit.
+    Mark = 4,
+    /// The letter two before it, before a sign, began nothing.
+    SignedMark = 5,
+    /// The byte refused is a `_` before any digit.
+    LeadingUnderscore = 6,
+    /// The `_` before it has no digit after it.
+    Underscore = 7,
+    /// A radix prefix has no digit after it.
+    NoDigits = 8,
+    /// The byte refused continues a finished literal.
+    After = 9,
+    /// The exponent letter before it continues a finished literal.
+    AfterMark = 10,
+    /// The exponent letter two before it, before a sign, does.
+    AfterSignedMark = 11,
+    /// The `_` before it does.
+    AfterUnderscore = 12,
+    /// A width suffix with a leading zero, whose digits end here.
+    LeadingZeros = 13,
+    /// The first `_` of the hexadecimal fraction no digit follows continues
+    /// the literal before it.
+    FractionUnderscore = 14,
+    /// The literal's line or the source ends here.
+    Unterminated = 15,
+    /// A character literal with no scalar value or more than one, closed
+    /// here.
+    CharCount = 16,
+    /// The source ends after an escape's `\`.
+    EscapeEnd = 17,
+    /// The character refused follows a `\` and begins no escape.
+    Escape = 18,
+    /// The byte refused follows `\u` and is not `{`.
+    EscapeBrace = 19,
+    /// The byte refused is in a `\u{…}` and is no hexadecimal digit.
+    EscapeHex = 20,
+    /// A byte UTF-8 does not allow there, which text never holds.
+    NotUtf8 = 21,
+}
+
+impl ScanRefusal {
+    /// Every reason, in code order: `ALL[r as usize - 1] == r`.
+    #[rustfmt::skip]
+    pub const ALL: [ScanRefusal; 21] = [
+        ScanRefusal::Unexpected, ScanRefusal::BangEq, ScanRefusal::Digit, ScanRefusal::Mark, ScanRefusal::SignedMark,
+        ScanRefusal::LeadingUnderscore, ScanRefusal::Underscore, ScanRefusal::NoDigits, ScanRefusal::After,
+        ScanRefusal::AfterMark, ScanRefusal::AfterSignedMark, ScanRefusal::AfterUnderscore, ScanRefusal::LeadingZeros,
+        ScanRefusal::FractionUnderscore, ScanRefusal::Unterminated, ScanRefusal::CharCount, ScanRefusal::EscapeEnd,
+        ScanRefusal::Escape, ScanRefusal::EscapeBrace, ScanRefusal::EscapeHex, ScanRefusal::NotUtf8,
+    ];
+
+    /// The reason with this code, if it is one.
+    pub fn of_code(code: u64) -> Option<ScanRefusal> {
+        let index = usize::try_from(code).ok()?.checked_sub(1)?;
+        ScanRefusal::ALL.get(index).copied()
+    }
+
+    /// The message this lexer refuses `src` with, where a token that starts
+    /// at `start` is refused at `at` for this reason; `None` where the two
+    /// offsets cannot be such a refusal's, or for a byte text never holds.
+    ///
+    /// Nothing is lexed here but values: a literal's value or an escape's
+    /// is refused before what follows it is, so where one comes before the
+    /// refusal its own refusal is the answer, read from its span as a
+    /// token's value is ([`scanned_token`]).
+    pub fn error(self, src: &str, start: usize, at: usize) -> Option<LexError> {
+        use ScanRefusal::*;
+        let bytes = src.as_bytes();
+        if start >= bytes.len() || at < start || at > bytes.len() || !src.is_char_boundary(start) {
+            return None;
+        }
+        // The byte `back` before the one refused, inside the token.
+        let before = |back: usize| at.checked_sub(back).filter(|&p| p >= start && p < bytes.len());
+        let error = match self {
+            Unexpected if at == start => unexpected_error(src, start),
+            Unexpected => return None,
+            BangEq => bang_eq_error(start),
+            Digit | Mark | SignedMark => digit_error(src, start, before(self as usize - Digit as usize)?),
+            LeadingUnderscore => underscore_error(src, start, before(0)?),
+            Underscore => underscore_error(src, start, before(1)?),
+            NoDigits if bytes.get(start + 1).is_some_and(|b| b.is_ascii_alphabetic()) => no_digits_error(src, start),
+            NoDigits => return None,
+            After => return Some(literal_then(src, start, before(0)?)),
+            AfterMark | AfterUnderscore => return Some(literal_then(src, start, before(1)?)),
+            AfterSignedMark => return Some(literal_then(src, start, before(2)?)),
+            LeadingZeros => {
+                let letter = start + bytes[start..at].iter().rposition(|b| matches!(b, b'u' | b'i'))?;
+                leading_zeros_error(src, start, letter, at)
+            }
+            FractionUnderscore => {
+                let point = start + bytes[start..at].iter().position(|&b| b == b'.')?;
+                let at = (point + 1..at).find(|&j| bytes[j] == b'_' && !bytes.get(j + 1).is_some_and(u8::is_ascii_hexdigit))?;
+                return Some(literal_then(src, start, at));
+            }
+            Unterminated | CharCount | EscapeEnd | Escape | EscapeBrace | EscapeHex => return quoted_refusal(self, src, start, at),
+            NotUtf8 => return None,
+        };
+        Some(error)
+    }
+}
+
+/// A numeral `start..at` and then a byte that continues it: the numeral's
+/// own refusal if its value is refused (an exponent out of range), and the
+/// byte's otherwise.
+fn literal_then(src: &str, start: usize, at: usize) -> LexError {
+    match lex_numeral(&src[..at], start) {
+        Err(error) => error,
+        Ok(_) => after_literal_error(src, start, at),
+    }
+}
+
+/// A character or string literal opened at `start` and refused at `at`. The
+/// escapes before the part refused are read for their values, which may be
+/// refused first; a character literal's count of scalar values is theirs.
+fn quoted_refusal(reason: ScanRefusal, src: &str, start: usize, at: usize) -> Option<LexError> {
+    use ScanRefusal::*;
+    let bytes = src.as_bytes();
+    let delim = bytes[start];
+    if !matches!(delim, b'\'' | b'"') {
+        return None;
+    }
+    // Where the part refused begins: the escape's `\`, or the refusal.
+    let refused = match reason {
+        EscapeEnd | Escape => at.checked_sub(1)?,
+        EscapeBrace => at.checked_sub(2)?,
+        EscapeHex => start + bytes[start..at].iter().rposition(|&b| b == b'\\')?,
+        _ => at,
+    };
+    if refused <= start || bytes.get(refused).is_some_and(|&b| b != b'\\') && refused != at {
+        return None;
+    }
+    // The scalar values before it, each escape's read, which may be refused.
+    let mut count = 0;
+    let mut i = start + 1;
+    while i < refused {
+        if bytes[i] == b'\\' {
+            match lex_escape(src, start, i + 1) {
+                Ok((_, next)) => i = next,
+                Err(error) => return Some(error),
+            }
+        } else {
+            i += src[i..].chars().next()?.len_utf8();
+        }
+        count += 1;
+    }
+    Some(match reason {
+        Unterminated => unterminated_error(start, delim),
+        CharCount if delim == b'\'' && bytes.get(at) == Some(&b'\'') => char_count_error(src, start, at + 1, count),
+        CharCount => return None,
+        EscapeEnd => escape_end_error(start, at),
+        Escape => unknown_escape_error(src, at),
+        EscapeBrace => escape_brace_error(at - 1),
+        EscapeHex => escape_hex_error(src, refused, at),
+        _ => return None,
+    })
+}
 
 /// A token's kind as a scanner numbers it: `crates/linked/generated/kinds.rs`,
 /// which `scripts/linked` writes from the table `TOKEN_KINDS` of
@@ -623,8 +855,8 @@ static CUT_BY_SCANNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static LEFT_TO_LEXER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// What the installed scanner has done in this process: how many sources
-/// it cut whole, and how many were this lexer's answer instead (a source
-/// that does not lex is one of those). Both zero with no scanner installed.
+/// it answered for, tokens or refusal, and how many were this lexer's
+/// answer instead. Both zero with no scanner installed.
 /// `HEATHER_LEXER_REPORT` prints them when `heather` ends.
 pub fn scanner_counts() -> (u64, u64) {
     use std::sync::atomic::Ordering::Relaxed;
@@ -632,24 +864,24 @@ pub fn scanner_counts() -> (u64, u64) {
 }
 
 /// [`lex`] with `scan` deciding where each token starts and ends and which
-/// kind it is. A token's value (an identifier's text, a numeral, a string
-/// with its escapes resolved) is read from its span by this lexer, on
-/// those bytes alone. Wherever the scanner refuses, or a span does not
-/// read as one token of the scanner's kind, the whole answer is this
-/// lexer's own, so every message is the one [`lex`] gives. The flag says
-/// which happened: `true` where every token was the scanner's cut.
+/// kind it is, and why and where a source is refused. A token's value (an
+/// identifier's text, a numeral, a string with its escapes resolved) is
+/// read from its span by this lexer, on those bytes alone, and a value it
+/// refuses is the source's refusal; a refusal of the scanner's is the
+/// message its reason names ([`ScanRefusal::error`]). Where a span does not
+/// read as one token of the scanner's kind, or a refusal is none this lexer
+/// knows, the whole answer is this lexer's own. The flag says which
+/// happened: `true` where the answer was the scanner's.
 pub fn lex_scanned(scan: Scan, src: &str) -> (Result<Vec<Tok>, LexError>, bool) {
     let mut toks = Vec::new();
-    match lex_into_scanned(scan, src, &mut toks, |_| true) {
-        Ok(scanned) => (Ok(toks), scanned),
-        Err(error) => (Err(error), false),
-    }
+    let (answer, scanned) = lex_into_scanned(scan, src, &mut toks, |_| true);
+    (answer.map(|()| toks), scanned)
 }
 
 /// [`lex_while`] with `scan`, as [`lex_scanned`] is [`lex`] with it.
 pub fn lex_while_scanned(scan: Scan, src: &str, keep: impl FnMut(&Tok) -> bool) -> Vec<Tok> {
     let mut toks = Vec::new();
-    if let Err(stopped) = lex_into_scanned(scan, src, &mut toks, keep) {
+    if let (Err(stopped), _) = lex_into_scanned(scan, src, &mut toks, keep) {
         let at = stopped.span.start;
         toks.push(Tok { kind: TokKind::Eof, span: Span { start: at, end: at } });
     }
@@ -702,52 +934,68 @@ macro_rules! spelled_tok_kinds {
 spelled_kinds!(spelled_tok_kinds);
 
 /// The token the scanner cut at `start..end` with kind `code`, its value
-/// read from those bytes alone; `None` where they are not one token of
-/// that kind to this lexer (a value this lexer refuses is such a case).
-fn scanned_token(src: &str, start: usize, end: usize, code: u64) -> Option<TokKind> {
+/// read from those bytes alone. `Err(Some(_))` is a value this lexer
+/// refuses, its refusal where it stands in the source; `Err(None)` is
+/// bytes that are not one token of that kind to this lexer.
+fn scanned_token(src: &str, start: usize, end: usize, code: u64) -> Result<TokKind, Option<LexError>> {
     // `>` and `>>` are told apart by what stands before them, which a span
     // alone does not hold, and neither has a value: the scanner's kind
     // stands.
     if code == scan_code(&TokKind::Gt) {
-        return Some(TokKind::Gt);
+        return Ok(TokKind::Gt);
     }
     if code == scan_code(&TokKind::Shr) {
-        return Some(TokKind::Shr);
+        return Ok(TokKind::Shr);
     }
     let mut alone = Vec::with_capacity(2);
-    lex_into_rust(&src[start..end], &mut alone, |_| true).ok()?;
-    let [tok, _eof] = alone.as_slice() else { return None };
+    if let Err(error) = lex_into_rust(&src[start..end], &mut alone, |_| true) {
+        let span = Span { start: error.span.start + start, end: error.span.end + start };
+        return Err((span.end <= end).then_some(LexError { msg: error.msg, span }));
+    }
+    let [tok, _eof] = alone.as_slice() else { return Err(None) };
     let whole = tok.span.start == 0 && tok.span.end == end - start;
-    (whole && scan_code(&tok.kind) == code).then(|| tok.kind.clone())
+    if !(whole && scan_code(&tok.kind) == code) {
+        return Err(None);
+    }
+    Ok(tok.kind.clone())
 }
 
-/// [`lex_into`] by a scanner. `Ok(true)` where every token was its cut;
-/// otherwise the answer is [`lex_into_rust`]'s, begun again, with `keep`
-/// not asked a second time about the tokens it has kept.
-fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> Result<bool, LexError> {
+/// [`lex_into`] by a scanner, and whether the answer is the scanner's:
+/// where it is not, the answer is [`lex_into_rust`]'s, begun again, with
+/// `keep` not asked a second time about the tokens it has kept.
+fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> bool) -> (Result<(), LexError>, bool) {
     let bytes = src.as_bytes();
     let base = toks.len();
     let (mut at, mut previous) = (0, 0);
     while at < bytes.len() {
         let start = at;
-        let cut = scan(bytes, start, previous)
-            .filter(|&(_, end)| end > start && end <= bytes.len() && src.is_char_boundary(end))
-            .and_then(|(code, end)| {
-                let kind = if code == SCAN_SPACE || code == SCAN_COMMENT { None } else { Some(scanned_token(src, start, end, code)?) };
-                Some((code, end, kind))
-            });
-        let Some((code, end, kind)) = cut else {
-            let kept = toks.len() - base;
-            toks.truncate(base);
-            let mut seen = 0;
-            lex_into_rust(src, toks, |tok| {
-                if seen < kept {
-                    seen += 1;
-                    return true;
+        let cut = match scan(bytes, start, previous) {
+            Ok((code, end)) if end > start && end <= bytes.len() && src.is_char_boundary(end) => {
+                if code == SCAN_SPACE || code == SCAN_COMMENT {
+                    Ok((code, end, None))
+                } else {
+                    scanned_token(src, start, end, code).map(|kind| (code, end, Some(kind)))
                 }
-                keep(tok)
-            })?;
-            return Ok(false);
+            }
+            Ok(_) => Err(None),
+            Err((reason, refused)) => Err(ScanRefusal::of_code(reason).and_then(|reason| reason.error(src, start, refused))),
+        };
+        let (code, end, kind) = match cut {
+            Ok(cut) => cut,
+            Err(Some(error)) => return (Err(error), true),
+            Err(None) => {
+                let kept = toks.len() - base;
+                toks.truncate(base);
+                let mut seen = 0;
+                let answer = lex_into_rust(src, toks, |tok| {
+                    if seen < kept {
+                        seen += 1;
+                        return true;
+                    }
+                    keep(tok)
+                });
+                return (answer, false);
+            }
         };
         previous = code;
         at = end;
@@ -756,12 +1004,12 @@ fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl F
         if !keep(&tok) {
             // At the refused token's start, as `lex_into_rust` stands.
             toks.push(Tok { kind: TokKind::Eof, span: Span { start, end: start } });
-            return Ok(true);
+            return (Ok(()), true);
         }
         toks.push(tok);
     }
     toks.push(Tok { kind: TokKind::Eof, span: Span { start: at, end: at } });
-    Ok(true)
+    (Ok(()), true)
 }
 
 /// [`lex`] into `toks`, stopping before the first token `keep` refuses. `Eof`
@@ -769,10 +1017,10 @@ fn lex_into_scanned(scan: Scan, src: &str, toks: &mut Vec<Tok>, mut keep: impl F
 /// there is one ([`install_scanner`]), and by [`lex_into_rust`] otherwise.
 fn lex_into(src: &str, toks: &mut Vec<Tok>, keep: impl FnMut(&Tok) -> bool) -> Result<(), LexError> {
     let Some(scan) = SCANNER.get() else { return lex_into_rust(src, toks, keep) };
-    let answer = lex_into_scanned(*scan, src, toks, keep);
-    let count = if matches!(answer, Ok(true)) { &CUT_BY_SCANNER } else { &LEFT_TO_LEXER };
+    let (answer, scanned) = lex_into_scanned(*scan, src, toks, keep);
+    let count = if scanned { &CUT_BY_SCANNER } else { &LEFT_TO_LEXER };
     count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    answer.map(|_| ())
+    answer
 }
 
 /// The lexer itself, in Rust: what [`lex_into`] is with no scanner, what a
@@ -874,15 +1122,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             let (text, end) = lex_quoted(src, start, b'\'')?;
             let mut chars = text.chars();
             let (Some(ch), None) = (chars.next(), chars.next()) else {
-                return Err(LexError {
-                    msg: format!(
-                        "a character literal holds exactly one scalar value, and `{}` holds {}: \
-                         write a string literal `\"…\"` for a sequence",
-                        &src[start..end],
-                        text.chars().count()
-                    ),
-                    span: Span { start, end },
-                });
+                return Err(char_count_error(src, start, end, text.chars().count()));
             };
             emit!(Tok { kind: TokKind::Char(ch), span: Span { start, end } });
             i = end;
@@ -918,10 +1158,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
         // alias for `≠`: keep diagnosing the pair at the lexer boundary
         // instead of tokenizing it as two unrelated operators.
         if two == "!=" {
-            return Err(LexError {
-                msg: "unexpected character '!' in `!=`; write `≠` for inequality".into(),
-                span: Span { start, end: start + 2 },
-            });
+            return Err(bang_eq_error(start));
         }
         // `·`, U+00B7 MIDDLE DOT, is deliberately distinct from `∙`, the
         // generic infix bullet. Consume an immediately adjacent run of
@@ -969,14 +1206,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
                 (TokKind::Gt, 1)
             }
             Some((kind, len)) => (kind.spelled_tok(), len),
-            None => {
-                // The whole character, not its first byte: `δ` is two.
-                let ch = src[start..].chars().next().unwrap_or(c as char);
-                return Err(LexError {
-                    msg: format!("unexpected character {ch:?}"),
-                    span: Span { start, end: start + ch.len_utf8() },
-                });
-            }
+            None => return Err(unexpected_error(src, start)),
         };
         emit!(Tok { kind, span: Span { start, end: start + len } });
         i += len;
