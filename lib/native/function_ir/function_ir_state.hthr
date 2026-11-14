@@ -28,6 +28,7 @@ import bitvec_bytes;
 import bool;
 import list;
 import list_window;
+import omega;
 import logic;
 import nat;
 import option;
@@ -127,6 +128,49 @@ theorem store_word_four(buffers: Buffers(), buffer, index: Nat, word: BitVec(32)
             buffer, index + 2, vector_get(word.bytes_le(4), 2, BitVec::zero())),
             buffer, index + 3, vector_get(word.bytes_le(4), 3, BitVec::zero())) {
     refl
+}
+
+// A word's four bytes, low first: what `store_word` stores of it.
+fn four_bytes(word: BitVec(32)) → List<BitVec(8)> {
+    [vector_get(word.bytes_le(4), 0, BitVec::zero()), vector_get(word.bytes_le(4), 1, BitVec::zero()),
+     vector_get(word.bytes_le(4), 2, BitVec::zero()), vector_get(word.bytes_le(4), 3, BitVec::zero())]
+}
+
+// Inside its buffer, a four-byte word stored one byte at a time is its four
+// bytes written over the buffer at once (`store_span`), what the machine's
+// one store leaves; every other buffer is as it was either way.
+theorem buffer_bytes_store_word_four(buffers: Buffers(), buffer, index: Nat, word: BitVec(32),
+    fits: 4 + index <= buffer_bytes(buffers, buffer).len()):
+    (other: Nat) → buffer_bytes(store_word(buffers, buffer, index, 4, word), other) =
+        buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), other) {
+    let c = λ (i: Nat) => vector_get(word.bytes_le(4), i, BitVec::zero());
+    let s1 = store_byte(buffers, buffer, index, c(0));
+    let s2 = store_byte(s1, buffer, index + 1, c(1));
+    let s3 = store_byte(s2, buffer, index + 2, c(2));
+    let xs = buffer_bytes(buffers, buffer);
+    let written: (buffer_bytes(store_word(buffers, buffer, index, 4, word), buffer) =
+            xs.update(index, λ (_: BitVec(8)) => c(0)).update(index + 1, λ (_: BitVec(8)) => c(1))
+                .update(index + 2, λ (_: BitVec(8)) => c(2)).update(index + 3, λ (_: BitVec(8)) => c(3))) =
+        trans(buffer_bytes_stored(s3, buffer, index + 3, c(3)),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 3, λ (_: BitVec(8)) => c(3)),
+                trans(buffer_bytes_stored(s2, buffer, index + 2, c(2)),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 2, λ (_: BitVec(8)) => c(2)),
+                        trans(buffer_bytes_stored(s1, buffer, index + 1, c(1)),
+                            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 1, λ (_: BitVec(8)) => c(1)),
+                                buffer_bytes_stored(buffers, buffer, index, c(0))))))));
+    let here: (buffer_bytes(store_word(buffers, buffer, index, 4, word), buffer) =
+            buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), buffer)) =
+        trans(written, trans(sym(List::put_window_update_from(four_bytes(word), xs, index, fits)),
+            sym(buffer_bytes_spanned(buffers, buffer, index, four_bytes(word), omega(fits)))));
+    λ other => match buffer.eq_dec(other) {
+        Inl(same) => j(same, λ o _ => buffer_bytes(store_word(buffers, buffer, index, 4, word), o) =
+            buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), o), here),
+        Inr(differs) => trans(buffer_bytes_store_other(s3, buffer, index + 3, c(3), other, differs),
+            trans(buffer_bytes_store_other(s2, buffer, index + 2, c(2), other, differs),
+                trans(buffer_bytes_store_other(s1, buffer, index + 1, c(1), other, differs),
+                    trans(buffer_bytes_store_other(buffers, buffer, index, c(0), other, differs),
+                        sym(buffer_bytes_span_other(buffers, buffer, index, four_bytes(word), other, differs)))))),
+    }
 }
 
 // ---------------------------------------------------------------------------

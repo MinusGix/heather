@@ -678,6 +678,128 @@ theorem leaf_table_holds(values: Valuation(), table: TableLeaf, nodes: List<Node
 }
 
 // ---------------------------------------------------------------------------
+// A word of four bytes stored: the last node of its leaf
+
+// `WideStore(4, …)` last, the nodes before it neither reading a buffer nor
+// storing: they lower as one block, which leaves the value held at width
+// 32, then the address and `MOV [base], r32` (`function_ir_lower_calls`,
+// `File::emit_wide_store`). The nodes before it hold the value's
+// producers, since a narrow value does not cross a leaf; for the same
+// reason nothing after the leaf reads the store's output, which is not
+// loaded back.
+record WideStoreLeaf { output: Nat, buffer: Nat, index: Nat, value: Nat }
+
+fn Node::as_wide_store(self node: Node) → Option<WideStoreLeaf> {
+    match node {
+        WideStore(bytes, output, buffer, index, value) => match bytes.same(4) {
+            False => None,
+            True => Some(WideStoreLeaf(output, buffer, index, value)),
+        },
+        _ => None,
+    }
+}
+
+fn leaf_wide_store(nodes: List<Node>) → Option<WideStoreLeaf> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match rest {
+            Nil => node.as_wide_store(),
+            Cons(_, _) => match node.reads_buffer() {
+                True => None,
+                False => match node.stores() { True => None, False => leaf_wide_store(rest) },
+            },
+        },
+    }
+}
+
+// The file the store leaves.
+fn WideStoreLeaf::after(self store: WideStoreLeaf, values: Valuation(), before: Buffers()) → Buffers() {
+    store_word(before, store.buffer, values(64, store.index).toNat(), 4, values(32, store.value))
+}
+
+theorem Node::as_wide_store_runs(self node: Node, values: Valuation(), before, after: Buffers(), store: WideStoreLeaf):
+    node.as_wide_store() = Some(store) → node.Runs(values, before, after) → after = store.after(values, before) {
+    match node {
+        WideStore(bytes, output, buffer, index, value) => (match bytes.same(4) as λ b => bytes.same(4) = b →
+            (match b { False => None, True => Some(WideStoreLeaf(output, buffer, index, value)) }) = Some(store) →
+            (after = store_word(before, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value))) ∧
+                (values(8 * bytes, output) = buffer_word(after, buffer, values(64, index).toNat(), bytes)) →
+            after = store.after(values, before) {
+            False => λ _ no _ => absurd(no),
+            True => λ four found ran => {
+                let at: (bytes = 4) = bytes.same_sound(4, four);
+                j(found, λ o _ => o.All(λ (w: WideStoreLeaf) => after = w.after(values, before)),
+                    j(at, λ k _ => after = store_word(before, buffer, values(64, index).toNat(), k, values(8 * k, value)), ran.left))
+            },
+        })(refl),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+// A leaf ending in the store runs to the file it leaves, and the nodes
+// before it hold over no buffer.
+theorem leaf_wide_store_runs(values: Valuation(), store: WideStoreLeaf, nodes: List<Node>): (before, after: Buffers()) →
+    leaf_wide_store(nodes) = Some(store) → NodesRun(nodes, values, before, after) →
+    (after = store.after(values, before)) ∧ NodesHold(values, nodes_front(nodes)) {
+    match nodes {
+        Nil => λ before after no _ => absurd(no),
+        Cons(node, rest) => (match rest as λ r =>
+            ((before, after: Buffers()) → leaf_wide_store(r) = Some(store) → NodesRun(r, values, before, after) →
+                (after = store.after(values, before)) ∧ NodesHold(values, nodes_front(r))) →
+            (before, after: Buffers()) → leaf_wide_store(Cons(node, r)) = Some(store) → NodesRun(Cons(node, r), values, before, after) →
+                (after = store.after(values, before)) ∧ NodesHold(values, nodes_front(Cons(node, r))) {
+            Nil => λ _ before after found ran => {
+                let mid = ran.witness;
+                let here: (mid = store.after(values, before)) = node.as_wide_store_runs(values, before, mid, store, found, ran.proof.left);
+                ⟨trans(ran.proof.right, here), trivial⟩
+            },
+            Cons(next, more) => λ later before after => match reads: node.reads_buffer() {
+                True => λ no _ => absurd(no),
+                False => match writes: node.stores() {
+                    True => λ no _ => absurd(no),
+                    False => λ found ran => {
+                        let mid = ran.witness;
+                        let still = node.runs_still(values, before, mid, Bool::is_true_of_eq(cong_fn(λ (c: Bool) => !c, writes)), ran.proof.left);
+                        let inner = later(mid, after, found, ran.proof.right);
+                        ⟨trans(inner.left, cong_fn(λ (f: Buffers()) => store.after(values, f), still.left)),
+                         ⟨node.holds_blind(values, before, Bool::is_true_of_eq(cong_fn(λ (c: Bool) => !c, reads)), still.right), inner.right⟩⟩
+                    },
+                },
+            },
+        })(λ before after => leaf_wide_store_runs(values, store, rest, before, after)),
+    }
+}
+
+// A leaf ending in the store stores into the store's buffer.
+theorem leaf_wide_store_stores(store: WideStoreLeaf, nodes: List<Node>): leaf_wide_store(nodes) = Some(store) →
+    nodes_store(nodes, store.buffer).IsTrue() {
+    match nodes {
+        Nil => λ no => absurd(no),
+        Cons(node, rest) => (match rest as λ r => (leaf_wide_store(r) = Some(store) → nodes_store(r, store.buffer).IsTrue()) →
+            leaf_wide_store(Cons(node, r)) = Some(store) → nodes_store(Cons(node, r), store.buffer).IsTrue() {
+            Nil => λ _ found => Bool::is_true_or_l(node.stores_to(store.buffer), False, (match node as λ n =>
+                n.as_wide_store() = Some(store) → n.stores_to(store.buffer).IsTrue() {
+                WideStore(bytes, output, buffer, index, value) => λ found => (match bytes.same(4) as λ b =>
+                    (match b { False => None, True => Some(WideStoreLeaf(output, buffer, index, value)) }) = Some(store) →
+                    buffer.same(store.buffer).IsTrue() {
+                    False => λ no => absurd(no),
+                    True => λ here => j(here, λ o _ => o.All(λ (w: WideStoreLeaf) => buffer.same(w.buffer).IsTrue()),
+                        Bool::is_true_of_eq(buffer.same_self())),
+                })(found),
+                _ => λ no => absurd(no),
+            })(found)),
+            Cons(next, more) => λ later => match node.reads_buffer() {
+                True => λ no => absurd(no),
+                False => match node.stores() {
+                    True => λ no => absurd(no),
+                    False => λ found => Bool::is_true_or_r(node.stores_to(store.buffer), nodes_store(Cons(next, more), store.buffer), later(found)),
+                },
+            },
+        })(leaf_wide_store_stores(store, rest)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The load's code
 
 // A register written that is none of `registers`.
