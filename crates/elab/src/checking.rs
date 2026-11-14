@@ -70,6 +70,35 @@ impl Checking<'_> {
         self.elab_check_skel(cx, e, expected, lvl, hint, None)
     }
 
+    /// A proof of `P` given where a condition `∥P∥` is expected
+    /// (docs/strict-conditions-design.md §3): its term, checked at `P`, for
+    /// the caller to wrap in `squash`; `None` where `e` is to check as
+    /// written, because it is already a `∥P∥` or a `squash(…)`.
+    ///
+    /// A search, a tactic, `refl` or a hole runs at `P`, since none of them
+    /// proves a squash. Anything else is inferred in a probe and wrapped
+    /// only when it infers and what it proves is not itself a squash, so a
+    /// condition passed on (`inside := inside`) stays as it is.
+    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, prop: &Rc<Type>, level: &Level) -> R<Option<Term>> {
+        if let ExprKind::App { head, .. } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
+        {
+            return Ok(None);
+        }
+        let search = matches!(&e.kind, ExprKind::Hole(_))
+            || (crate::surface::count_holes_expr(e) == 0 && crate::defaults::is_discharge(e));
+        if !search {
+            let squashed = self.probe(|| match self.elab_infer(cx, e) {
+                Ok((_, got, _)) => self.whnf(cx, &got, e.span).ok().map(|w| matches!(w, Type::Squash { .. })),
+                Err(_) => None,
+            });
+            if squashed != Some(false) {
+                return Ok(None);
+            }
+        }
+        self.elab_check(cx, e, prop, level).map(Some)
+    }
+
     /// [`Self::elab_check_hinted`] plus, where the caller has one, the
     /// expected type's implicitness *skeleton*
     /// (docs/implicit-binders-design.md §6.1). Three caller classes supply
@@ -163,6 +192,11 @@ impl Checking<'_> {
         // `name_of(p)` and `registered(T)` (docs/registered-values-design.md).
         if let Some(rewritten) = Registered(self).registry_rewrite(cx, e)? {
             return self.elab_check_skel_slots_written(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
+        // A proof-taking call where a `When` is wanted, or a `match` on one
+        // (docs/when-design.md §4).
+        if let Some((bound, tested)) = crate::tested::Tested(self).tested_check(cx, e, expected)? {
+            return self.elab_check_skel_slots_written(&bound, &tested, expected, lvl, hint, skel, capture_slots);
         }
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
@@ -309,6 +343,11 @@ impl Checking<'_> {
                 skel,
                 capture_slots,
             );
+        }
+        if let Type::Squash { level, ty } = expected
+            && let Some(payload) = self.check_condition_squashed(cx, e, ty, level)?
+        {
+            return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) });
         }
         if let ExprKind::App {
             head,
@@ -503,9 +542,14 @@ impl Checking<'_> {
                 // With `match h:` the convoy's equation is stated about the
                 // computed scrutinee itself, and an arm that passes `h` to a
                 // hypothesis needs that hypothesis about the same term, so
-                // neither is refined (design §5.1).
+                // neither is refined (design §5.1). A local scrutinee still
+                // refines what the arms name and the goal mentions, but not
+                // a hypothesis that takes an equation about it: that one is
+                // what `h` is passed to, `g: (b = False) → A` at
+                // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md).
                 let refines = eqbind.is_none() || matches!(scrut_t, Term::Var(_));
-                for p in refines.then(|| Generalize(self).refined_hypotheses(cx, arms, &scrut_t, dec, expected)).unwrap_or_default() {
+                let convoy = eqbind.is_some();
+                for p in refines.then(|| Generalize(self).refined_hypotheses(cx, arms, &scrut_t, dec, expected, convoy)).unwrap_or_default() {
                     if !positions.contains(&p) {
                         positions.push(p);
                     }
@@ -872,6 +916,15 @@ impl Checking<'_> {
                     },
                     Err(_) => Err(stuck),
                 }
+            }
+            // `known`: a hypothesis, a side of a conjunction, then the
+            // arithmetic searches (docs/when-design.md §5).
+            ExprKind::Var(name)
+                if name == crate::tested::KNOWN
+                    && !self.shadowed(cx, name)
+                    && Constructors(self).ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                crate::tested::Tested(self).known(cx, expected, lvl, e.span)
             }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
@@ -1314,6 +1367,11 @@ impl Checking<'_> {
                 // of the suite itself (the issue's 2026-08-17 log), so the
                 // cheap variants the issue proposed — leaves only, whnf'd types
                 // only — buy nothing worth the narrowing.
+                // A `When<T, P>` where a `T` is wanted takes its value
+                // (docs/when-design.md §5).
+                if let Some(value) = crate::tested::Tested(self).coerce(cx, e, &t, &got, &head, lvl)? {
+                    return Ok(value);
+                }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)
             }

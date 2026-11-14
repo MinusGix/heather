@@ -295,8 +295,10 @@ pub fn exports_rs(manifest: &str, assembly: &dyn Fn(&str) -> Result<String, Stri
 {doc}
 pub fn {function}({taken}) -> u64 {{
     // SAFETY (the premises of `{function}_native_returns`, in order):
-    // - the arguments are in their registers (`ArgsIn`): the declaration's
-    //   order is the table's, which the gate holds to the code's signature.
+    // - the arguments are passed (`Stack::Passed`): six in their registers
+    //   and the rest above the return address, as the C ABI passes them;
+    //   the declaration's order is the table's, which the gate holds to the
+    //   code's signature.
     // - each span's two words are its address and its length (`ArgsLent`):
     //   its pointer and `len()`, for {span}.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):

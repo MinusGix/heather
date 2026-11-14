@@ -430,6 +430,21 @@ impl Patterns<'_> {
                 }
             }
         }
+        // The one constructor the `_` row stands for alone, when there is
+        // one (an `if let`'s `else` on a two-constructor type): its fields
+        // are bound, under names the source cannot spell, so a tactic or
+        // `known` in the arm reads why the other arms did not match
+        // (docs/when-design.md §5, §10). Anywhere else `_` binds nothing.
+        let sole = match (&ctors, dflt) {
+            (Some(cs), Some(_)) => {
+                let mut uncovered = cs.iter().map(|(n, _)| n).filter(|n| !rows.iter().any(|(i, _)| arms[*i].ctor == **n));
+                match (uncovered.next(), uncovered.next()) {
+                    (Some(n), None) => Some(n.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let mut out = Vec::new();
         for name in order {
             let group: Vec<&Row> = rows
@@ -460,8 +475,12 @@ impl Patterns<'_> {
             }
             let mut sub: Vec<Row> = group.iter().map(|r| (*r).clone()).collect();
             if let Some(d) = dflt {
+                let field = |j: usize| match sole.as_deref() == Some(name.as_str()) {
+                    true => Pat::Var { name: format!("__else_{}_{j}", arms[d].span.start), span },
+                    false => wild(span),
+                };
                 sub.push(Row {
-                    pats: (0..arity).map(|_| wild(span)).collect(),
+                    pats: (0..arity).map(field).collect(),
                     body: d,
                     binds: vec![],
                     span: arms[d].span,

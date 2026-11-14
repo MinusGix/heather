@@ -1,0 +1,69 @@
+// Probes of `sha256_stream_agreement`: the linked hash's agreement with the
+// specification as a client reads it. A message given whole, the same
+// message in two parts, and a message of any number of parts' worth of
+// state: each leaves the specification's digest, from any context the span
+// held before `Sha256::init`. Tests, not library: nothing imports this
+// module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import bitvec;
+import vector;
+import sha2;
+import sha2_stream;
+import sha256_context;
+import sha256_stream;
+import sha256_agreement;
+import sha256_stream_agreement;
+import list_window;
+import layout;
+import stored;
+import rt_held;
+
+// "abc", FIPS 180-4's own example, in one part.
+theorem abc_whole(s: Sha256):
+    Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, [0x61, 0x62, 0x63], 3).after).after) = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    Sha256::digest_spec(s, [0x61, 0x62, 0x63], 3, refl)
+}
+
+// The same message as "a" and then "bc".
+theorem abc_in_parts(s: Sha256):
+    Sha256::digest(Sha256::finish(Sha256::update(Sha256::update(Sha256::init(s).after, [0x61], 1).after, [0x62, 0x63], 2).after).after)
+        = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    let first = Sha256::update_took(Sha256::init(s).after, Nil, [0x61], 1, refl, Sha256::init_took(s));
+    let second = Sha256::update_took(Sha256::update(Sha256::init(s).after, [0x61], 1).after, [0x61], [0x62, 0x63], 2, refl, first);
+    Sha256::finish_digest(Sha256::update(Sha256::update(Sha256::init(s).after, [0x61], 1).after, [0x62, 0x63], 2).after, [0x61, 0x62, 0x63], second)
+}
+
+// A part of any length, after any message: the digest is of both.
+theorem one_more_part(s: Sha256, message, part: List<u8>, mn: u64, sized: part.len() = mn.toNat(), took: Sha256Took(s, message)):
+    Sha256::digest(Sha256::finish(Sha256::update(s, part, mn).after).after) = Sha2::sha256().digest(message ++ part) {
+    Sha256::finish_digest(Sha256::update(s, part, mn).after, message ++ part, Sha256::update_took(s, message, part, mn, sized, took))
+}
+
+// A length word that is not the part's length is refused: the loop would
+// read past the part, or stop short of it.
+// expect-error: `len([ofNat(97), ofNat(98), ofNat(99)])` and `toNat(ofNat(2))` are not
+theorem wrong_length(s: Sha256):
+    Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, [0x61, 0x62, 0x63], 2).after).after) = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    Sha256::digest_spec(s, [0x61, 0x62, 0x63], 2, refl)
+}
+
+// On the bytes: "abc" through the three functions' code leaves the
+// specification's digest at the span's start.
+theorem abc_linked(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after.take(32)
+        = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    let after = Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after;
+    trans(sym(after.window_from_zero(32)), Sha256::linked_digest(span, s, length, [0x61, 0x62, 0x63], 3, holds, refl))
+}
+
+// A span not known to hold a context says nothing.
+// expect-error: unbound name `holds`
+theorem abc_unheld(span: List<u8>, s: Sha256, length: u64):
+    Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after
+        .window(SHA256_DIGEST_AT, 32 + SHA256_DIGEST_AT) = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    Sha256::linked_digest(span, s, length, [0x61, 0x62, 0x63], 3, holds, refl)
+}

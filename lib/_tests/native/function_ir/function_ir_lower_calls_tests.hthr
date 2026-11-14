@@ -1,0 +1,108 @@
+// Probes of a call past six words (`lib/native/function_ir/function_ir_lower_calls.hthr`,
+// issues/function-call-past-six-words.md): a function of eight words is
+// lowered, calls another and is called from a function of two, and each
+// meets the contract the six-word ones do, the words past the sixth passed
+// above the return address (`Stack::Passed`); a function or a call of nine
+// words is refused with its count named. Tests, not library (docs/test-value-audit.md §4.5).
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// sum8(a, …, h) = a + b + … + h, function 0.
+fn sum8() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5, 6, 7],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2), word(3), word(4), word(5), word(6), word(7)]),
+            nodes := [Add(width := 64, output := 8, left := 0, right := 1), Add(width := 64, output := 9, left := 8, right := 2),
+                Add(width := 64, output := 10, left := 9, right := 3), Add(width := 64, output := 11, left := 10, right := 4),
+                Add(width := 64, output := 12, left := 11, right := 5), Add(width := 64, output := 13, left := 12, right := 6),
+                Add(width := 64, output := 14, left := 13, right := 7)],
+            outputs := Ports([word(14)]))),
+        result := 14)
+}
+
+// relay(a, …, h) = sum8(h, …, a) + g, function 1: its seventh and eighth
+// words come on the stack and are loaded into R10 and R11 at its entry,
+// it passes them on the stack again, and `g` is read after the call.
+fn relay() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5, 6, 7],
+        body := Compose(Call(0, [7, 6, 5, 4, 3, 2, 1, 0], 8),
+            Dataflow(Region(inputs := Ports([word(6), word(8)]), nodes := [Add(width := 64, output := 9, left := 8, right := 6)],
+                outputs := Ports([word(9)])))),
+        result := 9)
+}
+
+// mix(a, b) = relay(a, b, a, b, a, b, b, a), function 2.
+fn mix() → Function {
+    Function(parameters := [0, 1], body := Call(1, [0, 1, 0, 1, 0, 1, 1, 0], 2), result := 2)
+}
+
+fn eight() → List<Function> { [mix(), relay(), sum8()] }
+
+theorem eight_lowers(): lower_program(eight(), plan_program(eight())).is_some().IsTrue() { trivial }
+theorem eight_evaluates(): program_eval(eight(), 2, [w(1), w(2)]) = w(14) { refl }
+
+// relay's contract at its label, whatever lowering of the program is the
+// code: its eight words passed, six in their registers and two above its
+// return address, it returns what the program says in RAX.
+theorem relay_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program(eight(), placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    a, b, c, d, e, f, g, h: BitVec(64)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(2),
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b, c, d, e, f, g, h], i, s) ∧ 136 * 2 <= i,
+        stack.CalleePost(program_eval(eight(), 1, [a, b, c, d, e, f, g, h]))) {
+    compiled_returns<M>(eight(), placement, program, lowered, trivial, fetch, data, last, origin, stack, 1, trivial,
+        [a, b, c, d, e, f, g, h], trivial, program_eval(eight(), 1, [a, b, c, d, e, f, g, h]), refl)
+}
+
+// And mix's, which calls it: mix(1, 2) returns 14 in RAX.
+theorem mix_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program(eight(), placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(3),
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([w(1), w(2)], i, s) ∧ 136 * 3 <= i,
+        stack.CalleePost(w(14))) {
+    compiled_returns<M>(eight(), placement, program, lowered, trivial, fetch, data, last, origin, stack, 2, trivial,
+        [w(1), w(2)], trivial, w(14), eight_evaluates())
+}
+
+// Nine is refused, the function and the call each with the count named.
+fn sum9() → Function {
+    Function(parameters := [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1), word(2), word(3), word(4), word(5), word(6), word(7), word(8)]),
+            nodes := [Add(width := 64, output := 9, left := 0, right := 8)],
+            outputs := Ports([word(9)]))),
+        result := 9)
+}
+fn nine_caller() → Function {
+    Function(parameters := [0, 1], body := Call(0, [0, 1, 1, 1, 1, 1, 1, 1, 0], 2), result := 2)
+}
+theorem nine_refused(): lower_program([sum9()], plan_program([sum9()])) = None { refl }
+theorem nine_why(): sum9().refused(0, sum9().plan(), 10, []) =
+    "the function has 9 parameters, and a function takes at most eight: six in registers and two on the stack" { refl }
+theorem nine_call_refused(): lower_program([nine_caller(), sum8()], plan_program([nine_caller(), sum8()])) = None { refl }
+theorem nine_call_why(): nine_caller().refused(1, nine_caller().plan(), 3, []) =
+    "the call of function 0 (0, 1, 1, 1, 1, 1, 1, 1, 0): it passes 9 words, and a call passes at most eight: six in registers and two on the stack" { refl }

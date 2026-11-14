@@ -234,7 +234,7 @@ theorem safe_pred_plain_if(n: BitVec(64)):
 // V3: `decreases` recursion. A self-call is a `Call` of the function itself,
 // answered from the table by the function, so the body pins by `refl`
 // against the body as written, convoy included, and `f(xs) = body[f]` is
-// the generated `f_unfold`, so the pin reaches the function itself.
+// the generated `f::unfold`, so the pin reaches the function itself.
 
 fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
@@ -256,7 +256,7 @@ theorem count_down_body_reflects(n, acc: BitVec(64)): count_down_rt().meaning(co
     match h: n.eq_bit(BitVec::ofNat(0)) { True => acc, False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)) } { refl }
 
 theorem count_down_reflects(n, acc: BitVec(64)): count_down_rt().meaning(count_down_world())(n, acc) = count_down(n, acc) {
-    trans(count_down_body_reflects(n, acc), sym(count_down_unfold(n, acc)))
+    trans(count_down_body_reflects(n, acc), sym(count_down::unfold(n, acc)))
 }
 
 // ---------------------------------------------------------------------------

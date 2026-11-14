@@ -189,10 +189,10 @@ fn not_a_list(n: Nat) → Nat {
     k
 }
 
-// `f_unfold` (§7.1): the function is its lowered body, for tactics that
+// `f::unfold` (§7.1): the function is its lowered body, for tactics that
 // treat `f(x̄)` as an atom.
 theorem sum_unfolds(xs: List<Nat>): sum(xs) = xs.foldl(λ (s: Nat) (x: Nat) => sum::step(s, x), 0) {
-    sum_unfold(xs)
+    sum::unfold(xs)
 }
 
 // ---- Early exit (§5.2): the step returns `ForStep`, the loop is `for_in` ----
@@ -317,7 +317,7 @@ fn countdown(n: Nat) → List<Nat> {
 theorem countdown_lit(): countdown(3) = [1, 2, 3] { refl }
 // Neutral: the function is its run from the initial state.
 theorem countdown_is(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { refl }
-theorem countdown_unfolds(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { countdown_unfold(n) }
+theorem countdown_unfolds(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { countdown::unfold(n) }
 theorem countdown_stops(out: List<Nat>): countdown::run(0, out) = countdown::State(0, out) { refl }
 // The run's equation (§7.3), at a neutral state: one step under the
 // condition, the state itself otherwise.
@@ -326,7 +326,7 @@ theorem countdown_run_unfolds(m: Nat, out: List<Nat>):
         True => countdown::run(m - 1, List::Cons(m, out)),
         False => countdown::State(m, out),
     }) {
-    countdown::run_unfold(m, out)
+    countdown::run::unfold(m, out)
 }
 
 // One local: the run returns it.

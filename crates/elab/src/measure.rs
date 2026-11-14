@@ -2314,6 +2314,16 @@ impl<'a> Rewrite<'a> {
         self.infer_local(e)
     }
 
+    /// [`Self::scrut_ty`] for the scrutinee of a `match` with `arms`: a call
+    /// under `When`'s constructors has the type of its test
+    /// (docs/when-design.md §4), as the `match` elaborates it.
+    fn match_scrut_ty(&self, e: &Expr, arms: &[Arm]) -> Option<Ty> {
+        match crate::tested::tested_marker(e, arms) {
+            Some(marked) => self.infer_local(&marked),
+            None => self.scrut_ty(e),
+        }
+    }
+
     /// Bind one arm pattern, typing its binders from the scrutinee's type
     /// through [`BinderTys`]; a position the oracle declines binds untyped,
     /// which only costs the sites whose statements name it their lifting.
@@ -2619,7 +2629,7 @@ impl<'a> Rewrite<'a> {
                         eqbind = Some(format!("__dec_meq{n}"));
                     }
                 }
-                let scrut_ty = self.scrut_ty(scrut);
+                let scrut_ty = self.match_scrut_ty(scrut, arms);
                 let arms = arms
                     .iter()
                     .map(|a| {
@@ -3782,7 +3792,7 @@ impl Respell<'_> {
         // The rewrite's own alias for a computed scrutinee, named and typed as
         // `Rewrite::expr` names it, so that obligations below lift over the
         // binders `f#body`'s lifted over.
-        let scrut_ty = self.rw.scrut_ty(scrut);
+        let scrut_ty = self.rw.match_scrut_ty(scrut, arms);
         let depth0 = self.rw.scope.len();
         // As there, a scrutinee whose type the walk cannot write keeps no
         // alias.
@@ -4168,7 +4178,7 @@ impl Respell<'_> {
             // the nested ones' numbers in step.
             self.rw.auto_n += 1;
         }
-        let scrut_ty = self.rw.scrut_ty(scrut);
+        let scrut_ty = self.rw.match_scrut_ty(scrut, arms);
         let stated = match &scrut.kind {
             ExprKind::Var(v) => self.rw.scrut_aliases.iter().rev()
                 .find(|(n, _)| n == v).map(|(_, e)| e.clone()),
@@ -4813,4 +4823,201 @@ pub(crate) fn companions(
             },
         },
     ])
+}
+
+// -- the step equations -------------------------------------------------------
+//
+// `f_unfold`'s right-hand side is the body as written, so where the body is a
+// test with an equation (`if h: P { … } else { … }`, `match h: b { True => …,
+// False => … }`), it is the convoy match on the test's bit. A proof about the
+// loop wants the arm the test picks, with the test as its hypothesis: one
+// equation per arm, `f::step` where the arm calls `f` again and `f::done` where
+// it does not (issues/loop-invariant-rules.md). Each is `f_unfold` followed
+// by `Bool::convoy_true`/`convoy_false`, which choose the arm at the
+// hypothesis's own proof, so the arm is stated exactly as `f_unfold` spells
+// it: the found proofs it passes are the same `f#found_N` terms.
+
+/// `f#step`, spelled `f::step` — the arm of the body's test that recurses,
+/// under the test. A designed spelling, as `f::ext` is, so that no name a
+/// module may declare is taken.
+pub(crate) fn step_name(name: &str) -> String {
+    format!("{name}#step")
+}
+
+/// `f#done`, spelled `f::done` — the arm of the body's test that does not
+/// recurse, under the test's failure.
+pub(crate) fn done_name(name: &str) -> String {
+    format!("{name}#done")
+}
+
+/// What one arm of the test is stated under: the hypothesis's name and type,
+/// and the test's bit equation as an expression over that hypothesis.
+struct ArmHyp {
+    name: String,
+    ty: Ty,
+    bit_eq: Expr,
+}
+
+/// `f::step` and `f::done` for `decl`, whose `f_unfold` was built: `Err` names
+/// why the body has no test to split (a `let` before it, a test that is not
+/// on a `Bool`, both arms or neither recursing), and nothing is generated.
+pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, String> {
+    let span = decl.body.span;
+    // The `let`s before the test (a `mut self` body opens with
+    // `let s__1 = s;`) are kept before each side's arm, so that the equation
+    // differs from `f_unfold`'s only in the arm; the test itself must not
+    // read them, since the hypothesis is stated outside them.
+    let qualified = var(&decl.name, span);
+    let mut top = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
+    if decl.name != name {
+        top = subst(&top, &[(name, &qualified)], &mut Vec::new());
+    }
+    let mut lets: Vec<Stmt> = Vec::new();
+    while let ExprKind::Block(b) = &top.kind {
+        lets.extend(b.stmts.iter().cloned());
+        top = (*b.result).clone();
+    }
+    let bound: Vec<String> = lets.iter().map(|st| match st {
+        Stmt::Let { name, .. } | Stmt::LetCode { name, .. } => Ok(name.clone()),
+        Stmt::LetRecord { .. } => Err(()),
+    }).collect::<Result<_, _>>().map_err(|_| "the body destructures a record before its test".to_string())?;
+    let top = &top;
+    let ExprKind::Match { scrut, eqbind: Some(eq), motive: None, arms, .. } = &top.kind else {
+        return Err("the body is not a test with an equation (`if h: P`, `match h: b`)".into());
+    };
+    let arm = |ctor: &str| arms.iter().find(|a| a.ctor == ctor && !a.default && a.binders.is_empty());
+    let (Some(yes), Some(no)) = (arm("True"), arm("False")) else {
+        return Err("the test is not on a `Bool`".into());
+    };
+    if arms.len() != 2 {
+        return Err("the test is not on a `Bool`".into());
+    }
+    let calls = |e: &Expr| {
+        let mut found = false;
+        crate::surface::walk_expr(e, &mut |x: &Expr| {
+            if let ExprKind::Var(n) = &x.kind && n == &decl.name {
+                found = true;
+            }
+        });
+        found
+    };
+    let yes_steps = match (calls(&yes.body), calls(&no.body)) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => return Err("both arms or neither call the function again".into()),
+    };
+    let taken: Vec<&str> = decl.params.iter().map(|p| p.name.as_str()).collect();
+    let fresh_hyp = |want: &str| {
+        let mut n = want.to_string();
+        while taken.contains(&n.as_str()) {
+            n.push('\'');
+        }
+        n
+    };
+    // `if h: P` is `match e: decide_bit<P>()` with `let h = decide_true<P>(e)`
+    // opening an arm that names `h`: the hypothesis is `P` (or `¬P`), and the
+    // bit's equation is read back from it. A written `match h: b` keeps `h`.
+    let decided = match &scrut.kind {
+        ExprKind::App { head, args, named, .. } if args.is_empty() && named.is_empty() => match &head.kind {
+            ExprKind::TyApp { head, args } if args.len() == 1 && matches!(&head.kind, ExprKind::Var(v) if v == "decide_bit") => Some(args[0].clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let is_evidence = |e: &Expr| match &e.kind {
+        ExprKind::App { head, .. } => matches!(&head.kind, ExprKind::TyApp { head, .. }
+            if matches!(&head.kind, ExprKind::Var(v) if v == "decide_true" || v == "decide_false")),
+        _ => false,
+    };
+    let reads_lets = bound.iter().any(|x| match &decided {
+        Some(prop) => crate::inductive::ty_mentions(prop, x),
+        None => crate::inductive::expr_mentions(scrut, x),
+    });
+    if reads_lets {
+        return Err("the test reads a name the body binds before it".into());
+    }
+    let with_lets = |e: Expr| if lets.is_empty() { e } else {
+        Expr { kind: ExprKind::Block(Box::new(Block { stmts: lets.clone(), result: Box::new(e), ons: Vec::new(), span })), span }
+    };
+    let hyp = |body: &Expr, truth: bool| -> ArmHyp {
+        match &decided {
+            Some(prop) => {
+                let evidence = match &body.kind {
+                    ExprKind::Block(b) => match b.stmts.first() {
+                        Some(Stmt::Let { name, expr, .. }) if is_evidence(expr) => Some(name.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let name = fresh_hyp(evidence.as_deref().unwrap_or("h"));
+                let ty = if truth {
+                    prop.clone()
+                } else {
+                    arrow(None, prop.clone(), Ty { kind: TyKind::Named { name: "False".into(), args: Vec::new() }, span }, span)
+                };
+                let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
+                let head = Expr { kind: ExprKind::TyApp { head: Box::new(var(lemma, span)), args: vec![prop.clone()] }, span };
+                let bit_eq = app(head, vec![var(&name, span)], span);
+                ArmHyp { name, ty, bit_eq }
+            }
+            None => {
+                let name = fresh_hyp(eq);
+                let ctor = var(if truth { "True" } else { "False" }, span);
+                let ty = eq_ty((**scrut).clone(), ctor, span);
+                let bit_eq = var(&name, span);
+                ArmHyp { name, ty, bit_eq }
+            }
+        }
+    };
+    let explicit = decl.params.iter().any(|p| p.implicit);
+    let call = |head: Expr, args: Vec<Expr>| Expr {
+        kind: ExprKind::App { head: Box::new(head), args, named: Vec::new(), explicit, goal_oriented: false },
+        span,
+    };
+    let args: Vec<Expr> = decl.params.iter().map(|p| var(&p.name, span)).collect();
+    let lhs = call(companion_ref(decl, &decl.name, span), args.clone());
+    let unfold = call(companion_ref(decl, &unfold_name(&decl.name), span), args);
+    let arm_fn = |a: &Arm| lam(&[eq.as_str()], a.body.clone(), span);
+    let mut out = Vec::new();
+    for (arm, truth) in [(yes, true), (no, false)] {
+        let h = hyp(&arm.body, truth);
+        let rhs = with_lets(subst(&arm.body, &[(eq.as_str(), &h.bit_eq)], &mut Vec::new()));
+        let chooser = if truth { "bool::Bool::convoy_true" } else { "bool::Bool::convoy_false" };
+        let chosen = app(var(chooser, span), vec![(**scrut).clone(), arm_fn(yes), arm_fn(no), h.bit_eq.clone()], span);
+        let proof = app(var("trans", span), vec![unfold.clone(), with_lets(chosen)], span);
+        let mut params = decl.params.clone();
+        params.push(Param {
+            name: h.name.clone(),
+            ty: h.ty,
+            implicit: false,
+            is_self: false,
+            solver: None,
+            default: None,
+            origin: ParamOrigin::Written,
+            symbol: None,
+            span,
+        });
+        let steps = truth == yes_steps;
+        out.push(Lowered {
+            decl: Decl {
+                kind: DeclKind::Theorem,
+                is_meta: false,
+                is_evidence: false,
+                is_interface: false,
+                partial: None,
+                value: false,
+                elaborates: None,
+                name: if steps { step_name(&decl.name) } else { done_name(&decl.name) },
+                tyvars: decl.tyvars.clone(),
+                params,
+                result: eq_ty(lhs.clone(), rhs, span),
+                decreases: None,
+                unfolding: Vec::new(),
+                body: block(proof, span),
+                span: decl.span,
+            },
+            obligations: Obligations { sites: Vec::new() },
+        });
+    }
+    Ok(out)
 }

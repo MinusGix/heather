@@ -96,7 +96,7 @@ theorem neg_has_cited(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi,
 }
 
 // A neutral scrutinee: `npow` recurses on its exponent, so it has no
-// whole-body `npow_unfold` (that is not `refl` at an open exponent), only
+// whole-body `npow::unfold` (that is not `refl` at an open exponent), only
 // one equation per arm.
 // expect-error(kernel): `Interval::npow` is an interface definition of `interval`
 theorem npow_succ_refl(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { refl }

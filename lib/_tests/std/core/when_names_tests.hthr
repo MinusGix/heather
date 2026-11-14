@@ -1,0 +1,65 @@
+// Probes of the tested call's reach (docs/when-design.md §4): a `match` is
+// read as a test only when its arms name `When`'s own constructors, and a
+// tested call inside statement sugar is still tested once, at its own span.
+// A module of its own because its `Attendance` names constructors `Present`
+// and `Absent`, which would shadow `When`'s for every probe in `when_tests`.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import when; import omega; import vector;
+
+// A type of the module's own whose constructors are spelled as `When`'s.
+inductive Attendance { Present(hours: Nat), Absent(excused: Bool) }
+
+// A call that leaves a searched condition, returning that type.
+fn mark(days, i: Nat, inside: i < days := omega) → Attendance { Present(i) }
+
+// The `match` names `Attendance`'s constructors, so the call keeps its one
+// reading: `inside` is searched, and found from `h`. Read as a test, the
+// scrutinee would have been a `When<Attendance, i < 4>`, and the arms would
+// not have fitted it.
+fn hours(i: Nat, h: i < 4) → Nat {
+    match mark(4, i) { Present(k) => k, Absent(_) => 0 }
+}
+theorem hours_lit(h: 2 < 4): hours(2, h) = 2 { refl }
+
+fn hours_if(i: Nat, h: i < 4) → Nat {
+    if let Present(k) = mark(4, i) { k } else { 0 }
+}
+theorem hours_if_lit(h: 1 < 4): hours_if(1, h) = 1 { refl }
+
+// Without the proof in scope the search fails as for any call, rather than
+// the call being tested: the arms are not `When`'s.
+// expect-error: omega
+fn hours_unknown(i: Nat) → Nat {
+    match mark(4, i) { Present(k) => k, Absent(_) => 0 }
+}
+
+// `When`'s constructors, qualified, still test the call here.
+fn Vec::nth<A>({n: Nat}, self v: [A; n], i: Nat, inside: i < n := omega) → A { vector_index(v, i, inside) }
+
+fn nth_or<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    match v.nth(i) { When::Present(x, _) => x, When::Absent(_) => d }
+}
+theorem nth_or_lit(): nth_or<Nat>([4, 5, 6], 1, 0) = 5 { refl }
+theorem nth_or_past(): nth_or<Nat>([4, 5, 6], 7, 0) = 0 { refl }
+
+// Statement sugar around a tested call: an assignment whose place is a
+// `When`, and one whose place is the value, inside a branch. The sugar's
+// own calls share no span with the read, so only the read is tested, once.
+fn nth_assigned<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    let mut w: When<A, i < n> = v.nth(i);
+    w := v.nth(i);
+    w.unwrap_or(d)
+}
+theorem nth_assigned_lit(): nth_assigned<Nat>([4, 5, 6], 2, 0) = 6 { refl }
+theorem nth_assigned_past(): nth_assigned<Nat>([4, 5, 6], 3, 0) = 0 { refl }
+
+fn nth_sum({n: Nat}, v: [Nat; n], i: Nat) → Nat {
+    let mut total = 0;
+    match v.nth(i) {
+        When::Present(x, _) => { total := total + x },
+        When::Absent(_) => {},
+    }
+    total
+}
+theorem nth_sum_lit(): nth_sum([4, 5, 6], 0) = 4 { refl }

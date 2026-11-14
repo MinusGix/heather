@@ -5776,7 +5776,7 @@ fn check_index_expr(c: &CtorDecl, e: &Expr, ity: &IdxTy) -> R<()> {
 /// Does a surface type mention the *term* variable `v`? [`occurs`] answers
 /// this for everything except a written equation, whose endpoints are terms
 /// it deliberately does not scan (it is looking for type occurrences).
-fn ty_mentions(t: &Ty, v: &str) -> bool {
+pub(crate) fn ty_mentions(t: &Ty, v: &str) -> bool {
     match &t.kind {
         TyKind::Eq(a, b) => expr_mentions(a, v) || expr_mentions(b, v),
         _ => occurs(t, v).is_some(),

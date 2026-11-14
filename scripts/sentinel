@@ -9,6 +9,7 @@ image store, a cold verdict store, a cold target directory.
 
     scripts/sentinel run          # suite, then publish (green) or bisect (red)
     scripts/sentinel seed DIR     # unpack the latest published image stores
+    scripts/sentinel refresh      # publish this checkout's images, no suite
     scripts/sentinel audit [REV]  # the early cutoff's audit from REV's library
 
 `run` writes target/sentinel/report.md and exits 0 green, 1 red, 2 when the
@@ -20,8 +21,26 @@ GitHub's file limit, + `manifest.json`: the commit, the date, the suite
 line, per-target CPU). A fresh session seeds its
 stores from it (scripts/session-start); replay rechecks every image with the
 reader's kernel, so a seeded image can only ever be a miss, never a wrong
-answer. The verdict store is not published: a vouched verdict skips the
-kernel. The report lists targets whose CPU grew past the last green run's.
+answer. The suite's verdict store (target/decl-cache) is not published: a
+vouched verdict skips the kernel. The report lists targets whose CPU grew
+past the last green run's.
+
+Only the images the run used are published (`live_files`): a store keeps
+every image of every earlier tree until its budget is spent
+(`ModuleImageCache::sweep`), and a seed that carries them is ten times the
+size of the library's images and no more use to a fresh box.
+
+`refresh` publishes the same stores from a checkout whose tree is master's,
+without running anything: for a session that has just run a lane over
+master (a round that merged), so that the seed follows master through the
+day and not only at night. A fresh box whose seed is behind master pays
+again for every module master changed since, and for every module those
+changes keep from being moved (issues/sentinel-seed-follows-master.md). The
+manifest keeps the last green run's commit, suite line and CPU table, which
+`run` bisects and compares from; `images_commit` and `images_date` say what
+the images are of. It does nothing while the published images are younger
+than REFRESH_MIN_AGE_H hours (`--force` publishes anyway), and `--dry-run`
+builds the archive and reports its size without pushing.
 
 Either way, the library is checked once at the last green run's commit and
 once here, by this commit's compiler and into one image store, with the
@@ -35,6 +54,7 @@ last green run, rerunning only those targets at each step, and the report
 names the first merge at which each fails.
 """
 
+import calendar
 import io
 import json
 import os
@@ -62,6 +82,13 @@ GROWTH_FLOOR_S = 10.0
 # 89 MB by 2026-10-26, so the archive is published in parts below that
 # (`images.tgz.000`, `.001`, …) and seed() joins them.
 PART_BYTES = 90 * 1000 * 1000
+# `refresh` leaves published images younger than this alone: each publish is
+# an orphan commit of the whole archive, and the host keeps what a force-push
+# drops for a while.
+REFRESH_MIN_AGE_H = 3
+# The images a `refresh` keeps when the manifest does not say since when the
+# published ones were live (a seed published before `since` was recorded).
+REFRESH_WINDOW_H = 36
 
 
 def git(*args, check=True, capture=True):
@@ -163,16 +190,54 @@ def fetch_manifest():
     return json.loads(r.stdout) if r.returncode == 0 else None
 
 
-def publish(head, line, cpu):
-    """One orphan commit holding this run's image stores, force-pushed."""
+def live_files(store, since):
+    """The files of `store` (a directory of STORE_ROOT) worth seeding a box
+    with, as paths relative to STORE_ROOT: every image read or written at or
+    after `since` (reading an image renews its modification time,
+    `ModuleImageCache::load`), the pointers that name one of those (a
+    `.latest` or `.src` file holds the 32-byte key of an image), and the
+    store's other files as they are. Lock files are made on demand."""
+    root = STORE_ROOT / store
+    kept, pointers, rest = set(), [], []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix == ".hmi":
+            if path.stat().st_mtime >= since:
+                kept.add((path.parent, path.stem))
+                rest.append(path)
+        elif path.suffix in (".latest", ".src"):
+            pointers.append(path)
+        elif path.suffix != ".lock":
+            rest.append(path)
+    for path in pointers:
+        key = path.read_bytes()
+        if len(key) == 32 and (path.parent, key.hex()) in kept:
+            rest.append(path)
+    return [p.relative_to(STORE_ROOT) for p in sorted(rest)]
+
+
+def write_archive(tmp, since):
+    """`images.tgz` in `tmp`, of every store's live files; returns how many
+    images it holds."""
+    images = 0
+    with tarfile.open(tmp / "images.tgz", "w:gz", compresslevel=6) as tar:
+        for store in STORES:
+            if (STORE_ROOT / store).is_dir():
+                for rel in live_files(store, since):
+                    images += rel.suffix == ".hmi"
+                    tar.add(STORE_ROOT / rel, arcname=str(rel))
+    return images
+
+
+def publish(manifest, since):
+    """One orphan commit holding the image stores' files live since `since`
+    and `manifest`, force-pushed."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        with tarfile.open(tmp / "images.tgz", "w:gz") as tar:
-            for store in STORES:
-                if (STORE_ROOT / store).is_dir():
-                    tar.add(STORE_ROOT / store, arcname=store)
-        manifest = {"commit": head, "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "suite": line, "target_cpu": cpu}
+        write_archive(tmp, since)
+        manifest = dict(manifest, since=int(since))
+        head, line = manifest["images_commit"], manifest["suite"]
         (tmp / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
         names = ["manifest.json"]
         with open(tmp / "images.tgz", "rb") as archive:
@@ -326,7 +391,11 @@ def run():
     report = [f"# Sentinel {time.strftime('%Y-%m-%d', time.gmtime())} at {head[:12]}", "",
               f"`{line}` in {int(time.time() - started)} s (fresh box, exact images).", ""]
     if code == 0 and not failing:
-        ok = publish(head, line, cpu)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # The suite read or wrote every image it needs after `started`; a
+        # minute of slack for a clock that steps.
+        ok = publish({"commit": head, "date": now, "suite": line, "target_cpu": cpu,
+                      "images_commit": head, "images_date": now}, started - 60)
         report.append("Green. Image stores published to `claude/sentinel-images`." if ok
                       else "Green, but publishing the image stores failed (see the session log).")
         changed = drifted(before, image_headers(STORE_ROOT))
@@ -411,9 +480,61 @@ def seed(dest, fetched=False):
     return 0
 
 
+def seconds(stamp):
+    """A manifest date as seconds since the epoch."""
+    return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def refresh(force=False, dry_run=False):
+    """Publish this checkout's image stores under the last green run's
+    manifest. 0 published (or nothing to do), 1 refused or failed."""
+    previous = fetch_manifest()
+    if previous is None:
+        print("sentinel refresh: no green run on record to refresh", file=sys.stderr)
+        return 1
+    if subprocess.run(["git", "fetch", "--quiet", "origin", "master"], cwd=ROOT).returncode != 0:
+        print("sentinel refresh: cannot fetch master", file=sys.stderr)
+        return 1
+    # The images are of this tree. A merged round's branch has master's tree
+    # without being master's commit, so the trees are compared; uncommitted
+    # edits to tracked files make it another tree.
+    if subprocess.run(["git", "diff", "--quiet", "FETCH_HEAD", "--"], cwd=ROOT).returncode != 0:
+        print("sentinel refresh: this checkout is not master's tree; a seed follows master", file=sys.stderr)
+        return 1
+    master = git("rev-parse", "FETCH_HEAD")
+    published = previous.get("images_date", previous["date"])
+    age_h = (time.time() - seconds(published)) / 3600
+    if previous.get("images_commit", previous["commit"]) == master:
+        print(f"sentinel refresh: the published images are already of {master[:12]}")
+        return 0
+    if age_h < REFRESH_MIN_AGE_H and not force and not dry_run:
+        print(f"sentinel refresh: the published images are {age_h:.1f} h old (under {REFRESH_MIN_AGE_H}); left alone")
+        return 0
+    # What the last run published as live stays, with what this checkout
+    # read or built since: a lane that ran only the tests its diff could
+    # affect renewed only their images.
+    since = previous.get("since", time.time() - REFRESH_WINDOW_H * 3600)
+    manifest = dict(previous, images_commit=master,
+                    images_date=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    if dry_run:
+        with tempfile.TemporaryDirectory() as tmp:
+            images = write_archive(Path(tmp), since)
+            size = (Path(tmp) / "images.tgz").stat().st_size
+        print(f"sentinel refresh: would publish {images} images of {master[:12]}, {size / 1e6:.0f} MB "
+              f"(published: {published}, {age_h:.1f} h old)")
+        return 0
+    if not publish(manifest, since):
+        print("sentinel refresh: publishing failed", file=sys.stderr)
+        return 1
+    print(f"sentinel refresh: images of {master[:12]} published to `{BRANCH}`")
+    return 0
+
+
 def main(argv):
     if argv[:1] == ["run"]:
         return run()
+    if argv[:1] == ["refresh"] and set(argv[1:]) <= {"--force", "--dry-run"}:
+        return refresh(force="--force" in argv, dry_run="--dry-run" in argv)
     if argv[:1] == ["seed"] and len(argv) == 2:
         return seed(argv[1])
     if argv[:1] == ["audit"] and len(argv) <= 2:

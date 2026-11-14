@@ -197,6 +197,14 @@ impl Inference<'_> {
 
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         self.refuse_value_call(cx, e)?;
+        // A `match` on `When`'s constructors whose scrutinee is a
+        // proof-taking call (docs/when-design.md §4).
+        if let Some((bound, tested)) = crate::tested::Tested(self).tested_match(cx, e)? {
+            return self.elab_infer_uncached(&bound, &tested, expected);
+        }
+        if let Some((bound, tested)) = crate::tested::Tested(self).tested_mark(cx, e)? {
+            return self.elab_infer_uncached(&bound, &tested, expected);
+        }
         if let ExprKind::App { head, .. } = &e.kind {
             if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) {
                 return err(

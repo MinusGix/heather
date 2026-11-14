@@ -329,6 +329,34 @@ theorem Sha2::run_add(self p: Sha2, schedule: List<BitVec(p.width)>, from, first
     }
 }
 
+// One step taken first: a word pushed before the rest are, a round run
+// before the rest are. What a loop that goes forward reads; the
+// definitions go back.
+theorem Sha2::extend_shift(self p: Sha2, m: Nat): (window: List<BitVec(p.width)>) → p.extend(Succ(m), window) = p.extend(m, p.push(window)) {
+    match m {
+        Zero => λ window => refl,
+        Succ(_, ih) => λ window => cong_fn(λ (w: List<BitVec(p.width)>) => p.push(w), ih(window)),
+    }
+}
+
+theorem Sha2::run_shift(self p: Sha2, schedule: List<BitVec(p.width)>, m: Nat):
+    (s: Sha2State(p.width)) → (from: Nat) →
+    p.run(schedule, from, Succ(m), s) =
+        p.run(schedule, from + 1, m, p.round(s, p.word(p.k, from), p.window_word(schedule, from)))
+{
+    match m {
+        Zero => λ s from => refl,
+        Succ(k, ih) => λ s from => {
+            let first = p.round(s, p.word(p.k, from), p.window_word(schedule, from));
+            j(sym(from.add_succ_left(k)), λ n _ => p.round(p.run(schedule, from, Succ(k), s), p.word(p.k, from + Succ(k)),
+                    p.window_word(schedule, from + Succ(k))) =
+                p.round(p.run(schedule, from + 1, k, first), p.word(p.k, n), p.window_word(schedule, n)),
+                cong_fn(λ (t: Sha2State(p.width)) => p.round(t, p.word(p.k, from + Succ(k)),
+                    p.window_word(schedule, from + Succ(k))), ih(s, from)))
+        },
+    }
+}
+
 // Two stretches of the schedule, or of the rounds, end to end.
 theorem Sha2::extend_then(self p: Sha2, first, second: Nat,
     start, middle, end: List<BitVec(p.width)>,

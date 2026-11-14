@@ -1,0 +1,78 @@
+// A loop that counts a word up to a bound, proved by rules rather than by
+// unfolding (issues/loop-invariant-rules.md). Such a loop is a `decreases`
+// function `f(s, i)` whose body is `if h: i < bound { …; f(next, i + 1) }
+// else { … }`, and its step equations `f::step` and `f::done` are generated.
+// `BitVec::loop_up` turns them into the loop's result as a function of the
+// iterated step (`BitVec::run_up`), and `BitVec::run_up_invariant` carries an
+// invariant through that iteration: a client gives the step as a function,
+// the two equations, and what the step keeps.
+import logic;
+import bool;
+import nat;
+import omega;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+
+// `k` steps of `g` from state `s` at counter `i`, the counter going up by one
+// each step.
+fn BitVec::run_up<S>({w: Nat}, g: S → BitVec(w) → S, s: S, i: BitVec(w), k: Nat) → S {
+    match k { Zero => s, Succ(m) => BitVec::run_up(g, g(s, i), i + 1, m) }
+}
+
+theorem BitVec::loop_up_from<S, R>({w: Nat}, f: S → BitVec(w) → R, g: S → BitVec(w) → S, d: S → BitVec(w) → R, bound: BitVec(w),
+    step: (s: S) → (i: BitVec(w)) → i < bound → f(s, i) = f(g(s, i), i + 1),
+    done: (s: S) → (i: BitVec(w)) → ¬(i < bound) → f(s, i) = d(s, i),
+    k: Nat): (s: S) → (i: BitVec(w)) → i.toNat() + k = bound.toNat() →
+    f(s, i) = d(BitVec::run_up(g, s, i, k), bound) {
+    match k {
+        Zero => λ s i e => {
+            let at: (i = bound) = bv_omega;
+            let stop: ¬(i < bound) = λ lt => bv_omega;
+            trans(done(s, i, stop), cong(at, f := λ x => d(s, x)))
+        },
+        Succ(_, ih) => λ s i e => {
+            let fits: bound.toNat() < Nat::pow(2, w) = BitVec::toNat_lt_pow(w, bound);
+            let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+            trans(step(s, i, bv_omega), ih(g(s, i), i + 1, omega))
+        },
+    }
+}
+
+// The loop from `i` is the exit at the bound, from the state the step has
+// made by then. The counter does not wrap: it stops at `bound`, and each
+// step's `i + 1` is below `2^w` because `i` is below the bound.
+theorem BitVec::loop_up<S, R>({w: Nat}, f: S → BitVec(w) → R, g: S → BitVec(w) → S, d: S → BitVec(w) → R, bound: BitVec(w),
+    step: (s: S) → (i: BitVec(w)) → i < bound → f(s, i) = f(g(s, i), i + 1),
+    done: (s: S) → (i: BitVec(w)) → ¬(i < bound) → f(s, i) = d(s, i),
+    s: S, i: BitVec(w), below: i <= bound):
+    f(s, i) = d(BitVec::run_up(g, s, i, (bound - i).toNat()), bound) {
+    BitVec::loop_up_from(f, g, d, bound, step, done, (bound - i).toNat(), s, i, bv_omega)
+}
+
+// What every step keeps holds after the steps: the invariant rule.
+theorem BitVec::run_up_invariant<S>({w: Nat}, g: S → BitVec(w) → S, Inv: S → BitVec(w) → Type, bound: BitVec(w),
+    keep: (s: S) → (i: BitVec(w)) → i < bound → Inv(s, i) → Inv(g(s, i), i + 1),
+    k: Nat): (s: S) → (i: BitVec(w)) → i.toNat() + k = bound.toNat() → Inv(s, i) →
+    Inv(BitVec::run_up(g, s, i, k), bound) {
+    match k {
+        Zero => λ s i e start => {
+            let at: (i = bound) = bv_omega;
+            j(at, λ x _ => Inv(s, x), start)
+        },
+        Succ(_, ih) => λ s i e start => {
+            let fits: bound.toNat() < Nat::pow(2, w) = BitVec::toNat_lt_pow(w, bound);
+            let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+            ih(g(s, i), i + 1, omega, keep(s, i, bv_omega, start))
+        },
+    }
+}
+
+// The common case at `u64` with `Mutated(s, i)` as the exit, the count of
+// passes left given: what a `mut self` loop over a word returns.
+theorem BitVec::counts_up<S>(f: S → u64 → Mutated<S, u64>, step: S → u64 → S, bound: u64,
+    steps: (s: S) → (i: u64) → i < bound → f(s, i) = f(step(s, i), i + 1),
+    ends: (s: S) → (i: u64) → ¬(i < bound) → f(s, i) = Mutated(s, i),
+    n: Nat): (s: S) → (i: u64) → i.toNat() + n = bound.toNat() → f(s, i) = Mutated(BitVec::run_up(step, s, i, n), bound) {
+    BitVec::loop_up_from(f, step, λ (s: S) (i: u64) => Mutated(s, i), bound, steps, ends, n)
+}

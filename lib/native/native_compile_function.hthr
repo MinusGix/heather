@@ -20,8 +20,8 @@
 // lent buffers as the function left them (`Target::based_left`). RAX then
 // goes to the result's home.
 //
-// Room: each activation keeps 128 bytes a function below its frame
-// (`Target::roomy`), and function `f` asks 120 a level and the CALL a word.
+// Room: each activation keeps 144 bytes a function below its frame
+// (`Target::roomy`), and function `f` asks 136 a level and the CALL a word.
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
@@ -130,11 +130,12 @@ fn Target::lending(self t: Target, held: Buffers(), count: Nat) → Lending {
 }
 
 // What function `f` is called under: the homes of the buffers it is lent
-// and then its words in the argument registers, its room on the stack, the
+// and then its words passed (all in the argument registers: a statement's
+// call passes six words at most), its room on the stack, the
 // buffers it is lent in memory, and each of them as long as its capacity.
 fn Target::CalledWith(self t: Target, held: Buffers(), f: Nat, words: List<BitVec(64)>) → Nat → MachineState<X86Memory(t.r.profile)> → Type {
-    λ i s => ArgsIn(t.passed_homes(program_lent(t.functions, f)) ++ words, argument_registers(), s.gprs) ∧
-        (120 * Succ(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
+    λ i s => t.stack.Passed(t.passed_homes(program_lent(t.functions, f)) ++ words, i, s) ∧
+        (136 * Succ(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
                 s.memory) ∧
             ((b: Nat) → b < program_lent(t.functions, f) → buffer_bytes(held, b).len() = t.layout().capacity(b))))
 }
@@ -996,7 +997,7 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let a = call(env.buffers, f, words);
         let i0 = t.index - 8;
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
-        let room_f: (120 * Succ(f) <= i0) = omega(t.roomy, below);
+        let room_f: (136 * Succ(f) <= i0) = omega(t.roomy, below);
         let bare = pre.left;
         let v = bare.left.witness;
         let based = bare.left.proof;
@@ -1008,7 +1009,8 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let short: (homes.len() <= 6) = omega(homes_len, accepted.right.left);
         let holding: s.gprs.Holding(call_registers(), homes) = j(sym(pre.right), λ g _ => g.Holding(call_registers(), homes), passed);
         let sized = t.lent_sized(env, t.room, v, s.memory, based, k, has);
-        let called: t.CalledWith(env.buffers, f, words)(i0, s) = ⟨s.gprs.holding_args(homes, argument_registers(), short, holding),
+        let called: t.CalledWith(env.buffers, f, words)(i0, s) = ⟨t.stack.passes_of_args(homes, argument_registers(), i0 + 8, s.gprs, s.memory,
+            s.gprs.holding_args(homes, argument_registers(), short, holding)),
             ⟨room_f, ⟨t.in_memory(env, t.room, v, s.memory, based, k, has), sized⟩⟩⟩;
         let got = answers(env.buffers, f, below, words, accepted.left)(s, here, resident, i0, bare.right.right, top.left, called, ret, top.right.left);
         let u = got.witness;

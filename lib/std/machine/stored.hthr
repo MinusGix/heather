@@ -391,3 +391,66 @@ theorem Stored::get_array_index<A>(self s: Stored<A>, n: Nat, bytes: List<u8>, a
     vector_index(s.array(n).get(bytes, at), i, inside) = s.get(bytes, i * s.layout.stride() + at) {
     inj(trans(sym(vector_entries_nth(n, s.array(n).get(bytes, at), i, inside)), s.get_array_nth(n, bytes, at, i, inside)))
 }
+
+// ---------------------------------------------------------------------------
+// Codecs that lose nothing
+//
+// `round` says a value written reads back. The converse, that bytes read
+// write back, holds only of a codec with no padding and no unused bit
+// pattern, so it is a property beside the record (`Stored::Exact`) and
+// not a field of it. Words and tight arrays of them have it; a padded
+// codec does not.
+
+// A codec that loses nothing: bytes of the layout's size are what their
+// value writes.
+fn Stored::Exact<A>(self s: Stored<A>) → Type { (bytes: List<u8>) → bytes.len() = s.layout.size → s.write(s.read(bytes)) = bytes }
+
+// A word's bytes, most significant first, lose nothing.
+theorem Stored::exact_be_bytes(k: Nat): Stored::be_bytes(k).Exact() {
+    λ bytes sized => trans(cong_fn(λ (v: [u8; k]) => vector_entries(v), BitVec::bytes_be_of_bytes_be(k, bytes.vector_of(k, BitVec::ofNat(0)))),
+        List::entries_vector_of(k, BitVec::ofNat(0), bytes, sized))
+}
+
+// Alignment is the layout's, so it changes nothing here.
+theorem Stored::exact_aligned<A>(self s: Stored<A>, log: Nat, exact: s.Exact()): s.aligned(log).Exact() { exact }
+
+// Where the codec loses nothing, the bytes a value is read from are the
+// value's own: a fact about a held value reaches the span.
+theorem Stored::window_get<A>(self s: Stored<A>, exact: s.Exact(), bytes: List<u8>, at: Nat, fits: s.layout.size + at <= bytes.len()):
+    bytes.window(at, s.layout.size + at) = s.write(s.get(bytes, at)) {
+    sym(exact(bytes.window(at, s.layout.size + at), trans(bytes.len_window(at, s.layout.size + at, omega, fits), s.layout.size.add_sub_cancel(at))))
+}
+
+// A value written to its own stride, where the stride is the size.
+theorem Stored::write_to_tight<A>(self s: Stored<A>, a: A, tight: s.layout.stride() = s.layout.size): s.write_to(a, s.layout.stride()) = s.write(a) {
+    let none: (s.layout.stride() - s.layout.size = 0) = omega;
+    trans(cong_fn(λ (k: Nat) => s.write(a) ++ List::replicate(BitVec::ofNat(0, n := 8), k), none), s.write(a).append_nil())
+}
+
+// An array whose elements sit a size apart has no padding to lose.
+theorem Stored::exact_all<A>(self s: Stored<A>, tight: s.layout.stride() = s.layout.size, exact: s.Exact(), n: Nat):
+    (bytes: List<u8>) → bytes.len() = n * s.layout.stride() → s.write_all(s.read_all(n, bytes)) = bytes {
+    match n {
+        Zero => λ bytes sized => {
+            let zero = s.layout.stride().mul_left_zero();
+            let empty: (bytes.len() = 0) = omega;
+            sym(bytes.nil_of_len_zero(empty))
+        },
+        Succ(k, ih) => λ bytes sized => {
+            let st = s.layout.stride();
+            let more = k.mul_succ_left(st);
+            let taken = bytes.len_take(s.layout.size, omega);
+            let first: (s.write_to(s.read(bytes.take(s.layout.size)), st) = bytes.take(st)) =
+                trans(s.write_to_tight(s.read(bytes.take(s.layout.size)), tight),
+                    trans(exact(bytes.take(s.layout.size), taken), cong_fn(λ (m: Nat) => bytes.take(m), sym(tight))));
+            let left = bytes.len_drop(st);
+            let rest = ih(bytes.drop(st), omega);
+            trans(cong_fn(λ (f: List<u8>) => f ++ s.write_all(s.read_all(k, bytes.drop(st))), first),
+                trans(cong_fn(λ (r: List<u8>) => bytes.take(st) ++ r, rest), bytes.take_append_drop(st)))
+        },
+    }
+}
+
+theorem Stored::exact_array<A>(self s: Stored<A>, n: Nat, tight: s.layout.stride() = s.layout.size, exact: s.Exact()): s.array(n).Exact() {
+    λ bytes sized => s.exact_all(tight, exact, n, bytes, sized)
+}

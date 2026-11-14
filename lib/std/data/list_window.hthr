@@ -461,3 +461,112 @@ theorem List::update_from_one_of_four<A>(self xs: List<A>, o, r: Nat, b, pad: A,
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reading through `++` and `rev`
+
+theorem List::nth_append_below<A>(self xs: List<A>, ys: List<A>): (i: Nat) → i < xs.len() → (xs ++ ys).nth(i) = xs.nth(i) {
+    match xs {
+        Nil => λ i below => false_elim(below),
+        Cons(_, t) => λ i => match i { Zero => λ _ => refl, Succ(k) => λ below => t.nth_append_below(ys, k, below) },
+    }
+}
+
+// The element `i` from the front of a reversed list is the one `i` from the back.
+theorem List::nth_rev<A>(self xs: List<A>): (i, k: Nat) → i + k + 1 = xs.len() → xs.rev().nth(i) = xs.nth(k) {
+    match xs {
+        Nil => λ i k e => false_elim(omega),
+        Cons(h, t) => λ i k => match k {
+            Zero => λ e => {
+                let turned = t.rev_len();
+                let at: (0 + t.rev().len() = i) = omega;
+                j(at, λ m _ => (t.rev() ++ [h]).nth(m) = Some(h), t.rev().nth_append_r([h], 0))
+            },
+            Succ(k2) => λ e => {
+                let turned = t.rev_len();
+                trans(t.rev().nth_append_below([h], i, omega), t.nth_rev(i, k2, omega))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Prefixes and rests of lists appended, updated and joined
+
+// A prefix no longer than the first list is read from it alone.
+theorem List::take_append_inside<A>(self xs: List<A>, ys: List<A>): (k: Nat) → k <= xs.len() → (xs ++ ys).take(k) = xs.take(k) {
+    match xs {
+        Nil => λ k => match k { Zero => λ _ => ys.take_zero(), Succ(_) => λ no => false_elim(no) },
+        Cons(h, t) => λ k => match k { Zero => λ _ => refl, Succ(j) => λ le => List::cong_cons(h, t.take_append_inside(ys, j, le)) },
+    }
+}
+
+// Dropping inside the first list leaves the second whole.
+theorem List::drop_append_inside<A>(self xs: List<A>, ys: List<A>): (k: Nat) → k <= xs.len() → (xs ++ ys).drop(k) = xs.drop(k) ++ ys {
+    match xs {
+        Nil => λ k => match k { Zero => λ _ => ys.drop_zero(), Succ(_) => λ no => false_elim(no) },
+        Cons(h, t) => λ k => match k { Zero => λ _ => refl, Succ(j) => λ le => t.drop_append_inside(ys, j, le) },
+    }
+}
+
+// Lists one after another.
+fn List::joined<A>(xss: List<List<A>>) → List<A> { match xss { Nil => Nil, Cons(x, rest) => x ++ List::joined(rest) } }
+
+// One more list joined at the end.
+theorem List::joined_snoc<A>(xss: List<List<A>>, x: List<A>): List::joined(xss ++ [x]) = List::joined(xss) ++ x {
+    match xss {
+        Nil => x.append_nil(),
+        Cons(h, rest) => trans(cong_fn(λ (t: List<A>) => h ++ t, List::joined_snoc(rest, x)), sym(h.append_assoc(List::joined(rest), x))),
+    }
+}
+
+// An update inside the first list leaves the second.
+theorem List::update_append_inside<A>(self xs: List<A>, ys: List<A>): (i: Nat) → (f: A → A) → i < xs.len() → (xs ++ ys).update(i, f) = xs.update(i, f) ++ ys {
+    match xs {
+        Nil => λ i f no => false_elim(no),
+        Cons(h, t) => λ i => match i { Zero => λ f _ => refl, Succ(k) => λ f below => cong_fn(λ (r: List<A>) => Cons(h, r), t.update_append_inside(ys, k, f, below)) },
+    }
+}
+
+// A prefix of an updated list is the prefix updated.
+theorem List::take_update<A>(self xs: List<A>): (n, i: Nat) → (f: A → A) → xs.update(i, f).take(n) = xs.take(n).update(i, f) {
+    match xs {
+        Nil => λ n i f => refl,
+        Cons(h, t) => λ n => match n {
+            Zero => λ i => match i { Zero => λ f => refl, Succ(_) => λ f => refl },
+            Succ(m) => λ i => match i { Zero => λ f => refl, Succ(k) => λ f => cong_fn(λ (r: List<A>) => Cons(h, r), t.take_update(m, k, f)) },
+        },
+    }
+}
+
+// An update at a prefix's end is the element after the prefix before it.
+theorem List::take_update_snoc<A>(self xs: List<A>): (i: Nat) → (b: A) → i < xs.len() → xs.update(i, λ _ => b).take(Succ(i)) = xs.take(i) ++ [b] {
+    match xs {
+        Nil => λ i b no => false_elim(no),
+        Cons(h, t) => λ i => match i {
+            Zero => λ b _ => cong_fn(λ (r: List<A>) => Cons(b, r), t.take_zero()),
+            Succ(k) => λ b below => cong_fn(λ (r: List<A>) => Cons(h, r), t.take_update_snoc(k, b, below)),
+        },
+    }
+}
+
+// Nothing is left past the end.
+theorem List::drop_len<A>(self xs: List<A>): xs.drop(xs.len()) = Nil {
+    match xs { Nil => refl, Cons(_, t) => t.drop_len() }
+}
+
+// What is left from an index inside: its element, then the rest.
+theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len() → xs.drop(i) = Cons(xs.nth(i).unwrap_or(d), xs.drop(Succ(i))) {
+    match xs {
+        Nil => λ i d no => false_elim(no),
+        Cons(h, t) => λ i => match i {
+            Zero => λ d _ => cong_fn(λ (r: List<A>) => Cons(h, r), sym(t.drop_zero())),
+            Succ(k) => λ d below => t.drop_at(k, d, below),
+        },
+    }
+}
+
+// Only the empty list has no length.
+theorem List::nil_of_len_zero<A>(self xs: List<A>): xs.len() = 0 → xs = Nil {
+    match xs { Nil => λ _ => refl, Cons(_, t) => λ no => { let pos: (Cons(_, t).len() = Succ(t.len())) = refl; false_elim(omega) } }
+}

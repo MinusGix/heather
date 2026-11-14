@@ -4,7 +4,7 @@ status: open
 labels: [performance,testing,cache]
 area: infrastructure
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-14
 ---
 
 Every child of `heather check --build-jobs` replays its module's import closure before it elaborates the module, so the cold library build repeats the shared prefix once per module. Found while writing [[performance-overview-2026-11-11]]; the build step is [[module-dag-build]]'s.
@@ -27,3 +27,8 @@ Release binary at #553 plus the name-record fix, quiet four-core cloud box, `--b
 ## Done when
 
 The summed child time of a cold library build is within a tenth of the same build done in one process per folder.
+
+## Log
+
+- 2026-11-13: Measured again with the self-checks off ([[kernel-self-check-cost-on-skipped-terms]]): the replays are now half of the build step over a stale seed (560 s of 1125 s of child time), about 35 ms per (module, import) pair over 16,000 pairs. Stack samples of a warm replay put a third of it in `ModuleDelta::relocate` under `load_into`: every import's delta is rebuilt node by node for the child's world, since a constant is an absolute position and nearly every term names one. A child that stays alive would save the decode and not this. What the seed can save instead is in [[sentinel-seed-follows-master]].
+- 2026-11-14: Whole library from an empty store, by module (`--build-times`, self-checks off): 369 s wall, 1396 CPU-s, 1454 s of child time over 557 modules. The 432 modules under 3 s are 441 s of it, and for those the imports are the cost: `native_tools` is 3.9 s cold and 3.6 s as a pure replay of its 244-module closure. The 26 modules over 10 s are 506 s.

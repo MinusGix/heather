@@ -44,7 +44,8 @@ file here is marked but `branches.hthr`'s `composed`, `either` and
 
 ## What `compile-x86` certifies
 
-`compile-x86` compiles a function with `BitVec(64)` parameters (at most six)
+`compile-x86` compiles a function with `BitVec(64)` parameters (at most
+eight: six in registers and two on the stack)
 and a `BitVec(64)` result, together with the word functions it calls,
 through the verified lowering ([round 4 of the issue](../../issues/function-ir-verified-lowering.md)).
 The body may use Add, Sub, AND, OR, XOR, `bitvec::ofNat` literals of any
@@ -77,8 +78,9 @@ source into a FunctionIR program and states:
 - the published bytes, a piece at a time (`_bytes`), and the exported
   function's offset (`_entry_at`);
 - and `_returns`, which instantiates the theorem `compiled_returns`. Called
-  at its label with its arguments in RDI, RSI, …, a return address at RSP
-  and room on the stack below it, the code returns the source's value in
+  at its label with its arguments in RDI, RSI, … and past the sixth on the
+  stack above the return address at RSP (`Stack::Passed`), and room on the
+  stack below it, the code returns the source's value in
   RAX, keeps the callee-saved registers and RSP, and leaves memory as it
   was but for stores into its own room below the return address
   (`Stack::Wrote`). The caller's stack words follow from that
@@ -116,7 +118,9 @@ next call's argument (`composition.hthr`), values live across calls
 (`multi_register.hthr`) and one callee called twice (`reused_callee.hthr`).
 `crates/cli/tests/native_program.rs` and `native_branches.rs` compile each,
 link it against a C reference and compare them on boundary and pseudorandom
-inputs.
+inputs. `stack_words.hthr` is a function of eight words that passes eight
+to another; `native_program.rs` calls it from Rust, the seventh and eighth
+on the stack.
 
 ## Narrow words
 

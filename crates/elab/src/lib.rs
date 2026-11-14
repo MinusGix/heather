@@ -211,6 +211,7 @@ mod infinitary;
 mod inductive;
 mod spelling;
 mod sum_layout;
+mod tested;
 mod lgg;
 mod solution_check;
 mod lint;
@@ -2451,13 +2452,26 @@ impl Elaborator {
         if let Some(msg) = self.access_refusal(name) {
             return NameRes::Restricted(msg);
         }
-        if let Some(msg) = self.unknown_access_path(name) {
-            return NameRes::Restricted(msg);
+        // `f::unfold` is the unfolding equation's designed spelling; the
+        // equation is still declared as `f_unfold`, which stays a deprecated
+        // spelling of it (docs/decreases-unfolding-design.md §2). A function
+        // that declares a member `unfold` of its own keeps it.
+        if let Some(base) = name.strip_suffix("::unfold") && self.access_alias(name).is_none() {
+            let declared = NameLookup(self).resolve_declared(name);
+            if matches!(declared, NameRes::Found(_)) {
+                return declared;
+            }
+            return self.resolve_name(&format!("{base}_unfold"));
         }
-        // An unfolding equation the walk declined to generate: say which body
-        // shape stopped it (docs/decreases-unfolding-design.md §3), since
-        // "unknown name" is the wrong thing to say about an equation the
-        // reader is right to expect.
+        // A companion the walk declined to generate: say which body shape
+        // stopped it (docs/decreases-unfolding-design.md §3, §6.1), since
+        // "unknown name" — or "no member `step`" — is the wrong thing to say
+        // about an equation the reader is right to expect. A name the module
+        // declared itself is not one.
+        let declared = NameLookup(self).resolve_declared(name);
+        if matches!(declared, NameRes::Found(_)) {
+            return declared;
+        }
         if let Some(why) = self.pass.unfold_refusals.borrow().get(name) {
             // A reason that already names the document that explains it — a
             // group's, `docs/mutual-recursion-design.md` §6 — points there
@@ -2467,12 +2481,17 @@ impl Elaborator {
             } else {
                 ", see docs/decreases-unfolding-design.md §3"
             };
+            if let Some(f) = name.strip_suffix("_unfold") {
+                return NameRes::Restricted(format!("no unfolding equation for `{f}`: {why}{see}"));
+            }
             return NameRes::Restricted(format!(
-                "no unfolding equation for `{}`: {why}{see}",
-                name.strip_suffix("_unfold").unwrap_or(name)
+                "no step equation `{name}` (docs/decreases-unfolding-design.md §6.1): {why}"
             ));
         }
-        NameLookup(self).resolve_declared(name)
+        if let Some(msg) = self.unknown_access_path(name) {
+            return NameRes::Restricted(msg);
+        }
+        declared
     }
 
     /// Run reflection or generation with names resolved as if read in a

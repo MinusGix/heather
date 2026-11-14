@@ -1,6 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: copy_window(span mut, span, word, word) -> word
-# stack: 240 bytes below the return address
+# stack: 272 bytes below the return address
 .text
 .globl copy_window
 .type copy_window, @function
