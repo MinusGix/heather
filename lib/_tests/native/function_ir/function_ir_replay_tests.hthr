@@ -102,3 +102,142 @@ theorem loop_read(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loop
 // before it a fact in the pass.
 theorem pass_apart(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loop([2], 1, [3], 4, leaf([Add(64, 8, 2, 2), Const(1, 5, 1)]), 5, [3], [6], 7)),
     Facts::none(), Both(Nodes([]), Body(Nodes([Swap(0, 0)])))).map(λ r => r.region) = None { refl }
+
+// ---------------------------------------------------------------------------
+// What was loaded since the last store
+
+// A byte loaded twice: the second load is a move of the first
+// (`load_again`, rule 19).
+fn again() → List<Step> { [Drop, Derive(19, [2, 1, 0, 0]), Emit(Move(64, 2, 1))] }
+
+theorem loaded_twice(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) =
+    Some([BufferLoad(1, 0, 0), Move(64, 2, 1)]) { refl }
+
+// What a store read back is such a load, so a load after a store at its
+// index is a move of that.
+theorem stored_then_loaded(): replay(rules(), Facts::none(), [BufferStore(1, 0, 0, 5), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) =
+    Some([BufferStore(1, 0, 0, 5), Move(64, 2, 1)]) { refl }
+
+// A store between the two is a refusal, wherever it stores: nothing is
+// said of which bytes it left alone.
+theorem stored_between(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferStore(3, 1, 7, 5), BufferLoad(2, 0, 0)],
+    Cons(Keep, Cons(Keep, again()))).map(λ r => r.nodes) = None { refl }
+
+// So is another index, another buffer, and a load not passed yet.
+theorem loaded_elsewhere(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 3), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) = None { refl }
+
+theorem loaded_of_another(): replay(rules(), Facts::none(), [BufferLoad(1, 1, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) = None { refl }
+
+theorem loaded_later(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)],
+    [Keep, Derive(19, [2, 1, 0, 0])]).map(λ r => r.nodes) = None { refl }
+
+// Between two leaves a plan walks node by node the loads are still known.
+fn apart(between: StructuredRegion) → StructuredRegion { Compose(leaf([BufferLoad(1, 0, 0)]), Compose(between, leaf([BufferLoad(2, 0, 0)]))) }
+
+fn apart_plan(between: Plan) → Plan { Both(Nodes([]), Both(between, Nodes(again()))) }
+
+fn regioned(region: StructuredRegion, plan: Plan) → Option<StructuredRegion> { replay_region(rules(), region, Facts::none(), plan).map(λ r => r.region) }
+
+theorem across_nodes(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Nodes([]))) =
+    Some(Compose(leaf([BufferLoad(1, 0, 0)]), Compose(leaf([Add(64, 3, 1, 1)]), leaf([Move(64, 2, 1)])))) { refl }
+
+// A region the plan leaves as it is may store, so nothing loaded before it
+// is known after: the same leaf under `Same`, a call, a conditional and a
+// loop.
+theorem across_same(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Same)) = None { refl }
+
+theorem across_call(): regioned(apart(Call(0, [1], 4)), apart_plan(Same)) = None { refl }
+
+theorem across_arms(): regioned(apart(Conditional(Ports(Nil), 5, Ports(Nil), Ports(Nil), leaf([]), leaf([]))), apart_plan(Arms(Nodes([]), Nodes([])))) = None { refl }
+
+theorem across_loop(): regioned(apart(Loop([], 6, [], 7, leaf([Const(1, 8, 1)]), 8, [], [], 9)), apart_plan(Body(Nodes([])))) = None { refl }
+
+// A function that loads a byte twice and adds the two, and what its
+// theorem says of the one that loads it once.
+fn doubled() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0), BufferLoad(2, 0, 0), Add(64, 3, 1, 2)]), 3)] }
+
+fn doubled_once() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0), Move(64, 2, 1), Add(64, 3, 1, 2)]), 3)] }
+
+theorem doubled_run(): replay_stage(rules()).run(doubled(), [Nodes(Cons(Keep, again()))]) = Some(doubled_once()) { refl }
+
+theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    did: program_effects(doubled(), before, f, arguments, result, after)): program_effects(doubled_once(), before, f, arguments, result, after) {
+    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, after, did)
+}
+
+// ---------------------------------------------------------------------------
+// A computation repeated
+
+// A sum computed twice: the second is a move of the first (`Step::Again`),
+// read through the copy before it.
+theorem summed_twice(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Move(64, 3, 0), Add(64, 4, 3, 1)], [Keep, Keep, Again(2, 0, 1)]).map(λ r => r.nodes) =
+    Some([Add(64, 2, 0, 1), Move(64, 3, 0), Move(64, 4, 2)]) { refl }
+
+// So is a constant written twice, and a comparison, whose word is a bit.
+theorem constant_twice(): replay(rules(), Facts::none(), [Const(64, 1, 7), Const(64, 2, 7)], [Keep, Again(1, 0, 0)]).map(λ r => r.nodes) =
+    Some([Const(64, 1, 7), Move(64, 2, 1)]) { refl }
+
+theorem compared_twice(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 2, 0, 1), UnsignedLessThan(64, 3, 0, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) =
+    Some([UnsignedLessThan(64, 2, 0, 1), Move(1, 3, 2)]) { refl }
+
+// Refused: another computation; the same one at an id no node wrote; a
+// load, which is no repeat while a store may come between (its rule is
+// `load_again`); a sum of words the facts do not say are the same.
+theorem again_other(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Sub(64, 4, 0, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_nowhere(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Add(64, 4, 0, 1)], [Keep, Again(3, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_loaded(): replay(rules(), Facts::none(), [BufferLoad(2, 0, 1), BufferLoad(4, 0, 1)], [Keep, Again(2, 1, 0)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_unread(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Add(64, 4, 3, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Orders
+
+// The words 0 and 1 are an index and a length nothing is known of. One
+// test of the index and 4: the sum did not wrap (4 is not below 0) and
+// fits (1 is not below it).
+fn span_test() → List<Node> { [Const(64, 2, 4), Add(64, 3, 0, 2), UnsignedLessThan(64, 4, 3, 0), UnsignedLessThan(64, 5, 1, 3), BitOr(1, 6, 4, 5)] }
+
+// Where the test's bit is clear: both comparisons are (rules 13, 14); the
+// sum is at least the index (21), so it is the index and 4 (25); the sum is
+// at most the length (21); so the index and 4 are at most the length (24).
+fn span_known() → List<Step> {
+    [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]), Derive(21, [5, 1, 3]),
+        Derive(24, [0, 4, 3, 0, 0, 1, 0, 4, 0])]
+}
+
+// The byte two past the index is below the length: its index is the index
+// and 2, which cannot wrap with room for 4 (28), so it and 1 are at most
+// the length (24), and the comparison is one (22).
+fn span_byte() → List<Node> { [Const(64, 7, 2), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)] }
+
+fn span_decided() → List<Step> { [Derive(28, [8, 0, 7, 2, 4, 1, 0]), Derive(24, [8, 0, 0, 2, 4, 1, 0, 1, 0]), Derive(22, [9, 8, 1]), Emit(Const(1, 9, 1))] }
+
+fn span_clear() → Facts { Facts::none().learn_all(span_test()).add(Const(1, 6, 0)) }
+
+theorem span_within(): replay(rules(), span_clear(), span_byte(), span_known() ++ ([Keep, Keep, Keep] ++ span_decided())).map(λ r => r.nodes) =
+    Some(span_byte() ++ [Const(1, 9, 1)]) { refl }
+
+// And the index itself is, by the order alone.
+theorem span_first(): replay(rules(), span_clear(), [UnsignedLessThan(64, 9, 0, 1)], span_known() ++ [Keep, Derive(22, [9, 0, 1]), Emit(Const(1, 9, 1))])
+    .map(λ r => r.nodes) = Some([UnsignedLessThan(64, 9, 0, 1), Const(1, 9, 1)]) { refl }
+
+// Not the byte four past it: there is room for 4, and it needs 5.
+theorem span_past(): replay(rules(), span_clear(), [Const(64, 7, 4), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)],
+    span_known() ++ [Keep, Keep, Keep, Derive(28, [8, 0, 7, 4, 4, 1, 0]), Derive(24, [8, 0, 0, 4, 4, 1, 0, 1, 0])]).map(λ r => r.nodes) = None { refl }
+
+// Nor anything where the test's bit is not known clear, nor from an order
+// claimed with more between the words than the two joined have.
+theorem span_untested(): replay(rules(), Facts::none().learn_all(span_test()), span_byte(), span_known()).map(λ r => r.nodes) = None { refl }
+
+theorem span_overclaimed(): replay(rules(), span_clear(), [], [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]),
+    Derive(21, [5, 1, 3]), Derive(24, [0, 4, 3, 0, 0, 1, 0, 5, 0])]).map(λ r => r.nodes) = None { refl }
+
+// A set comparison orders its operands, and that order decides the same
+// comparison made again; a clear one decides it the other way.
+theorem order_from_set(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 1)), [UnsignedLessThan(64, 3, 0, 1)],
+    [Derive(20, [2, 0, 1]), Keep, Derive(22, [3, 0, 1]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 1)]) { refl }
+
+theorem order_from_clear(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 0)), [UnsignedLessThan(64, 3, 0, 1)],
+    [Derive(21, [2, 0, 1]), Keep, Derive(23, [3, 0, 1]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 0)]) { refl }

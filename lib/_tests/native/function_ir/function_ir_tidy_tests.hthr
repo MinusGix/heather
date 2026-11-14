@@ -88,3 +88,32 @@ theorem store_kept(): Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferStor
 
 // A copy at one width is not read through at another.
 theorem width_kept(): Function([0], nodes([Move(64, 1, 0), Add(32, 2, 1, 1)]), 2).copy_plan() = Nodes([Keep, Keep]) { refl }
+
+// A sum computed twice, the second time through a copy of an operand: the
+// second is written as a move of the first (`Step::Again`), what read it
+// reads the first, and the sweep drops it.
+fn twice() → Function { Function([0, 1], nodes([Add(64, 2, 0, 1), Move(64, 3, 1), Add(64, 4, 0, 3), Sub(64, 5, 2, 4)]), 5) }
+
+theorem twice_found(): twice().copy_plan() = Nodes([Keep, Keep, Again(2, 0, 1), Swap(2, 2)]) { refl }
+
+theorem twice_run(): twice().tidy_plan(rules()).and_then(λ plan => tidy_stage(rules()).rewrite([], twice(), plan)) =
+    Some(Function([0, 1], nodes([Add(64, 2, 0, 1), Sub(64, 5, 2, 2)]), 5)) { refl }
+
+// A shift is found again by its word and its count, and not at another
+// count.
+theorem shift_found(): Function([0], nodes([ShiftLeft(64, 1, 0, 2), ShiftLeft(64, 2, 0, 3), ShiftLeft(64, 3, 0, 2)]), 3).copy_plan() =
+    Nodes([Keep, Keep, Again(1, 0, 0)]) { refl }
+
+// A comparison computed twice stays two comparisons: the lowering reads a
+// bound from the one an arm stands under. Nor is a constant a repeat, nor
+// a sum at another width, nor a sum of the same words the other way round.
+theorem repeats_kept(): Function([0, 1], nodes([UnsignedLessThan(64, 2, 0, 1), UnsignedLessThan(64, 3, 0, 1), Const(64, 4, 7), Const(64, 5, 7),
+    Add(32, 6, 0, 1), Add(32, 7, 0, 1), Add(64, 8, 0, 1), Add(64, 9, 1, 0)]), 9).copy_plan() =
+    Nodes([Keep, Keep, Keep, Keep, Keep, Keep, Keep, Keep]) { refl }
+
+// An arm starts from what was computed before its conditional, and what an
+// arm computes is not known after it: the other arm may have run.
+theorem repeat_in_arm(): Function([0, 1, 2], Compose(nodes([Add(64, 3, 0, 1)]), Compose(
+    Conditional(Ports([]), 2, Ports([]), Ports([]), nodes([Add(64, 4, 0, 1), Sub(64, 5, 0, 1), Const(64, 6, 0)]), nodes([Const(64, 6, 1)])),
+    nodes([Sub(64, 7, 0, 1)]))), 7).copy_plan() =
+    Both(Nodes([Keep]), Both(Arms(Nodes([Again(3, 0, 1), Keep, Keep]), Nodes([Keep])), Nodes([Keep]))) { refl }

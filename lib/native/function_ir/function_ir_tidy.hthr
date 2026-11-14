@@ -41,10 +41,12 @@ import pair;
 // A copy a sweep has passed: at `width`, the id written is `source`.
 record Copy { width: Nat, source: Nat }
 
-// The copies so far, by the id written.
-record Copies { by: NatMap<List<Copy>> }
+// The copies so far, by the id written, and the sums, differences and
+// shifts of words so far as they read through those, by the first id each
+// reads.
+record Copies { by: NatMap<List<Copy>>, made: NatMap<List<Node>> }
 
-fn Copies::none() → Copies { Copies(NatMap::empty()) }
+fn Copies::none() → Copies { Copies(NatMap::empty(), NatMap::empty()) }
 
 fn copies_find(found: List<Copy>, width, id: Nat) → Nat {
     match found { Nil => id, Cons(copy, rest) => match copy.width.same(width) { True => copy.source, False => copies_find(rest, width, id) } }
@@ -59,7 +61,8 @@ fn Copies::read_all(self copies: Copies, ids: List<Nat>) → List<Nat> { ids.map
 
 fn Copies::learn(self copies: Copies, node: Node) → Copies {
     match node {
-        Move(w, o, s) => Copies(nat_map_set(copies.by, o, Cons(Copy(w, copies.read(w, s)), match nat_map_get(copies.by, o) { None => [], Some(found) => found }))),
+        Move(w, o, s) => Copies(nat_map_set(copies.by, o, Cons(Copy(w, copies.read(w, s)), match nat_map_get(copies.by, o) { None => [], Some(found) => found })),
+            copies.made),
         _ => copies,
     }
 }
@@ -90,21 +93,68 @@ fn Node::read_through(self node: Node, copies: Copies) → Step {
     }
 }
 
+// A node whose repeat is written as a move of the first (`Step::Again`): a
+// sum, a difference or a shift of words, as it reads through the copies,
+// and the ids it then reads. Not a comparison, which the lowering reads a
+// bound from where it stands, nor a constant, which costs less written
+// again than kept in a register.
+record Shape { node: Node, a: Nat, b: Nat }
+
+fn Node::shape(self node: Node, copies: Copies) → Option<Shape> {
+    match node {
+        Add(w, o, l, r) => w.same(64).then(shared(copies.read(w, l), λ a => shared(copies.read(w, r), λ b => Some(Shape(Add(w, o, a, b), a, b))))),
+        Sub(w, o, l, r) => w.same(64).then(shared(copies.read(w, l), λ a => shared(copies.read(w, r), λ b => Some(Shape(Sub(w, o, a, b), a, b))))),
+        ShiftLeft(w, o, v, n) => w.same(64).then(shared(copies.read(w, v), λ a => Some(Shape(ShiftLeft(w, o, a, n), a, 0)))),
+        LogicalShiftRight(w, o, v, n) => w.same(64).then(shared(copies.read(w, v), λ a => Some(Shape(LogicalShiftRight(w, o, a, n), a, 0)))),
+        _ => None,
+    }
+}
+
+// The id an earlier node of the same computation wrote.
+fn nodes_computed(known: List<Node>, node: Node) → Option<Nat> {
+    match known {
+        Nil => None,
+        Cons(first, rest) => match first.at(0).same(node.at(0)) { True => Some(node_output(first).id), False => nodes_computed(rest, node) },
+    }
+}
+
+fn Copies::made_from(self copies: Copies, id: Nat) → List<Node> { match nat_map_get(copies.made, id) { None => [], Some(known) => known } }
+
+fn Copies::computed(self copies: Copies, shape: Shape) → Option<Nat> { nodes_computed(copies.made_from(shape.a), shape.node) }
+
+fn Copies::noting(self copies: Copies, shape: Shape) → Copies {
+    Copies(copies.by, nat_map_set(copies.made, shape.a, Cons(shape.node, copies.made_from(shape.a))))
+}
+
+record CopyStep { step: Step, copies: Copies }
+
+// A node's step and the copies after it: a repeat is a copy of the first.
+fn Copies::pass(self copies: Copies, node: Node) → CopyStep {
+    match node.shape(copies) {
+        None => CopyStep(node.read_through(copies), copies.learn(node)),
+        Some(shape) => match copies.computed(shape) {
+            None => CopyStep(node.read_through(copies), copies.noting(shape)),
+            Some(at) => CopyStep(Again(at, shape.a, shape.b), copies.learn(shape.node.as_move(at))),
+        },
+    }
+}
+
 record CopySteps { steps: List<Step>, copies: Copies }
 
 fn copy_steps(nodes: List<Node>, copies: Copies) → CopySteps {
     match nodes {
         Nil => CopySteps(Nil, copies),
-        Cons(node, rest) => shared(copy_steps(rest, copies.learn(node)), λ later =>
-            CopySteps(Cons(node.read_through(copies), later.steps), later.copies)),
+        Cons(node, rest) => shared(copies.pass(node), λ here => shared(copy_steps(rest, here.copies), λ later =>
+            CopySteps(Cons(here.step, later.steps), later.copies))),
     }
 }
 
 record CopyPlan { plan: Plan, copies: Copies }
 
 // A plan that has every node, call and loop read through the copies before
-// it, as the replayer learns them: an arm from the copies before the
-// conditional, a loop's body from none.
+// it, and a sum, a difference or a shift computed before be a move of the
+// first, as the replayer learns them: an arm from what was known before
+// the conditional, a loop's body from nothing.
 fn StructuredRegion::copy_plan(self region: StructuredRegion, copies: Copies) → CopyPlan {
     match region {
         Dataflow(body) => shared(copy_steps(body.nodes, copies), λ r => CopyPlan(Nodes(r.steps), r.copies)),

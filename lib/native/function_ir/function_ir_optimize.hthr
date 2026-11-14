@@ -41,39 +41,37 @@ import string;
 // ---------------------------------------------------------------------------
 // The stages
 
-// A function's plans: a test at its entry; where to inline; and then the
-// replayer's, as many as the search found use for, each over the function
-// the one before made (what its tests decide and which narrowings are
-// moves; what to read through; what to drop). None, or no replays, where a
-// stage leaves the function as it is.
+// A function's plans: a test at its entry, or none; and then moves, as
+// many as the search found use for, each over the function the one before
+// made. A move puts code in (a callee's body where its call was, or nodes
+// at new ids after a leaf: `function_ir_inline.hthr`) or is the replayer's
+// (what its tests decide and which narrowings are moves; what to read
+// through; what to drop). No test and no moves leave the function as it
+// is.
 //
 // The test comes first, so that the arm for a span too short is the
 // function as it was written, its calls still calls, and what is inlined
 // and decided and tidied is the other arm alone: the plain copy a test
 // costs is the small one.
-fn Passes() → Type { Pair<Pair<Option<Guard>, Option<Inlines>>, List<Plan>> }
+fn Passes() → Type { Pair<Option<Guard>, List<Or<Inlines, Plan>>> }
 
-fn passes(guard: Option<Guard>, inlines: Option<Inlines>, replays: List<Plan>) → Passes() { Pair(Pair(guard, inlines), replays) }
+fn passes(guard: Option<Guard>, moves: List<Or<Inlines, Plan>>) → Passes() { Pair(guard, moves) }
 
 // No stage has a plan: the function stays as it is.
-fn no_passes() → Passes() { passes(None, None, []) }
+fn no_passes() → Passes() { passes(None, []) }
 
-fn optimize_stage() → Stage<Passes()> {
-    guard_stage().maybe().then(inline_stage().maybe()).then(replay_stage(rules()).many())
-}
+// One move: code put in, or the replayer.
+fn move_stage() → Stage<Or<Inlines, Plan>> { inline_stage().or(replay_stage(rules())) }
 
-// What each stage makes of what the one before made, the stages make of
-// the function. The replays' statement is itself joined from one a plan
+fn optimize_stage() → Stage<Passes()> { guard_stage().maybe().then(move_stage().many()) }
+
+// What the test makes and the moves make of that, the stages make of the
+// function. The moves' statement is itself joined from one a move
 // (`Stage::many_made`).
-theorem optimize_made(callees: List<Function>, f0, f1, f2, f3: Function, guard: Option<Guard>, inlines: Option<Inlines>, replays: List<Plan>,
-    m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1),
-    m2: inline_stage().maybe().rewrite(callees, f1, inlines) = Some(f2),
-    m3: replay_stage(rules()).many().rewrite(callees, f2, replays) = Some(f3)):
-    optimize_stage().rewrite(callees, f0, passes(guard, inlines, replays)) = Some(f3) {
-    let s1 = guard_stage().maybe();
-    let s2 = s1.then(inline_stage().maybe());
-    let a2 = s1.then_made(inline_stage().maybe(), callees, f0, f1, f2, guard, inlines, m1, m2);
-    s2.then_made(replay_stage(rules()).many(), callees, f0, f2, f3, Pair(guard, inlines), replays, a2, m3)
+theorem optimize_made(callees: List<Function>, f0, f1, f2: Function, guard: Option<Guard>, moves: List<Or<Inlines, Plan>>,
+    m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1), m2: move_stage().many().rewrite(callees, f1, moves) = Some(f2)):
+    optimize_stage().rewrite(callees, f0, passes(guard, moves)) = Some(f2) {
+    guard_stage().maybe().then_made(move_stage().many(), callees, f0, f1, f2, guard, moves, m1, m2)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +84,7 @@ fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
         Emit(node) => spell_call("Emit", [node.spelled()]),
         Derive(rule, args) => spell_call("Derive", [spell_number(rule), spell_numbers(args)]),
         Swap(a, b) => spell_of("Swap", [a, b]),
+        Again(at, a, b) => spell_of("Again", [at, a, b]),
     }
 }
 
@@ -110,6 +109,8 @@ fn Sites::spelled(self sites: Sites) → List<Nat> → List<Nat> {
     match sites {
         Stay => spell_text("Stay"),
         Here(room) => spell_of("Here", [room]),
+        Put(room, leaves) => spell_call("Put", [spell_number(room),
+            spell_list(leaves.map(λ (nodes: List<Node>) => spell_list(nodes.map(λ (node: Node) => node.spelled()))))]),
         Then(rest) => spell_call("Then", [rest.spelled()]),
         Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
         Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
@@ -147,6 +148,7 @@ fn Sites::idle(self sites: Sites) → Bool {
     match sites {
         Stay => True,
         Here(_) => False,
+        Put(_, _) => False,
         Then(rest) => rest.idle(),
         Both(first, second) => first.idle() && second.idle(),
         Arms(when_true, when_false) => when_true.idle() && when_false.idle(),
@@ -207,17 +209,29 @@ fn Plan::past_test(self plan: Plan) → Plan {
     match plan { Both(_, rest) => match rest { Arms(_, past) => past, _ => Same }, _ => Same }
 }
 
-// `plain` under a test of its lengths at its entry. The function asked is
-// `plain` as the inlining and tidying stages leave it without a test, which
-// is where the tests to decide are: the test is the one that function
-// wants, and it is put where the arm past it then decides more tests than
-// the function decides without one. Not in a function small enough to be
-// inlined: whoever it is inlined into tests for it.
+// The comparisons a test makes: what it costs where it passes.
+fn nodes_compare(nodes: List<Node>) → Nat {
+    match nodes { Nil => 0, Cons(node, rest) => match node { UnsignedLessThan(_, _, _, _) => Succ(nodes_compare(rest)), _ => nodes_compare(rest) } }
+}
+
+// The function reading through its copies and repeats, where that plan is
+// taken: what a test's words are to the body's is known after it.
+fn Function::copied(self function: Function) → Function {
+    match replay_function(rules(), function, function.copy_plan()) { None => function, Some(made) => made }
+}
+
+// `plain` under a test at its entry. The function asked is `plain` as the
+// inlining and tidying stages leave it without a test, which is where the
+// tests to decide are: the test is the one that function wants, and it is
+// put where the arm past it then decides more tests than the function
+// decides without one, by at least the comparisons the test makes. Not in
+// a function small enough to be inlined: whoever it is inlined into tests
+// for it.
 fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted) → Option<Found> {
     match tidied.body.size().leb(wanted.small) {
         True => None,
         False => tidied.guard_over(plain.top().max(tidied.top())).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
-            match Succ(tidied.learn_plan().decided()).leb(tested.learn_plan().past_test().decided()) {
+            match (tidied.learn_plan().decided() + nodes_compare(guard.nodes)).leb(tested.copied().learn_plan().past_test().decided()) {
                 True => guard_function(plain, guard).map(λ made => Found(guard.spelled(), made)),
                 False => None,
             })),

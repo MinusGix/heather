@@ -55,6 +55,22 @@ theorem ids_under_mono(b, c: Nat, le: b.leb(c) = True, ids: List<Nat>): ids_unde
     }
 }
 
+// Ids at or above a bound: none of them is an id below it.
+fn ids_over(ids: List<Nat>, b: Nat) → Bool { match ids { Nil => True, Cons(id, rest) => b.leb(id) && ids_over(rest, b) } }
+
+theorem ids_over_absent(b: Nat, ids: List<Nat>): ids_over(ids, b) = True → (id: Nat) → Succ(id).leb(b) = True → absent(id, ids).IsTrue() {
+    match ids {
+        Nil => λ _ id _ => trivial,
+        Cons(x, rest) => λ over id under => {
+            let parts = Bool::and_true_parts(b.leb(x), ids_over(rest, b), over);
+            Bool::is_true_and_intro(id.differs(x), absent(id, rest),
+                id.differs_of_ne(x, λ same => Nat::leb_lt_le_absurd(id, b, Bool::is_true_of_eq(under),
+                    Bool::is_true_of_eq(j(sym(same), λ y _ => b.leb(y) = True, parts.left)))),
+                ids_over_absent(b, rest, parts.right, id, under))
+        },
+    }
+}
+
 fn nodes_under(nodes: List<Node>, b: Nat) → Bool {
     match nodes { Nil => True, Cons(node, rest) => ids_under(node.mentions(), b) && nodes_under(rest, b) }
 }

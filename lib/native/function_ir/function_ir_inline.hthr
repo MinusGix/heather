@@ -390,6 +390,9 @@ inductive Sites {
     Stay,
     // A call, replaced by its callee's body: the body's ids are below `room`.
     Here(room: Nat),
+    // A dataflow leaf, and after it leaves of nodes that only compute:
+    // their outputs are ids from the bound up, below `room` past it.
+    Put(room: Nat, leaves: List<List<Node>>),
     // A sequence's continuation.
     Then(rest: Sites),
     // A composition's two parts.
@@ -403,6 +406,50 @@ inductive Sites {
 // A region with calls inlined, and the bound its ids are now below.
 record Inlined { region: StructuredRegion, bound: Nat }
 
+// Leaves of nodes one after another, and their nodes as one list.
+fn leaves_region(leaves: List<List<Node>>) → StructuredRegion {
+    match leaves { Nil => StructuredRegion::of_nodes([]), Cons(nodes, rest) => Compose(StructuredRegion::of_nodes(nodes), leaves_region(rest)) }
+}
+
+fn leaves_nodes(leaves: List<List<Node>>) → List<Node> { match leaves { Nil => [], Cons(nodes, rest) => nodes ++ leaves_nodes(rest) } }
+
+theorem nodes_quiet_split(xs, ys: List<Node>): nodes_quiet(xs ++ ys).IsTrue() → nodes_quiet(xs).IsTrue() ∧ nodes_quiet(ys).IsTrue() {
+    match xs {
+        Nil => λ quiet => ⟨trivial, quiet⟩,
+        Cons(node, rest) => λ quiet => {
+            let parts = Bool::is_true_and(!node.stores(), nodes_quiet(rest ++ ys), quiet);
+            let later = nodes_quiet_split(rest, ys, parts.right);
+            ⟨Bool::is_true_and_intro(!node.stores(), nodes_quiet(rest), parts.left, later.left), later.right⟩
+        },
+    }
+}
+
+theorem nodes_hold_split(file: Buffers(), values: Valuation(), xs, ys: List<Node>): NodesHoldOver(file, values, xs ++ ys) →
+    NodesHoldOver(file, values, xs) ∧ NodesHoldOver(file, values, ys) {
+    match xs {
+        Nil => λ held => ⟨trivial, held⟩,
+        Cons(_, rest) => λ held => {
+            let later = nodes_hold_split(file, values, rest, ys, held.right);
+            ⟨⟨held.left, later.left⟩, later.right⟩
+        },
+    }
+}
+
+// Leaves that store nothing run from a file to itself over a valuation
+// their nodes hold of.
+theorem leaves_run(effects: Effects(), values: Valuation(), file: Buffers(), leaves: List<List<Node>>):
+    nodes_quiet(leaves_nodes(leaves)).IsTrue() → NodesHoldOver(file, values, leaves_nodes(leaves)) →
+    StructuredRegionRunsOver(effects, values, leaves_region(leaves), file, file) {
+    match leaves {
+        Nil => λ _ _ => refl,
+        Cons(nodes, rest) => λ quiet held => {
+            let q = nodes_quiet_split(nodes, leaves_nodes(rest), quiet);
+            let h = nodes_hold_split(file, values, nodes, leaves_nodes(rest), held);
+            Exists(file, ⟨nodes_run_quiet(values, file, nodes, q.left, h.left), leaves_run(effects, values, file, rest, q.right, h.right)⟩)
+        },
+    }
+}
+
 fn Inlined::at(piece: StructuredRegion, bound: Nat, inside: Bool) → Option<Inlined> {
     (inside && piece.under(bound)).then(Some(Inlined(piece, bound)))
 }
@@ -414,6 +461,8 @@ fn inline_region(callees: List<Function>, region: StructuredRegion) → Nat → 
     match region {
         Dataflow(body) => λ by sites => match sites {
             Stay => Some(Inlined(Dataflow(body), by)),
+            Put(room, leaves) => Inlined::at(Compose(Dataflow(body), leaves_region(leaves)), by + room,
+                nodes_quiet(leaves_nodes(leaves)) && (nodes_evaluable(leaves_nodes(leaves)) && ids_over(nodes_writes(leaves_nodes(leaves)), by))),
             _ => None,
         },
         Sequence(prefix, continuation) => λ by sites => match sites {
@@ -474,6 +523,27 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
         Dataflow(body) => λ by sites => match sites {
             Stay => λ r made under => j(Option::some_inj(Inlined(Dataflow(body), by), r, made), λ x _ => x.Sound(effects, Dataflow(body), by),
                 Inlined::stay_sound(effects, Dataflow(body), by, under)),
+            // The valuation is the old one evaluated through the new
+            // nodes over the file the leaf left: it agrees below the
+            // bound, where the leaf's ids are, and the nodes hold of it.
+            Put(room, leaves) => λ r made under => {
+                let nodes = leaves_nodes(leaves);
+                let piece = Compose(Dataflow(body), leaves_region(leaves));
+                let ok = Bool::then_some((nodes_quiet(nodes) && (nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by))) && piece.under(by + room),
+                    Some(Inlined(piece, by + room)), r, made);
+                let checks = Bool::and_true_parts(nodes_quiet(nodes) && (nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by)), piece.under(by + room), ok.left);
+                let c1 = Bool::and_true_parts(nodes_quiet(nodes), nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by), checks.left);
+                let c2 = Bool::and_true_parts(nodes_evaluable(nodes), ids_over(nodes_writes(nodes), by), c1.right);
+                j(Option::some_inj(Inlined(piece, by + room), r, ok.right), λ x _ => x.Sound(effects, Dataflow(body), by),
+                    ⟨by.leb_true(by + room, by.le_add_l(room)), ⟨checks.right, λ values before after ran => {
+                        let other = eval_nodes_over(after, nodes, values);
+                        let agree: Valuation::AgreeBelow(values, other, by) = λ id below w =>
+                            eval_nodes_frame(nodes, after, values, w, id, ids_over_absent(by, nodes_writes(nodes), c2.right, id, below));
+                        Exists(other, ⟨agree, Exists(after, ⟨Dataflow(body).runs_agree(effects, by, under, values, other, agree, before, after, ran),
+                            leaves_run(effects, other, after, leaves, Bool::is_true_of_eq(c1.left),
+                                eval_nodes_holds(nodes, after, Bool::is_true_of_eq(c2.left), values, other, λ w id m => refl))⟩)⟩)
+                    }⟩⟩)
+            },
             _ => λ r made under => absurd(made),
         },
         Sequence(prefix, continuation) => λ by sites => match sites {

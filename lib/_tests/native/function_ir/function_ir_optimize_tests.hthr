@@ -80,45 +80,52 @@ fn seven_made() → Function {
 
 theorem seven_swept(): made(seven_copied().find_swept()) = Some(seven_made()) { refl }
 
-fn seven_passes() → Passes() { passes(None, Some(seven_inlines()), [seven_copies(), seven_dead()]) }
+fn seven_passes() → Passes() { passes(None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())]) }
 
-// What a certificate states of a function: the test's statement and the
-// inlining's, a stage that found nothing keeping the function; a
-// statement for each of the replayer's plans, joined from the last
-// (`Stage::many_made`); and all of them as one (`optimize_made`).
+// What a certificate states of a function: the test's statement, a stage
+// that found nothing keeping the function; a statement for each move,
+// joined from the last (`Stage::many_made`); and all of them as one
+// (`optimize_made`).
 theorem seven_tested(): guard_stage().maybe().rewrite([xor()], seven(), None) = Some(seven()) { refl }
-theorem seven_inlining(): inline_stage().maybe().rewrite([xor()], seven(), Some(seven_inlines())) = Some(seven_inlined()) { refl }
-theorem seven_replay_0(): replay_stage(rules()).rewrite([xor()], seven_inlined(), seven_copies()) = Some(seven_copied()) { refl }
-theorem seven_replay_1(): replay_stage(rules()).rewrite([xor()], seven_copied(), seven_dead()) = Some(seven_made()) { refl }
+theorem seven_move_0(): move_stage().rewrite([xor()], seven(), Inl(seven_inlines())) = Some(seven_inlined()) { refl }
+theorem seven_move_1(): move_stage().rewrite([xor()], seven_inlined(), Inr(seven_copies())) = Some(seven_copied()) { refl }
+theorem seven_move_2(): move_stage().rewrite([xor()], seven_copied(), Inr(seven_dead())) = Some(seven_made()) { refl }
 
-theorem seven_joined_1(): replay_stage(rules()).many().rewrite([xor()], seven_copied(), [seven_dead()]) = Some(seven_made()) {
-    replay_stage(rules()).many_made([xor()], seven_copied(), seven_made(), seven_made(), seven_dead(), [], seven_replay_1(),
-        replay_stage(rules()).many_none([xor()], seven_made()))
+theorem seven_joined_2(): move_stage().many().rewrite([xor()], seven_copied(), [Inr(seven_dead())]) = Some(seven_made()) {
+    move_stage().many_made([xor()], seven_copied(), seven_made(), seven_made(), Inr(seven_dead()), [], seven_move_2(),
+        move_stage().many_none([xor()], seven_made()))
 }
 
-theorem seven_joined_0(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_copies(), seven_dead()]) = Some(seven_made()) {
-    replay_stage(rules()).many_made([xor()], seven_inlined(), seven_copied(), seven_made(), seven_copies(), [seven_dead()], seven_replay_0(),
-        seven_joined_1())
+theorem seven_joined_1(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_copies()), Inr(seven_dead())]) = Some(seven_made()) {
+    move_stage().many_made([xor()], seven_inlined(), seven_copied(), seven_made(), Inr(seven_copies()), [Inr(seven_dead())], seven_move_1(),
+        seven_joined_2())
+}
+
+theorem seven_joined_0(): move_stage().many().rewrite([xor()], seven(), [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())]) =
+    Some(seven_made()) {
+    move_stage().many_made([xor()], seven(), seven_inlined(), seven_made(), Inl(seven_inlines()), [Inr(seven_copies()), Inr(seven_dead())],
+        seven_move_0(), seven_joined_1())
 }
 
 theorem seven_staged(): optimize_stage().rewrite([xor()], seven(), seven_passes()) = Some(seven_made()) {
-    optimize_made([xor()], seven(), seven(), seven_inlined(), seven_made(), None, Some(seven_inlines()), [seven_copies(), seven_dead()],
-        seven_tested(), seven_inlining(), seven_joined_0())
+    optimize_made([xor()], seven(), seven(), seven_made(), None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())], seven_tested(),
+        seven_joined_0())
 }
 
-// The replays are as many as the plans: none is the function, and one that
+// The moves are as many as the plans: none is the function, and one that
 // is refused refuses them all.
-theorem seven_once(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_copies()]) = Some(seven_copied()) { refl }
-theorem seven_none(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), []) = Some(seven_inlined()) { refl }
-theorem seven_out_of_turn(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_dead(), seven_copies()]) = None { refl }
+theorem seven_once(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_copies())]) = Some(seven_copied()) { refl }
+theorem seven_none(): move_stage().many().rewrite([xor()], seven_inlined(), []) = Some(seven_inlined()) { refl }
+theorem seven_out_of_turn(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_dead()), Inr(seven_copies())]) = None { refl }
 
 // Function 2 takes function 1 as the stages left it, so no call is left in
 // it and every move is read through: the sum reads the exclusive or.
 fn top_passes() → Passes() {
-    passes(None, Some(Inlines(3, Both(Here(6), Stay))), [
-        Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
-            Nodes([Swap(8, 0)])),
-        Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep])),
+    passes(None, [
+        Inl(Inlines(3, Both(Here(6), Stay))),
+        Inr(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
+            Nodes([Swap(8, 0)]))),
+        Inr(Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))),
     ])
 }
 
@@ -278,7 +285,7 @@ theorem unproved_bit(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 5, 
 
 // The whole of it as one stage's statement.
 theorem pair_staged(): optimize_stage().rewrite([], pair_sum(),
-    passes(Some(pair_guard()), None, [pair_sum().guarded(pair_guard()).learn_plan().plain_kept()])) = Some(pair_made()) { refl }
+    passes(Some(pair_guard()), [Inr(pair_sum().guarded(pair_guard()).learn_plan().plain_kept())])) = Some(pair_made()) { refl }
 
 // ---------------------------------------------------------------------------
 // The test comes before the inlining: the plain arm keeps its calls
@@ -412,13 +419,66 @@ fn be16_made() → Function {
 
 theorem be16_found(): made(be16_learned().find_copied_past()).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(be16_made()) { refl }
 
-// The stage's statement, the replayer run three times, and the lowering
+// The stage's statement, three moves of the replayer, and the lowering
 // taking what it made.
-theorem be16_staged(): optimize_stage().rewrite([], be16(), passes(Some(be16_guard()), None, [be16_learn(), be16_copies(), be16_dead()])) =
-    Some(be16_made()) { refl }
+theorem be16_staged(): optimize_stage().rewrite([], be16(),
+    passes(Some(be16_guard()), [Inr(be16_learn()), Inr(be16_copies()), Inr(be16_dead())])) = Some(be16_made()) { refl }
 
 theorem be16_lowers(): be16_made().lowers(0, [1]) = True { refl }
 
 // The sweep's plan before the moves are read through would drop a move the
 // shift still reads, and is refused.
-theorem be16_early(): replay_stage(rules()).many().rewrite([], be16_learned(), [be16_dead(), be16_copies()]) = None { refl }
+theorem be16_early(): move_stage().many().rewrite([], be16_learned(), [Inr(be16_dead()), Inr(be16_copies())]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A span at an index the caller computed (step 5)
+
+// Two bytes of a span at `base + i * 4` added, or zero where either is
+// past the span's end (`function_ir_learn_tests`): the span's home is 0,
+// its length 1, the base 2 and i 3.
+fn word_pair() → Function {
+    Function([0, 1, 2, 3], Compose(nodes([ShiftLeft(64, 4, 3, 2), Add(64, 5, 2, 4), UnsignedLessThan(64, 6, 5, 1)]),
+        Conditional(Ports([]), 6, Ports([]), Ports([Port(12, 64)]),
+            Compose(nodes([BufferLoad(7, 0, 5)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 5, 8), UnsignedLessThan(64, 10, 9, 1)]),
+                Conditional(Ports([]), 10, Ports([]), Ports([Port(12, 64)]), Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)])),
+                    nodes([Const(64, 12, 0)])))),
+            nodes([Const(64, 12, 0)]))), 12, 1)
+}
+
+fn word_guard() → Guard {
+    Guard(13, [ShiftLeft(64, 13, 3, 2), Add(64, 14, 2, 13), Const(64, 15, 2), Add(64, 16, 14, 15), UnsignedLessThan(64, 17, 16, 14),
+        UnsignedLessThan(64, 18, 1, 16), BitOr(1, 19, 17, 18)], 19)
+}
+
+// The test is kept: past it, once the body reads through its repeats, two
+// tests are decided where none was, which is what the test's two
+// comparisons cost.
+theorem word_tested(): made(word_pair().find_guarded(word_pair(), narrow())) = Some(word_pair().guarded(word_guard())) { refl }
+
+// The searches in the order the compiler runs them past a test: read
+// through, drop, decide, read through, drop.
+fn word_made() → Option<Function> {
+    made(word_pair().find_guarded(word_pair(), narrow())).and_then(λ (f: Function) => made(f.find_copied_past()))
+        .and_then(λ (f: Function) => made(f.find_swept_past())).and_then(λ (f: Function) => made(f.find_learned_past()))
+        .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+}
+
+// The arm past the test: the body's own shift and sum are the test's (13,
+// 14), and the two loads stand with no test between them, each
+// comparison kept with its bit written after it.
+fn word_fast() → Function {
+    Function([0, 1, 2, 3], Compose(nodes(word_guard().nodes), Conditional(Ports([]), 19, Ports([]), Ports([Port(12, 64)]), word_pair().body,
+        Compose(nodes([UnsignedLessThan(64, 6, 14, 1), Const(1, 6, 1)]),
+            Compose(nodes([BufferLoad(7, 0, 14)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 14, 8), UnsignedLessThan(64, 10, 9, 1), Const(1, 10, 1)]),
+                Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)]))))))), 12, 1)
+}
+
+theorem word_staged(): word_made() = Some(word_fast()) { refl }
+
+// The lowering takes it, as it took the function as written.
+theorem word_plain_lowers(): word_pair().lowers(0, [1]) = True { refl }
+theorem word_lowers(): word_fast().lowers(0, [1]) = True { refl }
+
+// Deciding before reading through finds nothing: the test's sum and the
+// body's are two ids until then.
+theorem word_too_early(): made(word_pair().guarded(word_guard()).find_learned_past()) = None { refl }
