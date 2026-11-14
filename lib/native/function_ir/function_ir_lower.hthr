@@ -14,6 +14,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bitvec_resize;
 import bool;
@@ -2593,6 +2594,65 @@ theorem File::byte_swap_keeps<M>(self file: File, values: Valuation(), destinati
 }
 
 // ---------------------------------------------------------------------------
+// A rotate: `ROR r32, imm8` on a 32-bit value held narrow, by a count below
+// 32, which the five-bit mask leaves alone. The low half is rotated and the
+// upper half left zero, so the result is held narrow again.
+
+theorem ror32_count_of(count: Nat, fits: count <= 31): ror32_count(BitVec::ofNat(count)) = count {
+    let small: (count < Nat::pow(2, 8)) = Nat::le_trans(count, 31, 255, fits, trivial);
+    trans(cong_fn(λ (n: Nat) => n.mod(32), BitVec::toNat_ofNat(8, count, small)),
+        Nat::mod_of_lt(count, 32, fits))
+}
+
+// A narrow word's rotation, zero-extended, is what `ROR r32` leaves of the
+// word that holds it.
+theorem ror_narrow(x: BitVec(32), count: Nat): ror32_value(x.zero_extend(32), count) = x.rotr(count).zero_extend(32) {
+    cong_fn(λ (y: BitVec(32)) => y.rotr(count).zero_extend(32), BitVec::truncate_zero_extend(32, 32, x))
+}
+
+theorem in_place_ror32<M>(destination: Gpr, immediate: BitVec(8)):
+    InPlace<M>([RorRI32(destination, immediate)], destination, λ x => ror32_value(x, ror32_count(immediate)))
+{
+    λ s query => refl
+}
+
+fn File::rotate_right(self file: File, destination: Gpr, output, value, amount: Nat) → Option<Lowered> {
+    match amount.le_dec(31) {
+        Inr(_) => None,
+        Inl(_) => file.reshaped([RorRI32(destination, BitVec::ofNat(amount))], Narrow(32), Narrow(32), destination, output, value),
+    }
+}
+
+theorem File::rotate_right_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, value, amount: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, RotateRight(32, output, value, amount)),
+        file.rotate_right(destination, output, value, amount))
+{
+    match amount.le_dec(31) {
+        Inr(_) => trivial,
+        Inl(fits) => {
+            let g = λ (x: BitVec(64)) => ror32_value(x, ror32_count(BitVec::ofNat(amount, n := 8)));
+            let code: List<Instruction> = [RorRI32(destination, BitVec::ofNat(amount))];
+            keeps_given<M>(values, file, Reshapes(values, Narrow(32), Narrow(32), output, value, g),
+                NodeHolds(values, RotateRight(32, output, value, amount)),
+                file.reshaped(code, Narrow(32), Narrow(32), destination, output, value),
+                λ gprs represents holds => λ a (rep: values(32, value).resize(64) = a) => {
+                    let x = values(32, value);
+                    let rotated: (values(32, output).resize(64) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (y: BitVec(32)) => y.resize(64), holds),
+                            BitVec::resize_zero_extend(32, 32, x.rotr(amount)));
+                    let counted: (g(x.zero_extend(32)) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (c: Nat) => ror32_value(x.zero_extend(32), c), ror32_count_of(amount, fits)),
+                            ror_narrow(x, amount));
+                    trans(rotated, trans(sym(counted),
+                        cong_fn(g, trans(sym(BitVec::resize_zero_extend(32, 32, x)), rep))))
+                },
+                file.reshaped_keeps<M>(values, code, g, Narrow(32), Narrow(32), destination, output, value,
+                    in_place_ror32<M>(destination, BitVec::ofNat(amount))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 // What only the word has yet (a signed comparison, an arithmetic right
@@ -2696,6 +2756,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         WideStore(_, _, _, _, _) => None,
         // A swap of 32 bits held narrow; the 64-bit swap is not lowered yet.
         ByteSwap(width, output, source) => at_width(32, width, width.eq_dec(32), file.byte_swap(destination, output, source), None),
+        RotateRight(width, output, value, amount) => at_width(32, width, width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None),
     }
 }
 
@@ -2798,6 +2860,10 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(width, output, source) => at_width_keeps<M>(values, file, 32, width, λ w => NodeHolds(values, ByteSwap(w, output, source)),
             width.eq_dec(32), file.byte_swap(destination, output, source), None, file.byte_swap_keeps<M>(values, destination, output, source), trivial),
+        RotateRight(width, output, value, amount) => at_width_keeps<M>(values, file, 32, width,
+            λ w => NodeHolds(values, RotateRight(w, output, value, amount)), width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None,
+            file.rotate_right_keeps<M>(values, destination, output, value, amount), trivial),
     }
 }
 
@@ -2897,6 +2963,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         WideLoad(_, _, _, _) => trivial,
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(_, _, _) => trivial,
+        RotateRight(_, _, _, _) => trivial,
     }
 }
 
@@ -3316,6 +3383,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         WideLoad(_, _, _, index) => [index],
         WideStore(_, _, _, index, value) => [index, value],
         ByteSwap(_, _, source) => [source],
+        RotateRight(_, _, value, _) => [value],
     }
 }
 
@@ -3425,7 +3493,7 @@ fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
         BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
-        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, _ => False,
+        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, RotateRight(_, _, _, _) => True, _ => False,
     }
 }
 

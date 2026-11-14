@@ -43,6 +43,7 @@ fn Node::spelled_node(self node: Node) → List<Nat> {
         WideLoad(bytes, output, buffer, index) => [18, bytes, output, buffer, index],
         WideStore(bytes, output, buffer, index, value) => [19, bytes, output, buffer, index, value],
         ByteSwap(width, output, source) => [20, width, output, source],
+        RotateRight(width, output, value, amount) => [21, width, output, value, amount],
     }
 }
 

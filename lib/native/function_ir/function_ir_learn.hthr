@@ -1121,6 +1121,7 @@ fn Node::renamed(self node: Node, names: NatMap<Nat>, output: Nat) → Node {
         BitXor(w, _, l, r) => BitXor(w, output, named(names, l), named(names, r)),
         ShiftLeft(w, _, v, n) => ShiftLeft(w, output, named(names, v), n),
         LogicalShiftRight(w, _, v, n) => LogicalShiftRight(w, output, named(names, v), n),
+        RotateRight(w, _, v, n) => RotateRight(w, output, named(names, v), n),
         ArithmeticShiftRight(w, _, v, n) => ArithmeticShiftRight(w, output, named(names, v), n),
         UnsignedLessThan(w, _, l, r) => UnsignedLessThan(w, output, named(names, l), named(names, r)),
         SignedLessThan(w, _, l, r) => SignedLessThan(w, output, named(names, l), named(names, r)),

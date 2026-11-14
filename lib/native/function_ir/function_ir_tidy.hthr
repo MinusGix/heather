@@ -82,6 +82,7 @@ fn Node::read_through(self node: Node, copies: Copies) → Step {
         BitXor(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
         ShiftLeft(w, _, v, _) => swap_one(v, copies.read(w, v)),
         LogicalShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        RotateRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
         ArithmeticShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
         UnsignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
         SignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
