@@ -10,7 +10,9 @@
 // what the module happens to import.
 //
 // This module holds the set type and the defaults of the carriers below
-// the tactics (`Nat`, `List`), whose own modules cannot import `string`.
+// the tactics (`Nat`, `List`, `[A; n]`, `BitVec`), whose own modules cannot
+// import `string`. A carrier above it (`Stored`, `Valuation`) registers its
+// set in its own module.
 
 import logic;
 import bool;
@@ -19,6 +21,12 @@ import list;
 import option;
 import char;
 import string;
+import list_window;
+import vector;
+import bitvec;
+import bitvec_nat;
+import bitvec_concat;
+import bitvec_shift_nat;
 
 // `name`: what a report calls the set. `default_for`: the types (by
 // `name_of`) whose goals get the set without naming it. `laws`: proofs of
@@ -60,4 +68,41 @@ register def simp_list_shape: SimpSet = simp_default("List::shape", name_of(List
     name_of(List::map_append),
     name_of(List::map_map),
     name_of(List::mem_append_iff),
+]);
+
+// `List` windows: a prefix or suffix of a known length, of an append at
+// its seam, of an update; lengths of each. What a proof about a buffer
+// read in blocks rewrites by (lib/native/crypto/sha256_stream_agreement.hthr).
+// A law with a hypothesis fires where the call's discharger proves it.
+register def simp_list_windows: SimpSet = simp_default("List::windows", name_of(List), [
+    name_of(List::take_len),
+    name_of(List::drop_len),
+    name_of(List::take_append_len),
+    name_of(List::drop_append_len),
+    name_of(List::drop_drop),
+    name_of(List::len_take),
+    name_of(List::len_drop),
+    name_of(List::len_update),
+    name_of(List::take_update_snoc),
+    name_of(List::joined_snoc),
+]);
+
+// `[A; n]`: a vector's entries are a list, and an update or a `snoc` is the
+// list's.
+register def simp_vector_entries: SimpSet = simp_default("Vec::entries", "Vec", [
+    name_of(vector_entries_len),
+    name_of(vector_entries_update),
+    name_of(vector_entries_snoc),
+]);
+
+// `BitVec`: a word read as its number. Conversions cancel (the number's
+// bound is the hypothesis), and a concatenation, a right shift and a low
+// mask are their arithmetic.
+register def simp_bitvec_nat: SimpSet = simp_default("BitVec::nat", name_of(BitVec), [
+    name_of(BitVec::ofNat_toNat),
+    name_of(BitVec::toNat_ofNat),
+    name_of(BitVec::toNat_concat),
+    name_of(BitVec::toNat_shift_right),
+    name_of(BitVec::toNat_band_low_mask),
+    name_of(BitVec::eq_bit_self),
 ]);

@@ -16,6 +16,10 @@ import bitvec_bytes;
 import layout;
 import stored;
 import part;
+import string;
+import tactic;
+import simp_laws;
+import simp;
 
 // ---------------------------------------------------------------------------
 // A record's parts: a header with padding inside it and after it
@@ -142,3 +146,6 @@ fn misplaced<A>(s: Stored<A>, t: Stored<A>) → Part<Pair<A, A>, A>(s.then(t)) {
     Part(0, t, λ p => p.snd, λ p b => Pair(p.fst, b), Nat::le_refl(t.layout.size + s.layout.offset_of(t.layout)),
         Part::snd(s, t).reads, Part::snd(s, t).frames)
 }
+
+// `simp`'s default for `Part` passes the checks a set is held to.
+theorem simp_part_fields_checked(): True { by simp_check([simp_part_fields]) }

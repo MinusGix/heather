@@ -893,6 +893,15 @@ fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<T
     let oracle = elab.goal_oracle();
     let mut fired = false;
     for reduct in oracle.unfold(&cx.gamma, call, Unfold::RecursiveArm) {
+        // A `decreases` function (`f` over `f#rec`) is stepped by its
+        // generated equations (`f::step`, `f::done`), which are laws: run at
+        // a closed count, its arm is `f#body(…)`, a lifted body no source
+        // spells and no law about `f` meets again.
+        if let Term::GlobalTm { var, .. } = crate::spelling::app_spine(&reduct).0
+            && elab.global_abs_of(*var).and_then(|abs| elab.global_name_at(abs)).is_some_and(|name| name.ends_with("#rec"))
+        {
+            return None;
+        }
         if eliminator_headed(&reduct) {
             // The recursion firing on a constructor selects an arm. Its
             // reduct may itself be the recursion, as a tail call on an
@@ -1092,19 +1101,26 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
 /// calls ([`recursion_at_constructor`]): what `simp_only` matches laws
 /// against.
 pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool) -> Type {
-    simplify_goal_unfolding(elab, cx, expected, recursive, &[])
+    simplify_goal_unfolding(elab, cx, expected, recursive, &[], &[])
 }
 
 /// [`simplify_goal_with`], and every call of a definition in `unfold` (by
 /// absolute position in Ψ) unfolded where it stands, its body applied to the
 /// call's arguments: what `simp_only` does with a definition named among
 /// its laws (docs/simp-design.md §14).
-pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool, unfold: &[usize]) -> Type {
-    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize])) -> Term {
+///
+/// A term in `frozen` stays as written: a law's own term (`zeroed(R, 0,
+/// 64).hash`'s `R`, a call whose body computes), which the law could no
+/// longer meet once computed.
+pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Type, recursive: bool, unfold: &[usize], frozen: &[Rc<Term>]) -> Type {
+    fn term(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize], &[Rc<Term>])) -> Term {
         if budget.0 == 0 {
             return input.clone();
         }
         budget.0 -= 1;
+        if budget.3.iter().any(|f| **f == *input) {
+            return input.clone();
+        }
         let mut output = input.clone();
         // Every occurrence alike: a split abstracts the goal's term
         // syntactically, so an occurrence left unsimplified inside a
@@ -1146,6 +1162,13 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
             // nothing below a binder is scoped where the oracle is.
             Term::Lam { body, .. } if budget.1 => *body = crate::spelling::contract_projections(&Rc::new(beta_below(body))),
             Term::Succ(inner) => *inner = Rc::new(term(elab, cx, inner, budget)),
+            // An equation's code, as a conjunction's operand holds it
+            // (`And<block(…) = T ++ …, ….hash = s.hash>`), for `simp`: its
+            // two sides compute as a goal's do.
+            Term::TmId { lhs, rhs, .. } if budget.1 => {
+                *lhs = Rc::new(term(elab, cx, lhs, budget));
+                *rhs = Rc::new(term(elab, cx, rhs, budget));
+            }
             Term::Inl { val, .. } | Term::InlAt { val, .. } | Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 *val = Rc::new(term(elab, cx, val, budget));
             }
@@ -1159,6 +1182,7 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                     .bounded(64)
                     .whnf_term_opaque(&cx.gamma, input)
                     && reduced != *input
+                    && (!budget.1 || elab.spell_term_source(cx, &reduced).is_some())
                 {
                     return term(elab, cx, &reduced, budget);
                 }
@@ -1170,11 +1194,21 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
                     if let Ok(unfolded) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, pair)
                         && matches!(unfolded, Term::Pair { .. } | Term::PairAt { .. })
                     {
-                        *pair = Rc::new(unfolded);
-                        if let Ok(reduced) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output)
-                            && reduced != *input
-                        {
-                            return term(elab, cx, &reduced, budget);
+                        let kept = std::mem::replace(pair, Rc::new(unfolded));
+                        // For `simp`, only a field the source can spell: a
+                        // definition whose constructor is reached by running
+                        // its body reads otherwise as raw projections, where
+                        // no law meets it again; the call stays.
+                        match elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output) {
+                            Ok(reduced) if reduced != *input && (!budget.1 || elab.spell_term_source(cx, &reduced).is_some()) => {
+                                return term(elab, cx, &reduced, budget);
+                            }
+                            _ if budget.1 => {
+                                if let Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } = &mut output {
+                                    *pair = kept;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     if let Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } = &mut output {
@@ -1248,22 +1282,39 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
         }
         output
     }
-    let mut output = expected.clone();
-    let mut budget = (512, recursive, unfold);
-    match &mut output {
-        Type::Id { lhs, rhs, .. } => {
-            *lhs = Rc::new(term(elab, cx, lhs, &mut budget));
-            *rhs = Rc::new(term(elab, cx, rhs, &mut budget));
+    fn walk(elab: &Elaborator, cx: &Cx, ty: &Type, budget: &mut (u32, bool, &[usize], &[Rc<Term>])) -> Type {
+        let mut output = ty.clone();
+        match &mut output {
+            Type::Id { lhs, rhs, .. } => {
+                *lhs = Rc::new(term(elab, cx, lhs, budget));
+                *rhs = Rc::new(term(elab, cx, rhs, budget));
+            }
+            // A relation (`Le(a, b)`) keeps its own spelling for the leaf: only
+            // its arguments are simplified, never the relation's head, which
+            // computes away at literals (`0 <= 1` is `True`).
+            Type::El { tm, .. } => *tm = Rc::new(arguments(elab, cx, tm, budget)),
+            // A conjunction, as a record decodes (`And<a = b, c = d>` is a
+            // Σ of the two), for `simp`: each operand that its second does
+            // not depend on, below the binder when nothing reads it.
+            Type::Sigma { fst, snd, .. } if budget.1 => {
+                *fst = Rc::new(walk(elab, cx, fst, budget));
+                let outer = snd.inst_top(0, &Term::Zero);
+                if outer.shift_local(1) == **snd {
+                    let walked = walk(elab, cx, &outer, budget);
+                    if walked != outer {
+                        *snd = Rc::new(walked.shift_local(1));
+                    }
+                }
+            }
+            _ => {}
         }
-        // A relation (`Le(a, b)`) keeps its own spelling for the leaf: only
-        // its arguments are simplified, never the relation's head, which
-        // computes away at literals (`0 <= 1` is `True`).
-        Type::El { tm, .. } => *tm = Rc::new(arguments(elab, cx, tm, &mut budget)),
-        _ => {}
+        output
     }
+    let mut budget = (512, recursive, unfold, frozen);
+    let output = walk(elab, cx, expected, &mut budget);
     // A goal that is not an application (a match on a split comparison)
     // simplifies whole.
-    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize])) -> Term {
+    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut (u32, bool, &[usize], &[Rc<Term>])) -> Term {
         let mut output = input.clone();
         match &mut output {
             Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
