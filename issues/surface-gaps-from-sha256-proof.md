@@ -66,7 +66,8 @@ a neutral or open variant and a refusal), and `abd_claimed` in
    inferred, `trans(cong_fn(λ t => Mutated(t, 48), p), q)`, whose first
    argument has no expected type until `q` is elaborated; that needs
    checking against a domain with metas, which this elaborator's per-call
-   scratch world does not do: [[inferred-call-arguments-see-no-expected-type]].
+   scratch world does not do: [[inferred-call-arguments-see-no-expected-type]]
+   (since fixed where the later argument is a local or a `let`).
 3. **Fixed.** A spilled argument (past the declaration's parameters) whose
    domain is already known is checked there and the spill continues, so a
    later one teaches the implicit: `pieces_add(4, 16, 16 * k, xs)`.
@@ -86,7 +87,8 @@ a neutral or open variant and a refusal), and `abd_claimed` in
    stays `OutOfFuel`, but the refusal now moves to the first checking site
    whose two types spell differently and names the part that differs
    (`MismatchNotes::fuel_note`: "which differs at `99` against `100`").
-   The verdict itself: [[false-closed-claim-out-of-fuel]].
+   The verdict itself: [[false-closed-claim-out-of-fuel]] (since then the
+   refusal also says whether the claim is false, checked again with more fuel).
 
 Workarounds removed (PR after #639): `let at: u64 = …` in
 `lib/native/crypto/sha256_agreement.hthr`, `let single: List<u8>` in

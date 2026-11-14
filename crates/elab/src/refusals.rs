@@ -18,6 +18,12 @@ use crate::partial::Partial;
 /// Kernel refusals' part of the elaborator: turning a refused judgment into a located error.
 pub(crate) struct Refusals<'e>(pub(crate) &'e Elaborator);
 
+/// How many times the gate's budget a declaration refused out of fuel is
+/// checked again with, to say whether its claim is false or its proof only
+/// costly (issues/false-closed-claim-out-of-fuel.md). The false SHA-256
+/// claim that met it is decided at about three and a half times the budget.
+const REFUSAL_FUEL_FACTOR: u64 = 8;
+
 impl std::ops::Deref for Refusals<'_> {
     type Target = Elaborator;
     fn deref(&self) -> &Elaborator {
@@ -166,6 +172,62 @@ impl Refusals<'_> {
     /// term and its two types where they spell.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn kernel_refusal(
+        &self,
+        decl: &str,
+        span: Span,
+        e: TypeError,
+        psi: &GlobalCtx,
+        layer: Layer,
+        gamma: &LocalCtx,
+        body: Option<&Term>,
+        ty: &Type,
+        level: &Level,
+    ) -> ElabError {
+        let error = self.kernel_refusal_at_budget(decl, span, e, psi, layer, gamma, body, ty, level);
+        if !matches!(e, TypeError::OutOfFuel) {
+            return error;
+        }
+        // Out of fuel is no verdict on the claim. Checked again with more
+        // fuel, the refused declaration may get one: a false claim whose two
+        // sides only differ once both are computed (`digest(abc) =
+        // digest(abd)`), or a right proof that only costs more than a
+        // conversion is allowed. The verdict stays the gate's; only what the
+        // refusal says changes, and only on this path.
+        let budget = self.policy.fuel.saturating_mul(REFUSAL_FUEL_FACTOR);
+        let retried = match body {
+            Some(body) => typing::check_term(psi, 0, layer, gamma, body, ty, level, budget),
+            None => typing::check_type(psi, 0, layer, gamma, ty, level, budget),
+        };
+        let said = match retried {
+            Err(TypeError::NotConvertible | TypeError::HeadMismatch) => format!(
+                "with {REFUSAL_FUEL_FACTOR} times the budget the kernel computes both sides and finds \
+                 them different: the claim is false"
+            ),
+            Ok(()) => format!(
+                "the proof is right, but checks only with up to {REFUSAL_FUEL_FACTOR} times the budget: \
+                 split the computation into stage theorems (docs/proof-patterns.md)"
+            ),
+            Err(_) => return error,
+        };
+        match error {
+            ElabError::Kernel { decl, span, err, note, site } => ElabError::Kernel {
+                decl,
+                span,
+                err,
+                note: Some(match note {
+                    Some(note) => format!("{}; {said}", note.replace(": the claim is likely false", "")),
+                    None => said,
+                }),
+                site,
+            },
+            other => other,
+        }
+    }
+
+    /// [`Self::kernel_refusal`] at the gate's own budget: the site, and the
+    /// note that says why.
+    #[allow(clippy::too_many_arguments)]
+    fn kernel_refusal_at_budget(
         &self,
         decl: &str,
         span: Span,
