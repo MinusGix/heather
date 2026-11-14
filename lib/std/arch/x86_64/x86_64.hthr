@@ -220,6 +220,9 @@ inductive Instruction {
     // and AF undefined, every flag kept at a masked count of zero
     // (`shift_imm_flags`).
     ShiftImm(op: ShiftOp, destination: Gpr, immediate: BitVec(8)),
+    // BSWAP r32 (0F C8+rd): the low four bytes reversed, the upper half
+    // cleared as every 32-bit destination's is, and no flag changed.
+    Bswap32(destination: Gpr),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -366,6 +369,13 @@ fn modrm_rr(rm, reg: Gpr) → BitVec(8) {
 fn rr_bytes(opcode: Nat, rm, reg: Gpr) → List<BitVec(8)> {
     Cons(rex_w_rr(rm, reg), Cons(BitVec::ofNat(opcode),
         Cons(modrm_rr(rm, reg), Nil)))
+}
+
+// A REX without W (0100 0R0B): it extends the registers and changes no
+// width. The forms that use it always carry it, so their length does not
+// depend on the register.
+fn rex_plain_rr(rm, reg: Gpr) → BitVec(8) {
+    byte_from_fields(gpr_extended(rm), False, gpr_extended(reg), False, False, False, True, False)
 }
 
 fn rex_w_ri(destination: Gpr) → BitVec(8) {
@@ -593,6 +603,23 @@ fn shift_imm_bytes(op: ShiftOp, destination: Gpr, immediate: BitVec(8)) → List
         modrm_rr(destination, op.extension()), immediate]
 }
 
+// REX 0F C8+rd: the register in the opcode's low three bits, extended by
+// REX.B. The REX is always written, so the form is three bytes for every
+// register (`as` omits it below R8; the CPU reads both alike).
+fn bswap32_bytes(destination: Gpr) → List<BitVec(8)> {
+    [rex_plain_rr(destination, Rax), BitVec::ofNat(0x0f),
+        byte_from_fields(gpr_bit0(destination), gpr_bit1(destination), gpr_bit2(destination), True, False, False, True, True)]
+}
+
+// The low four bytes of `value` reversed into a word whose upper half is
+// zero: BSWAP r32's result (Intel SDM Vol. 2A, BSWAP: TEMP ← DEST;
+// DEST[7:0] ← TEMP[31:24] … DEST[31:24] ← TEMP[7:0], and a 32-bit result
+// zero-extends into its 64-bit register).
+fn bswap32_value(value: BitVec(64)) → BitVec(64) {
+    immediate_from_bytes(imm_byte3(value), imm_byte2(value), imm_byte1(value), imm_byte0(value),
+        BitVec::zero(), BitVec::zero(), BitVec::zero(), BitVec::zero())
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -630,6 +657,7 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         AddRI32(destination, immediate) => add_ri32_bytes(destination, immediate),
         ShiftOne(op, destination) => shift_one_bytes(op, destination),
         ShiftImm(op, destination, immediate) => shift_imm_bytes(op, destination, immediate),
+        Bswap32(destination) => bswap32_bytes(destination),
     }
 }
 
@@ -696,6 +724,7 @@ fn canonical_length_valid(instruction: Instruction) →
         AddRI32(_, _) => And(trivial, trivial),
         ShiftOne(_, _) => And(trivial, trivial),
         ShiftImm(_, _, _) => And(trivial, trivial),
+        Bswap32(_) => And(trivial, trivial),
     }
 }
 
@@ -782,6 +811,7 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         AddRI32(destination, immediate) => bytes = add_ri32_bytes(destination, immediate),
         ShiftOne(op, destination) => bytes = shift_one_bytes(op, destination),
         ShiftImm(op, destination, immediate) => bytes = shift_imm_bytes(op, destination, immediate),
+        Bswap32(destination) => bytes = bswap32_bytes(destination),
     }
 }
 
@@ -1784,6 +1814,24 @@ fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     }
 }
 
+// REX 0F C8+rd: BSWAP r32, the register in the third byte's low bits,
+// extended by REX.B. Its REX has no W, so no two-register form reads these
+// bytes; it is tried where the one-bit shift's opcode is not found.
+fn decode_bswap32(rex, escape, opcode: BitVec(8)) → Option<DecodedInstruction> {
+    let destination = gpr_from_fields(byte_bit0(opcode), byte_bit1(opcode), byte_bit2(opcode), byte_bit0(rex));
+    match escape.eq_dec(BitVec::ofNat(0x0f)) {
+        Inr(_) => None,
+        Inl(_) => match rex.eq_dec(rex_plain_rr(destination, Rax)) {
+            Inr(_) => None,
+            Inl(_) => match opcode.eq_dec(byte_from_fields(gpr_bit0(destination), gpr_bit1(destination), gpr_bit2(destination),
+                    True, False, False, True, True)) {
+                Inr(_) => None,
+                Inl(_) => Some(decoded_canonical(Bswap32(destination))),
+            },
+        },
+    }
+}
+
 // REX.W D1 /4, /5 or /7 with a register-direct ModRM. It is tried after the
 // two-register forms, so their decoding is unchanged.
 fn decode_shift_one(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
@@ -1796,7 +1844,7 @@ fn decode_shift_one(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
                 Cons(modrm, t3) => match t3 {
                     Cons(_, _) => None,
                     Nil => match opcode.eq_dec(BitVec::ofNat(0xd1)) {
-                        Inr(_) => None,
+                        Inr(_) => decode_bswap32(rex, opcode, modrm),
                         Inl(_) => match ShiftOp::of_extension(gpr_from_fields(byte_bit3(modrm),
                                 byte_bit4(modrm), byte_bit5(modrm), byte_bit2(rex))) {
                             None => None,
@@ -2098,6 +2146,15 @@ theorem decode_shift_imm_complete(op: ShiftOp, destination: Gpr, immediate: BitV
     }
 }
 
+theorem decode_bswap32_complete(destination: Gpr):
+    decode_instruction(bswap32_bytes(destination)) = Some(decoded_canonical(Bswap32(destination)))
+{
+    match destination {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 theorem decode_shift_one_complete(op: ShiftOp, destination: Gpr):
     decode_instruction(shift_one_bytes(op, destination)) =
         Some(decoded_canonical(ShiftOne(op, destination)))
@@ -2290,6 +2347,9 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
             j(sym(encoding), λ actual q => decode_instruction(actual) =
                 Some(decoded_canonical(ShiftImm(op, destination, immediate))),
                 decode_shift_imm_complete(op, destination, immediate)),
+        Bswap32(destination) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(Bswap32(destination))),
+                decode_bswap32_complete(destination)),
     }(decoding)
 }
 
@@ -2331,7 +2391,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
-        ShiftOne(_, _) => refl, ShiftImm(_, _, _) => refl,
+        ShiftOne(_, _) => refl, ShiftImm(_, _, _) => refl, Bswap32(_) => refl,
     }
 }
 
@@ -2363,6 +2423,7 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         AddRI32(_, _) => And(refl, refl),
         ShiftOne(_, _) => And(refl, refl),
         ShiftImm(_, _, _) => And(refl, refl),
+        Bswap32(_) => And(refl, refl),
     }
 }
 
@@ -2482,6 +2543,7 @@ theorem canonical_bytes_length(instruction: Instruction):
         AddRI32(_, _) => refl,
         ShiftOne(_, _) => refl,
         ShiftImm(_, _, _) => refl,
+        Bswap32(_) => refl,
     }
 }
 
@@ -2877,6 +2939,10 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
         ShiftOne(op, destination) => execute_shift_one(op, destination, before, False),
         ShiftImm(op, destination, immediate) =>
             execute_shift_imm(op, destination, immediate, before, flags),
+        Bswap32(destination) => RegisterEffect(
+            gprs := write_gpr(destination, bswap32_value(read_gpr(destination, before)), before),
+            flags := flags,
+        ),
     }
 }
 
@@ -3124,6 +3190,7 @@ theorem erase_normal_commute<M>(instruction: Instruction, before: MachineState<M
                 write_gpr(d, op.by(read_gpr(d, before.gprs), shift_count(immediate)), before.gprs), f,
                 next_rip(before.rip, decoded_canonical(ShiftImm(op, d, immediate)).length), before.memory),
             shift_imm_flags_erase(op, read_gpr(d, before.gprs), shift_count(immediate), before.flags)),
+        Bswap32(_) => λ _ => refl,
     })(reads)
 }
 
@@ -3504,6 +3571,7 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         AddRI32(_, _) => refl,
         ShiftOne(_, _) => refl,
         ShiftImm(_, _, _) => refl,
+        Bswap32(_) => refl,
     }
 }
 

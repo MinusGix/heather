@@ -85,6 +85,7 @@ fn Instruction::defines(self instruction: Instruction, defined: DefinedFlags) �
         AddRI8(_, _) => DefinedFlags::all(), AddRI32(_, _) => DefinedFlags::all(),
         ShiftOne(_, _) => DefinedFlags::but_af(),
         ShiftImm(_, _, immediate) => shift_imm_defines(shift_count(immediate), defined),
+        Bswap32(_) => defined,
     }
 }
 
@@ -96,6 +97,7 @@ theorem execute_normal_defines<M>(instruction: Instruction, s: MachineState<M>):
         SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl, TestRR(_, _) => refl,
         AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
         ShiftImm(op, d, immediate) => shift_imm_flags_defined(op, read_gpr(d, s.gprs), shift_count(immediate), s.flags),
+        Bswap32(_) => refl,
     }
 }
 
@@ -153,7 +155,7 @@ theorem Instruction::reads_within(self instruction: Instruction, a, b: DefinedFl
         MovRR(_, _) => λ r => r, MovRI(_, _) => λ r => r, AddRR(_, _) => λ r => r, SubRR(_, _) => λ r => r,
         AndRR(_, _) => λ r => r, OrRR(_, _) => λ r => r, XorRR(_, _) => λ r => r, CmpRR(_, _) => λ r => r,
         TestRR(_, _) => λ r => r, AddRI8(_, _) => λ r => r, AddRI32(_, _) => λ r => r, ShiftOne(_, _) => λ r => r,
-        ShiftImm(_, _, _) => λ r => r,
+        ShiftImm(_, _, _) => λ r => r, Bswap32(_) => λ r => r,
     }
 }
 
@@ -170,6 +172,7 @@ theorem Instruction::defines_within(self instruction: Instruction, a, b: Defined
         CmpRR(_, _) => refl, SetBelow(_) => w, SetLess(_) => w, SetEqual(_) => w, TestRR(_, _) => refl,
         AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
         ShiftImm(_, _, immediate) => shift_imm_defines_within(shift_count(immediate), a, b, w),
+        Bswap32(_) => w,
     }
 }
 

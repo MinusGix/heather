@@ -61,6 +61,7 @@ inductive EmittedInstruction {
     EmitWordLoad(load: WordLoad),
     EmitLeaRip(lea: LeaRip),
     EmitIndexedWordLoad(load: IndexedWordLoad),
+    EmitDwordLoad(load: DwordLoad),
     EmitShort(control: ShortControl),
     EmitNear(control: NearControl),
 }
@@ -71,6 +72,7 @@ fn emitted_bytes(emitted: EmittedInstruction) → List<BitVec(8)> {
         EmitWordLoad(load) => word_load_bytes(load),
         EmitLeaRip(lea) => lea_rip_bytes(lea),
         EmitIndexedWordLoad(load) => indexed_word_load_bytes(load),
+        EmitDwordLoad(load) => dword_load_bytes(load),
         EmitShort(control) => short_control_bytes(control),
         EmitNear(control) => near_control_bytes(control),
     }
@@ -84,6 +86,7 @@ fn EmittedExecutes<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
         EmitWordLoad(load) => Exists<BitVec(64)>(λ word => WordLoadStep<M>(data, load, word, before, after)),
         EmitLeaRip(lea) => after = lea_rip_after(lea, before),
         EmitIndexedWordLoad(load) => Exists<BitVec(64)>(λ word => IndexedWordLoadStep<M>(data, load, word, before, after)),
+        EmitDwordLoad(load) => Exists<BitVec(32)>(λ dword => DwordLoadStep<M>(data, load, dword, before, after)),
         EmitShort(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_short_control(control, before),
         EmitNear(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_near_control(control, before),
     }
@@ -110,6 +113,8 @@ theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedIn
         EmitLeaRip(_) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
         EmitIndexedWordLoad(load) => λ a b p q => SameDefinedState::of_equal(
             indexed_word_load_same(data, load, before, a, b, p.witness, q.witness, p.proof, q.proof)),
+        EmitDwordLoad(load) => λ a b p q => SameDefinedState::of_equal(
+            dword_load_same(data, load, before, a, b, p.witness, q.witness, p.proof, q.proof)),
         EmitShort(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
         EmitNear(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
     })(first, second, left, right)
@@ -141,6 +146,8 @@ theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: Emitt
         },
         EmitIndexedWordLoad(load) => λ a b same x y p q =>
             indexed_word_load_respects_defined(data, load, a, b, x, y, p.witness, q.witness, same, p.proof, q.proof),
+        EmitDwordLoad(load) => λ a b same x y p q =>
+            dword_load_respects_defined(data, load, a, b, x, y, p.witness, q.witness, same, p.proof, q.proof),
         EmitShort(control) => λ a b same x y p q => calc {
             x ≈ execute_short_control(control, a) := SameDefinedState::of_equal(p.right),
             ≈ execute_short_control(control, b) := short_control_respects_defined(control, a, b, same, p.left),
