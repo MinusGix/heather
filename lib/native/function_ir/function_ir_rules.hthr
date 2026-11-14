@@ -2,8 +2,8 @@
 // clause made from an instance's numbers, with the theorem that a valuation
 // and buffers satisfying its premises satisfy its conclusion. A fact is a
 // node's equation, a word's range, an order between two words
-// (`low + add ≤ high + more`, read as naturals), or a load made since the
-// last store. The replayer
+// (`low + add ≤ high + more`, read as naturals), a load made since the
+// last store, or that a word is bytes of a buffer joined. The replayer
 // (function_ir_replay) applies a rule by its place in `rules()` where its
 // premises are among the facts, so adding one is a clause, its proof and a
 // line of the table, and no change to anything proved about the replayer.
@@ -15,7 +15,9 @@ import function_ir;
 import function_ir_eval;
 import function_ir_replay;
 import bitvec;
+import bitvec_bytes;
 import bitvec_nat;
+import bitvec_resize;
 import bitvec_ring;
 import bitvec_shift_nat;
 import bool;
@@ -501,6 +503,88 @@ theorem load_again_sound(b, a, f, i: Nat): load_again(b, a, f, i).Sound() {
     λ values buffers held => trans(held.right.left, sym(held.left))
 }
 
+// ---------------------------------------------------------------------------
+// Bytes joined. `Joined(o, f, i, n, sh)` says the word `o` is the `n`
+// bytes of buffer `f` from the index `i`, the first the most significant,
+// shifted left by `sh` (`buffer_join`). A byte load starts one, a shift
+// moves it, an or of two that are side by side in the buffer and in the
+// word is the longer one, and four bytes unshifted are the word one load
+// reads, swapped. However the bytes were joined, the rules meet at the
+// same fact.
+
+fn join_byte(b, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(b, f, i))], Joined(b, f, i, 1, 0)) }
+
+theorem join_byte_sound(b, f, i: Nat): join_byte(b, f, i).Sound() {
+    λ values buffers held => trans(held.left, sym(buffer_join_one(buffers, f, values(64, i).toNat())))
+}
+
+fn join_shift(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }
+
+theorem join_shift_sound(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() {
+    λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: BitVec(64)) => z.shift_left(c), held.left),
+        sym(buffer_join(buffers, f, values(64, i).toNat(), n).shift_left_add(sh, c))))
+}
+
+// Two joins side by side: the second starts where the first ends, which
+// the two orders say of the indexes as numbers, and the first is shifted
+// past the second's bytes.
+theorem joins_meet(buffers: Buffers(), f, x, y, n, m, sh: Nat, after: x + n <= y + 0, before: y + 0 <= x + n):
+    buffer_join(buffers, f, x, n).shift_left(8 * m + sh).bor(buffer_join(buffers, f, y, m).shift_left(sh)) =
+        buffer_join(buffers, f, x, n + m).shift_left(sh) {
+    let a = buffer_join(buffers, f, x, n);
+    let at: (y = x + n) = omega(after, before);
+    trans(cong_fn(λ (k: Nat) => a.shift_left(8 * m + sh).bor(buffer_join(buffers, f, k, m).shift_left(sh)), at),
+        trans(cong_fn(λ (z: BitVec(64)) => z.bor(buffer_join(buffers, f, x + n, m).shift_left(sh)), a.shift_left_add(8 * m, sh)),
+            trans(sym(a.shift_left(8 * m).shift_left_bor(buffer_join(buffers, f, x + n, m), sh)),
+                cong_fn(λ (z: BitVec(64)) => z.shift_left(sh), sym(buffer_join_split(buffers, f, x, n, m))))))
+}
+
+fn join_or(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, a, b))], Joined(o, f, i, n + m, sh))
+}
+
+theorem join_or_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or(o, a, b, f, i, j, n, m, sh).Sound() {
+    λ values buffers held => {
+        let first = held.left;
+        let second = held.right.left;
+        let or = held.right.right.right.right.left;
+        trans(or, trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
+            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
+                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left))))
+    }
+}
+
+// The same with the or's operands the other way round.
+fn join_or_right(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, b, a))], Joined(o, f, i, n + m, sh))
+}
+
+theorem join_or_right_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or_right(o, a, b, f, i, j, n, m, sh).Sound() {
+    λ values buffers held => {
+        let first = held.left;
+        let second = held.right.left;
+        let or = held.right.right.right.right.left;
+        trans(or, trans(BitVec::bor_comm(64, values(64, b), values(64, a)), trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
+            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
+                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left)))))
+    }
+}
+
+// Four bytes joined and unshifted are what one four-byte load reads at
+// the same index, swapped and widened: the word is that one's.
+fn join_word(o, w, s, r, f, i: Nat) → Clause {
+    Clause([Joined(o, f, i, 4, 0), Loaded(WideLoad(4, w, f, i)), Is(ByteSwap(32, s, w)), Is(Resize(32, 64, r, s))], Is(Move(64, o, r)))
+}
+
+theorem join_word_sound(o, w, s, r, f, i: Nat): join_word(o, w, s, r, f, i).Sound() {
+    λ values buffers held => {
+        let word = buffer_word(buffers, f, values(64, i).toNat(), 4);
+        let swapped: (values(32, s) = word.swap_bytes()) = trans(held.right.right.left, cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), held.right.left));
+        trans(held.left, trans(buffer_join_four(buffers, f, values(64, i).toNat()),
+            sym(trans(held.right.right.right.left, cong_fn(λ (z: BitVec(32)) => BitVec::ofNat(z.toNat(), n := 64), swapped)))))
+    }
+}
+
 fn always(args: List<Nat>) → Bool { True }
 
 // The table a plan's `Derive` steps index. A rule keeps its place: new
@@ -562,5 +646,16 @@ fn rules() → List<Rule> {
         Rule::when(λ n => (num(n, 3) + num(n, 6)).leb(num(n, 4)),
             λ n => sum_roomed_high(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
             λ n ok => sum_roomed_high_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+        // 29
+        Rule::when(always, λ n => join_byte(num(n, 0), num(n, 1), num(n, 2)), λ n _ => join_byte_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => join_shift(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n _ => join_shift_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6))),
+        Rule::when(always, λ n => join_or(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
+            λ n _ => join_or_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
+        Rule::when(always, λ n => join_or_right(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
+            λ n _ => join_or_right_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
+        // 33
+        Rule::when(always, λ n => join_word(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
+            λ n _ => join_word_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
     ]
 }

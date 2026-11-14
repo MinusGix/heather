@@ -5,15 +5,17 @@
 // - A fact is something known of the activation's valuation and the
 //   buffers as they stand (`Fact`): a node's equation, that a word lies
 //   between two numbers, an order between two words (`Order`:
-//   `low + add ≤ high + more`, the words read as naturals), or a load made
-//   since the last store. Every node of the old body that touches no
+//   `low + add ≤ high + more`, the words read as naturals), a load made
+//   since the last store, or that a word is bytes of a buffer joined
+//   (`Memory::Bytes`, over `buffer_join`). Every node of the old body that touches no
 //   buffer is one once the sweep has passed it, kept or dropped
 //   (`Facts::learn`), and an arm starts with its conditional's bit as a
 //   constant. The facts are keyed by the id they are about, so asking for
 //   one is a lookup; a range is known where a range inside it is, and an
 //   order where a stronger one between the same two words is.
-// - What was loaded is known until something may store: a store forgets
-//   every load and remembers its own read-back, and a call, a lend, a
+// - What is kept of the buffers (`Memory`: a load, or a word that is
+//   bytes of one) is known until something may store: a store forgets all
+//   of it and remembers its own read-back, and a call, a lend, a
 //   conditional and a loop forget (`Facts::forget`, `Facts::Remembered`).
 // - A rule is a clause over facts with its proof (`Clause`, `Rule`): made
 //   from an instance's ids and literals, premises and a conclusion, and a
@@ -189,13 +191,64 @@ theorem nodes_have_holds(values: Valuation(), node: Node, nodes: List<Node>): No
     }
 }
 
-theorem nodes_have_holds_over(values: Valuation(), buffers: Buffers(), node: Node, nodes: List<Node>): NodesHoldOver(buffers, values, nodes) →
-    nodes_have(nodes, node) = True → NodeHolds(values, node, buffers := buffers) {
-    match nodes {
+// What a replay remembers of the buffers as they are where it stands: a
+// node that read them, or a word that is bytes of one joined, the first
+// byte the most significant, and then shifted (`buffer_join`).
+inductive Memory { Read(node: Node), Bytes(id: Nat, buffer: Nat, index: Nat, count: Nat, shift: Nat) }
+
+fn Memory::Holds(self memory: Memory, values: Valuation(), buffers: Buffers()) → Type {
+    match memory {
+        Read(node) => NodeHolds(values, node, buffers := buffers),
+        Bytes(id, buffer, index, count, shift) => values(64, id) = buffer_join(buffers, buffer, values(64, index).toNat(), count).shift_left(shift),
+    }
+}
+
+fn MemoriesHold(values: Valuation(), buffers: Buffers(), memories: List<Memory>) → Type {
+    match memories { Nil => True, Cons(memory, rest) => memory.Holds(values, buffers) ∧ MemoriesHold(values, buffers, rest) }
+}
+
+fn Memory::same(self a: Memory, b: Memory) → Bool {
+    match a {
+        Read(node) => match b { Read(other) => node.same(other), _ => False },
+        Bytes(id, buffer, index, count, shift) => match b {
+            Bytes(id2, buffer2, index2, count2, shift2) => id.same(id2) && same4(buffer, index, count, shift, buffer2, index2, count2, shift2),
+            _ => False,
+        },
+    }
+}
+
+theorem Memory::same_sound(self a: Memory): (b: Memory) → a.same(b) = True → a = b {
+    match a {
+        Read(node) => λ b => match b {
+            Read(other) => λ h => cong_fn<Node, Memory>(λ n => Read(n), node.same_sound(other, h)),
+            _ => λ h => absurd(h),
+        },
+        Bytes(id, buffer, index, count, shift) => λ b => match b {
+            Bytes(id2, buffer2, index2, count2, shift2) => λ h => {
+                let p = Bool::and_true_parts(id.same(id2), same4(buffer, index, count, shift, buffer2, index2, count2, shift2), h);
+                let e = same4_sound(buffer, index, count, shift, buffer2, index2, count2, shift2, p.right);
+                trans(cong_fn<Nat, Memory>(λ n => Bytes(n, buffer, index, count, shift), id.same_sound(id2, p.left)),
+                    trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, n, index, count, shift), e.left),
+                        trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, n, count, shift), e.right.left),
+                            trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, index2, n, shift), e.right.right.left),
+                                cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, index2, count2, n), e.right.right.right)))))
+            },
+            _ => λ h => absurd(h),
+        },
+    }
+}
+
+fn memories_have(memories: List<Memory>, memory: Memory) → Bool {
+    match memories { Nil => False, Cons(known, rest) => known.same(memory) || memories_have(rest, memory) }
+}
+
+theorem memories_have_hold(values: Valuation(), buffers: Buffers(), memory: Memory, memories: List<Memory>): MemoriesHold(values, buffers, memories) →
+    memories_have(memories, memory) = True → memory.Holds(values, buffers) {
+    match memories {
         Nil => λ _ h => absurd(h),
-        Cons(fact, rest) => λ held h => match Bool::or_true_parts(fact.same(node), nodes_have(rest, node), h) {
-            Inl(here) => j(fact.same_sound(node, here), λ n _ => NodeHolds(values, n, buffers := buffers), held.left),
-            Inr(there) => nodes_have_holds_over(values, buffers, node, rest, held.right, there),
+        Cons(known, rest) => λ held h => match Bool::or_true_parts(known.same(memory), memories_have(rest, memory), h) {
+            Inl(here) => j(known.same_sound(memory, here), λ m _ => m.Holds(values, buffers), held.left),
+            Inr(there) => memories_have_hold(values, buffers, memory, rest, held.right, there),
         },
     }
 }
@@ -281,15 +334,23 @@ theorem orders_give_holds(values: Valuation(), wanted: Order, orders: List<Order
 
 // What a replay knows. Of the valuation: a node's equation, a word's
 // range, or two words' order. Of the buffers as they are where the replay
-// stands: a node that read them, which is known until something stores.
-inductive Fact { Is(node: Node), Within(id: Nat, low: Nat, high: Nat), AtMost(low: Nat, add: Nat, high: Nat, more: Nat), Loaded(node: Node) }
+// stands: a node that read them, or a word that is bytes of one joined,
+// each known until something stores.
+inductive Fact {
+    Is(node: Node),
+    Within(id: Nat, low: Nat, high: Nat),
+    AtMost(low: Nat, add: Nat, high: Nat, more: Nat),
+    Loaded(node: Node),
+    Joined(id: Nat, buffer: Nat, index: Nat, count: Nat, shift: Nat),
+}
 
 fn Fact::Holds(self fact: Fact, values: Valuation(), buffers: Buffers()) → Type {
     match fact {
         Is(node) => NodeHolds(values, node),
         Within(id, low, high) => Range(low, high).Holds(values(64, id)),
         AtMost(low, add, high, more) => Order(low, add, high, more).Holds(values),
-        Loaded(node) => NodeHolds(values, node, buffers := buffers),
+        Loaded(node) => Read(node).Holds(values, buffers),
+        Joined(id, buffer, index, count, shift) => Bytes(id, buffer, index, count, shift).Holds(values, buffers),
     }
 }
 
@@ -297,7 +358,7 @@ fn FactsHold(values: Valuation(), buffers: Buffers(), facts: List<Fact>) → Typ
     match facts { Nil => True, Cons(fact, rest) => fact.Holds(values, buffers) ∧ FactsHold(values, buffers, rest) }
 }
 
-record Facts { by: NatMap<List<Node>>, within: NatMap<Range>, orders: List<Order>, loaded: List<Node> }
+record Facts { by: NatMap<List<Node>>, within: NatMap<Range>, orders: List<Order>, loaded: List<Memory> }
 
 fn Facts::none() → Facts { Facts(NatMap::empty(), NatMap::empty(), [], []) }
 
@@ -325,14 +386,17 @@ fn Facts::bound(self facts: Facts, id: Nat, range: Range) → Facts {
 // Two words are in `order` too.
 fn Facts::rank(self facts: Facts, order: Order) → Facts { Facts(facts.by, facts.within, Cons(order, facts.orders), facts.loaded) }
 
+// Something more of the buffers as they are.
+fn Facts::keep(self facts: Facts, memory: Memory) → Facts { Facts(facts.by, facts.within, facts.orders, Cons(memory, facts.loaded)) }
+
 // A node that read the buffers as they are.
-fn Facts::recall(self facts: Facts, node: Node) → Facts { Facts(facts.by, facts.within, facts.orders, Cons(node, facts.loaded)) }
+fn Facts::recall(self facts: Facts, node: Node) → Facts { facts.keep(Read(node)) }
 
 // The buffers may have changed: what was read of them is known no longer.
 fn Facts::forget(self facts: Facts) → Facts { Facts(facts.by, facts.within, facts.orders, []) }
 
-// Every node recalled holds of `values` over `buffers`.
-fn Facts::Remembered(self facts: Facts, values: Valuation(), buffers: Buffers()) → Type { NodesHoldOver(buffers, values, facts.loaded) }
+// Everything kept of the buffers holds of `values` over `buffers`.
+fn Facts::Remembered(self facts: Facts, values: Valuation(), buffers: Buffers()) → Type { MemoriesHold(values, buffers, facts.loaded) }
 
 // Every fact about the valuation holds of `values`.
 fn Facts::Hold(self facts: Facts, values: Valuation()) → Type {
@@ -412,13 +476,15 @@ theorem Facts::add_hold(self facts: Facts, values: Valuation(), held: facts.Hold
 }
 
 // A fact is known: a node among the facts, a range a known one is inside,
-// an order a known one gives, or a node among those recalled.
+// an order a known one gives, or something among what is kept of the
+// buffers.
 fn Facts::knows(self facts: Facts, fact: Fact) → Bool {
     match fact {
         Is(node) => facts.has(node),
         Within(id, low, high) => facts.range(id).inside(Range(low, high)),
         AtMost(low, add, high, more) => orders_give(facts.orders, Order(low, add, high, more)),
-        Loaded(node) => nodes_have(facts.loaded, node),
+        Loaded(node) => memories_have(facts.loaded, Read(node)),
+        Joined(id, buffer, index, count, shift) => memories_have(facts.loaded, Bytes(id, buffer, index, count, shift)),
     }
 }
 
@@ -428,7 +494,8 @@ theorem Facts::knows_holds(self facts: Facts, values: Valuation(), buffers: Buff
         Is(node) => λ h => facts.has_holds(values, held, node, h),
         Within(id, low, high) => λ h => facts.range(id).inside_holds(Range(low, high), values(64, id), h, facts.range_holds(values, held, id)),
         AtMost(low, add, high, more) => λ h => orders_give_holds(values, Order(low, add, high, more), facts.orders, held.right.right, h),
-        Loaded(node) => λ h => nodes_have_holds_over(values, buffers, node, facts.loaded, loaded, h),
+        Loaded(node) => λ h => memories_have_hold(values, buffers, Read(node), facts.loaded, loaded, h),
+        Joined(id, buffer, index, count, shift) => λ h => memories_have_hold(values, buffers, Bytes(id, buffer, index, count, shift), facts.loaded, loaded, h),
     }
 }
 
@@ -453,6 +520,7 @@ fn Facts::with(self facts: Facts, fact: Fact) → Facts {
         Within(id, low, high) => facts.bound(id, Range(low, high)),
         AtMost(low, add, high, more) => facts.rank(Order(low, add, high, more)),
         Loaded(node) => facts.recall(node),
+        Joined(id, buffer, index, count, shift) => facts.keep(Bytes(id, buffer, index, count, shift)),
     }
 }
 
@@ -463,6 +531,7 @@ theorem Facts::with_hold(self facts: Facts, values: Valuation(), buffers: Buffer
         Within(id, low, high) => λ holds => facts.bound_hold(values, held, id, Range(low, high), holds),
         AtMost(low, add, high, more) => λ holds => facts.rank_hold(values, held, Order(low, add, high, more), holds),
         Loaded(_) => λ _ => held,
+        Joined(_, _, _, _, _) => λ _ => held,
     }
 }
 
@@ -473,6 +542,7 @@ theorem Facts::with_remembered(self facts: Facts, values: Valuation(), buffers: 
         Within(_, _, _) => λ _ => loaded,
         AtMost(_, _, _, _) => λ _ => loaded,
         Loaded(_) => λ holds => ⟨holds, loaded⟩,
+        Joined(_, _, _, _, _) => λ holds => ⟨holds, loaded⟩,
     }
 }
 

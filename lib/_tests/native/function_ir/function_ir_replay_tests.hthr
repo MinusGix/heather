@@ -1,7 +1,8 @@
 // Probes of the replayer (lib/native/function_ir/function_ir_replay.hthr,
 // docs/optimizer-design.md §3.2): a plan followed over a list of nodes, a
-// plan refused, and a program of two functions rewritten as a stage, with
-// what its theorem says of the rewritten program. Tests, not library:
+// plan refused, a program of two functions rewritten as a stage, with
+// what its theorem says of the rewritten program, loads remembered, orders
+// between words, and bytes joined into a word. Tests, not library:
 // nothing imports this module.
 import function_ir;
 import function_ir_eval;
@@ -241,3 +242,64 @@ theorem order_from_set(): replay(rules(), Facts::none().learn_all([UnsignedLessT
 
 theorem order_from_clear(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 0)), [UnsignedLessThan(64, 3, 0, 1)],
     [Derive(21, [2, 0, 1]), Keep, Derive(23, [3, 0, 1]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 0)]) { refl }
+
+// ---------------------------------------------------------------------------
+// Bytes joined into a word (rules 29 to 33)
+
+// Two bytes of buffer 0, at the index 0 and at the word 3, the first
+// shifted past the second and the two or'd.
+fn pair_nodes() → List<Node> { [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 5, 4)] }
+
+// The word 3 is the index and one, both ways.
+fn pair_beside() → Facts { Facts::none().with(AtMost(0, 1, 3, 0)).with(AtMost(3, 0, 0, 1)) }
+
+// Each load starts a join, the shift moves the first, and the or of the
+// two is the join of both bytes.
+fn pair_steps(count: Nat) → List<Step> {
+    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(31, [6, 5, 4, 0, 0, 3, count, 1, 0])]
+}
+
+theorem pair_joined(): replay(rules(), pair_beside(), pair_nodes(), pair_steps(1)).map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
+
+// Not where the second byte's index is not known to be the next one, in
+// either direction; nor as a join longer than the bytes it has.
+theorem pair_anywhere(): replay(rules(), Facts::none(), pair_nodes(), pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+theorem pair_not_before(): replay(rules(), Facts::none().with(AtMost(0, 1, 3, 0)), pair_nodes(), pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+theorem pair_overclaimed(): replay(rules(), pair_beside(), pair_nodes(), pair_steps(2)).map(λ r => r.nodes) = None { refl }
+
+// The or's operands the other way round are rule 32's, and not rule 31's.
+theorem pair_turned(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
+    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(32, [6, 5, 4, 0, 0, 3, 1, 1, 0])])
+    .map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
+
+theorem pair_turned_wrong(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
+    pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+// A store after the loads: what they read is known no longer, so nothing
+// is a join of it.
+theorem pair_stored(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferStore(7, 0, 0, 1)], [Keep, Keep, Derive(29, [1, 0, 0])])
+    .map(λ r => r.nodes) = None { refl }
+
+// A word that is four bytes joined and unshifted is the word one load of
+// four bytes at the same index reads, swapped and widened (rule 33).
+fn wide_nodes() → List<Node> { [WideLoad(4, 7, 0, 0), ByteSwap(32, 8, 7), Resize(32, 64, 9, 8)] }
+
+fn wide_steps() → List<Step> { [Keep, Keep, Keep, Derive(33, [6, 7, 8, 9, 0, 0]), Emit(Move(64, 6, 9))] }
+
+theorem word_of_join(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) =
+    Some(wide_nodes() ++ [Move(64, 6, 9)]) { refl }
+
+// Not three bytes, not a join still shifted, not one at another index or
+// of another buffer; and not a load taken unswapped.
+theorem word_of_three(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 3, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_shifted(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 8)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_elsewhere(): replay(rules(), Facts::none().with(Joined(6, 0, 1, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_of_another(): replay(rules(), Facts::none().with(Joined(6, 1, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_unswapped(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), [WideLoad(4, 7, 0, 0), Resize(32, 64, 9, 7)],
+    [Keep, Keep, Derive(33, [6, 7, 7, 9, 0, 0]), Emit(Move(64, 6, 9))]).map(λ r => r.nodes) = None { refl }
