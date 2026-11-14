@@ -1,6 +1,6 @@
 ---
 title: compile-x86 evaluates the optimizer's searches again over a warm store
-status: open
+status: closed
 labels: [native,compiler,performance,optimization]
 area: heather-in-heather
 milestone: [hih-passes]
@@ -95,3 +95,7 @@ certificate was not audited, so they were left as they were.
 A second `compile-x86` of `sha256_compress` over the store the first one
 wrote is back near the time of a compile without the optimizer, and
 `scripts/bench-native`'s warm column shows it.
+
+## Log
+
+- 2026-11-14: Built (PR #649). `scripts/bench-native --quick --no-count` on the cloud box: `sha256_compress` cold 238.6 s, warm 4.4 s. Closed.
