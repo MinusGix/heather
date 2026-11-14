@@ -262,7 +262,15 @@ impl Tested<'_> {
         if !is_call(call) {
             return Ok(None);
         }
-        let Some(found) = self.condition_of(cx, call) else { return Ok(None) };
+        let Some(mut found) = self.condition_of(cx, call) else { return Ok(None) };
+        // A condition whose proofs are interchangeable is `∥P∥`
+        // (docs/strict-conditions-design.md §3): `P` is what is decided, and
+        // its proof is accepted at the squash, wrapped.
+        if let Type::Squash { level, ty } = &found.condition {
+            let (level, ty) = (level.clone(), (**ty).clone());
+            found.condition = ty;
+            found.level = level;
+        }
         let Some(code) = code::code_of(&found.condition) else { return Ok(None) };
         let mut bound = cx.clone();
         bound.aliases.push(Rc::new(Alias {

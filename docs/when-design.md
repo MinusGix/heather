@@ -341,6 +341,11 @@ language` and log rulings there.
   structurally first: an inductive's tag names its declaration and module.
   Only a type with no tag in its shape is decoded, and only in a module
   that imports `when`. No table probe is on that path.
+- A condition whose proofs are interchangeable, `inside: ∥P∥ := bv_omega`
+  (`docs/strict-conditions-design.md` §3, as `Vec::at` now declares it),
+  is tested as `P`: the decision is of `P`, the result is `When<T, P>`, and
+  the arm's proof is passed back as `inside := h`, which the squashed
+  parameter accepts wrapped. `word_at` over `Vec::at` is the probe.
 - Refusals, as `expect-error` probes: a written condition where a `When` is
   wanted (a mismatch: the call is not tested), a condition with no decision
   ("… has no decision (`Decide<…>`) here: give `name := …` and take the
