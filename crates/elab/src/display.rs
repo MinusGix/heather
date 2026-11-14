@@ -982,6 +982,20 @@ impl Speller<'_> {
             out.push('\'');
             return out;
         }
+        // A `match` on an enumeration, and the convoy `match h:` and
+        // `if h:` lower to, as the reader wrote it: a lowered `decreases`
+        // body's test, read back in a goal or an unfolding equation, is not
+        // `app@(case[0,0,0](M Π…`.
+        if self.rough.is_none() && !self.qualified {
+            if let Some(shown) = self.convoy(t, d) {
+                return shown;
+            }
+            if let Term::Case { .. } = t
+                && let Some(shown) = self.enum_match(t, None, d)
+            {
+                return shown;
+            }
+        }
         match t {
             // A codata instance's code, `λ a b => Eutt<R>(E, a, b)`'s body:
             // the instance it decodes to.
@@ -1085,6 +1099,118 @@ impl Speller<'_> {
         let abs = self.el.global_abs_of(var)?;
         let slot = abs.checked_sub(self.el.psi().bindings.len())?;
         self.el.attempt.goal_arena.slot_spelling(slot)
+    }
+
+    /// `match h: e { … }`: a case analysis whose motive is `Π(e = z). M`,
+    /// applied to `refl` — what `match h:` and `if h:` lower to
+    /// (docs/dependent-match-compiler-design.md §4). Each arm is a `λ` over
+    /// the equation, which takes the name `h` (or a fresh one) in the arm.
+    fn convoy(&self, t: &Term, d: u32) -> Option<String> {
+        let (case, arg) = crate::spelling::app_of(t)?;
+        let Term::Refl { .. } = &**arg else { return None };
+        let Term::Case { motive, scrut, .. } = &**case else { return None };
+        let Type::Pi { dom, .. } = &**motive else { return None };
+        let Type::Id { lhs, rhs, .. } = &**dom else { return None };
+        // Under the motive's binder: `e` weakened past it, and `z` itself.
+        if !matches!(&**rhs, Term::Var(LocalVar(0))) || **lhs != scrut.shift_local(1) {
+            return None;
+        }
+        let name = self.fresh_from(&["h", "e", "same"]);
+        self.enum_match(case, Some(&name), d)
+    }
+
+    /// `match e { C₀ => a₀, … }` for a case analysis over an enumeration,
+    /// a tier-0 inductive whose constructors carry nothing: `Bool`, read as
+    /// `if e { … } else { … }`, or a chain of cases, one per constructor
+    /// but the last, each on the one before's right summand. With `eq`,
+    /// each arm is a `λ` over the convoy's equation, bound under that name.
+    /// `None` for anything else, which falls back to the raw spelling.
+    fn enum_match(&self, t: &Term, eq: Option<&str>, d: u32) -> Option<String> {
+        let Term::Case { lhs, scrut, .. } = t else { return None };
+        let ind = self.el.display_tag_of(lhs)?;
+        let n = ind.ctors.len();
+        if n < 2 || ind.ctors.iter().any(|c| c.fields.len() != 0) {
+            return None;
+        }
+        // A convoy over more than two constructors would chain its
+        // equation through the inner cases' motives; not read here.
+        if eq.is_some() && n != 2 {
+            return None;
+        }
+        let mut arms: Vec<String> = Vec::with_capacity(n);
+        let mut entered = 0;
+        let mut cur = t;
+        let shown = (|| {
+            for k in 0..n - 1 {
+                let Term::Case { lhs, rhs, lhs_level, rhs_level, case_l, case_r, scrut: s, .. } = cur else {
+                    return None;
+                };
+                if k > 0 && !matches!(&**s, Term::Var(LocalVar(0))) {
+                    return None;
+                }
+                arms.push(self.enum_arm(lhs, lhs_level, case_l, eq, d)?);
+                if k + 2 == n {
+                    arms.push(self.enum_arm(rhs, rhs_level, case_r, eq, d)?);
+                } else {
+                    // The rest of the constructors, under the right
+                    // summand's binder, which nothing in an arm reads.
+                    let name = self.fresh();
+                    self.enter(&name, rhs, rhs_level);
+                    entered += 1;
+                    cur = case_r;
+                }
+            }
+            Some(())
+        })();
+        for _ in 0..entered {
+            self.leave();
+        }
+        shown?;
+        let scrut_s = self.tm(scrut, d + 1);
+        let head = match eq {
+            Some(h) => format!("{h}: {scrut_s}"),
+            None => scrut_s,
+        };
+        if self.standard(&ind, "bool", "Bool") {
+            // `inductive Bool { False, True }`: the right arm is `True`'s.
+            return Some(format!("if {head} {{ {} }} else {{ {} }}", arms[1], arms[0]));
+        }
+        let shown: Vec<String> =
+            ind.ctors.iter().zip(&arms).map(|(c, a)| format!("{} => {a}", c.name)).collect();
+        Some(format!("match {head} {{ {} }}", shown.join(", ")))
+    }
+
+    /// One arm of [`Self::enum_match`]: `body` under the summand's binder
+    /// (the constructor's empty payload, which it does not read), and under
+    /// the equation's `λ` when there is one.
+    fn enum_arm(&self, summand: &Type, level: &crate::Level, body: &Term, eq: Option<&str>, d: u32) -> Option<String> {
+        let payload = self.fresh();
+        self.enter(&payload, summand, level);
+        let shown = match (eq, body) {
+            (None, body) => Some(self.tm(body, d + 1)),
+            (Some(h), Term::Lam { dom, dom_level, body, .. }) => {
+                self.enter(h, dom, dom_level);
+                let s = self.tm(body, d + 1);
+                self.leave();
+                Some(s)
+            }
+            (Some(_), _) => None,
+        };
+        self.leave();
+        shown
+    }
+
+    /// [`Self::fresh`] with the caller's own preferences first.
+    fn fresh_from(&self, preferred: &[&str]) -> String {
+        {
+            let names = self.names.borrow();
+            let used = |candidate: &str| names.contains(candidate)
+                || self.cx.aliases.iter_inner().any(|a| a.name == candidate);
+            if let Some(c) = preferred.iter().find(|c| !used(c)) {
+                return c.to_string();
+            }
+        }
+        self.fresh()
     }
 
     /// A nullary `fn` in a type position, spelled as its call, `Inner()`:
@@ -1469,10 +1595,14 @@ impl Speller<'_> {
     /// no type in `cx.gamma`. Re-elaborating the spelling walks the same
     /// spine, so it comes back to `t`.
     fn field_read(&self, t: &Term, d: u32) -> Option<String> {
-        if self.binders() != 0 {
+        // Under binders the walk crossed, the receiver is typed where the
+        // walk stands: a field read in a `match` arm, `s.hash` in an `if h:`
+        // branch of a lowered `decreases` body. For a reader only: a source
+        // spelling under a binder keeps declining, as it always has.
+        if self.binders() != 0 && self.qualified {
             return None;
         }
-        let (pair, name) = self.el.field_read_parts(self.cx, t)?;
+        let (pair, name) = self.el.field_read_parts(&self.here(), t)?;
         let shown = self.tm(pair, d + 1);
         Some(if (matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
             || crate::spelling::proj_of(pair).is_some())
