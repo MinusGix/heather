@@ -1,6 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: list_raise_letters(span mut, word, word) -> word
-# stack: 240 bytes below the return address
+# stack: 272 bytes below the return address
 .text
 .globl list_raise_letters
 .type list_raise_letters, @function

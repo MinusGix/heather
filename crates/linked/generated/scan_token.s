@@ -1,12 +1,12 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: scan_token(span, word, word) -> word
-# stack: 4080 bytes below the return address
+# stack: 4624 bytes below the return address
 # signature: scan_step(word, word) -> word
-# stack: 3120 bytes below the return address
+# stack: 3536 bytes below the return address
 # signature: scan_accept(word) -> word
-# stack: 3360 bytes below the return address
+# stack: 3808 bytes below the return address
 # signature: scan_begin(word) -> word
-# stack: 3960 bytes below the return address
+# stack: 4488 bytes below the return address
 .text
 .globl scan_token
 .type scan_token, @function

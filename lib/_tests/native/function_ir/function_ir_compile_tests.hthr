@@ -181,7 +181,7 @@ theorem reading_beside_lowers(): lower_program_lent(reading_beside(), plan_progr
 theorem sum_beside_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program_lent(reading_beside(), placement, [0, 1]) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), a, b: BitVec(64)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(1),
-        λ (i: Nat) (s: MachineState<M>) => ArgsIn([a, b], argument_registers(), s.gprs) ∧ 120 * 1 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 136 * 1 <= i,
         stack.CalleePost(program_eval_over(Nil, reading_beside(), 0, [a, b]))) {
     compiled_returns_unlent<M>(reading_beside(), placement, [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
         refl, [a, b], trivial, program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)

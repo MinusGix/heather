@@ -1,0 +1,534 @@
+// The linked SHA-256 is the specification's (FIPS 180-4 §6.2):
+// `Sha256::digest_spec`, that the digest a context holds after
+// `Sha256::init`, `Sha256::update` and `Sha256::finish`
+// (`sha256_stream.hthr`) is `Sha2::digest` (`sha2.hthr`) of the message
+// taken, and `Sha256::update_took` and `Sha256::finish_digest` for a
+// message that arrives in any number of parts.
+//
+// The invariant is `Sha256Took(s, message)`: the hash value has absorbed
+// the message's whole blocks, the context's block (its schedule's first
+// sixteen words as bytes, `Sha256::block`) begins with the bytes after
+// them, and the count is the message's length (`Sha256Tracks` is the part
+// of it the byte loop keeps). A byte pushed keeps it (`Sha256::push_fed`),
+// so the loop over a part does (`Sha256::absorb_from`); the end is
+// `Sha256::close_hash`, the padding and the length's words against
+// `Sha2::hash_short` and `Sha2::hash_long` (`sha2_stream.hthr`). A block
+// run is the specification's compression by `Sha256::run_spec`
+// (`sha256_agreement.hthr`).
+//
+// The functions that test without evidence (`push`, `pad`) are restated
+// by their test's bit (`Sha256::pushed`, `Sha256::padded`) and the loops
+// stepped by `Bool::convoy_true`, as in `sha256_agreement.hthr`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import bitvec;
+import bitvec_bytes;
+import bitvec_concat;
+import vector;
+import omega;
+import sha2;
+import sha2_stream;
+import bitvec_nat;
+import bitvec_shift_nat;
+import bitvec_omega;
+import bitvec_loop;
+import stored_words;
+import sha256_context;
+import sha256_round;
+import sha256_block;
+import sha256_schedule;
+import sha256_working;
+import sha256_compression;
+import sha256_agreement;
+import sha256_filling;
+import sha256_padding;
+import sha256_stream;
+import rt;
+
+fn Sha256::block(s: Sha256) → List<u8> { Sha2::spelled(vector_entries(s.schedule).take(16)) }
+
+theorem Sha256::len_block(s: Sha256): Sha256::block(s).len() = 64 {
+    let sixteen: (vector_entries(s.schedule).take(16).len() = 16) =
+        vector_entries(s.schedule).len_take(16, j(sym(vector_entries_len(64, s.schedule)), λ x _ => 16 <= x, trivial));
+    let spelled = Sha2::len_spelled(vector_entries(s.schedule).take(16));
+    omega
+}
+
+// The compression, of the block's bytes.
+theorem Sha256::run_block(s: Sha256):
+    Sha256::state(Sha256::run(s).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(Sha256::block(s))) {
+    trans(Sha256::run_spec(s), cong_fn(λ (ws: List<u32>) => Sha2::sha256().compress(Sha256::state(s.hash), ws), sym(Sha2::words_spelled(vector_entries(s.schedule).take(16)))))
+}
+
+// A byte stored in the schedule's first sixteen words is that byte of the block replaced.
+theorem Sha256::block_with_byte(s: Sha256, i: Nat, b: u8, below: i < 64):
+    Sha256::block((s with { schedule = vector_with_byte_be(s.schedule, i, b) })) = Sha256::block(s).update(i, λ _ => b) {
+    let v = s.schedule;
+    let q = i.div(4);
+    let r = i.mod(4);
+    let w0 = vector_get(v, q, 0);
+    let X = w0.with_byte_be(4, r, b);
+    let parts = i.div_mul_add_mod(4);
+    let small: (r < 4) = i.mod_lt(4);
+    let word: (q < 16) = i.div_lt_of_lt_mul(4, 16, below);
+    let inside: (q < 64) = omega;
+    let at: (vector_entries(v).take(16).nth(q) = Some(w0)) =
+        trans(vector_entries(v).nth_take(16, q, word), trans(vector_entries_nth(64, v, q, inside), cong_fn(λ (y: u32) => Some(y), sym(vector_get_inside(64, v, q, 0, inside)))));
+    let listed: (vector_entries(vector_update(v, q, X)).take(16) = vector_entries(v).take(16).update(q, λ _ => X)) =
+        trans(cong_fn(λ (e: List<u32>) => e.take(16), vector_entries_update(64, v, q, X)), vector_entries(v).take_update(16, q, λ _ => X));
+    let place: (4 * q + r = i) = omega;
+    trans(cong_fn(λ (e: List<u32>) => Sha2::spelled(e), listed),
+        trans(Sha2::spelled_update(vector_entries(v).take(16), q, r, w0, b, small, at),
+            cong_fn(λ (k: Nat) => Sha256::block(s).update(k, λ _ => b), place)))
+}
+
+// A byte stored inside the block is that byte of the schedule's word replaced.
+theorem Sha256::put_inside(s: Sha256, at, byte: u64, below: at.toNat() < 64):
+    Sha256::put(s, at, byte) = Mutated((s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }), at) {
+    let e: (at.unsigned_lt_bit(64) = True) = bv_omega;
+    Bool::convoy_true(at.unsigned_lt_bit(64), Mutated((s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }), at), Mutated(s, at), e)
+}
+
+// `Sha256::push` by its test's bit: a byte stored, and the block run where that fills it.
+fn Sha256::pushed(s: Sha256, fill, byte: u64, full: Bool) → Mutated<Sha256, u64> {
+    match full { True => Mutated(Sha256::run(Sha256::put(s, fill, byte).after).after, 0), False => Mutated(Sha256::put(s, fill, byte).after, fill + 1) }
+}
+
+theorem Sha256::push_is(s: Sha256, fill, byte: u64): Sha256::push(s, fill, byte) = Sha256::pushed(s, fill, byte, fill.eq_bit(63)) { refl }
+
+// The context after whole blocks `full` of a message and `T` more bytes,
+// with room for `room` more before the block is run.
+record Sha256Tracks(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat) {
+    hashed: Sha256::state(s.hash) = Sha2::absorbed(Sha2::sha256().start(), full),
+    held: Sha256::block(s).take(T.len()) = T,
+    space: T.len() + room = 63,
+    whole: Sha2::Blocks(full),
+}
+
+// The block after one more byte.
+theorem Sha256::block_put(s: Sha256, T: List<u8>, fill, byte: u64, held: Sha256::block(s).take(T.len()) = T, at: fill.toNat() = T.len(), below: T.len() < 64):
+    Sha256::block(Sha256::put(s, fill, byte).after).take(Succ(T.len())) = T ++ [byte.truncate(8, 56)] {
+    let b = byte.truncate(8, 56);
+    let size = Sha256::len_block(s);
+    let stored: (Sha256::put(s, fill, byte).after = (s with { schedule = vector_with_byte_be(s.schedule, fill.toNat(), b) })) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::put_inside(s, fill, byte, omega));
+    let block: (Sha256::block(Sha256::put(s, fill, byte).after) = Sha256::block(s).update(T.len(), λ _ => b)) =
+        trans(cong_fn(λ (x: Sha256) => Sha256::block(x), stored),
+            trans(Sha256::block_with_byte(s, fill.toNat(), b, omega), cong_fn(λ (k: Nat) => Sha256::block(s).update(k, λ _ => b), at)));
+    trans(cong_fn(λ (bytes: List<u8>) => bytes.take(Succ(T.len())), block),
+        trans(Sha256::block(s).take_update_snoc(T.len(), b, omega), cong_fn(λ (t: List<u8>) => t ++ [b], held)))
+}
+
+// A byte stored leaves the hash value.
+theorem Sha256::put_hash(s: Sha256, fill, byte: u64, below: fill.toNat() < 64): Sha256::put(s, fill, byte).after.hash = s.hash {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => m.after.hash, Sha256::put_inside(s, fill, byte, below))
+}
+
+// A byte pushed where the block has room after it.
+theorem Sha256::push_room(s: Sha256, full: List<List<u8>>, T: List<u8>, k: Nat, fill, byte: u64, t: Sha256Tracks(s, full, T, Succ(k)), at: fill.toNat() = T.len()):
+    And<Sha256Tracks(Sha256::push(s, fill, byte).after, full, T ++ [byte.truncate(8, 56)], k), Sha256::push(s, fill, byte).value.toNat() = Succ(T.len())> {
+    let b = byte.truncate(8, 56);
+    let space = t.space;
+    let other: (fill.eq_bit(63) = False) = BitVec::eq_bit_of_ne(64, fill, 63, λ same => {
+        let n: (fill.toNat() = 63) = cong_fn(λ (x: u64) => x.toNat(), same);
+        false_elim(omega)
+    });
+    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::put(s, fill, byte).after, fill + 1)) =
+        trans(Sha256::push_is(s, fill, byte), cong_fn(λ (full: Bool) => Sha256::pushed(s, fill, byte, full), other));
+    let single: List<u8> = [b];
+    let longer = T.len_append(single);
+    let one: (T.len() + single.len() = Succ(T.len())) = refl;
+    let next: ((fill + 1).toNat() = Succ(T.len())) = bv_omega;
+    let held: (Sha256::block(Sha256::put(s, fill, byte).after).take((T ++ [b]).len()) = T ++ [b]) =
+        j(sym(trans(longer, one)), λ n _ => Sha256::block(Sha256::put(s, fill, byte).after).take(n) = T ++ [b], Sha256::block_put(s, T, fill, byte, t.held, at, omega));
+    let inside: (fill.toNat() < 64) = omega;
+    let left: (T.len() + single.len() + k = 63) = omega;
+    let after: Sha256Tracks(Sha256::put(s, fill, byte).after, full, T ++ [b], k) =
+        Sha256Tracks(trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), Sha256::put_hash(s, fill, byte, inside)), t.hashed), held, j(sym(longer), λ n _ => n + k = 63, left), t.whole);
+    j(sym(pushed), λ m _ => And<Sha256Tracks(m.after, full, T ++ [b], k), m.value.toNat() = Succ(T.len())>, And(after, next))
+}
+
+// The byte that fills the block: the block is run and a new one begun.
+theorem Sha256::push_full(s: Sha256, full: List<List<u8>>, T: List<u8>, fill, byte: u64, t: Sha256Tracks(s, full, T, 0), at: fill.toNat() = T.len()):
+    And<Sha256Tracks(Sha256::push(s, fill, byte).after, full ++ [T ++ [byte.truncate(8, 56)]], Nil, 63), Sha256::push(s, fill, byte).value.toNat() = 0> {
+    let b = byte.truncate(8, 56);
+    let space: (T.len() = 63) = t.space;
+    let same: (fill = 63) = bv_omega;
+    let P = Sha256::put(s, fill, byte).after;
+    let zero: u64 = 0;
+    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, zero)) =
+        trans(Sha256::push_is(s, fill, byte), cong_fn(λ (full: Bool) => Sha256::pushed(s, fill, byte, full), BitVec::eq_bit_of_eq(64, fill, 63, same)));
+    let single: List<u8> = [b];
+    let last = T ++ single;
+    let longer = T.len_append(single);
+    let one: (T.len() + single.len() = Succ(T.len())) = refl;
+    let sized: (last.len() = 64) = omega;
+    let count: (Succ(T.len()) = Sha256::block(P).len()) = trans(Nat::cong_succ(space), sym(Sha256::len_block(P)));
+    let block: (Sha256::block(P) = last) =
+        trans(sym(Sha256::block(P).take_len()), j(count, λ n _ => Sha256::block(P).take(n) = last, Sha256::block_put(s, T, fill, byte, t.held, at, omega)));
+    let inside: (fill.toNat() < 64) = omega;
+    let before: (Sha256::state(P.hash) = Sha2::absorbed(Sha2::sha256().start(), full)) =
+        trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), Sha256::put_hash(s, fill, byte, inside)), t.hashed);
+    let hashed: (Sha256::state(Sha256::run(P).after.hash) = Sha2::absorbed(Sha2::sha256().start(), full ++ [last])) =
+        trans(Sha256::run_block(P),
+            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(P))), before),
+                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(bytes)), block),
+                    sym(Sha2::absorbed_snoc(Sha2::sha256().start(), full, last)))));
+    let none: List<u8> = Nil;
+    let after: Sha256Tracks(Sha256::run(P).after, full ++ [last], none, 63) =
+        Sha256Tracks(hashed, Sha256::block(Sha256::run(P).after).take_zero(), refl, Sha2::blocks_snoc(full, last, sized, t.whole));
+    let value: (zero.toNat() = 0) = refl;
+    j(sym(pushed), λ m _ => And<Sha256Tracks(m.after, full ++ [last], none, 63), m.value.toNat() = 0>, And(after, value))
+}
+
+// The zeroing loop's two unfoldings, and the context it leaves.
+theorem Sha256::zero_step(s: Sha256, i: u64, below: i.toNat() < 64): Sha256::zero(s, i) = Sha256::zero(Sha256::put(s, i, 0).after, i + 1) {
+    let e: (i.unsigned_lt_bit(64) = True) = bv_omega;
+    trans(Sha256::zero_unfold(s, i), Bool::convoy_true(i.unsigned_lt_bit(64), Sha256::zero(Sha256::put(s, i, 0).after, i + 1), Mutated(s, i), e))
+}
+
+theorem Sha256::zero_done(s: Sha256, i: u64, past: 64 <= i.toNat()): Sha256::zero(s, i) = Mutated(s, i) {
+    let e: (i.unsigned_lt_bit(64) = False) = bv_omega;
+    trans(Sha256::zero_unfold(s, i), Bool::convoy_false(i.unsigned_lt_bit(64), Sha256::zero(Sha256::put(s, i, 0).after, i + 1), Mutated(s, i), e))
+}
+
+fn Sha256::zeroed(s: Sha256, i: u64, n: Nat) → Sha256 { BitVec::iterate_up(λ (s: Sha256) (i: u64) => Sha256::put(s, i, 0).after, s, i, n) }
+
+theorem Sha256::zero_from(s: Sha256, i: u64, n: Nat, left: i.toNat() + n = 64): Sha256::zero(s, i) = Mutated(Sha256::zeroed(s, i, n), 64) {
+    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::zero(s, i), λ (s: Sha256) (i: u64) => Sha256::put(s, i, 0).after, 64,
+        λ s i below => Sha256::zero_step(s, i, below), λ s i past => Sha256::zero_done(s, i, past), n, s, i, left)
+}
+
+// The block's first bytes kept, zeros after them, and the hash value left.
+theorem Sha256::zeroed_block(n: Nat): (s: Sha256) → (i: u64) → (T: List<u8>) → i.toNat() + n = 64 → i.toNat() = T.len() → Sha256::block(s).take(T.len()) = T →
+    And<Sha256::block(Sha256::zeroed(s, i, n)) = T ++ Sha2::zero_bytes(n), Sha256::zeroed(s, i, n).hash = s.hash> {
+    match n {
+        Zero => λ s i T left at held => {
+            let count: (T.len() = Sha256::block(s).len()) = trans(sym(at), trans(left, sym(Sha256::len_block(s))));
+            let whole: (Sha256::block(s) = T) = trans(sym(Sha256::block(s).take_len()), j(count, λ k _ => Sha256::block(s).take(k) = T, held));
+            And(trans(whole, sym(T.append_nil())), refl)
+        },
+        Succ(m, ih) => λ s i T left at held => {
+            let z: u8 = 0;
+            let single: List<u8> = [z];
+            let P = Sha256::put(s, i, 0).after;
+            let longer = T.len_append(single);
+            let one: (T.len() + single.len() = Succ(T.len())) = refl;
+            let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+            let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) =
+                j(sym(trans(longer, one)), λ k _ => Sha256::block(P).take(k) = T ++ single, Sha256::block_put(s, T, i, 0, held, at, omega));
+            let rest = ih(P, i + 1, T ++ single, omega, omega, put);
+            let inside: (i.toNat() < 64) = omega;
+            And(trans(rest.left, T.append_assoc(single, Sha2::zero_bytes(m))), trans(rest.right, Sha256::put_hash(s, i, 0, inside)))
+        },
+    }
+}
+
+// The block with the one bit and its zeros, and `Sha256::pad` by its test's bit.
+fn Sha256::filled(s: Sha256, fill: u64) → Sha256 { Sha256::zero(Sha256::put(s, fill, 0x80).after, fill + 1).after }
+
+fn Sha256::padded(s: Sha256, fill: u64, short: Bool) → Mutated<Sha256, u64> {
+    match short { True => Mutated(Sha256::filled(s, fill), fill), False => Mutated(Sha256::zero(Sha256::run(Sha256::filled(s, fill)).after, 0).after, fill) }
+}
+
+theorem Sha256::pad_is(s: Sha256, fill: u64): Sha256::pad(s, fill) = Sha256::padded(s, fill, fill.unsigned_lt_bit(56)) { refl }
+
+// The one bit and zeros to the block's end, after the bytes it held.
+theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
+    And<Sha256::block(Sha256::filled(s, fill)) = T ++ Sha2::one_bit(63 - T.len()), Sha256::filled(s, fill).hash = s.hash> {
+    let x: u8 = BitVec::ofNat(0x80);
+    let single: List<u8> = [x];
+    let P = Sha256::put(s, fill, 0x80).after;
+    let longer = T.len_append(single);
+    let one: (T.len() + single.len() = Succ(T.len())) = refl;
+    let next: ((fill + 1).toNat() = fill.toNat() + 1) = bv_omega;
+    let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) =
+        j(sym(trans(longer, one)), λ k _ => Sha256::block(P).take(k) = T ++ single, Sha256::block_put(s, T, fill, 0x80, held, at, below));
+    let left: ((fill + 1).toNat() + (63 - T.len()) = 64) = omega;
+    let zeros = Sha256::zeroed_block(63 - T.len(), P, fill + 1, T ++ single, left, omega, put);
+    let ran: (Sha256::filled(s, fill) = Sha256::zeroed(P, fill + 1, 63 - T.len())) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::zero_from(P, fill + 1, 63 - T.len(), left));
+    let inside: (fill.toNat() < 64) = omega;
+    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), ran), trans(zeros.left, T.append_assoc(single, Sha2::zero_bytes(63 - T.len())))),
+        trans(cong_fn(λ (z: Sha256) => z.hash, ran), trans(zeros.right, Sha256::put_hash(s, fill, 0x80, inside))))
+}
+
+// The padding where the length still fits the block: the block is the bytes held, the one bit, and zeros.
+theorem Sha256::pad_short(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), short: T.len() < 56, held: Sha256::block(s).take(T.len()) = T):
+    And<Sha256::block(Sha256::pad(s, fill).after) = T ++ Sha2::one_bit(63 - T.len()), Sha256::pad(s, fill).after.hash = s.hash> {
+    let e: (fill.unsigned_lt_bit(56) = True) = bv_omega;
+    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, trans(Sha256::pad_is(s, fill), cong_fn(λ (b: Bool) => Sha256::padded(s, fill, b), e)));
+    let filled = Sha256::filled_block(s, T, fill, at, omega, held);
+    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), is), filled.left), trans(cong_fn(λ (z: Sha256) => z.hash, is), filled.right))
+}
+
+// The padding where it does not: the block is run, and a block of zeros begun.
+theorem Sha256::pad_long(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), long: 56 <= T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
+    And<Sha256::block(Sha256::pad(s, fill).after) = Sha2::zero_bytes(64),
+        Sha256::state(Sha256::pad(s, fill).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))> {
+    let e: (fill.unsigned_lt_bit(56) = False) = bv_omega;
+    let F = Sha256::filled(s, fill);
+    let R = Sha256::run(F).after;
+    let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, trans(Sha256::pad_is(s, fill), cong_fn(λ (b: Bool) => Sha256::padded(s, fill, b), e)));
+    let filled = Sha256::filled_block(s, T, fill, at, below, held);
+    let none: List<u8> = Nil;
+    let zeros = Sha256::zeroed_block(64, R, 0, none, refl, refl, Sha256::block(R).take_zero());
+    let ran: (Sha256::zero(R, 0).after = Sha256::zeroed(R, 0, 64)) = cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::zero_from(R, 0, 64, refl));
+    let hashed: (Sha256::state(R.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))) =
+        trans(Sha256::run_block(F),
+            trans(cong_fn(λ (h: [u32; 8]) => Sha2::sha256().compress(Sha256::state(h), Sha2::sha256().words(Sha256::block(F))), filled.right),
+                cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(bytes)), filled.left)));
+    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), trans(is, ran)), zeros.left),
+        trans(cong_fn(λ (z: Sha256) => Sha256::state(z.hash), trans(is, ran)), trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), zeros.right), hashed)))
+}
+
+// The length's two words stored, and `Sha256::close` as the padding, those, and the block run.
+fn Sha256::lengthed(s: Sha256, count: u64) → Sha256 {
+    (s with { schedule = vector_update(vector_update(s.schedule, 14, (count >> 29).truncate(32, 32)), 15, (count << 3).truncate(32, 32)) })
+}
+
+theorem Sha256::close_is(s: Sha256, count: u64): Sha256::close(s, count) = Sha256::run(Sha256::lengthed(Sha256::pad(s, count & 63).after, count)) { refl }
+
+theorem Sha256::lengthed_block(s: Sha256, count: u64):
+    Sha256::block(Sha256::lengthed(s, count)) = Sha256::block(s).take(56) ++ Sha2::spelled([(count >> 29).truncate(32, 32), (count << 3).truncate(32, 32)]) { refl }
+
+theorem Sha256::lengthed_is(s: Sha256, count: u64, n: Nat, counted: count = BitVec::ofNat(n)):
+    Sha256::block(Sha256::lengthed(s, count)) = Sha256::block(s).take(56) ++ Sha2::be_bytes(8 * n, 8) {
+    trans(Sha256::lengthed_block(s, count), cong_fn(λ (l: List<u8>) => Sha256::block(s).take(56) ++ l, Sha2::length_spelled(count, n, counted)))
+}
+
+// The message's end where the padding fits the block it ends in.
+theorem Sha256::close_short(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat, count: u64, n: Nat, t: Sha256Tracks(s, full, T, room),
+    fill: (count & 63).toNat() = T.len(), counted: count = BitVec::ofNat(n), total: n = 64 * full.len() + T.len(), short: T.len() < 56):
+    Sha256::state(Sha256::close(s, count).after.hash) = Sha2::sha256().hash(List::joined(full) ++ T) {
+    let Pd = Sha256::pad(s, count & 63).after;
+    let L = Sha256::lengthed(Pd, count);
+    let padded = Sha256::pad_short(s, T, count & 63, fill, short, t.held);
+    let lb = Sha2::be_bytes(8 * n, 8);
+    let head = T ++ Sha2::one_bit(55 - T.len());
+    let count_zeros: (63 - T.len() = 8 + (55 - T.len())) = omega;
+    let zeros: (Sha2::zero_bytes(63 - T.len()) = Sha2::zero_bytes(55 - T.len()) ++ Sha2::zero_bytes(8)) =
+        trans(cong_fn(λ (c: Nat) => Sha2::zero_bytes(c), count_zeros), Sha2::zero_bytes_add(55 - T.len(), 8));
+    let cut: (T ++ Sha2::one_bit(63 - T.len()) = head ++ Sha2::zero_bytes(8)) =
+        trans(cong_fn(λ (z: List<u8>) => T ++ Cons(BitVec::ofNat(0x80), z), zeros), sym(T.append_assoc(Sha2::one_bit(55 - T.len()), Sha2::zero_bytes(8))));
+    let l1 = T.len_append(Sha2::one_bit(55 - T.len()));
+    let l2 = Sha2::len_zero_bytes(55 - T.len());
+    let ones: (Sha2::one_bit(55 - T.len()).len() = Succ(Sha2::zero_bytes(55 - T.len()).len())) = refl;
+    let sized: (56 = head.len()) = omega;
+    let front: (Sha256::block(Pd).take(56) = head) =
+        trans(cong_fn(λ (bytes: List<u8>) => bytes.take(56), trans(padded.left, cut)), j(sym(sized), λ k _ => (head ++ Sha2::zero_bytes(8)).take(k) = head, head.take_append_len(Sha2::zero_bytes(8))));
+    let block: (Sha256::block(L) = T ++ Sha2::ending(55 - T.len(), 64 * full.len() + T.len())) =
+        trans(Sha256::lengthed_is(Pd, count, n, counted),
+            trans(cong_fn(λ (f: List<u8>) => f ++ lb, front),
+                trans(T.append_assoc(Sha2::one_bit(55 - T.len()), lb), cong_fn(λ (k: Nat) => T ++ Sha2::ending(55 - T.len(), k), total))));
+    let before: (Sha256::state(L.hash) = Sha2::absorbed(Sha2::sha256().start(), full)) = trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), padded.right), t.hashed);
+    trans(cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::state(m.after.hash), Sha256::close_is(s, count)),
+        trans(Sha256::run_block(L),
+            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(L))), before),
+                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(bytes)), block),
+                    sym(Sha2::hash_short(full, T, t.whole, short))))))
+}
+
+// The message's end where the padding takes a block more.
+theorem Sha256::close_long(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat, count: u64, n: Nat, t: Sha256Tracks(s, full, T, room),
+    fill: (count & 63).toNat() = T.len(), counted: count = BitVec::ofNat(n), total: n = 64 * full.len() + T.len(), long: 56 <= T.len()):
+    Sha256::state(Sha256::close(s, count).after.hash) = Sha2::sha256().hash(List::joined(full) ++ T) {
+    let Pd = Sha256::pad(s, count & 63).after;
+    let L = Sha256::lengthed(Pd, count);
+    let space = t.space;
+    let below: (T.len() < 64) = omega;
+    let padded = Sha256::pad_long(s, T, count & 63, fill, long, below, t.held);
+    let lb = Sha2::be_bytes(8 * n, 8);
+    let front: (Sha2::zero_bytes(64).take(56) = Sha2::zero_bytes(56)) = refl;
+    let block: (Sha256::block(L) = Sha2::length_block(64 * full.len() + T.len())) =
+        trans(Sha256::lengthed_is(Pd, count, n, counted),
+            trans(cong_fn(λ (bytes: List<u8>) => bytes.take(56) ++ lb, padded.left),
+                cong_fn(λ (k: Nat) => Sha2::length_block(k), total)));
+    let first = Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())));
+    let before: (Sha256::state(L.hash) = first) =
+        trans(padded.right, cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len()))), t.hashed));
+    trans(cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::state(m.after.hash), Sha256::close_is(s, count)),
+        trans(Sha256::run_block(L),
+            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(L))), before),
+                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(first, Sha2::sha256().words(bytes)), block),
+                    sym(Sha2::hash_long(full, T, t.whole, long, below))))))
+}
+
+// A context closed holds the specification's hash of the bytes it was tracking.
+theorem Sha256::close_hash(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat, count: u64, n: Nat, t: Sha256Tracks(s, full, T, room),
+    fill: (count & 63).toNat() = T.len(), counted: count = BitVec::ofNat(n), total: n = 64 * full.len() + T.len()):
+    Sha256::state(Sha256::close(s, count).after.hash) = Sha2::sha256().hash(List::joined(full) ++ T) {
+    match T.len().lt_or_ge(56) {
+        Inl(short) => Sha256::close_short(s, full, T, room, count, n, t, fill, counted, total, short),
+        Inr(long) => Sha256::close_long(s, full, T, room, count, n, t, fill, counted, total, long),
+    }
+}
+
+// A byte pushed keeps the context on the message.
+theorem Sha256::push_fed(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat, fill, byte: u64, t: Sha256Tracks(s, full, T, room), at: fill.toNat() = T.len()):
+    And<Sha256Tracks(Sha256::push(s, fill, byte).after, Sha2Feed::fed(full, T, room, byte.truncate(8, 56)).full, Sha2Feed::fed(full, T, room, byte.truncate(8, 56)).tail, Sha2Feed::fed(full, T, room, byte.truncate(8, 56)).room),
+        Sha256::push(s, fill, byte).value.toNat() = Sha2Feed::fed(full, T, room, byte.truncate(8, 56)).tail.len()> {
+    (match room as λ r => Sha256Tracks(s, full, T, r) →
+        And<Sha256Tracks(Sha256::push(s, fill, byte).after, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).full, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).tail, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).room),
+            Sha256::push(s, fill, byte).value.toNat() = Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).tail.len()> {
+        Zero => λ t => Sha256::push_full(s, full, T, fill, byte, t, at),
+        Succ(k) => λ t => {
+            let b = byte.truncate(8, 56);
+            let single: List<u8> = [b];
+            let longer = T.len_append(single);
+            let one: (T.len() + single.len() = Succ(T.len())) = refl;
+            let pushed = Sha256::push_room(s, full, T, k, fill, byte, t, at);
+            And(pushed.left, trans(pushed.right, sym(trans(longer, one))))
+        },
+    })(t)
+}
+
+// A context and the count of its block's bytes, on a message fed.
+fn Sha256::Fed(m: Mutated<Sha256, u64>, f: Sha2Feed) → Type { And<Sha256Tracks(m.after, f.full, f.tail, f.room), m.value.toNat() = f.tail.len()> }
+
+// The byte loop's two unfoldings.
+theorem Sha256::absorb_step(s: Sha256, message: List<u8>, mn, j, fill: u64, below: j.toNat() < mn.toNat()):
+    Sha256::absorb(s, message, mn, j, fill)
+        = Sha256::absorb(Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).after, message, mn, j + 1, Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).value) {
+    let e: (j.unsigned_lt_bit(mn) = True) = bv_omega;
+    trans(Sha256::absorb_unfold(s, message, mn, j, fill),
+        Bool::convoy_true(j.unsigned_lt_bit(mn),
+            Sha256::absorb(Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).after, message, mn, j + 1, Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).value),
+            Mutated(s, fill), e))
+}
+
+theorem Sha256::absorb_done(s: Sha256, message: List<u8>, mn, j, fill: u64, past: mn.toNat() <= j.toNat()): Sha256::absorb(s, message, mn, j, fill) = Mutated(s, fill) {
+    let e: (j.unsigned_lt_bit(mn) = False) = bv_omega;
+    trans(Sha256::absorb_unfold(s, message, mn, j, fill),
+        Bool::convoy_false(j.unsigned_lt_bit(mn),
+            Sha256::absorb(Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).after, message, mn, j + 1, Sha256::push(s, fill, message.byte_within(mn, j).zero_extend(56)).value),
+            Mutated(s, fill), e))
+}
+
+// The byte loop from `j`: the context is on the message fed the bytes from there.
+theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn, j, fill: u64) → (full: List<List<u8>>) → (T: List<u8>) → (room: Nat) →
+    j.toNat() + n = mn.toNat() → message.len() = mn.toNat() → Sha256Tracks(s, full, T, room) → fill.toNat() = T.len() →
+    Sha256::Fed(Sha256::absorb(s, message, mn, j, fill), Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))) {
+    match n {
+        Zero => λ s message mn j fill full T room left sized t at => {
+            let end: (j.toNat() = message.len()) = omega;
+            let none: (message.drop(j.toNat()) = Nil) = trans(cong_fn(λ (k: Nat) => message.drop(k), end), message.drop_len());
+            let done = Sha256::absorb_done(s, message, mn, j, fill, omega);
+            let here: Sha256::Fed(Mutated(s, fill), Sha2Feed(full, T, room)) = And(t, at);
+            j(sym(none), λ r _ => Sha256::Fed(Sha256::absorb(s, message, mn, j, fill), Sha2Feed(full, T, room).bytes(r)),
+                j(sym(done), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room)), here))
+        },
+        Succ(m, ih) => λ s message mn j fill full T room left sized t at => {
+            let zero: u8 = 0;
+            let B = message.byte_within(mn, j).zero_extend(56);
+            let b = message.nth(j.toNat()).unwrap_or(zero);
+            let byte: (B.truncate(8, 56) = b) = trans(BitVec::truncate_zero_extend(8, 56, message.byte_within(mn, j)), message.byte_within_inside(mn, j, omega));
+            let pushed = Sha256::push_fed(s, full, T, room, fill, B, t, at);
+            let P = Sha256::push(s, fill, B);
+            let F = Sha2Feed::fed(full, T, room, B.truncate(8, 56));
+            let inside: (j.toNat() < mn.toNat()) = omega;
+            let top = BitVec::toNat_lt_pow(64, mn);
+            let next: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
+            let after: ((j + 1).toNat() = Succ(j.toNat())) = omega;
+            let rest = ih(P.after, message, mn, j + 1, P.value, F.full, F.tail, F.room, omega, sized, pushed.left, pushed.right);
+            let cut: (message.drop(j.toNat()) = Cons(b, message.drop(Succ(j.toNat())))) = message.drop_at(j.toNat(), zero, omega);
+            let onward: (Sha2Feed(F.full, F.tail, F.room).bytes(message.drop((j + 1).toNat())) = Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))) =
+                trans(cong_fn(λ (f: Sha2Feed) => f.bytes(message.drop((j + 1).toNat())), F.eta()),
+                    trans(cong_fn(λ (k: Nat) => F.bytes(message.drop(k)), after),
+                        trans(cong_fn(λ (x: u8) => Sha2Feed::fed(full, T, room, x).bytes(message.drop(Succ(j.toNat()))), byte),
+                            sym(cong_fn(λ (r: List<u8>) => Sha2Feed(full, T, room).bytes(r), cut)))));
+            j(sym(Sha256::absorb_step(s, message, mn, j, fill, omega)), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))),
+                j(onward, λ f _ => Sha256::Fed(Sha256::absorb(P.after, message, mn, j + 1, P.value), f), rest))
+        },
+    }
+}
+
+// A context that has taken a message: its hash value has absorbed the
+// whole blocks, its block begins with the bytes after them, and its count
+// is the message's length.
+record Sha256Took(s: Sha256, message: List<u8>) {
+    feed: Sha2Feed,
+    tracks: Sha256Tracks(s, feed.full, feed.tail, feed.room),
+    said: feed.message() = message,
+    counted: s.count = BitVec::ofNat(message.len()),
+}
+
+theorem Sha256Took::length(s: Sha256, message: List<u8>, took: Sha256Took(s, message)): message.len() = 64 * took.feed.full.len() + took.feed.tail.len() {
+    let whole = Sha2::len_joined(took.feed.full, took.tracks.whole);
+    let sum = List::joined(took.feed.full).len_append(took.feed.tail);
+    let same: (took.feed.message().len() = message.len()) = cong_fn(λ (m: List<u8>) => m.len(), took.said);
+    let opened: (took.feed.message().len() = (List::joined(took.feed.full) ++ took.feed.tail).len()) = refl;
+    omega
+}
+
+// A context begun has taken nothing.
+theorem Sha256::init_took(s: Sha256): Sha256Took(Sha256::init(s).after, Nil) {
+    let I = Sha256::init(s).after;
+    let none: List<u8> = Nil;
+    let tracks: Sha256Tracks(I, Nil, none, 63) = Sha256Tracks(refl, Sha256::block(I).take_zero(), refl, trivial);
+    Sha256Took(Sha2Feed(Nil, none, 63), tracks, refl, refl)
+}
+
+theorem Sha256Took::fill(s: Sha256, message: List<u8>, took: Sha256Took(s, message)): (s.count & 63).toNat() = took.feed.tail.len() {
+    let f = took.feed;
+    let length = Sha256Took::length(s, message, took);
+    let space = took.tracks.space;
+    Sha2::fill_of_count(s.count, f.full.len(), f.tail.len(), trans(took.counted, cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), length)), omega)
+}
+
+// One more part taken.
+theorem Sha256::update_took(s: Sha256, message, part: List<u8>, mn: u64, sized: part.len() = mn.toNat(), took: Sha256Took(s, message)):
+    Sha256Took(Sha256::update(s, part, mn).after, message ++ part) {
+    let f = took.feed;
+    let fill = Sha256Took::fill(s, message, took);
+    let zero: u64 = 0;
+    let start: (zero.toNat() = 0) = refl;
+    let A = Sha256::absorb(s, part, mn, 0, s.count & 63);
+    let fed = Sha256::absorb_from(mn.toNat(), s, part, mn, 0, s.count & 63, f.full, f.tail, f.room, omega, sized, took.tracks, fill);
+    let G = f.bytes(part);
+    let same: (Sha2Feed(f.full, f.tail, f.room).bytes(part.drop(zero.toNat())) = G) =
+        trans(cong_fn(λ (r: List<u8>) => Sha2Feed(f.full, f.tail, f.room).bytes(r), part.drop_zero()), cong_fn(λ (g: Sha2Feed) => g.bytes(part), f.eta()));
+    let on: Sha256::Fed(A, G) = j(same, λ g _ => Sha256::Fed(A, g), fed);
+    let updated: (Sha256::update(s, part, mn).after = (A.after with { count = s.count + mn })) = refl;
+    let tracks: Sha256Tracks(A.after with { count = s.count + mn }, G.full, G.tail, G.room) = Sha256Tracks(on.left.hashed, on.left.held, on.left.space, on.left.whole);
+    let said: (G.message() = message ++ part) = trans(Sha2Feed::message_bytes(part, f), cong_fn(λ (m: List<u8>) => m ++ part, took.said));
+    let word: (mn = BitVec::ofNat(part.len())) = sym(trans(cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), sized), BitVec::ofNat_toNat(64, mn)));
+    let counted: (s.count + mn = BitVec::ofNat((message ++ part).len())) =
+        trans(BitVec::ofNat_add_of(64, took.counted, word), cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), sym(message.len_append(part))));
+    j(sym(updated), λ u _ => Sha256Took(u, message ++ part), Sha256Took(G, tracks, said, counted))
+}
+
+// The message ended: the hash value is the specification's.
+theorem Sha256::finish_hash(s: Sha256, message: List<u8>, took: Sha256Took(s, message)):
+    Sha256::state(Sha256::finish(s).after.hash) = Sha2::sha256().hash(message) {
+    let f = took.feed;
+    let closed = Sha256::close_hash(s, f.full, f.tail, f.room, s.count, message.len(), took.tracks, Sha256Took::fill(s, message, took), took.counted, Sha256Took::length(s, message, took));
+    trans(closed, cong_fn(λ (m: List<u8>) => Sha2::sha256().hash(m), took.said))
+}
+
+// The digest a context holds: its hash value's thirty-two bytes, as the
+// span stores them.
+fn Sha256::digest(s: Sha256) → List<u8> { Sha2::spelled(vector_entries(s.hash)) }
+
+theorem Sha256::spell_state(v: [u32; 8]): Sha2::sha256().spell(Sha256::state(v)) = Sha2::spelled(vector_entries(v)) { refl }
+
+// The digest left is the specification's.
+theorem Sha256::finish_digest(s: Sha256, message: List<u8>, took: Sha256Took(s, message)):
+    Sha256::digest(Sha256::finish(s).after) = Sha2::sha256().digest(message) {
+    trans(sym(Sha256::spell_state(Sha256::finish(s).after.hash)), cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().spell(h), Sha256::finish_hash(s, message, took)))
+}
+
+// A message in one part.
+theorem Sha256::digest_spec(s: Sha256, message: List<u8>, mn: u64, sized: message.len() = mn.toNat()):
+    Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, message, mn).after).after) = Sha2::sha256().digest(message) {
+    let none: List<u8> = Nil;
+    let took: Sha256Took(Sha256::update(Sha256::init(s).after, message, mn).after, none ++ message) = Sha256::update_took(Sha256::init(s).after, none, message, mn, sized, Sha256::init_took(s));
+    Sha256::finish_digest(Sha256::update(Sha256::init(s).after, message, mn).after, message, took)
+}

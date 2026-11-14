@@ -491,12 +491,33 @@ fn Bool::le_dec(self a, b: Bool) → a <= b ∨ ¬(a <= b) {
 
 instance(a, b: Bool) Decide<Bool::Le(a, b)> { dec := a.le_dec(b), bit := or_bit(a.le_dec(b)), reflects := or_bit_reflects(a.le_dec(b)) }
 
-// `match h:` on a bit whose value is known takes that arm, at the proof it
-// was given. Each arm is a slot: `f` and `g` are read off the `match` the
-// goal holds — a `decreases` function's unfolding at its `if h:` test, say
+// A `match` on a Bool whose arms take the equation of the scrutinee with
+// their constructor (what `if h: c { … } else { … }` is) is the arm the
+// Bool's value names, when neither arm's value depends on the equation.
+// A function by `decreases` unfolds to this shape, and its test is a
+// neutral Bool, so these are how its unfolding takes a step
+// (issues/loop-invariant-rules.md).
+theorem Bool::convoy_true<A>(b: Bool, yes, no: A, e: b = True): ((match b as λ c => (b = c) → A { True => λ _ => yes, False => λ _ => no })(refl)) = yes {
+    (match b as λ c => (c = True) → ((match c as λ d => (c = d) → A { True => λ _ => yes, False => λ _ => no })(refl)) = yes {
+        True => λ _ => refl,
+        False => λ e => absurd(e),
+    })(e)
+}
+
+theorem Bool::convoy_false<A>(b: Bool, yes, no: A, e: b = False): ((match b as λ c => (b = c) → A { True => λ _ => yes, False => λ _ => no })(refl)) = no {
+    (match b as λ c => (c = False) → ((match c as λ d => (c = d) → A { True => λ _ => yes, False => λ _ => no })(refl)) = no {
+        True => λ e => absurd(e),
+        False => λ _ => refl,
+    })(e)
+}
+
+// The same at arms that read the equation: `match h:` on a bit whose
+// value is known takes that arm, at the proof it was given. Each arm is a
+// slot: `f` and `g` are read off the `match` the goal holds — a `decreases`
+// function's unfolding at its `if h:` test, say
 // (issues/unify-through-match-arms.md) — so a step is
-// `trans(f_unfold(x), Bool::taken_true(c, e))` with only the test's verdict
-// written.
+// `trans(f_unfold(x), Bool::taken_true(c, e))` with only the test's
+// verdict written.
 theorem Bool::taken_true<A>(b: Bool, {f: (b = True) → A}, {g: (b = False) → A}, e: b = True):
     (match h: b { True => f(h), False => g(h) }) = f(e) {
     j(e, λ w q => (match h: b { True => f(h), False => g(h) }) = (match w as λ c => (b = c) → A { True => λ h => f(h), False => λ h => g(h) })(q), refl)

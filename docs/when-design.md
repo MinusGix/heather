@@ -55,8 +55,10 @@ Library surface (all ordinary functions by `match`, no kernel change):
 | `w.map(f)` | `When<U, P>` |
 | `w.restate(to: Q → P, from: P → Q)` | `When<T, Q>`: the condition restated |
 | `w.and_then(k: T → P → When<U, Q>, back: Q → P)` | `When<U, Q>` (§6) |
-| `When::of(d: Decide<P>, f: P → T)` | test, then build: the form §4 generates |
-| `val_present`, `option_some_iff`, `map_val` | the laws a client cites |
+| `w.is_present()`, `w.unwrap_or(d)` | `Bool`, `T` |
+| `When::of<P: Decide, T>(f: P → T)` | test, then build: the form §4 generates |
+| `When::of_bit(f, bit, e)`, `When::of_cases(f, M, yes, no)` | `of` with its bit as a parameter, and the elimination a proof about a test goes through (§11) |
+| `val_present`, `option_some_iff`, `map_val`, `of_val`, … | the laws a client cites |
 
 `val` reduces whenever its subject reduces to a constructor, whatever the
 proofs are. That is the property everything below leans on.
@@ -105,11 +107,14 @@ A condition the call writes (`inside := h`) is not tested; the call then
 has only its first reading, and a `When` wanted there is a type error as
 now.
 
-- **Which parameters.** V1: the parameters of `f` whose default is a
+- **Which parameters.** The first parameter of `f` whose default is a
   context search (`defaults::is_context_search`) and that the call does not
-  give. One such parameter gives `When<T, P>`; several independent ones give
-  the conjunction. A later condition that mentions an earlier one's proof is
-  refused in V1, naming it.
+  give is tested; the call is `When<T, P>` of that one. A later such
+  parameter is searched as usual, with the tested proof in scope: so a later
+  condition may mention the earlier one, and one the search cannot find is
+  refused with the usual default error, naming it (built 2026-11-14; this
+  replaced "several give the conjunction", which could not express a later
+  condition that depends on an earlier one).
 - **What it elaborates to.** The same term as
 
   ```heather
@@ -130,14 +135,25 @@ now.
 - **Unknown expected type.** `let w = v.at(i);` with nothing wanted is the
   first reading, and its error when the search fails says both ways out:
   prove it, or use it where a `When` is wanted (`match`, `if let`, `?`).
+  An argument at a parameter whose type is a `When` still open in the
+  call's implicits (`present_count(v.at(i))` with `present_count<T, P>`) is
+  inferred, not checked, so it is the first reading too; giving the type
+  arguments makes it a place a `When` is wanted.
 - **The law**, proved once per `f` where it goes through by cases and
   `refl`: the tested form's `.val(h)` is `f(a, h)`. It is what lets a later
   stage drop the test when `h` is known (§8).
 
 The elaborator knows the callee's signature and the expected type at the
-call, so this is an elaboration of the call node (one more route in the
-argument-defaults pass, taken only when the expected type's head is `When`)
-and not a parser rewrite. It gives the proof by name, so the found-proof
+call, so this is an elaboration of the call node and not a parser rewrite
+(`crates/elab/src/tested.rs`). `P` is the parameter's domain as this call
+instantiates it, which only the call's elaboration knows (an implicit length,
+a method's receiver), so the call is first elaborated in a probe that stops
+at the condition's default and records its goal; `P` is then bound, as a
+`let` binds a type, to a name the rewritten call's binder is annotated with:
+`When::of(λ (h: P) => f(args, name := h))`. The route is taken only where
+the expected type's head is `When` (after a name lookup that a module which
+cannot name `When` pays alone) or the call is a scrutinee under `Present`/
+`Absent`; it costs one more elaboration of the call's arguments. It gives the proof by name, so the found-proof
 lifting of #607 has nothing to lift here. This reads the expected type at
 calls with a context-search default, so it re-elaborates the whole library
 before it merges.
@@ -293,10 +309,13 @@ language` and log rulings there.
 - The law `of_val` is `When::of(f).val(h) = f(h)` **given `same: (a, b: P)
   → f(a) = f(b)`**: in the `Present` arm the value is `f` at the proof the
   decision built, not at `h`. `same` is `refl` for `Vec::at` and a checked
-  addition (they ignore the proof), and also for the Nat-indexed
-  `vector_index`, which uses it: two proofs of `i < n` are convertible at an
-  open `i` and `n` (the probe `entry` in the tests). Where `same` is not
-  `refl`, the type wants an extensionality law (§7), not each client.
+  addition (they ignore the proof). For the Nat-indexed `vector_index`,
+  which uses it, it is **not** `refl`: two proofs of `i < n` at an open `i`
+  and `n` are two stuck terms. Stage 1 said otherwise without a probe at a
+  neutral index; stage 2 corrected it, adding `vector_index_irrel` (by
+  induction, in `vector.hthr`) and the probes `entry_val` and the refused
+  `entry_val_refl`. A wrapper over such a function (`Vec::nth`) cites the
+  same lemma, since the wrapper unfolds to it.
 - The stage-1 users are in the tests: `word_at` over `Vec::at`,
   `checked_add` over `add_within(a, b, fits := bv_omega)`, `entry` over
   `vector_index` (open element type), and `both`, a chain of two reads by
@@ -306,3 +325,44 @@ language` and log rulings there.
 - `When` is not in the common prelude yet: a module imports `when`. Whether
   stage 2 needs it there (the elaborator names the type at the call) is
   decided there.
+
+**Stage 2** (the tested call, `crates/elab/src/tested.rs`).
+
+- Built as §4 says, with the first omitted condition tested and later ones
+  searched. Places: a result or annotation of type `When`, an argument at a
+  `When` parameter whose type is known, and the scrutinee of a `match` or
+  `if let` whose arms name `Present`/`Absent`. The two stage-1 users are now
+  `v.at(i)` and `add_within(a, b)` where a `When` is wanted.
+- An arm's constructor is resolved, not read by its spelling: a type of the
+  module's own (or another import's) with a constructor `Present` keeps
+  its call's first reading, and so does an ambiguous bare name;
+  `When::Present` is resolved through its type (`when_names_tests`).
+- The test of an expected type runs on every checked call, so it reads
+  structurally first: an inductive's tag names its declaration and module.
+  Only a type with no tag in its shape is decoded, and only in a module
+  that imports `when`. No table probe is on that path.
+- Refusals, as `expect-error` probes: a written condition where a `When` is
+  wanted (a mismatch: the call is not tested), a condition with no decision
+  ("… has no decision (`Decide<…>`) here: give `name := …` and take the
+  value, or call a function whose own work decides it and returns a
+  `When`"), and a later condition the search cannot find. A failed search
+  where `When` can be named now also says the call can be tested.
+- The rewritten call's names are `__when_condition` and `__when_proof`,
+  lexable like `__if_bitN`: a later default's tactic spells the proof back
+  as source (`omega`'s certificate), and a `\0` name broke that.
+- **§7.1, proofs in values across `decreases` companions.** A tested read
+  as a `decreases` body's scrutinee checks, computes, and has its unfolding
+  equation (`sum_from`, `count_from` in the tests). The unfolding needed one
+  fix: its walk types a scrutinee alone (`Rewrite::scrut_ty`) and read the
+  call as the first reading, so the arm's proof was untyped and the lifted
+  obligation could not see it; it now types a call under `Present`/`Absent`
+  as its test (`match_scrut_ty`, through a private marker the inference
+  entry reads). The tested call names its proof, so there is no found proof
+  for two companions to differ on.
+- **§7.2, kernel cost at a neutral condition.** A theorem about a tested
+  call at a neutral index goes by `When::of_cases`, a case split on the bit
+  and one conversion per arm; its cost does not grow with the callee
+  (`nth_or_inside`, `nth_or_outside`). Comparing a read at the decision's
+  proof with a read at the caller's is where it can fail: that needs the
+  callee's proof irrelevance (`same`), which is `refl` only for a callee that
+  ignores its proof.

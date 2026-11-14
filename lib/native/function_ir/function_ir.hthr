@@ -941,18 +941,38 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
                    (StructuredRegionValid(when_true) ∧
                     StructuredRegionValid(when_false))))))))),
         Call(_, arguments, result) =>
-            arguments.len() <= 6 ∧ PortIdAbsent(result, word_ports(arguments)),
+            arguments.len() <= 8 ∧ PortIdAbsent(result, word_ports(arguments)),
         Loop(inputs, _, parameters, _, body, _, next, outputs, _) =>
             (inputs.len() = parameters.len()) ∧ ((next.len() = parameters.len()) ∧
                 ((outputs.len() = parameters.len()) ∧ StructuredRegionValid(body))),
         Lend(views, _, arguments, result) =>
-            (views_homes(views) ++ arguments).len() <= 6 ∧ PortIdAbsent(result, word_ports(views_reads(views) ++ arguments)),
+            (views_homes(views) ++ arguments).len() <= 8 ∧ PortIdAbsent(result, word_ports(views_reads(views) ++ arguments)),
     }
 }
 
 // The words at `ids`.
 fn words_of(values: Valuation(), ids: List<Nat>) → List<BitVec(64)> {
     match ids { Nil => Nil, Cons(id, rest) => Cons(values(64, id), words_of(values, rest)) }
+}
+
+// Words of the front and the rest of the ids, and how many.
+theorem words_of_take(values: Valuation(), ids: List<Nat>): (n: Nat) → words_of(values, ids).take(n) = words_of(values, ids.take(n)) {
+    match ids {
+        Nil => λ n => refl,
+        Cons(id, rest) => λ n => match n {
+            Zero => refl,
+            Succ(k) => List::cong_cons(values(64, id), words_of_take(values, rest, k)),
+        },
+    }
+}
+theorem words_of_drop(values: Valuation(), ids: List<Nat>): (n: Nat) → words_of(values, ids).drop(n) = words_of(values, ids.drop(n)) {
+    match ids {
+        Nil => λ n => refl,
+        Cons(_, rest) => λ n => match n { Zero => refl, Succ(k) => words_of_drop(values, rest, k) },
+    }
+}
+theorem words_of_len(values: Valuation(), ids: List<Nat>): words_of(values, ids).len() = ids.len() {
+    match ids { Nil => refl, Cons(_, rest) => cong_fn<Nat, Nat>(λ n => Succ(n), words_of_len(values, rest)) }
 }
 
 // A loop's passes from `state` with `remaining` passes left, each pass's

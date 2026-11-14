@@ -12,8 +12,9 @@
 //!
 //! Each export is a `runtime fn` over 64-bit words. Its certificate's
 //! `_returns` theorem (`examples/x86-native/README.md`) says: called at its
-//! label with its arguments in RDI, RSI, RDX, RCX, R8, R9, a return address
-//! at RSP and room on the stack below it, the code returns the source
+//! label with its arguments in RDI, RSI, RDX, RCX, R8, R9 and any past the
+//! sixth above the return address at RSP (`Stack::Passed`), and room on the
+//! stack below it, the code returns the source
 //! function's value in RAX, keeps the callee-saved registers and RSP, and
 //! stores nowhere but in its own room below the return address
 //! (`Stack::Wrote`), so the caller's stack and everything else it owns are

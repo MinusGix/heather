@@ -254,6 +254,60 @@ int main(void) {{
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A function of eight words called from Rust (issues/function-call-past-six-words.md):
+// `eight` passes its seventh and eighth on the stack to `spread` twice, and
+// Rust passes its own the same way, `extern "sysv64"` with the certified
+// bytes linked by `global_asm!`. The contract's `Stack::Passed` is what
+// both callers meet.
+#[test]
+fn eight_words_are_called_from_rust() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-stack-words-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("eight.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/stack_words.hthr", "eight", "-o"]).arg(&assembly)
+        .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let text = std::fs::read_to_string(&assembly).unwrap();
+    assert!(text.contains("# signature: eight(word, word, word, word, word, word, word, word) -> word"), "{text}");
+    let certificate = std::fs::read_to_string(dir.join("eight.certificate.hthr")).unwrap();
+    assert!(certificate.contains("stack.Passed([a0, a1, a2, a3, a4, a5, a6, a7], i, s)"), "the contract passes eight words");
+    let driver = dir.join("driver.rs");
+    std::fs::write(&driver, r#"
+std::arch::global_asm!(include_str!("eight.s"), options(att_syntax));
+extern "sysv64" { fn eight(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> u64; }
+fn spread(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> u64 {
+    ((a.wrapping_add(b) ^ c).wrapping_sub(d).wrapping_add(e ^ f).wrapping_sub(g)) ^ h
+}
+fn reference([a, b, c, d, e, f, g, h]: [u64; 8]) -> u64 {
+    spread(h, g, f, e, d, c, b, a).wrapping_add(spread(a, b, c, d, e, f, g, h))
+}
+fn main() {
+    let mut state: u64 = 1;
+    for i in 0..10000u64 {
+        let mut w = [0u64; 8];
+        for x in w.iter_mut() {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *x = if i % 3 == 0 { state >> (i % 64) } else { state };
+        }
+        let got = unsafe { eight(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]) };
+        if got != reference(w) { eprintln!("{w:?}: {got} is not {}", reference(w)); std::process::exit(1); }
+    }
+    println!("10000 calls of eight words passed");
+}
+"#).unwrap();
+    let binary = dir.join("driver");
+    let built = Command::new("rustc").args(["--edition", "2021", "-O"]).arg(&driver).arg("-o").arg(&binary).output().unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success() && String::from_utf8_lossy(&run.stdout).contains("10000 calls of eight words passed"),
+        "{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // A loop that is not a `runtime fn` is refused, naming the marker: the Rust
 // reflector no longer compiles loops (what a `runtime fn` loop refuses is
 // `lib/_tests/native/runtime/runtime_tests.hthr`'s to probe).

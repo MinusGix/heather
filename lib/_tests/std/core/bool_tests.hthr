@@ -89,10 +89,10 @@ theorem taken_open<A>(b: Bool, x: (b = True) → A, y: A, e: b = True):
 fn count_to(n: Nat, k: Nat) → Nat decreases k {
     match h: decide_bit<1 <= k>() { True => count_to(n + 1, k - 1), False => n }
 }
-theorem count_to_done(n: Nat): count_to(n, 0) = n {
+theorem count_to_ends(n: Nat): count_to(n, 0) = n {
     trans(count_to_unfold(n, 0), Bool::taken_false(decide_bit<1 <= 0>(), refl))
 }
-theorem count_to_step(n, k: Nat): count_to(n, Succ(k)) = count_to(n + 1, Succ(k) - 1) {
+theorem count_to_steps(n, k: Nat): count_to(n, Succ(k)) = count_to(n + 1, Succ(k) - 1) {
     trans(count_to_unfold(n, Succ(k)), Bool::taken_true(decide_bit<1 <= Succ(k)>(), refl))
 }
 
