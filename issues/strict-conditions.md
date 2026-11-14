@@ -35,3 +35,7 @@ accepts a proof of `P` (a search, a tactic, or an inferred proof) where
    every decidable condition recoverable and lets `vector_index` take its
    bound squashed.
 3. Retiring `measure::lift_found` (note §5).
+
+## Log
+
+- 2026-11-14: 2026-11-14: PR #614 merged. Minus's rulings on the three open points: the surface is the type `∥P∥` alone, with no binder marker; he is unsure about the kernel bridge `∥Empty∥ → Empty`, so it is not built (a squashed bound still cannot rule a case out, and `Vec::at` stays the total read); `measure::lift_found` stays.
