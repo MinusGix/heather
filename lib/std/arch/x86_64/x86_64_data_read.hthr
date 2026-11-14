@@ -191,6 +191,130 @@ theorem word_load_result<M>(load: WordLoad, word: BitVec(64), before: MachineSta
     read_gpr(load.destination, word_load_after(load, word, before).gprs) = word {
     read_gpr_after_write(load.destination, word, before.gprs)
 }
+// Normal-path MOV r64, qword [base + index*8] (REX.W 8B /r, ModRM mod 00
+// r/m 100, SIB scale 11): the word at entry `index` of a table of words at
+// `base`, as a constant table is read (issues/rt-fixed-arrays-and-tables.md).
+// Its registers are the ones this encoding can name: under mod 00 a SIB base
+// of 101 is a 32-bit absolute address rather than RBP or R13, and an index
+// of 100 without REX.X is no index rather than RSP, so neither is a
+// register of the form.
+inductive SibBase { BRax, BRcx, BRdx, BRbx, BRsp, BRsi, BRdi, BR8, BR9, BR10, BR11, BR12, BR14, BR15 }
+inductive SibIndex { XRax, XRcx, XRdx, XRbx, XRbp, XRsi, XRdi, XR8, XR9, XR10, XR11, XR12, XR13, XR14, XR15 }
+
+fn SibBase::gpr(self base: SibBase) → Gpr {
+    match base {
+        BRax => Rax, BRcx => Rcx, BRdx => Rdx, BRbx => Rbx, BRsp => Rsp, BRsi => Rsi, BRdi => Rdi,
+        BR8 => R8, BR9 => R9, BR10 => R10, BR11 => R11, BR12 => R12, BR14 => R14, BR15 => R15,
+    }
+}
+fn SibIndex::gpr(self index: SibIndex) → Gpr {
+    match index {
+        XRax => Rax, XRcx => Rcx, XRdx => Rdx, XRbx => Rbx, XRbp => Rbp, XRsi => Rsi, XRdi => Rdi,
+        XR8 => R8, XR9 => R9, XR10 => R10, XR11 => R11, XR12 => R12, XR13 => R13, XR14 => R14, XR15 => R15,
+    }
+}
+// A register as a SIB base or index, where the form can name it.
+fn Gpr::sib_base(self register: Gpr) → Option<SibBase> {
+    match register {
+        Rax => Some(BRax), Rcx => Some(BRcx), Rdx => Some(BRdx), Rbx => Some(BRbx), Rsp => Some(BRsp), Rbp => None,
+        Rsi => Some(BRsi), Rdi => Some(BRdi), R8 => Some(BR8), R9 => Some(BR9), R10 => Some(BR10), R11 => Some(BR11),
+        R12 => Some(BR12), R13 => None, R14 => Some(BR14), R15 => Some(BR15),
+    }
+}
+fn Gpr::sib_index(self register: Gpr) → Option<SibIndex> {
+    match register {
+        Rax => Some(XRax), Rcx => Some(XRcx), Rdx => Some(XRdx), Rbx => Some(XRbx), Rsp => None, Rbp => Some(XRbp),
+        Rsi => Some(XRsi), Rdi => Some(XRdi), R8 => Some(XR8), R9 => Some(XR9), R10 => Some(XR10), R11 => Some(XR11),
+        R12 => Some(XR12), R13 => Some(XR13), R14 => Some(XR14), R15 => Some(XR15),
+    }
+}
+theorem SibBase::back(self base: SibBase): base.gpr().sib_base() = Some(base) {
+    match base {
+        BRax => refl, BRcx => refl, BRdx => refl, BRbx => refl, BRsp => refl, BRsi => refl, BRdi => refl,
+        BR8 => refl, BR9 => refl, BR10 => refl, BR11 => refl, BR12 => refl, BR14 => refl, BR15 => refl,
+    }
+}
+theorem SibIndex::back(self index: SibIndex): index.gpr().sib_index() = Some(index) {
+    match index {
+        XRax => refl, XRcx => refl, XRdx => refl, XRbx => refl, XRbp => refl, XRsi => refl, XRdi => refl,
+        XR8 => refl, XR9 => refl, XR10 => refl, XR11 => refl, XR12 => refl, XR13 => refl, XR14 => refl, XR15 => refl,
+    }
+}
+
+record IndexedWordLoad { destination: Gpr, base: SibBase, index: SibIndex }
+
+fn indexed_word_load_bytes(load: IndexedWordLoad) → List<BitVec(8)> {
+    let base = load.base.gpr();
+    let index = load.index.gpr();
+    [byte_from_fields(gpr_extended(base), gpr_extended(index), gpr_extended(load.destination), True,
+            False, False, True, False),
+        BitVec::ofNat(0x8b),
+        byte_from_fields(False, False, True,
+            gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination), False, False),
+        byte_from_fields(gpr_bit0(base), gpr_bit1(base), gpr_bit2(base),
+            gpr_bit0(index), gpr_bit1(index), gpr_bit2(index), True, True)]
+}
+theorem indexed_word_load_length(load: IndexedWordLoad): indexed_word_load_bytes(load).len() = 4 { refl }
+
+// The address read: `base` plus eight times `index`, wrapping as the
+// machine's address arithmetic does.
+fn indexed_address(load: IndexedWordLoad, gprs: Gprs) → BitVec(64) {
+    read_gpr(load.base.gpr(), gprs).add(read_gpr(load.index.gpr(), gprs).shift_left(3))
+}
+
+fn indexed_word_load_after<M>(load: IndexedWordLoad, word: BitVec(64), before: MachineState<M>) → MachineState<M> {
+    MachineState(gprs := write_gpr(load.destination, word, before.gprs),
+        flags := before.flags, rip := next_rip(before.rip, 4), memory := before.memory)
+}
+
+// As `WordLoadStep`, at the indexed address.
+record IndexedWordLoadStep<M>(access: ByteReadAccess<M>, load: IndexedWordLoad, word: BitVec(64),
+    before, after: MachineState<M>) {
+    canonical: indexed_address(load, before.gprs).toNat() + 8 <= Nat::pow(2, 47),
+    present: read_word(access, before.memory, indexed_address(load, before.gprs)) = Some(word),
+    execution: after = indexed_word_load_after(load, word, before),
+}
+
+theorem indexed_word_load_same<M>(access: ByteReadAccess<M>, load: IndexedWordLoad,
+    before, first, second: MachineState<M>, left, right: BitVec(64),
+    left_step: IndexedWordLoadStep<M>(access, load, left, before, first),
+    right_step: IndexedWordLoadStep<M>(access, load, right, before, second)):
+    first = second {
+    let word = Option::some_inj(left, right, trans(sym(left_step.present), right_step.present));
+    trans(left_step.execution,
+        trans(cong_fn(λ value => indexed_word_load_after(load, value, before), word), sym(right_step.execution)))
+}
+
+evidence theorem indexed_word_load_after_respects_defined<M>({load: IndexedWordLoad}, {word: BitVec(64)}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, indexed_word_load_after<M>(load, word)) {
+    same_defined_respects(indexed_word_load_after<M>(load, word), λ state => refl)
+}
+
+theorem indexed_word_load_respects_defined<M>(access: ByteReadAccess<M>, load: IndexedWordLoad,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    left_word, right_word: BitVec(64), before_same: SameDefinedState<M>(before_left, before_right),
+    left: IndexedWordLoadStep<M>(access, load, left_word, before_left, after_left),
+    right: IndexedWordLoadStep<M>(access, load, right_word, before_right, after_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let address = cong_fn(λ (gprs: Gprs) => indexed_address(load, gprs), SameDefinedState::gprs(before_same));
+    let read_same = trans(
+        cong_fn(λ (memory: M) => read_word(access, memory, indexed_address(load, before_left.gprs)), SameDefinedState::memory(before_same)),
+        cong_fn(λ (at: BitVec(64)) => read_word(access, before_right.memory, at), address));
+    let word = Option::some_inj(left_word, right_word, trans(sym(left.present), trans(read_same, right.present)));
+    calc {
+        after_left ≈ indexed_word_load_after(load, left_word, before_left) := SameDefinedState::of_equal(left.execution),
+        ≈ indexed_word_load_after(load, left_word, before_right) := rel_cong(before_same),
+        ≈ indexed_word_load_after(load, right_word, before_right) :=
+            SameDefinedState::of_equal(cong_fn(λ value => indexed_word_load_after(load, value, before_right), word)),
+        ≈ after_right := SameDefinedState::of_equal(sym(right.execution)),
+    }
+}
+
+theorem indexed_word_load_result<M>(load: IndexedWordLoad, word: BitVec(64), before: MachineState<M>):
+    read_gpr(load.destination, indexed_word_load_after(load, word, before).gprs) = word {
+    read_gpr_after_write(load.destination, word, before.gprs)
+}
+
 theorem word_load_preserves<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>, register: Gpr,
     distinct: load.destination.same(register) = False):
     read_gpr(register, word_load_after(load, word, before).gprs) = read_gpr(register, before.gprs) {

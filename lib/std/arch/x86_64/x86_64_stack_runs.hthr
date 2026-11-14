@@ -417,6 +417,30 @@ theorem Site::lea_lands<M>(self site: Site<M>, s: MachineState<M>, from: Nat, le
             jumps_forward(site.origin, from, 7, lea.displacement, to, lands)))
 }
 
+// The word at entry `index` of a table at `base` (`IndexedWordLoad`), as a
+// piece: no `Asm` constructor of its own.
+fn asm_indexed_load(load: IndexedWordLoad) → Asm { Piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
+
+// The indexed load at a label: the eight bytes at the address read as a
+// word, below the canonical boundary.
+theorem Site::moves_indexed_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: IndexedWordLoad, at: asm_back(site.program, k) = At(before, name, asm_indexed_load(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
+        (indexed_address(load, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(site.data, s.memory, indexed_address(load, s.gprs)) = Some(word)) ∧ post(indexed_word_load_after(load, word, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 4, pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = indexed_word_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitIndexedWordLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, asm_indexed_load(load), at, here),
+             Exists(found.witness, IndexedWordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), 4, here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // A byte stored
 

@@ -178,10 +178,47 @@ fn decode_lea_form(rex, modrm: BitVec(8), rest: List<BitVec(8)>) → Option<Step
     }
 }
 
+// A ModRM whose r/m is 100: a SIB byte follows.
+fn sib_follows(modrm: BitVec(8)) → Bool {
+    match byte_bit2(modrm) { False => False, True => match byte_bit1(modrm) { True => False, False => !byte_bit0(modrm) } }
+}
+fn sib_base_of(rex, sib: BitVec(8)) → Gpr { gpr_from_fields(byte_bit0(sib), byte_bit1(sib), byte_bit2(sib), byte_bit0(rex)) }
+fn sib_index_of(rex, sib: BitVec(8)) → Gpr { gpr_from_fields(byte_bit3(sib), byte_bit4(sib), byte_bit5(sib), byte_bit1(rex)) }
+
+fn word_load_form(destination, base: Gpr) → Option<StepForm> { Some(FormEmitted(EmitWordLoad(WordLoad(destination := destination, base := base)))) }
+
+fn word_load_with_sib(destination, rm, base, index: Gpr, scaled: Bool) → Option<StepForm> {
+    match index.sib_index() {
+        None => word_load_form(destination, rm),
+        Some(i) => match scaled {
+            False => None,
+            True => match base.sib_base() {
+                None => None,
+                Some(b) => Some(FormEmitted(EmitIndexedWordLoad(IndexedWordLoad(destination := destination, base := b, index := i)))),
+            },
+        },
+    }
+}
+
+// The word load (8B /r) from [base], or, when its r/m is 100 and the SIB
+// byte names an index, from [base + index*8]. A SIB naming no index (100,
+// REX.X clear) is the plain load's from [RSP] or [R12]; one naming an index
+// at another scale, or a base the indexed form cannot name, is no form.
+fn decode_word_load_form(rex, modrm: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match sib_follows(modrm) {
+        False => word_load_form(reg_of(rex, modrm), rm_of(rex, modrm)),
+        True => match rest {
+            Nil => word_load_form(reg_of(rex, modrm), rm_of(rex, modrm)),
+            Cons(sib, _) => word_load_with_sib(reg_of(rex, modrm), rm_of(rex, modrm), sib_base_of(rex, sib), sib_index_of(rex, sib),
+                byte_bit6(sib) && byte_bit7(sib)),
+        },
+    }
+}
+
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
 // a frame slot a stack form, and otherwise a store into [base], of a byte
-// (88 /r) or a word (89 /r), or the word load from [base] (8B /r), whose SIB
-// or displacement byte, if any, the decoder never reads.
+// (88 /r) or a word (89 /r), or a word load (8B /r, `decode_word_load_form`).
+// A store's SIB or displacement byte, if any, the decoder never reads.
 fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
@@ -194,7 +231,7 @@ fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<S
                     Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x88)) {
                         Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
                         Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
-                            Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+                            Inl(_) => decode_word_load_form(rex, modrm, tail),
                             Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
                         },
                     },
@@ -479,7 +516,6 @@ theorem load_form_complete(load: ByteLoad, rest: List<BitVec(8)>):
 
 // The word load's ModRM is never a frame slot's, base by base: its
 // displaced bases (RBP, R13) are r/m 101.
-fn word_load_form(destination, base: Gpr) → Option<StepForm> { Some(FormEmitted(EmitWordLoad(WordLoad(destination := destination, base := base)))) }
 theorem word_load_reg_back(base, destination: Gpr):
     word_load_form(reg_of(rex_w_rr(base, destination), byte_from_fields(gpr_bit0(base), gpr_bit1(base), gpr_bit2(base),
         gpr_bit0(destination), gpr_bit1(destination), gpr_bit2(destination), byte_load_displaced(base), False)), base) =
@@ -516,6 +552,30 @@ theorem lea_rip_form_complete(lea: LeaRip, rest: List<BitVec(8)>):
             reg_of_fields(Rbp, lea.destination, False, False)),
         cong_fn(λ (x: BitVec(32)) => Some(FormEmitted(EmitLeaRip(LeaRip(destination := lea.destination, displacement := x)))),
             rel32_round_trip(d)))
+}
+
+theorem indexed_word_load_form_complete(load: IndexedWordLoad, rest: List<BitVec(8)>):
+    decode_step_form(indexed_word_load_bytes(load) ++ rest) = Some(FormEmitted(EmitIndexedWordLoad(load))) {
+    let base = load.base.gpr();
+    let index = load.index.gpr();
+    let d = load.destination;
+    let rm = gpr_from_fields(False, False, True, gpr_extended(base));
+    let named = λ (x: Gpr) (b: Gpr) (i: Gpr) => word_load_with_sib(x, rm, b, i, True);
+    let raw = λ (r: Gpr) => gpr_from_fields(gpr_bit0(r), gpr_bit1(r), gpr_bit2(r), gpr_extended(r));
+    trans(cong_fn(λ (x: Gpr) => named(x, raw(base), raw(index)), gpr_fields_roundtrip(d)),
+    trans(cong_fn(λ (b: Gpr) => named(d, b, raw(index)), gpr_fields_roundtrip(base)),
+    trans(cong_fn(λ (i: Gpr) => named(d, base, i), gpr_fields_roundtrip(index)),
+        j(sym(load.index.back()), λ found _ => (match found {
+            None => word_load_form(d, rm),
+            Some(i) => match base.sib_base() {
+                None => None,
+                Some(b) => Some(FormEmitted(EmitIndexedWordLoad(IndexedWordLoad(destination := d, base := b, index := i)))),
+            },
+        }) = Some(FormEmitted(EmitIndexedWordLoad(load))),
+        j(sym(load.base.back()), λ found _ => (match found {
+                None => None,
+                Some(b) => Some(FormEmitted(EmitIndexedWordLoad(IndexedWordLoad(destination := d, base := b, index := load.index)))),
+            }) = Some(FormEmitted(EmitIndexedWordLoad(load))), refl)))))
 }
 
 theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
@@ -617,6 +677,7 @@ theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
             EmitLoad(load) => load_form_complete(load, rest),
             EmitWordLoad(load) => word_load_form_complete(load, rest),
             EmitLeaRip(lea) => lea_rip_form_complete(lea, rest),
+            EmitIndexedWordLoad(load) => indexed_word_load_form_complete(load, rest),
             EmitShort(control) => short_form_complete(control, rest),
             EmitNear(control) => near_form_complete(control, rest),
         },
