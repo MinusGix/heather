@@ -41,51 +41,39 @@ import string;
 // ---------------------------------------------------------------------------
 // The stages
 
-// A function's plans, one for each stage in turn: a test at its entry;
-// where to inline; what to read through; what to drop; what its tests
-// decide; what to drop then. None where a stage leaves the function as it
-// is.
+// A function's plans: a test at its entry; where to inline; and then the
+// replayer's, as many as the search found use for, each over the function
+// the one before made (what its tests decide and which narrowings are
+// moves; what to read through; what to drop). None, or no replays, where a
+// stage leaves the function as it is.
 //
 // The test comes first, so that the arm for a span too short is the
 // function as it was written, its calls still calls, and what is inlined
-// and tidied and decided is the other arm alone: the plain copy a test
+// and decided and tidied is the other arm alone: the plain copy a test
 // costs is the small one.
-fn Passes() → Type { Pair<Pair<Pair<Pair<Pair<Option<Guard>, Option<Inlines>>, Option<Plan>>, Option<Plan>>, Option<Plan>>, Option<Plan>> }
+fn Passes() → Type { Pair<Pair<Option<Guard>, Option<Inlines>>, List<Plan>> }
 
-fn passes(guard: Option<Guard>, inlines: Option<Inlines>, copies, dead, learn, swept: Option<Plan>) → Passes() {
-    Pair(Pair(Pair(Pair(Pair(guard, inlines), copies), dead), learn), swept)
-}
+fn passes(guard: Option<Guard>, inlines: Option<Inlines>, replays: List<Plan>) → Passes() { Pair(Pair(guard, inlines), replays) }
 
 // No stage has a plan: the function stays as it is.
-fn no_passes() → Passes() { passes(None, None, None, None, None, None) }
+fn no_passes() → Passes() { passes(None, None, []) }
 
 fn optimize_stage() → Stage<Passes()> {
-    guard_stage().maybe().then(inline_stage().maybe()).then(replay_stage(rules()).maybe()).then(replay_stage(rules()).maybe())
-        .then(replay_stage(rules()).maybe()).then(replay_stage(rules()).maybe())
+    guard_stage().maybe().then(inline_stage().maybe()).then(replay_stage(rules()).many())
 }
 
 // What each stage makes of what the one before made, the stages make of
-// the function.
-theorem optimize_made(callees: List<Function>, f0, f1, f2, f3, f4, f5, f6: Function, guard: Option<Guard>, inlines: Option<Inlines>,
-    copies, dead, learn, swept: Option<Plan>,
+// the function. The replays' statement is itself joined from one a plan
+// (`Stage::many_made`).
+theorem optimize_made(callees: List<Function>, f0, f1, f2, f3: Function, guard: Option<Guard>, inlines: Option<Inlines>, replays: List<Plan>,
     m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1),
     m2: inline_stage().maybe().rewrite(callees, f1, inlines) = Some(f2),
-    m3: replay_stage(rules()).maybe().rewrite(callees, f2, copies) = Some(f3),
-    m4: replay_stage(rules()).maybe().rewrite(callees, f3, dead) = Some(f4),
-    m5: replay_stage(rules()).maybe().rewrite(callees, f4, learn) = Some(f5),
-    m6: replay_stage(rules()).maybe().rewrite(callees, f5, swept) = Some(f6)):
-    optimize_stage().rewrite(callees, f0, passes(guard, inlines, copies, dead, learn, swept)) = Some(f6) {
+    m3: replay_stage(rules()).many().rewrite(callees, f2, replays) = Some(f3)):
+    optimize_stage().rewrite(callees, f0, passes(guard, inlines, replays)) = Some(f3) {
     let s1 = guard_stage().maybe();
-    let r = replay_stage(rules()).maybe();
     let s2 = s1.then(inline_stage().maybe());
-    let s3 = s2.then(r);
-    let s4 = s3.then(r);
-    let s5 = s4.then(r);
     let a2 = s1.then_made(inline_stage().maybe(), callees, f0, f1, f2, guard, inlines, m1, m2);
-    let a3 = s2.then_made(r, callees, f0, f2, f3, Pair(guard, inlines), copies, a2, m3);
-    let a4 = s3.then_made(r, callees, f0, f3, f4, Pair(Pair(guard, inlines), copies), dead, a3, m4);
-    let a5 = s4.then_made(r, callees, f0, f4, f5, Pair(Pair(Pair(guard, inlines), copies), dead), learn, a4, m5);
-    s5.then_made(r, callees, f0, f5, f6, Pair(Pair(Pair(Pair(guard, inlines), copies), dead), learn), swept, a5, m6)
+    s2.then_made(replay_stage(rules()).many(), callees, f0, f2, f3, Pair(guard, inlines), replays, a2, m3)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,15 +225,16 @@ fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted
 }
 
 // The function with the conditionals its own tests decide replaced by
-// their arms, where there is one.
+// their arms and the narrowings its ranges make moves written as moves,
+// where there is one of either.
 fn Function::find_learned(self function: Function) → Option<Found> {
-    shared(function.learn_plan(), λ plan => match plan.decided() { Zero => None, Succ(_) => function.find_replayed(plan) })
+    shared(function.learn_plan(), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan) })
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
 fn Function::find_learned_past(self function: Function) → Option<Found> {
-    shared(function.learn_plan().plain_kept(), λ plan => match plan.decided() { Zero => None, Succ(_) => function.find_replayed(plan) })
+    shared(function.learn_plan().plain_kept(), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan) })
 }
 
 // Whether the lowering takes a function with the planner's placement, as

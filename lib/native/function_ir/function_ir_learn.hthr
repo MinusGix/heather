@@ -15,6 +15,13 @@
 // decided bit is written after the comparison as a constant, which is what
 // the lowering reads the bound from.
 //
+// A word narrowed and widened again while its range is within the narrow
+// width is a move of it (`Seen::replaced`): the widening is dropped and the
+// move written, for the pass that reads through moves to take up. A load's
+// word is a byte, which the replayer's facts say of it unasked, so the two
+// resizes after a byte load go; an or's range is its operands' added, so
+// the two after four bytes joined go as well.
+//
 // A parameter that words are compared below is a length, and the least
 // value that would decide every such comparison met is the bound to test at
 // the function's entry (`Function::guard`). The compiler asks that of a
@@ -121,6 +128,17 @@ fn Seen::learn(self seen: Seen, id: Nat, range: Range, needs: List<Nat>, step: S
         seen.indexes, seen.origin, seen.wants)
 }
 
+// A word's range the replayer's facts hold with no step: a load's byte.
+fn Seen::known(self seen: Seen, id: Nat, range: Range) → Seen {
+    Seen(seen.made, nat_map_set(seen.range, id, range), seen.how, nat_map_set(seen.proved, id, True), seen.bits, seen.pending,
+        seen.indexes, seen.origin, seen.wants)
+}
+
+// The node that writes `id`, for a later node's rule to read.
+fn Seen::making(self seen: Seen, id: Nat, node: Node) → Seen {
+    Seen(nat_map_set(seen.made, id, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants)
+}
+
 record Explained { steps: List<Step>, proved: NatMap<Bool> }
 
 // The steps that derive the ranges of `ids` not yet derived, what each
@@ -198,14 +216,61 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
         },
         Resize(from, to, o, s) => match to.same(64) && from.leb(63) {
             True => shared(Nat::pow(2, from) - 1, λ high => Passed([], seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])))),
-            False => Passed([], seen),
+            False => Passed([], match from.same(64) { True => seen.making(o, node), False => seen }),
         },
+        BufferLoad(o, _, _) => Passed([], seen.known(o, Range(0, 255))),
+        BufferStore(o, _, _, _) => Passed([], seen.known(o, Range(0, 255))),
         UnsignedLessThan(w, c, l, r) => match w.same(64) { True => seen.compared(c, l, r, node), False => Passed([], seen) },
-        BitOr(w, o, _, _) => match w.same(1) {
-            True => Passed([], Seen(nat_map_set(seen.made, o, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants)),
+        BitOr(w, o, l, r) => match w.same(1) {
+            True => Passed([], seen.making(o, node)),
+            False => match w.same(64) {
+                False => Passed([], seen),
+                True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
+                    True => Passed([], seen.learn(o, Range(0, a.high + b.high), [l, r], Derive(16, [o, l, r, a.high, b.high]))),
+                    False => Passed([], seen),
+                })),
+            },
+        },
+        BitAnd(w, o, l, r) => match w.same(64) {
             False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match a.high.leb(b.high) {
+                True => match a.high.same(word_top()) {
+                    True => Passed([], seen),
+                    False => Passed([], seen.learn(o, Range(0, a.high), [l], Derive(17, [o, l, r, a.high]))),
+                },
+                False => Passed([], seen.learn(o, Range(0, b.high), [r], Derive(18, [o, l, r, b.high]))),
+            })),
         },
         _ => Passed([], seen),
+    }
+}
+
+// A node the walk writes another for, with the steps that do: a word
+// narrowed and widened again within the narrow width is a move of the word
+// it was. The widening is dropped once the facts have its equation, the
+// rule gives the move, and the move is written.
+fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
+    match node {
+        Resize(from, to, b, a) => match to.same(64) && from.leb(63) {
+            False => None,
+            True => match nat_map_get(seen.made, a) {
+                None => None,
+                Some(narrowing) => match narrowing {
+                    Resize(wide, narrow, _, s) => match wide.same(64) && narrow.same(from) {
+                        False => None,
+                        True => shared(seen.of(s), λ range => match Succ(range.high).leb(Nat::pow(2, from)) {
+                            False => None,
+                            True => shared(explain(100, seen.how, seen.proved, [s]), λ why =>
+                                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [b, a, s, from, range.high]), Emit(Move(64, b, s))])),
+                                    Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants)
+                                        .learn(b, range, [s], Derive(3, [b, s, range.low, range.high])).from(b, s)))),
+                        }),
+                    },
+                    _ => None,
+                },
+            },
+        },
+        _ => None,
     }
 }
 
@@ -214,8 +279,11 @@ record Swept { steps: List<Step>, seen: Seen }
 fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
     match nodes {
         Nil => Swept([], seen),
-        Cons(node, rest) => shared(seen.pass(node), λ here => shared(learn_nodes(here.seen, rest), λ later =>
-            Swept(Cons(Keep, here.after ++ later.steps), later.seen))),
+        Cons(node, rest) => match seen.replaced(node) {
+            Some(here) => shared(learn_nodes(here.seen, rest), λ later => Swept(here.after ++ later.steps, later.seen)),
+            None => shared(seen.pass(node), λ here => shared(learn_nodes(here.seen, rest), λ later =>
+                Swept(Cons(Keep, here.after ++ later.steps), later.seen))),
+        },
     }
 }
 
@@ -340,8 +408,10 @@ fn StructuredRegion::learn(self region: StructuredRegion, seen: Seen) → Learne
         Compose(prefix, continuation) => shared(prefix.learn(seen), λ a =>
             shared(continuation.learn(a.seen), λ c => Learned(Both(a.plan, c.plan), c.seen))),
         Conditional(_, condition, _, _, when_true, when_false) => match nat_map_get(seen.bits, condition) {
+            // The arm is the code from here on, so what the walk saw in it
+            // is seen after it, as the replayer's facts are.
             Some(bit) => shared(match bit { True => when_true.learn(seen), False => when_false.learn(seen) }, λ arm =>
-                Learned(Arm(bit, arm.plan), seen.wanting(arm.seen.wants))),
+                Learned(Arm(bit, arm.plan), arm.seen)),
             None => shared(when_true.learn(seen.taking(condition, True)), λ yes =>
                 shared(when_false.learn(seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
                     Learned(Arms(yes.plan, no.plan), seen.wanting(no.seen.wants)))),
@@ -403,6 +473,29 @@ fn Plan::decided(self plan: Plan) → Nat {
         Derived(_, body) => body.decided(),
         Args(_) => 0,
         Inputs(_, body) => body.decided(),
+    }
+}
+
+// The nodes a plan drops or writes.
+fn steps_written(steps: List<Step>) → Nat {
+    match steps {
+        Nil => 0,
+        Cons(step, rest) => match step { Drop => Succ(steps_written(rest)), Emit(_) => Succ(steps_written(rest)), _ => steps_written(rest) },
+    }
+}
+
+fn Plan::written(self plan: Plan) → Nat {
+    match plan {
+        Same => 0,
+        Nodes(steps) => steps_written(steps),
+        Then(steps, rest) => steps_written(steps) + rest.written(),
+        Both(first, second) => first.written() + second.written(),
+        Arms(when_true, when_false) => when_true.written() + when_false.written(),
+        Arm(_, arm) => arm.written(),
+        Body(body) => body.written(),
+        Derived(steps, body) => steps_written(steps) + body.written(),
+        Args(_) => 0,
+        Inputs(_, body) => body.written(),
     }
 }
 

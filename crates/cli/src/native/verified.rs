@@ -472,25 +472,24 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
 const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rules", "function_ir_tidy",
     "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
 
-/// The optimizer's stages in the order `optimize_stage()` composes them
-/// (`function_ir_optimize`), each with the type of its plan: a test at the
-/// function's entry, inlining, reading through copies, dropping what
-/// nothing reads, deciding tests, dropping again. A literal plan is
-/// elaborated against its type: the stages' plans share constructor names.
-const STAGES: [(&str, &str); 6] = [
-    ("guard_stage()", "Guard"),
-    ("inline_stage()", "Inlines"),
-    ("replay_stage(rules())", "Plan"),
-    ("replay_stage(rules())", "Plan"),
-    ("replay_stage(rules())", "Plan"),
-    ("replay_stage(rules())", "Plan"),
-];
+/// The stage a search's answer is a plan of, in the order
+/// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
+/// function's entry, inlining, and then the replayer as often as a search
+/// found use for it (deciding tests and writing narrowings as moves,
+/// reading through copies, dropping what nothing reads).
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    Guard,
+    Inline,
+    Replay,
+}
 
-/// A stage that changed a function: which stage, the plan it took, the
-/// function made as source, and the name the reads know that function by.
+/// A search that changed a function: the stage its plan is of, the plan,
+/// the function made as source, and the name the reads know that function
+/// by.
 #[derive(Clone)]
 struct Staged {
-    stage: usize,
+    stage: Stage,
     plan: String,
     function: String,
     name: String,
@@ -527,27 +526,30 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// The optimizer over a program that is lent spans
 /// (`function_ir_optimize`, docs/optimizer-design.md §9): a function at a
 /// time, callees first, each over its callees as the stages left them, and
-/// a stage at a time (`STAGES`), each over the function the stages before
-/// it made. A search is an evaluation and proves nothing: it answers a
+/// a search at a time, each over the function the searches before it
+/// made. A search is an evaluation and proves nothing: it answers a
 /// plan and the function its stage makes of it, both as source, which are
 /// stated here as literals, and the certificate's statement that the stage
-/// makes the one from the other is the kernel's to check, a stage of a
-/// function a statement; `optimize_made` makes them the statement
-/// `Stage::run_next` takes. A stage whose search has nothing, or answers
-/// the function it was given, has no plan and keeps the function.
+/// makes the one from the other is the kernel's to check, a plan of a
+/// function a statement; `Stage::many_made` joins the replayer's and
+/// `optimize_made` makes them the statement `Stage::run_next` takes. A
+/// search that has nothing, or answers the function it was given, adds no
+/// plan and keeps the function.
 ///
 /// A function is first inlined and tidied with no test, which is where the
 /// search sees what a test of its spans' lengths would decide. Where there
 /// is such a test, the function is made again with the test first: the arm
-/// for a span too short is the function as written, and the stages work in
-/// the other arm alone (the searches named `…_past`).
+/// for a span too short is the function as written, and the searches work
+/// in the other arm alone (those named `…_past`). After inlining, what the
+/// tests decide comes before reading through copies, since it writes
+/// moves of its own (a narrowing of a value already in range).
 ///
 /// What the stages made is kept where it is within the search's room
 /// (`Function::fits`) and the lowering takes it with the planner's
 /// placement (`Function::lowers`, a read of its own: a search and the
 /// planner each hold what they evaluate): the function under its test,
-/// else the one with no test and its own tests decided, else that one as
-/// tidied, else the function as it is.
+/// else the one with no test and its own tests decided, else the one
+/// inlined and tidied alone, else the function as it is.
 ///
 /// Then the functions `roots` (the exported ones) no longer reach are
 /// emptied (`prune`): inlined everywhere, a small function is called by
@@ -580,12 +582,12 @@ fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False
         // search is asked of the function the one before it made, and what
         // it makes, where that is another function, is defined under a name
         // of its own, `{prefix}_opt_fn{k}_{tag}{stage}`.
-        let run = |fork: &mut Elaborator, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(usize, String)]|
+        let run = |fork: &mut Elaborator, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(Stage, String)]|
             -> Result<Vec<Staged>, String> {
             let mut made: Vec<Staged> = Vec::new();
-            for (stage, search) in searches {
+            for (at, (stage, search)) in searches.iter().enumerate() {
                 let current = made.last().map_or(from.to_string(), |last| format!("{}()", last.name));
-                let item = format!("found_{k}_{tag}{stage}");
+                let item = format!("found_{k}_{tag}{at}");
                 let find = format!("{probe}_opt_{item}");
                 let text = format!("{imports}{}
 fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
@@ -599,8 +601,8 @@ fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
                     _ => return Err(unread()),
                 };
                 if before.as_deref() == Some(function) { continue; }
-                let name = format!("{prefix}_opt_fn{k}_{tag}{stage}");
-                let module = format!("{probe}_opt_made_{k}_{tag}{stage}");
+                let name = format!("{prefix}_opt_fn{k}_{tag}{at}");
+                let module = format!("{probe}_opt_made_{k}_{tag}{at}");
                 let text = format!("{imports}{}
 fn {name}() → Function {{
     {function}
@@ -619,36 +621,44 @@ fn {name}() → Function {{
         let lowers = |fork: &mut Elaborator, modules: &[String], made: &[Staged], item: &str|
             asks(fork, modules, &format!("taken_{item}{k}"), &format!("{}.lowers({k}, {prefix}_counts())", named(made)));
         let wanted = format!("{earlier}, Wanted::usual()");
+        let replay = |search: &str| (Stage::Replay, search.to_string());
         // With no test: inlined and tidied, within the search's room or
         // not at all.
         let mut tidied = run(&mut fork, &mut modules, "t", &original, None,
-            &[(1, format!("find_inlined({wanted})")), (2, "find_copied()".to_string()), (3, "find_swept()".to_string())])?;
+            &[(Stage::Inline, format!("find_inlined({wanted})")), replay("find_copied()"), replay("find_swept()")])?;
         if !tidied.is_empty() && !fits(&mut fork, &modules, &tidied, "")? { tidied.clear(); }
         // Under the test that function asks for, where it asks for one: the
         // test is put on the function as written.
         let mut made: Vec<Staged> = Vec::new();
-        let mut tested = run(&mut fork, &mut modules, "g", &named(&tidied), None, &[(0, format!("find_guarded({original}, Wanted::usual())"))])?;
+        let mut tested = run(&mut fork, &mut modules, "g", &named(&tidied), None, &[(Stage::Guard, format!("find_guarded({original}, Wanted::usual())"))])?;
         if !tested.is_empty() {
             let last = tested[0].function.clone();
-            tested.extend(run(&mut fork, &mut modules, "g", &named(&tested), Some(last),
-                &[(1, format!("find_inlined_past({wanted})")), (2, "find_copied_past()".to_string()), (3, "find_swept_past()".to_string()),
-                    (4, "find_learned_past()".to_string()), (5, "find_swept_past()".to_string())])?);
+            tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
+                &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_learned_past()"), replay("find_copied_past()"),
+                    replay("find_swept_past()")])?);
             if fits(&mut fork, &modules, &tested, "tested_")? && lowers(&mut fork, &modules, &tested, "tested_")? { made = tested; }
         }
-        // With no test: what the function's own tests decide, or as tidied.
+        // With no test: what the function's own tests and ranges decide,
+        // of the function inlined; or that function as tidied.
         if made.is_empty() {
-            let mut learned = tidied.clone();
-            learned.extend(run(&mut fork, &mut modules, "t", &named(&tidied), tidied.last().map(|last| last.function.clone()),
-                &[(4, "find_learned()".to_string()), (5, "find_swept()".to_string())])?);
-            if learned.len() > tidied.len() && lowers(&mut fork, &modules, &learned, "learned_")? { made = learned; }
-            else if !tidied.is_empty() && lowers(&mut fork, &modules, &tidied, "")? { made = tidied; }
+            let inlined: Vec<Staged> = tidied.iter().filter(|staged| staged.stage == Stage::Inline).cloned().collect();
+            let mut learned = inlined.clone();
+            learned.extend(run(&mut fork, &mut modules, "l", &named(&inlined), inlined.last().map(|last| last.function.clone()),
+                &[replay("find_learned()")])?);
+            if learned.len() > inlined.len() {
+                let last = learned.last().map(|last| last.function.clone());
+                learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
+                if lowers(&mut fork, &modules, &learned, "learned_")? { made = learned; }
+            }
+            if made.is_empty() && !tidied.is_empty() && lowers(&mut fork, &modules, &tidied, "")? { made = tidied; }
         }
-        // The function after each stage, by name, the original first.
-        let mut after = vec![original.clone()];
-        for s in 0..STAGES.len() {
-            after.push(made.iter().find(|staged| staged.stage == s).map_or(after[s].clone(), |staged| format!("{}()", staged.name)));
-        }
-        let last_made = after[STAGES.len()].clone();
+        // The function after the test, after inlining, and after each of
+        // the replayer's plans, by name.
+        let staged = |stage: Stage| made.iter().find(|staged| staged.stage == stage);
+        let tested_name = staged(Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
+        let inlined_name = staged(Stage::Inline).map_or(tested_name.clone(), |staged| format!("{}()", staged.name));
+        let replays: Vec<&Staged> = made.iter().filter(|staged| staged.stage == Stage::Replay).collect();
+        let last_made = replays.last().map_or(inlined_name.clone(), |staged| format!("{}()", staged.name));
         let lists = format!("fn {prefix}_opt_first_{k}() → List<Function> {{ Cons({prefix}_opt_fn{k}(), {earlier}) }}\n");
         let next = format!("{probe}_opt_{k}");
         let text = format!("{imports}{}
@@ -670,32 +680,58 @@ theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original},
 }}
 "));
         } else {
-            stated.push_str(&format!("\n// Function {k} after each stage that changed it, the plan each stage took, and the function as the optimizer left it.\n"));
-            for (s, (stage, plans)) in STAGES.iter().enumerate() {
-                let found = made.iter().find(|staged| staged.stage == s);
+            stated.push_str(&format!("\n// Function {k} after each plan that changed it, the plans, and the function as the optimizer left it.\n"));
+            for (s, (stage, plans, before, after)) in [(Stage::Guard, "Guard", &original, &tested_name), (Stage::Inline, "Inlines", &tested_name, &inlined_name)]
+                .into_iter().enumerate() {
+                let found = staged(stage);
                 stated.push_str(&format!("fn {prefix}_opt_plan_{k}_{s}() → Option<{plans}> {{{}}}\n",
                     found.map_or(" None ".to_string(), |staged| format!("\n    Some({})\n", staged.plan))));
                 if let Some(staged) = found {
                     stated.push_str(&format!("fn {}() → Function {{\n    {}\n}}\n", staged.name, staged.function));
                 }
                 statements.push_str(&format!("
-theorem {prefix}_opt_made_{k}_{s}(): {stage}.maybe().rewrite({earlier}, {}, {prefix}_opt_plan_{k}_{s}()) = Some({}) {{
+theorem {prefix}_opt_made_{k}_{s}(): {}.maybe().rewrite({earlier}, {before}, {prefix}_opt_plan_{k}_{s}()) = Some({after}) {{
     refl
 }}
-", after[s], after[s + 1]));
+", if stage == Stage::Guard { "guard_stage()" } else { "inline_stage()" }));
             }
-            let each = |item: &dyn Fn(usize) -> String| (0..STAGES.len()).map(item).collect::<Vec<_>>().join(", ");
-            stated.push_str(&format!("fn {prefix}_opt_plan_{k}() → Passes() {{ passes({}) }}
+            // The replayer's plans, each its own statement, joined from
+            // the last: `{prefix}_opt_replays_{k}_{i}` is the plans from
+            // the `i`th on, and `{prefix}_opt_joined_{k}_{i}` that they
+            // make the last function of the one the `i`th was given.
+            let count = replays.len();
+            let given = |i: usize| if i == 0 { inlined_name.clone() } else { format!("{}()", replays[i - 1].name) };
+            let rest = |i: usize| if i == count { "Nil".to_string() } else { format!("{prefix}_opt_replays_{k}_{i}()") };
+            for (i, staged) in replays.iter().enumerate() {
+                stated.push_str(&format!("fn {prefix}_opt_plan_{k}_r{i}() → Plan {{\n    {}\n}}\nfn {}() → Function {{\n    {}\n}}\n",
+                    staged.plan, staged.name, staged.function));
+                statements.push_str(&format!("
+theorem {prefix}_opt_made_{k}_r{i}(): replay_stage(rules()).rewrite({earlier}, {}, {prefix}_opt_plan_{k}_r{i}()) = Some({}) {{
+    refl
+}}
+", given(i), given(i + 1)));
+            }
+            for i in (0..count).rev() {
+                stated.push_str(&format!("fn {prefix}_opt_replays_{k}_{i}() → List<Plan> {{ Cons({prefix}_opt_plan_{k}_r{i}(), {}) }}\n", rest(i + 1)));
+                let later = if i + 1 == count { format!("replay_stage(rules()).many_none({earlier}, {last_made})") } else { format!("{prefix}_opt_joined_{k}_{}()", i + 1) };
+                statements.push_str(&format!("
+theorem {prefix}_opt_joined_{k}_{i}(): replay_stage(rules()).many().rewrite({earlier}, {}, {prefix}_opt_replays_{k}_{i}()) = Some({last_made}) {{
+    replay_stage(rules()).many_made({earlier}, {}, {}, {last_made}, {prefix}_opt_plan_{k}_r{i}(), {}, {prefix}_opt_made_{k}_r{i}(), {later})
+}}
+", given(i), given(i), given(i + 1), rest(i + 1)));
+            }
+            let joined = if count == 0 { format!("replay_stage(rules()).many_none({earlier}, {last_made})") } else { format!("{prefix}_opt_joined_{k}_0()") };
+            stated.push_str(&format!("fn {prefix}_opt_plan_{k}() → Passes() {{ passes({prefix}_opt_plan_{k}_0(), {prefix}_opt_plan_{k}_1(), {}) }}
 fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
 {lists}fn {prefix}_opt_plans_{k}() → List<Passes()> {{ Cons({prefix}_opt_plan_{k}(), {plans_before}) }}
-", each(&|s| format!("{prefix}_opt_plan_{k}_{s}()"))));
+", rest(0)));
             statements.push_str(&format!("
 theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
-    optimize_made({earlier}, {},
-        {},
-        {})
+    optimize_made({earlier}, {original}, {tested_name}, {inlined_name}, {last_made},
+        {prefix}_opt_plan_{k}_0(), {prefix}_opt_plan_{k}_1(), {},
+        {prefix}_opt_made_{k}_0(), {prefix}_opt_made_{k}_1(), {joined})
 }}
-", after.join(", "), each(&|s| format!("{prefix}_opt_plan_{k}_{s}()")), each(&|s| format!("{prefix}_opt_made_{k}_{s}()"))));
+", rest(0)));
         }
         statements.push_str(&format!("
 theorem {prefix}_opt_ran_{k}(): optimize_stage().run({prefix}_first_{k}(), {prefix}_opt_plans_{k}()) = Some({prefix}_opt_first_{k}()) {{

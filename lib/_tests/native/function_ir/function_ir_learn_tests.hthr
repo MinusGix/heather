@@ -3,8 +3,8 @@
 // function_ir_learn.hthr, docs/optimizer-design.md §5.1): a conditional
 // replaced by the arm its test is proved to take, what the replayer
 // refuses, the test the search puts at a function's entry and the plan it
-// finds past it, and a loop whose passes keep a range. Tests, not library:
-// nothing imports this module.
+// finds past it, a loop whose passes keep a range, and a narrowing that a
+// range makes a move. Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
 import function_ir_writes;
@@ -191,3 +191,101 @@ theorem drifting_undecided(): drifting().guarded(first_guard()).learn_plan().dec
 
 // And the replayer refuses the plan that decides it.
 theorem drifting_refused(): replay_function(rules(), drifting().guarded(first_guard()), first16().guarded(first_guard()).learn_plan()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A narrowing of a word already within the narrow width is a move
+
+// A loaded byte narrowed to eight bits and widened again is the byte. What
+// a load leaves is below 256 with no rule's help (`Facts::learn`), and
+// `narrow_back` asks that 255 is below 2^8. The widening is dropped once
+// the facts have its equation, and the move is written in its place.
+theorem byte_back(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
+    [Keep, Keep, Drop, Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
+    Some([BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Move(64, 3, 1)]) { refl }
+
+// So is the byte a store wrote, which is the store's own output.
+theorem stored_back(): replay(rules(), Facts::none(), [BufferStore(2, 0, 0, 1), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
+    [Keep, Keep, Drop, Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    Some([BufferStore(2, 0, 0, 1), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
+
+// Not of a word no range is known of: 0 is the function's parameter.
+theorem any_word_kept(): replay(rules(), Facts::none(), [Resize(64, 8, 1, 0), Resize(8, 64, 2, 1)],
+    [Keep, Drop, Derive(15, [2, 1, 0, 8, 255]), Emit(Move(64, 2, 0))]).map(λ r => r.nodes) = None { refl }
+
+// Not at a width the range does not fit: 255 goes through eight bits and
+// 256 does not, whatever bound the plan claims for it.
+theorem fits_eight(): replay(rules(), Facts::none(), [Const(64, 1, 255), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
+    [Keep, Keep, Drop, Derive(2, [1, 255]), Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
+    Some([Const(64, 1, 255), Resize(64, 8, 2, 1), Move(64, 3, 1)]) { refl }
+
+theorem past_eight(): replay(rules(), Facts::none(), [Const(64, 1, 256), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
+    [Keep, Keep, Drop, Derive(2, [1, 256]), Derive(15, [3, 2, 1, 8, 256]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+
+theorem bound_claimed(): replay(rules(), Facts::none(), [Const(64, 1, 256), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
+    [Keep, Keep, Drop, Derive(2, [1, 256]), Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+
+// Not through a narrowing to another width than the widening is from.
+theorem widths_apart(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Resize(16, 64, 3, 2)],
+    [Keep, Keep, Drop, Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+
+// A word joined of two has at most the sum of their bounds (`within_or`),
+// and a word masked has the bound of either side (`within_and`,
+// `within_and_right`): two bytes joined go through sixteen bits, and a
+// word masked to its low byte goes through eight.
+theorem joined_back(): replay(rules(), Facts::none(),
+    [BufferLoad(1, 0, 0), ShiftLeft(64, 2, 1, 8), BufferLoad(3, 0, 0), BitOr(64, 4, 2, 3), Resize(64, 16, 5, 4), Resize(16, 64, 6, 5)],
+    [Keep, Keep, Keep, Keep, Keep, Drop, Derive(5, [2, 1, 8, 0, 255]), Derive(16, [4, 2, 3, 65280, 255]), Derive(15, [6, 5, 4, 16, 65535]),
+        Emit(Move(64, 6, 4))]).map(λ r => r.nodes) =
+    Some([BufferLoad(1, 0, 0), ShiftLeft(64, 2, 1, 8), BufferLoad(3, 0, 0), BitOr(64, 4, 2, 3), Resize(64, 16, 5, 4), Move(64, 6, 4)]) { refl }
+
+theorem masked_back(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 0, 1), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
+    [Keep, Keep, Keep, Drop, Derive(2, [1, 255]), Derive(18, [2, 0, 1, 255]), Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    Some([Const(64, 1, 255), BitAnd(64, 2, 0, 1), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
+
+// The mask on the left is the other rule, and neither is the rule for the
+// side the mask is not on.
+theorem masked_left(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 1, 0), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
+    [Keep, Keep, Keep, Drop, Derive(2, [1, 255]), Derive(17, [2, 1, 0, 255]), Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    Some([Const(64, 1, 255), BitAnd(64, 2, 1, 0), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
+
+theorem masked_wrong_side(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 1, 0)],
+    [Keep, Keep, Derive(2, [1, 255]), Derive(18, [2, 1, 0, 255])]).map(λ r => r.nodes) = None { refl }
+
+// The search writes those plans. Two bytes of a span joined, the first the
+// high one, each load under its own test: both bytes' narrowings and the
+// narrowing of the word joined are moves.
+fn word16() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(20, 64)]),
+            Compose(nodes([BufferLoad(4, 0, 2), Resize(64, 8, 5, 4), Resize(8, 64, 6, 5), ShiftLeft(64, 7, 6, 8)]),
+                Compose(nodes([Const(64, 8, 1), Add(64, 9, 2, 8), UnsignedLessThan(64, 10, 9, 1)]),
+                    Conditional(Ports([]), 10, Ports([]), Ports([Port(20, 64)]),
+                        nodes([BufferLoad(11, 0, 9), Resize(64, 8, 12, 11), Resize(8, 64, 13, 12), BitOr(64, 14, 7, 13), Resize(64, 16, 15, 14),
+                            Resize(16, 64, 20, 15)]),
+                        nodes([Const(64, 20, 0)])))),
+            nodes([Const(64, 20, 0)]))), 20, 1)
+}
+
+fn word16_moved() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(20, 64)]),
+            Compose(nodes([BufferLoad(4, 0, 2), Resize(64, 8, 5, 4), Move(64, 6, 4), ShiftLeft(64, 7, 6, 8)]),
+                Compose(nodes([Const(64, 8, 1), Add(64, 9, 2, 8), UnsignedLessThan(64, 10, 9, 1)]),
+                    Conditional(Ports([]), 10, Ports([]), Ports([Port(20, 64)]),
+                        nodes([BufferLoad(11, 0, 9), Resize(64, 8, 12, 11), Move(64, 13, 11), BitOr(64, 14, 7, 13), Resize(64, 16, 15, 14),
+                            Move(64, 20, 14)]),
+                        nodes([Const(64, 20, 0)])))),
+            nodes([Const(64, 20, 0)]))), 20, 1)
+}
+
+theorem word16_written(): word16().learn_plan().written() = 6 { refl }
+theorem word16_made(): replay_function(rules(), word16(), word16().learn_plan()) = Some(word16_moved()) { refl }
+
+// A sum of two bytes may be 510, so its narrowing to eight bits stays, and
+// so does a narrowing of the function's own parameter.
+fn sum8() → Function {
+    Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferLoad(4, 0, 2), Add(64, 5, 3, 4), Resize(64, 8, 6, 5), Resize(8, 64, 7, 6),
+        Resize(64, 8, 8, 2), Resize(8, 64, 9, 8), Add(64, 10, 7, 9)]), 10, 1)
+}
+
+theorem sum8_kept(): sum8().learn_plan().written() = 0 { refl }

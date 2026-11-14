@@ -1,10 +1,11 @@
 // Probes of the optimizer as the compiler runs it
 // (lib/native/function_ir/function_ir_optimize.hthr, docs/optimizer-design.md
-// §3, §9): what each stage's search finds for a program, callees first; the
-// stages making the functions found from the plans found, a stage a
+// §3, §9): what each search finds for a program, callees first; the
+// stages making the functions found from the plans found, a plan a
 // statement; a function left as it is; a function whose bounds tests a
-// test at its entry decides, and what the lowering makes of it; the
-// functions a root reaches before and after; and what the compiler reads.
+// test at its entry decides, and what the lowering makes of it; a word
+// read a byte at a time with its narrowings gone; the functions a root
+// reaches before and after; and what the compiler reads.
 // Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
@@ -79,31 +80,46 @@ fn seven_made() → Function {
 
 theorem seven_swept(): made(seven_copied().find_swept()) = Some(seven_made()) { refl }
 
-fn seven_passes() → Passes() { passes(None, Some(seven_inlines()), Some(seven_copies()), Some(seven_dead()), None, None) }
+fn seven_passes() → Passes() { passes(None, Some(seven_inlines()), [seven_copies(), seven_dead()]) }
 
-// What a certificate states of a function: each stage's statement, a
-// stage that found nothing keeping the function, and the six as one
-// (`optimize_made`).
-theorem seven_stage_1(): guard_stage().maybe().rewrite([xor()], seven(), None) = Some(seven()) { refl }
-theorem seven_stage_2(): inline_stage().maybe().rewrite([xor()], seven(), Some(seven_inlines())) = Some(seven_inlined()) { refl }
-theorem seven_stage_3(): replay_stage(rules()).maybe().rewrite([xor()], seven_inlined(), Some(seven_copies())) = Some(seven_copied()) { refl }
-theorem seven_stage_4(): replay_stage(rules()).maybe().rewrite([xor()], seven_copied(), Some(seven_dead())) = Some(seven_made()) { refl }
-theorem seven_stage_5(): replay_stage(rules()).maybe().rewrite([xor()], seven_made(), None) = Some(seven_made()) { refl }
+// What a certificate states of a function: the test's statement and the
+// inlining's, a stage that found nothing keeping the function; a
+// statement for each of the replayer's plans, joined from the last
+// (`Stage::many_made`); and all of them as one (`optimize_made`).
+theorem seven_tested(): guard_stage().maybe().rewrite([xor()], seven(), None) = Some(seven()) { refl }
+theorem seven_inlining(): inline_stage().maybe().rewrite([xor()], seven(), Some(seven_inlines())) = Some(seven_inlined()) { refl }
+theorem seven_replay_0(): replay_stage(rules()).rewrite([xor()], seven_inlined(), seven_copies()) = Some(seven_copied()) { refl }
+theorem seven_replay_1(): replay_stage(rules()).rewrite([xor()], seven_copied(), seven_dead()) = Some(seven_made()) { refl }
+
+theorem seven_joined_1(): replay_stage(rules()).many().rewrite([xor()], seven_copied(), [seven_dead()]) = Some(seven_made()) {
+    replay_stage(rules()).many_made([xor()], seven_copied(), seven_made(), seven_made(), seven_dead(), [], seven_replay_1(),
+        replay_stage(rules()).many_none([xor()], seven_made()))
+}
+
+theorem seven_joined_0(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_copies(), seven_dead()]) = Some(seven_made()) {
+    replay_stage(rules()).many_made([xor()], seven_inlined(), seven_copied(), seven_made(), seven_copies(), [seven_dead()], seven_replay_0(),
+        seven_joined_1())
+}
 
 theorem seven_staged(): optimize_stage().rewrite([xor()], seven(), seven_passes()) = Some(seven_made()) {
-    optimize_made([xor()], seven(), seven(), seven_inlined(), seven_copied(), seven_made(), seven_made(), seven_made(),
-        None, Some(seven_inlines()), Some(seven_copies()), Some(seven_dead()), None, None,
-        seven_stage_1(), seven_stage_2(), seven_stage_3(), seven_stage_4(), seven_stage_5(), seven_stage_5())
+    optimize_made([xor()], seven(), seven(), seven_inlined(), seven_made(), None, Some(seven_inlines()), [seven_copies(), seven_dead()],
+        seven_tested(), seven_inlining(), seven_joined_0())
 }
+
+// The replays are as many as the plans: none is the function, and one that
+// is refused refuses them all.
+theorem seven_once(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_copies()]) = Some(seven_copied()) { refl }
+theorem seven_none(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), []) = Some(seven_inlined()) { refl }
+theorem seven_out_of_turn(): replay_stage(rules()).many().rewrite([xor()], seven_inlined(), [seven_dead(), seven_copies()]) = None { refl }
 
 // Function 2 takes function 1 as the stages left it, so no call is left in
 // it and every move is read through: the sum reads the exclusive or.
 fn top_passes() → Passes() {
-    passes(None, Some(Inlines(3, Both(Here(6), Stay))),
-        Some(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
-            Nodes([Swap(8, 0)]))),
-        Some(Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))),
-        None, None)
+    passes(None, Some(Inlines(3, Both(Here(6), Stay))), [
+        Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
+            Nodes([Swap(8, 0)])),
+        Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep])),
+    ])
 }
 
 fn top_made() → Function {
@@ -262,7 +278,7 @@ theorem unproved_bit(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 5, 
 
 // The whole of it as one stage's statement.
 theorem pair_staged(): optimize_stage().rewrite([], pair_sum(),
-    passes(Some(pair_guard()), None, None, None, Some(pair_sum().guarded(pair_guard()).learn_plan().plain_kept()), None)) = Some(pair_made()) { refl }
+    passes(Some(pair_guard()), None, [pair_sum().guarded(pair_guard()).learn_plan().plain_kept()])) = Some(pair_made()) { refl }
 
 // ---------------------------------------------------------------------------
 // The test comes before the inlining: the plain arm keeps its calls
@@ -315,8 +331,8 @@ fn two_made() → Function {
 }
 
 theorem two_found(): made(two().guarded(two_guard()).find_inlined_past([byte_at()], tight()))
-    .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
-    .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(two_made()) { refl }
+    .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_copied_past()))
+    .and_then(λ (f: Function) => made(f.find_swept_past())) = Some(two_made()) { refl }
 
 // The inlining's plan has no site in the plain arm.
 theorem two_inlines_read(): read(two().guarded(two_guard()).find_inlined_past([byte_at()], tight())).take(97) =
@@ -324,3 +340,85 @@ theorem two_inlines_read(): read(two().guarded(two_guard()).find_inlined_past([b
 
 // The lowering takes it as the program's second function.
 theorem two_lowers(): two_made().lowers(1, [1, 1]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// A word read a byte at a time: the narrowings go once the tests do
+
+// The first two bytes of a span joined, the first the high one. Each byte
+// is read as the generator writes a checked read: under a test of its
+// index, narrowed to eight bits to leave the conditional, and widened
+// again after it.
+fn be16() → Function {
+    Function([0, 1], Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1)]),
+            Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 8)]), Compose(nodes([BufferLoad(4, 0, 2)]), nodes([Resize(64, 8, 5, 4)])),
+                nodes([Const(8, 5, 0)]))),
+        Compose(nodes([Resize(8, 64, 6, 5), ShiftLeft(64, 7, 6, 8)]),
+            Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1)]),
+                    Conditional(Ports([]), 9, Ports([]), Ports([Port(11, 8)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)])),
+                        nodes([Const(8, 11, 0)]))),
+                nodes([Resize(8, 64, 12, 11), BitOr(64, 13, 7, 12)])))), 13, 1)
+}
+
+// As it stands nothing is a move: what is widened is what one of two arms
+// left, and only one of them is a byte loaded.
+theorem be16_alone(): made(be16().find_learned()) = None { refl }
+
+fn be16_guard() → Guard { Guard(14, [Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)], 15) }
+
+theorem be16_tested(): made(be16().find_guarded(be16(), narrow())) = Some(be16().guarded(be16_guard())) { refl }
+
+// Past the test both conditionals are their arms, so each widening follows
+// its narrowing and the byte narrowed is a load's: two tests decided, and
+// two widenings dropped for a move each (with the two bits, six nodes
+// dropped or written).
+fn be16_learn() → Plan { be16().guarded(be16_guard()).learn_plan().plain_kept() }
+
+theorem be16_decided(): be16_learn().decided() = 2 { refl }
+theorem be16_written(): be16_learn().written() = 6 { refl }
+
+fn be16_learned() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), be16().body,
+            Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1), Const(1, 3, 1)]),
+                    Compose(nodes([BufferLoad(4, 0, 2)]), nodes([Resize(64, 8, 5, 4)]))),
+                Compose(nodes([Move(64, 6, 4), ShiftLeft(64, 7, 6, 8)]),
+                    Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]),
+                            Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)]))),
+                        nodes([Move(64, 12, 10), BitOr(64, 13, 7, 12)])))))), 13, 1)
+}
+
+theorem be16_moves(): made(be16().guarded(be16_guard()).find_learned_past()) = Some(be16_learned()) { refl }
+
+// Read through the moves and swept, the arm past the test is two loads, a
+// shift and an or. The other arm is the function as written.
+fn be16_copies() → Plan {
+    Both(Nodes([Keep, Keep]), Arms(Same, Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Keep]))),
+        Both(Nodes([Keep, Swap(4, 0)]), Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Keep]))), Nodes([Keep, Swap(7, 10)]))))))
+}
+
+fn be16_dead() → Plan {
+    Both(Nodes([Keep, Keep]), Arms(Same, Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Drop]))),
+        Both(Nodes([Drop, Keep]), Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Drop]))), Nodes([Drop, Keep]))))))
+}
+
+fn be16_made() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), be16().body,
+            Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1), Const(1, 3, 1)]), Compose(nodes([BufferLoad(4, 0, 2)]), nodes([]))),
+                Compose(nodes([ShiftLeft(64, 7, 4, 8)]),
+                    Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([]))),
+                        nodes([BitOr(64, 13, 7, 10)])))))), 13, 1)
+}
+
+theorem be16_found(): made(be16_learned().find_copied_past()).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(be16_made()) { refl }
+
+// The stage's statement, the replayer run three times, and the lowering
+// taking what it made.
+theorem be16_staged(): optimize_stage().rewrite([], be16(), passes(Some(be16_guard()), None, [be16_learn(), be16_copies(), be16_dead()])) =
+    Some(be16_made()) { refl }
+
+theorem be16_lowers(): be16_made().lowers(0, [1]) = True { refl }
+
+// The sweep's plan before the moves are read through would drop a move the
+// shift still reads, and is refused.
+theorem be16_early(): replay_stage(rules()).many().rewrite([], be16_learned(), [be16_dead(), be16_copies()]) = None { refl }
