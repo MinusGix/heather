@@ -36,3 +36,5 @@ evidence is for `When` alone.
   reuses the device for `if let` evidence.
 
 ## Log
+
+- 2026-11-14: Stage 1 merged (PR #609). Minus 2026-11-14: no `checked` keyword ("generalize `?` or another elegant spelling"); the call is tested where a `When` is wanted; coercion `When → T` is wanted as its own PR with benchmarks (stage 5). Stage 2 built: `crates/elab/src/tested.rs`, the first omitted condition is tested and later ones searched with its proof in scope (the design thread agreed: better than the conjunction). §7 probes: a tested read in a `decreases` body needed the unfolding walk to type the scrutinee as its test; neutral-condition proofs go by `When::of_cases`. Stage 1's claim that `vector_index`'s `same` is `refl` was wrong; `vector_index_irrel` added.

@@ -76,6 +76,10 @@ impl Defaults<'_> {
         else {
             return err("internal parameter default names no defaulted parameter", span);
         };
+        // A tested call's probe stops here (docs/when-design.md §4).
+        if let Some(stop) = crate::tested::Tested(self).capture(cx, owner, &name, &default.expr, expected, lvl, span) {
+            return stop;
+        }
         let callee = owner.rsplit("::").next().unwrap_or(owner);
         let goal = self.spell_type_source(cx, expected).or_else(|| self.spell_type(cx, expected)).unwrap_or_else(|| "its type".into());
         let mut hidden = cx.hygienic();
@@ -107,10 +111,17 @@ impl Defaults<'_> {
                 default: default.expr.clone(),
             });
         }
+        // A condition a search was left with can also be tested, where the
+        // caller can name `When` (docs/when-design.md §4).
+        let or_test = if is_context_search(&default.expr) && crate::tested::Tested(self).when_visible() {
+            " or use the call where a `When` is wanted (a `match` on `Present`/`Absent`), which tests it"
+        } else {
+            ""
+        };
         let _scope = self.use_scope(&default.scope);
         self.elab_check(&hidden, &default.expr, expected, lvl).map_err(|error| ElabError::Elab {
             msg: format!("`{callee}`'s `{name}` was left to its default, which did not give `{goal}` here: {}; \
-                give it by name (`{name} := …`)", match error {
+                give it by name (`{name} := …`){or_test}", match error {
                     ElabError::Elab { msg, .. } => msg,
                     other => other.to_string(),
                 }),

@@ -185,6 +185,19 @@ fn vector_index<A>({n: Nat}, v: [A; n], i: Nat, inside: i < n) → A {
     })(v, i, inside)
 }
 
+// The entry does not depend on which proof of `i < n` reads it. Two proofs
+// at an open `i` and `n` are not convertible, so a client comparing two reads
+// (a tested read and the read at a proof, docs/when-design.md §11) cites this.
+theorem vector_index_irrel<A>({n: Nat}, v: [A; n], i: Nat, a, b: i < n): vector_index(v, i, a) = vector_index(v, i, b) {
+    (match n as λ m => (v: [A; m]) → (i: Nat) → (a, b: i < m) → vector_index(v, i, a) = vector_index(v, i, b) {
+        Zero => λ v i a b => false_elim(a),
+        Succ(m, ih) => λ v i => match i as λ k => (a, b: k < Succ(m)) → vector_index(v, k, a) = vector_index(v, k, b) {
+            Zero => λ a b => refl,
+            Succ(j) => λ a b => ih(tail(v), j, a, b),
+        },
+    })(v, i, a, b)
+}
+
 // The vector with `a` at entry `i`; the vector where it has no such entry.
 fn vector_update<A>({n: Nat}, v: [A; n], i: Nat, a: A) → [A; n] {
     (match n as λ m => [A; m] → Nat → [A; m] {

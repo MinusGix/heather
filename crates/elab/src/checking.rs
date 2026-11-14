@@ -164,6 +164,11 @@ impl Checking<'_> {
         if let Some(rewritten) = Registered(self).registry_rewrite(cx, e)? {
             return self.elab_check_skel_slots_written(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
         }
+        // A proof-taking call where a `When` is wanted, or a `match` on one
+        // (docs/when-design.md §4).
+        if let Some((bound, tested)) = crate::tested::Tested(self).tested_check(cx, e, expected)? {
+            return self.elab_check_skel_slots_written(&bound, &tested, expected, lvl, hint, skel, capture_slots);
+        }
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
