@@ -4,8 +4,9 @@
 // stages making the functions found from the plans found, a plan a
 // statement; a function left as it is; a function whose bounds tests a
 // test at its entry decides, and what the lowering makes of it; a word
-// read a byte at a time with its narrowings gone; the functions a root
-// reaches before and after; and what the compiler reads.
+// read a byte at a time with its narrowings gone, and then as one load;
+// the functions a root reaches before and after; and what the compiler
+// reads.
 // Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
@@ -482,3 +483,66 @@ theorem word_lowers(): word_fast().lowers(0, [1]) = True { refl }
 // Deciding before reading through finds nothing: the test's sum and the
 // body's are two ids until then.
 theorem word_too_early(): made(word_pair().guarded(word_guard()).find_learned_past()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Bytes joined into a word, read as one load (step 5)
+
+// Four bytes of a span from `base` joined into a word, the first the most
+// significant, past a test that the four are inside the span: the shape
+// the searches above leave a big-endian read in. The span's home is 0,
+// its length 1, the base 2; where the test fails the word is zero. The
+// third byte is read `third` past the base, `between` stands after its
+// load, and the second or has its lower operand first.
+fn be_with(third: Nat, between: List<Node>) → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2), UnsignedLessThan(64, 6, 1, 4), BitOr(1, 7, 5, 6)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(30, 64)]), nodes([Const(64, 30, 0)]),
+            Compose(nodes([UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([BufferLoad(9, 0, 2)]),
+                Compose(nodes([ShiftLeft(64, 10, 9, 24), Const(64, 11, 1), Add(64, 12, 2, 11), UnsignedLessThan(64, 13, 12, 1), Const(1, 13, 1)]),
+                    Compose(nodes([BufferLoad(14, 0, 12)]),
+                        Compose(nodes([ShiftLeft(64, 15, 14, 16), BitOr(64, 16, 10, 15), Const(64, 17, third), Add(64, 18, 2, 17), UnsignedLessThan(64, 19, 18, 1),
+                            Const(1, 19, 1)]),
+                            Compose(nodes([BufferLoad(20, 0, 18)]),
+                                Compose(nodes(between ++ [ShiftLeft(64, 21, 20, 8), BitOr(64, 22, 21, 16), Const(64, 23, 3), Add(64, 24, 2, 23),
+                                    UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
+                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, 1)
+}
+
+fn be_bytes() → Function { be_with(2, []) }
+
+// The walk finds the four a join, and asks for a load at the base after
+// the last of the byte loads.
+theorem be_asked(): be_bytes().asked() = [Asked(0, 2, 26)] { refl }
+
+// Not where the third byte is not the next one, nor where a store stands
+// between the loads and the or that would join them.
+theorem be_gapped(): be_with(3, []).asked() = [] { refl }
+
+theorem be_stored(): be_with(2, [BufferStore(27, 0, 2, 9)]).asked() = [] { refl }
+
+// The searches in the order the compiler runs them: the load put, the
+// join found a move of its word, read through, the byte loads swept, the
+// tests no access reads any more dropped, and what they read swept.
+fn be_made() → Option<Function> {
+    made(be_bytes().find_worded_past([])).and_then(λ (f: Function) => made(f.find_learned_past()))
+        .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+        .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+}
+
+// What is left past the test: the comparison of the base and that of the
+// last byte's index, each with its bit, which is what the lowering reads
+// the load's bounds from; the load, its swap and its widening in a leaf
+// of their own; and the word.
+fn be_word() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2), UnsignedLessThan(64, 6, 1, 4), BitOr(1, 7, 5, 6)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(30, 64)]), nodes([Const(64, 30, 0)]),
+            Compose(nodes([UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]),
+                Compose(nodes([Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
+                    Compose(Compose(nodes([]), Compose(nodes([WideLoad(4, 31, 0, 2), ByteSwap(32, 32, 31), Resize(32, 64, 33, 32)]), nodes([]))),
+                        nodes([Move(64, 30, 33)]))))))))))), 30, 1)
+}
+
+theorem be_staged(): be_made() = Some(be_word()) { refl }
+
+// The lowering takes both.
+theorem be_bytes_lower(): be_bytes().lowers(0, [1]) = True { refl }
+theorem be_word_lowers(): be_word().lowers(0, [1]) = True { refl }
