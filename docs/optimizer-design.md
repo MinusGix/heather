@@ -338,6 +338,18 @@ conditional and its condition as a constant. A comparison whose operands'
 ranges decide it derives that constant (a rule). And a conditional on a
 bit the facts say is constant is its arm (`Plan::Arm`).
 
+Ranges decide more than tests. A word narrowed and widened again is
+itself where its range is within the narrow width, so the two resizes are
+a move (`narrow_back`), which reading through and the sweep then remove.
+The ranges that makes useful are a byte's and a word's joined of bytes: a
+load's word is below 256, which the replayer states of every load and
+store itself (`Facts::learn`: a load is not an equation among the facts,
+so no rule could take it as a premise); an or is at most its operands
+added, an and at most either (`within_or`, `within_and`).
+A checked read of a byte is narrowed to leave its conditional and widened
+after it, so this is what the generator writes around every byte, and it
+goes where the test does.
+
 A loop's body is replayed from no facts, since a pass may start from any
 state, with one exception that needs no invariant to be stated: a state
 word whose next value is itself keeps its range through every pass, so the
@@ -493,7 +505,8 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 | 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
 | 3, inline | built, and run by `compile-x86`: §9.1 |
 | 4, requests | built for ranges, with the answers In scope, Decided and Tested: §5.1, §9.1. Required, and a range of a word a loop changes, are not |
-| 5 to 7 | not built |
+| 5, memory rules and the word load | begun: a narrowing within its range is a move (§5.1, §9.1). The word load's nodes and instructions, the memory facts and the rules joining four byte loads are not built |
+| 6 and 7 | not built |
 
 ### 9.1 What is built, as built
 
@@ -542,22 +555,31 @@ keeps each word's range and writes down only the derivations a decided
 comparison needs. §5.1 has the reasons.
 
 **The search is not trusted, and is evaluated.** `function_ir_optimize.hthr`:
-`optimize_stage()` is six stages in turn, each with a plan or none: the
-test at the entry, inline, read through copies, drop what nothing reads,
-decide tests, drop again. Each stage has its search, a method of the
-function the stages before it made (`Function::find_guarded`,
-`find_inlined`, `find_copied`, `find_swept`, `find_learned`, and the ones
-named `…_past` that work only past a test). `compile-x86` evaluates them a
-function at a time, callees first, and a stage at a time, reads each
+`optimize_stage()` is three stages in turn: the test at the entry, with a
+plan or none; inline, with a plan or none; and the replayer as often as
+there are plans (`Stage::many`: a list of plans, each over the function
+the one before made, no plan being the function itself). How many times
+the replayer runs and what each run is for is therefore the search's, a
+function at a time, and a new use of the replayer is a new search and no
+change to the stage or its theorem. The searches the compiler runs are, in
+order: decide tests and write the narrowings that are moves
+(`find_learned`), read through copies (`find_copied`), drop what nothing
+reads (`find_swept`). Deciding comes before reading through because a
+narrowing made a move is one more copy to read through. Each search is a
+method of the function the plans before it made (and the ones named
+`…_past` work only past a test). `compile-x86` evaluates them a
+function at a time, callees first, and a search at a time, reads each
 answer back as source (`function_ir_spelled.hthr`:
 the spelling is numbers, a character's code or a marked number the compiler
 writes in decimal, because a decimal digit made in Heather is a long
 division and a function's source is mostly numbers), and states plan and
 function as literals; the certificate's statement is that the stage
-makes the one from the other, checked by evaluation, a stage of a function
-a statement, which `optimize_made` joins into the function's and
-`Stage::run_next` into the program's. A stage a statement keeps each
-statement well inside the kernel's fuel, and a refusal names its stage.
+makes the one from the other, checked by evaluation, a plan of a function
+a statement. `Stage::many_made` joins the replays' statements from the
+last, `optimize_made` joins those with the test's and the inlining's into
+the function's, and `Stage::run_next` joins the functions' into the
+program's. A plan a statement keeps each statement well inside the
+kernel's fuel, and a refusal names its plan.
 
 A function is inlined and tidied with no test first. Where the search then
 asks for a test, the function is made again with the test first, and that
@@ -596,6 +618,12 @@ checks it needs are of the program made, the run is the published one's.
 - A range is not carried for a word a loop's passes change, so a test of a
   counting index against a length stays. A table read as a chain of tests
   (SHA-256's constants) stays until the table is a node.
+- A narrowing stays in two places. Under a test that is not decided, the
+  byte leaves the conditional through a port eight bits wide, and what is
+  widened after it is one of two arms' values: it goes when the test does
+  (the loop law, or Required), or with a rule that widens a port, which is
+  not built. Before a byte store, the word narrowed is any word and the
+  store reads its low byte alone: that goes with the word store (step 5).
 - The planner and the emission cost a function more than in proportion to
   its size, and the largest function sets the compile's peak memory
   (issues/compile-x86-address-space-margin.md). Using the placement the
@@ -617,6 +645,12 @@ removes about a tenth more of the instructions executed. Code size grows
 again: each tested function carries its plain arm, and the callees that
 arm calls are no longer emptied. Most of the compares that still run are
 the table's chain and the tests of indexes that count in a loop.
+
+The narrowing rule removes the two shifts after every byte loaded past a
+decided test, a few percent of what ran, and a little code with them. What
+a word read a byte at a time still costs is the byte accesses themselves,
+the address formed for each, and the shifts and ors joining them, which
+is the word load's to remove.
 
 ## 10. Machine instructions added for the optimizer
 
