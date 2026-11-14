@@ -351,6 +351,14 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         None
     }
 
+    /// Is `result`, a call's result type with every slot solved, the
+    /// expected type? Conversion, committed world: what keeps a read of the
+    /// expected type ahead of the arguments ([`propagate_expected`]) from
+    /// keeping what a learn-only unification got wrong.
+    fn result_agrees(&self, _cx: &Cx, _result: &Type, _expected: &Type, _level: &Level) -> bool {
+        false
+    }
+
     fn blocked_solver_error(
         &self,
         name: &str,
@@ -513,6 +521,140 @@ pub(crate) fn retry_obligations(
             return Ok(());
         }
     }
+}
+
+/// Read the expected type into this call's slots before an argument that
+/// would otherwise be inferred at a domain still waiting on them, as a
+/// checked call's result is read in the end anyway: the argument is then
+/// checked, and a literal or a λ inside it is elaborated knowing what it is
+/// for (issues/surface-gaps-from-sha256-proof.md item 2). `true` when the
+/// domain `dom` is solved by it, and the solutions are kept; otherwise every
+/// slot is as it was, and the argument is inferred as before.
+///
+/// The result type is the callee's codomain past the remaining parameters:
+/// an implicit is its slot, an argument that may wait is its reserved slot,
+/// and any other argument is unknown here. So the read is made only when the
+/// result does not mention those, which is checked by building it twice with
+/// two different stand-ins and comparing; a call with arguments left over
+/// for its result (a spill) or too few is not read either. The slots the
+/// call holds back from unification (a solver's implicit, an argument that
+/// will be checked) are held back here too.
+#[allow(clippy::too_many_arguments)]
+fn propagate_expected(
+    elab: &impl ImplicitApplicationElab,
+    cx: &Cx,
+    params: &[ParamMeta],
+    first_param: usize,
+    rest_mask: &[bool],
+    mut rest_args: std::slice::Iter<'_, Expr>,
+    cod: &Type,
+    cod_level: &Level,
+    waits: &dyn Fn(&Expr) -> bool,
+    next_meta: u32,
+    n: u32,
+    sols: &mut [Sol],
+    meta_doms: &[Type],
+    expected: &Type,
+    owed: &OwedChecks,
+    dom: &Type,
+    span: Span,
+) -> bool {
+    let gamma = || LocalSubst::id(&cx.gamma);
+    // Which of the remaining parameters take a slot, and whether that slot
+    // is held back; `None` for an argument that is unknown here.
+    let mut takes = Vec::with_capacity(rest_mask.len());
+    for (i, &implicit) in rest_mask.iter().enumerate() {
+        if implicit {
+            let solver = params.get(first_param + i).is_some_and(|p| p.solver.is_some());
+            takes.push(Some(solver));
+        } else {
+            let Some(arg) = rest_args.next() else { return false };
+            takes.push(waits(arg).then_some(true));
+        }
+    }
+    if rest_args.next().is_some() {
+        return false;
+    }
+    let walk = |stand_in: u64| -> Option<(Type, Level, Vec<Type>, Vec<usize>)> {
+        let stand_in = Rc::new(Term::NatLit(stand_in.into()));
+        let mut ty = cod.apply_local(&gamma().extended(Rc::clone(&stand_in)));
+        let mut doms = meta_doms.to_vec();
+        let mut held = Vec::new();
+        let mut slot = next_meta;
+        let mut level = cod_level.clone();
+        for take in &takes {
+            let Type::Pi { dom, cod, cod_level, .. } = elab.whnf_for_application(cx, &ty, n, span).ok()? else { return None };
+            level = cod_level;
+            let argument = match take {
+                Some(hold) => {
+                    doms.push((*dom).clone());
+                    if *hold { held.push(slot as usize); }
+                    slot += 1;
+                    Rc::new(Term::GlobalTm { var: GlobalVar::index(slot - 1), subst: gamma() })
+                }
+                None => Rc::clone(&stand_in),
+            };
+            ty = cod.apply_local(&gamma().extended(argument));
+        }
+        Some((ty, level, doms, held))
+    };
+    let Some((result, level, doms, held)) = walk(u64::MAX - 1) else { return false };
+    let Some((other, _, other_doms, _)) = walk(u64::MAX - 2) else { return false };
+    if result != other || doms != other_doms || !slots_bare(cx, &result, n, sols) {
+        return false;
+    }
+    let before = sols.to_vec();
+    let postponed = owed.postponed().get();
+    for &slot in &held {
+        if matches!(sols[slot], Sol::Unsolved) { sols[slot] = Sol::Withheld; }
+    }
+    let read = elab.solve_application_from_expected(cx, &result, expected, n, sols, &doms, Guesses::Postpone(owed.postponed()), span);
+    for &slot in &held {
+        if matches!(sols[slot], Sol::Withheld) && matches!(before[slot], Sol::Unsolved) { sols[slot] = Sol::Unsolved; }
+    }
+    // Unification here is learn-only, and may have kept half of a pairing
+    // that failed (`?b ++ X` against `ys ++ D` solving `?b := ys`): kept only
+    // when the result it solved is the expected type.
+    if read.is_ok()
+        && zonked(dom, n, sols).is_some()
+        && zonked(&result, n, sols).is_some_and(|result| elab.result_agrees(cx, &result, expected, &level))
+    {
+        return true;
+    }
+    sols.clone_from_slice(&before);
+    owed.postponed().set(postponed);
+    false
+}
+
+/// Does `e` hold a `·` that belongs to an enclosing section? Such a call's
+/// expected type is the section's, after the slots are bound, and an
+/// argument slot must fail to infer to escape to it.
+fn has_free_slot(e: &Expr) -> bool {
+    let mut found = false;
+    crate::surface::for_each_free_slot(e, &mut |_, _| found = true);
+    found
+}
+
+/// Does every slot `result` still waits on stand bare where it occurs, as an
+/// endpoint of an equation or its type, or as a type itself? Only such a
+/// slot is read off the expected type and not guessed at: `a = ?c` against
+/// `a = mk(b)` says `?c` is `mk(b)`, but `BitVec(?m + ?n)` against
+/// `BitVec(63 + 1)` does not say `?n` is `1`, though unifying the sums
+/// pairwise would conclude it and the conversion would agree.
+fn slots_bare(cx: &Cx, result: &Type, n: u32, sols: &[Sol]) -> bool {
+    let term = |t: &Term| {
+        zonked_tm(t, n, sols).is_some()
+            || matches!(t, Term::GlobalTm { var, subst }
+                if var.innermost(n).is_some() && *subst == LocalSubst::id(&cx.gamma))
+    };
+    fn ty(t: &Type, term: &dyn Fn(&Term) -> bool, n: u32, sols: &[Sol]) -> bool {
+        match t {
+            Type::Id { ty: of, lhs, rhs, .. } => ty(of, term, n, sols) && term(lhs) && term(rhs),
+            Type::El { tm, .. } => term(tm),
+            other => zonked(other, n, sols).is_some(),
+        }
+    }
+    ty(result, &term, n, sols)
 }
 
 /// The earlier arguments `param`'s default mentions, out of the scratch
@@ -1072,6 +1214,9 @@ fn apply_implicit_planned(
     // default to fill, which may mention an earlier argument (§9.6).
     let defaults = args.iter().any(crate::defaults::is_param_default);
     let mut earlier: Vec<EarlierArg> = Vec::new();
+    // The expected type has been read into the slots ahead of the arguments
+    // ([`propagate_expected`]); once is enough.
+    let mut propagated = false;
 
     for step in plan.steps(param_offset) {
         let parameter = step.parameter;
@@ -1216,6 +1361,30 @@ fn apply_implicit_planned(
                     next_meta += 1;
                     Rc::new(meta)
                 }
+                // About to be inferred blind, though the expected type may
+                // say what its domain is: `trans(h, cong_fn(λ t => Pair(t,
+                // 48), p))`, whose `b = ?c` only the expected type completes.
+                // Inferred, the λ's `48` defaults to `Nat` before anything
+                // says the pair's second field is a word.
+                // A name's type is its own, so only an argument that is
+                // elaborated (a call, a block, a λ) has a use for it.
+                None if !propagated
+                    && !matches!(argument.kind, ExprKind::Var(_) | ExprKind::ArgSlot(_))
+                    && let Some(expected) = expected
+                    && !args.iter().any(has_free_slot)
+                    && propagate_expected(
+                        elab, cx, &params, parameter + 1, &mask[parameter - param_offset + 1..], arguments.clone(), &cod, &cod_level,
+                        &|arg| elab.classify_application_argument(cx, arg).checking_only || forced_at(arg),
+                        next_meta, n, &mut sols, &meta_doms, expected, &owed, &dom, span,
+                    ) =>
+                {
+                    propagated = true;
+                    let real_dom = zonked(&dom, n, &sols).expect("propagate_expected settled the domain");
+                    let hint = params.get(parameter).map(|parameter| (name, parameter.name.as_str()));
+                    let skel = params.get(parameter).and_then(|parameter| parameter.skel.as_deref());
+                    let checked = elab.check_explicit_argument(cx, argument, &real_dom, &dom_level, hint, skel)?;
+                    Rc::new(checked.shift_global(n))
+                }
                 None => {
                     let inferred = elab.infer_application_argument(cx, argument);
                     // A call that does not infer on its own may only be
@@ -1290,11 +1459,21 @@ fn apply_implicit_planned(
                 break;
             };
             let argument = &spill[taken];
-            if zonked(&dom, n, &sols).is_some()
-                || elab
-                    .classify_application_argument(cx, argument)
-                    .checking_only
-            {
+            // A spilled argument whose domain is already known is checked
+            // there and passed, so that a later one may still teach:
+            // `pieces_add(4, 16, 16 * k, xs)`, whose `A` occurs only under
+            // the result's binders, is fixed by `xs` after the `Nat`
+            // (issues/surface-gaps-from-sha256-proof.md item 3).
+            if let Some(real_dom) = zonked(&dom, n, &sols) {
+                let checked = elab.check_explicit_argument(cx, argument, &real_dom, &dom_level, None, None)?;
+                let argument = Rc::new(checked.shift_global(n));
+                ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
+                level = cod_level.clone();
+                term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, argument, n);
+                taken += 1;
+                continue;
+            }
+            if elab.classify_application_argument(cx, argument).checking_only {
                 break;
             }
             // A spill only *teaches* here: the call does not need it to, since

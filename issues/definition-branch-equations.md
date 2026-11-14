@@ -51,9 +51,10 @@ Probes: `lib/_tests/std/core/branch_equations_tests.hthr`.
 
 ## Open
 
-- `match` on an inductive other than `Bool`: `f::Zero`, `f::Succ` under
-  `scrut = Succ(m)`, or with the scrutinee instantiated where it is a
-  parameter.
+- `match` on something other than a parameter of a written inductive
+  type (a call, a field), whose type the generator cannot read off the
+  source; a nested pattern; an indexed family; and the `_` arm, whose
+  condition is every other constructor's failure.
 - `f::True`/`f::False` beside `f::step`/`f::done` for a `decreases` body,
   so the two schemes are one (the loops' generator,
   `measure::step_equations`, would become this one after `f::unfold`).
@@ -80,3 +81,13 @@ Probes: `lib/_tests/std/core/branch_equations_tests.hthr`.
   on: every module passes. The SHA-256 rewrite is its own change
   (`/mnt/project-files/branch-equations/sha256-stream-by-branch-equations.patch`
   until it lands).
+- 2026-11-14: constructor arms. A `match` on a parameter whose written
+  type is an inductive (or `Nat`) gets `f::C` per written arm: the arm's
+  fields as parameters, typed from the declaration's field types at the
+  parameter's type arguments, and `h: x = C(ȳ)`; proved by `j` from `h`
+  to the constructor, where the `match` computes. Arms chain with tests
+  (`f::Succ::True`). PR #640 landed the SHA-256 use of the `Bool` round. On the library: about a third of the
+  `fn`s that reach the generator get equations (some thousands in all); the
+  equations' own elaboration is a few percent of the library's CPU, and a
+  whole-library sweep at three jobs is slower by a similar fraction. Lazy
+  generation at a first reference is the change that would remove it.

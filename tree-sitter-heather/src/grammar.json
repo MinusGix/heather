@@ -4988,6 +4988,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "ascription_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "declaration_type_application"
         },
         {
@@ -7187,6 +7191,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "ascription_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "vector_type"
         },
         {
@@ -7341,6 +7349,39 @@
         {
           "type": "SYMBOL",
           "name": "_expression"
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
+    },
+    "ascription_expression": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
+          }
         },
         {
           "type": "STRING",
@@ -10916,6 +10957,24 @@
     }
   ],
   "conflicts": [
+    [
+      "parameter_name",
+      "_expression"
+    ],
+    [
+      "parameter_name",
+      "_expression",
+      "lambda_binder"
+    ],
+    [
+      "parameter_name",
+      "refl_expression",
+      "contextual_identifier"
+    ],
+    [
+      "parameter_name",
+      "contextual_identifier"
+    ],
     [
       "_expression",
       "lambda_binder"

@@ -2581,6 +2581,9 @@ impl<'a> Rewrite<'a> {
             ExprKind::Eq(a, b) => {
                 ExprKind::Eq(Box::new(self.expr(a)), Box::new(self.expr(b)))
             }
+            ExprKind::Ascribe { expr, ty } => {
+                ExprKind::Ascribe { expr: Box::new(self.expr(expr)), ty: ty.clone() }
+            }
             ExprKind::Match {
                 form,
                 generated,

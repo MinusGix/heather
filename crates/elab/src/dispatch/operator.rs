@@ -144,8 +144,12 @@ impl Operators<'_> {
         //    notation: `-(1 + a)` has the same anchor as `1 + a`.
         let mut uncovered_carrier = None;
         if self.traits.has_designation_for(fixity, sym) {
+            // A collection literal on the left has no carrier of its own
+            // to propose either: `[BitVec::zero()] ++ xs` is `xs`'s `++`
+            // (issues/surface-gaps-from-sha256-proof.md item 4).
             let flexible_left = args.first().is_some_and(|arg| {
                 expression_left_leaf_is_numeral(arg)
+                    || matches!(arg.kind, ExprKind::CollectionLit(_))
                     || expression_needs_numeral_carrier(arg, |leaf| AppUnify(self).is_checking_only(cx, leaf))
             });
             let expected_for_numeral = if flexible_left {

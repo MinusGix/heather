@@ -69,6 +69,19 @@ impl Refusals<'_> {
         // dictionary was filled) is refused for the levels before any
         // conversion is asked, and the note recorded at the argument says why
         // (issues/applied-field-source-spelling-level-mismatch.md).
+        // Out of fuel is no verdict on the claim, but where the claim is
+        // likely false is still worth saying, at the site.
+        if matches!(e, TypeError::OutOfFuel)
+            && let Some((note, at)) = MismatchNotes(self).fuel_note(span)
+        {
+            return ElabError::Kernel {
+                decl: decl.to_string(),
+                span: at,
+                err: e,
+                note: Some(note),
+                site: KernelSite::Recorded,
+            };
+        }
         let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch | TypeError::LevelMismatch);
         if conversion
             && let Some((note, at)) = self.refused_decide().or_else(|| self.refused_trivial())

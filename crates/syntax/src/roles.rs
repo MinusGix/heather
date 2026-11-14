@@ -387,6 +387,10 @@ impl<'a> Walk<'a> {
                 self.expr(b);
             }
             ExprKind::TyLit(t) => self.ty(t),
+            ExprKind::Ascribe { expr, ty } => {
+                self.expr(expr);
+                self.ty(ty);
+            }
             ExprKind::Match { scrut, motive, arms, .. } => {
                 self.expr(scrut);
                 if let Some(m) = motive {
