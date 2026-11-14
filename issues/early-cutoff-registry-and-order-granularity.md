@@ -4,7 +4,7 @@ status: open
 labels: [tooling,caching,performance]
 area: infrastructure
 created: 2026-10-24
-updated: 2026-10-30
+updated: 2026-11-14
 ---
 
 The early cutoff (`docs/module-interface-cutoff-design.md`) moves a module's
@@ -42,3 +42,4 @@ appended moves everything; how often do edits add registry entries?).
 - 2026-10-30: Under closure keys ([[module-dag-build]]) the module-order refusal no longer arises between folders, and the registry digest is over the module's closure, not its whole prefix. Registry granularity inside the closure is still whole.
 - 2026-10-30: How often edits add registry entries, from the library's history (2026-10-16 to 10-30, 26 squash-merged commits touching `lib/`, the folder move excluded): a diff line adding or removing an `inductive`/`record`/`class`/`instance`/`designation`/… declaration appears in 8 of them, and about a fifth of the modules downstream of an edited file sit downstream of such a line (~330 of ~1,750). Most of that is one commit (`Decide`'s bit, registry lines in `bool`/`nat`, ~170 downstream); the rest are native modules with ~10–30 dependents each. So the registry digest's coarseness costs the stale lanes a full downstream rebuild on a minority of edits, concentrated in core-module class work. It does not touch the warm replay: the Merkle walk the 2026-10-30 thread attributed to "moved imports" was the module-DAG composition moves, which are exact and are now vouched for whole (`docs/module-dag-design.md` §13).
 - 2026-11-05: gardener: cites a file it shares with [[library-gate-warmup-runs-alone]] (`docs/library-world-design.md`); [[native-gates-start-when-their-images-exist]] (`crates/cli/tests/library.rs`); [[pr-lane-prelude-change-images]] (`crates/cli/tests/library.rs`).
+- 2026-11-14: Two findings beside this one, from one theorem appended to `nat` under the gate's per-module build: the registry digest was taken in the observer's coordinates, so children refused moves that one process makes (`issues/registry-digest-taken-in-observer-coordinates.md`, fixed); and modules with expected refusals are never moved (`issues/expected-refusal-modules-never-moved.md`).

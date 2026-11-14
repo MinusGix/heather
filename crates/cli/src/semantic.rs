@@ -1418,13 +1418,37 @@ impl SemanticSession {
             }
             world.push(wm);
         }
-        // Digests taken here are kept for the next world.
-        for wm in &world {
+        // Digests taken here are kept for the next world. A registry part
+        // names bindings by where they sit in its module's own canonical
+        // world, so its digest is taken over that world's hashes: this
+        // world's when the module's world is a prefix of it, and otherwise
+        // the same per-module hashes laid out in the module's order. Taken
+        // over this world's positions regardless, the digest would depend on
+        // which world first asked for it, and a process that met the module
+        // in another world would refuse every move over it
+        // (`issues/registry-digest-taken-in-observer-coordinates.md`).
+        let lead = usize::from(base_len > 0);
+        for (i, wm) in world.iter().enumerate() {
             if let Some(f) = self.done.get(&wm.name)
                 && f.digest.get().is_none()
                 && wm.registry.as_ref().is_some_and(|p| !p.is_inert())
             {
-                let _ = f.digest.set(wm.registry_digest(&merkle));
+                let own = &f.canon.order;
+                let digest = if i == own.len() + lead && own.iter().eq(canon.order[..own.len()].iter()) {
+                    wm.registry_digest(&merkle)
+                } else {
+                    let mut canonical: Vec<Option<Hash>> = base_hashes.iter().copied().collect();
+                    let mut known = true;
+                    for m in own.iter().chain(std::iter::once(&wm.name)) {
+                        match self.done.get(m).and_then(|f| f.hashes.as_ref()) {
+                            Some(h) => canonical.extend(h.iter().copied()),
+                            None => known = false,
+                        }
+                    }
+                    if known { wm.registry_digest(&canonical) } else { None }
+                };
+                let _ = wm.digest.set(digest);
+                let _ = f.digest.set(digest);
             }
         }
         (world, merkle)

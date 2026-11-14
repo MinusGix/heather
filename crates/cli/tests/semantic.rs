@@ -268,6 +268,47 @@ fn a_client_moves_over_a_changed_theorem_it_does_not_use() {
     assert_eq!(edit("cutoff-unused", &before, &after, CLIENT).relocated, 1);
 }
 
+/// A module's registry digest does not depend on which world first asked for
+/// it (`issues/registry-digest-taken-in-observer-coordinates.md`). `shape`
+/// declares a record and stands after `wide` in `client`'s world (`wide` has
+/// the larger closure, so its world is the spine), not where its own world
+/// puts it. The first session meets `shape` only under
+/// `client`; the second, after an edit to `origin`, meets it first under
+/// `near`, where it stands in its own place. Both take the same digest, and
+/// `client` is moved.
+#[test]
+fn a_registry_digest_is_the_same_whichever_world_asks_first() {
+    let root = temp("cutoff-digest-coordinates");
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    let write = |name: &str, src: &str| std::fs::write(root.join(name), src).unwrap();
+    write("origin.hthr", ORIGIN);
+    write("shape.hthr", "import origin;\nrecord Shape { side: Nat }\nfn round() -> Shape { Shape { side: origin::value() } }\n");
+    let wide: String =
+        (0..12).map(|i| format!("fn wide{i}() -> Nat {{ origin::value() }}\ntheorem wide{i}_is(): wide{i}() = 7 {{ refl }}\n")).collect();
+    write("pad.hthr", "import origin;\nfn pad() -> Nat { origin::value() }\n");
+    write("wide.hthr", &format!("import origin;\nimport pad;\n{wide}"));
+    write(
+        "client.hthr",
+        "import wide;\nimport shape;\nfn side(s: shape::Shape) -> Nat { s.side }\nfn flat() -> Nat { side(shape::round()) }\ntheorem flat_is(): flat() = wide::wide0() { refl }\n",
+    );
+    write("near.hthr", "import shape;\nfn again() -> shape::Shape { shape::round() }\n");
+    write("top.hthr", "import near;\nimport client;\n");
+    let first = pass(&root.join("client.hthr"), Some(&cache), ImageFreshness::AcceptStale, None);
+    assert_eq!(first.relocated, 0);
+    write("origin.hthr", &format!("theorem unrelated(n: Nat): n = n {{ refl }}\n{ORIGIN}"));
+    let moved = pass(&root.join("top.hthr"), Some(&cache), ImageFreshness::AcceptStale, None);
+    let order: Vec<&str> = moved.modules.iter().map(|m| m.0.as_str()).collect();
+    let at = |name: &str| order.iter().position(|m| *m == name).unwrap_or_else(|| panic!("{name} in {order:?}"));
+    assert!(at("near") < at("client"), "{order:?}");
+    let client = &moved.modules[at("client")];
+    assert!(client.1, "the client was elaborated again: {:?}", client.2);
+    assert_eq!(client.2, [CacheNoticeKind::Relocated]);
+    let fresh = pass(&root.join("top.hthr"), None, ImageFreshness::Exact, None);
+    assert!(moved.psi == fresh.psi, "the stale lane's world differs from a fresh elaboration");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Negative controls: each edit below is something the client observed, and
 /// the client is elaborated again, never moved.
 #[test]
