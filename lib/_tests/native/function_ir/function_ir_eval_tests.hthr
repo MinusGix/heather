@@ -6,6 +6,11 @@ import function_ir_eval;
 import bool;
 import list;
 import option;
+import string;
+import tactic;
+import simp_laws;
+import simp;
+import bitvec;
 
 fn no_calls() → Nat → Option<Nat> { λ _ => None }
 
@@ -57,3 +62,10 @@ fn unknown_call() → Function { of(Call(5, [0], 1)) }
 
 theorem unknown_call_refused(): unknown_call().scan(no_calls()) = False { refl }
 theorem unknown_call_not_evaluable(): unknown_call().evaluable(no_calls()) = False { refl }
+
+// `simp`'s default for a valuation passes the checks a set is held to, and
+// a read of what was set is a `by simp()`.
+theorem simp_valuation_reads_checked(): True { by simp_check([simp_valuation_reads]) }
+
+theorem set_read_by_simp(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w)):
+    Valuation::set(values, id, value, 64, id) = value(64) { by simp() }

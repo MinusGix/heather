@@ -130,9 +130,9 @@ fn TokenKind::numbered(kinds: List<TokenKind>, next: u64) → Bool {
 // Whether the scanner, from the start of a source that is `spelling` and
 // nothing else, cuts one token of kind `code` that runs to its end.
 fn TokenKind::cuts(code: u64, spelling: String) → Bool {
-    match Accepted::longest(scan_begin(0), utf8::encode(spelling), 0, None) {
-        None => False,
-        Some(found) => match found.rest {
+    match Accepted::longest(scan_begin(0), utf8::encode(spelling), 0, Cut::Refusal(REFUSED_UNEXPECTED, 0)) {
+        Refusal(_, _) => False,
+        Found(found) => match found.rest {
             Nil => found.kind.eq_bit(code),
             Cons(_, _) => False,
         },

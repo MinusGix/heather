@@ -215,3 +215,9 @@ theorem simp_nat_arith_checked(): True { by simp_check([simp_nat_arith]) }
 theorem simp_list_shape_checked(): True { by simp_check([simp_list_shape]) }
 
 theorem simp_core_defaults_checked(): True { by simp_check([simp_nat_arith, simp_list_shape]) }
+
+theorem simp_list_windows_checked(): True { by simp_check([simp_nat_arith, simp_list_shape, simp_list_windows]) }
+
+theorem simp_vector_entries_checked(): True { by simp_check([simp_list_shape, simp_list_windows, simp_vector_entries]) }
+
+theorem simp_bitvec_nat_checked(): True { by simp_check([simp_nat_arith, simp_bitvec_nat]) }

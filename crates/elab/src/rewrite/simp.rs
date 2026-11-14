@@ -300,7 +300,10 @@ impl Simps<'_> {
                 below.push("_".into(), (**dom).clone(), dom_level.clone());
                 cur = cod;
             }
-            if Relation::of_type(self.0, &below, cur, h.span).is_none() {
+            // A type former of two types (`Mutated<Sha256, u64>`, what a
+            // `mut self` function returns) has a relation's shape and is
+            // no relation: its values are not related by it.
+            if Relation::of_type(self.0, &below, cur, h.span).is_none_or(|rel| matches!(*rel.carrier, Type::Ty(_))) {
                 return Ok(Rule { expr: h, proof, ty, name, iff, unfold: Some(abs) });
             }
         }
@@ -415,18 +418,59 @@ impl Simps<'_> {
         let premise = |at: &Cx, ty: &Type, level: &Level| self.discharge(at, ty, level, discharge);
         let mut run = Run { steps: Vec::new(), end: start.clone(), blocked: Vec::new(), exhausted: false, cycle: None };
         let unfolds: Vec<usize> = rules.iter().filter_map(|rule| rule.unfold).collect();
+        // An applied law's left side names its terms (`zeroed(R, 0, 64).hash`
+        // names `R`, a call whose body would compute): they stay as written
+        // while the goal computes, so the law can meet them. A call of a
+        // definition the call lists to unfold is not kept: listing it asks
+        // for its body.
+        let frozen: Vec<Rc<Term>> = rules
+            .iter()
+            .filter(|rule| rule.unfold.is_none() && !rule.iff)
+            .filter_map(|rule| match &rule.ty {
+                Type::Id { lhs, .. } => Some(Type::El { level: Level::Zero, tm: Rc::clone(lhs) }.root_terms()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|t| crate::spelling::is_app(t) || crate::spelling::proj_of(t).is_some())
+            .filter(|t| match crate::spelling::app_spine(t).0 {
+                Term::GlobalTm { var, .. } => self.0.global_abs_of(*var).is_none_or(|abs| !unfolds.contains(&abs)),
+                _ => true,
+            })
+            .collect();
         let mut seen = vec![start.clone()];
         'steps: loop {
             if run.steps.len() >= BUDGET {
                 run.exhausted = true;
                 return Ok(run);
             }
-            // Calls at constructors compute first (`simp(Seq(a, b))` is
+            // Calls at constructors compute (`simp(Seq(a, b))` is
             // `seq(simp(a), simp(b))`), as a split's goal does: a law's left
             // side is matched against what is written, and the definition's
             // own equations are not laws anyone should have to list.
-            let computed = crate::goal_combinators::simplify_goal_unfolding(self.0, cx, &run.end, true, &unfolds);
+            let computed = crate::goal_combinators::simplify_goal_unfolding(self.0, cx, &run.end, true, &unfolds, &frozen);
             if computed != run.end && self.conv_types(cx, &computed, &run.end, lvl) {
+                // A law that fires on the goal and not on the computed goal
+                // fires first: the computing would take its instance away, as
+                // a law about a call (`Sha256::run_spec` at
+                // `Sha256::run(s).after`) is lost once the call computes into
+                // its body, a `mut self` function's calls in sequence. Only
+                // such a law: one that fires on the computed goal fires
+                // there, where the pattern children the computing names are
+                // what other laws meet.
+                for (i, rule) in rules.iter().enumerate() {
+                    if let Outcome::Fired(fired, next, sides) = self.fire(relations, cx, rule, &run.end, lvl, &premise)?
+                        && !matches!(self.fire(relations, cx, rule, &computed, lvl, &premise)?, Outcome::Fired(..))
+                    {
+                        run.steps.push(Step { rule: i, fired, sides });
+                        run.end = next;
+                        if let Some(back) = seen.iter().position(|ty| *ty == run.end) {
+                            run.cycle = Some(back);
+                            return Ok(run);
+                        }
+                        seen.push(run.end.clone());
+                        continue 'steps;
+                    }
+                }
                 run.end = computed;
             }
             // A closing call is done where the two sides are one term: a
@@ -790,8 +834,9 @@ impl Simps<'_> {
             };
         }
         let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, end, span)? else {
-            // `P ↔ P` and the like: the library's own closers, checked.
-            for text in ["iff_refl()", "trivial"] {
+            // `P ↔ P`, a conjunction of two equations that each met, and
+            // the like: the library's own closers, checked.
+            for text in ["iff_refl()", "trivial", "And(refl, refl)"] {
                 let source = format!("fn generated() -> Type {{ {text} }}");
                 let Ok(mut file) = parse_file(&source) else { continue };
                 let Some(Item::Decl(d)) = file.items.pop() else { continue };

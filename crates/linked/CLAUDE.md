@@ -35,8 +35,12 @@ repository root.
 - **`HEATHER_LEXER=linked`** has the `heather` binary cut every source with
   Heather's own scanner (compiled, linked;
   `heather_syntax::lexer::install_scanner`, `issues/self-lexer-linked.md`);
-  values and every refusal stay the Rust lexer's, so output is unchanged, and
-  `HEATHER_LEXER_REPORT=1` prints who cut what. Off by default.
+  values stay the Rust lexer's and a refusal is the scanner's reason and
+  offset worded by the Rust lexer's message builders
+  (`heather_syntax::lexer::ScanRefusal`), so output is unchanged, and
+  `HEATHER_LEXER_REPORT=1` prints who cut what. Off by default. A new reason
+  is a `REFUSED_*` and `FAIL_*` in `lexer_scan.hthr` and a `ScanRefusal`
+  (`tests/scanner.rs` holds the two numberings to each other).
 - **A new token kind** is a row of `TOKEN_KINDS` in
   `lib/lang/lexer/lexer_kinds.hthr` (its code, its `TokKind` name, its
   spellings), its `KIND_*` and states in `lexer_scan.hthr`, and the

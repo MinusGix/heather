@@ -22,9 +22,9 @@
 // (`Sha256::digest_bytes`, by `Part::window_of`: the hash value's codec
 // loses nothing).
 //
-// The functions that test without evidence (`push`, `pad`) are restated
-// by their test's bit (`Sha256::pushed`, `Sha256::padded`) and the loops
-// stepped by their generated equations (`*_step`, `*_done`).
+// A function that tests is taken at a branch by its generated equations
+// (`Sha256::push::True`, `Sha256::pad::False`), and a loop is stepped by
+// its own (`Sha256::zero::step`, `Sha256::zero::done`).
 
 import logic;
 import bool;
@@ -102,16 +102,8 @@ theorem Sha256::block_with_byte(s: Sha256, i: Nat, b: u8, below: i < 64):
 // A byte stored inside the block is that byte of the schedule's word replaced.
 theorem Sha256::put_inside(s: Sha256, at, byte: u64, below: at.toNat() < 64):
     Sha256::put(s, at, byte) = Mutated((s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }), at) {
-    let e: (at.unsigned_lt_bit(64) = True) = bv_omega;
-    Bool::convoy_true(at.unsigned_lt_bit(64), λ _ => Mutated((s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }), at), λ _ => Mutated(s, at), e)
+    Sha256::put::True(s, at, byte, below)
 }
-
-// `Sha256::push` by its test's bit: a byte stored, and the block run where that fills it.
-fn Sha256::pushed(s: Sha256, fill, byte: u64, full: Bool) → Mutated<Sha256, u64> {
-    match full { True => Mutated(Sha256::run(Sha256::put(s, fill, byte).after).after, 0), False => Mutated(Sha256::put(s, fill, byte).after, fill + 1) }
-}
-
-theorem Sha256::push_is(s: Sha256, fill, byte: u64): Sha256::push(s, fill, byte) = Sha256::pushed(s, fill, byte, fill.eq_bit(63)) { refl }
 
 // The context after whole blocks `full` of a message and `T` more bytes,
 // with room for `room` more before the block is run.
@@ -146,12 +138,11 @@ theorem Sha256::push_room(s: Sha256, full: List<List<u8>>, T: List<u8>, k: Nat, 
     And<Sha256Tracks(Sha256::push(s, fill, byte).after, full, T ++ [byte.truncate(8, 56)], k), Sha256::push(s, fill, byte).value.toNat() = Succ(T.len())> {
     let b = byte.truncate(8, 56);
     let space = t.space;
-    let other: (fill.eq_bit(63) = False) = BitVec::eq_bit_of_ne(64, fill, 63, λ same => {
-        let n: (fill.toNat() = 63) = cong_fn(λ (x: u64) => x.toNat(), same);
-        false_elim(omega)
-    });
     let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::put(s, fill, byte).after, fill + 1)) =
-        trans(Sha256::push_is(s, fill, byte), cong_fn(λ (full: Bool) => Sha256::pushed(s, fill, byte, full), other));
+        Sha256::push::False(s, fill, byte, λ same => {
+            let n: (fill.toNat() = 63) = cong_fn(λ (x: u64) => x.toNat(), same);
+            omega
+        });
     let single: List<u8> = [b];
     let longer = T.len_append(single);
     let one: (T.len() + single.len() = Succ(T.len())) = refl;
@@ -174,7 +165,7 @@ theorem Sha256::push_full(s: Sha256, full: List<List<u8>>, T: List<u8>, fill, by
     let P = Sha256::put(s, fill, byte).after;
     let zero: u64 = 0;
     let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, zero)) =
-        trans(Sha256::push_is(s, fill, byte), cong_fn(λ (full: Bool) => Sha256::pushed(s, fill, byte, full), BitVec::eq_bit_of_eq(64, fill, 63, same)));
+        Sha256::push::True(s, fill, byte, same);
     let single: List<u8> = [b];
     let last = T ++ single;
     let longer = T.len_append(single);
@@ -231,14 +222,8 @@ theorem Sha256::zeroed_block(n: Nat): (s: Sha256) → (i: u64) → (T: List<u8>)
     }
 }
 
-// The block with the one bit and its zeros, and `Sha256::pad` by its test's bit.
+// The block with the one bit and its zeros.
 fn Sha256::filled(s: Sha256, fill: u64) → Sha256 { Sha256::zero(Sha256::put(s, fill, 0x80).after, fill + 1).after }
-
-fn Sha256::padded(s: Sha256, fill: u64, short: Bool) → Mutated<Sha256, u64> {
-    match short { True => Mutated(Sha256::filled(s, fill), fill), False => Mutated(Sha256::zero(Sha256::run(Sha256::filled(s, fill)).after, 0).after, fill) }
-}
-
-theorem Sha256::pad_is(s: Sha256, fill: u64): Sha256::pad(s, fill) = Sha256::padded(s, fill, fill.unsigned_lt_bit(56)) { refl }
 
 // The one bit and zeros to the block's end, after the bytes it held.
 theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
@@ -263,9 +248,10 @@ theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat()
 // The padding where the length still fits the block: the block is the bytes held, the one bit, and zeros.
 theorem Sha256::pad_short(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), short: T.len() < 56, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::pad(s, fill).after) = T ++ Sha2::one_bit(63 - T.len()), Sha256::pad(s, fill).after.hash = s.hash> {
-    let e: (fill.unsigned_lt_bit(56) = True) = bv_omega;
-    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, trans(Sha256::pad_is(s, fill), cong_fn(λ (b: Bool) => Sha256::padded(s, fill, b), e)));
+    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) = {
+        let lt: (fill.toNat() < 56) = omega;
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::pad::True(s, fill, lt))
+    };
     let filled = Sha256::filled_block(s, T, fill, at, omega, held);
     And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), is), filled.left), trans(cong_fn(λ (z: Sha256) => z.hash, is), filled.right))
 }
@@ -274,11 +260,10 @@ theorem Sha256::pad_short(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = 
 theorem Sha256::pad_long(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), long: 56 <= T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::pad(s, fill).after) = Sha2::zero_bytes(64),
         Sha256::state(Sha256::pad(s, fill).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))> {
-    let e: (fill.unsigned_lt_bit(56) = False) = bv_omega;
     let F = Sha256::filled(s, fill);
     let R = Sha256::run(F).after;
     let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, trans(Sha256::pad_is(s, fill), cong_fn(λ (b: Bool) => Sha256::padded(s, fill, b), e)));
+        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::pad::False(s, fill, λ (lt: fill.toNat() < 56) => omega));
     let filled = Sha256::filled_block(s, T, fill, at, below, held);
     let none: List<u8> = Nil;
     let zeros = Sha256::zeroed_block(64, R, 0, none, refl, refl, Sha256::block(R).take_zero());

@@ -52,11 +52,11 @@ unsafe extern "sysv64" {
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
     /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 136 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3536 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3672 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
-    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3808 bytes.
+    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3944 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
-    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 4488 bytes.
+    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 4896 bytes.
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 
@@ -324,7 +324,7 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
-/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 4624 bytes.
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 5032 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers

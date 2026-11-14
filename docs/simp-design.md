@@ -670,3 +670,56 @@ a definition's body (`Valuation::set_here`, about `Valuation::set`) does not
 match a call of a definition that is that body (`Node::step(Move(…), v)`)
 until the call is unfolded. Before this, the proof wrote the unfolding as a
 `refl` equation and passed it as a law.
+
+## 15. Computing, matching and defaults for the stream proofs, as built (2026-11-14)
+
+Found by converting the chains of
+`lib/native/crypto/sha256_stream_agreement.hthr` and
+`lib/std/crypto/sha2_stream.hthr`; probed in
+`lib/_tests/std/tactic/simp_tests.hthr`.
+
+- **Laws that the computing would take away fire first.** Each step
+  computes the goal; a law that fires on the goal as written and not on the
+  computed goal fires before the computed goal replaces it. A law about a
+  call (`Sha256::run_spec` at `Sha256::run(s).after`) is otherwise lost once
+  the call computes into its body. A law that fires on both waits, so the
+  pattern children the computing names (`h(a)` at a pointwise body) are
+  what it meets.
+- **An applied law's terms are frozen.** The application and projection
+  terms of each applied law's left side (`zeroed(R, 0, 64).hash` names `R`)
+  are not computed while the goal is, so the law can meet them. A call of a
+  definition the call lists to unfold is not frozen: listing it asks for its
+  body.
+- **What computes, for `simp`.** A `decreases` function's recursion at a
+  constructor is not taken (its arm is `f#body(…)`, which no law meets
+  again; its `f::step` equations are the laws). A field read is taken only
+  when the result spells; a field of a definition that unfolds to a
+  constructor is otherwise left as the call. A conjunction's sides and an
+  equation's two sides are computed (`And<a = b, c = d>` goals, a record's
+  Σ, non-dependent second components), and `And(refl, refl)` closes a
+  conjunction of met equations.
+- **A `mut self` function is a definition.** Its result is `Mutated<S, R>`,
+  which looks like a relation's carrier; a "relation" whose carrier is a
+  type is a function, so the call unfolds when named.
+- **Matching reaches values.** A pattern's variable under a λ (matched up
+  to the bound variables), a sum's injection, a pair, a projection, or a
+  constructor's label and children is matched there; a bare projection's
+  key compares its kind and its pair.
+- **A registered set's names resolve wherever their module is reached.**
+  `name_of` spells a qualified key; the host's `Resolve` takes a key whose
+  module is in the import closure, as `Lookup` already did, so a set
+  registered in `simp_laws` reaches a `by simp()` in a module that does not
+  import the lemma's.
+
+**Defaults.** `List::windows`, `Vec::entries` and `BitVec::nat` are in
+`simp_laws` (their modules sit below `string`); `Stored::bytes`
+(`stored.hthr`), `Part::fields` (`part.hthr`) and `Valuation::reads`
+(`function_ir_eval.hthr`) are in their types' modules. Each has its
+`simp_check` theorem: the core ones in `simp.hthr`, the others in their
+modules' `lib/_tests` files. A builtin is keyed by its name (`"Vec"` for
+`[A; n]`). A law with a hypothesis fires where the call's discharger proves
+it; the default discharger reads the locals only.
+
+Not built: a default discharger for arithmetic side conditions, or for a
+theorem body or a `found` condition with no tactic written; what each would
+need is in `issues/simp-adoption-native-gaps.md`.

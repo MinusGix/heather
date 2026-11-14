@@ -32,6 +32,8 @@ import vector;
 import bitvec_bytes;
 import list_window;
 import layout;
+import string;
+import simp_laws;
 
 // How a value of `A` is bytes of a layout: a writer whose output is the
 // layout's size, and a reader that gives back what was written.
@@ -454,3 +456,12 @@ theorem Stored::exact_all<A>(self s: Stored<A>, tight: s.layout.stride() = s.lay
 theorem Stored::exact_array<A>(self s: Stored<A>, n: Nat, tight: s.layout.stride() = s.layout.size, exact: s.Exact()): s.array(n).Exact() {
     λ bytes sized => s.exact_all(tight, exact, n, bytes, sized)
 }
+
+// `simp`'s default for a goal with a `Stored` in it: a read of what was
+// just put, at the same place or one apart, and a put's length. Each
+// hypothesis is the call's discharger's to prove.
+register def simp_stored_bytes: SimpSet = simp_default("Stored::bytes", name_of(Stored), [
+    name_of(Stored::get_put),
+    name_of(Stored::get_put_apart),
+    name_of(Stored::len_put),
+]);
