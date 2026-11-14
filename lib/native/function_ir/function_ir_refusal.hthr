@@ -175,17 +175,28 @@ fn leaf_refusal(saves: Nat, prog: Prog, file: File, before, rest: List<Node>, pl
 // `File::emit_call`, saying which of its tests refuses.
 fn File::call_refusal(self file: File, callee: Nat, arguments: List<Nat>, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
     let call = "the call of function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "): ";
+    let staged = file.write(Rsp, None);
+    let order = staged.call_moves(arguments.take(6));
     match Succ(callee).leb(bound) {
         False => call ++ "the callee is not below this function",
         True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
             False => call ++ "its leading arguments are not the homes of the buffers the callee is lent",
-            True => match file.move_outputs(ArgumentMove::ports(file.call_moves(arguments)), ArgumentMove::registers(file.call_moves(arguments))) {
-                None => call ++ "an argument is in no register, where " ++ file.shown(),
-                Some(moves) => match moves.file.outputs_check(word_ports(arguments), argument_registers()) {
-                    False => call ++ "the moves do not leave the arguments in their registers, where " ++ file.shown(),
-                    True => match leaves_all(moves.code, callee_saved()) {
-                        False => call ++ "a move writes a callee-saved register",
-                        True => call ++ "no test of the call refuses",
+            True => match arguments.drop(6).len().leb(2) {
+                False => call ++ "it passes " ++ refusal_number(arguments.len()) ++ " words, and a call passes at most eight: six in registers and two on the stack",
+                True => match staged.sources(arguments.drop(6)) {
+                    None => call ++ "a word past the sixth is in no register, where " ++ staged.shown(),
+                    Some(sources) => match sources.len().same(arguments.drop(6).len()) && staged.outputs_check(word_ports(arguments.drop(6)), sources) {
+                        False => call ++ "the words past the sixth are not in the registers found for them, where " ++ staged.shown(),
+                        True => match staged.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
+                            None => call ++ "an argument is in no register, where " ++ staged.shown(),
+                            Some(moves) => match moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()) {
+                                False => call ++ "the moves do not leave the arguments in their registers, where " ++ staged.shown(),
+                                True => match leaves_all(moves.code, callee_saved()) {
+                                    False => call ++ "a move writes a callee-saved register",
+                                    True => call ++ "no test of the call refuses",
+                                },
+                            },
+                        },
                     },
                 },
             },
@@ -306,11 +317,12 @@ fn Function::refused(self function: Function, k: Nat, placement: List<Place>, na
     match function.lent.same(lent_count(counts, k)) {
         False => "the function is lent " ++ refusal_number(function.lent) ++ " buffers and the program's counts say "
             ++ refusal_number(lent_count(counts, k)),
-        True => match input_file(word_ports(function.parameters), argument_registers()) {
-            None => "the function has more parameters than argument registers",
-            Some(file) => match function.body.emit_calls(placement_saves(placement), function_opened(Start, k, placement_saves(placement)), file,
+        True => match input_file(word_ports(function.parameters), parameter_registers()) {
+            None => "the function has " ++ refusal_number(function.parameters.len())
+                ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
+            Some(file) => match function.body.emit_calls(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
                 placement_body(placement), names, k, counts, function.homes()) {
-                None => function.body.refusal(placement_saves(placement), function_opened(Start, k, placement_saves(placement)), file,
+                None => function.body.refusal(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
                     placement_body(placement), names, k, counts, function.homes()),
                 Some(body) => match function.closing(placement_saves(placement), body) {
                     None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "

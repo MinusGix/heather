@@ -196,7 +196,7 @@ fn scaled_program() → Prog {
         .label(2).put(Block([frame_allocate()]))
         .put(Block([MovRR(Rcx, Rsi), MovRR(R8, Rdi)]))
         .label(3).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 5))
-        .saving().put(Block([MovRR(Rdi, R8)])).put(CallTo(1)).restoring()
+        .saving().put(Block([])).put(Block([MovRR(Rdi, R8)])).put(CallTo(1)).put(Block([])).restoring()
         .put(Block([XorRR(R9, R9), CmpRR(Rcx, Rcx), SetBelow(R9b)]))
         .put(Block([TestRR(R9, R9)])).put(Jcc(E, 4))
         .put(Block([MovRR(R8, Rax)])).put(Block([MovRI(Rdx, w(0))])).put(Jmp(6))

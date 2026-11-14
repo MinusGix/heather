@@ -78,8 +78,8 @@ fn linked_exports_are_what_the_compiler_emits() {
 
 // What the contract does not take is refused by name, and nothing is
 // written (docs/native-library-exports-design.md §6, clauses 1 and 4): a
-// seventh word, whether the words are the function's own or a span's
-// address and length among them, for a function that reads its span and for
+// ninth word (issues/function-call-past-six-words.md), whether the words
+// are the function's own or a span's address and length among them, for a function that reads its span and for
 // one that stores into it, and an entry of a program that is not one
 // `compile-x86` exports yet.
 #[test]
@@ -93,17 +93,17 @@ fn what_the_contract_does_not_take_is_refused() {
         import rt_loop;\nimport rt_file;\nimport rt_file_lower;\nimport rt_file_loop;\n\
         import function_ir;\nimport function_ir_eval;\nimport function_ir_state;\nimport function_ir_writes;\n\
         import function_ir_run;\nimport function_ir_link;\nimport function_ir_placeless;\nimport runtime;\nimport runtime_file;\n\
-        runtime fn seven(a, b, c, d, e, f, g: BitVec(64)) → BitVec(64) { a.add(g) }\n\
-        runtime fn wide_span(span: List<BitVec(8)>, length, a, b, c, d, e: BitVec(64)) → BitVec(64) {\n\
-            span.byte_within(length, a).zero_extend(56).add(e)\n}\n\
-        runtime fn wide_store(span: List<BitVec(8)>, length, a, b, c, d, e: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {\n\
-            Mutated(span.with_byte_within(length, a, b.truncate(8, 56)), e)\n}\n";
+        runtime fn nine(a, b, c, d, e, f, g, h, i: BitVec(64)) → BitVec(64) { a.add(i) }\n\
+        runtime fn wide_span(span: List<BitVec(8)>, length, a, b, c, d, e, f, g: BitVec(64)) → BitVec(64) {\n\
+            span.byte_within(length, a).zero_extend(56).add(g)\n}\n\
+        runtime fn wide_store(span: List<BitVec(8)>, length, a, b, c, d, e, f, g: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {\n\
+            Mutated(span.with_byte_within(length, a, b.truncate(8, 56)), g)\n}\n";
     std::fs::write(dir.join("wide.hthr"), source).unwrap();
     let wide = dir.join("wide.hthr");
     for (module, function, why) in [
-        (&wide, "seven", "takes 7 words: compile-x86 passes at most six"),
-        (&wide, "wide_span", "takes 7 words, an address and a length for each span among them"),
-        (&wide, "wide_store", "takes 7 words, an address and a length for each span among them"),
+        (&wide, "nine", "takes 9 words: compile-x86 passes at most eight, six in registers and two on the stack"),
+        (&wide, "wide_span", "takes 9 words, an address and a length for each span among them"),
+        (&wide, "wide_store", "takes 9 words, an address and a length for each span among them"),
     ] {
         let output = dir.join(format!("{function}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
