@@ -5,7 +5,7 @@ labels: [native,metaprogramming,compiler]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-14
 ---
 
 Slice R5a of `docs/runtime-fn-setups-design.md` (§4, §12): the reflected
@@ -64,3 +64,6 @@ same values from the real bodies. What implementing changed from §4.1:
 - `ForIn` waits for R3 (`List::for_in` does not exist yet); `Enum`/`Case`
   wait for the first enum-reading runtime fn. `Bytes(cap)`'s capacity is not
   in the type, so the reflector writes `Bytes(0)` and the setup chooses.
+- 2026-11-14: The span reflector's refusal of another computation called
+  last rested on "no η for records", which is false; filed as
+  [[reflect-tail-call-of-computation]].

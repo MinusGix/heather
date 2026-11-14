@@ -2152,7 +2152,6 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     let measure_at <- runtime_span_ref("FFun::measure_at");
     let on_words <- runtime_span_ref("FFun::on_words");
     let recast <- runtime_span_ref("FTm::recast");
-    let eta <- runtime_span_ref("FTm::mutated_eta");
     let rfl <- runtime_global("tactic::rfl");
     let sym_g <- runtime_global("Setup::eq_sym");
     let trans_g <- runtime_global("Setup::eq_trans");
@@ -2244,8 +2243,7 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(ys3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
     let hy = ap(cong_g, [Blank, Blank, ap(recast, [e.tys, w64, res_e]), Blank, Blank,
         ap(Local(hyp), [key(ys3), list(places, ys3), Local(lead(ys3)), ap(rfl, [Blank, NatLit(ws.len())]), Local(p3.ref)])]);
-    let back = ap(trans_g, [Blank, Blank, Blank, Blank, hy, ap(eta, [Blank, Blank, ap(Global(f), runtime_locals(ys3))])]);
-    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, back])]));
+    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
     let lt_n = ap(lt_succ, [n_e]);
     let proved = runtime_lams(Cons(rest, xs.append([own, again, hyp])), ap(cong_g, [Blank, Blank, ap(recast, [e.tys, res_e, w64]), Blank, Blank,
         ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_f(Local(own), here, xs).append([lt_n, lt_n])))))))])]));

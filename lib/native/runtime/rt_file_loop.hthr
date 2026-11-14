@@ -591,8 +591,6 @@ fn FFun::uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, h: FTm::Sem(tys, Sig
 // The ending of a word and a span over the rest of the file.
 fn FTm::end_of(rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, BitVec(64)>) → Ending { Ending(m.value, Cons(m.after, rest)) }
 
-theorem FTm::mutated_eta<S, R>(m: Mutated<S, R>): Mutated(m.after, m.value) = m { match m { Mutated(_, _) => refl } }
-
 // What answers like the uncurried meaning on as many words as parameters
 // answers like the meaning.
 theorem FFun::answers_of_uncurry(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
@@ -964,9 +962,8 @@ theorem FFun::meas_pass_sound(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, 
             FFun::uncurry(tys, all, res, h, xs, o1), guarded, st, len_st);
     ⟨j(sym(chain), λ e _ => FTm::Spanned(rest, e.buffers), refl),
         λ hr => trans(chain, cong_fn(λ (x: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, x), at_st(own, again_w, λ ys o len_ys lt =>
-            trans(cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
-                    earlier(ys, o, trans(len_ys, sym(Fun::ids_len(all, Succ(Fun::meas_bnd(all)))))).right(Nat::lt_of_lt_of_le(m(ys, o), m(st, own), Succ(r), lt, hr))),
-                FTm::mutated_eta(FFun::uncurry(tys, all, res, h, ys, o))))))⟩
+            cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
+                    earlier(ys, o, trans(len_ys, sym(Fun::ids_len(all, Succ(Fun::meas_bnd(all)))))).right(Nat::lt_of_lt_of_le(m(ys, o), m(st, own), Succ(r), lt, hr))))))⟩
 }
 
 // What the code answers a self-call with once its passes have run out:
@@ -1341,9 +1338,8 @@ theorem FFun::counted_sound<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: FTm,
                     let picked = FFun::pick(all.len(), again_w, known(r));
                     let same = λ (ys: List<BitVec(64)>) (o1: List<BitVec(8)>) =>
                         FFun::pick_same(ys.len().same(all.len()), known(r, ys, o1), again_w(ys, o1), λ yes =>
-                            sym(trans(cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
-                                    earlier(ys, o1, trans(Nat::same_sound(ys.len(), all.len(), yes), sym(Fun::ids_len(all, Succ(bnd))))).right(trivial)),
-                                FTm::mutated_eta(known(r, ys, o1)))));
+                            sym(cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
+                                    earlier(ys, o1, trans(Nat::same_sound(ys.len(), all.len(), yes), sym(Fun::ids_len(all, Succ(bnd))))).right(trivial))));
                     let swapped = FTm::tail_sem_ext(body, fw, res, FFun::later_round(tys, res, rest, later),
                         λ (ys: List<BitVec(64)>) (o1: List<BitVec(8)>) => FTm::recast(tys, Word(64), res, picked(ys, o1)),
                         λ ys o1 => cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(tys, Word(64), res, u), sym(same(ys, o1))),
