@@ -118,7 +118,8 @@ cpu, rustc, commit, date and the `sha2` backend; `measure` rows are
 
 | what | fails when | why |
 |---|---|---|
-| a count (`count/…/instructions`, `…/per-byte`) | it rose at all | exact and deterministic: a moved counter is a change in the emitted code, not noise |
+| the compression's count (`count/sha256/block/instructions`) | it rose at all | exact and deterministic over fixed input: a moved counter is a change in the emitted code, not noise |
+| the scanner's count (`count/scanner/…/per-byte`) | it rose by more than 1% | exact too, but its input is `lib/`, which every library round edits; the mix of tokens drifts by fractions of a percent |
 | a linked time | ≥ 1.25× slower on the snapshot's cpu and rustc | the kernel suite's threshold and reasons (`docs/benchmarking.md`) |
 | a reference time, a compile time | never; printed | the references are Rust's, not ours, and compile times are the noisy wall clock |
 

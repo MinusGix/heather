@@ -289,7 +289,8 @@ fn save(path: &Path, m: &Measures, env: &[(&str, String)]) {
     std::fs::write(path, out).expect("the snapshot is writable");
 }
 
-/// Exit status of `--check`: 1 when a counter moved up or a linked case got
+/// Exit status of `--check`: 1 when a counter moved up (the scanner's
+/// per-byte count by more than 1%, its corpus being lib/) or a linked case got
 /// at least 1.25 times slower on the snapshot's machine, 3 when the times
 /// could not be compared (another cpu or rustc), 0 otherwise. Counters are
 /// exact, so any move is reported; a move down is a hint to re-record.
@@ -307,7 +308,10 @@ fn check(m: &Measures, env: &[(&str, String)], baseline: &Option<Baseline>) -> i
             if (ratio - 1.0).abs() > 0.0005 {
                 let word = if now > *recorded { "rose" } else { "fell" };
                 println!("check: {key} {word}: {} → {} ({ratio:.3}×)", num(Some(*recorded), 1), num(Some(now), 1));
-                if now > *recorded && (key.ends_with("/instructions") || key.ends_with("/per-byte")) {
+                // The compression's count is over fixed bytes, so any rise
+                // is the code. The scanner's is over lib/, which every
+                // library change edits, so it fails only past 1%.
+                if now > *recorded && (key.ends_with("/instructions") || key.ends_with("/per-byte") && ratio > 1.01) {
                     status = 1;
                 }
             }
