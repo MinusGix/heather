@@ -91,6 +91,96 @@ proved once. The level is FunctionIR, because every producer reaches it
 | Learn | Inside an arm, the branch's condition is a fact; a test of a known condition is its arm | The branch's own meaning | The length test on every byte |
 | Restate a loop | Runs a loop over a different state | A simulation between the two states (§6) | The working variables in registers |
 
+### 3.1 What a move's law is, over this IR's meaning
+
+FunctionIR's meaning is declarative: a function's body is a set of
+equations over one valuation for the activation (one more for each pass of a
+loop), with the file of buffers threaded through the nodes in order
+(`StructuredRegionRunsOver`, `Function::Runs`, `program_effects`;
+`function_ir_writes.hthr`). The compiled code's contract takes that
+relation as a premise: where the program's functions say a call may return
+`result` and leave `after`, the code returns it (`Stack::CalledOver`). So
+an optimizer from `fs` to `fs'` owes one statement, with the functions kept
+at their indexes:
+
+    program_effects(fs)(before, f, arguments, result, after)
+      → program_effects(fs')(before, f, arguments, result, after)
+
+Every valuation that satisfies the old body must give one that satisfies
+the new. Read move by move, that says where the proof work is:
+
+- **Dropping a node is free.** The new body asks less of the same
+  valuation. Nothing about liveness is proved: if a later node reads the
+  dropped id, the lowering refuses the program, which is the arrangement the
+  planner already has.
+- **Rewriting a node in place needs only the rule.** The valuation is
+  unchanged, and every equation of the old body in the same scope holds of
+  it, whichever side of the node it is written on. The replayer carries
+  those equations as the definitions in scope, unfolds the old node and the
+  new through them as far as the rule's two sides go, and compares.
+- **A node with a new id needs the id to be new.** The valuation is
+  extended at that id, so every other equation must not mention it. The
+  replayer keeps a bound above every id of the function, takes new ids from
+  above it, and the one lemma is that a region whose ids are below a bound
+  holds alike of two valuations that agree below it.
+- **Inline is that lemma once more.** A call's meaning is that some
+  valuation satisfies the callee's body. The inlined body is the callee's
+  with every id raised above the bound, and the new valuation is the
+  caller's below the bound and the callee's above it. A loop's body has a
+  valuation of its own, so nothing inside it is renamed.
+- **Learn is the conditional's own meaning.** A conditional holds as its
+  taken arm does, so an arm is transformed with the condition's bit among
+  the equations in scope, and a conditional whose bit is known is its arm.
+
+Requirements the lowering and the callers check of a program (which
+buffers it stores to, that it lends nothing it should not) are computed
+again on the new program, so no move owes their preservation.
+
+An idiom that has no node (a rotate, a byte swap, a load of a word) can
+arrive two ways, chosen per idiom. A new node costs a case in every match
+on the node type, through the meaning and the lowering, and gives the
+rules something to speak of: right where the idiom has algebra of its own,
+as a rotate does. Or it is selection in the lowering, a place that covers
+several nodes as `Folded` covers a constant (§7): right where the idiom is
+only an encoding, as a 32-bit move for a narrowing is.
+
+### 3.2 Facts and rules, as the probe built them
+
+A probe of the replayer over the real node type checks, with its theorem
+(2026-11-14; `function_ir_replay.hthr` when it lands). What it settled:
+
+- **The proof state is a set of facts**: nodes known to hold of the
+  activation's valuation. Every pure node of the old body is one as the
+  sweep passes it, kept or dropped.
+- **A rule is a clause over nodes with its proof**: premises and a
+  conclusion, made from an instance's ids and literals, and one theorem
+  that any valuation satisfying the premises satisfies the conclusion
+  (`Clause::Sound`, `Rule`). `x + 0 = x` is the clause from a `Const` of
+  zero and an `Add` to a `Move`, and its proof is one line about words.
+  A rule is written in the IR's own vocabulary, so there is no pattern
+  type, no expression type and nothing to unfold: applying a rule is
+  finding its premises among the facts.
+- **Four moves over a list of nodes**: keep the next node, drop it (never
+  a store), derive a rule's conclusion into the facts, and emit a node
+  that is among the facts. A rewrite is a drop, some derivations and an
+  emit; sharing and copy propagation are rules like any other.
+- **One theorem** (`replay_sound`): whatever the plan, the nodes returned
+  run wherever the old ones ran, over the same valuation and files, and
+  the facts returned hold there.
+
+The fold pass's `Fact` (an id with its constant) and a range, a known bit
+or a branch's condition are the same thing with a wider fact type, which
+is where requests (§5) attach: an answer In scope is a fact, and an answer
+Decided is a fact a rule derived.
+
+What the kernel pays, as a shape: with the facts in a list a move costs a
+scan of the function's facts, and a plan for a few hundred nodes runs a
+query out of fuel. With the facts keyed by the id a node writes
+(`NatMap`), a move costs a lookup, a rewritten node costs a few thousand
+kernel steps whatever the function's size, and one query replays a few
+hundred of them. A function's plan is therefore replayed a region at a
+time with the facts threaded between, as the lowering is.
+
 Memory needs no move of its own. A load after a store at the same index is
 the stored value. A store after a store at the same index drops the first. A
 load after a store at another index passes over it. These are rules, the
@@ -295,9 +385,7 @@ without a special case.
    share of the counter; independent of everything else.
 2. **The replayer at FunctionIR** with Rewrite, Share and Drop, and the rule
    table. Acceptance: the folding pass restated as rules, and the rotate
-   rule added as the first new one. Before it, a probe of what the kernel
-   pays to replay a plan of a few hundred moves over a toy operator
-   language; if that cost has the wrong shape the design changes there.
+   rule added as the first new one. The probe before it is done (§3.2).
 3. **Inline.**
 4. **Requests** with the answers In scope, Decided and Required, and the
    range domain. Acceptance: SHA-256's length tests go, with no change to
