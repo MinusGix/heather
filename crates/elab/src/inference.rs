@@ -680,13 +680,6 @@ impl Inference<'_> {
                         kind: ExprKind::Dot { recv: recv.clone(), name: "at".into(), tyargs: vec![], args: Some(vec![(**idx).clone()]), named: vec![] },
                         span: e.span,
                     };
-                    // An index whose type is `Fin` behind a definition is
-                    // still the kernel's `nth`, where the method is refused.
-                    if self.probe(|| self.elab_infer_written(cx, &call, expected).is_err())
-                        && self.probe(|| vec::elab_nth(self.0, cx, recv, idx, e.span).is_ok())
-                    {
-                        return vec::elab_nth(self.0, cx, recv, idx, e.span);
-                    }
                     self.elab_infer_written(cx, &call, expected).map_err(|err| match err {
                         crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
                             msg: format!(

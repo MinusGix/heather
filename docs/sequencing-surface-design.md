@@ -1398,8 +1398,7 @@ reports the `Nat` reading with the word reading's reason beside it.
 receiver's `at` method, `xs.at(i)` (`inference::index_by_method`): for
 `[A; n]` that is `Vec::at`, which finds its proof that `i` is inside
 (`stored_words.hthr`). A numeral, and an index that only checks (`FZ`),
-keep the kernel's `nth` at `Fin(n)`, and so does an index the method
-refuses where `nth` takes it (a `Fin` behind a definition).
+keep the kernel's `nth` at `Fin(n)`.
 
 `xs[i] := e` is a place (§20 extended): `p[i] := e` is `p := p.put(i,
 e)`, written by the parser (`place_update`), so `x.f[i] := e` nests into
