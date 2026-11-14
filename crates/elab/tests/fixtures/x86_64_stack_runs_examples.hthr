@@ -115,14 +115,18 @@ theorem caller_moves<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: S
 // its own (nothing stores to it); data is one byte per address, read by the
 // address's value; a store writes its bytes from there up.
 
-record Toy { code: BitVec(64) → Option<BitVec(8)>, bytes: Nat → BitVec(8) }
+// Code is the bytes themselves, run where `code` says and only above the
+// stack's 4096 bytes and below 2^47, so a store into the stack never
+// reaches it and an instruction's bytes read as data where it was fetched.
+record Toy { code: Nat → Bool, bytes: Nat → BitVec(8) }
 
 fn store_at(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat) → BitVec(8) {
     match base.leb(n) { False => f(n), True => match bytes.nth(n - base) { None => f(n), Some(byte) => byte } }
 }
 
 fn toy_fetch() → FetchAccess<Toy> {
-    FetchAccess(λ (m: Toy) (a: BitVec(64)) => m.code(a), λ (m: Toy) (a: BitVec(64)) => match m.code(a) { None => False, Some(_) => True })
+    FetchAccess(λ (m: Toy) (a: BitVec(64)) => Some(m.bytes(a.toNat())),
+        λ (m: Toy) (a: BitVec(64)) => m.code(a.toNat()) && (Nat::leb(4096, a.toNat()) && Succ(a.toNat()).leb(Nat::pow(2, 47))))
 }
 fn toy_data() → ByteReadAccess<Toy> { ByteReadAccess(λ (m: Toy) (a: BitVec(64)) => Some(m.bytes(a.toNat()))) }
 fn toy_store(m: Toy, a: BitVec(64), bytes: List<BitVec(8)>) → Toy { Toy(m.code, λ (n: Nat) => store_at(m.bytes, a.toNat(), bytes, n)) }
@@ -256,13 +260,29 @@ theorem toy_apart(m: Toy, i, k: Nat, fits: i + 8 <= 4096, k_fits: k + 8 <= 4096,
         sym(toy_word(m, k, k_fits))))
 }
 
-// Stores never reach code.
-theorem toy_code(m: Toy, a: BitVec(64), stored, bytes: List<BitVec(8)>): (at: BitVec(64)) →
-    CodeResident(toy_fetch(), m, bytes, at) → CodeResident(toy_fetch(), toy_store(m, a, stored), bytes, at) {
+// Where code runs, the toy's flag and an address past the stack.
+theorem toy_executable(m: Toy, a: BitVec(64), exec: toy_fetch().executable(m, a) = True):
+    (4096 <= a.toNat()) ∧ (a.toNat() < Nat::pow(2, 47)) {
+    let n = a.toNat();
+    let parts = Bool::is_true_and(m.code(n), Nat::leb(4096, n) && Succ(n).leb(Nat::pow(2, 47)), Bool::is_true_of_eq(exec));
+    let high = Bool::is_true_and(Nat::leb(4096, n), Succ(n).leb(Nat::pow(2, 47)), parts.right);
+    ⟨Nat::leb_sound(4096, n, high.left), Nat::leb_sound(Succ(n), Nat::pow(2, 47), high.right)⟩
+}
+
+// Stores into the stack never reach code.
+theorem toy_code(m: Toy, i: Nat, fits: i + 8 <= 4096, w: BitVec(64), bytes: List<BitVec(8)>): (at: BitVec(64)) →
+    CodeResident(toy_fetch(), m, bytes, at) → CodeResident(toy_fetch(), toy_store(m, next_rip(BitVec::zero(), i), word_bytes(w)), bytes, at) {
     match bytes {
         Nil => λ at resident => resident,
-        Cons(_, rest) => λ at resident => ⟨resident.left, ⟨resident.right.left, ⟨resident.right.right.left,
-            toy_code(m, a, stored, rest, next_rip(at, 1), resident.right.right.right)⟩⟩⟩,
+        Cons(_, rest) => λ at resident => {
+            let above = toy_executable(m, at, resident.left).left;
+            let base: (next_rip(BitVec::zero(), i).toNat() = i) = zero_at(i, { omega });
+            let eight: (word_bytes(w).len() = 8) = refl;
+            let stays: (store_at(m.bytes, next_rip(BitVec::zero(), i).toNat(), word_bytes(w), at.toNat()) = m.bytes(at.toNat())) =
+                store_past(m.bytes, next_rip(BitVec::zero(), i).toNat(), word_bytes(w), at.toNat(), { omega });
+            ⟨resident.left, ⟨trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), stays), resident.right.left),
+                ⟨resident.right.right.left, toy_code(m, i, fits, w, rest, next_rip(at, 1), resident.right.right.right)⟩⟩⟩
+        },
     }
 }
 
@@ -272,9 +292,10 @@ fn toy_stack() → Stack<Toy>(toy_fetch(), toy_data()) {
         λ m i fits => trivial,
         λ m i fits w => toy_stored(m, i, fits, w),
         λ m i k fits k_fits apart w => toy_apart(m, i, k, fits, k_fits, apart, w),
-        λ m i fits w bytes at resident => toy_code(m, next_rip(BitVec::zero(), i), word_bytes(w), bytes, at, resident),
+        λ m i fits w bytes at resident => toy_code(m, i, fits, w, bytes, at, resident),
         λ m i fits => Exists(immediate_from_bytes(m.bytes(i), m.bytes(i + 1), m.bytes(i + 2), m.bytes(i + 3), m.bytes(i + 4), m.bytes(i + 5),
-            m.bytes(i + 6), m.bytes(i + 7)), toy_word(m, i, fits)))
+            m.bytes(i + 6), m.bytes(i + 7)), toy_word(m, i, fits)),
+        λ m a exec => ⟨refl, toy_executable(m, a, exec).right⟩)
 }
 
 // The caller's theorem at the toy memory.

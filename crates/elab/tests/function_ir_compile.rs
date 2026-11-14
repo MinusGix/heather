@@ -14,6 +14,8 @@ fn checker() -> heather_elab::Elaborator {
         ("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
         ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
         ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
+        ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
+        ("bitvec_shift_nat", include_str!("../../../lib/std/bitvec/bitvec_shift_nat.hthr")),
         ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
         ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
         // The state a function's meaning threads and its runs over a file
@@ -21,8 +23,6 @@ fn checker() -> heather_elab::Elaborator {
         ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
         ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
         ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
-        // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
-        ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
         // A call over views: the windows it lends and puts back.
