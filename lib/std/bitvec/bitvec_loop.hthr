@@ -1,7 +1,7 @@
 // A loop that counts a word up to a bound, proved by rules rather than by
 // unfolding (issues/loop-invariant-rules.md). Such a loop is a `decreases`
 // function `f(s, i)` whose body is `if h: i < bound { …; f(next, i + 1) }
-// else { … }`, and its step equations `f_step` and `f_done` are generated.
+// else { … }`, and its step equations `f::step` and `f::done` are generated.
 // `BitVec::loop_up` turns them into the loop's result as a function of the
 // iterated step (`BitVec::run_up`), and `BitVec::run_up_invariant` carries an
 // invariant through that iteration: a client gives the step as a function,

@@ -414,13 +414,21 @@ impl AppUnify<'_> {
     /// [`Unfold::NextHead`] head reducts or the oracle's fuel.
     pub(crate) fn next_head(&self, cx: &Cx, t: &Term) -> Option<Term> {
         let head = spelling::app_spine(t).0.clone();
-        self.semantic_oracle().unfold_to(&cx.gamma, t, Unfold::NextHead, |r| {
+        let mut last = None;
+        for r in self.semantic_oracle().unfold(&cx.gamma, t, Unfold::NextHead) {
             let exposed = match spelling::app_spine(&r).0 {
                 h @ (Term::GlobalTm { .. } | Term::Var(_)) => *h != head,
                 h => !unification::steps_through(h),
             };
-            exposed.then_some(r)
-        })
+            if exposed {
+                return Some(r);
+            }
+            last = Some(r);
+        }
+        // A walk that ends on a case analysis it cannot take — on a neutral
+        // scrutinee, the `match h:` of a `decreases` body — ends on a head
+        // a pattern can meet arm by arm (issues/unify-through-match-arms.md).
+        last.filter(|r| matches!(spelling::app_spine(r).0, Term::Case { .. }))
     }
 
     /// [`unification::U::unfold_constant`]: a closed constant of Σ, `t`,

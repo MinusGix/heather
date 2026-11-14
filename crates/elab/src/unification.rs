@@ -1051,8 +1051,15 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // against `g(n, m)`, where `g`'s body is `n.leb(m) && !m.leb(n)`,
             // learns `?a := n.leb(m)` rather than nothing
             // (issues/unifier-spine-across-distinct-heads.md).
+            // A case analysis applied to its convoy's `refl` (`match h:`)
+            // against a call: the call has to unfold before the arms have
+            // anything to meet, and paired positionally the `case` would
+            // meet the callee and learn nothing
+            // (issues/unify-through-match-arms.md).
+            let case_against_call = matches!(head, Term::Case { .. }) && !matches!(spine_head(s), Term::Case { .. });
             let mismatch = (rigid_atom(head, n) && rigid_head(s) && spine_len(p) != spine_len(s))
-                || u.distinct_heads(head, spine_head(s), n);
+                || u.distinct_heads(head, spine_head(s), n)
+                || case_against_call;
             if mismatch {
                 unify_unfolded(u, pat, s, n, d, sols);
                 return;
@@ -1177,6 +1184,39 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, b1, b2, n, d, sols);
             unify_tm(u, s1, s2, n, d + 2, sols);
             unify_tm(u, t1, t2, n, d, sols);
+        }),
+        // Two case analyses over a sum: a `match` on a two-constructor type
+        // (`Bool`'s `if`, a lowered `if h:`) is one. Their arms pair, each
+        // under its own binder, so a lemma stated over a `match` whose arms
+        // are its slots — `λ h => ?f(h)` — learns each arm from the term it
+        // is used at (the unfolding equation of a `decreases` function).
+        // Learn-only, like `elimNat`'s congruence above; the kernel judges.
+        (
+            Term::Case {
+                lhs: a1,
+                rhs: b1,
+                motive: m1,
+                case_l: l1,
+                case_r: r1,
+                scrut: t1,
+                ..
+            },
+            Term::Case {
+                lhs: a2,
+                rhs: b2,
+                motive: m2,
+                case_l: l2,
+                case_r: r2,
+                scrut: t2,
+                ..
+            },
+        ) => opaquely(u, || {
+            unify_ty(u, a1, a2, n, d, sols);
+            unify_ty(u, b1, b2, n, d, sols);
+            unify_tm(u, t1, t2, n, d, sols);
+            unify_ty(u, m1, m2, n, d + 1, sols);
+            unify_tm(u, l1, l2, n, d + 1, sols);
+            unify_tm(u, r1, r2, n, d + 1, sols);
         }),
         (
             Term::TmPi {

@@ -4840,7 +4840,7 @@ struct ArmHyp {
     bit_eq: Expr,
 }
 
-/// `f_step` and `f_done` for `decl`, whose `f_unfold` was built: `Err` names
+/// `f::step` and `f::done` for `decl`, whose `f_unfold` was built: `Err` names
 /// why the body has no test to split (a `let` before it, a test that is not
 /// on a `Bool`, both arms or neither recursing), and nothing is generated.
 pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, String> {

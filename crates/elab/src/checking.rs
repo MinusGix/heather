@@ -542,9 +542,14 @@ impl Checking<'_> {
                 // With `match h:` the convoy's equation is stated about the
                 // computed scrutinee itself, and an arm that passes `h` to a
                 // hypothesis needs that hypothesis about the same term, so
-                // neither is refined (design §5.1).
+                // neither is refined (design §5.1). A local scrutinee still
+                // refines what the arms name and the goal mentions, but not
+                // a hypothesis that takes an equation about it: that one is
+                // what `h` is passed to, `g: (b = False) → A` at
+                // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md).
                 let refines = eqbind.is_none() || matches!(scrut_t, Term::Var(_));
-                for p in refines.then(|| Generalize(self).refined_hypotheses(cx, arms, &scrut_t, dec, expected)).unwrap_or_default() {
+                let convoy = eqbind.is_some();
+                for p in refines.then(|| Generalize(self).refined_hypotheses(cx, arms, &scrut_t, dec, expected, convoy)).unwrap_or_default() {
                     if !positions.contains(&p) {
                         positions.push(p);
                     }

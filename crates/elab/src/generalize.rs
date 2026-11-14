@@ -185,6 +185,7 @@ impl Generalize<'_> {
         scrutinee: &Term,
         dec: Option<usize>,
         expected: &Type,
+        convoy: bool,
     ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         // A computed scrutinee is abstracted the same way, by syntactic
@@ -193,7 +194,7 @@ impl Generalize<'_> {
         // local the term mentions can be, since the motive abstracts the term
         // as it stands in `cx`.
         let Term::Var(LocalVar(index)) = scrutinee else {
-            return self.refined_by_occurrence(cx, arms, scrutinee, expected);
+            return self.refined_by_occurrence(cx, arms, scrutinee, expected, convoy);
         };
         let x = m - 1 - *index as usize;
         if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
@@ -215,11 +216,11 @@ impl Generalize<'_> {
                 about.push(q);
             }
         }
-        self.select_refined(cx, arms, expected, about)
+        self.select_refined(cx, arms, expected, about, convoy.then_some(scrutinee))
     }
 
     /// [`Self::refined_hypotheses`] at a computed scrutinee.
-    fn refined_by_occurrence(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term, expected: &Type) -> Vec<usize> {
+    fn refined_by_occurrence(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term, expected: &Type, convoy: bool) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let wrapped = Type::El { level: Level::Zero, tm: Rc::new(scrutinee.clone()) };
         let first = (0..m)
@@ -240,12 +241,15 @@ impl Generalize<'_> {
         if about.is_empty() {
             return about;
         }
-        self.select_refined(cx, arms, expected, about)
+        self.select_refined(cx, arms, expected, about, convoy.then_some(scrutinee))
     }
 
     /// Of the binders `about` the scrutinee, what an arm names or the goal
-    /// mentions, closed under what their types need.
-    fn select_refined(&self, cx: &Cx, arms: &[Arm], expected: &Type, about: Vec<usize>) -> Vec<usize> {
+    /// mentions, closed under what their types need. Under `match h:`
+    /// (`convoy`, the scrutinee scoped in `cx`), a binder an arm names that
+    /// takes an equation about the scrutinee is left as written: it is what
+    /// the arm passes `h` to, and `h` is about the scrutinee as written.
+    fn select_refined(&self, cx: &Cx, arms: &[Arm], expected: &Type, about: Vec<usize>, convoy: Option<&Term>) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
         // Of those, what an arm names or the goal mentions. A `match` is also
@@ -262,13 +266,20 @@ impl Generalize<'_> {
                 }
             });
         }
+        let takes_h = |q: usize| {
+            convoy.is_some_and(|scrutinee| {
+                cx.gamma.entries.get(q).is_some_and(|entry| {
+                    takes_equation_about(&entry.ty.shift_local((m - q) as u32), scrutinee)
+                })
+            })
+        };
         let machinery = |q: usize| cx.names[q].starts_with('#') || cx.names[q].starts_with("__");
         let mut refined: Vec<usize> = about
             .iter()
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && (named.iter().any(|n| n == &cx.names[q])
+                    && ((named.iter().any(|n| n == &cx.names[q]) && !takes_h(q))
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
@@ -494,6 +505,30 @@ mod tests {
         let back =
             cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Var(LocalVar(0)))));
         assert_eq!(back, goal);
+    }
+}
+
+/// Does `ty` take an equation about `scrutinee` — is one of its Π
+/// telescope's domains `scrutinee = c` or `c = scrutinee`? Both scoped in
+/// the same context; the scrutinee is weakened past each Π it crosses.
+fn takes_equation_about(ty: &Type, scrutinee: &Term) -> bool {
+    let mut ty = ty;
+    let mut s = scrutinee.clone();
+    loop {
+        let Type::Pi { dom, cod, .. } = ty else { return false };
+        let sides = match &**dom {
+            Type::Id { lhs, rhs, .. } => Some((lhs, rhs)),
+            Type::El { tm, .. } => match &**tm {
+                Term::TmId { lhs, rhs, .. } => Some((lhs, rhs)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if sides.is_some_and(|(l, r)| **l == s || **r == s) {
+            return true;
+        }
+        s = s.shift_local(1);
+        ty = cod;
     }
 }
 

@@ -274,40 +274,6 @@ theorem decide_bit_of_not<P: Decide>(n: ¬P): decide_bit<P>() = False {
     })(refl)
 }
 
-// A proof that a constructor of `Bool` equals itself is `refl`: matching the
-// equation's free end on the constructor says which type it has.
-theorem Bool::true_eq_unique(p: True = True): refl = p {
-    j(p, λ w q => ((match w as λ c => (True = c) → Type { True => λ r => refl = r, False => λ _ => False = False })(q)), refl)
-}
-
-theorem Bool::false_eq_unique(p: False = False): refl = p {
-    j(p, λ w q => ((match w as λ c => (False = c) → Type { True => λ _ => True = True, False => λ r => refl = r })(q)), refl)
-}
-
-// The convoy a test with an equation lowers to (`if h: P`, `match h: b`),
-// at a bit whose value a hypothesis gives: the arm it picks, applied to that
-// hypothesis. Each arm may read its equation, so the proofs of `b = True`
-// being one (`true_eq_unique`) is what lets the hypothesis stand for the
-// convoy's own `refl`. The step equations of a `decreases` function are
-// `f::unfold` followed by one of these (issues/loop-invariant-rules.md).
-theorem Bool::convoy_true<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = True):
-    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = yes(e) {
-    (match b as λ c => (e2: c = True) → (yes2: (c = True) → A) → (no2: (c = False) → A) →
-        ((match c as λ d => (c = d) → A { True => yes2, False => no2 })(refl)) = yes2(e2) {
-        True => λ e2 yes2 no2 => { let u: (refl = e2) = Bool::true_eq_unique(e2); cong(u, f := yes2) },
-        False => λ e2 => absurd(e2),
-    })(e, yes, no)
-}
-
-theorem Bool::convoy_false<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = False):
-    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = no(e) {
-    (match b as λ c => (e2: c = False) → (yes2: (c = True) → A) → (no2: (c = False) → A) →
-        ((match c as λ d => (c = d) → A { True => yes2, False => no2 })(refl)) = no2(e2) {
-        True => λ e2 => absurd(e2),
-        False => λ e2 yes2 no2 => { let u: (refl = e2) = Bool::false_eq_unique(e2); cong(u, f := no2) },
-    })(e, yes, no)
-}
-
 // Reflection (issues/reflection-through-decide-instances.md): a closed
 // decided proposition is *proved* by running its decision and reading the
 // side it took. `or_index` is that reading (a `Nat`: it was written when the
@@ -541,3 +507,35 @@ fn Bool::le_dec(self a, b: Bool) → a <= b ∨ ¬(a <= b) {
 }
 
 instance(a, b: Bool) Decide<Bool::Le(a, b)> { dec := a.le_dec(b), bit := or_bit(a.le_dec(b)), reflects := or_bit_reflects(a.le_dec(b)) }
+
+// A `match h:` on a bit whose
+// value is known takes that arm, at the proof it was given. Each arm is a
+// slot: `f` and `g` are read off the `match` the goal holds — a `decreases`
+// function's unfolding at its `if h:` test, say
+// (issues/unify-through-match-arms.md) — so a step is
+// `trans(f_unfold(x), Bool::taken_true(c, e))` with only the test's
+// verdict written.
+theorem Bool::taken_true<A>(b: Bool, {f: (b = True) → A}, {g: (b = False) → A}, e: b = True):
+    (match h: b { True => f(h), False => g(h) }) = f(e) {
+    j(e, λ w q => (match h: b { True => f(h), False => g(h) }) = (match w as λ c => (b = c) → A { True => λ h => f(h), False => λ h => g(h) })(q), refl)
+}
+
+theorem Bool::taken_false<A>(b: Bool, {f: (b = True) → A}, {g: (b = False) → A}, e: b = False):
+    (match h: b { True => f(h), False => g(h) }) = g(e) {
+    j(e, λ w q => (match h: b { True => f(h), False => g(h) }) = (match w as λ c => (b = c) → A { True => λ h => f(h), False => λ h => g(h) })(q), refl)
+}
+
+// The same with the arms given rather than read off the goal: the
+// convoy a test with an equation lowers to (`if h: P`, `match h: b`) at a
+// bit a hypothesis gives is the arm it picks, applied to that hypothesis.
+// The step equations of a `decreases` function (`f::step`, `f::done`) are
+// `f_unfold` followed by one of these (issues/loop-invariant-rules.md).
+theorem Bool::convoy_true<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = True):
+    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = yes(e) {
+    Bool::taken_true(b, e, f := yes, g := no)
+}
+
+theorem Bool::convoy_false<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = False):
+    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = no(e) {
+    Bool::taken_false(b, e, f := yes, g := no)
+}

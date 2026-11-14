@@ -55,3 +55,60 @@ theorem spread_intro(a: Nat, pos: 1 <= a): decide_bit<Spread(a, a)>().IsTrue() {
 // conjunction) is dropped unbuilt, and the trace says so.
 // expect-error: rejected: conclusion does not match
 fn no_decision(f: Nat → Type) → Bool { decide_bit<f(3) ∧ True>() }
+
+// `match h:` in a function body passes `h` to a hypothesis about the
+// scrutinee: the split refines neither, so `g` still takes `b = False`
+// (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md).
+fn pick_by<A>(b: Bool, f: (b = True) → A, g: (b = False) → A) → A {
+    match h: b { True => f(h), False => g(h) }
+}
+theorem pick_by_true<A>(f: (True = True) → A, g: (True = False) → A): pick_by(True, f, g) = f(refl) { refl }
+
+// The same split where the goal reads a hypothesis about the scrutinee:
+// that one is still refined, with the goal.
+theorem pick_by_goal(b: Bool, k: b.IsTrue() → Nat): (b.IsTrue() → Nat) {
+    match h: b { True => λ p => k(p), False => λ p => false_elim(p) }
+}
+
+// `Bool::taken_true` and `taken_false` learn both arms from the `match` the
+// goal holds (issues/unify-through-match-arms.md): through a call that has
+// to unfold first (`taken_pick`), at an open result type with an arm that
+// does not read the equation (`taken_open`), and through `trans` from a
+// `decreases` function's unfolding (`count_to_*`).
+fn taken_yes(b: Bool, h: b = True) → Nat { 1 }
+fn taken_no(b: Bool, h: b = False) → Nat { 0 }
+fn taken_pick(b: Bool) → Nat { match h: b { True => taken_yes(b, h), False => taken_no(b, h) } }
+theorem taken_pick_true(b: Bool, e: b = True): taken_pick(b) = taken_yes(b, e) { Bool::taken_true(b, e) }
+theorem taken_pick_false(b: Bool, e: b = False): taken_pick(b) = taken_no(b, e) { Bool::taken_false(b, e) }
+
+theorem taken_open<A>(b: Bool, x: (b = True) → A, y: A, e: b = True):
+    (match h: b { True => x(h), False => y }) = x(e) {
+    Bool::taken_true(b, e)
+}
+
+fn count_to(n: Nat, k: Nat) → Nat decreases k {
+    match h: decide_bit<1 <= k>() { True => count_to(n + 1, k - 1), False => n }
+}
+theorem count_to_ends(n: Nat): count_to(n, 0) = n {
+    trans(count_to_unfold(n, 0), Bool::taken_false(decide_bit<1 <= 0>(), refl))
+}
+theorem count_to_steps(n, k: Nat): count_to(n, Succ(k)) = count_to(n + 1, Succ(k) - 1) {
+    trans(count_to_unfold(n, Succ(k)), Bool::taken_true(decide_bit<1 <= Succ(k)>(), refl))
+}
+
+// A negative control: the verdict has to be the arm's. The message spells
+// the `match h:` as the `if h:` it is (issues/lowered-match-printing.md).
+// expect-error: this has type `if h: b { taken_yes(b, h) } else { taken_no(b, h) } = taken_yes(b, e)`, but `taken_pick(b) = taken_no(b, e2)` is expected here
+theorem taken_wrong_arm(b: Bool, e: b = True, e2: b = False): taken_pick(b) = taken_no(b, e2) { Bool::taken_true(b, e) }
+
+// A `decreases` function's unfolding reads as its body, the `match h:` on
+// its test included.
+// expect-error: this has type `count_to(n, k) = if h: leb(1, k) { count_to(n + 1, k - 1) } else { n }`
+theorem count_to_misread(n, k: Nat): count_to(n, k) = n { count_to_unfold(n, k) }
+
+// An enumeration's `match`, and a record's fields read inside its arms.
+inductive Dir { North, East, South }
+record Walk { steps: Nat, facing: Dir }
+fn Walk::turn(self w: Walk) → Nat { match w.facing { North => w.steps, East => w.steps + 1, South => 0 } }
+// expect-error(kernel): `turn(w)` and `match w.facing { North => w.steps, East => w.steps + 1, South => 0 } + 1` are not
+theorem turn_misread(w: Walk): w.turn() = match w.facing { North => w.steps, East => w.steps + 1, South => 0 } + 1 { refl }
