@@ -463,7 +463,11 @@ fn vector_with_byte_be({n: Nat}, v: [u32; n], i: Nat, b: u8) → [u32; n] {
 // left out, `bv_omega` finds it from what the call's context states (a
 // loop's test `if h: i < 64`, a parameter `h: i < 4`), and the call is
 // refused where it finds none. So nothing reads or stores past the end,
-// and no value stands for an entry that is not there.
+// and no value stands for an entry that is not there. The proof is taken
+// squashed (`∥…∥`): two calls that differ only in the proof a search
+// found are one call to the kernel, so a `decreases` body's companions,
+// which find their own, agree (docs/strict-conditions-design.md). A proof
+// of the bound itself is accepted for it (`inside := h`).
 //
 // Each is defined as the total function beside it (`vector_get` at 0,
 // `vector_update`, `vector_with_byte_be`), which is what a function of a
@@ -472,14 +476,14 @@ fn vector_with_byte_be({n: Nat}, v: [u32; n], i: Nat, b: u8) → [u32; n] {
 // `vector_index` at the proof.
 
 // Entry `i` of an array of words.
-fn Vec::at({w, n: Nat}, self v: [BitVec(w); n], i: u64, inside: i.toNat() < n := bv_omega) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
+fn Vec::at({w, n: Nat}, self v: [BitVec(w); n], i: u64, inside: ∥i.toNat() < n∥ := bv_omega) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
 
 // The array with `a` at entry `i`.
-fn Vec::put<A>({n: Nat}, self v: [A; n], i: u64, a: A, inside: i.toNat() < n := bv_omega) → [A; n] { vector_update(v, i.toNat(), a) }
+fn Vec::put<A>({n: Nat}, self v: [A; n], i: u64, a: A, inside: ∥i.toNat() < n∥ := bv_omega) → [A; n] { vector_update(v, i.toNat(), a) }
 
 // An array of big-endian words of four bytes with byte `i` of its bytes
 // replaced.
-fn Vec::put_byte_be({n: Nat}, self v: [u32; n], i: u64, b: u8, inside: i.toNat() < 4 * n := bv_omega) → [u32; n] { vector_with_byte_be(v, i.toNat(), b) }
+fn Vec::put_byte_be({n: Nat}, self v: [u32; n], i: u64, b: u8, inside: ∥i.toNat() < 4 * n∥ := bv_omega) → [u32; n] { vector_with_byte_be(v, i.toNat(), b) }
 
 theorem Vec::at_index({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: i.toNat() < n): v.at(i, inside := inside) = vector_index(v, i.toNat(), inside) {
     vector_get_inside(n, v, i.toNat(), BitVec::ofNat(0), inside)

@@ -1,0 +1,79 @@
+// Probes of conditions taken squashed (docs/strict-conditions-design.md):
+// two calls that differ only in a squashed proof are equal by `refl`, a
+// proof of `P` is accepted where `∥P∥` is expected, and a `decreases`
+// body whose found proofs are squashed keeps its unfolding equation without
+// lifting them. Tests, not library: nothing outside lib/_tests imports
+// this module.
+import vector;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import bool;
+import logic;
+import nat;
+
+// ---------------------------------------------------------------------------
+// Equal by `refl` at an opaque head
+
+// `f` is a variable, so nothing unfolds: the kernel compares the arguments
+// at `f`'s domain, and a squash domain accepts any two.
+theorem opaque_head_ignores_squashed({n: Nat}, f: (i: u64) → ∥i.toNat() < n∥ → u32, i: u64, p, q: i.toNat() < n):
+    f(i, squash(p)) = f(i, squash(q))
+{ refl }
+
+// Negative control: the same with the condition relevant.
+// expect-error(kernel): the kernel rejected `opaque_head_compares_relevant`: NotConvertible
+theorem opaque_head_compares_relevant({n: Nat}, f: (i: u64) → i.toNat() < n → u32, i: u64, p, q: i.toNat() < n):
+    f(i, p) = f(i, q)
+{ refl }
+
+// An open element width and length.
+theorem opaque_head_open_width({w, n: Nat}, f: [BitVec(w); n] → (i: u64) → ∥i.toNat() < n∥ → BitVec(w), v: [BitVec(w); n], i: u64, p, q: ∥i.toNat() < n∥):
+    f(v, i, p) = f(v, i, q)
+{ refl }
+
+// ---------------------------------------------------------------------------
+// A proof of `P` where `∥P∥` is expected
+
+fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: ∥i.toNat() < n∥ := bv_omega) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
+fn word_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: ∥i.toNat() < n∥ := bv_omega) → [A; n] { vector_update(v, i.toNat(), a) }
+
+// The default's search runs at `P`, and a literal index is in a checking
+// position of the call.
+theorem default_found_at_literal(v: [u32; 64]): word_at(v, 3) = vector_get(v, 3, 0) { refl }
+
+// A plain proof, passed by name, is squashed; so is one a search finds,
+// and the two calls are one.
+theorem plain_proof_squashed(v: [u32; 64], i: u64, p: i.toNat() < 64):
+    word_at(v, i, inside := p) = word_at(v, i, inside := { let fact = p; bv_omega })
+{ refl }
+
+// A squashed condition is passed on as it is.
+fn word_at_twice({n: Nat}, v: [u32; n], i: u64, inside: ∥i.toNat() < n∥) → u32 { word_at(v, i, inside := inside) + word_at(v, i, inside := inside) }
+
+// ---------------------------------------------------------------------------
+// `decreases` bodies (issues/found-proof-differs-across-recursion-companions.md)
+
+// The issue's reproduction, a read at `j + 14` stored at `j + 16`, with
+// both conditions squashed: each companion finds its own proofs, and
+// nothing is lifted.
+fn squashed_spread(v: [u32; 64], j: u64) → [u32; 64]
+    decreases (48 - j).toNat() {
+    if h: j < 48 { squashed_spread(word_put(v, j + 16, word_at(v, j + 14)), j + 1) } else { v }
+}
+theorem squashed_spread_unfolds(v: [u32; 64], j: u64):
+    squashed_spread(v, j) = (if h: j < 48 { squashed_spread(word_put(v, j + 16, word_at(v, j + 14)), j + 1) } else { v })
+{ squashed_spread_unfold(v, j) }
+
+// Negative control: relevant conditions whose default is not a context
+// search the lifting knows (a block), so nothing is lifted, and the
+// companions' two found proofs do not convert.
+fn relevant_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: i.toNat() < n := { bv_omega }) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
+fn relevant_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: i.toNat() < n := { bv_omega }) → [A; n] { vector_update(v, i.toNat(), a) }
+fn relevant_spread(v: [u32; 64], j: u64) → [u32; 64]
+    decreases (48 - j).toNat() {
+    if h: j < 48 { relevant_spread(relevant_put(v, j + 16, relevant_at(v, j + 14)), j + 1) } else { v }
+}
+// expect-error: no unfolding equation for `relevant_spread`
+theorem relevant_spread_unfolds(v: [u32; 64], j: u64): True { let u = relevant_spread_unfold(v, j); trivial }

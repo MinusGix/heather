@@ -113,3 +113,11 @@ theorem put_leaves_the_other(span: List<u8>, length, i, k, word: u64, inside: i.
 theorem short_read_differs(): List::u32_be_within(six(), w(2), w(0)).eq_bit(Stored::u32_be().get(six(), 0).zero_extend(32)) = False { refl }
 theorem short_store_differs(): Stored::u32_be().get(List::put_u32_be_within(six(), w(2), w(0), w(0xdeadbeef)).after, 0)
     .eq_bit(Stored::u32_be().get(Stored::u32_be().put(six(), 0, BitVec::ofNat(0xdeadbeef)), 0)) = False { refl }
+
+// The index methods take their bound squashed
+// (docs/strict-conditions-design.md): a proof of the bound is accepted for
+// it, and two calls whose proofs differ are one, at a neutral index.
+theorem at_proofs_interchangeable(v: [u32; 64], i: u64, p: i.toNat() < 64, q: i.toNat() < 64):
+    v.at(i, inside := p) = v.at(i, inside := q) { refl }
+theorem put_proofs_interchangeable(v: [u32; 64], i: u64, x: u32, p: i.toNat() < 64, q: ∥i.toNat() < 64∥):
+    v.put(i, x, inside := p) = v.put(i, x, inside := q) { refl }
