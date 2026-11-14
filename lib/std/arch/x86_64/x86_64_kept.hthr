@@ -59,6 +59,9 @@ fn Instruction::writes(self instruction: Instruction) → Option<Gpr> {
         ShiftOne(_, destination) => Some(destination),
         ShiftImm(_, destination, _) => Some(destination),
         Bswap32(destination) => Some(destination),
+        CmpRI8(_, _) => None,
+        CmpRI32(_, _) => None,
+        MovRI32(destination, _) => Some(destination),
     }
 }
 
@@ -124,6 +127,9 @@ theorem execute_spares<M>(instruction: Instruction, s: MachineState<M>, query: G
         ShiftImm(op, destination, immediate) => write_spares(destination, query,
             op.by(read_gpr(destination, s.gprs), shift_count(immediate)), s.gprs),
         Bswap32(destination) => write_spares(destination, query, bswap32_value(read_gpr(destination, s.gprs)), s.gprs),
+        CmpRI8(_, _) => λ _ => refl,
+        CmpRI32(_, _) => λ _ => refl,
+        MovRI32(destination, immediate) => write_spares(destination, query, immediate.zero_extend(32), s.gprs),
     }
 }
 
