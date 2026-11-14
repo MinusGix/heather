@@ -1,0 +1,54 @@
+// The number two vectors joined are (`BitVec::concat`): the low one's, and
+// the high one's as many places up as the low one is wide. Bytes joined
+// into a word count in 256s, which is how a word's big-endian bytes meet
+// the number a specification says they spell.
+
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+
+// `x` doubled `n` times.
+fn Nat::doubled(self x: Nat, n: Nat) → Nat { match n { Zero => x, Succ(k) => x.doubled(k).twice() } }
+
+theorem Nat::doubled_succ(self x: Nat, k: Nat): x.doubled(Succ(k)) = x.doubled(k) + x.doubled(k) { x.doubled(k).twice_add_self() }
+
+theorem Nat::doubled_eight(self x: Nat): x.doubled(8) = 256 * x {
+    let d0: (x.doubled(0) = x) = refl;
+    let d1 = x.doubled_succ(0);
+    let d2 = x.doubled_succ(1);
+    let d3 = x.doubled_succ(2);
+    let d4 = x.doubled_succ(3);
+    let d5 = x.doubled_succ(4);
+    let d6 = x.doubled_succ(5);
+    let d7 = x.doubled_succ(6);
+    let d8 = x.doubled_succ(7);
+    omega
+}
+
+// The value of two vectors joined: the high one's, `n` places up.
+theorem BitVec::toNat_concat(n: Nat): (m: Nat) → (lo: BitVec(n)) → (hi: BitVec(m)) → lo.concat(hi).toNat() = lo.toNat() + hi.toNat().doubled(n) {
+    match n {
+        Zero => λ m lo hi => { let e: (hi.toNat() = 0 + hi.toNat()) = omega; e },
+        Succ(k, ih) => λ m lo hi => {
+            let inner = ih(m, lo.tail_bits(), hi);
+            let t1 = lo.tail_bits().concat(hi).toNat().twice_add_self();
+            let t2 = lo.tail_bits().toNat().twice_add_self();
+            let t3 = hi.toNat().doubled(k).twice_add_self();
+            let e: (Nat::of_bit(lo.head_bit()) + lo.tail_bits().concat(hi).toNat().twice() =
+                (Nat::of_bit(lo.head_bit()) + lo.tail_bits().toNat().twice()) + hi.toNat().doubled(k).twice()) = omega;
+            e
+        },
+    }
+}
+
+// A byte below a vector: the vector counts in 256s.
+theorem BitVec::toNat_concat_byte(m: Nat, lo: u8, hi: BitVec(m)): lo.concat(hi).toNat() = lo.toNat() + 256 * hi.toNat() {
+    trans(BitVec::toNat_concat(8, m, lo, hi), cong_fn(λ (x: Nat) => lo.toNat() + x, hi.toNat().doubled_eight()))
+}
+
+// A literal without its low byte is the literal of the number shifted.
+theorem BitVec::drop_low_byte_ofNat(m, v: Nat): BitVec::ofNat(v, n := m + 8).drop_low(8, m) = BitVec::ofNat(v.shr(8), n := m) { refl }

@@ -296,3 +296,22 @@ theorem vector_get_update_other<A>(n: Nat, v: [A; n], i, k: Nat, a, pad: A, insi
     trans(vector_get_inside(n, vector_update(v, i, a), k, pad, inside),
         trans(vector_index_update_other(n, v, i, k, a, inside, other), sym(vector_get_inside(n, v, k, pad, inside))))
 }
+
+// An updated vector's entries are the entries updated.
+theorem vector_entries_update<A>(n: Nat): (v: [A; n]) → (i: Nat) → (a: A) → vector_entries(vector_update(v, i, a)) = vector_entries(v).update(i, λ _ => a) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (a: A) → vector_entries(vector_update(v, i, a)) = vector_entries(v).update(i, λ _ => a) {
+        Zero => λ v i a => refl,
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ a => refl,
+            Succ(k) => λ a => cong_fn(λ (t: List<A>) => Cons(head(v), t), ih(tail(v), k, a)),
+        },
+    }
+}
+
+// A vector with one more at its end has that one last among its entries.
+theorem vector_entries_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) → vector_entries(snoc(xs, x)) = vector_entries(xs) ++ [x] {
+    match n as λ m => (xs: [A; m]) → (x: A) → vector_entries(snoc(xs, x)) = vector_entries(xs) ++ [x] {
+        Zero => λ xs x => refl,
+        Succ(_, ih) => λ xs x => cong_fn(λ (t: List<A>) => Cons(head(xs), t), ih(tail(xs), x)),
+    }
+}
