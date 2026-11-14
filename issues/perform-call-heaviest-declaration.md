@@ -4,7 +4,7 @@ status: open
 labels: [performance,native,proofs]
 area: heather-in-heather
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-14
 ---
 
 One declaration is 4% of the whole library gate. Found while writing [[performance-overview-2026-11-11]].
@@ -20,3 +20,4 @@ One declaration is 4% of the whole library gate. Found while writing [[performan
 ## Log
 
 - 2026-11-11: `Target::perform_call` no longer exists: U5's step 5c ([[native-one-compiler]]) replaced it by a call site proved once from a contract (`Target::goes_calls`, `native_compile_function.hthr`) and a callee proved entry to return (`Target::procedures_body`, `native_compile_correct.hthr`). Measured the same way (`--only`, width one, release binary, cloud box, 2026-11-11): `procedures_body` is 9.5 s with 0.1 s in the kernel gate and five `omega` calls, and it still grows the peak by 1.4 GB; `goes_calls` is 0.1 s, `function_performs` 0.3 s, `based_left` 1.1 s, `goes_counted`, `procedures_deep` and `calls_of` under 0.1 s each. So the time fell to under a third and the gate's share went, and the memory did not move: it is in elaborating `procedures_body`, not in the gate and not obviously in `omega`. The done-when reads on `procedures_body` from here; where its elaboration allocates has not been looked at.
+- 2026-11-14: `native_compile_correct` is the costliest module of a cold library build (58 s of 1454 s of child time), and `Target::procedures_body` alone is 42 s of it (24 s in the gate, 25 M steps), with `native_compile_correct_calls` at 11 s and `native_compile_correct_bare` at 7 s.
