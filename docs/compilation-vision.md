@@ -285,6 +285,12 @@ optimization that uses it is proved once under it as a hypothesis.
   certified refinement (`repr::BigNat` for `Nat`, `repr::Vec` for `List`,
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
   operational choice with a certificate, like which `Compile` instance.
+  A specification compiled as written (a list held as an array, a count as
+  a word, a step-after recursion as a loop, a closed argument such as
+  `Sha2::sha256()` specialised away) goes through `datarepr`'s transfer to a
+  generated `runtime fn` of a laid record with its `refines`, then the
+  record-function generator: `docs/specification-shapes-design.md`
+  (proposed 2026-11-14).
 
 ### 2.5 Memory a function is lent
 
@@ -508,7 +514,7 @@ decides.
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |
 | certified passes | probe passed | `docs/certified-pass-algebra-probe.md`, `function-ir-pass-in-heather` |
-| representations | v1 built | `docs/datarepr-design.md` |
+| representations | v1 built; bounded carriers (a list in an array, a count in a word) designed, a hand-run at `Sha2::extend` | `docs/datarepr-design.md`, `docs/specification-shapes-design.md` |
 | specialization (`CallCtx`) | sketched | `docs/sketches/surface-v3.md` §1, §3 |
 | contracts across calls | direction issue | `issues/proof-carrying-function-analysis.md` |
 | foreign code as an instance | surveyed, not scheduled | `docs/foreign-binaries-survey.md`, `issues/foreign-binary-contracts.md` |

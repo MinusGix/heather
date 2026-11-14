@@ -1,0 +1,186 @@
+// A hand-run of compiling `Sha2::extend` at SHA-256 from the specification
+// itself (docs/specification-shapes-design.md §5): what a generator would
+// write and what it would prove, written out by hand once, so the design's
+// claim that the certificate is small and schematic is checked before any
+// generator is.
+//
+// Three layers, and only the last is per function:
+// - once per representation: a list held newest-first in an array, its
+//   length beside it (`Vec::stack_abs`), and its two laws, a read at a place
+//   back from the newest (`Vec::stack_read_abs`) and a push (`Vec::stack_push_abs`);
+// - once for every function of the shape: a tail loop of passes refines a
+//   recursion whose step comes after its recursive call, when one pass
+//   refines one step (`Nat::loop_refines`);
+// - per function: the pass (`extend_pass`), the loop (`extend_loop`), and
+//   the one law the shape theorem asks of them (`extend_pass_abs`), each a
+//   conversion or a chain of the representation's laws.
+
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import vector;
+import bitvec;
+import bitvec_rotate;
+import sha2;
+
+// ---------------------------------------------------------------------------
+// The representation: the first `len` entries of an array, newest last, read
+// as a list newest first. Pushing writes at `len`; the element `back` places
+// from the newest is at `len - Succ(back)`.
+
+fn Vec::stack_abs<A>({n: Nat}, self v: [A; n], len: Nat, pad: A) → List<A> {
+    match len { Zero => Nil, Succ(k) => Cons(vector_get(v, k, pad), v.stack_abs(k, pad)) }
+}
+
+fn Vec::stack_read<A>({n: Nat}, self v: [A; n], len, back: Nat, pad: A) → A {
+    match Succ(back).leb(len) { True => vector_get(v, len - Succ(back), pad), False => pad }
+}
+
+// A read is the list's element, or the pad past its end: no invariant is
+// needed, since the representation's own reads pad where the list ends.
+theorem Vec::stack_read_abs<A>({n: Nat}, self v: [A; n], pad: A): (len, back: Nat) →
+    v.stack_abs(len, pad).nth(back).unwrap_or(pad) = v.stack_read(len, back, pad) {
+    λ len => match len {
+        Zero => λ back => refl,
+        Succ(k, ih) => λ back => match back {
+            Zero => cong_fn(λ (i: Nat) => vector_get(v, i, pad), sym(Nat::sub_zero(k))),
+            Succ(b) => ih(b),
+        },
+    }
+}
+
+// The entry written is read back, inside the array.
+theorem Vec::get_update_same<A>({n: Nat}, self v: [A; n], i: Nat, x, pad: A, inside: i < n): vector_get(vector_update(v, i, x), i, pad) = x {
+    trans(vector_get_inside(n, vector_update(v, i, x), i, pad, inside), vector_index_update_same(n, v, i, i, x, inside, refl))
+}
+
+// Every other entry reads as it did, inside the array or past it.
+theorem Vec::get_update_other<A>({n: Nat}, self v: [A; n], i, k: Nat, x, pad: A, other: ¬(k = i)): vector_get(vector_update(v, i, x), k, pad) = vector_get(v, k, pad) {
+    (match Succ(k).leb(n) as λ b => (Succ(k).leb(n) = b) → vector_get(vector_update(v, i, x), k, pad) = vector_get(v, k, pad) {
+        True => λ e => {
+            let inside: (k < n) = Nat::leb_sound(Succ(k), n, j(sym(e), λ b _ => b.IsTrue(), trivial));
+            trans(vector_get_inside(n, vector_update(v, i, x), k, pad, inside),
+                trans(vector_index_update_other(n, v, i, k, x, inside, other), sym(vector_get_inside(n, v, k, pad, inside))))
+        },
+        False => λ e => {
+            let past: (n <= k) = Nat::leb_sound(n, k, Nat::leb_not_lt(k, n, j(sym(e), λ b _ => b.not().IsTrue(), trivial)));
+            trans(vector_get_past(n, vector_update(v, i, x), k, pad, past), sym(vector_get_past(n, v, k, pad, past)))
+        },
+    })(refl)
+}
+
+// A write at `i` leaves the list of the entries below it.
+theorem Vec::stack_abs_update_above<A>({n: Nat}, self v: [A; n], i: Nat, x, pad: A): (len: Nat) → len <= i →
+    vector_update(v, i, x).stack_abs(len, pad) = v.stack_abs(len, pad) {
+    λ len => match len {
+        Zero => λ _ => refl,
+        Succ(k, ih) => λ below => {
+            let other: ¬(k = i) = λ same => Nat::lt_irrefl(i, j(same, λ m _ => m < i, below));
+            let lower: (k <= i) = Nat::le_of_lt(k, i, below);
+            let rest: (vector_update(v, i, x).stack_abs(k, pad) = v.stack_abs(k, pad)) = ih(lower);
+            trans(cong_fn(λ (a: A) => Cons(a, vector_update(v, i, x).stack_abs(k, pad)), v.get_update_other(i, k, x, pad, other)),
+                cong_fn(λ (r: List<A>) => Cons(vector_get(v, k, pad), r), rest))
+        },
+    }
+}
+
+// Pushing below the array's end is `Cons` of the list: a constructor's
+// image, guarded by the room it needs (docs/datarepr-design.md §1.3).
+theorem Vec::stack_push_abs<A>({n: Nat}, self v: [A; n], len: Nat, x, pad: A, room: len < n):
+    vector_update(v, len, x).stack_abs(Succ(len), pad) = Cons(x, v.stack_abs(len, pad)) {
+    trans(cong_fn(λ (a: A) => Cons(a, vector_update(v, len, x).stack_abs(len, pad)), v.get_update_same(len, x, pad, room)),
+        cong_fn(λ (r: List<A>) => Cons(x, r), v.stack_abs_update_above(len, x, pad, len, Nat::le_refl(len))))
+}
+
+// ---------------------------------------------------------------------------
+// The shape, once: `F(Succ(k), x) = step(F(k, x))` (a structural recursion
+// whose step comes after its recursive call, at a fixed argument) is
+// computed by a tail loop `L` of passes, each refining one step on the
+// representation, as long as the passes have room.
+
+theorem Nat::iterate_shift<X>(F: Nat → X → X, step: X → X,
+    F_zero: (x: X) → F(0, x) = x, F_succ: (k: Nat) → (x: X) → F(Succ(k), x) = step(F(k, x))):
+    (k: Nat) → (x: X) → F(k, step(x)) = F(Succ(k), x) {
+    λ k => match k {
+        Zero => λ x => trans(F_zero(step(x)), sym(trans(F_succ(0, x), cong_fn(step, F_zero(x))))),
+        Succ(m, ih) => λ x => trans(F_succ(m, step(x)), trans(cong_fn(step, ih(x)), sym(F_succ(Succ(m), x)))),
+    }
+}
+
+theorem Nat::loop_refines<R, X>(abs: R → Nat → X, pass: R → Nat → R, step: X → X, cap: Nat,
+    pass_abs: (r: R) → (len: Nat) → len < cap → abs(pass(r, len), Succ(len)) = step(abs(r, len)),
+    F: Nat → X → X, F_zero: (x: X) → F(0, x) = x, F_succ: (k: Nat) → (x: X) → F(Succ(k), x) = step(F(k, x)),
+    L: Nat → R → Nat → R, L_zero: (r: R) → (len: Nat) → L(0, r, len) = r,
+    L_succ: (k: Nat) → (r: R) → (len: Nat) → L(Succ(k), r, len) = L(k, pass(r, len), Succ(len))):
+    (count: Nat) → (r: R) → (len: Nat) → len + count <= cap → abs(L(count, r, len), len + count) = F(count, abs(r, len)) {
+    λ count => match count {
+        Zero => λ r len _ => trans(cong_fn(λ (s: R) => abs(s, len), L_zero(r, len)), sym(F_zero(abs(r, len)))),
+        Succ(k, ih) => λ r len room => {
+            let room_after: (Succ(len) + k <= cap) = j(sym(Nat::add_succ_left(len, k)), λ m _ => m <= cap, room);
+            let first: (len < cap) = Nat::le_trans(Succ(len), Succ(len + k), cap, Nat::le_succ_succ(len, len + k, len.le_add_l(k)), room);
+            let rest: (abs(L(k, pass(r, len), Succ(len)), Succ(len) + k) = F(k, abs(pass(r, len), Succ(len)))) = ih(pass(r, len), Succ(len), room_after);
+            let at: (abs(L(Succ(k), r, len), Succ(len + k)) = abs(L(k, pass(r, len), Succ(len)), Succ(len) + k)) =
+                trans(cong_fn(λ (s: R) => abs(s, Succ(len + k)), L_succ(k, r, len)),
+                    cong_fn(λ (m: Nat) => abs(L(k, pass(r, len), Succ(len)), m), sym(Nat::add_succ_left(len, k))));
+            trans(at, trans(rest, trans(cong_fn(λ (x: X) => F(k, x), pass_abs(r, len, first)),
+                Nat::iterate_shift(F, step, F_zero, F_succ, k, abs(r, len)))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per function: `Sha2::extend` at SHA-256, what a generator would write.
+// The pass reads the four words §6.2.2 step 1 names, at the counts the
+// closed `Sha2::sha256()` holds, and pushes their sum.
+
+fn extend_next(v: [BitVec(32); 64], len: Nat) → BitVec(32) {
+    Sha2Counts(17, 19, 10).small(v.stack_read(len, 1, BitVec::zero())).add(v.stack_read(len, 6, BitVec::zero()))
+        .add(Sha2Counts(7, 18, 3).small(v.stack_read(len, 14, BitVec::zero()))).add(v.stack_read(len, 15, BitVec::zero()))
+}
+
+fn extend_pass(v: [BitVec(32); 64], len: Nat) → [BitVec(32); 64] { vector_update(v, len, extend_next(v, len)) }
+
+fn extend_loop(count: Nat, v: [BitVec(32); 64], len: Nat) → [BitVec(32); 64] {
+    match count { Zero => v, Succ(k) => extend_loop(k, extend_pass(v, len), Succ(len)) }
+}
+
+fn extend_abs(v: [BitVec(32); 64], len: Nat) → List<BitVec(32)> { v.stack_abs(len, BitVec::zero()) }
+
+// The next word is the specification's, read through the representation:
+// four reads, each `Vec::stack_read_abs`.
+theorem extend_next_abs(v: [BitVec(32); 64], len: Nat): extend_next(v, len) = Sha2::sha256().next_word(extend_abs(v, len)) {
+    let z: BitVec(32) = BitVec::zero();
+    rewrite(sym(v.stack_read_abs(z, len, 1)), sym(v.stack_read_abs(z, len, 6)),
+        sym(v.stack_read_abs(z, len, 14)), sym(v.stack_read_abs(z, len, 15)), refl)
+}
+
+theorem extend_pass_abs(v: [BitVec(32); 64], len: Nat, room: len < 64):
+    extend_abs(extend_pass(v, len), Succ(len)) = Sha2::sha256().push(extend_abs(v, len)) {
+    trans(v.stack_push_abs(len, extend_next(v, len), BitVec::zero(), room),
+        cong_fn(λ (x: BitVec(32)) => Cons(x, extend_abs(v, len)), extend_next_abs(v, len)))
+}
+
+// The function compiled from the specification: `count` passes from a
+// window of `len` words leave the specification's extended window.
+theorem extend_loop_refines(count: Nat, v: [BitVec(32); 64], len: Nat, room: len + count <= 64):
+    extend_abs(extend_loop(count, v, len), len + count) = Sha2::sha256().extend(count, extend_abs(v, len)) {
+    Nat::loop_refines(extend_abs, extend_pass, λ (w: List<BitVec(32)>) => Sha2::sha256().push(w), 64, extend_pass_abs,
+        λ (k: Nat) (w: List<BitVec(32)>) => Sha2::sha256().extend(k, w), λ w => refl, λ k w => refl,
+        extend_loop, λ r l => refl, λ k r l => refl, count, v, len, room)
+}
+
+// A negative control: a pass that reads the word seven back where the
+// specification reads six is not the specification's step.
+fn extend_next_misread(v: [BitVec(32); 64], len: Nat) → BitVec(32) {
+    Sha2Counts(17, 19, 10).small(v.stack_read(len, 1, BitVec::zero())).add(v.stack_read(len, 7, BitVec::zero()))
+        .add(Sha2Counts(7, 18, 3).small(v.stack_read(len, 14, BitVec::zero()))).add(v.stack_read(len, 15, BitVec::zero()))
+}
+
+// expect-error: does not mention the equation's left side `stack_read(v, len, 6, zero)`
+theorem extend_next_misread_abs(v: [BitVec(32); 64], len: Nat): extend_next_misread(v, len) = Sha2::sha256().next_word(extend_abs(v, len)) {
+    let z: BitVec(32) = BitVec::zero();
+    rewrite(sym(v.stack_read_abs(z, len, 1)), sym(v.stack_read_abs(z, len, 6)),
+        sym(v.stack_read_abs(z, len, 14)), sym(v.stack_read_abs(z, len, 15)), refl)
+}

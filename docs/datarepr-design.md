@@ -1119,6 +1119,20 @@ not needed, an inline `j` against the derived body's own name does that job.
   `Impl`s. That issue's open half (API naturality, cost-honest signatures
   per repr) stays its own; nothing here needs it.
 
+**Proposed 2026-11-14, for the bytes stage: carriers with a bound.**
+`docs/specification-shapes-design.md` takes §3's transfer past the byte-free
+scope to compile a specification as written (`Sha2::extend` at SHA-256): a
+list held in a fixed array in stack or queue order, with `rev` between the
+two orders as an `Impl` that is the identity on the carrier (§5.3's
+conversions, written in the specification rather than inserted); a count held
+as a word, consumption total and production guarded (§1.3); `Cons`'s image
+guarded by room and inherited as a precondition (§2's first rung,
+`issues/datarepr-guarded-images.md`); a step-after recursion on a count
+transferred to a tail loop by one theorem proved once; and the transfer's
+output a `runtime fn` of a laid record, so the code level is the
+record-function generator's. A hand-run at `Nat` lengths checks
+(`lib/_tests/native/spec/extend_handrun_tests.hthr`).
+
 ### 5.3 Multi-repr per program — deferred, designed-not-killed (trigger: the first program genuinely wanting two reprs of one type)
 
 Settled guardrails, restated as the activation contract: inter-repr
