@@ -188,9 +188,15 @@ impl Tested<'_> {
     /// and module, and only a type with no tag in its shape (one a definition
     /// spells) is decoded, in a module that imports `when`.
     pub(crate) fn is_when(&self, cx: &Cx, ty: &Type) -> bool {
+        self.when_of(cx, ty).is_some()
+    }
+
+    /// [`Self::is_when`], with the declaration.
+    fn when_of(&self, cx: &Cx, ty: &Type) -> Option<Rc<crate::inductive::Inductive>> {
         match self.tag_of(ty) {
-            Some(ind) => is_when_ind(&ind),
-            None => self.when_imported() && goal_combinators::type_inductive(self, cx, ty).is_some_and(|ind| is_when_ind(&ind)),
+            Some(ind) => is_when_ind(&ind).then_some(ind),
+            None if self.when_imported() => goal_combinators::type_inductive(self, cx, ty).filter(|ind| is_when_ind(ind)),
+            None => None,
         }
     }
 
@@ -316,11 +322,63 @@ impl Tested<'_> {
         Ok(Some((bound, tested)))
     }
 
-    /// A `match` on `When`'s constructors whose scrutinee is a call: the
-    /// `match` with the call tested, and the context binding its condition.
+    /// A `match` on `When`'s constructors whose arms leave the proofs out
+    /// (docs/when-design.md §5): `Present(x)` binds its proof as
+    /// `__when_holds`, and the `_` arm beside it (an `if let`'s `else`) is
+    /// `Absent`, binding the refutation as `__when_fails`. The names are
+    /// private, like `__if_bitN`, and visible to a tactic and to `known`.
+    fn complete_arms(&self, e: &Expr) -> Option<Expr> {
+        let ExprKind::Match { form, motive, scrut, arms, eqbind, generated } = &e.kind else { return None };
+        if !when_arm(arms).is_some_and(|c| self.names_when(c)) {
+            return None;
+        }
+        let ctor = |a: &heather_syntax::Arm| a.ctor.rsplit("::").next().unwrap_or(&a.ctor).to_string();
+        let short = |a: &heather_syntax::Arm| ctor(a) == "Present" && !a.default && a.binders.len() == 1;
+        let named_present = arms.iter().any(|a| ctor(a) == "Present" && !a.default);
+        let named_absent = arms.iter().any(|a| ctor(a) == "Absent" && !a.default);
+        let wild = arms.iter().any(|a| a.default) && named_present && !named_absent;
+        if !arms.iter().any(short) && !wild {
+            return None;
+        }
+        let bind = |name: &str, span: Span| heather_syntax::Pat::Var { name: name.to_string(), span };
+        let arms = arms
+            .iter()
+            .map(|a| {
+                let mut a = a.clone();
+                if short(&a) {
+                    a.binders.push(bind("__when_holds", a.span));
+                } else if a.default && wild {
+                    a.default = false;
+                    a.ctor = "Absent".to_string();
+                    a.binders = vec![bind("__when_fails", a.span)];
+                }
+                a
+            })
+            .collect();
+        Some(Expr {
+            kind: ExprKind::Match {
+                form: *form,
+                motive: motive.clone(),
+                scrut: scrut.clone(),
+                arms,
+                eqbind: eqbind.clone(),
+                generated: *generated,
+            },
+            span: e.span,
+        })
+    }
+
+    /// A `match` on `When`'s constructors, made ready: its arms completed
+    /// ([`Self::complete_arms`]) and a call scrutinee tested.
     pub(crate) fn tested_match(&self, cx: &Cx, e: &Expr) -> R<Option<(Cx, Expr)>> {
-        let Some(scrut) = self.when_match(e) else { return Ok(None) };
-        let Some((bound, tested)) = self.tested(cx, scrut)? else { return Ok(None) };
+        let completed = self.complete_arms(e);
+        let e = completed.as_ref().unwrap_or(e);
+        let Some(scrut) = self.when_match(e) else {
+            return Ok(completed.map(|c| (cx.clone(), c)));
+        };
+        let Some((bound, tested)) = self.tested(cx, scrut)? else {
+            return Ok(completed.map(|c| (cx.clone(), c)));
+        };
         let ExprKind::Match { form, motive, arms, eqbind, generated, .. } = &e.kind else { return Ok(None) };
         let rewritten = Expr {
             kind: ExprKind::Match {
@@ -342,12 +400,214 @@ impl Tested<'_> {
     /// `When` is expected, or a `match` on `When`'s constructors whose
     /// scrutinee is a call.
     pub(crate) fn tested_check(&self, cx: &Cx, e: &Expr, expected: &Type) -> R<Option<(Cx, Expr)>> {
-        if self.when_match(e).is_some() {
+        if matches!(&e.kind, ExprKind::Match { arms, .. } if when_arm(arms).is_some_and(|c| self.names_when(c))) {
             return self.tested_match(cx, e);
+        }
+        if let Some(found) = self.tested_propagation(cx, e, expected)? {
+            return Ok(Some(found));
         }
         if !is_call(e) || !self.is_when(cx, expected) {
             return Ok(None);
         }
         self.tested(cx, e)
+    }
+}
+
+/// The `known` search's name: a hypothesis in scope, or a side of one that
+/// is a conjunction, then `omega`, then `bv_omega` (docs/when-design.md §5).
+/// The default of `When::val`'s condition.
+pub(crate) const KNOWN: &str = "known";
+
+impl Tested<'_> {
+    /// `known` at `expected`: the innermost hypothesis of that type, or a
+    /// side of a conjunction in scope, else the arithmetic searches a
+    /// `decreases` obligation runs.
+    pub(crate) fn known(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<heather_kernel::term::Term> {
+        // Binders and `let`/pattern aliases, innermost first within each.
+        let names: Vec<String> = cx.aliases.iter_inner().map(|a| a.name.clone())
+            .chain(cx.names.iter_inner().map(str::to_string))
+            .collect();
+        for name in &names {
+            let var = Expr { kind: ExprKind::Var(name.clone()), span };
+            let side = |field: &str| Expr {
+                kind: ExprKind::Dot { recv: Box::new(var.clone()), name: field.to_string(), tyargs: vec![], args: None, named: vec![] },
+                span,
+            };
+            let Ok((_, ty, _)) = self.resolve_reading(cx, name, span) else { continue };
+            let mut candidates = vec![var.clone()];
+            if goal_combinators::type_inductive(self, cx, &ty).is_some_and(|ind| ind.name == "And") {
+                candidates.push(side("left"));
+                candidates.push(side("right"));
+            }
+            for candidate in candidates {
+                let fits = self.probe(|| {
+                    self.elab_infer(cx, &candidate).is_ok_and(|(_, ty, _)| self.conv_types(cx, &ty, expected, lvl))
+                });
+                if fits {
+                    return self.elab_check(cx, &candidate, expected, lvl);
+                }
+            }
+        }
+        // A conjunction is found side by side: `?`'s stated condition is the
+        // conjunction of what its tests proved.
+        if goal_combinators::type_inductive(self, cx, expected).is_some_and(|ind| ind.name == "And") {
+            let pair = Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var("And".to_string()), span }),
+                    args: vec![Expr { kind: ExprKind::Var(KNOWN.to_string()), span }, Expr { kind: ExprKind::Var(KNOWN.to_string()), span }],
+                    named: vec![],
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            if let Ok(term) = self.probe(|| self.elab_check(cx, &pair, expected, lvl)) {
+                let _ = term;
+                return self.elab_check(cx, &pair, expected, lvl);
+            }
+        }
+        let closer = Expr { kind: ExprKind::Var(crate::measure::CLOSER.to_string()), span };
+        self.elab_check(cx, &closer, expected, lvl).map_err(|error| {
+            let goal = self.spell_type_source(cx, expected).or_else(|| self.spell_type(cx, expected)).unwrap_or_else(|| "it".into());
+            let detail = match error {
+                crate::ElabError::Elab { msg, .. } => msg,
+                other => other.to_string(),
+            };
+            crate::ElabError::Elab {
+                msg: format!(
+                    "`known` found no hypothesis `{goal}` in scope, nor a side of a conjunction, and {detail}; \
+                     test it (a `match` or `if let` on `Present`/`Absent`) or prove it"
+                ),
+                span,
+            }
+        })
+    }
+}
+
+/// The call a `?` lowers to (`heather_syntax::try_lower`): `K[e?]` is this
+/// applied to `e` and `λ v => K[v]`.
+const PROPAGATE: &str = "result::Result::and_then";
+
+/// `e` peeled of its blocks: the expression that gives its value.
+fn tail(e: &Expr) -> &Expr {
+    match &e.kind {
+        ExprKind::Block(b) => tail(&b.result),
+        _ => e,
+    }
+}
+
+/// Is `e` already a `When`, as the walk writes or the writer did: a nested
+/// propagation, or `Present(…)`/`Absent(…)`.
+fn gives_when(e: &Expr) -> bool {
+    let ExprKind::App { head, .. } = &tail(e).kind else { return false };
+    let ExprKind::Var(name) = &head.kind else { return false };
+    let short = name.rsplit("::").next().unwrap_or(name);
+    name == PROPAGATE || short == "Present" || short == "Absent"
+}
+
+impl Tested<'_> {
+    /// `K[w?]` where a `When<U, Q>` is wanted (docs/when-design.md §6):
+    ///
+    /// ```text
+    /// When::and_then(w, λ v __when_holds_N => K[v], λ q => known)
+    /// ```
+    ///
+    /// `w` is tested when it is a proof-taking call (§4). The continuation's
+    /// value is wrapped as `Present(value, known)` unless it is a `When`
+    /// already (a further `?`, or a written `Present`/`Absent`); `known`
+    /// finds `Q` from the proofs the `?`s bound, building a conjunction side
+    /// by side, and `back: Q → P` from `q`.
+    pub(crate) fn tested_propagation(&self, cx: &Cx, e: &Expr, expected: &Type) -> R<Option<(Cx, Expr)>> {
+        let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind else { return Ok(None) };
+        let (ExprKind::Var(name), [input, continuation], true) = (&head.kind, args.as_slice(), named.is_empty()) else {
+            return Ok(None);
+        };
+        let ExprKind::Lam { binders, body } = &continuation.kind else { return Ok(None) };
+        if name != PROPAGATE || binders.len() != 1 || !self.is_when(cx, expected) {
+            return Ok(None);
+        }
+        let span = e.span;
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span };
+        let (bound, input) = match self.tested(cx, input)? {
+            Some(found) => found,
+            None => (cx.clone(), input.clone()),
+        };
+        let holds = format!("__when_holds_{}", input.span.start);
+        let call = |name: &str, args: Vec<Expr>| Expr {
+            kind: ExprKind::App { head: Box::new(var(name)), args, named: vec![], explicit: false, goal_oriented: false },
+            span,
+        };
+        let build = |wrap: bool| {
+            let body = if wrap { call("Present", vec![(**body).clone(), var(KNOWN)]) } else { (**body).clone() };
+            let mut binders = binders.clone();
+            binders.push(LamBinder { name: holds.clone(), ty: None, implicit: false, span });
+            let continuation = Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span };
+            let back = Expr {
+                kind: ExprKind::Lam {
+                    binders: vec![LamBinder { name: "__when_q".to_string(), ty: None, implicit: false, span }],
+                    body: Box::new(var(KNOWN)),
+                },
+                span,
+            };
+            call("When::and_then", vec![input.clone(), continuation, back])
+        };
+        Ok(Some((bound, build(!gives_when(body)))))
+    }
+}
+
+/// The value a coercion takes the `.val()` of, in the rewritten call.
+const COERCED: &str = "__when_coerced";
+
+impl Tested<'_> {
+    /// A `When<T, P>` where a `T` is wanted (docs/when-design.md §5, stage
+    /// 5): the value, with `P` found by `known`. Reached only from the
+    /// checking fallback after inference, and only when the inferred type is
+    /// `When`, the expected one is not, and its `T` is the expected type;
+    /// everything else keeps the ordinary verdict.
+    pub(crate) fn coerce(&self, cx: &Cx, e: &Expr, term: &heather_kernel::term::Term, got: &Type, expected: &Type, lvl: &Level) -> R<Option<heather_kernel::term::Term>> {
+        // On every checking path that infers: the structural read first, as
+        // for the tested call, and no name lookup.
+        let Some(ind) = self.when_of(cx, got) else { return Ok(None) };
+        if self.is_when(cx, expected) {
+            return Ok(None);
+        }
+        let Some(args) = crate::gendefs::GeneratedDefs(self).instance_args(cx, &ind, got) else { return Ok(None) };
+        let Some(value) = args.first() else { return Ok(None) };
+        let value_ty = Type::El { level: lvl.clone(), tm: Rc::clone(value) };
+        if !self.conv_types(cx, &value_ty, expected, lvl) {
+            return Ok(None);
+        }
+        let span = e.span;
+        let mut bound = cx.clone();
+        bound.aliases.push(Rc::new(Alias {
+            name: COERCED.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term.clone()),
+            ty: got.clone(),
+            level: lvl.clone(),
+            skel: None,
+            spliced: None,
+            shifted: Default::default(),
+        }));
+        let call = Expr {
+            kind: ExprKind::Dot {
+                recv: Box::new(Expr { kind: ExprKind::Var(COERCED.to_string()), span }),
+                name: "val".to_string(),
+                tyargs: vec![],
+                args: Some(vec![]),
+                named: vec![],
+            },
+            span,
+        };
+        self.elab_check(&bound, &call, expected, lvl).map(Some).map_err(|error| {
+            let detail = match error {
+                crate::ElabError::Elab { msg, .. } => msg,
+                other => other.to_string(),
+            };
+            crate::ElabError::Elab {
+                msg: format!("this is a `When`, used where its value is wanted, so its condition must be known here: {detail}"),
+                span,
+            }
+        })
     }
 }

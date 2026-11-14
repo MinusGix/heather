@@ -10,7 +10,7 @@ import omega; import pair; import vector; import bitvec; import bitvec_nat; impo
 // ---------------------------------------------------------------------------
 // The constructors and members at closed values.
 
-theorem present_val(h, k: 1 <= 2): Present<Nat, 1 <= 2>(7, h).val(k) = 7 { refl }
+theorem present_val(h, k: 1 <= 2): Present<Nat, 1 <= 2>(7, h).val(holds := k) = 7 { refl }
 theorem present_option(h: True): Present<Nat, True>(7, h).option() = Some(7) { refl }
 theorem absent_option(n: ¬False): Absent<Nat, False>(n).option() = None { refl }
 theorem present_map(h: True): Present<Nat, True>(7, h).map(λ x => x + 1).option() = Some(8) { refl }
@@ -34,7 +34,7 @@ theorem word_at_outside_absent(): word_at(three(), 7).is_present() = False { ref
 
 // A neutral index: the test agrees with `Vec::at`, which does not look at its
 // proof, so `same` is `refl`.
-theorem word_at_val({w, n: Nat}, v: [BitVec(w); n], i: u64, h: i.toNat() < n): word_at(v, i).val(h) = v.at(i, inside := h) {
+theorem word_at_val({w, n: Nat}, v: [BitVec(w); n], i: u64, h: i.toNat() < n): word_at(v, i).val(holds := h) = v.at(i, inside := h) {
     When::of_val(λ h => v.at(i, inside := h), λ a b => refl, h)
 }
 
@@ -78,7 +78,7 @@ fn checked_add(a, b: u64) → When<u64, a.toNat() + b.toNat() < Nat::pow(2, 64)>
 theorem checked_add_small(): checked_add(2, 3).option() = Some(5) { refl }
 theorem checked_add_wraps(): checked_add(18446744073709551615, 1).is_present() = False { refl }
 
-theorem checked_add_val(a, b: u64, h: a.toNat() + b.toNat() < Nat::pow(2, 64)): checked_add(a, b).val(h).toNat() = a.toNat() + b.toNat() {
+theorem checked_add_val(a, b: u64, h: a.toNat() + b.toNat() < Nat::pow(2, 64)): checked_add(a, b).val(holds := h).toNat() = a.toNat() + b.toNat() {
     trans(j(sym(When::of_val(λ h => add_within(a, b, fits := h), λ x y => refl, h)), λ y _ => y.toNat() = add_within(a, b, fits := h).toNat(), refl),
         add_within_toNat(a, b, h))
 }
@@ -99,14 +99,14 @@ fn Vec::nth<A>({n: Nat}, self v: [A; n], i: Nat, inside: i < n := omega) → A {
 theorem entry_lit<A>(x, y, z: A): entry<A>([x, y, z], 1).option() = Some(y) { refl }
 theorem entry_past<A>(x, y: A): entry<A>([x, y], 2).option() = None { refl }
 
-theorem entry_val<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(h) = vector_index(v, i, h) {
+theorem entry_val<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(holds := h) = vector_index(v, i, h) {
     When::of_val(λ h => vector_index(v, i, h), λ a b => vector_index_irrel(v, i, a, b), h)
 }
 
 // `refl` is not `same` here: the read at the decision's proof and the read at
 // `h` are two stuck terms.
 // expect-error(kernel)
-theorem entry_val_refl<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(h) = vector_index(v, i, h) {
+theorem entry_val_refl<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(holds := h) = vector_index(v, i, h) {
     When::of_val(λ h => vector_index(v, i, h), λ a b => refl, h)
 }
 
@@ -207,6 +207,94 @@ theorem count_from_unfolds({n: Nat}, v: [Nat; n], i: Nat):
 }
 
 // ---------------------------------------------------------------------------
+// Flow facts and `val`'s search (docs/when-design.md §5). `if let
+// Present(x) = w` leaves the condition in scope of its block and the
+// refutation in scope of `else`, under private names; `w.val()` and a
+// proof-taking call find them (`known`: a hypothesis, a side of a
+// conjunction, then `omega`/`bv_omega`).
+
+// The success block reads again with no test: the condition is known.
+fn nth_twice<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    if let Present(_) = v.nth(i) { v.nth(i) } else { d }
+}
+
+// The `else` block knows the refutation.
+fn nth_refuted({n: Nat}, v: [Nat; n], i: Nat) → Nat {
+    if let Present(x) = v.nth(i) { x } else { let no: ¬(i < n) = known; 0 }
+}
+
+// What follows from the condition is found by the arithmetic behind it.
+fn nth_before({n: Nat}, v: [Nat; n], i: Nat) → Nat {
+    if let Present(x) = v.nth(i) { if h: 1 <= i { v.nth(i - 1) } else { x } } else { 0 }
+}
+
+// On a `When` value, at an open condition: `val` finds the arm's proof.
+fn value_again<T, P>(w: When<T, P>, d: T) → T {
+    if let Present(_) = w { w.val() } else { d }
+}
+
+// A hypothesis, a side of a conjunction, a consequence.
+fn val_hyp(n: Nat, w: When<Nat, n < 5>, h: n < 5) → Nat { w.val() }
+fn val_side(n: Nat, w: When<Nat, n < 5>, h: 1 <= n ∧ n < 5) → Nat { w.val() }
+fn val_follows(n: Nat, w: When<Nat, n < 5>, h: n < 3) → Nat { w.val() }
+fn val_closed(w: When<Nat, 2 < 5>) → Nat { w.val() }
+
+theorem nth_twice_lit(): nth_twice(small(), 2, 0) = 7 { refl }
+theorem nth_before_lit(): nth_before(small(), 2) = 6 { refl }
+theorem value_again_lit(h: True): value_again(Present<Nat, True>(4, h), 0) = 4 { refl }
+
+// ---------------------------------------------------------------------------
+// Propagation (docs/when-design.md §6): `e?` in a function returning
+// `When<U, Q>`. A proof-taking call is tested, an absent operand makes the
+// result absent (`back: Q → P` found by `known`), and the tail is wrapped as
+// `Present(value, known)`, `Q` found from the proofs the `?`s bound.
+
+fn first_two({n: Nat}, v: [Nat; n]) → When<Nat, 1 < n> {
+    let a = v.nth(0)?;
+    let b = v.nth(1)?;
+    a + b
+}
+
+// The stated condition is the conjunction of the tests.
+fn pair_sum({n: Nat}, v: [Nat; n], i, k: Nat) → When<Nat, i < n ∧ k < n> {
+    v.nth(i)? + v.nth(k)?
+}
+
+// On a `When` value, at an open element type.
+fn both_of<A, B, P, Q>(a: When<A, P>, b: When<B, Q>) → When<Pair<A, B>, P ∧ Q> {
+    Pair(a?, b?)
+}
+
+// A written `Present` tail is not wrapped again.
+fn written_tail({n: Nat}, v: [Nat; n]) → When<Nat, 0 < n> {
+    let a = v.nth(0)?;
+    Present(a + 1, known)
+}
+
+theorem first_two_lit(): first_two(small()).option() = Some(11) { refl }
+theorem first_two_short(): first_two([4]).is_present() = False { refl }
+theorem pair_sum_lit(): pair_sum(small(), 0, 2).option() = Some(12) { refl }
+theorem pair_sum_past(): pair_sum(small(), 0, 3).is_present() = False { refl }
+theorem written_tail_lit(): written_tail(small()).option() = Some(6) { refl }
+theorem both_of_absent(h: True, n: ¬False): both_of(Present<Nat, True>(1, h), Absent<Nat, False>(n)).is_present() = False { refl }
+
+// ---------------------------------------------------------------------------
+// Coercion (docs/when-design.md §5, stage 5): a `When<T, P>` where a `T` is
+// wanted is its value, with `P` found by `known`. A checking position only:
+// an operator's operands are inferred, so `w + 1` is not one.
+
+fn coerce_result(n: Nat, w: When<Nat, n < 5>, h: n < 5) → Nat { w }
+fn coerce_follows(n: Nat, w: When<Nat, n < 5>, h: n < 3) → Nat { w }
+fn coerce_arg(n: Nat, w: When<Nat, n < 5>, h: n < 5) → Nat { Succ(w) }
+fn coerce_branch<T, P>(w: When<T, P>, d: T) → T { if let Present(_) = w { w } else { d } }
+fn coerce_read<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    if let Present(_) = v.nth(i) { let x: A = entry(v, i); x } else { d }
+}
+
+theorem coerce_result_lit(h: 2 < 5): coerce_result(2, Present(9, h), h) = 9 { refl }
+theorem coerce_branch_lit(h: True): coerce_branch(Present<Nat, True>(4, h), 0) = 4 { refl }
+
+// ---------------------------------------------------------------------------
 // Negative controls.
 
 // An index past the end gives no value.
@@ -215,7 +303,7 @@ theorem word_at_outside_some(): word_at(three(), 3).option() = Some(0) { refl }
 
 // `val` takes the condition, and nothing else stands for it.
 // expect-error(mismatch)
-fn val_without(v: [u64; 3], i: u64) → u64 { word_at(v, i).val(trivial) }
+fn val_without(v: [u64; 3], i: u64) → u64 { word_at(v, i).val(holds := trivial) }
 
 // A `When` is wanted, and the call names its condition: it is not tested,
 // and its value is not a `When`.
@@ -234,3 +322,18 @@ fn two_conditions(i, k: Nat, first: i < 4 := omega, second: i + k < 5 := omega) 
 fn second_follows(i: Nat) → When<Nat, i < 4> { two_conditions(i, 1) }
 // expect-error: `second` was left to its default
 fn second_unknown(i, k: Nat) → When<Nat, i < 4> { two_conditions(i, k) }
+
+// `val` with nothing to find: the error says to test it or prove it.
+// expect-error: test it (a `match` or `if let` on `Present`/`Absent`) or prove it
+fn val_unknown(n: Nat, w: When<Nat, n < 5>) → Nat { w.val() }
+
+// A stated condition the tests do not give: `Q` is not found for the tail.
+// expect-error: `known` found no hypothesis
+fn too_strong({n: Nat}, v: [Nat; n]) → When<Nat, 2 < n> {
+    let a = v.nth(1)?;
+    a
+}
+
+// A `When` where its value is wanted and its condition is not known.
+// expect-error: this is a `When`, used where its value is wanted
+fn coerce_unknown(n: Nat, w: When<Nat, n < 5>) → Nat { w }
