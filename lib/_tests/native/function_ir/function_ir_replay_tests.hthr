@@ -63,7 +63,7 @@ theorem two_run(): replay_stage(rules()).run(two(), two_plans()) = Some(two_repl
 
 // What the program may do, the rewritten one may.
 theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects(two())(before, f, arguments, result, after)): program_effects(two_replayed())(before, f, arguments, result, after) {
+    did: program_effects(two(), before, f, arguments, result, after)): program_effects(two_replayed(), before, f, arguments, result, after) {
     replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, after, did)
 }
 

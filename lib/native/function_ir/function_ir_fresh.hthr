@@ -1,0 +1,364 @@
+// Ids below a bound, and valuations that agree below it
+// (docs/optimizer-design.md §3.1): what a pass that makes new ids owes.
+//
+// A function's body is equations over one valuation, so a pass that adds a
+// value must name it with an id the body does not use, and then show the
+// rest of the body cannot tell. `StructuredRegion::under(b)` is the check:
+// every id the region mentions is below `b`. `StructuredRegion::runs_agree`
+// is the theorem: a region under `b` runs over any valuation that agrees
+// with one it ran over below `b` (`Valuation::AgreeBelow`). A pass then
+// builds its new valuation to agree below the bound and place the new
+// values at or above it, and carries the bound along as it goes.
+//
+// A loop pass has a valuation of its own, so a loop's body is not read
+// through the outer one; `under` bounds its ids all the same, so one bound
+// serves a pass that rewrites inside a body too.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Ids below a bound
+
+fn ids_under(ids: List<Nat>, b: Nat) → Bool {
+    match ids { Nil => True, Cons(id, rest) => Succ(id).leb(b) && ids_under(rest, b) }
+}
+
+theorem ids_under_mem(b: Nat, ids: List<Nat>): ids_under(ids, b) = True → (id: Nat) → Mem(id, ids) → Succ(id).leb(b) = True {
+    match ids {
+        Nil => λ _ id m => false_elim(m),
+        Cons(first, rest) => λ under id m => {
+            let parts = Bool::and_true_parts(Succ(first).leb(b), ids_under(rest, b), under);
+            match m {
+                Inl(same) => j(sym(same), λ x _ => Succ(x).leb(b) = True, parts.left),
+                Inr(later) => ids_under_mem(b, rest, parts.right, id, later),
+            }
+        },
+    }
+}
+
+theorem ids_under_mono(b, c: Nat, le: b.leb(c) = True, ids: List<Nat>): ids_under(ids, b) = True → ids_under(ids, c) = True {
+    match ids {
+        Nil => λ _ => refl,
+        Cons(first, rest) => λ under => {
+            let parts = Bool::and_true_parts(Succ(first).leb(b), ids_under(rest, b), under);
+            Bool::and_true_of(Succ(first).leb(c), ids_under(rest, c), Succ(first).leb_trans(b, c, parts.left, le), ids_under_mono(b, c, le, rest, parts.right))
+        },
+    }
+}
+
+fn nodes_under(nodes: List<Node>, b: Nat) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => ids_under(node.mentions(), b) && nodes_under(rest, b) }
+}
+
+theorem nodes_under_mono(b, c: Nat, le: b.leb(c) = True, nodes: List<Node>): nodes_under(nodes, b) = True → nodes_under(nodes, c) = True {
+    match nodes {
+        Nil => λ _ => refl,
+        Cons(node, rest) => λ under => {
+            let parts = Bool::and_true_parts(ids_under(node.mentions(), b), nodes_under(rest, b), under);
+            Bool::and_true_of(ids_under(node.mentions(), c), nodes_under(rest, c), ids_under_mono(b, c, le, node.mentions(), parts.left),
+                nodes_under_mono(b, c, le, rest, parts.right))
+        },
+    }
+}
+
+// Every id a region mentions is below `b`: its own, and its loops' bodies'.
+fn StructuredRegion::under(self region: StructuredRegion, b: Nat) → Bool {
+    match region {
+        Dataflow(body) => nodes_under(body.nodes, b),
+        Sequence(prefix, continuation) => nodes_under(prefix.nodes, b) && continuation.under(b),
+        Compose(prefix, continuation) => prefix.under(b) && continuation.under(b),
+        Conditional(_, condition, _, _, when_true, when_false) => Succ(condition).leb(b) && (when_true.under(b) && when_false.under(b)),
+        Call(_, arguments, result) => ids_under(Cons(result, arguments), b),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            ids_under(Cons(bound, Cons(exhausted, inputs)), b) && (ids_under(outputs, b) &&
+                (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)))),
+        Lend(views, _, arguments, result) => nodes_under(views_nodes(views), b) &&
+            (ids_under(nodes_mentions(views_nodes(views)), b) && ids_under(Cons(result, views_homes(views) ++ arguments), b)),
+    }
+}
+
+theorem StructuredRegion::under_mono(self region: StructuredRegion, b, c: Nat, le: b.leb(c) = True): region.under(b) = True → region.under(c) = True {
+    match region {
+        Dataflow(body) => λ under => nodes_under_mono(b, c, le, body.nodes, under),
+        Sequence(prefix, continuation) => λ under => {
+            let parts = Bool::and_true_parts(nodes_under(prefix.nodes, b), continuation.under(b), under);
+            Bool::and_true_of(nodes_under(prefix.nodes, c), continuation.under(c), nodes_under_mono(b, c, le, prefix.nodes, parts.left),
+                continuation.under_mono(b, c, le, parts.right))
+        },
+        Compose(prefix, continuation) => λ under => {
+            let parts = Bool::and_true_parts(prefix.under(b), continuation.under(b), under);
+            Bool::and_true_of(prefix.under(c), continuation.under(c), prefix.under_mono(b, c, le, parts.left), continuation.under_mono(b, c, le, parts.right))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ under => {
+            let parts = Bool::and_true_parts(Succ(condition).leb(b), when_true.under(b) && when_false.under(b), under);
+            let arms = Bool::and_true_parts(when_true.under(b), when_false.under(b), parts.right);
+            Bool::and_true_of(Succ(condition).leb(c), when_true.under(c) && when_false.under(c), Succ(condition).leb_trans(b, c, parts.left, le),
+                Bool::and_true_of(when_true.under(c), when_false.under(c), when_true.under_mono(b, c, le, arms.left), when_false.under_mono(b, c, le, arms.right)))
+        },
+        Call(_, arguments, result) => λ under => ids_under_mono(b, c, le, Cons(result, arguments), under),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ under => {
+            let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), b), ids_under(outputs, b) &&
+                (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b))), under);
+            let p2 = Bool::and_true_parts(ids_under(outputs, b), ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)), p1.right);
+            let p3 = Bool::and_true_parts(ids_under(Cons(count, Cons(exit, parameters)), b), ids_under(next, b) && body.under(b), p2.right);
+            let p4 = Bool::and_true_parts(ids_under(next, b), body.under(b), p3.right);
+            Bool::and_true_of(ids_under(Cons(bound, Cons(exhausted, inputs)), c), ids_under(outputs, c) &&
+                    (ids_under(Cons(count, Cons(exit, parameters)), c) && (ids_under(next, c) && body.under(c))),
+                ids_under_mono(b, c, le, Cons(bound, Cons(exhausted, inputs)), p1.left),
+                Bool::and_true_of(ids_under(outputs, c), ids_under(Cons(count, Cons(exit, parameters)), c) && (ids_under(next, c) && body.under(c)),
+                    ids_under_mono(b, c, le, outputs, p2.left),
+                    Bool::and_true_of(ids_under(Cons(count, Cons(exit, parameters)), c), ids_under(next, c) && body.under(c),
+                        ids_under_mono(b, c, le, Cons(count, Cons(exit, parameters)), p3.left),
+                        Bool::and_true_of(ids_under(next, c), body.under(c), ids_under_mono(b, c, le, next, p4.left), body.under_mono(b, c, le, p4.right)))))
+        },
+        Lend(views, _, arguments, result) => λ under => {
+            let p1 = Bool::and_true_parts(nodes_under(views_nodes(views), b),
+                ids_under(nodes_mentions(views_nodes(views)), b) && ids_under(Cons(result, views_homes(views) ++ arguments), b), under);
+            let p2 = Bool::and_true_parts(ids_under(nodes_mentions(views_nodes(views)), b), ids_under(Cons(result, views_homes(views) ++ arguments), b), p1.right);
+            Bool::and_true_of(nodes_under(views_nodes(views), c),
+                ids_under(nodes_mentions(views_nodes(views)), c) && ids_under(Cons(result, views_homes(views) ++ arguments), c),
+                nodes_under_mono(b, c, le, views_nodes(views), p1.left),
+                Bool::and_true_of(ids_under(nodes_mentions(views_nodes(views)), c), ids_under(Cons(result, views_homes(views) ++ arguments), c),
+                    ids_under_mono(b, c, le, nodes_mentions(views_nodes(views)), p2.left),
+                    ids_under_mono(b, c, le, Cons(result, views_homes(views) ++ arguments), p2.right)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Valuations that agree below a bound
+
+fn Valuation::AgreeBelow(values, other: Valuation(), b: Nat) → Type {
+    (id: Nat) → Succ(id).leb(b) = True → (w: Nat) → other(w, id) = values(w, id)
+}
+
+// A node holds of any valuation that agrees on what it mentions.
+theorem Node::holds_agree(self node: Node, values, other: Valuation(), buffers: Buffers(),
+    agree: (id: Nat) → Mem(id, node.mentions()) → (w: Nat) → other(w, id) = values(w, id)):
+    NodeHolds(values, node, buffers := buffers) → NodeHolds(other, node, buffers := buffers) {
+    (match node as λ n => ((id: Nat) → Mem(id, n.mentions()) → (w: Nat) → other(w, id) = values(w, id)) →
+        NodeHolds(values, n, buffers := buffers) → NodeHolds(other, n, buffers := buffers) {
+        Const(width, output, _) => λ agree h => trans(agree(output, Inl(refl), width), h),
+        Move(width, output, source) => λ agree h => trans(agree(output, Inl(refl), width), trans(h, sym(agree(source, Inr(Inl(refl)), width)))),
+        Add(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.add(y), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        Sub(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.sub(y), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        BitAnd(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.band(y), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        BitOr(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bor(y), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        BitXor(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bxor(y), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        ShiftLeft(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(width)) => x.shift_left(amount), agree(value, Inr(Inl(refl)), width))))),
+        LogicalShiftRight(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(width)) => x.shift_right(amount), agree(value, Inr(Inl(refl)), width))))),
+        ArithmeticShiftRight(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(width)) => x.arithmetic_shift_right(amount), agree(value, Inr(Inl(refl)), width))))),
+        UnsignedLessThan(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), 1), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => BitVec::ofBool(x.unsigned_lt_bit(y)), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        SignedLessThan(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), 1), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => BitVec::ofBool(x.signed_lt_bit(y)), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        Equal(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), 1), trans(h,
+            sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => BitVec::ofBool(x.eq_bit(y)), agree(left, Inr(Inl(refl)), width), agree(right, Inr(Inr(Inl(refl))), width))))),
+        BufferLoad(output, buffer, index) => λ agree h => trans(agree(output, Inl(refl), 64), trans(h,
+            sym(cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(buffers, buffer, x.toNat())), agree(index, Inr(Inl(refl)), 64))))),
+        BufferStore(_, _, _, _) => λ agree h => h,
+        Resize(from, to, output, source) => λ agree h => trans(agree(output, Inl(refl), to), trans(h,
+            sym(cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := to), agree(source, Inr(Inl(refl)), from))))),
+        SignResize(from, to, output, source) => λ agree h => trans(agree(output, Inl(refl), to), trans(h,
+            sym(cong_fn(λ (x: BitVec(from)) => x.sresize(to), agree(source, Inr(Inl(refl)), from))))),
+    })(agree)
+}
+
+theorem Node::runs_agree(self node: Node, values, other: Valuation(), before, after: Buffers(),
+    agree: (id: Nat) → Mem(id, node.mentions()) → (w: Nat) → other(w, id) = values(w, id)):
+    node.Runs(values, before, after) → node.Runs(other, before, after) {
+    (match node as λ n => ((id: Nat) → Mem(id, n.mentions()) → (w: Nat) → other(w, id) = values(w, id)) →
+        n.Runs(values, before, after) → n.Runs(other, before, after) {
+        Const(width, output, value) => λ agree ran => ⟨Const(width, output, value).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        Move(width, output, source) => λ agree ran => ⟨Move(width, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        Add(width, output, left, right) => λ agree ran => ⟨Add(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        Sub(width, output, left, right) => λ agree ran => ⟨Sub(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        BitAnd(width, output, left, right) => λ agree ran => ⟨BitAnd(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        BitOr(width, output, left, right) => λ agree ran => ⟨BitOr(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        BitXor(width, output, left, right) => λ agree ran => ⟨BitXor(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        ShiftLeft(width, output, value, amount) => λ agree ran => ⟨ShiftLeft(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        LogicalShiftRight(width, output, value, amount) => λ agree ran => ⟨LogicalShiftRight(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        ArithmeticShiftRight(width, output, value, amount) => λ agree ran => ⟨ArithmeticShiftRight(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        UnsignedLessThan(width, output, left, right) => λ agree ran => ⟨UnsignedLessThan(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        SignedLessThan(width, output, left, right) => λ agree ran => ⟨SignedLessThan(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        Equal(width, output, left, right) => λ agree ran => ⟨Equal(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        BufferLoad(output, buffer, index) => λ agree ran => ⟨BufferLoad(output, buffer, index).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        BufferStore(output, buffer, index, value) => λ agree ran =>
+            ⟨trans(ran.left, sym(eq2(λ (x: BitVec(64)) (y: BitVec(64)) => store_byte(before, buffer, x.toNat(), low_byte(y)),
+                    agree(index, Inr(Inl(refl)), 64), agree(value, Inr(Inr(Inl(refl))), 64)))),
+                trans(agree(output, Inl(refl), 64), trans(ran.right,
+                    sym(cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(after, buffer, x.toNat())), agree(index, Inr(Inl(refl)), 64)))))⟩,
+        Resize(from, to, output, source) => λ agree ran => ⟨Resize(from, to, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        SignResize(from, to, output, source) => λ agree ran => ⟨SignResize(from, to, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+    })(agree)
+}
+
+theorem nodes_run_agree(values, other: Valuation(), b: Nat, agree: Valuation::AgreeBelow(values, other, b), nodes: List<Node>):
+    nodes_under(nodes, b) = True → (before, after: Buffers()) → NodesRun(nodes, values, before, after) → NodesRun(nodes, other, before, after) {
+    match nodes {
+        Nil => λ _ before after ran => ran,
+        Cons(node, rest) => λ under before after ran => {
+            let parts = Bool::and_true_parts(ids_under(node.mentions(), b), nodes_under(rest, b), under);
+            Exists(ran.witness, ⟨node.runs_agree(values, other, before, ran.witness,
+                    λ id m w => agree(id, ids_under_mem(b, node.mentions(), parts.left, id, m), w), ran.proof.left),
+                nodes_run_agree(values, other, b, agree, rest, parts.right, ran.witness, after, ran.proof.right)⟩)
+        },
+    }
+}
+
+// A loop from the same count, state, final state and verdict, however they
+// are spelled.
+theorem loop_runs_over_same(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    n, m: Nat, state, state2, final, final2: List<BitVec(64)>, e, e2: Bool, before, after: Buffers(),
+    sn: n = m, ss: state = state2, sf: final = final2, se: e = e2):
+    LoopRunsOver(pass, parameters, count, exit, next, n, state, final, e, before, after) →
+    LoopRunsOver(pass, parameters, count, exit, next, m, state2, final2, e2, before, after) {
+    j(sn, λ x _ => LoopRunsOver(pass, parameters, count, exit, next, n, state, final, e, before, after) →
+            LoopRunsOver(pass, parameters, count, exit, next, x, state2, final2, e2, before, after),
+        j(ss, λ x _ => LoopRunsOver(pass, parameters, count, exit, next, n, state, final, e, before, after) →
+                LoopRunsOver(pass, parameters, count, exit, next, n, x, final2, e2, before, after),
+            j(sf, λ x _ => LoopRunsOver(pass, parameters, count, exit, next, n, state, final, e, before, after) →
+                    LoopRunsOver(pass, parameters, count, exit, next, n, state, x, e2, before, after),
+                j(se, λ x _ => LoopRunsOver(pass, parameters, count, exit, next, n, state, final, e, before, after) →
+                        LoopRunsOver(pass, parameters, count, exit, next, n, state, final, x, before, after), λ ran => ran))))
+}
+
+// A region runs over any valuation that agrees with one it runs over below
+// a bound its ids are below.
+theorem StructuredRegion::runs_agree(self region: StructuredRegion, effects: Effects(), b: Nat): region.under(b) = True →
+    (values, other: Valuation()) → Valuation::AgreeBelow(values, other, b) → (before, after: Buffers()) →
+    StructuredRegionRunsOver(effects, values, region, before, after) → StructuredRegionRunsOver(effects, other, region, before, after) {
+    match region {
+        Dataflow(body) => λ under values other agree before after ran => nodes_run_agree(values, other, b, agree, body.nodes, under, before, after, ran),
+        Sequence(prefix, continuation) => λ under values other agree before after ran => {
+            let parts = Bool::and_true_parts(nodes_under(prefix.nodes, b), continuation.under(b), under);
+            Exists(ran.witness, ⟨nodes_run_agree(values, other, b, agree, prefix.nodes, parts.left, before, ran.witness, ran.proof.left),
+                continuation.runs_agree(effects, b, parts.right, values, other, agree, ran.witness, after, ran.proof.right)⟩)
+        },
+        Compose(prefix, continuation) => λ under values other agree before after ran => {
+            let parts = Bool::and_true_parts(prefix.under(b), continuation.under(b), under);
+            Exists(ran.witness, ⟨prefix.runs_agree(effects, b, parts.left, values, other, agree, before, ran.witness, ran.proof.left),
+                continuation.runs_agree(effects, b, parts.right, values, other, agree, ran.witness, after, ran.proof.right)⟩)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ under values other agree before after => {
+            let parts = Bool::and_true_parts(Succ(condition).leb(b), when_true.under(b) && when_false.under(b), under);
+            let arms = Bool::and_true_parts(when_true.under(b), when_false.under(b), parts.right);
+            let same: (other(1, condition) = values(1, condition)) = agree(condition, parts.left, 1);
+            j(sym(same), λ bit _ =>
+                    (match values(1, condition).head_bit() {
+                        False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                        True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                    }) →
+                    (match bit.head_bit() {
+                        False => StructuredRegionRunsOver(effects, other, when_false, before, after),
+                        True => StructuredRegionRunsOver(effects, other, when_true, before, after),
+                    }),
+                (match values(1, condition).head_bit() as λ h =>
+                    (match h {
+                        False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                        True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                    }) →
+                    (match h {
+                        False => StructuredRegionRunsOver(effects, other, when_false, before, after),
+                        True => StructuredRegionRunsOver(effects, other, when_true, before, after),
+                    }) {
+                    False => λ arm => when_false.runs_agree(effects, b, arms.right, values, other, agree, before, after, arm),
+                    True => λ arm => when_true.runs_agree(effects, b, arms.left, values, other, agree, before, after, arm),
+                }))
+        },
+        Call(callee, arguments, result) => λ under values other agree before after ran => {
+            let words: (words_of(values, arguments) = words_of(other, arguments)) = sym(words_agree(arguments, values, other,
+                λ id m => agree(id, ids_under_mem(b, Cons(result, arguments), under, id, Inr(m)), 64)));
+            let word: (values(64, result) = other(64, result)) = sym(agree(result, ids_under_mem(b, Cons(result, arguments), under, result, Inl(refl)), 64));
+            j(words, λ ws _ => effects(before, callee, ws, other(64, result), after),
+                j(word, λ r _ => effects(before, callee, words_of(values, arguments), r, after), ran))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ under values other agree before after ran => {
+            let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), b), ids_under(outputs, b) &&
+                (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b))), under);
+            let p2 = Bool::and_true_parts(ids_under(outputs, b), ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)), p1.right);
+            let outer = ids_under_mem(b, Cons(bound, Cons(exhausted, inputs)), p1.left);
+            loop_runs_over_same(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                parameters, count, exit, next, values(64, bound).toNat(), other(64, bound).toNat(), words_of(values, inputs), words_of(other, inputs),
+                words_of(values, outputs), words_of(other, outputs), values(1, exhausted).head_bit(), other(1, exhausted).head_bit(), before, after,
+                cong_fn(λ (x: BitVec(64)) => x.toNat(), sym(agree(bound, outer(bound, Inl(refl)), 64))),
+                sym(words_agree(inputs, values, other, λ id m => agree(id, outer(id, Inr(Inr(m))), 64))),
+                sym(words_agree(outputs, values, other, λ id m => agree(id, ids_under_mem(b, outputs, p2.left, id, m), 64))),
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), sym(agree(exhausted, outer(exhausted, Inr(Inl(refl))), 1))), ran)
+        },
+        Lend(views, callee, arguments, result) => λ under values other agree before after ran => {
+            let p1 = Bool::and_true_parts(nodes_under(views_nodes(views), b),
+                ids_under(nodes_mentions(views_nodes(views)), b) && ids_under(Cons(result, views_homes(views) ++ arguments), b), under);
+            let p2 = Bool::and_true_parts(ids_under(nodes_mentions(views_nodes(views)), b), ids_under(Cons(result, views_homes(views) ++ arguments), b), p1.right);
+            let mid = ran.witness;
+            let left = ran.proof.right.witness;
+            let at_views: ((id: Nat) → Mem(id, nodes_mentions(views_nodes(views))) → other(64, id) = values(64, id)) =
+                λ id m => agree(id, ids_under_mem(b, nodes_mentions(views_nodes(views)), p2.left, id, m), 64);
+            let passed = ids_under_mem(b, Cons(result, views_homes(views) ++ arguments), p2.right);
+            let windows: (viewed(views, values, mid) = viewed(views, other, mid)) = sym(viewed_agree(views, values, other, mid, at_views));
+            let words: (words_of(values, views_homes(views) ++ arguments) = words_of(other, views_homes(views) ++ arguments)) =
+                sym(words_agree(views_homes(views) ++ arguments, values, other, λ id m => agree(id, passed(id, Inr(m)), 64)));
+            let word: (values(64, result) = other(64, result)) = sym(agree(result, passed(result, Inl(refl)), 64));
+            let called = j(windows, λ file _ => effects(file, callee, words_of(other, views_homes(views) ++ arguments), other(64, result), left),
+                j(words, λ ws _ => effects(viewed(views, values, mid), callee, ws, other(64, result), left),
+                    j(word, λ r _ => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), r, left),
+                        ran.proof.right.proof.left)));
+            Exists(mid, ⟨nodes_run_agree(values, other, b, agree, views_nodes(views), p1.left, before, mid, ran.proof.left),
+                Exists(left, ⟨called, trans(ran.proof.right.proof.right, sym(put_views_agree(views, values, other, at_views, left, mid)))⟩)⟩)
+        },
+    }
+}
+
+theorem Valuation::agree_below_refl(values: Valuation(), b: Nat): Valuation::AgreeBelow(values, values, b) { λ id under w => refl }
+
+theorem Valuation::agree_below_less(values, new: Valuation(), b, c: Nat, agree: Valuation::AgreeBelow(values, new, c), le: b.leb(c) = True):
+    Valuation::AgreeBelow(values, new, b) {
+    λ id under w => agree(id, Succ(id).leb_trans(b, c, under, le), w)
+}
+
+theorem Valuation::agree_below_trans(values, mid, new: Valuation(), b, c: Nat, first: Valuation::AgreeBelow(values, mid, b),
+    second: Valuation::AgreeBelow(mid, new, c), le: b.leb(c) = True): Valuation::AgreeBelow(values, new, b) {
+    λ id under w => trans(second(id, Succ(id).leb_trans(b, c, under, le), w), first(id, under, w))
+}
+
+// ---------------------------------------------------------------------------
+// A bound to propose
+
+// The least bound above `top` and every one of `ids`. A searcher proposes
+// it and `under` checks it, so nothing is proved of it.
+fn ids_top(ids: List<Nat>, top: Nat) → Nat { match ids { Nil => top, Cons(id, rest) => ids_top(rest, top.max(Succ(id))) } }
+
+fn nodes_top(nodes: List<Node>, top: Nat) → Nat { match nodes { Nil => top, Cons(node, rest) => nodes_top(rest, ids_top(node.mentions(), top)) } }
+
+// A bound above every id of the region and `top`.
+fn StructuredRegion::top(self region: StructuredRegion, top: Nat) → Nat {
+    match region {
+        Dataflow(body) => nodes_top(body.nodes, top),
+        Sequence(prefix, continuation) => continuation.top(nodes_top(prefix.nodes, top)),
+        Compose(prefix, continuation) => continuation.top(prefix.top(top)),
+        Conditional(_, condition, _, _, when_true, when_false) => when_false.top(when_true.top(top.max(Succ(condition)))),
+        Call(_, arguments, result) => ids_top(Cons(result, arguments), top),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            body.top(ids_top(next, ids_top(Cons(count, Cons(exit, parameters)), ids_top(outputs, ids_top(Cons(bound, Cons(exhausted, inputs)), top))))),
+        Lend(views, _, arguments, result) => ids_top(Cons(result, views_homes(views) ++ arguments), ids_top(nodes_mentions(views_nodes(views)), top)),
+    }
+}
+
+fn Function::top(self function: Function) → Nat { function.body.top(ids_top(Cons(function.result, function.parameters), 0)) }

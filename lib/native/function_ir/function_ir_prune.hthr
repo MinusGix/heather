@@ -1,0 +1,156 @@
+// Functions nothing calls any more, emptied (docs/optimizer-design.md
+// §3.1): after inlining, a function whose every call was replaced is code
+// the program never reaches, and the lowering would still compile it.
+//
+// `live` names the functions kept: the ones a caller outside the program
+// may call, and every function a kept one calls (`program_closed`, a
+// check). Every other function becomes one constant (`Function::emptied`),
+// with its parameters and its count of lent buffers as they were, so the
+// functions keep their numbers and the program its shape. `prune_sound`:
+// a live function of the pruned program may do whatever it did.
+//
+// This is not a `Stage`: a stage's law is every function's, and an emptied
+// function does not do what it did.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_fresh;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn Nat::among(self n: Nat, ns: List<Nat>) → Bool { match ns { Nil => False, Cons(m, rest) => n.same(m) || n.among(rest) } }
+
+// Whether every call of the region is of a function `live` names.
+fn StructuredRegion::calls_only(self region: StructuredRegion, live: Nat → Bool) → Bool {
+    match region {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_only(live),
+        Compose(prefix, continuation) => prefix.calls_only(live) && continuation.calls_only(live),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_only(live) && when_false.calls_only(live),
+        Call(callee, _, _) => live(callee),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_only(live),
+        Lend(_, callee, _, _) => live(callee),
+    }
+}
+
+// A region runs under any effects its own imply at the functions it calls.
+theorem StructuredRegion::runs_weaken_within(self region: StructuredRegion, live: Nat → Bool, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after)):
+    region.calls_only(live) = True → (values: Valuation()) → (before, after: Buffers()) →
+    StructuredRegionRunsOver(effects, values, region, before, after) → StructuredRegionRunsOver(weaker, values, region, before, after) {
+    match region {
+        Dataflow(_) => λ only values before after ran => ran,
+        Sequence(_, continuation) => λ only values before after ran => Exists(ran.witness, ⟨ran.proof.left,
+            continuation.runs_weaken_within(live, effects, weaker, implies, only, values, ran.witness, after, ran.proof.right)⟩),
+        Compose(prefix, continuation) => λ only values before after ran => {
+            let parts = Bool::and_true_parts(prefix.calls_only(live), continuation.calls_only(live), only);
+            Exists(ran.witness, ⟨prefix.runs_weaken_within(live, effects, weaker, implies, parts.left, values, before, ran.witness, ran.proof.left),
+                continuation.runs_weaken_within(live, effects, weaker, implies, parts.right, values, ran.witness, after, ran.proof.right)⟩)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ only values before after => {
+            let parts = Bool::and_true_parts(when_true.calls_only(live), when_false.calls_only(live), only);
+            (match values(1, condition).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(weaker, values, when_false, before, after),
+                    True => StructuredRegionRunsOver(weaker, values, when_true, before, after),
+                }) {
+                False => λ arm => when_false.runs_weaken_within(live, effects, weaker, implies, parts.right, values, before, after, arm),
+                True => λ arm => when_true.runs_weaken_within(live, effects, weaker, implies, parts.left, values, before, after, arm),
+            })
+        },
+        Call(callee, arguments, result) => λ only values before after ran =>
+            implies(before, callee, only, words_of(values, arguments), values(64, result), after, ran),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ only values before after ran =>
+            loop_runs_over_weaken(
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
+                λ pass from to old => body.runs_weaken_within(live, effects, weaker, implies, only, pass, from, to, old),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
+                values(1, exhausted).head_bit(), before, after, ran),
+        Lend(views, callee, arguments, result) => λ only values before after ran =>
+            Exists(ran.witness, ⟨ran.proof.left, Exists(ran.proof.right.witness,
+                ⟨implies(viewed(views, values, ran.witness), callee, only, words_of(values, views_homes(views) ++ arguments), values(64, result),
+                    ran.proof.right.witness, ran.proof.right.proof.left), ran.proof.right.proof.right⟩)⟩),
+    }
+}
+
+// The function with one constant for a body: its parameters and its count
+// of lent buffers are as they were, so a program lists and lowers it as
+// before.
+fn Function::emptied(self function: Function) → Function {
+    Function(function.parameters, Dataflow(Region(Ports(Nil), [Const(64, ids_top(function.parameters, 0), 0)], Ports(Nil))),
+        ids_top(function.parameters, 0), function.lent)
+}
+
+// The program with every function `live` does not name emptied.
+fn prune(functions: List<Function>, live: Nat → Bool) → List<Function> {
+    match functions {
+        Nil => Nil,
+        Cons(last, earlier) => Cons(match live(earlier.len()) { True => last, False => last.emptied() }, prune(earlier, live)),
+    }
+}
+
+// Whether every function `live` names calls only functions it names.
+fn program_closed(functions: List<Function>, live: Nat → Bool) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (!live(earlier.len()) || last.body.calls_only(live)) && program_closed(earlier, live),
+    }
+}
+
+theorem prune_len(live: Nat → Bool, functions: List<Function>): prune(functions, live).len() = functions.len() {
+    match functions { Nil => refl, Cons(_, earlier) => cong_fn<Nat, Nat>(λ n => Succ(n), prune_len(live, earlier)) }
+}
+
+// A live function of the pruned program may do whatever it did.
+theorem prune_sound(live: Nat → Bool, functions: List<Function>): program_closed(functions, live) = True → (before: Buffers()) → (f: Nat) →
+    live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+    program_effects(functions, before, f, arguments, result, after) → program_effects(prune(functions, live), before, f, arguments, result, after) {
+    match functions {
+        Nil => λ _ before f _ arguments result after ran => false_elim(ran),
+        Cons(last, earlier) => λ closed before f alive arguments result after => {
+            let parts = Bool::and_true_parts(!live(earlier.len()) || last.body.calls_only(live), program_closed(earlier, live), closed);
+            let below = prune_sound(live, earlier, parts.right);
+            let at = (match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) →
+                (match d {
+                    Inl(_) => (match live(earlier.len()) { True => last, False => last.emptied() }).Runs(program_effects(prune(earlier, live)),
+                        arguments, result, before, after),
+                    Inr(_) => program_effects(prune(earlier, live), before, f, arguments, result, after),
+                }) {
+                Inl(same) => λ ran => {
+                    let here: (live(earlier.len()) = True) = j(same, λ n _ => live(n) = True, alive);
+                    let only: (last.body.calls_only(live) = True) = j(here, λ t _ => (!t || last.body.calls_only(live)) = True, parts.left);
+                    let moved: last.Runs(program_effects(prune(earlier, live)), arguments, result, before, after) =
+                        Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken_within(live, program_effects(earlier),
+                            program_effects(prune(earlier, live)), below, only, ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩);
+                    j(sym(here), λ t _ => (match t { True => last, False => last.emptied() }).Runs(program_effects(prune(earlier, live)),
+                        arguments, result, before, after), moved)
+                },
+                Inr(_) => λ ran => below(before, f, alive, arguments, result, after, ran),
+            });
+            j(sym(prune_len(live, earlier)), λ n _ =>
+                (match f.eq_dec(earlier.len()) {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) →
+                (match f.eq_dec(n) {
+                    Inl(_) => (match live(earlier.len()) { True => last, False => last.emptied() }).Runs(program_effects(prune(earlier, live)),
+                        arguments, result, before, after),
+                    Inr(_) => program_effects(prune(earlier, live), before, f, arguments, result, after),
+                }), at)
+        },
+    }
+}

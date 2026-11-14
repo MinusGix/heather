@@ -93,8 +93,8 @@ theorem Stage::run_len<P>(self stage: Stage<P>, functions: List<Function>): (pla
 // the same result and leave the same file.
 theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (plans: List<P>) → (new: List<Function>) →
     stage.run(functions, plans) = Some(new) → (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) →
-    (result: BitVec(64)) → (after: Buffers()) → program_effects(functions)(before, f, arguments, result, after) →
-    program_effects(new)(before, f, arguments, result, after) {
+    (result: BitVec(64)) → (after: Buffers()) → program_effects(functions, before, f, arguments, result, after) →
+    program_effects(new, before, f, arguments, result, after) {
     match functions {
         Nil => λ plans new made before f arguments result after ran => false_elim(ran),
         Cons(last, earlier) => λ plans => match plans {
@@ -110,11 +110,11 @@ theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (p
                 let at = (match f.eq_dec(earlier.len()) as λ d =>
                     (match d {
                         Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
-                        Inr(_) => program_effects(earlier)(before, f, arguments, result, after),
+                        Inr(_) => program_effects(earlier, before, f, arguments, result, after),
                     }) →
                     (match d {
                         Inl(_) => g.Runs(program_effects(gs), arguments, result, before, after),
-                        Inr(_) => program_effects(gs)(before, f, arguments, result, after),
+                        Inr(_) => program_effects(gs, before, f, arguments, result, after),
                     }) {
                     Inl(_) => λ ran => stage.sound(gs, last, plan, g, b.proof.left, arguments, result, before, after,
                         Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(program_effects(earlier), program_effects(gs), below,
@@ -124,15 +124,15 @@ theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (p
                 let moved = j(sym(same), λ n _ =>
                     (match f.eq_dec(earlier.len()) {
                         Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
-                        Inr(_) => program_effects(earlier)(before, f, arguments, result, after),
+                        Inr(_) => program_effects(earlier, before, f, arguments, result, after),
                     }) →
                     (match f.eq_dec(n) {
                         Inl(_) => g.Runs(program_effects(gs), arguments, result, before, after),
-                        Inr(_) => program_effects(gs)(before, f, arguments, result, after),
+                        Inr(_) => program_effects(gs, before, f, arguments, result, after),
                     }), at);
                 j(Option::some_inj(Cons(g, gs), new, b.proof.right), λ out _ =>
-                    program_effects(Cons(last, earlier))(before, f, arguments, result, after) →
-                    program_effects(out)(before, f, arguments, result, after), moved)
+                    program_effects(Cons(last, earlier), before, f, arguments, result, after) →
+                    program_effects(out, before, f, arguments, result, after), moved)
             },
         },
     }
@@ -141,8 +141,89 @@ theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (p
 // Two stages, one after the other.
 theorem Stage::run_then<P, Q>(first: Stage<P>, second: Stage<Q>, functions, between, new: List<Function>, plans: List<P>, more: List<Q>,
     ran: first.run(functions, plans) = Some(between), then: second.run(between, more) = Some(new), before: Buffers(), f: Nat,
-    arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(), did: program_effects(functions)(before, f, arguments, result, after)):
-    program_effects(new)(before, f, arguments, result, after) {
+    arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(), did: program_effects(functions, before, f, arguments, result, after)):
+    program_effects(new, before, f, arguments, result, after) {
     second.run_sound(between, more, new, then, before, f, arguments, result, after,
         first.run_sound(functions, plans, between, ran, before, f, arguments, result, after, did))
+}
+
+// ---------------------------------------------------------------------------
+// The function a call names
+
+fn program_function(functions: List<Function>, f: Nat) → Option<Function> {
+    match functions {
+        Nil => None,
+        Cons(last, earlier) => match f.eq_dec(earlier.len()) { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) },
+    }
+}
+
+theorem past_same(n, f: Nat, same: f = n, past: Succ(n) <= f): False { omega }
+theorem past_less(n, f: Nat, past: Succ(n) <= f): n <= f { omega }
+theorem past_of_same(n, f: Nat, same: f = n): n <= f { omega }
+
+// No function answers a call past the program's end.
+theorem program_effects_past(functions: List<Function>): (f: Nat) → functions.len() <= f → (before: Buffers()) →
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+    program_effects(functions, before, f, arguments, result, after) → False {
+    match functions {
+        Nil => λ f _ before arguments result after ran => ran,
+        Cons(last, earlier) => λ f past before arguments result after =>
+            (match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) → False {
+                Inl(same) => λ _ => past_same(earlier.len(), f, same, past),
+                Inr(_) => λ ran => program_effects_past(earlier, f, past_less(earlier.len(), f, past), before, arguments, result, after, ran),
+            }),
+    }
+}
+
+// What a program answers, a program it is the end of answers.
+theorem program_effects_more(last: Function, earlier: List<Function>, before: Buffers(), f: Nat, arguments: List<BitVec(64)>,
+    result: BitVec(64), after: Buffers()):
+    program_effects(earlier, before, f, arguments, result, after) → program_effects(Cons(last, earlier), before, f, arguments, result, after) {
+    (match f.eq_dec(earlier.len()) as λ d => program_effects(earlier, before, f, arguments, result, after) →
+        (match d {
+            Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+            Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+        }) {
+        Inl(same) => λ ran => false_elim(program_effects_past(earlier, f, past_of_same(earlier.len(), f, same), before, arguments, result, after, ran)),
+        Inr(_) => λ ran => ran,
+    })
+}
+
+theorem Function::runs_weaken(self function: Function, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after),
+    arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(), ran: function.Runs(effects, arguments, result, before, after)):
+    function.Runs(weaker, arguments, result, before, after) {
+    Exists(ran.witness, ⟨ran.proof.left, ⟨function.body.runs_weaken(effects, weaker, implies, ran.witness, before, after, ran.proof.right.left),
+        ran.proof.right.right⟩⟩)
+}
+
+// A call the program answers is a run of the function it names, over the
+// program's own effects.
+theorem program_effects_function(functions: List<Function>): (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) →
+    (result: BitVec(64)) → (after: Buffers()) → program_effects(functions, before, f, arguments, result, after) →
+    Exists<Function>(λ g => (program_function(functions, f) = Some(g)) ∧ g.Runs(program_effects(functions), arguments, result, before, after)) {
+    match functions {
+        Nil => λ before f arguments result after ran => false_elim(ran),
+        Cons(last, earlier) => λ before f arguments result after =>
+            (match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) →
+                Exists<Function>(λ g => ((match d { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) }) = Some(g)) ∧
+                    g.Runs(program_effects(Cons(last, earlier)), arguments, result, before, after)) {
+                Inl(_) => λ ran => Exists(last, ⟨refl, last.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
+                    λ b g a r e => program_effects_more(last, earlier, b, g, a, r, e), arguments, result, before, after, ran)⟩),
+                Inr(_) => λ ran => {
+                    let found = program_effects_function(earlier, before, f, arguments, result, after, ran);
+                    Exists(found.witness, ⟨found.proof.left, found.witness.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
+                        λ b g a r e => program_effects_more(last, earlier, b, g, a, r, e), arguments, result, before, after, found.proof.right)⟩)
+                },
+            }),
+    }
 }

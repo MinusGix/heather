@@ -2735,6 +2735,11 @@ theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
     }
 }
 
+// The decision is transitive, as its verdicts.
+theorem Nat::leb_trans(self a, b, c: Nat, p: a.leb(b) = True, q: b.leb(c) = True): a.leb(c) = True {
+    a.leb_true(c, a.le_trans(b, c, a.leb_sound(b, Bool::is_true_of_eq(p)), b.leb_sound(c, Bool::is_true_of_eq(q))))
+}
+
 // Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
 // a `Bool` computed to `True` or `False` proves the fact or refutes it, so
 // a comparison of large numerals costs the accelerated `leb` / `same` and

@@ -424,21 +424,21 @@ fn replay_region(table: List<Rule>, region: StructuredRegion) → Facts → Plan
         Sequence(prefix, continuation) => λ facts plan => match plan {
             Same => Some(Regioned(Sequence(prefix, continuation), facts)),
             Then(steps, rest) => replay(table, facts, prefix.nodes, steps).and_then(λ r =>
-                replay_region(table, continuation)(r.facts, rest).and_then(λ c =>
+                replay_region(table, continuation, r.facts, rest).and_then(λ c =>
                     Some(Regioned(Sequence(Region(prefix.inputs, r.nodes, prefix.outputs), c.region), c.facts)))),
             _ => None,
         },
         Compose(prefix, continuation) => λ facts plan => match plan {
             Same => Some(Regioned(Compose(prefix, continuation), facts)),
-            Both(first, second) => replay_region(table, prefix)(facts, first).and_then(λ a =>
-                replay_region(table, continuation)(a.facts, second).and_then(λ b =>
+            Both(first, second) => replay_region(table, prefix, facts, first).and_then(λ a =>
+                replay_region(table, continuation, a.facts, second).and_then(λ b =>
                     Some(Regioned(Compose(a.region, b.region), b.facts)))),
             _ => None,
         },
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ facts plan => match plan {
             Same => Some(Regioned(Conditional(inputs, condition, arguments, outputs, when_true, when_false), facts)),
-            Arms(yes, no) => replay_region(table, when_true)(facts, yes).and_then(λ a =>
-                replay_region(table, when_false)(facts, no).and_then(λ b =>
+            Arms(yes, no) => replay_region(table, when_true, facts, yes).and_then(λ a =>
+                replay_region(table, when_false, facts, no).and_then(λ b =>
                     Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts)))),
             _ => None,
         },
@@ -448,7 +448,7 @@ fn replay_region(table: List<Rule>, region: StructuredRegion) → Facts → Plan
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ facts plan => match plan {
             Same => Some(Regioned(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), facts)),
-            Body(inner) => replay_region(table, body)(Facts::none(), inner).and_then(λ b =>
+            Body(inner) => replay_region(table, body, Facts::none(), inner).and_then(λ b =>
                 Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts))),
             _ => None,
         },
@@ -466,7 +466,7 @@ fn Regioned::Sound(self r: Regioned, effects: Effects(), values: Valuation(), be
 }
 
 theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: StructuredRegion): (facts: Facts) → (plan: Plan) → (r: Regioned) →
-    replay_region(table, region)(facts, plan) = Some(r) → (values: Valuation()) → (before, after: Buffers()) → facts.Hold(values) →
+    replay_region(table, region, facts, plan) = Some(r) → (values: Valuation()) → (before, after: Buffers()) → facts.Hold(values) →
     StructuredRegionRunsOver(effects, values, region, before, after) → r.Sound(effects, values, before, after) {
     match region {
         Dataflow(body) => λ facts plan => match plan {
@@ -486,10 +486,10 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
                 j(Option::some_inj(Regioned(Sequence(prefix, continuation), facts), r, made), λ x _ => x.Sound(effects, values, before, after),
                     ⟨ran, held⟩),
             Then(steps, rest) => λ r made values before after held ran => {
-                let got = Option::and_then_some(replay(table, facts, prefix.nodes, steps), λ (n: Replayed) => replay_region(table, continuation)(n.facts, rest).and_then(λ c =>
+                let got = Option::and_then_some(replay(table, facts, prefix.nodes, steps), λ (n: Replayed) => replay_region(table, continuation, n.facts, rest).and_then(λ c =>
                     Some(Regioned(Sequence(Region(prefix.inputs, n.nodes, prefix.outputs), c.region), c.facts))), r, made);
                 let n = got.witness;
-                let more = Option::and_then_some(replay_region(table, continuation)(n.facts, rest), λ (c: Regioned) =>
+                let more = Option::and_then_some(replay_region(table, continuation, n.facts, rest), λ (c: Regioned) =>
                     Some(Regioned(Sequence(Region(prefix.inputs, n.nodes, prefix.outputs), c.region), c.facts)), r, got.proof.right);
                 let c = more.witness;
                 let first = replay_sound(table, values, steps, facts, prefix.nodes, n, got.proof.left, before, ran.witness, held, ran.proof.left);
@@ -505,10 +505,10 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
                 j(Option::some_inj(Regioned(Compose(prefix, continuation), facts), r, made), λ x _ => x.Sound(effects, values, before, after),
                     ⟨ran, held⟩),
             Both(first, second) => λ r made values before after held ran => {
-                let got = Option::and_then_some(replay_region(table, prefix)(facts, first), λ (a: Regioned) => replay_region(table, continuation)(a.facts, second).and_then(λ b =>
+                let got = Option::and_then_some(replay_region(table, prefix, facts, first), λ (a: Regioned) => replay_region(table, continuation, a.facts, second).and_then(λ b =>
                     Some(Regioned(Compose(a.region, b.region), b.facts))), r, made);
                 let a = got.witness;
-                let more = Option::and_then_some(replay_region(table, continuation)(a.facts, second), λ (b: Regioned) => Some(Regioned(Compose(a.region, b.region), b.facts)), r, got.proof.right);
+                let more = Option::and_then_some(replay_region(table, continuation, a.facts, second), λ (b: Regioned) => Some(Regioned(Compose(a.region, b.region), b.facts)), r, got.proof.right);
                 let b = more.witness;
                 let one = replay_region_sound(table, effects, prefix, facts, first, a, got.proof.left, values, before, ran.witness, held,
                     ran.proof.left);
@@ -524,10 +524,10 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
                 j(Option::some_inj(Regioned(Conditional(inputs, condition, arguments, outputs, when_true, when_false), facts), r, made),
                     λ x _ => x.Sound(effects, values, before, after), ⟨ran, held⟩),
             Arms(yes, no) => λ r made values before after held ran => {
-                let got = Option::and_then_some(replay_region(table, when_true)(facts, yes), λ (a: Regioned) => replay_region(table, when_false)(facts, no).and_then(λ b =>
+                let got = Option::and_then_some(replay_region(table, when_true, facts, yes), λ (a: Regioned) => replay_region(table, when_false, facts, no).and_then(λ b =>
                     Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts))), r, made);
                 let a = got.witness;
-                let more = Option::and_then_some(replay_region(table, when_false)(facts, no), λ (b: Regioned) =>
+                let more = Option::and_then_some(replay_region(table, when_false, facts, no), λ (b: Regioned) =>
                     Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts)), r, got.proof.right);
                 let b = more.witness;
                 let taken = (match values(1, condition).head_bit() as λ h =>
@@ -560,7 +560,7 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
                 j(Option::some_inj(Regioned(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), facts), r, made),
                     λ x _ => x.Sound(effects, values, before, after), ⟨ran, held⟩),
             Body(inner) => λ r made values before after held ran => {
-                let got = Option::and_then_some(replay_region(table, body)(Facts::none(), inner), λ (b: Regioned) =>
+                let got = Option::and_then_some(replay_region(table, body, Facts::none(), inner), λ (b: Regioned) =>
                     Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts)), r, made);
                 let b = got.witness;
                 let passes = loop_runs_over_weaken(
@@ -588,7 +588,7 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
 // Functions and programs
 
 fn replay_function(table: List<Rule>, function: Function, plan: Plan) → Option<Function> {
-    replay_region(table, function.body)(Facts::none(), plan).and_then(λ r =>
+    replay_region(table, function.body, Facts::none(), plan).and_then(λ r =>
         Some(Function(function.parameters, r.region, function.result, function.lent)))
 }
 
@@ -596,7 +596,7 @@ theorem replay_function_sound(table: List<Rule>, function: Function, plan: Plan,
     made: replay_function(table, function, plan) = Some(replayed), effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64),
     before, after: Buffers(), ran: function.Runs(effects, arguments, result, before, after)):
     replayed.Runs(effects, arguments, result, before, after) {
-    let got = Option::and_then_some(replay_region(table, function.body)(Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, function.lent)), replayed, made);
+    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, function.lent)), replayed, made);
     let r = got.witness;
     let values = ran.witness;
     let ok = replay_region_sound(table, effects, function.body, Facts::none(), plan, r, got.proof.left, values, before, after,

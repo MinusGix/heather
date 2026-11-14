@@ -1,0 +1,739 @@
+// Inlining (docs/optimizer-design.md §3.1): a call replaced by its
+// callee's body, as a stage of the optimizer (`function_ir_stage.hthr`).
+//
+// A call says the callee, run on the arguments' words over the file, may
+// return the result's word and leave the file. `program_effects_function`
+// opens that: the callee's body ran over some valuation of its own. The
+// inlined body is that body with every id raised by a bound `by` the
+// caller's ids are below (`StructuredRegion::raised`), between moves that
+// bind the raised parameters to the arguments and the result to the raised
+// result (`Function::inlined`). The caller's new valuation is its old one
+// below `by` and the callee's above (`Valuation::over`), so the callee's
+// body runs as it did (`raised_runs`) and the rest of the caller cannot
+// tell (`runs_agree`, `function_ir_fresh.hthr`). The binding is by moves
+// at width 64 because a call binds words: a parameter's id read at another
+// width is its own value in the callee, and no argument's.
+//
+// A plan (`Inlines`) names a bound above the function's ids and which
+// calls to replace, in the region's shape (`Sites`), each with the room
+// its callee's ids need; the bound moves up by that room at each site. A
+// loop's body is inlined into over its own passes' valuations. A call that
+// lends views stays a call. `inline_stage` is the stage, so a program
+// inlined callees first reads each callee's body as inlining left it, and
+// `Stage::run_sound` is its theorem.
+//
+// `inline_search` is a searcher: every wanted call, with the least bounds.
+// It is not trusted; `inline_function` checks what it proposes.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import function_ir_stage;
+import function_ir_fresh;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// A body with its ids raised
+
+fn raised_ids(ids: List<Nat>, by: Nat) → List<Nat> { match ids { Nil => Nil, Cons(id, rest) => Cons(id + by, raised_ids(rest, by)) } }
+
+fn raised_ports(ports: Ports, by: Nat) → Ports { Ports(ports.entries.map(λ (port: Port) => Port(port.id + by, port.width))) }
+
+fn Node::raised(self node: Node, by: Nat) → Node {
+    match node {
+        Const(width, output, value) => Const(width, output + by, value),
+        Move(width, output, source) => Move(width, output + by, source + by),
+        Add(width, output, left, right) => Add(width, output + by, left + by, right + by),
+        Sub(width, output, left, right) => Sub(width, output + by, left + by, right + by),
+        BitAnd(width, output, left, right) => BitAnd(width, output + by, left + by, right + by),
+        BitOr(width, output, left, right) => BitOr(width, output + by, left + by, right + by),
+        BitXor(width, output, left, right) => BitXor(width, output + by, left + by, right + by),
+        UnsignedLessThan(width, output, left, right) => UnsignedLessThan(width, output + by, left + by, right + by),
+        SignedLessThan(width, output, left, right) => SignedLessThan(width, output + by, left + by, right + by),
+        Equal(width, output, left, right) => Equal(width, output + by, left + by, right + by),
+        ShiftLeft(width, output, value, amount) => ShiftLeft(width, output + by, value + by, amount),
+        LogicalShiftRight(width, output, value, amount) => LogicalShiftRight(width, output + by, value + by, amount),
+        ArithmeticShiftRight(width, output, value, amount) => ArithmeticShiftRight(width, output + by, value + by, amount),
+        BufferLoad(output, buffer, index) => BufferLoad(output + by, buffer, index + by),
+        BufferStore(output, buffer, index, value) => BufferStore(output + by, buffer, index + by, value + by),
+        Resize(from, to, output, source) => Resize(from, to, output + by, source + by),
+        SignResize(from, to, output, source) => SignResize(from, to, output + by, source + by),
+    }
+}
+
+fn raised_nodes(nodes: List<Node>, by: Nat) → List<Node> { match nodes { Nil => Nil, Cons(node, rest) => Cons(node.raised(by), raised_nodes(rest, by)) } }
+
+fn View::raised(self view: View, by: Nat) → View {
+    View(view.buffer, view.home + by, view.start + by, view.end + by, view.written, view.base + by, view.length + by)
+}
+
+fn raised_views(views: List<View>, by: Nat) → List<View> { match views { Nil => Nil, Cons(view, rest) => Cons(view.raised(by), raised_views(rest, by)) } }
+
+// Every id of a region `by` higher. A loop's body is left as it is: a pass
+// has a valuation of its own, which no id outside the body reads.
+fn StructuredRegion::raised(self region: StructuredRegion, by: Nat) → StructuredRegion {
+    match region {
+        Dataflow(body) => Dataflow(Region(raised_ports(body.inputs, by), raised_nodes(body.nodes, by), raised_ports(body.outputs, by))),
+        Sequence(prefix, continuation) => Sequence(Region(raised_ports(prefix.inputs, by), raised_nodes(prefix.nodes, by), raised_ports(prefix.outputs, by)),
+            continuation.raised(by)),
+        Compose(prefix, continuation) => Compose(prefix.raised(by), continuation.raised(by)),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => Conditional(raised_ports(inputs, by), condition + by,
+            raised_ports(arguments, by), raised_ports(outputs, by), when_true.raised(by), when_false.raised(by)),
+        Call(callee, arguments, result) => Call(callee, raised_ids(arguments, by), result + by),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Loop(raised_ids(inputs, by), bound + by, parameters, count, body, exit, next, raised_ids(outputs, by), exhausted + by),
+        Lend(views, callee, arguments, result) => Lend(raised_views(views, by), callee, raised_ids(arguments, by), result + by),
+    }
+}
+
+// The raised node runs over a valuation wherever the node runs over that
+// valuation read `by` higher: the two are one statement.
+theorem Node::raised_runs(self node: Node, by: Nat, values: Valuation(), before, after: Buffers()):
+    node.Runs(λ w id => values(w, id + by), before, after) → node.raised(by).Runs(values, before, after) {
+    match node {
+        Const(_, _, _) => λ ran => ran,
+        Move(_, _, _) => λ ran => ran,
+        Add(_, _, _, _) => λ ran => ran,
+        Sub(_, _, _, _) => λ ran => ran,
+        BitAnd(_, _, _, _) => λ ran => ran,
+        BitOr(_, _, _, _) => λ ran => ran,
+        BitXor(_, _, _, _) => λ ran => ran,
+        ShiftLeft(_, _, _, _) => λ ran => ran,
+        LogicalShiftRight(_, _, _, _) => λ ran => ran,
+        ArithmeticShiftRight(_, _, _, _) => λ ran => ran,
+        UnsignedLessThan(_, _, _, _) => λ ran => ran,
+        SignedLessThan(_, _, _, _) => λ ran => ran,
+        Equal(_, _, _, _) => λ ran => ran,
+        BufferLoad(_, _, _) => λ ran => ran,
+        BufferStore(_, _, _, _) => λ ran => ran,
+        Resize(_, _, _, _) => λ ran => ran,
+        SignResize(_, _, _, _) => λ ran => ran,
+    }
+}
+
+theorem raised_nodes_run(by: Nat, values: Valuation(), nodes: List<Node>): (before, after: Buffers()) →
+    NodesRun(nodes, λ w id => values(w, id + by), before, after) → NodesRun(raised_nodes(nodes, by), values, before, after) {
+    match nodes {
+        Nil => λ before after ran => ran,
+        Cons(node, rest) => λ before after ran => Exists(ran.witness, ⟨node.raised_runs(by, values, before, ran.witness, ran.proof.left),
+            raised_nodes_run(by, values, rest, ran.witness, after, ran.proof.right)⟩),
+    }
+}
+
+theorem words_of_raised(values: Valuation(), by: Nat, ids: List<Nat>): words_of(values, raised_ids(ids, by)) = words_of(λ w id => values(w, id + by), ids) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => cong_fn<List<BitVec(64)>, List<BitVec(64)>>(λ ws => Cons(values(64, id + by), ws), words_of_raised(values, by, rest)),
+    }
+}
+
+theorem raised_ids_append(by: Nat, ids: List<Nat>): (more: List<Nat>) → raised_ids(ids, by) ++ raised_ids(more, by) = raised_ids(ids ++ more, by) {
+    match ids {
+        Nil => λ more => refl,
+        Cons(id, rest) => λ more => cong_fn<List<Nat>, List<Nat>>(λ tail => Cons(id + by, tail), raised_ids_append(by, rest, more)),
+    }
+}
+
+theorem raised_views_nodes(by: Nat, views: List<View>): views_nodes(raised_views(views, by)) = raised_nodes(views_nodes(views), by) {
+    match views {
+        Nil => refl,
+        Cons(view, rest) => cong_fn<List<Node>, List<Node>>(λ tail => Cons(Add(64, view.base + by, view.home + by, view.start + by),
+            Cons(Sub(64, view.length + by, view.end + by, view.start + by), tail)), raised_views_nodes(by, rest)),
+    }
+}
+
+theorem raised_views_homes(by: Nat, views: List<View>): views_homes(raised_views(views, by)) = raised_ids(views_homes(views), by) {
+    match views {
+        Nil => refl,
+        Cons(view, rest) => cong_fn<List<Nat>, List<Nat>>(λ tail => Cons(view.base + by, Cons(view.length + by, tail)), raised_views_homes(by, rest)),
+    }
+}
+
+theorem raised_viewed(by: Nat, values: Valuation(), held: Buffers(), views: List<View>):
+    viewed(raised_views(views, by), values, held) = viewed(views, λ w id => values(w, id + by), held) {
+    match views {
+        Nil => refl,
+        Cons(view, rest) => cong_fn<Buffers(), Buffers()>(λ tail => Cons(view.bytes(λ w id => values(w, id + by), held), tail),
+            raised_viewed(by, values, held, rest)),
+    }
+}
+
+theorem raised_put_views(by: Nat, values: Valuation(), views: List<View>): (after, held: Buffers()) →
+    put_views(raised_views(views, by), values, after, held) = put_views(views, λ w id => values(w, id + by), after, held) {
+    match views {
+        Nil => λ after held => refl,
+        Cons(view, rest) => λ after held => raised_put_views(by, values, rest, match after { Nil => Nil, Cons(_, later) => later },
+            view.put(λ w id => values(w, id + by), buffer_bytes(after, 0), held)),
+    }
+}
+
+theorem StructuredRegion::raised_runs(self region: StructuredRegion, effects: Effects(), by: Nat): (values: Valuation()) → (before, after: Buffers()) →
+    StructuredRegionRunsOver(effects, λ w id => values(w, id + by), region, before, after) →
+    StructuredRegionRunsOver(effects, values, region.raised(by), before, after) {
+    match region {
+        Dataflow(body) => λ values before after ran => raised_nodes_run(by, values, body.nodes, before, after, ran),
+        Sequence(prefix, continuation) => λ values before after ran => Exists(ran.witness,
+            ⟨raised_nodes_run(by, values, prefix.nodes, before, ran.witness, ran.proof.left),
+                continuation.raised_runs(effects, by, values, ran.witness, after, ran.proof.right)⟩),
+        Compose(prefix, continuation) => λ values before after ran => Exists(ran.witness,
+            ⟨prefix.raised_runs(effects, by, values, before, ran.witness, ran.proof.left),
+                continuation.raised_runs(effects, by, values, ran.witness, after, ran.proof.right)⟩),
+        Conditional(_, condition, _, _, when_true, when_false) => λ values before after =>
+            (match values(1, condition + by).head_bit() as λ h =>
+                (match h {
+                    False => StructuredRegionRunsOver(effects, λ w id => values(w, id + by), when_false, before, after),
+                    True => StructuredRegionRunsOver(effects, λ w id => values(w, id + by), when_true, before, after),
+                }) →
+                (match h {
+                    False => StructuredRegionRunsOver(effects, values, when_false.raised(by), before, after),
+                    True => StructuredRegionRunsOver(effects, values, when_true.raised(by), before, after),
+                }) {
+                False => λ arm => when_false.raised_runs(effects, by, values, before, after, arm),
+                True => λ arm => when_true.raised_runs(effects, by, values, before, after, arm),
+            }),
+        Call(callee, arguments, result) => λ values before after ran =>
+            j(sym(words_of_raised(values, by, arguments)), λ ws _ => effects(before, callee, ws, values(64, result + by), after), ran),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values before after ran =>
+            loop_runs_over_same(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                parameters, count, exit, next, values(64, bound + by).toNat(), values(64, bound + by).toNat(),
+                words_of(λ w id => values(w, id + by), inputs), words_of(values, raised_ids(inputs, by)),
+                words_of(λ w id => values(w, id + by), outputs), words_of(values, raised_ids(outputs, by)),
+                values(1, exhausted + by).head_bit(), values(1, exhausted + by).head_bit(), before, after,
+                refl, sym(words_of_raised(values, by, inputs)), sym(words_of_raised(values, by, outputs)), refl, ran),
+        Lend(views, callee, arguments, result) => λ values before after ran => {
+            let mid = ran.witness;
+            let left = ran.proof.right.witness;
+            let nodes = j(sym(raised_views_nodes(by, views)), λ ns _ => NodesRun(ns, values, before, mid),
+                raised_nodes_run(by, values, views_nodes(views), before, mid, ran.proof.left));
+            let words: (words_of(λ w id => values(w, id + by), views_homes(views) ++ arguments) =
+                words_of(values, views_homes(raised_views(views, by)) ++ raised_ids(arguments, by))) =
+                trans(sym(words_of_raised(values, by, views_homes(views) ++ arguments)),
+                    cong_fn<List<Nat>, List<BitVec(64)>>(λ ids => words_of(values, ids),
+                        trans(sym(raised_ids_append(by, views_homes(views), arguments)),
+                            cong_fn<List<Nat>, List<Nat>>(λ homes => homes ++ raised_ids(arguments, by), sym(raised_views_homes(by, views))))));
+            let called = j(sym(raised_viewed(by, values, mid, views)), λ file _ =>
+                    effects(file, callee, words_of(values, views_homes(raised_views(views, by)) ++ raised_ids(arguments, by)), values(64, result + by), left),
+                j(words, λ ws _ => effects(viewed(views, λ w id => values(w, id + by), mid), callee, ws, values(64, result + by), left),
+                    ran.proof.right.proof.left));
+            Exists(mid, ⟨nodes, Exists(left, ⟨called, trans(ran.proof.right.proof.right, sym(raised_put_views(by, values, views, left, mid)))⟩)⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The valuation of a body inlined: the caller's below a bound, the callee's
+// above it
+
+fn Valuation::over(values, inner: Valuation(), by: Nat) → Valuation() {
+    λ w id => match Succ(id).leb(by) { True => values(w, id), False => inner(w, id - by) }
+}
+
+theorem Valuation::over_below(values, inner: Valuation(), by: Nat): Valuation::AgreeBelow(values, Valuation::over(values, inner, by), by) {
+    λ id under w => cong_fn(λ (t: Bool) => match t { True => values(w, id), False => inner(w, id - by) }, under)
+}
+
+theorem raised_past(id, by: Nat): by < Succ(id + by) { omega }
+
+theorem Valuation::over_above(values, inner: Valuation(), by, w, id: Nat): Valuation::over(values, inner, by, w, id + by) = inner(w, id) {
+    trans(cong_fn(λ (t: Bool) => match t { True => values(w, id + by), False => inner(w, (id + by) - by) },
+            Succ(id + by).leb_false(by, raised_past(id, by))),
+        cong_fn(λ (k: Nat) => inner(w, k), id.add_sub_cancel(by)))
+}
+
+// ---------------------------------------------------------------------------
+// A call replaced by its callee's body
+
+fn binds(parameters, arguments: List<Nat>, by: Nat) → List<Node> {
+    match parameters {
+        Nil => Nil,
+        Cons(p, ps) => match arguments { Nil => Nil, Cons(a, rest) => Cons(Move(64, p + by, a), binds(ps, rest, by)) },
+    }
+}
+
+// Nodes alone, as a region.
+fn StructuredRegion::of_nodes(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), nodes, Ports(Nil))) }
+
+// The callee's body in place of a call of it: its parameters bound to the
+// arguments, its body with every id `by` higher, the call's result moved
+// from its own.
+fn Function::inlined(self callee: Function, by: Nat, arguments: List<Nat>, result: Nat) → StructuredRegion {
+    Compose(StructuredRegion::of_nodes(binds(callee.parameters, arguments, by)), Compose(callee.body.raised(by), StructuredRegion::of_nodes([Move(64, result, callee.result + by)])))
+}
+
+theorem binds_run(values, inner, new: Valuation(), by: Nat, below: Valuation::AgreeBelow(values, new, by),
+    above: (w: Nat) → (id: Nat) → new(w, id + by) = inner(w, id), file: Buffers(), parameters: List<Nat>): (arguments: List<Nat>) →
+    ids_under(arguments, by) = True → words_of(inner, parameters) = words_of(values, arguments) →
+    NodesRun(binds(parameters, arguments, by), new, file, file) {
+    match parameters {
+        Nil => λ arguments _ _ => refl,
+        Cons(p, ps) => λ arguments => match arguments {
+            Nil => λ _ _ => refl,
+            Cons(a, rest) => λ under same => {
+                let parts = Bool::and_true_parts(Succ(a).leb(by), ids_under(rest, by), under);
+                let words = List::cons_inj(inner(64, p), values(64, a), words_of(inner, ps), words_of(values, rest), same);
+                Exists(file, ⟨⟨trans(above(64, p), trans(words.left, sym(below(a, parts.left, 64)))), refl⟩,
+                    binds_run(values, inner, new, by, below, above, file, ps, rest, parts.right, words.right)⟩)
+            },
+        },
+    }
+}
+
+// Where the call's ids are below `by` and the callee's body's below `room`:
+// a valuation that is the caller's below `by` runs the inlined body
+// wherever the callee ran.
+theorem Function::inlined_runs(self callee: Function, effects: Effects(), by, room: Nat, arguments: List<Nat>, result: Nat,
+    under: ids_under(Cons(result, arguments), by) = True, inside: callee.body.under(room) = True, values: Valuation(),
+    before, after: Buffers(), ran: callee.Runs(effects, words_of(values, arguments), values(64, result), before, after)):
+    Exists<Valuation()>(λ new => Valuation::AgreeBelow(values, new, by) ∧
+        StructuredRegionRunsOver(effects, new, callee.inlined(by, arguments, result), before, after)) {
+    let inner = ran.witness;
+    let new = Valuation::over(values, inner, by);
+    let below = Valuation::over_below(values, inner, by);
+    let parts = Bool::and_true_parts(Succ(result).leb(by), ids_under(arguments, by), under);
+    let body = callee.body.raised_runs(effects, by, new, before, after,
+        callee.body.runs_agree(effects, room, inside, inner, λ w id => new(w, id + by),
+            λ id _ w => Valuation::over_above(values, inner, by, w, id), before, after, ran.proof.right.left));
+    let out: (new(64, result) = new(64, callee.result + by)) = trans(below(result, parts.left, 64),
+        trans(sym(ran.proof.right.right), sym(Valuation::over_above(values, inner, by, 64, callee.result))));
+    Exists(new, ⟨below, Exists(before, ⟨binds_run(values, inner, new, by, below, λ w id => Valuation::over_above(values, inner, by, w, id),
+            before, callee.parameters, arguments, parts.right, ran.proof.left),
+        Exists(after, ⟨body, Exists(after, ⟨⟨out, refl⟩, refl⟩)⟩)⟩)⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A loop whose passes are run over other valuations
+
+// Each pass's valuation may be replaced by one that agrees with it on what
+// the loop reads of a pass: its parameters, count, exit and next state.
+theorem loop_runs_over_revalued(pass, weaker: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, count, exit: Nat,
+    next: List<Nat>, b: Nat, under: ids_under(Cons(count, Cons(exit, parameters)), b) = True, next_under: ids_under(next, b) = True,
+    implies: (values: Valuation()) → (before, after: Buffers()) → pass(values, before, after) →
+        Exists<Valuation()>(λ new => Valuation::AgreeBelow(values, new, b) ∧ weaker(new, before, after)),
+    remaining: Nat): (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(weaker, parameters, count, exit, next, remaining, state, final, exhausted, before, after) {
+    match remaining {
+        Zero => λ state final exhausted before after ran => ran,
+        Succ(rest) => λ state final exhausted before after ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            let step = implies(values, before, mid, held.right.right.left);
+            let new = step.witness;
+            let agree = step.proof.left;
+            let ids = ids_under_mem(b, Cons(count, Cons(exit, parameters)), under);
+            let words: (words_of(new, parameters) = words_of(values, parameters)) =
+                words_agree(parameters, values, new, λ id m => agree(id, ids(id, Inr(Inr(m))), 64));
+            let nexts: (words_of(new, next) = words_of(values, next)) =
+                words_agree(next, values, new, λ id m => agree(id, ids_under_mem(b, next, next_under, id, m), 64));
+            let counted: (new(64, count) = values(64, count)) = agree(count, ids(count, Inl(refl)), 64);
+            let exits: (new(1, exit) = values(1, exit)) = agree(exit, ids(exit, Inr(Inl(refl))), 1);
+            let inner = (match values(1, exit).head_bit() as λ h =>
+                (match h {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) →
+                (match h {
+                    False => LoopRunsOver(weaker, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) {
+                False => λ more => loop_runs_over_revalued(pass, weaker, parameters, count, exit, next, b, under, next_under, implies, rest,
+                    words_of(values, next), final, exhausted, mid, after, more),
+                True => λ done => done,
+            })(held.right.right.right);
+            let worded = j(sym(nexts), λ ws _ => match values(1, exit).head_bit() {
+                    False => LoopRunsOver(weaker, parameters, count, exit, next, rest, ws, final, exhausted, mid, after),
+                    True => (final = ws) ∧ ((exhausted = False) ∧ (after = mid)),
+                }, inner);
+            let tail = j(sym(exits), λ bit _ => match bit.head_bit() {
+                    False => LoopRunsOver(weaker, parameters, count, exit, next, rest, words_of(new, next), final, exhausted, mid, after),
+                    True => (final = words_of(new, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }, worded);
+            Exists(new, Exists(mid, ⟨trans(words, held.left), ⟨trans(counted, held.right.left), ⟨step.proof.right, tail⟩⟩⟩))
+        },
+    }
+}
+
+// A loop's ids below a bound, with another body whose ids are.
+theorem loop_under_body(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body, other: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, exhausted, b, c: Nat, le: b.leb(c) = True,
+    under: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).under(b) = True, inside: other.under(c) = True):
+    Loop(inputs, bound, parameters, count, other, exit, next, outputs, exhausted).under(c) = True {
+    let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), b), ids_under(outputs, b) &&
+        (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b))), under);
+    let p2 = Bool::and_true_parts(ids_under(outputs, b), ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)), p1.right);
+    let p3 = Bool::and_true_parts(ids_under(Cons(count, Cons(exit, parameters)), b), ids_under(next, b) && body.under(b), p2.right);
+    let p4 = Bool::and_true_parts(ids_under(next, b), body.under(b), p3.right);
+    Bool::and_true_of(ids_under(Cons(bound, Cons(exhausted, inputs)), c), ids_under(outputs, c) &&
+            (ids_under(Cons(count, Cons(exit, parameters)), c) && (ids_under(next, c) && other.under(c))),
+        ids_under_mono(b, c, le, Cons(bound, Cons(exhausted, inputs)), p1.left),
+        Bool::and_true_of(ids_under(outputs, c), ids_under(Cons(count, Cons(exit, parameters)), c) && (ids_under(next, c) && other.under(c)),
+            ids_under_mono(b, c, le, outputs, p2.left),
+            Bool::and_true_of(ids_under(Cons(count, Cons(exit, parameters)), c), ids_under(next, c) && other.under(c),
+                ids_under_mono(b, c, le, Cons(count, Cons(exit, parameters)), p3.left),
+                Bool::and_true_of(ids_under(next, c), other.under(c), ids_under_mono(b, c, le, next, p4.left), inside))))
+}
+
+// ---------------------------------------------------------------------------
+// Inlining over a region
+
+// Which calls of a region to inline, in the region's shape.
+inductive Sites {
+    // The region as it is.
+    Stay,
+    // A call, replaced by its callee's body: the body's ids are below `room`.
+    Here(room: Nat),
+    // A sequence's continuation.
+    Then(rest: Sites),
+    // A composition's two parts.
+    Both(first: Sites, second: Sites),
+    // A conditional's arms.
+    Arms(when_true: Sites, when_false: Sites),
+    // A loop's body.
+    Body(body: Sites),
+}
+
+// A region with calls inlined, and the bound its ids are now below.
+record Inlined { region: StructuredRegion, bound: Nat }
+
+fn Inlined::at(piece: StructuredRegion, bound: Nat, inside: Bool) → Option<Inlined> {
+    (inside && piece.under(bound)).then(Some(Inlined(piece, bound)))
+}
+
+// The region with the calls `sites` names inlined, its ids below `by`
+// before: each inlined body takes the ids from the bound up, and the bound
+// moves past it.
+fn inline_region(callees: List<Function>, region: StructuredRegion) → Nat → Sites → Option<Inlined> {
+    match region {
+        Dataflow(body) => λ by sites => match sites {
+            Stay => Some(Inlined(Dataflow(body), by)),
+            _ => None,
+        },
+        Sequence(prefix, continuation) => λ by sites => match sites {
+            Stay => Some(Inlined(Sequence(prefix, continuation), by)),
+            Then(rest) => inline_region(callees, continuation, by, rest).and_then(λ c => Some(Inlined(Sequence(prefix, c.region), c.bound))),
+            _ => None,
+        },
+        Compose(prefix, continuation) => λ by sites => match sites {
+            Stay => Some(Inlined(Compose(prefix, continuation), by)),
+            Both(first, second) => inline_region(callees, prefix, by, first).and_then(λ a =>
+                inline_region(callees, continuation, a.bound, second).and_then(λ c => Some(Inlined(Compose(a.region, c.region), c.bound)))),
+            _ => None,
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ by sites => match sites {
+            Stay => Some(Inlined(Conditional(inputs, condition, arguments, outputs, when_true, when_false), by)),
+            Arms(yes, no) => inline_region(callees, when_true, by, yes).and_then(λ a =>
+                inline_region(callees, when_false, a.bound, no).and_then(λ c =>
+                    Some(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound)))),
+            _ => None,
+        },
+        Call(callee, arguments, result) => λ by sites => match sites {
+            Stay => Some(Inlined(Call(callee, arguments, result), by)),
+            Here(room) => program_function(callees, callee).and_then(λ g =>
+                Inlined::at(g.inlined(by, arguments, result), by + room, g.body.under(room))),
+            _ => None,
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ by sites => match sites {
+            Stay => Some(Inlined(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by)),
+            Body(inner) => inline_region(callees, body, by, inner).and_then(λ c =>
+                Some(Inlined(Loop(inputs, bound, parameters, count, c.region, exit, next, outputs, exhausted), c.bound))),
+            _ => None,
+        },
+        Lend(views, callee, arguments, result) => λ by sites => match sites {
+            Stay => Some(Inlined(Lend(views, callee, arguments, result), by)),
+            _ => None,
+        },
+    }
+}
+
+// What an inlined region owes the region it was, whose ids were below
+// `by`: its bound is no lower, its ids are below its bound, and wherever
+// the region ran it runs, over a valuation that is the old one below `by`.
+fn Inlined::Sound(self r: Inlined, effects: Effects(), region: StructuredRegion, by: Nat) → Type {
+    (by.leb(r.bound) = True) ∧ ((r.region.under(r.bound) = True) ∧
+        ((values: Valuation()) → (before, after: Buffers()) → StructuredRegionRunsOver(effects, values, region, before, after) →
+            Exists<Valuation()>(λ new => Valuation::AgreeBelow(values, new, by) ∧ StructuredRegionRunsOver(effects, new, r.region, before, after))))
+}
+
+theorem Inlined::stay_sound(effects: Effects(), region: StructuredRegion, by: Nat, under: region.under(by) = True):
+    Inlined(region, by).Sound(effects, region, by) {
+    ⟨by.leb_refl(), ⟨under, λ values before after ran => Exists(values, ⟨Valuation::agree_below_refl(values, by), ran⟩)⟩⟩
+}
+
+theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): (by: Nat) → (sites: Sites) → (r: Inlined) →
+    inline_region(callees, region, by, sites) = Some(r) → region.under(by) = True → r.Sound(program_effects(callees), region, by) {
+    let effects = program_effects(callees);
+    match region {
+        Dataflow(body) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Dataflow(body), by), r, made), λ x _ => x.Sound(effects, Dataflow(body), by),
+                Inlined::stay_sound(effects, Dataflow(body), by, under)),
+            _ => λ r made under => absurd(made),
+        },
+        Sequence(prefix, continuation) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Sequence(prefix, continuation), by), r, made),
+                λ x _ => x.Sound(effects, Sequence(prefix, continuation), by), Inlined::stay_sound(effects, Sequence(prefix, continuation), by, under)),
+            Then(rest) => λ r made under => {
+                let got = Option::and_then_some(inline_region(callees, continuation, by, rest),
+                    λ (c: Inlined) => Some(Inlined(Sequence(prefix, c.region), c.bound)), r, made);
+                let c = got.witness;
+                let parts = Bool::and_true_parts(nodes_under(prefix.nodes, by), continuation.under(by), under);
+                let sc = inline_region_sound(callees, continuation, by, rest, c, got.proof.left, parts.right);
+                j(Option::some_inj(Inlined(Sequence(prefix, c.region), c.bound), r, got.proof.right),
+                    λ x _ => x.Sound(effects, Sequence(prefix, continuation), by),
+                    ⟨sc.left, ⟨Bool::and_true_of(nodes_under(prefix.nodes, c.bound), c.region.under(c.bound),
+                            nodes_under_mono(by, c.bound, sc.left, prefix.nodes, parts.left), sc.right.left),
+                        λ values before after ran => {
+                            let mid = ran.witness;
+                            let k = sc.right.right(values, mid, after, ran.proof.right);
+                            Exists(k.witness, ⟨k.proof.left, Exists(mid, ⟨nodes_run_agree(values, k.witness, by, k.proof.left, prefix.nodes, parts.left,
+                                before, mid, ran.proof.left), k.proof.right⟩)⟩)
+                        }⟩⟩)
+            },
+            _ => λ r made under => absurd(made),
+        },
+        Compose(prefix, continuation) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Compose(prefix, continuation), by), r, made),
+                λ x _ => x.Sound(effects, Compose(prefix, continuation), by), Inlined::stay_sound(effects, Compose(prefix, continuation), by, under)),
+            Both(first, second) => λ r made under => {
+                let got = Option::and_then_some(inline_region(callees, prefix, by, first), λ (a: Inlined) =>
+                    inline_region(callees, continuation, a.bound, second).and_then(λ c => Some(Inlined(Compose(a.region, c.region), c.bound))), r, made);
+                let a = got.witness;
+                let more = Option::and_then_some(inline_region(callees, continuation, a.bound, second),
+                    λ (c: Inlined) => Some(Inlined(Compose(a.region, c.region), c.bound)), r, got.proof.right);
+                let c = more.witness;
+                let parts = Bool::and_true_parts(prefix.under(by), continuation.under(by), under);
+                let sa = inline_region_sound(callees, prefix, by, first, a, got.proof.left, parts.left);
+                let sc = inline_region_sound(callees, continuation, a.bound, second, c, more.proof.left,
+                    continuation.under_mono(by, a.bound, sa.left, parts.right));
+                j(Option::some_inj(Inlined(Compose(a.region, c.region), c.bound), r, more.proof.right),
+                    λ x _ => x.Sound(effects, Compose(prefix, continuation), by),
+                    ⟨by.leb_trans(a.bound, c.bound, sa.left, sc.left),
+                        ⟨Bool::and_true_of(a.region.under(c.bound), c.region.under(c.bound), a.region.under_mono(a.bound, c.bound, sc.left, sa.right.left),
+                            sc.right.left),
+                        λ values before after ran => {
+                            let mid = ran.witness;
+                            let one = sa.right.right(values, before, mid, ran.proof.left);
+                            let v1 = one.witness;
+                            let two = sc.right.right(v1, mid, after,
+                                continuation.runs_agree(effects, by, parts.right, values, v1, one.proof.left, mid, after, ran.proof.right));
+                            let v2 = two.witness;
+                            Exists(v2, ⟨Valuation::agree_below_trans(values, v1, v2, by, a.bound, one.proof.left, two.proof.left, sa.left),
+                                Exists(mid, ⟨a.region.runs_agree(effects, a.bound, sa.right.left, v1, v2, two.proof.left, before, mid, one.proof.right),
+                                    two.proof.right⟩)⟩)
+                        }⟩⟩)
+            },
+            _ => λ r made under => absurd(made),
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Conditional(inputs, condition, arguments, outputs, when_true, when_false), by), r, made),
+                λ x _ => x.Sound(effects, Conditional(inputs, condition, arguments, outputs, when_true, when_false), by),
+                Inlined::stay_sound(effects, Conditional(inputs, condition, arguments, outputs, when_true, when_false), by, under)),
+            Arms(yes, no) => λ r made under => {
+                let got = Option::and_then_some(inline_region(callees, when_true, by, yes), λ (a: Inlined) =>
+                    inline_region(callees, when_false, a.bound, no).and_then(λ c =>
+                        Some(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound))), r, made);
+                let a = got.witness;
+                let more = Option::and_then_some(inline_region(callees, when_false, a.bound, no),
+                    λ (c: Inlined) => Some(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound)), r, got.proof.right);
+                let c = more.witness;
+                let parts = Bool::and_true_parts(Succ(condition).leb(by), when_true.under(by) && when_false.under(by), under);
+                let arms = Bool::and_true_parts(when_true.under(by), when_false.under(by), parts.right);
+                let sa = inline_region_sound(callees, when_true, by, yes, a, got.proof.left, arms.left);
+                let sc = inline_region_sound(callees, when_false, a.bound, no, c, more.proof.left,
+                    when_false.under_mono(by, a.bound, sa.left, arms.right));
+                let le = by.leb_trans(a.bound, c.bound, sa.left, sc.left);
+                j(Option::some_inj(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound), r, more.proof.right),
+                    λ x _ => x.Sound(effects, Conditional(inputs, condition, arguments, outputs, when_true, when_false), by),
+                    ⟨le, ⟨Bool::and_true_of(Succ(condition).leb(c.bound), a.region.under(c.bound) && c.region.under(c.bound),
+                            Succ(condition).leb_trans(by, c.bound, parts.left, le),
+                            Bool::and_true_of(a.region.under(c.bound), c.region.under(c.bound), a.region.under_mono(a.bound, c.bound, sc.left, sa.right.left),
+                                sc.right.left)),
+                        λ values before after =>
+                            (match values(1, condition).head_bit() as λ h => values(1, condition).head_bit() = h →
+                                (match h {
+                                    False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                                    True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                                }) →
+                                Exists<Valuation()>(λ new => Valuation::AgreeBelow(values, new, by) ∧
+                                    (match new(1, condition).head_bit() {
+                                        False => StructuredRegionRunsOver(effects, new, c.region, before, after),
+                                        True => StructuredRegionRunsOver(effects, new, a.region, before, after),
+                                    })) {
+                                False => λ is arm => {
+                                    let k = sc.right.right(values, before, after, arm);
+                                    let new = k.witness;
+                                    let agree = Valuation::agree_below_less(values, new, by, a.bound, k.proof.left, sa.left);
+                                    let bit: (new(1, condition).head_bit() = False) =
+                                        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), agree(condition, parts.left, 1)), is);
+                                    Exists(new, ⟨agree, j(sym(bit), λ h _ => match h {
+                                            False => StructuredRegionRunsOver(effects, new, c.region, before, after),
+                                            True => StructuredRegionRunsOver(effects, new, a.region, before, after),
+                                        }, k.proof.right)⟩)
+                                },
+                                True => λ is arm => {
+                                    let k = sa.right.right(values, before, after, arm);
+                                    let new = k.witness;
+                                    let bit: (new(1, condition).head_bit() = True) =
+                                        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), k.proof.left(condition, parts.left, 1)), is);
+                                    Exists(new, ⟨k.proof.left, j(sym(bit), λ h _ => match h {
+                                            False => StructuredRegionRunsOver(effects, new, c.region, before, after),
+                                            True => StructuredRegionRunsOver(effects, new, a.region, before, after),
+                                        }, k.proof.right)⟩)
+                                },
+                            })(refl)⟩⟩)
+            },
+            _ => λ r made under => absurd(made),
+        },
+        Call(callee, arguments, result) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Call(callee, arguments, result), by), r, made),
+                λ x _ => x.Sound(effects, Call(callee, arguments, result), by), Inlined::stay_sound(effects, Call(callee, arguments, result), by, under)),
+            Here(room) => λ r made under => {
+                let got = Option::and_then_some(program_function(callees, callee), λ (g: Function) =>
+                    Inlined::at(g.inlined(by, arguments, result), by + room, g.body.under(room)), r, made);
+                let g = got.witness;
+                let piece = g.inlined(by, arguments, result);
+                let ok = Bool::then_some(g.body.under(room) && piece.under(by + room), Some(Inlined(piece, by + room)), r, got.proof.right);
+                let checks = Bool::and_true_parts(g.body.under(room), piece.under(by + room), ok.left);
+                j(Option::some_inj(Inlined(piece, by + room), r, ok.right), λ x _ => x.Sound(effects, Call(callee, arguments, result), by),
+                    ⟨by.leb_true(by + room, by.le_add_l(room)), ⟨checks.right, λ values before after ran => {
+                        let found = program_effects_function(callees, before, callee, words_of(values, arguments), values(64, result), after, ran);
+                        let same: (found.witness = g) = Option::some_inj(found.witness, g, trans(sym(found.proof.left), got.proof.left));
+                        g.inlined_runs(effects, by, room, arguments, result, under, checks.left, values, before, after,
+                            j(same, λ x _ => x.Runs(effects, words_of(values, arguments), values(64, result), before, after), found.proof.right))
+                    }⟩⟩)
+            },
+            _ => λ r made under => absurd(made),
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by), r, made),
+                λ x _ => x.Sound(effects, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by),
+                Inlined::stay_sound(effects, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by, under)),
+            Body(inner) => λ r made under => {
+                let got = Option::and_then_some(inline_region(callees, body, by, inner), λ (c: Inlined) =>
+                    Some(Inlined(Loop(inputs, bound, parameters, count, c.region, exit, next, outputs, exhausted), c.bound)), r, made);
+                let c = got.witness;
+                let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), by), ids_under(outputs, by) &&
+                    (ids_under(Cons(count, Cons(exit, parameters)), by) && (ids_under(next, by) && body.under(by))), under);
+                let p2 = Bool::and_true_parts(ids_under(outputs, by), ids_under(Cons(count, Cons(exit, parameters)), by) && (ids_under(next, by) && body.under(by)), p1.right);
+                let p3 = Bool::and_true_parts(ids_under(Cons(count, Cons(exit, parameters)), by), ids_under(next, by) && body.under(by), p2.right);
+                let p4 = Bool::and_true_parts(ids_under(next, by), body.under(by), p3.right);
+                let sc = inline_region_sound(callees, body, by, inner, c, got.proof.left, p4.right);
+                j(Option::some_inj(Inlined(Loop(inputs, bound, parameters, count, c.region, exit, next, outputs, exhausted), c.bound), r, got.proof.right),
+                    λ x _ => x.Sound(effects, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by),
+                    ⟨sc.left, ⟨loop_under_body(inputs, bound, parameters, count, body, c.region, exit, next, outputs, exhausted, by, c.bound, sc.left,
+                            under, sc.right.left),
+                        λ values before after ran => Exists(values, ⟨Valuation::agree_below_refl(values, by),
+                            loop_runs_over_revalued(
+                                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, c.region, from, to),
+                                parameters, count, exit, next, by, p3.left, p4.left, λ pass from to old => sc.right.right(pass, from, to, old),
+                                values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit(),
+                                before, after, ran)⟩)⟩⟩)
+            },
+            _ => λ r made under => absurd(made),
+        },
+        Lend(views, callee, arguments, result) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Lend(views, callee, arguments, result), by), r, made),
+                λ x _ => x.Sound(effects, Lend(views, callee, arguments, result), by),
+                Inlined::stay_sound(effects, Lend(views, callee, arguments, result), by, under)),
+            _ => λ r made under => absurd(made),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions, and the stage
+
+// A function's inlining: a bound its ids are below, and the calls.
+record Inlines { bound: Nat, sites: Sites }
+
+fn inline_function(callees: List<Function>, function: Function, plan: Inlines) → Option<Function> {
+    (ids_under(Cons(function.result, function.parameters), plan.bound) && function.body.under(plan.bound)).then(
+        inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
+            Some(Function(function.parameters, r.region, function.result, function.lent))))
+}
+
+theorem inline_function_sound(callees: List<Function>, function: Function, plan: Inlines, new: Function,
+    made: inline_function(callees, function, plan) = Some(new)): Rewrites(callees, function, new) {
+    λ arguments result before after ran => {
+        let ok = Bool::then_some(ids_under(Cons(function.result, function.parameters), plan.bound) && function.body.under(plan.bound),
+            inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
+                Some(Function(function.parameters, r.region, function.result, function.lent))), new, made);
+        let checks = Bool::and_true_parts(ids_under(Cons(function.result, function.parameters), plan.bound), function.body.under(plan.bound), ok.left);
+        let got = Option::and_then_some(inline_region(callees, function.body, plan.bound, plan.sites),
+            λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, function.lent)), new, ok.right);
+        let r = got.witness;
+        let sound = inline_region_sound(callees, function.body, plan.bound, plan.sites, r, got.proof.left, checks.right);
+        let values = ran.witness;
+        let k = sound.right.right(values, before, after, ran.proof.right.left);
+        let other = k.witness;
+        let ids = ids_under_mem(plan.bound, Cons(function.result, function.parameters), checks.left);
+        j(Option::some_inj(Function(function.parameters, r.region, function.result, function.lent), new, got.proof.right),
+            λ g _ => g.Runs(program_effects(callees), arguments, result, before, after),
+            Exists(other, ⟨trans(words_agree(function.parameters, values, other, λ id m => k.proof.left(id, ids(id, Inr(m)), 64)), ran.proof.left),
+                ⟨k.proof.right, trans(k.proof.left(function.result, ids(function.result, Inl(refl)), 64), ran.proof.right.right)⟩⟩))
+    }
+}
+
+// Inlining as a stage: a function's calls are replaced by the bodies its
+// callees have after the stage, so inlining every call of every function
+// leaves no call at all.
+fn inline_stage() → Stage<Inlines> { Stage(inline_function, inline_function_sound) }
+
+// ---------------------------------------------------------------------------
+// A searcher (not trusted): every wanted call inlined
+
+// A region's size as a searcher counts it: its nodes, calls, conditionals
+// and loops.
+fn StructuredRegion::size(self region: StructuredRegion) → Nat {
+    match region {
+        Dataflow(body) => body.nodes.len(),
+        Sequence(prefix, continuation) => prefix.nodes.len() + continuation.size(),
+        Compose(prefix, continuation) => prefix.size() + continuation.size(),
+        Conditional(_, _, _, _, when_true, when_false) => Succ(when_true.size() + when_false.size()),
+        Call(_, _, _) => 1,
+        Loop(_, _, _, _, body, _, _, _, _) => Succ(body.size()),
+        Lend(views, _, _, _) => Succ(views.len()),
+    }
+}
+
+// The sites of every call `wanted` names, by the callee's number and the
+// callee as inlining left it, each with the least room.
+fn StructuredRegion::inline_all(self region: StructuredRegion, callees: List<Function>, wanted: Nat → Function → Bool) → Sites {
+    match region {
+        Dataflow(_) => Stay,
+        Sequence(_, continuation) => Then(continuation.inline_all(callees, wanted)),
+        Compose(prefix, continuation) => Both(prefix.inline_all(callees, wanted), continuation.inline_all(callees, wanted)),
+        Conditional(_, _, _, _, when_true, when_false) => Arms(when_true.inline_all(callees, wanted), when_false.inline_all(callees, wanted)),
+        Call(callee, _, _) => match program_function(callees, callee) {
+            None => Stay,
+            Some(g) => match wanted(callee, g) { False => Stay, True => Here(g.body.top(0)) },
+        },
+        Loop(_, _, _, _, body, _, _, _, _) => Body(body.inline_all(callees, wanted)),
+        Lend(_, _, _, _) => Stay,
+    }
+}
+
+// The plans a search found, and the program they make.
+record Searched { plans: List<Inlines>, functions: List<Function> }
+
+// The program inlined callees first, so `wanted` sees each callee with its
+// own calls already replaced.
+fn inline_search(functions: List<Function>, wanted: Nat → Function → Bool) → Option<Searched> {
+    match functions {
+        Nil => Some(Searched(Nil, Nil)),
+        Cons(last, earlier) => inline_search(earlier, wanted).and_then(λ found => {
+            let plan = Inlines(last.top(), last.body.inline_all(found.functions, wanted));
+            inline_function(found.functions, last, plan).and_then(λ g => Some(Searched(Cons(plan, found.plans), Cons(g, found.functions))))
+        }),
+    }
+}
+
+// A policy: the callees no larger than `limit`.
+fn inline_small(limit: Nat) → Nat → Function → Bool { λ _ g => g.body.size().leb(limit) }

@@ -1,0 +1,61 @@
+// Probes of the pass that empties functions nothing calls
+// (lib/native/function_ir/function_ir_prune.hthr, docs/optimizer-design.md
+// §3.1): a program whose calls were inlined keeps its entry and empties
+// the rest; what the pass's theorem says of the entry; and a program that
+// still calls a function the pass was told to empty, which is not closed.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_fresh;
+import function_ir_prune;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn nodes(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), ns, Ports(Nil))) }
+
+// Function 2 calls function 1, which calls function 0.
+fn calling() → List<Function> {
+    [Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2),
+        Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2),
+        Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2)]
+}
+
+// The same program with function 2's call inlined: it calls nothing.
+fn inlined() → List<Function> {
+    [Function([0], Compose(nodes([Const(64, 4, 7), BitXor(64, 1, 0, 4)]), nodes([Add(64, 2, 1, 0)])), 2),
+        Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2),
+        Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2)]
+}
+
+// Only function 2 is called from outside.
+fn entry() → Nat → Bool { λ f => f.among([2]) }
+
+theorem inlined_closed(): program_closed(inlined(), entry()) = True { refl }
+
+// Functions 1 and 0 are one constant each, named past their parameters;
+// the program has its three functions at their numbers.
+theorem inlined_pruned(): prune(inlined(), entry()) =
+    [Function([0], Compose(nodes([Const(64, 4, 7), BitXor(64, 1, 0, 4)]), nodes([Add(64, 2, 1, 0)])), 2),
+        Function([0], nodes([Const(64, 1, 0)]), 1),
+        Function([0, 1], nodes([Const(64, 2, 0)]), 2)] { refl }
+
+// The entry does whatever it did.
+theorem entry_kept(before: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    ran: program_effects(inlined(), before, 2, arguments, result, after)):
+    program_effects(prune(inlined(), entry()), before, 2, arguments, result, after) {
+    prune_sound(entry(), inlined(), inlined_closed(), before, 2, refl, arguments, result, after, ran)
+}
+
+// Before inlining the entry calls function 1, so emptying it is refused;
+// keeping every function the entry reaches is not.
+theorem calling_open(): program_closed(calling(), entry()) = False { refl }
+theorem calling_closed(): program_closed(calling(), λ (f: Nat) => f.among([2, 1, 0])) = True { refl }
+theorem calling_kept(): prune(calling(), λ (f: Nat) => f.among([2, 1, 0])) = calling() { refl }
+
+// An emptied function keeps its parameters and its count of lent buffers.
+theorem emptied_shape(): Function([0, 1], Call(0, [0, 1], 2), 2, 1).emptied() = Function([0, 1], nodes([Const(64, 2, 0)]), 2, 1) { refl }
