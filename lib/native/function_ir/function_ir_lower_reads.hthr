@@ -461,7 +461,7 @@ theorem leaf_load_holds(values: Valuation(), buffers: Buffers(), nodes: List<Nod
 
 // A leaf with no load means what it means over no buffers, which is what
 // the lowering of its nodes is proved against.
-fn Node::reads_buffer(self node: Node) → Bool { match node { BufferLoad(_, _, _) => True, _ => False } }
+fn Node::reads_buffer(self node: Node) → Bool { match node { BufferLoad(_, _, _) => True, WideLoad(_, _, _, _) => True, _ => False } }
 
 fn nodes_blind(nodes: List<Node>) → Bool {
     match nodes { Nil => True, Cons(node, rest) => !node.reads_buffer() && nodes_blind(rest) }
@@ -471,6 +471,7 @@ theorem Node::holds_blind(self node: Node, values: Valuation(), buffers: Buffers
     (!node.reads_buffer()).IsTrue() → NodeHolds(values, node, buffers := buffers) → NodeHolds(values, node) {
     match node {
         BufferLoad(_, _, _) => λ no _ => false_elim(no),
+        WideLoad(_, _, _, _) => λ no _ => false_elim(no),
         _ => λ _ holds => holds,
     }
 }

@@ -2613,6 +2613,11 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         SignResize(_, _, _, _) => None,
         // A table read is memory too: its lowering is the next step.
         TableRead(_, _, _, _, _) => None,
+        // Wide accesses and the byte swap lower in their own leaves
+        // (`function_ir_lower_reads`); this file lowers neither.
+        WideLoad(_, _, _, _) => None,
+        WideStore(_, _, _, _, _) => None,
+        ByteSwap(_, _, _) => None,
     }
 }
 
@@ -2711,6 +2716,9 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         Resize(from, to, output, source) => file.resize_keeps<M>(values, from, to, destination, output, source),
         SignResize(_, _, _, _) => trivial,
         TableRead(_, _, _, _, _) => trivial,
+        WideLoad(_, _, _, _) => trivial,
+        WideStore(_, _, _, _, _) => trivial,
+        ByteSwap(_, _, _) => trivial,
     }
 }
 
@@ -2780,6 +2788,9 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         Resize(_, _, _, _) => trivial,
         SignResize(_, _, _, _) => trivial,
         TableRead(_, _, _, _, _) => trivial,
+        WideLoad(_, _, _, _) => trivial,
+        WideStore(_, _, _, _, _) => trivial,
+        ByteSwap(_, _, _) => trivial,
     }
 }
 
@@ -3195,6 +3206,9 @@ fn Node::reads(self node: Node) → List<Nat> {
         Resize(_, _, _, source) => [source],
         SignResize(_, _, _, source) => [source],
         TableRead(_, _, _, index, _) => [index],
+        WideLoad(_, _, _, index) => [index],
+        WideStore(_, _, _, index, value) => [index, value],
+        ByteSwap(_, _, source) => [source],
     }
 }
 

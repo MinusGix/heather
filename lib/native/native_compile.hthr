@@ -307,6 +307,9 @@ fn Node::read_ports(self node: Node) → List<Port> {
         Resize(from, _, _, source) => [Port(source, from)],
         SignResize(from, _, _, source) => [Port(source, from)],
         TableRead(_, _, bits, index, _) => [Port(index, bits)],
+        WideLoad(_, _, _, index) => [Port(index, 64)],
+        WideStore(bytes, _, _, index, value) => [Port(index, 64), Port(value, 8 * bytes)],
+        ByteSwap(width, _, source) => [Port(source, width)],
     }
 }
 
@@ -682,6 +685,9 @@ fn Node::renamed(self node: Node, output: Nat) → Node {
         Resize(from, to, _, source) => Resize(from, to, output, source),
         SignResize(from, to, _, source) => SignResize(from, to, output, source),
         TableRead(width, _, bits, index, entries) => TableRead(width, output, bits, index, entries),
+        WideLoad(bytes, _, buffer, index) => WideLoad(bytes, output, buffer, index),
+        WideStore(bytes, _, buffer, index, value) => WideStore(bytes, output, buffer, index, value),
+        ByteSwap(width, _, source) => ByteSwap(width, output, source),
     }
 }
 

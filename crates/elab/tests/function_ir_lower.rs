@@ -15,7 +15,7 @@ const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 const PREFIX: &[&str] = &[
     "logic", "bool", "nat", "option", "pair", "list", "relation", "relation_props", "algebra_rel",
     "algebra", "morphism", "int", "omega", "bitvec", "location", "certified_lookup", "x86_64", "x86_64_block",
-    "vector", "list_window", "function_ir",
+    "vector", "list_window", "bitvec_nat", "bitvec_resize", "bitvec_bytes", "function_ir",
 ];
 
 #[test]
@@ -30,9 +30,6 @@ fn verified_lowering_checks_and_lowers_the_examples() {
         })
         .collect();
     modules.push(("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")));
-    // What the lowering's narrow widths read.
-    modules.push(("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")));
-    modules.push(("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")));
     modules.push(("function_ir_lower", FUNCTION_IR_LOWER));
     let mut elaborator = support::semantic_test_base(&modules);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_examples", EXAMPLES) {

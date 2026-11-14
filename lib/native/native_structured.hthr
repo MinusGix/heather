@@ -57,6 +57,10 @@ fn Node::wide(self node: Node) → Bool {
         Resize(_, _, _, _) => False,
         SignResize(_, _, _, _) => False,
         TableRead(_, _, _, _, _) => False,
+        // Wide accesses and the swap are the register lowering's alone.
+        WideLoad(_, _, _, _) => False,
+        WideStore(_, _, _, _, _) => False,
+        ByteSwap(_, _, _) => False,
     }
 }
 

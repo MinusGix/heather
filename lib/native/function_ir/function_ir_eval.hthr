@@ -26,6 +26,7 @@
 
 import function_ir;
 import bitvec;
+import bitvec_bytes;
 import bool;
 import list;
 import set_solve;
@@ -234,6 +235,12 @@ fn load_value(buffers: Buffers(), buffer, index: Nat, values: Valuation()) → (
     word_value(byte_word(buffer_byte(buffers, buffer, values(64, index).toNat())))
 }
 
+// What a wide load's output holds over `buffers`: the word of its bytes,
+// the index read off `values`.
+fn wide_value(buffers: Buffers(), buffer, index, bytes: Nat, values: Valuation()) → (w: Nat) → BitVec(w) {
+    λ w => BitVec::ofNat(buffer_word(buffers, buffer, values(64, index).toNat(), bytes).toNat())
+}
+
 // ---------------------------------------------------------------------------
 // Nodes
 
@@ -257,6 +264,9 @@ fn Node::reads(self node: Node) → List<Nat> {
         Resize(_, _, _, source) => [source],
         SignResize(_, _, _, source) => [source],
         TableRead(_, _, _, index, _) => [index],
+        WideLoad(_, _, _, index) => [index],
+        WideStore(_, _, _, index, value) => [index, value],
+        ByteSwap(_, _, source) => [source],
     }
 }
 
@@ -286,6 +296,9 @@ fn Node::value(self node: Node, values: Valuation(), buffers: Buffers() := Nil) 
         Resize(from, _, _, source) => λ w => BitVec::ofNat(values(from, source).toNat()),
         SignResize(from, _, _, source) => λ w => values(from, source).sresize(w),
         TableRead(_, _, bits, index, entries) => λ w => BitVec::ofNat(table_entry(entries, values(bits, index).toNat())),
+        WideLoad(bytes, _, buffer, index) => wide_value(buffers, buffer, index, bytes, values),
+        WideStore(bytes, _, buffer, index, _) => wide_value(buffers, buffer, index, bytes, values),
+        ByteSwap(_, _, source) => λ w => values(w, source).swap_bytes(),
     }
 }
 
@@ -339,6 +352,12 @@ theorem Node::holds_of(self node: Node, values, after: Valuation(), buffers: Buf
             sym(cong_fn(λ (x: BitVec(from)) => x.sresize(to), kept(from, source, Inl(refl))))),
         TableRead(width, _, bits, index, entries) => λ at_output kept => trans(at_output(width),
             sym(cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := width), kept(bits, index, Inl(refl))))),
+        WideLoad(bytes, _, buffer, index) => λ at_output kept => trans(at_output(8 * bytes),
+            trans(BitVec::ofNat_toNat(8 * bytes, buffer_word(buffers, buffer, values(64, index).toNat(), bytes)),
+                sym(cong_fn(λ (x: BitVec(64)) => buffer_word(buffers, buffer, x.toNat(), bytes), kept(64, index, Inl(refl)))))),
+        WideStore(_, _, _, _, _) => λ at_output kept => trivial,
+        ByteSwap(width, _, source) => λ at_output kept => trans(at_output(width),
+            sym(cong_fn(λ (x: BitVec(width)) => x.swap_bytes(), kept(width, source, Inl(refl))))),
     }
 }
 
@@ -856,6 +875,11 @@ theorem Node::value_same_over(self node: Node, buffers: Buffers(), values, other
         SignResize(from, _, _, source) => λ w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), same(from, source)),
         TableRead(_, _, bits, index, entries) => λ w => cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := w),
             same(bits, index)),
+        WideLoad(bytes, _, buffer, index) => λ w => cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(buffers, buffer, x.toNat(), bytes).toNat(), n := w),
+            same(64, index)),
+        WideStore(bytes, _, buffer, index, _) => λ w => cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(buffer_word(buffers, buffer, x.toNat(), bytes).toNat(), n := w),
+            same(64, index)),
+        ByteSwap(_, _, source) => λ w => cong_fn(λ (x: BitVec(w)) => x.swap_bytes(), same(w, source)),
     }
 }
 

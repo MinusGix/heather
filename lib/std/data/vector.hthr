@@ -235,6 +235,21 @@ theorem vector_get_past<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → n 
     }
 }
 
+// Entry `i` of the vector from `at` is the list's entry `at + i`, the sum
+// not wrapped.
+theorem List::vector_at_get<A>(self xs: List<A>, pad: A): (k, at, i: Nat) → i < k → vector_get(xs.vector_at(at, k, pad), i, pad) = xs.nth(at + i).unwrap_or(pad) {
+    λ k => match k as λ m => (at, i: Nat) → i < m → vector_get(xs.vector_at(at, m, pad), i, pad) = xs.nth(at + i).unwrap_or(pad) {
+        Zero => λ at i inside => false_elim(inside),
+        Succ(j, ih) => λ at i => match i as λ c => c < Succ(j) → vector_get(xs.vector_at(at, Succ(j), pad), c, pad) = xs.nth(at + c).unwrap_or(pad) {
+            Zero => λ _ => refl,
+            Succ(c) => λ inside => {
+                let moved: (Succ(at) + c = at + Succ(c)) = omega;
+                trans(ih(Succ(at), c, inside), cong_fn(λ (n: Nat) => xs.nth(n).unwrap_or(pad), moved))
+            },
+        },
+    }
+}
+
 // It is the entry of the vector's list.
 theorem vector_entries_nth<A>(n: Nat): (v: [A; n]) → (i: Nat) → (inside: i < n) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {
     match n as λ m => (v: [A; m]) → (i: Nat) → (inside: i < m) → vector_entries(v).nth(i) = Some(vector_index(v, i, inside)) {

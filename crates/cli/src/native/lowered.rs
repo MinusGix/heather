@@ -56,6 +56,9 @@ impl Reader<'_> {
                 let fields = join(&self.take(4)?);
                 return Ok(format!("TableRead({fields}, {})", self.ids()?));
             }
+            18 => ("WideLoad", 4),
+            19 => ("WideStore", 5),
+            20 => ("ByteSwap", 3),
             tag => return Err(format!("node tag {tag}")),
         };
         Ok(format!("{name}({})", join(&self.take(fields)?)))

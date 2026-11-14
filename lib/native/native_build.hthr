@@ -422,6 +422,9 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
         Resize(from, to, _, source) => Resize(from, to, dest, source),
         SignResize(from, to, _, source) => SignResize(from, to, dest, source),
         TableRead(width, _, bits, index, entries) => TableRead(width, dest, bits, index, entries),
+        WideLoad(bytes, _, buffer, index) => WideLoad(bytes, dest, buffer, index),
+        WideStore(bytes, _, buffer, index, value) => WideStore(bytes, dest, buffer, index, value),
+        ByteSwap(width, _, source) => ByteSwap(width, dest, source),
     }
 }
 

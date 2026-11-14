@@ -132,6 +132,10 @@ theorem Node::run_other(self node: Node, values: Valuation(), buffers: Buffers()
         Resize(from, to, output, source) => λ ne => Resize(from, to, output, source).step_other(values, w, id, ne),
         SignResize(from, to, output, source) => λ ne => SignResize(from, to, output, source).step_other(values, w, id, ne),
         TableRead(width, output, bits, index, entries) => λ ne => TableRead(width, output, bits, index, entries).step_other(values, w, id, ne),
+        WideLoad(bytes, output, buffer, index) => λ ne => Valuation::set_other(values, output, wide_value(buffers, buffer, index, bytes, values), w, id, ne),
+        WideStore(bytes, output, buffer, index, value) => λ ne => Valuation::set_other(values, output,
+            wide_value(store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value)), buffer, index, bytes, values), w, id, ne),
+        ByteSwap(width, output, source) => λ ne => ByteSwap(width, output, source).step_other(values, w, id, ne),
     }(ne)
 }
 
@@ -208,6 +212,9 @@ theorem Node::run_wide(self node: Node, values, other: Valuation(), same: (x: Na
         Resize(_, _, _, _) => λ never => false_elim(never),
         SignResize(_, _, _, _) => λ never => false_elim(never),
         TableRead(_, _, _, _, _) => λ never => false_elim(never),
+        WideLoad(_, _, _, _) => λ never => false_elim(never),
+        WideStore(_, _, _, _, _) => λ never => false_elim(never),
+        ByteSwap(_, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -251,6 +258,9 @@ theorem Node::run_word(self node: Node, values: Valuation(), buffers: Buffers(),
         Resize(_, _, _, _) => λ never => false_elim(never),
         SignResize(_, _, _, _) => λ never => false_elim(never),
         TableRead(_, _, _, _, _) => λ never => false_elim(never),
+        WideLoad(_, _, _, _) => λ never => false_elim(never),
+        WideStore(_, _, _, _, _) => λ never => false_elim(never),
+        ByteSwap(_, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -345,6 +355,12 @@ theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
             Valuation::set_here(values, spare, SignResize(from, to, spare, source).value(values), to)),
         TableRead(width, _, bits, index, entries) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
             Valuation::set_here(values, spare, TableRead(width, spare, bits, index, entries).value(values), width)),
+        WideLoad(bytes, _, buffer, index) => cong_fn(λ (x: BitVec(8 * bytes)) => x.toNat(),
+            Valuation::set_here(values, spare, WideLoad(bytes, spare, buffer, index).value(values), 8 * bytes)),
+        WideStore(bytes, _, buffer, index, value) => cong_fn(λ (x: BitVec(8 * bytes)) => x.toNat(),
+            Valuation::set_here(values, spare, WideStore(bytes, spare, buffer, index, value).value(values), 8 * bytes)),
+        ByteSwap(width, _, source) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, ByteSwap(width, spare, source).value(values), width)),
     }
 }
 
@@ -369,6 +385,9 @@ theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Nod
         Resize(_, _, _, _) => refl,
         SignResize(_, _, _, _) => refl,
         TableRead(_, _, _, _, _) => refl,
+        WideLoad(_, _, _, _) => refl,
+        WideStore(_, _, _, _, _) => refl,
+        ByteSwap(_, _, _) => refl,
     }
 }
 
