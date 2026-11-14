@@ -184,6 +184,46 @@ fn Stage::maybe<P>(self stage: Stage<P>) → Stage<Option<P>> {
         })
 }
 
+// A stage as often as there are plans, the function each plan makes being
+// the next plan's: no plan is the function itself. So how many times a
+// stage runs is the search's to choose, a function at a time.
+fn rewrite_many<P>(rewrite: List<Function> → Function → P → Option<Function>, callees: List<Function>, plans: List<P>) → Function → Option<Function> {
+    match plans {
+        Nil => λ old => Some(old),
+        Cons(plan, rest) => λ old => rewrite(callees, old, plan).and_then(rewrite_many(rewrite, callees, rest)),
+    }
+}
+
+theorem Stage::many_sound<P>(self stage: Stage<P>, callees: List<Function>, plans: List<P>): (old, new: Function) →
+    rewrite_many(stage.rewrite, callees, plans, old) = Some(new) → Rewrites(callees, old, new) {
+    match plans {
+        Nil => λ old new made arguments result before after ran =>
+            j(Option::some_inj(old, new, made), λ g _ => g.Runs(program_effects(callees), arguments, result, before, after), ran),
+        Cons(plan, rest) => λ old new made arguments result before after ran => {
+            let a = Option::and_then_some(stage.rewrite(callees, old, plan), rewrite_many(stage.rewrite, callees, rest), new, made);
+            stage.many_sound(callees, rest, a.witness, new, a.proof.right, arguments, result, before, after,
+                stage.sound(callees, old, plan, a.witness, a.proof.left, arguments, result, before, after, ran))
+        },
+    }
+}
+
+fn Stage::many<P>(self stage: Stage<P>) → Stage<List<P>> {
+    Stage(λ callees old plans => rewrite_many(stage.rewrite, callees, plans, old),
+        λ callees old plans new made => stage.many_sound(callees, plans, old, new, made))
+}
+
+// No plan is the function itself.
+theorem Stage::many_none<P>(self stage: Stage<P>, callees: List<Function>, old: Function): stage.many().rewrite(callees, old, []) = Some(old) { refl }
+
+// What a stage makes by a plan, and makes of that by the plans after it, it
+// makes by them all: a certificate states each plan's step as a statement
+// of its own, and this joins them from the last.
+theorem Stage::many_made<P>(self stage: Stage<P>, callees: List<Function>, old, mid, new: Function, plan: P, rest: List<P>,
+    made: stage.rewrite(callees, old, plan) = Some(mid), after: stage.many().rewrite(callees, mid, rest) = Some(new)):
+    stage.many().rewrite(callees, old, Cons(plan, rest)) = Some(new) {
+    trans(cong_fn<Option<Function>, Option<Function>>(λ o => o.and_then(rewrite_many(stage.rewrite, callees, rest)), made), after)
+}
+
 // Whatever `old` may do called at its function `f`, `new` may: what a
 // compiler that lowers `new` owes for a theorem about `old`
 // (`compiled_returns_written_through` and its kin). A stage gives it at
