@@ -45,8 +45,14 @@ register def simp_nat_arith: SimpSet = simp_default("Nat::arith", name_of(Nat), 
 ]);
 
 // `List`: appends nested to the right with no empty operand, `len` and
-// `map` pushed to the leaves, membership in an append as a disjunction.
+// `map` pushed to the leaves, membership in an append as a disjunction,
+// and a window of count 0 gone: `take` and `drop` recurse on the list
+// first, so `xs.take(0)` and `xs.drop(0)` are stuck at a neutral `xs`
+// (recursing on the count first instead breaks every list-induction proof
+// of a `take`/`drop` law at its `Nil` arm; measured 2026-11-14).
 register def simp_list_shape: SimpSet = simp_default("List::shape", name_of(List), [
+    name_of(List::take_zero),
+    name_of(List::drop_zero),
     name_of(List::append_nil),
     name_of(List::append_assoc),
     name_of(List::len_append),

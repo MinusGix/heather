@@ -287,6 +287,10 @@ theorem default_falls_short(a, b: Nat): a + b = b + a { by simp() }
 // expect-error: `simp`: the two sides do not meet
 theorem default_report(a, b: Nat): a + b = b + a { by simp() }
 
+// A window of count 0 at a neutral list: `take`/`drop` recurse on the list
+// first, so these are laws in `List::shape`, not conversions.
+theorem defaults_zero_window<A>(xs, ys: List<A>): xs.take(0) ++ ys.drop(0) = ys { by simp() }
+
 // No type in the goal has a default: said, not a silent empty run.
 // expect-error: no type in the goal has a default set here, and the call names none
 theorem no_default(a, b: Bool): a = b { by simp() }
