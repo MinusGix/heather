@@ -1252,6 +1252,60 @@ fn File::emit_lend(self file: File, saves: Nat, prog: Prog, views: List<View>, c
 
 // One register per parameter, then the counter and the flag; the rest
 // place the body.
+// What a conditional tests: its bit where a register holds it (TEST, the
+// second arm where it is zero), else the comparison the file knows it to be
+// from a folded node (CMP of its operands' registers, the second arm where
+// the comparison fails), the bit never materialised.
+record Tested(file: File, condition: Nat) {
+    test: Test,
+    selects: (values: Valuation()) → (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, condition).head_bit(),
+}
+
+fn CompareOp::fails(self op: CompareOp) → ConditionCode { match op { Below => AE, Less => GE, Same => NE } }
+
+theorem CompareOp::fails_holds(self op: CompareOp, flags: Flags): condition_holds(op.fails(), flags) = !op.flag(flags) {
+    match op { Below => refl, Less => refl, Same => refl }
+}
+
+theorem compare_selects(values: Valuation(), g: Gprs, op: CompareOp, condition, left, right: Nat, a: Gpr, b: CmpRight,
+    left_rep: values(64, left) = read_gpr(a, g), right_rep: values(64, right) = b.read(g),
+    holds: op.Holds(values, condition, left, right)):
+    Compare(op.fails(), a, b).taken(g) = !values(1, condition).head_bit()
+{
+    let x = read_gpr(a, g);
+    let y = b.read(g);
+    trans(op.fails_holds(sub_flags(x, y)),
+        trans(cong_fn<Bool, Bool>(λ c => !c, op.flag_sub(x, y)),
+            trans(j(left_rep, λ v _ => !op.apply(v, y) = !op.apply(values(64, left), y), refl),
+                trans(j(right_rep, λ v _ => !op.apply(values(64, left), v) = !op.apply(values(64, left), values(64, right)), refl),
+                    j(sym(holds), λ w _ => !op.apply(values(64, left), values(64, right)) = !w.head_bit(), refl)))))
+}
+
+fn File::compare_test(self file: File, condition: Nat, compared: Comparison,
+    known: known_comparison(file.known, condition) = Some(compared)) → Option<Tested(file, condition)> {
+    match file.find(Held(compared.left, Word)) {
+        None => None,
+        Some(a) => match file.cmp_right(compared.right) {
+            None => None,
+            Some(b) => Some(Tested(Compare(compared.op.fails(), a.register, b.right),
+                λ values g represents => compare_selects(values, g, compared.op, condition, compared.left, compared.right,
+                    a.register, b.right, a.at.rep(values, g, represents), b.rep(values, g, represents),
+                    known_comparison_holds(values, condition, compared, file.known, known, represents.right)))),
+        },
+    }
+}
+
+fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, condition)> {
+    match file.find(Held(condition, Bit)) {
+        Some(found) => Some(Tested(Nonzero(found.register),
+            λ values g represents => found.register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents)))),
+        None => match known: known_comparison(file.known, condition) {
+            None => None,
+            Some(compared) => file.compare_test(condition, compared, known),
+        },
+    }
+}
+
 record LoopRegisters { state: List<Gpr>, counter: Gpr, flag: Gpr, rest: List<Place> }
 
 fn loop_registers(n: Nat, placement: List<Place>) → Option<LoopRegisters> {
@@ -1329,37 +1383,39 @@ fn File::loop_entry(self file: File, saves: Nat, inputs: List<Nat>, limit: Nat, 
 
 // The code out of a pass: the exit bit's register, the moves to leave and
 // to go round, and the file after the loop.
-record LoopExit { register: Gpr, leave: List<Instruction>, back: List<Instruction>, out: File }
+// The exit is tested as a conditional's bit is (`File::branch_test`): TEST
+// of its register, or the CMP of the comparison it is, the bit never
+// materialised.
+record LoopExit { test: Test, leave: List<Instruction>, back: List<Instruction>, out: File }
 
-fn File::loop_exit_out(self file: File, saves: Nat, register: Gpr, leave, back: Lowered, registers: LoopRegisters, count, exit: Nat,
+fn File::loop_exit_out(self file: File, saves: Nat, test: Test, leave, back: Lowered, registers: LoopRegisters, count, exit: Nat,
     next, outputs: List<Nat>, exhausted: Nat) → Option<LoopExit> {
     match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(registers.flag, registers.state)) {
         None => None,
-        Some(out) => match file.check_one(exit, Some(Bit), register) &&
-            (leave.file.outputs_check(word_ports(next), registers.state) && (leaves_all(leave.code, body_kept(saves)) &&
+        Some(out) => match leave.file.outputs_check(word_ports(next), registers.state) && (leaves_all(leave.code, body_kept(saves)) &&
                 (back.file.outputs_check(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) &&
-                    leaves_all(back.code, body_kept(saves))))) {
+                    leaves_all(back.code, body_kept(saves)))) {
             False => None,
-            True => Some(LoopExit(register, leave.code, back.code, out)),
+            True => Some(LoopExit(test, leave.code, back.code, out)),
         },
     }
 }
 
-fn File::loop_exit_back(self file: File, saves: Nat, register: Gpr, leave: Lowered, registers: LoopRegisters, count, exit: Nat,
+fn File::loop_exit_back(self file: File, saves: Nat, test: Test, leave: Lowered, registers: LoopRegisters, count, exit: Nat,
     next, outputs: List<Nat>, exhausted: Nat) → Option<LoopExit> {
     match file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) {
         None => None,
-        Some(back) => file.loop_exit_out(saves, register, leave, back, registers, count, exit, next, outputs, exhausted),
+        Some(back) => file.loop_exit_out(saves, test, leave, back, registers, count, exit, next, outputs, exhausted),
     }
 }
 
 fn File::loop_exit(self file: File, saves: Nat, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat) →
     Option<LoopExit> {
-    match file.find(Held(exit, Bit)) {
+    match file.branch_test(exit) {
         None => None,
-        Some(found) => match file.move_outputs(word_ports(next), registers.state) {
+        Some(tested) => match file.move_outputs(word_ports(next), registers.state) {
             None => None,
-            Some(leave) => file.loop_exit_back(saves, found.register, leave, registers, count, exit, next, outputs, exhausted),
+            Some(leave) => file.loop_exit_back(saves, tested.test, leave, registers, count, exit, next, outputs, exhausted),
         },
     }
 }
@@ -1370,7 +1426,7 @@ fn loop_tested(prog: Prog, entry: LoopEntry, names: Nat) → Prog {
     loop_head(prog, entry, names).branch_label(entry.registers.counter, Succ(Succ(Succ(names))))
 }
 fn loop_jumped(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
-    At(At(At(pass.branch_label(exit.register, Succ(Succ(names))), 0, Block(exit.leave)), 0, Block([registers.clear()])), 0,
+    At(At(At(pass.branched(exit.test, Succ(Succ(names))), 0, Block(exit.leave)), 0, Block([registers.clear()])), 0,
         Jmp(Succ(Succ(Succ(Succ(names))))))
 }
 fn loop_again(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
@@ -1389,60 +1445,6 @@ fn Emitted::loop_close(self pass: Emitted, saves: Nat, registers: LoopRegisters,
     match pass.file.loop_exit(saves, registers, count, exit, next, outputs, exhausted) {
         None => None,
         Some(out) => Some(Emitted(loop_done(pass.prog, registers, out, names), out.out, pass.placement, pass.names)),
-    }
-}
-
-// What a conditional tests: its bit where a register holds it (TEST, the
-// second arm where it is zero), else the comparison the file knows it to be
-// from a folded node (CMP of its operands' registers, the second arm where
-// the comparison fails), the bit never materialised.
-record Tested(file: File, condition: Nat) {
-    test: Test,
-    selects: (values: Valuation()) → (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, condition).head_bit(),
-}
-
-fn CompareOp::fails(self op: CompareOp) → ConditionCode { match op { Below => AE, Less => GE, Same => NE } }
-
-theorem CompareOp::fails_holds(self op: CompareOp, flags: Flags): condition_holds(op.fails(), flags) = !op.flag(flags) {
-    match op { Below => refl, Less => refl, Same => refl }
-}
-
-theorem compare_selects(values: Valuation(), g: Gprs, op: CompareOp, condition, left, right: Nat, a, b: Gpr,
-    left_rep: values(64, left) = read_gpr(a, g), right_rep: values(64, right) = read_gpr(b, g),
-    holds: op.Holds(values, condition, left, right)):
-    Compare(op.fails(), a, b).taken(g) = !values(1, condition).head_bit()
-{
-    let x = read_gpr(a, g);
-    let y = read_gpr(b, g);
-    trans(op.fails_holds(sub_flags(x, y)),
-        trans(cong_fn<Bool, Bool>(λ c => !c, op.flag_sub(x, y)),
-            trans(j(left_rep, λ v _ => !op.apply(v, y) = !op.apply(values(64, left), y), refl),
-                trans(j(right_rep, λ v _ => !op.apply(values(64, left), v) = !op.apply(values(64, left), values(64, right)), refl),
-                    j(sym(holds), λ w _ => !op.apply(values(64, left), values(64, right)) = !w.head_bit(), refl)))))
-}
-
-fn File::compare_test(self file: File, condition: Nat, compared: Comparison,
-    known: known_comparison(file.known, condition) = Some(compared)) → Option<Tested(file, condition)> {
-    match file.find(Held(compared.left, Word)) {
-        None => None,
-        Some(a) => match file.find(Held(compared.right, Word)) {
-            None => None,
-            Some(b) => Some(Tested(Compare(compared.op.fails(), a.register, b.register),
-                λ values g represents => compare_selects(values, g, compared.op, condition, compared.left, compared.right,
-                    a.register, b.register, a.at.rep(values, g, represents), b.at.rep(values, g, represents),
-                    known_comparison_holds(values, condition, compared, file.known, known, represents.right)))),
-        },
-    }
-}
-
-fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, condition)> {
-    match file.find(Held(condition, Bit)) {
-        Some(found) => Some(Tested(Nonzero(found.register),
-            λ values g represents => found.register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents)))),
-        None => match known: known_comparison(file.known, condition) {
-            None => None,
-            Some(compared) => file.compare_test(condition, compared, known),
-        },
     }
 }
 
@@ -4185,7 +4187,7 @@ theorem loop_entry_sound<M>(saves: Nat, values: Valuation(), file: File, inputs:
 // the flag.
 fn LoopExitOk<M>(saves: Nat, file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat,
     out: LoopExit) → Type {
-    ((pass: Valuation()) → (g: Gprs) → file.Represents(pass, g) → out.register.tests_zero(g) = !pass(1, exit).head_bit()) ∧
+    ((pass: Valuation()) → (g: Gprs) → file.Represents(pass, g) → out.test.taken(g) = !pass(1, exit).head_bit()) ∧
     (((pass: Valuation()) → MovesInto<M>(saves, pass, file, next, registers.state, out.leave)) ∧
      (((pass: Valuation()) → MovesInto<M>(saves, pass, file, Cons(count, next), Cons(registers.counter, registers.state), out.back)) ∧
       ((values: Valuation()) → (g: Gprs) → ArgsIn(words_of(values, outputs), registers.state, g) →
@@ -4197,14 +4199,13 @@ fn MayLoopExit<M>(saves: Nat, file: File, registers: LoopRegisters, count, exit:
     out.All(λ (x: LoopExit) => LoopExitOk<M>(saves, file, registers, count, exit, next, outputs, exhausted, x))
 }
 
-theorem loop_exit_out_sound<M>(saves: Nat, file: File, register: Gpr, leave, back: Lowered,
+theorem loop_exit_out_sound<M>(saves: Nat, file: File, exit: Nat, tested: Tested(file, exit), leave, back: Lowered,
     leave_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, leave), back_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, back),
-    registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+    registers: LoopRegisters, count: Nat, next, outputs: List<Nat>, exhausted: Nat):
     MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted,
-        file.loop_exit_out(saves, register, leave, back, registers, count, exit, next, outputs, exhausted)) {
+        file.loop_exit_out(saves, tested.test, leave, back, registers, count, exit, next, outputs, exhausted)) {
     let ports = Cons(Port(id := exhausted, width := 1), word_ports(outputs));
     let into = Cons(registers.flag, registers.state);
-    let found = file.check_one(exit, Some(Bit), register);
     let leave_placed = leave.file.outputs_check(word_ports(next), registers.state);
     let leave_kept = leaves_all(leave.code, body_kept(saves));
     let back_placed = back.file.outputs_check(word_ports(Cons(count, next)), Cons(registers.counter, registers.state));
@@ -4213,23 +4214,21 @@ theorem loop_exit_out_sound<M>(saves: Nat, file: File, register: Gpr, leave, bac
         ((values: Valuation()) → (g: Gprs) → PortsAt(values, ports, into, g) → o.All(λ (f: File) => f.Represents(values, g))) →
         MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted, match o {
             None => None,
-            Some(after) => match found && (leave_placed && (leave_kept && (back_placed && back_kept))) {
+            Some(after) => match leave_placed && (leave_kept && (back_placed && back_kept)) {
                 False => None,
-                True => Some(LoopExit(register, leave.code, back.code, after)),
+                True => Some(LoopExit(tested.test, leave.code, back.code, after)),
             },
         }) {
         None => λ _ => trivial,
         Some(after) => λ after_ok =>
-            match checked: found && (leave_placed && (leave_kept && (back_placed && back_kept))) {
+            match checked: leave_placed && (leave_kept && (back_placed && back_kept)) {
                 False => trivial,
                 True => {
-                    let first = Bool::is_true_and(found, leave_placed && (leave_kept && (back_placed && back_kept)),
-                        is_true_of_eq(found && (leave_placed && (leave_kept && (back_placed && back_kept))), checked));
-                    let second = Bool::is_true_and(leave_placed, leave_kept && (back_placed && back_kept), first.right);
+                    let second = Bool::is_true_and(leave_placed, leave_kept && (back_placed && back_kept),
+                        is_true_of_eq(leave_placed && (leave_kept && (back_placed && back_kept)), checked));
                     let third = Bool::is_true_and(leave_kept, back_placed && back_kept, second.right);
                     let fourth = Bool::is_true_and(back_placed, back_kept, third.right);
-                    ⟨λ pass g represents => register.tests_zero_bit(g, pass(1, exit),
-                        check_one_sound(pass, file, g, represents, exit, Some(Bit), register, first.left)),
+                    ⟨λ pass g represents => tested.selects(pass, g, represents),
                      ⟨λ pass => moves_into<M>(saves, pass, file, next, registers.state, leave, leave_keeps(pass), second.left, third.left),
                       ⟨λ pass => moves_into<M>(saves, pass, file, Cons(count, next), Cons(registers.counter, registers.state), back, back_keeps(pass),
                             fourth.left, fourth.right),
@@ -4239,35 +4238,36 @@ theorem loop_exit_out_sound<M>(saves: Nat, file: File, register: Gpr, leave, bac
     })(λ values g placed => input_file_represents(values, g, ports, into, placed))
 }
 
-theorem loop_exit_back_sound<M>(saves: Nat, file: File, register: Gpr, leave: Lowered, leave_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, leave),
-    registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+theorem loop_exit_back_sound<M>(saves: Nat, file: File, exit: Nat, tested: Tested(file, exit), leave: Lowered,
+    leave_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, leave),
+    registers: LoopRegisters, count: Nat, next, outputs: List<Nat>, exhausted: Nat):
     MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted,
-        file.loop_exit_back(saves, register, leave, registers, count, exit, next, outputs, exhausted)) {
+        file.loop_exit_back(saves, tested.test, leave, registers, count, exit, next, outputs, exhausted)) {
     (match file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) as λ o =>
         ((pass: Valuation()) → MayKeep<M>(pass, file, True, o)) →
         MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted, match o {
             None => None,
-            Some(back) => file.loop_exit_out(saves, register, leave, back, registers, count, exit, next, outputs, exhausted),
+            Some(back) => file.loop_exit_out(saves, tested.test, leave, back, registers, count, exit, next, outputs, exhausted),
         }) {
         None => λ _ => trivial,
-        Some(back) => λ back_keeps => loop_exit_out_sound<M>(saves, file, register, leave, back, leave_keeps, back_keeps, registers, count, exit,
+        Some(back) => λ back_keeps => loop_exit_out_sound<M>(saves, file, exit, tested, leave, back, leave_keeps, back_keeps, registers, count,
             next, outputs, exhausted),
     })(λ pass => move_outputs_keeps<M>(pass, word_ports(Cons(count, next)), file, Cons(registers.counter, registers.state)))
 }
 
 theorem loop_exit_sound<M>(saves: Nat, file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
     MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted, file.loop_exit(saves, registers, count, exit, next, outputs, exhausted)) {
-    match file.find(Held(exit, Bit)) {
+    match file.branch_test(exit) {
         None => trivial,
-        Some(found) =>
+        Some(tested) =>
             (match file.move_outputs(word_ports(next), registers.state) as λ o =>
                 ((pass: Valuation()) → MayKeep<M>(pass, file, True, o)) →
                 MayLoopExit<M>(saves, file, registers, count, exit, next, outputs, exhausted, match o {
                     None => None,
-                    Some(leave) => file.loop_exit_back(saves, found.register, leave, registers, count, exit, next, outputs, exhausted),
+                    Some(leave) => file.loop_exit_back(saves, tested.test, leave, registers, count, exit, next, outputs, exhausted),
                 }) {
                 None => λ _ => trivial,
-                Some(leave) => λ leave_keeps => loop_exit_back_sound<M>(saves, file, found.register, leave, leave_keeps, registers, count, exit,
+                Some(leave) => λ leave_keeps => loop_exit_back_sound<M>(saves, file, exit, tested, leave, leave_keeps, registers, count,
                     next, outputs, exhausted),
             })(λ pass => move_outputs_keeps<M>(pass, word_ports(next), file, registers.state)),
     }
@@ -4514,18 +4514,18 @@ theorem loop_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let lands = program.laid_out_lands(laid);
     let c_name = Succ(Succ(names));
     let j_name = Succ(Succ(Succ(Succ(names))));
-    let left = pass.branch_label(out.register, c_name);
+    let left = pass.branched(out.test, c_name);
     let leave = At(left, 0, Block(out.leave));
     let cleared = At(leave, 0, Block([registers.clear()]));
     let jumped = loop_jumped(pass, registers, out, names);
     let cleared_in = cleared.within_before(0, Jmp(j_name), program, jumped_in);
     let leave_in = leave.within_before(0, Block([registers.clear()]), program, cleared_in);
     let left_in = left.within_before(0, Block(out.leave), program, leave_in);
-    let tested = pass.test_label(out.register);
-    let test_in = tested.within_before(0, Jcc(E, c_name), program, left_in);
+    let tested = pass.tested(out.test);
+    let test_in = tested.within_before(0, Jcc(out.test.cc(), c_name), program, left_in);
     let else_lands = j(c_lands, λ target _ => JumpsForward(prog_len(tested), 6,
-            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, c_name)), target),
-        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, E, c_name, lands, left_in.proof));
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(out.test.cc(), c_name)), target),
+        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, out.test.cc(), c_name, lands, left_in.proof));
     let jump_lands = j(j_lands, λ target _ => NearLands(prog_len(cleared), asm_jump_of(asm_labels(program), prog_len(cleared), Jmp(j_name)),
             target),
         jmp_lands(asm_labels(program), jumped_in.witness, program, cleared, 0, j_name, lands, jumped_in.proof));
@@ -4533,17 +4533,17 @@ theorem loop_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let moved = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, next), registers.state, g) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ keep(m));
     let post = stack.LoopDone(saves, keep, s0, registers, words_of(values, next), False);
-    site.moves_test(stack.writes, fits, pass, out.register, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+    site.moves_test_on(stack.writes, fits, pass, out.test, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
         prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
         site.moves_trans(stack.writes, prog_len(left), prog_len(cleared), j_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
             λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
             site.moves_trans(stack.writes, prog_len(left), prog_len(leave), prog_len(cleared),
-                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
                 λ (s: MachineState<M>) => moved(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
                 site.moves_weaken(stack.writes, prog_len(left), prog_len(leave), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
                     λ (t: MachineState<M>) => moved(t.gprs, t.memory),
-                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
                     λ (t: MachineState<M>) => moved(t.gprs, t.memory),
                     site.moves_block(stack.writes, fits, leave_in.witness, left, 0, out.leave, leave_in.proof,
                         program.block_reads_at(laid, leave_in.witness, left, 0, out.leave, leave_in.proof), pre, moved,
@@ -4562,7 +4562,7 @@ theorem loop_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
                             execute_block_kept<M>([registers.clear()], s, body_kept(saves), apart.right.right.left)), held.right.right⟩⟩)),
             site.moves_jump(stack.writes, fits, jumped_in.witness, cleared, 0, j_name, jumped_in.proof, j_at, jump_lands, post)),
         site.moves_absurd(stack.writes, prog_len(jumped), j_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
             λ (t: MachineState<M>) => post(t.gprs, t.memory),
             λ s held => {
                 let bad: (True = False) = trans(sym(held.right), trans(out_ok.left(values, s.gprs, held.left.left),
@@ -4597,14 +4597,14 @@ theorem loop_rounds<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let back_in = back.within_before(0, Block([registers.step()]), program, stepped_in);
     let cont_in = cont.within_before(0, Block(out.back), program, back_in);
     let jumped_in = jumped.within_before(c_name, Block([]), program, cont_in);
-    let left = pass.branch_label(out.register, c_name);
+    let left = pass.branched(out.test, c_name);
     let into_jumped: left.Within(jumped) = Exists(3, refl);
     let left_in = left.within_trans(jumped, program, into_jumped, jumped_in);
-    let tested = pass.test_label(out.register);
-    let test_in = tested.within_before(0, Jcc(E, c_name), program, left_in);
+    let tested = pass.tested(out.test);
+    let test_in = tested.within_before(0, Jcc(out.test.cc(), c_name), program, left_in);
     let else_lands = j(c_lands, λ target _ => JumpsForward(prog_len(tested), 6,
-            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, c_name)), target),
-        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, E, c_name, lands, left_in.proof));
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(out.test.cc(), c_name)), target),
+        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, out.test.cc(), c_name, lands, left_in.proof));
     let jump_lands = j(h_lands, λ target _ => NearLands(prog_len(stepped), asm_jump_of(asm_labels(program), prog_len(stepped), Jmp(h_name)),
             target),
         jmp_lands(asm_labels(program), again_in.witness, program, stepped, 0, h_name, lands, again_in.proof));
@@ -4612,10 +4612,10 @@ theorem loop_rounds<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let turned = stack.LoopHead(saves, keep, s0, registers, Succ(rest), words_of(values, next));
     let post = stack.LoopHead(saves, keep, s0, registers, rest, words_of(values, next));
     let c = BitVec::ofNat(255, n := 8).sign_extend(56);
-    site.moves_test(stack.writes, fits, pass, out.register, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+    site.moves_test_on(stack.writes, fits, pass, out.test, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
         prog_len(jumped), else_lands, h_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
         site.moves_absurd(stack.writes, prog_len(left), h_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
             λ (t: MachineState<M>) => post(t.gprs, t.memory),
             λ s held => {
                 let bad: (True = False) = trans(sym(cong_fn<Bool, Bool>(λ b => !b, clear)),
@@ -4623,14 +4623,14 @@ theorem loop_rounds<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
                 absurd(bad)
             }),
         site.moves_trans(stack.writes, prog_len(jumped), prog_len(stepped), h_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
             λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
             site.moves_trans(stack.writes, prog_len(jumped), prog_len(back), prog_len(stepped),
-                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
                 λ (s: MachineState<M>) => turned(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
                 site.moves_weaken(stack.writes, prog_len(cont), prog_len(back), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
                     λ (t: MachineState<M>) => turned(t.gprs, t.memory),
-                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
                     λ (t: MachineState<M>) => turned(t.gprs, t.memory),
                     site.moves_block(stack.writes, fits, back_in.witness, cont, 0, out.back, back_in.proof,
                         program.block_reads_at(laid, back_in.witness, cont, 0, out.back, back_in.proof), pre, turned,

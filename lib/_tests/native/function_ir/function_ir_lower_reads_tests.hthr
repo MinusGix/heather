@@ -77,7 +77,7 @@ fn byte_at_program() → Prog {
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
-        .label(2).put(Block([MovRI(Rax, w(256))]))
+        .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
         .label(3)
         .put(Block([])).put(Block([frame_free()])).put(Ret)
 }
@@ -249,7 +249,7 @@ fn put_at_program() → Prog {
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(StoreByte(ByteStore(Rax, Rcx))).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
-        .label(2).put(Block([MovRI(Rax, w(256))]))
+        .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
         .label(3)
         .put(Block([])).put(Block([frame_free()])).put(Ret)
 }
@@ -766,9 +766,9 @@ fn be_word_program() → Prog {
         .put(Block([MovRR(Rax, Rdx), AddRI8(Rax, b(3))]))
         .put(Block([CmpRR(Rax, Rsi)])).put(Jcc(AE, 4))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(asm_dword_load(DwordLoad(Rax, Rax))).put(Block([Bswap32(Rax)])).put(Jmp(5))
-        .label(4).put(Block([MovRI(Rax, w(0))]))
+        .label(4).put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .label(5).put(Jmp(3))
-        .label(2).put(Block([MovRI(Rax, w(0))]))
+        .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .label(3)
         .put(Block([])).put(Block([frame_free()])).put(Ret)
 }

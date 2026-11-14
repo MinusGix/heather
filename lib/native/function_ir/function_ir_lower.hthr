@@ -514,12 +514,43 @@ fn File::place_found(self file: File, held: Held, destination: Gpr, found: Found
     }
 }
 
+// A word loaded as an immediate: `MOV r32, imm32` (six bytes; writing the
+// low half clears the high one) where its high half is zero, else the
+// ten-byte `MOV r64, imm64`.
+fn mov_constant(destination: Gpr, word: BitVec(64)) → Instruction {
+    match word.resize(32).zero_extend(32).eq_bit(word) {
+        True => MovRI32(destination, word.resize(32)),
+        False => MovRI(destination, word),
+    }
+}
+
+theorem mov_constant_gprs<M>(destination: Gpr, word: BitVec(64), s: MachineState<M>):
+    execute_block_normal([mov_constant(destination, word)], s).gprs = write_gpr(destination, word, s.gprs)
+{
+    (match word.resize(32).zero_extend(32).eq_bit(word) as λ b => word.resize(32).zero_extend(32).eq_bit(word) = b →
+        execute_block_normal([match b { True => MovRI32(destination, word.resize(32)), False => MovRI(destination, word) }], s).gprs =
+            write_gpr(destination, word, s.gprs) {
+        True => λ fits => cong_fn(λ (w: BitVec(64)) => write_gpr(destination, w, s.gprs),
+            BitVec::eq_of_eq_bit(64, word.resize(32).zero_extend(32), word, fits)),
+        False => λ _ => refl,
+    })(refl)
+}
+
+// What a file says of the registers `mov_constant` leaves, it says of the
+// registers with the word written.
+theorem File::represents_mov_constant<M>(self file: File, values: Valuation(), s: MachineState<M>, destination: Gpr,
+    word: BitVec(64), held: file.Represents(values, write_gpr(destination, word, s.gprs))):
+    file.Represents(values, execute_block_normal([mov_constant(destination, word)], s).gprs)
+{
+    j(sym(mov_constant_gprs<M>(destination, word, s)), λ g _ => file.Represents(values, g), held)
+}
+
 // A word no register holds but the file knows, loaded: a folded constant
 // that something reads from a register after all.
 fn File::load_known(self file: File, id: Nat, destination: Gpr) → Option<Lowered> {
     match known_value(file.known, id) {
         None => None,
-        Some(value) => Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+        Some(value) => Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
             file.write(destination, Some(Held(id, Word))))),
     }
 }
@@ -529,9 +560,10 @@ theorem File::load_known_keeps<M>(self file: File, values: Valuation(), id: Nat,
 {
     (match known: known_value(file.known, id) {
         None => trivial,
-        Some(value) => λ s represents _ =>
+        Some(value) => λ s represents _ => file.write(destination, Some(Held(id, Word))).represents_mov_constant<M>(values, s,
+            destination, BitVec::ofNat(value),
             file.represents_write(values, s.gprs, destination, Some(Held(id, Word)), BitVec::ofNat(value),
-                represents, known_value_holds(values, id, value, file.known, known, represents.right)),
+                represents, known_value_holds(values, id, value, file.known, known, represents.right))),
     })
 }
 
@@ -950,7 +982,7 @@ theorem File::bits_keeps<M>(self file: File, values: Valuation(), op: BinaryOp,
 
 // A one-bit constant, zero-extended.
 fn File::bit_constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := 1).zero_extend(63))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value, n := 1).zero_extend(63))],
         file.write(destination, Some(Held(output, Bit)))))
 }
 
@@ -959,10 +991,11 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
     MayKeep<M>(values, file, values(1, output) = BitVec::ofNat(value),
         file.bit_constant(destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Bit))).represents_mov_constant<M>(values, s, destination,
+        BitVec::ofNat(value, n := 1).zero_extend(63),
         file.represents_write(values, s.gprs, destination, Some(Held(output, Bit)),
             BitVec::ofNat(value, n := 1).zero_extend(63), represents,
-            cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds))
+            cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds)))
 }
 
 // ---------------------------------------------------------------------------
@@ -973,7 +1006,7 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
 // (`known_value`: an ADD's immediate once the register is gone, a view from
 // its buffer's start, `File::zero`) reads it wherever the placement put it.
 fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
         file.write(destination, Some(Held(output, Word))).know(Constant(output, value))))
 }
 
@@ -982,11 +1015,12 @@ theorem File::constant_keeps<M>(self file: File, values: Valuation(), destinatio
     MayKeep<M>(values, file, values(64, output) = BitVec::ofNat(value),
         file.constant(destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Word))).know(Constant(output, value))
+        .represents_mov_constant<M>(values, s, destination, BitVec::ofNat(value),
         file.write(destination, Some(Held(output, Word))).represents_know(values, write_gpr(destination, BitVec::ofNat(value), s.gprs),
             Constant(output, value),
             file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-                BitVec::ofNat(value), represents, holds), holds)
+                BitVec::ofNat(value), represents, holds), holds))
 }
 
 fn File::copy_found(self file: File, destination: Gpr, output, source: Nat, found: Found(file, Held(source, Word)),
@@ -1004,7 +1038,7 @@ fn File::copy_from(self file: File, destination: Gpr, output, source: Nat,
     match found {
         None => match known_value(file.known, source) {
             None => None,
-            Some(value) => Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+            Some(value) => Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
                 file.write(destination, Some(Held(output, Word))))),
         },
         Some(here) => Some(file.copy_found(destination, output, source, here, destination.same(here.register))),
@@ -1043,9 +1077,10 @@ theorem File::copy_from_keeps<M>(self file: File, values: Valuation(), destinati
     match found {
         None => (match known: known_value(file.known, source) {
             None => trivial,
-            Some(value) => λ s represents holds =>
+            Some(value) => λ s represents holds => file.write(destination, Some(Held(output, Word))).represents_mov_constant<M>(values,
+                s, destination, BitVec::ofNat(value),
                 file.represents_write(values, s.gprs, destination, Some(Held(output, Word)), BitVec::ofNat(value),
-                    represents, trans(holds, known_value_holds(values, source, value, file.known, known, represents.right))),
+                    represents, trans(holds, known_value_holds(values, source, value, file.known, known, represents.right)))),
         }),
         Some(here) => file.copy_found_keeps<M>(values, destination, output, source, here),
     }
@@ -1103,6 +1138,62 @@ theorem add_immediate_adds<M>(destination: Gpr, value: Nat, s: MachineState<M>, 
             False => λ absent => absurd(absent),
         }),
     })(refl)
+}
+
+// CMP of a register with a constant the file knows: the same sign
+// extension decides the immediate, and the form is taken where it gives
+// the constant back.
+fn cmp_immediate(value: Nat) → Option<CmpRight> {
+    match BitVec::ofNat(value, n := 8).sign_extend(56).eq_bit(BitVec::ofNat(value, n := 64)) {
+        True => Some(RightImm8(BitVec::ofNat(value))),
+        False => match BitVec::ofNat(value, n := 32).sign_extend(32).eq_bit(BitVec::ofNat(value, n := 64)) {
+            True => Some(RightImm32(BitVec::ofNat(value))),
+            False => None,
+        },
+    }
+}
+
+theorem cmp_immediate_reads(value: Nat, right: CmpRight, g: Gprs):
+    cmp_immediate(value) = Some(right) → right.read(g) = BitVec::ofNat(value)
+{
+    let word = BitVec::ofNat(value, n := 64);
+    let short = BitVec::ofNat(value, n := 8);
+    let long = BitVec::ofNat(value, n := 32);
+    (match short.sign_extend(56).eq_bit(word) as λ b => short.sign_extend(56).eq_bit(word) = b →
+        (match b {
+            True => Some(RightImm8(short)),
+            False => match long.sign_extend(32).eq_bit(word) { True => Some(RightImm32(long)), False => None },
+        }) = Some(right) → right.read(g) = word {
+        True => λ fits chosen => j(chosen, λ o _ => o.All(λ (r: CmpRight) => r.read(g) = word),
+            BitVec::eq_of_eq_bit(64, short.sign_extend(56), word, fits)),
+        False => λ _ => (match fits: long.sign_extend(32).eq_bit(word) {
+            True => λ chosen => j(chosen, λ o _ => o.All(λ (r: CmpRight) => r.read(g) = word),
+                BitVec::eq_of_eq_bit(64, long.sign_extend(32), word, fits)),
+            False => λ absent => absurd(absent),
+        }),
+    })(refl)
+}
+
+// A comparison's right operand: the register that holds it, else the
+// immediate of the constant the file knows it to be.
+record RightAt(file: File, id: Nat) {
+    right: CmpRight,
+    rep: (values: Valuation()) → (g: Gprs) → file.Represents(values, g) → values(64, id) = right.read(g),
+}
+
+fn File::cmp_right(self file: File, id: Nat) → Option<RightAt(file, id)> {
+    match file.find(Held(id, Word)) {
+        Some(b) => Some(RightAt(RightRegister(b.register), λ values g represents => b.at.rep(values, g, represents))),
+        None => match known: known_value(file.known, id) {
+            None => None,
+            Some(value) => match chosen: cmp_immediate(value) {
+                None => None,
+                Some(right) => Some(RightAt(right, λ values g represents =>
+                    trans(known_value_holds(values, id, value, file.known, known, represents.right),
+                        sym(cmp_immediate_reads(value, right, g, chosen))))),
+            },
+        },
+    }
 }
 
 // `operand` moved to the destination, then the immediate ADD.
@@ -1670,7 +1761,7 @@ theorem ShiftOp::legalize_sound(self op: ShiftOp, x: BitVec(64), count: Nat):
 fn File::select_shift(self file: File, op: ShiftOp, destination: Gpr, output, value: Nat, legal: ShiftLegal) → Option<Lowered> {
     match legal {
         ShiftsBy(by) => file.shift_by(op, destination, output, value, by),
-        ShiftsToZero => Some(Lowered([MovRI(destination, BitVec::zero())],
+        ShiftsToZero => Some(Lowered([mov_constant(destination, BitVec::zero())],
             file.write(destination, Some(Held(output, Word))))),
     }
 }
@@ -1689,8 +1780,9 @@ theorem File::select_shift_keeps<M>(self file: File, values: Valuation(), op: Sh
             file.shift_by(op, destination, output, value, by),
             λ holds => trans(holds, same),
             file.shift_by_keeps<M>(values, op, destination, output, value, by)),
-        ShiftsToZero => λ zero s represents holds => file.represents_write(values, s.gprs, destination,
-            Some(Held(output, Word)), BitVec::zero(), represents, trans(holds, zero)),
+        ShiftsToZero => λ zero s represents holds => file.write(destination, Some(Held(output, Word))).represents_mov_constant<M>(
+            values, s, destination, BitVec::zero(), file.represents_write(values, s.gprs, destination,
+            Some(Held(output, Word)), BitVec::zero(), represents, trans(holds, zero))),
     })(means)
 }
 
@@ -2184,7 +2276,7 @@ theorem File::narrow_copy_keeps<M>(self file: File, values: Valuation(), width: 
 }
 
 fn File::narrow_constant(self file: File, width: Nat, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := width).resize(64))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value, n := width).resize(64))],
         file.write(destination, Some(Held(output, Narrow(width))))))
 }
 
@@ -2193,10 +2285,11 @@ theorem File::narrow_constant_keeps<M>(self file: File, values: Valuation(), wid
     MayKeep<M>(values, file, values(width, output) = BitVec::ofNat(value),
         file.narrow_constant(width, destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Narrow(width)))).represents_mov_constant<M>(values, s,
+        destination, BitVec::ofNat(value, n := width).resize(64),
         file.represents_write(values, s.gprs, destination, Some(Held(output, Narrow(width))),
             BitVec::ofNat(value, n := width).resize(64), represents,
-            cong_fn(λ (c: BitVec(width)) => c.resize(64), holds))
+            cong_fn(λ (c: BitVec(width)) => c.resize(64), holds)))
 }
 
 // A comparison of two registers at the kind the file holds them: the bit
