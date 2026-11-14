@@ -317,6 +317,8 @@ property of Heather.
   `match` on a `Bool` has `f::True(x̄, h: P)` and `f::False(x̄, h: ¬P)`:
   the call is the arm, under the condition as the source wrote it (`b =
   True` for a `Bool`), and `f::False::True` where the `else` tests again.
+  A `match` on a parameter `x` of an inductive type has `f::C(x̄, ȳ, h: x
+  = C(ȳ))` per written constructor arm.
   Pass the hypothesis as the comparison it is: a word's `i < 64` is
   `i.toNat() < 64` by conversion, so a typed `let lt: (i.toNat() < 64) =
   omega` is accepted for it. They are `simp` laws too, with the hypothesis
