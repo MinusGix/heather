@@ -186,6 +186,26 @@ the stored value. A store after a store at the same index drops the first. A
 load after a store at another index passes over it. These are rules, the
 last one with the condition that the indexes differ, which is a request.
 
+What is built of that (`function_ir_replay.hthr`): a fact may be of the
+buffers as they stand and not of the valuation alone. A load made since
+the last store is one (`Fact::Loaded`), kept until something may store: a
+store forgets every load and remembers its own read-back, and a call, a
+lend, a conditional and a loop forget (`Facts::forget`;
+`Facts::Remembered` is what the replayer's theorem carries beside the
+valuation's facts). A rule's premises and conclusion are read over both,
+so a rule about memory is a clause like any other, and the first is that
+two loads at one index with no store between are one word (`load_again`).
+Stores that pass over a load at another index, and a store after a store,
+are not built.
+
+A fifth step, `Again`, writes the next node as a move of an id the facts
+say the same computation wrote: common subexpressions, as the pass that
+reads through copies finds them (a sum, a difference or a shift of words
+as it reads through the copies before it; `Copies::pass` in
+`function_ir_tidy.hthr`). It is a step and not a rule because its
+premise is a node with any operands: the replayer compares the node, read
+through the copies the plan names, with the one among the facts.
+
 Share and Drop exist as parts of the folding pass, and the composition of
 moves is the simulation diagrams already in the library
 (`function_ir_pass_diagrams.hthr`, `lib/std/relation/transition.hthr`). The
@@ -358,6 +378,25 @@ them (`Facts::carry`, `loop_kept`). A span's length handed round a loop is
 such a word. A range of a word a pass changes (an index that counts) is
 the loop law's to carry (§6), and is not built.
 
+**Orders.** A range bounds a word by constants, which says nothing of an
+index a caller computed: `base + 4 * i` against a length is decided by no
+range of either. The facts therefore include orders between two words,
+`low + add ≤ high + more` with the words read as naturals
+(`Fact::AtMost`, `Order`), and an order is known where a stronger one
+between the same two words is. A bit taken gives the order of its
+comparison's operands (`order_set`, `order_clear`); two orders through a
+common word join (`order_join`); a word that is another and a constant
+added is ordered with it on both sides once an order shows the sum did not
+wrap (`sum_tested_low`, `sum_tested_high` from the wrap test's own bit,
+`sum_roomed_low`, `sum_roomed_high` from room under a third word); and a
+comparison is decided where an order between its operands is known
+(`ordered_below`, `ordered_not_below`). This is ABCD's inequality graph
+(Bodik, Gupta and Sarkar, PLDI 2000: a bounds check goes where a path of
+constraints leads from the index to the length), with the path written
+down as the derivation the replayer checks, so the search that finds a
+path is not trusted (`Ordered`, `Seen::ordered` in
+`function_ir_learn.hthr`).
+
 **Tested, as built.** A function's lengths are its parameters, and nothing
 in the function bounds them, so its length tests are decided only under an
 assumption. The answer built is Tested: a stage that puts fresh nodes and
@@ -368,6 +407,18 @@ test's bit takes simply starts with that bit as a fact, and the replayer
 derives the rest. What to test is the search's to choose: a parameter that
 words are compared below is a length, and the least value deciding every
 such comparison is the bound (`Function::guard`).
+
+Where the words compared below a length are one word and constants added
+(the bytes of a word of a span, at `base`, `base + 1` and on), no constant
+bounds them and the test is of the base itself: the words `base` is
+computed from are computed again at the entry, the greatest constant and
+one are added, and the test is that the sum did not wrap and is at most
+the length (`span_tests`; only a base a few pure nodes from the
+parameters is taken, and only one compared more than once, since a single
+comparison is its own test). The body still computes its own `base`. The
+pass that reads through copies finds that a repeat of the entry's
+(`Again`), after which what the test's bits say of the entry's sum is
+said of the body's, and each byte's test is decided by the orders above.
 
 The test is the first stage a function goes through, before inlining. The
 arm for a span too short is then the function as it was written, its calls
@@ -505,7 +556,7 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 | 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
 | 3, inline | built, and run by `compile-x86`: §9.1 |
 | 4, requests | built for ranges, with the answers In scope, Decided and Tested: §5.1, §9.1. Required, and a range of a word a loop changes, are not |
-| 5, memory rules and the word load | begun: a narrowing within its range is a move (§5.1, §9.1). The word load's nodes and instructions, the memory facts and the rules joining four byte loads are not built |
+| 5, memory rules and the word load | begun: a narrowing within its range is a move; loads since the last store are facts; orders between words decide the tests of a word's bytes under one test at the entry (§3.2, §5.1, §9.1). The word load's nodes and instructions are built in their own pull request; the rule joining four byte loads into one is not built |
 | 6 and 7 | not built |
 
 ### 9.1 What is built, as built
@@ -522,7 +573,12 @@ theorem about `old`.
 
 **The passes.** Inline is a stage of its own (`function_ir_inline.hthr`):
 the callee's body with its ids raised above the caller's bound, parameters
-bound by moves from the arguments, the result by a move back. The replayer
+bound by moves from the arguments, the result by a move back. The same
+stage puts new nodes after a leaf (`Sites::Put`: nodes that store nothing
+and can be evaluated, at ids above the function's bound), which is how
+code no node of the function computes yet comes to be there for a rule to
+equate with what the function does compute: the word load beside the four
+byte loads it replaces. The replayer
 is a stage (`replay_stage`), and tidying is the replayer twice
 (`function_ir_tidy.hthr`): once reading every node through the moves
 before it (`Step::Swap`, `Plan::Args`, `Plan::Inputs`), once dropping what
@@ -555,16 +611,19 @@ keeps each word's range and writes down only the derivations a decided
 comparison needs. §5.1 has the reasons.
 
 **The search is not trusted, and is evaluated.** `function_ir_optimize.hthr`:
-`optimize_stage()` is three stages in turn: the test at the entry, with a
-plan or none; inline, with a plan or none; and the replayer as often as
-there are plans (`Stage::many`: a list of plans, each over the function
-the one before made, no plan being the function itself). How many times
-the replayer runs and what each run is for is therefore the search's, a
-function at a time, and a new use of the replayer is a new search and no
-change to the stage or its theorem. The searches the compiler runs are, in
-order: decide tests and write the narrowings that are moves
-(`find_learned`), read through copies (`find_copied`), drop what nothing
-reads (`find_swept`). Deciding comes before reading through because a
+`optimize_stage()` is two stages in turn: the test at the entry, with a
+plan or none; and then moves, each an inlining or a replay
+(`Stage::or`), as often as there are plans (`Stage::many`: a list of
+plans, each over the function the one before made, no plan being the
+function itself). How many moves run, in what order and what each is for
+is therefore the search's, a function at a time, and a new use of the
+replayer is a new search and no change to the stage or its theorem. The
+searches the compiler runs after inlining are, in order: read through
+copies and repeats (`find_copied`), drop what nothing reads
+(`find_swept`), decide tests and write the narrowings that are moves
+(`find_learned`), and the first two again. Reading through comes before
+deciding because a word the entry's test computed and the body's own
+computation of it are two ids until then, and after it because a
 narrowing made a move is one more copy to read through. Each search is a
 method of the function the plans before it made (and the ones named
 `…_past` work only past a test). `compile-x86` evaluates them a
@@ -575,8 +634,8 @@ writes in decimal, because a decimal digit made in Heather is a long
 division and a function's source is mostly numbers), and states plan and
 function as literals; the certificate's statement is that the stage
 makes the one from the other, checked by evaluation, a plan of a function
-a statement. `Stage::many_made` joins the replays' statements from the
-last, `optimize_made` joins those with the test's and the inlining's into
+a statement. `Stage::many_made` joins the moves' statements from the
+last, `optimize_made` joins those with the test's into
 the function's, and `Stage::run_next` joins the functions' into the
 program's. A plan a statement keeps each statement well inside the
 kernel's fuel, and a refusal names its plan.
@@ -615,6 +674,16 @@ checks it needs are of the program made, the run is the published one's.
 - A function tested at its entry keeps its plain arm's callees alive, so
   fewer functions are emptied, and each such function tests again what its
   caller tested. Required removes both (§5.1).
+- A test at the entry of a function called with an index is paid at
+  every call: on SHA-256's loader of a big-endian word it costs most of
+  what the four tests it decides did. Its worth is the shape it leaves,
+  four loads with no test between, which is what the word load replaces;
+  the test itself goes to the callers with Required.
+- The order search is small on purpose: a base is taken only where the
+  length it is compared with is the parameter itself, a sum of a sum is
+  not flattened, a constant in the words a base is computed from is not
+  linked to the body's (`Again` leaves constants alone), and orders are
+  not carried round a loop.
 - A range is not carried for a word a loop's passes change, so a test of a
   counting index against a length stays. A table read as a chain of tests
   (SHA-256's constants) stays until the table is a node.
@@ -652,6 +721,12 @@ a word read a byte at a time still costs is the byte accesses themselves,
 the address formed for each, and the shifts and ors joining them, which
 is the word load's to remove.
 
+Most of the byte loads of a block run in one function, the loader of a
+big-endian word at an index, which is too large to inline and is called
+with indexes its callers compute. The entry test there removes the four
+tests a call ran and adds its own, a gain of a percent or two; what it
+buys is that the loads are then provably in bounds together.
+
 ## 10. Machine instructions added for the optimizer
 
 Minus, 2026-11-14: instructions may be added to the machine model as steps
@@ -681,4 +756,5 @@ checked and not computed is certified abstract interpretation (Besson,
 Jensen and others). Rule discovery is Ruler and Souper. The loop law is data
 refinement. The request, a compiler whose optimizations name the proposition
 they lack and take the programmer's theorem as the answer, is this design's
-own.
+own. Deciding a bounds test by a path of orders from the index to the
+length is ABCD (Bodik, Gupta and Sarkar), with the path kept as the proof.
