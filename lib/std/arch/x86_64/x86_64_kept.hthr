@@ -175,3 +175,10 @@ theorem execute_block_kept<M>(instructions: List<Instruction>, s: MachineState<M
         },
     }
 }
+
+// No register of the list is `query`. (Here and not with the stack's runs,
+// which prove what it means for a list of saves, so that a planner can ask
+// it without them.)
+fn List::spare(self registers: List<Gpr>, query: Gpr) → Bool {
+    match registers { Nil => True, Cons(register, rest) => !register.same(query) && rest.spare(query) }
+}

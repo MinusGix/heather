@@ -570,11 +570,6 @@ fn restore(registers: List<Gpr>, saved, gprs: Gprs) → Gprs {
     }
 }
 
-// No register of the list is `query`.
-fn List::spare(self registers: List<Gpr>, query: Gpr) → Bool {
-    match registers { Nil => True, Cons(register, rest) => !register.same(query) && rest.spare(query) }
-}
-
 // Slot `k` of the frame at offset `d`, the stack pointer there.
 theorem Stack::slot_address<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, k: Nat,
     gprs: Gprs, rsp: read_gpr(Rsp, gprs) = stack.at(d), small: k < 16):
