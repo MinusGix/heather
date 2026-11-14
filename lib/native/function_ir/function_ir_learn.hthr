@@ -791,6 +791,10 @@ fn Node::renamed(self node: Node, names: NatMap<Nat>, output: Nat) → Node {
         BufferStore(_, f, i, v) => BufferStore(output, f, named(names, i), named(names, v)),
         Resize(from, to, _, s) => Resize(from, to, output, named(names, s)),
         SignResize(from, to, _, s) => SignResize(from, to, output, named(names, s)),
+        TableRead(w, _, n, i, es) => TableRead(w, output, n, named(names, i), es),
+        WideLoad(n, _, f, i) => WideLoad(n, output, f, named(names, i)),
+        WideStore(n, _, f, i, v) => WideStore(n, output, f, named(names, i), named(names, v)),
+        ByteSwap(w, _, s) => ByteSwap(w, output, named(names, s)),
     }
 }
 

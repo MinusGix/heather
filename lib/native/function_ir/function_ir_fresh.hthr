@@ -19,6 +19,7 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_views;
 import bitvec;
+import bitvec_bytes;
 import bool;
 import list;
 import logic;
@@ -194,6 +195,13 @@ theorem Node::holds_agree(self node: Node, values, other: Valuation(), buffers: 
             sym(cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := to), agree(source, Inr(Inl(refl)), from))))),
         SignResize(from, to, output, source) => λ agree h => trans(agree(output, Inl(refl), to), trans(h,
             sym(cong_fn(λ (x: BitVec(from)) => x.sresize(to), agree(source, Inr(Inl(refl)), from))))),
+        TableRead(width, output, bits, index, entries) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := width), agree(index, Inr(Inl(refl)), bits))))),
+        WideLoad(bytes, output, buffer, index) => λ agree h => trans(agree(output, Inl(refl), 8 * bytes), trans(h,
+            sym(cong_fn(λ (x: BitVec(64)) => buffer_word(buffers, buffer, x.toNat(), bytes), agree(index, Inr(Inl(refl)), 64))))),
+        WideStore(_, _, _, _, _) => λ agree h => h,
+        ByteSwap(width, output, source) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(width)) => x.swap_bytes(), agree(source, Inr(Inl(refl)), width))))),
     })(agree)
 }
 
@@ -223,6 +231,15 @@ theorem Node::runs_agree(self node: Node, values, other: Valuation(), before, af
                     sym(cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(after, buffer, x.toNat())), agree(index, Inr(Inl(refl)), 64)))))⟩,
         Resize(from, to, output, source) => λ agree ran => ⟨Resize(from, to, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         SignResize(from, to, output, source) => λ agree ran => ⟨SignResize(from, to, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        TableRead(width, output, bits, index, entries) => λ agree ran =>
+            ⟨TableRead(width, output, bits, index, entries).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        WideLoad(bytes, output, buffer, index) => λ agree ran => ⟨WideLoad(bytes, output, buffer, index).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        WideStore(bytes, output, buffer, index, value) => λ agree ran =>
+            ⟨trans(ran.left, sym(eq2(λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => store_word(before, buffer, x.toNat(), bytes, y),
+                    agree(index, Inr(Inl(refl)), 64), agree(value, Inr(Inr(Inl(refl))), 8 * bytes)))),
+                trans(agree(output, Inl(refl), 8 * bytes), trans(ran.right,
+                    sym(cong_fn(λ (x: BitVec(64)) => buffer_word(after, buffer, x.toNat(), bytes), agree(index, Inr(Inl(refl)), 64)))))⟩,
+        ByteSwap(width, output, source) => λ agree ran => ⟨ByteSwap(width, output, source).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
     })(agree)
 }
 

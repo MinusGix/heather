@@ -90,6 +90,10 @@ fn Node::read_through(self node: Node, copies: Copies) → Step {
         BufferStore(_, _, i, v) => swap_two(i, v, copies.read(64, i), copies.read(64, v)),
         Resize(from, _, _, s) => swap_one(s, copies.read(from, s)),
         SignResize(from, _, _, s) => swap_one(s, copies.read(from, s)),
+        TableRead(_, _, n, i, _) => swap_one(i, copies.read(n, i)),
+        WideLoad(_, _, _, i) => swap_one(i, copies.read(64, i)),
+        WideStore(n, _, _, i, v) => swap_two(i, v, copies.read(64, i), copies.read(8 * n, v)),
+        ByteSwap(w, _, s) => swap_one(s, copies.read(w, s)),
     }
 }
 

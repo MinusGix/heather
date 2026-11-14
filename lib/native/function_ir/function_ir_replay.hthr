@@ -50,6 +50,7 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_stage;
 import bitvec;
+import bitvec_bytes;
 import bitvec_nat;
 import bool;
 import list;
@@ -65,6 +66,14 @@ import option;
 fn same2(a, b, c, d: Nat) → Bool { a.same(c) && b.same(d) }
 fn same3(a, b, c, x, y, z: Nat) → Bool { a.same(x) && (b.same(y) && c.same(z)) }
 fn same4(a, b, c, d, w, x, y, z: Nat) → Bool { a.same(w) && (b.same(x) && (c.same(y) && d.same(z))) }
+
+// A table's entries, one by one.
+fn entries_same(xs, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys { Nil => False, Cons(y, others) => x.same(y) && entries_same(rest, others) },
+    }
+}
 
 fn Node::same(self a: Node, b: Node) → Bool {
     match a {
@@ -85,6 +94,10 @@ fn Node::same(self a: Node, b: Node) → Bool {
         BufferStore(o, f, i, v) => match b { BufferStore(o2, f2, i2, v2) => same4(o, f, i, v, o2, f2, i2, v2), _ => False },
         Resize(f, t, o, s) => match b { Resize(f2, t2, o2, s2) => same4(f, t, o, s, f2, t2, o2, s2), _ => False },
         SignResize(f, t, o, s) => match b { SignResize(f2, t2, o2, s2) => same4(f, t, o, s, f2, t2, o2, s2), _ => False },
+        TableRead(w, o, n, i, es) => match b { TableRead(w2, o2, n2, i2, es2) => same4(w, o, n, i, w2, o2, n2, i2) && entries_same(es, es2), _ => False },
+        WideLoad(n, o, f, i) => match b { WideLoad(n2, o2, f2, i2) => same4(n, o, f, i, n2, o2, f2, i2), _ => False },
+        WideStore(n, o, f, i, v) => match b { WideStore(n2, o2, f2, i2, v2) => same4(n, o, f, i, n2, o2, f2, i2) && v.same(v2), _ => False },
+        ByteSwap(w, o, s) => match b { ByteSwap(w2, o2, s2) => same3(w, o, s, w2, o2, s2), _ => False },
     }
 }
 
@@ -103,6 +116,19 @@ theorem con3(f: Nat → Nat → Nat → Node, a, b, c, x, y, z: Nat, e: (a = x) 
 }
 theorem con4(f: Nat → Nat → Nat → Nat → Node, a, b, c, d, w, x, y, z: Nat, e: (a = w) ∧ ((b = x) ∧ ((c = y) ∧ (d = z)))): f(a, b, c, d) = f(w, x, y, z) {
     trans(cong_fn<Nat, Node>(λ n => f(n, b, c, d), e.left), con3(λ p q r => f(w, p, q, r), b, c, d, x, y, z, e.right))
+}
+
+theorem entries_same_sound(xs: List<Nat>): (ys: List<Nat>) → entries_same(xs, ys) = True → xs = ys {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ => refl, Cons(_, _) => λ h => absurd(h) },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ h => absurd(h),
+            Cons(y, others) => λ h => {
+                let p = Bool::and_true_parts(x.same(y), entries_same(rest, others), h);
+                trans(cong_fn<Nat, List<Nat>>(λ n => Cons(n, rest), x.same_sound(y, p.left)), cong_fn<List<Nat>, List<Nat>>(λ l => Cons(y, l), entries_same_sound(rest, others, p.right)))
+            },
+        },
+    }
 }
 
 theorem Node::same_sound(self a: Node): (b: Node) → a.same(b) = True → a = b {
@@ -124,6 +150,24 @@ theorem Node::same_sound(self a: Node): (b: Node) → a.same(b) = True → a = b
         BufferStore(w, o, l, r) => λ b => match b { BufferStore(w2, o2, l2, r2) => λ h => con4(λ p q s t => BufferStore(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         Resize(w, o, l, r) => λ b => match b { Resize(w2, o2, l2, r2) => λ h => con4(λ p q s t => Resize(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         SignResize(w, o, l, r) => λ b => match b { SignResize(w2, o2, l2, r2) => λ h => con4(λ p q s t => SignResize(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        TableRead(w, o, l, r, es) => λ b => match b {
+            TableRead(w2, o2, l2, r2, es2) => λ h => {
+                let parts = Bool::and_true_parts(same4(w, o, l, r, w2, o2, l2, r2), entries_same(es, es2), h);
+                trans(con4(λ p q s t => TableRead(p, q, s, t, es), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, parts.left)),
+                    cong_fn<List<Nat>, Node>(λ l => TableRead(w2, o2, l2, r2, l), entries_same_sound(es, es2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        WideLoad(w, o, l, r) => λ b => match b { WideLoad(w2, o2, l2, r2) => λ h => con4(λ p q s t => WideLoad(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        WideStore(w, o, l, r, v) => λ b => match b {
+            WideStore(w2, o2, l2, r2, v2) => λ h => {
+                let parts = Bool::and_true_parts(same4(w, o, l, r, w2, o2, l2, r2), v.same(v2), h);
+                trans(con4(λ p q s t => WideStore(p, q, s, t, v), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, parts.left)),
+                    cong_fn<Nat, Node>(λ n => WideStore(w2, o2, l2, r2, n), v.same_sound(v2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        ByteSwap(w, o, v) => λ b => match b { ByteSwap(w2, o2, v2) => λ h => con3(λ p q r => ByteSwap(p, q, r), w, o, v, w2, o2, v2, same3_sound(w, o, v, w2, o2, v2, h)), _ => λ h => absurd(h) },
     }
 }
 
@@ -453,6 +497,10 @@ theorem Node::pure_holds(self node: Node, values: Valuation(), before, after: Bu
         BufferStore(_, _, _, _) => λ p _ => absurd(p),
         Resize(_, _, _, _) => λ _ ran => ran.left,
         SignResize(_, _, _, _) => λ _ ran => ran.left,
+        TableRead(_, _, _, _, _) => λ _ ran => ran.left,
+        WideLoad(_, _, _, _) => λ p _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ ran => ran.left,
     }
 }
 theorem Node::pure_runs(self node: Node, values: Valuation(), file: Buffers()): node.pure() = True →
@@ -475,6 +523,10 @@ theorem Node::pure_runs(self node: Node, values: Valuation(), file: Buffers()): 
         BufferStore(_, _, _, _) => λ p _ => absurd(p),
         Resize(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         SignResize(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        TableRead(_, _, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        WideLoad(_, _, _, _) => λ p _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ holds => ⟨holds, refl⟩,
     }
 }
 
@@ -685,6 +737,10 @@ fn Node::reading(self node: Node, facts: Facts, a, b: Nat) → Option<Node> {
         BufferStore(o, f, i, v) => (facts.reads(64, i, a) && facts.reads(64, v, b)).then(Some(BufferStore(o, f, a, b))),
         Resize(from, to, o, s) => facts.reads(from, s, a).then(Some(Resize(from, to, o, a))),
         SignResize(from, to, o, s) => facts.reads(from, s, a).then(Some(SignResize(from, to, o, a))),
+        TableRead(w, o, n, i, es) => facts.reads(n, i, a).then(Some(TableRead(w, o, n, a, es))),
+        WideLoad(n, o, f, i) => facts.reads(64, i, a).then(Some(WideLoad(n, o, f, a))),
+        WideStore(n, o, f, i, v) => (facts.reads(64, i, a) && facts.reads(8 * n, v, b)).then(Some(WideStore(n, o, f, a, b))),
+        ByteSwap(w, o, s) => facts.reads(w, s, a).then(Some(ByteSwap(w, o, a))),
     }
 }
 
@@ -700,6 +756,17 @@ theorem Facts::reads_two(self facts: Facts, values: Valuation(), held: facts.Hol
     let got = Bool::then_some(facts.reads(width, left, a) && facts.reads(width, right, b), Some(made), new, h);
     let both = Bool::and_true_parts(facts.reads(width, left, a), facts.reads(width, right, b), got.left);
     ⟨⟨facts.reads_same(values, held, width, left, a, both.left), facts.reads_same(values, held, width, right, b, both.right)⟩,
+        Option::some_inj(made, new, got.right)⟩
+}
+
+// The same of two ids read at two widths, as a wide store reads its index
+// and its word.
+theorem Facts::reads_apart(self facts: Facts, values: Valuation(), held: facts.Hold(values), width, left, other, right, a, b: Nat, made, new: Node,
+    h: (facts.reads(width, left, a) && facts.reads(other, right, b)).then(Some(made)) = Some(new)):
+    ((values(width, left) = values(width, a)) ∧ (values(other, right) = values(other, b))) ∧ (made = new) {
+    let got = Bool::then_some(facts.reads(width, left, a) && facts.reads(other, right, b), Some(made), new, h);
+    let both = Bool::and_true_parts(facts.reads(width, left, a), facts.reads(other, right, b), got.left);
+    ⟨⟨facts.reads_same(values, held, width, left, a, both.left), facts.reads_same(values, held, other, right, b, both.right)⟩,
         Option::some_inj(made, new, got.right)⟩
 }
 
@@ -786,6 +853,28 @@ theorem Node::reading_runs(self node: Node, facts: Facts, values: Valuation(), h
             let got = facts.reads_one(values, held, from, s, a, SignResize(from, to, o, a), new, made);
             j(got.right, λ n _ => n.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(from)) => x.sresize(to), got.left)), ran.right⟩)
         },
+        TableRead(w, o, bits, i, es) => λ new made ran => {
+            let got = facts.reads_one(values, held, bits, i, a, TableRead(w, o, bits, a, es), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(es, x.toNat()), n := w), got.left)), ran.right⟩)
+        },
+        WideLoad(bytes, o, f, i) => λ new made ran => {
+            let got = facts.reads_one(values, held, 64, i, a, WideLoad(bytes, o, f, a), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(64)) => buffer_word(before, f, x.toNat(), bytes), got.left)), ran.right⟩)
+        },
+        WideStore(bytes, o, f, i, v) => λ new made ran => {
+            let got = facts.reads_apart(values, held, 64, i, 8 * bytes, v, a, b, WideStore(bytes, o, f, a, b), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                j(got.left.left, λ x _ => (after = store_word(before, f, x.toNat(), bytes, values(8 * bytes, b))) ∧
+                        (values(8 * bytes, o) = buffer_word(after, f, x.toNat(), bytes)),
+                    j(got.left.right, λ y _ => (after = store_word(before, f, values(64, i).toNat(), bytes, y)) ∧
+                        (values(8 * bytes, o) = buffer_word(after, f, values(64, i).toNat(), bytes)), ran)))
+        },
+        ByteSwap(w, o, s) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, s, a, ByteSwap(w, o, a), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.swap_bytes(), got.left)), ran.right⟩)
+        },
     }
 }
 
@@ -812,6 +901,10 @@ fn Node::at(self node: Node, id: Nat) → Node {
         BufferStore(_, f, i, x) => BufferStore(id, f, i, x),
         Resize(from, to, _, x) => Resize(from, to, id, x),
         SignResize(from, to, _, x) => SignResize(from, to, id, x),
+        TableRead(w, _, n, i, es) => TableRead(w, id, n, i, es),
+        WideLoad(n, _, f, i) => WideLoad(n, id, f, i),
+        WideStore(n, _, f, i, x) => WideStore(n, id, f, i, x),
+        ByteSwap(w, _, x) => ByteSwap(w, id, x),
     }
 }
 
@@ -840,11 +933,15 @@ theorem Node::at_agrees(self node: Node, id: Nat, values: Valuation()): node.pur
         BufferStore(_, _, _, _) => λ p _ _ => absurd(p),
         Resize(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         SignResize(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        TableRead(_, _, _, _, _) => λ _ here there => trans(here, sym(there)),
+        WideLoad(_, _, _, _) => λ p _ _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ here there => trans(here, sym(there)),
     }
 }
 
 theorem Node::pure_quiet(self node: Node): node.pure() = True → (!node.stores()).IsTrue() {
-    match node { BufferStore(_, _, _, _) => λ p => absurd(p), _ => λ _ => trivial }
+    match node { BufferStore(_, _, _, _) => λ p => absurd(p), WideStore(_, _, _, _, _) => λ p => absurd(p), _ => λ _ => trivial }
 }
 
 // The node reading `a` and `b` as `reading` has it, or as it is where it
@@ -873,6 +970,10 @@ theorem Node::rereading_runs(self node: Node, facts: Facts, values: Valuation(),
         BufferStore(o, f, i, x) => λ new made ran => BufferStore(o, f, i, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         Resize(from, to, o, x) => λ new made ran => Resize(from, to, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         SignResize(from, to, o, x) => λ new made ran => SignResize(from, to, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        TableRead(w, o, n, i, es) => λ new made ran => TableRead(w, o, n, i, es).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        WideLoad(n, o, f, i) => λ new made ran => WideLoad(n, o, f, i).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        WideStore(n, o, f, i, x) => λ new made ran => WideStore(n, o, f, i, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        ByteSwap(w, o, x) => λ new made ran => ByteSwap(w, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
     }
 }
 

@@ -65,6 +65,10 @@ fn Node::raised(self node: Node, by: Nat) → Node {
         BufferStore(output, buffer, index, value) => BufferStore(output + by, buffer, index + by, value + by),
         Resize(from, to, output, source) => Resize(from, to, output + by, source + by),
         SignResize(from, to, output, source) => SignResize(from, to, output + by, source + by),
+        TableRead(width, output, bits, index, entries) => TableRead(width, output + by, bits, index + by, entries),
+        WideLoad(bytes, output, buffer, index) => WideLoad(bytes, output + by, buffer, index + by),
+        WideStore(bytes, output, buffer, index, value) => WideStore(bytes, output + by, buffer, index + by, value + by),
+        ByteSwap(width, output, source) => ByteSwap(width, output + by, source + by),
     }
 }
 
@@ -115,6 +119,10 @@ theorem Node::raised_runs(self node: Node, by: Nat, values: Valuation(), before,
         BufferStore(_, _, _, _) => λ ran => ran,
         Resize(_, _, _, _) => λ ran => ran,
         SignResize(_, _, _, _) => λ ran => ran,
+        TableRead(_, _, _, _, _) => λ ran => ran,
+        WideLoad(_, _, _, _) => λ ran => ran,
+        WideStore(_, _, _, _, _) => λ ran => ran,
+        ByteSwap(_, _, _) => λ ran => ran,
     }
 }
 
