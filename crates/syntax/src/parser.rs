@@ -5105,10 +5105,33 @@ impl Parser {
         matches!(self.peek(), TokKind::LParen)
             && matches!(self.nth(1), TokKind::Ident(_))
             && match self.nth(2) {
-                TokKind::Colon => true,
+                // `(x: A)` with no arrow after it is an ascription.
+                TokKind::Colon => self.group_then_arrow(),
                 TokKind::Comma => self.group_binds(),
                 _ => false,
             }
+    }
+
+    /// Does the parenthesised group at the cursor stand immediately before a
+    /// `->`? What tells a binder `(x: A) -> B` from an ascription `(x: A)`.
+    fn group_then_arrow(&self) -> bool {
+        let mut depth = 0usize;
+        let mut i = self.pos;
+        while i < self.toks.len() {
+            match self.toks[i].kind {
+                TokKind::LParen => depth += 1,
+                TokKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.nth(i + 1 - self.pos), TokKind::Arrow);
+                    }
+                }
+                TokKind::Eof => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Does the parenthesised group at the cursor either carry an annotation
@@ -6041,7 +6064,7 @@ impl Parser {
                 Ok(Expr { kind: ExprKind::Str(s), span: sp })
             }
             TokKind::LParen => {
-                self.bump();
+                let open = self.bump().span;
                 // Parenthesising is the escape hatch for a record literal in
                 // scrutinee position **and for the comparison rung**, so both
                 // restrictions must lift here. The `no_eq` half is what makes
@@ -6050,6 +6073,15 @@ impl Parser {
                 // `let p: (a = b) = pf;`.
                 let e = self
                     .with_eq(false, |p| p.with_record_lit(false, |p| p.expr()))?;
+                // `(e: T)`: an ascription. A group `(x: A)` followed by an
+                // arrow never gets here (`at_binder_group` took it).
+                if matches!(self.peek(), TokKind::Colon) {
+                    self.bump();
+                    let ty = self.with_eq(false, |p| p.ty())?;
+                    let close = self.expect(&TokKind::RParen, "`)` to close the ascription")?;
+                    let span = open.join(close);
+                    return Ok(Expr { kind: ExprKind::Ascribe { expr: Box::new(e), ty: Box::new(ty) }, span });
+                }
                 self.expect(&TokKind::RParen, "`)`")?;
                 Ok(e)
             }

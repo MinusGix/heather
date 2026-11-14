@@ -1131,6 +1131,12 @@ pub enum ExprKind {
     /// *function* type, e.g. the IH-generalizing `λ z => (env: Val) -> … ->
     /// P(z)` (`issues/ih-generalization.md`).
     TyLit(Box<Ty>),
+    /// `(e: T)` — a type ascription (issues/surface-gaps-from-sha256-proof.md
+    /// item 1). `e` is checked at `T`, and the whole infers `T`: what a typed
+    /// `let` did, in place, so `(130: u64)` is a word wherever it is written.
+    /// Only inside parentheses, the way `(x: A) -> B` writes its binder; the
+    /// parser tells the two apart by the arrow after the group.
+    Ascribe { expr: Box<Expr>, ty: Box<Ty> },
     /// `refl` — checking-only.
     Refl,
     /// The result the parser puts in an **empty** proof block, `{}`

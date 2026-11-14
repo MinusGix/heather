@@ -318,6 +318,10 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::AutoRefl
         | ExprKind::Hole(_) => {}
         ExprKind::TyLit(t) => ty(t, out),
+        ExprKind::Ascribe { expr: e, ty: t } => {
+            ty(t, out);
+            expr(e, out);
+        }
         ExprKind::App {
             head, args, named, ..
         } => {
@@ -708,6 +712,10 @@ impl BinderUses {
             | ExprKind::AutoRefl
             | ExprKind::Hole(_) => {}
             ExprKind::TyLit(t) => self.ty(t),
+            ExprKind::Ascribe { expr, ty } => {
+                self.ty(ty);
+                self.expr(expr);
+            }
             ExprKind::App {
                 head, args, named, ..
             } => {
