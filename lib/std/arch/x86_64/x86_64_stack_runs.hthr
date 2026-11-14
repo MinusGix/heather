@@ -374,6 +374,50 @@ theorem Site::moves_load_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits
 }
 
 // ---------------------------------------------------------------------------
+// An address formed from the code's own
+
+// LEA of label `target`'s address: a piece whose displacement is the
+// distance from its own end to the label, as a jump's is. A label at the
+// program's end names the bytes after it (`Site.last`), where a constant
+// table lies (issues/rt-fixed-arrays-and-tables.md).
+fn asm_lea(destination: Gpr, target: Nat) → Asm {
+    Refer(λ labels here => lea_rip_bytes(LeaRip(destination := destination, displacement := near_rel(here + 7, labels(target)))),
+        7, λ labels here => refl)
+}
+
+// The displacement `asm_lea` takes at `here`.
+fn asm_lea_displacement(labels: Nat → Nat, here, target: Nat) → BitVec(32) { near_rel(here + 7, labels(target)) }
+
+// LEA at a label. Where its displacement lands on `to` (`JumpsForward`, the
+// producer's by evaluation or by a bound), the register holds the code's
+// address at `to` after it.
+theorem Site::moves_lea<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, destination: Gpr, target: Nat, at: asm_back(site.program, k) = At(before, name, asm_lea(destination, target)),
+    post: MachineState<M> → Type):
+    site.Moves(writes, prog_len(before), prog_len(before) + 7,
+        λ s => post(lea_rip_after(LeaRip(destination := destination,
+            displacement := asm_lea_displacement(asm_labels(site.program), prog_len(before), target)), s)), post) {
+    λ s here resident holds => {
+        let lea = LeaRip(destination := destination, displacement := asm_lea_displacement(asm_labels(site.program), prog_len(before), target));
+        let after = lea_rip_after(lea, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitLeaRip(lea),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, asm_lea(destination, target), at, here), refl⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), 7, here), ⟨resident, holds⟩⟩⟩)
+    }
+}
+
+// What the register holds after LEA at `from`, its displacement landing on
+// `to`: the code's address at `to`.
+theorem Site::lea_lands<M>(self site: Site<M>, s: MachineState<M>, from: Nat, lea: LeaRip, to: Nat,
+    here: s.rip = next_rip(site.origin, from), lands: JumpsForward(from, 7, lea.displacement, to)):
+    read_gpr(lea.destination, lea_rip_after(lea, s).gprs) = next_rip(site.origin, to) {
+    trans(lea_rip_result(lea, s),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 7, lea.displacement), here),
+            jumps_forward(site.origin, from, 7, lea.displacement, to, lands)))
+}
+
+// ---------------------------------------------------------------------------
 // A byte stored
 
 // A register's low byte stored at a label, through a plain base, to a

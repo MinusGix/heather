@@ -1,0 +1,33 @@
+// LEA r64, [rip + disp32] (`LeaRip`, x86_64_fetched_code; `asm_lea`,
+// x86_64_stack_runs): its bytes are the manual's, the step decoder reads
+// them back, and a displacement formed from labels lands where the label
+// is. Tests, not library (docs/test-value-audit.md §4.5).
+import x86_64; import x86_64_block; import x86_64_layout; import x86_64_data_read; import x86_64_fetched_code;
+import x86_64_store; import x86_64_stack; import x86_64_asm; import x86_64_stack_runs; import x86_64_step_forms;
+import bitvec; import bool; import list; import logic; import nat; import option;
+
+// `lea rax, [rip + 0x10]` is 48 8D 05 10 00 00 00, and `lea r9, [rip - 1]`
+// is 4C 8D 0D FF FF FF FF (REX.R for R9, reg 001).
+theorem lea_rax_bytes(): lea_rip_bytes(LeaRip(destination := Rax, displacement := BitVec::ofNat(0x10))) =
+    [BitVec::ofNat(0x48), BitVec::ofNat(0x8d), BitVec::ofNat(0x05), BitVec::ofNat(0x10), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)] { refl }
+theorem lea_r9_bytes(): lea_rip_bytes(LeaRip(destination := R9, displacement := BitVec::ofNat(0xffffffff))) =
+    [BitVec::ofNat(0x4c), BitVec::ofNat(0x8d), BitVec::ofNat(0x0d), BitVec::ofNat(0xff), BitVec::ofNat(0xff), BitVec::ofNat(0xff), BitVec::ofNat(0xff)] { refl }
+
+// The decoder reads the form back, and does not read a word load's bytes
+// (8B, the same ModRM) as one.
+theorem lea_decodes(): decode_step_form(lea_rip_bytes(LeaRip(destination := R9, displacement := BitVec::ofNat(0x20)))) =
+    Some(FormEmitted(EmitLeaRip(LeaRip(destination := R9, displacement := BitVec::ofNat(0x20))))) { refl }
+theorem word_load_is_not_lea(): decode_step_form(word_load_bytes(WordLoad(destination := Rax, base := Rbx))) =
+    Some(FormEmitted(EmitWordLoad(WordLoad(destination := Rax, base := Rbx)))) { refl }
+
+// In a program of a 3-byte piece, the LEA, and a label 1 at its end, the
+// LEA at offset 3 reaches offset 10: its displacement is 0.
+def lea_program: Prog = At(At(then(then(Start, Code([BitVec::ofNat(0x90), BitVec::ofNat(0x90), BitVec::ofNat(0x90)])),
+    asm_lea(Rax, 1)), 1, Code([])), 0, Code([BitVec::ofNat(0xc3)]));
+theorem lea_program_displacement(): asm_lea_displacement(asm_labels(lea_program), 3, 1) = BitVec::ofNat(0) { refl }
+theorem lea_program_lands(): JumpsForward(3, 7, asm_lea_displacement(asm_labels(lea_program), 3, 1), 10) {
+    asm_lands_forward(3, 7, asm_lea_displacement(asm_labels(lea_program), 3, 1), 10, refl)
+}
+// A label 5 bytes past the end is reached by displacement 5, and not by 4.
+theorem lea_displacement_ahead(): near_rel(10, 15) = BitVec::ofNat(5) { refl }
+theorem lea_does_not_land_short(): asm_same(3 + 7 + near_rel(10, 14).sign_extend(32).toNat(), 15) = False { refl }

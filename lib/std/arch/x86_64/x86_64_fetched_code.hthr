@@ -20,6 +20,38 @@ import omega;
 import relation_props;
 import transition;
 
+// LEA r64, [rip + disp32] (REX.W 8D /r, ModRM mod 00 r/m 101): the address
+// `displacement` past the instruction's end, sign-extended, into a
+// register, as a near jump's target is formed; no memory is read and no
+// flag changes. It is how code reaches the bytes placed after it, a
+// constant table (docs/native-library-exports-design.md §8,
+// issues/rt-fixed-arrays-and-tables.md). The ModRM's r/m is RBP's code under
+// mod 00, which is the RIP-relative form.
+record LeaRip { destination: Gpr, displacement: BitVec(32) }
+
+fn lea_rip_bytes(lea: LeaRip) → List<BitVec(8)> {
+    Cons(rex_w_rr(Rbp, lea.destination), Cons(BitVec::ofNat(0x8d),
+        Cons(byte_from_fields(gpr_bit0(Rbp), gpr_bit1(Rbp), gpr_bit2(Rbp),
+            gpr_bit0(lea.destination), gpr_bit1(lea.destination), gpr_bit2(lea.destination), False, False),
+            rel32_bytes(lea.displacement))))
+}
+theorem lea_rip_length(lea: LeaRip): lea_rip_bytes(lea).len() = 7 { refl }
+
+fn lea_rip_after<M>(lea: LeaRip, before: MachineState<M>) → MachineState<M> {
+    MachineState(gprs := write_gpr(lea.destination, near_branch_target(before.rip, 7, lea.displacement), before.gprs),
+        flags := before.flags, rip := next_rip(before.rip, 7), memory := before.memory)
+}
+
+evidence theorem lea_rip_after_respects_defined<M>({lea: LeaRip}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, lea_rip_after<M>(lea)) {
+    same_defined_respects(lea_rip_after<M>(lea), λ state => refl)
+}
+
+theorem lea_rip_result<M>(lea: LeaRip, before: MachineState<M>):
+    read_gpr(lea.destination, lea_rip_after(lea, before).gprs) = near_branch_target(before.rip, 7, lea.displacement) {
+    read_gpr_after_write(lea.destination, near_branch_target(before.rip, 7, lea.displacement), before.gprs)
+}
+
 // The forms the compiler emits. Each executes by its existing relation; a
 // fetched step adds only the fetch of its exact canonical bytes. Calls join
 // as another case when a fetched program first needs them.
@@ -27,6 +59,7 @@ inductive EmittedInstruction {
     EmitOrdinary(instruction: Instruction),
     EmitLoad(load: ByteLoad),
     EmitWordLoad(load: WordLoad),
+    EmitLeaRip(lea: LeaRip),
     EmitShort(control: ShortControl),
     EmitNear(control: NearControl),
 }
@@ -35,6 +68,7 @@ fn emitted_bytes(emitted: EmittedInstruction) → List<BitVec(8)> {
         EmitOrdinary(instruction) => canonical_bytes(instruction),
         EmitLoad(load) => byte_load_bytes(load),
         EmitWordLoad(load) => word_load_bytes(load),
+        EmitLeaRip(lea) => lea_rip_bytes(lea),
         EmitShort(control) => short_control_bytes(control),
         EmitNear(control) => near_control_bytes(control),
     }
@@ -46,6 +80,7 @@ fn EmittedExecutes<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
             decoded_canonical(instruction), before, Returned(after)),
         EmitLoad(load) => Exists<BitVec(8)>(λ byte => ByteLoadStep<M>(data, load, byte, before, after)),
         EmitWordLoad(load) => Exists<BitVec(64)>(λ word => WordLoadStep<M>(data, load, word, before, after)),
+        EmitLeaRip(lea) => after = lea_rip_after(lea, before),
         EmitShort(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_short_control(control, before),
         EmitNear(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_near_control(control, before),
     }
@@ -69,6 +104,7 @@ theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedIn
         EmitWordLoad(load) => λ a b p q => SameDefinedState::of_equal(
             word_load_same(data, load, before, a, b, p.witness, q.witness,
                 p.proof, q.proof)),
+        EmitLeaRip(_) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
         EmitShort(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
         EmitNear(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
     })(first, second, left, right)
@@ -93,6 +129,11 @@ theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: Emitt
         EmitWordLoad(load) => λ a b same x y p q =>
             word_load_respects_defined(data, load, a, b, x, y,
                 p.witness, q.witness, same, p.proof, q.proof),
+        EmitLeaRip(lea) => λ a b same x y p q => calc {
+            x ≈ lea_rip_after(lea, a) := SameDefinedState::of_equal(p),
+            ≈ lea_rip_after(lea, b) := rel_cong(same),
+            ≈ y := SameDefinedState::of_equal(sym(q)),
+        },
         EmitShort(control) => λ a b same x y p q => calc {
             x ≈ execute_short_control(control, a) := SameDefinedState::of_equal(p.right),
             ≈ execute_short_control(control, b) := short_control_respects_defined(control, a, b, same, p.left),

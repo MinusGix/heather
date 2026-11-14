@@ -159,6 +159,25 @@ fn decode_slot_form(rex, opcode, modrm: BitVec(8), rest: List<BitVec(8)>) → Op
     }
 }
 
+// LEA r64, [rip + disp32] (8D /r): the four displacement bytes after the
+// ModRM, the only memory operand the forms give LEA.
+fn decode_lea_form(rex, modrm: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(b0, t1) => match t1 {
+            Nil => None,
+            Cons(b1, t2) => match t2 {
+                Nil => None,
+                Cons(b2, t3) => match t3 {
+                    Nil => None,
+                    Cons(b3, _) => Some(FormEmitted(EmitLeaRip(LeaRip(destination := reg_of(rex, modrm),
+                        displacement := rel32_of_bytes(b0, b1, b2, b3))))),
+                },
+            },
+        },
+    }
+}
+
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
 // a frame slot a stack form, and otherwise a store into [base], of a byte
 // (88 /r) or a word (89 /r), or the word load from [base] (8B /r), whose SIB
@@ -170,11 +189,14 @@ fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<S
             True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
             False => match stack_slot(modrm) {
                 True => decode_slot_form(rex, opcode, modrm, tail),
-                False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
-                    Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
-                    Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
-                        Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
-                        Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                False => match opcode.eq_dec(BitVec::ofNat(0x8d)) {
+                    Inl(_) => decode_lea_form(rex, modrm, tail),
+                    Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x88)) {
+                        Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
+                            Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+                            Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                        },
                     },
                 },
             },
@@ -482,6 +504,20 @@ theorem word_load_form_complete(load: WordLoad, rest: List<BitVec(8)>):
     word_load_form_at(load.destination, load.base, rest)
 }
 
+theorem lea_rip_form_complete(lea: LeaRip, rest: List<BitVec(8)>):
+    decode_step_form(lea_rip_bytes(lea) ++ rest) = Some(FormEmitted(EmitLeaRip(lea))) {
+    let modrm = byte_from_fields(gpr_bit0(Rbp), gpr_bit1(Rbp), gpr_bit2(Rbp),
+        gpr_bit0(lea.destination), gpr_bit1(lea.destination), gpr_bit2(lea.destination), False, False);
+    let rex = rex_w_rr(Rbp, lea.destination);
+    let d = lea.displacement;
+    trans(cong_fn(λ (r: Gpr) => Some(FormEmitted(EmitLeaRip(LeaRip(destination := r,
+            displacement := rel32_of_bytes(d.take_low(8, 24), d.drop_low(8, 24).take_low(8, 16),
+                d.drop_low(8, 24).drop_low(8, 16).take_low(8, 8), d.drop_low(8, 24).drop_low(8, 16).drop_low(8, 8)))))),
+            reg_of_fields(Rbp, lea.destination, False, False)),
+        cong_fn(λ (x: BitVec(32)) => Some(FormEmitted(EmitLeaRip(LeaRip(destination := lea.destination, displacement := x)))),
+            rel32_round_trip(d)))
+}
+
 theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
     decode_step_form(word_store_bytes(store) ++ rest) = Some(FormStore(StoreWord(store))) {
     let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
@@ -580,6 +616,7 @@ theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
             EmitOrdinary(instruction) => ordinary_form_complete(instruction, rest),
             EmitLoad(load) => load_form_complete(load, rest),
             EmitWordLoad(load) => word_load_form_complete(load, rest),
+            EmitLeaRip(lea) => lea_rip_form_complete(lea, rest),
             EmitShort(control) => short_form_complete(control, rest),
             EmitNear(control) => near_form_complete(control, rest),
         },
