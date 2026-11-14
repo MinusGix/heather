@@ -218,6 +218,15 @@ theorem search_in_result_and_body(j: BitVec(64), h: j < 48): word_below(j + 16, 
     ?rest
     on ?rest := refl;
 }
-// Negative control: left open, the goal is reported with its statement.
-// expect-error: unsolved goals in `search_goal_left_open`
+// Negative control: left open, the goal is reported with its statement, the
+// lifted proof spelled as the search that found it.
+// expect-error: ?rest : word_below(j + ofNat(16), inside := bv_omega) = j + ofNat(16)
 theorem search_goal_left_open(j: BitVec(64), h: j < 48): word_below(j + 16, inside := bv_omega) = j + 16 { ?rest }
+// `omega`'s certificate is inline, not lifted, and has no spelling: `…`, not
+// the kernel term, and the rest of the statement still spelled.
+// expect-error: ?rest : toNat(word_below(j + ofNat(16), inside := bv_omega)) + nat_below(n + 1, inside := …) = toNat(j + ofNat(16)) + (n + 1)
+theorem searches_left_open(j: BitVec(64), n: Nat, h: j < 48, k: n < 10):
+    word_below(j + 16, inside := bv_omega).toNat() + nat_below(n + 1, inside := omega) = (j + 16).toNat() + (n + 1) { ?rest }
+// A goal another goal's statement mentions is spelled by its name.
+// expect-error: ?rest : word_below(j + ofNat(16), inside := ?p) = j + ofNat(16)
+theorem goal_in_goal(j: BitVec(64), h: j < 48): word_below(j + 16, inside := ?p) = j + 16 { ?rest }
