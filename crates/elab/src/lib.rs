@@ -2485,7 +2485,9 @@ impl Elaborator {
             if let Some(f) = name.strip_suffix("_unfold") {
                 return NameRes::Restricted(format!("no unfolding equation for `{f}`: {why}{see}"));
             }
-            if name.ends_with("::True") || name.ends_with("::False") {
+            // A branch equation is named by its arm's constructor
+            // (`f::True`, `f::Succ`); a loop's are `f::step` and `f::done`.
+            if name.rsplit("::").next().is_some_and(|last| last.starts_with(char::is_uppercase)) {
                 return NameRes::Restricted(format!(
                     "no branch equation `{name}` (issues/definition-branch-equations.md): {why}"
                 ));

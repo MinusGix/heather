@@ -97,7 +97,31 @@ impl DeclarationsMut<'_> {
         let warn_mark = self.pass.warnings.borrow().len();
         let mut why = String::new();
         for reading in [branch_equations::Reading::Proposition, branch_equations::Reading::Bool] {
-            let equations = match branch_equations::branch_equations(decl, &self_name, reading) {
+            let fields = |ty: &Ty, ctor: &str| -> Option<Vec<(Option<String>, Ty)>> {
+                let base = ctor.rsplit("::").next().unwrap_or(ctor);
+                let nat = |span| Ty { kind: TyKind::Nat, span };
+                let named = match &ty.kind {
+                    TyKind::Nat => None,
+                    TyKind::Named { name, args } if !(args.is_empty() && (name == "Nat" || name == "nat::Nat")) => Some((name, args)),
+                    TyKind::Named { .. } => None,
+                    _ => return None,
+                };
+                let Some((name, args)) = named else {
+                    return match base {
+                        "Zero" => Some(Vec::new()),
+                        "Succ" => Some(vec![(None, nat(ty.span))]),
+                        _ => None,
+                    };
+                };
+                let ind = self.lookup_inductive(name)?;
+                if ind.codata || ind.index.is_some() || ind.skel.is_some() || !ind.valparams.is_empty() || ind.params.len() != args.len() {
+                    return None;
+                }
+                let ctor = ind.ctors.iter().find(|c| c.name.rsplit("::").next() == Some(base))?;
+                let at: Vec<(String, Ty)> = ind.params.iter().cloned().zip(args.iter().cloned()).collect();
+                Some(ctor.fields.iter().map(|(n, t)| (n.clone(), measure::instantiate_ty(t, &at))).collect())
+            };
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields) {
                 Ok(e) => e,
                 Err(e) => {
                     why = e;
@@ -128,8 +152,9 @@ impl DeclarationsMut<'_> {
                 Err(_) => {}
             }
         }
-        self.pass.unfold_refusals.borrow_mut().insert(format!("{}::True", decl.name), why.clone());
-        self.pass.unfold_refusals.borrow_mut().insert(format!("{}::False", decl.name), why);
+        for name in branch_equations::head_names(decl) {
+            self.pass.unfold_refusals.borrow_mut().insert(name, why.clone());
+        }
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
