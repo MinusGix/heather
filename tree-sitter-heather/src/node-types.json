@@ -16,6 +16,10 @@
         "named": true
       },
       {
+        "type": "ascription_expression",
+        "named": true
+      },
+      {
         "type": "big_operator_expression",
         "named": true
       },
@@ -388,6 +392,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "ascription_expression",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {

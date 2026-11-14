@@ -337,6 +337,37 @@ impl MismatchNotes<'_> {
         located
     }
 
+    /// Where a declaration the kernel ran out of fuel on is most likely
+    /// false: the first recorded checking site whose two types spell
+    /// differently, and the part of the spellings that differs
+    /// (issues/surface-gaps-from-sha256-proof.md item 7). No conversion is
+    /// run, since one just ran out: the note claims only what the spellings
+    /// show, and the verdict stays the kernel's. A claim proved by a true
+    /// theorem at another argument (`digest(s, [0x61, 0x62, 0x63], 3, …)`
+    /// against `digest([0x61, 0x62, 0x64])`) differs only inside a
+    /// computation: the two sides are calls of one function, and no cheap
+    /// check can say two calls disagree, so conversion evaluates both.
+    ///
+    /// Only a site inside the declaration counts (`within`): a tactic's
+    /// generated term records sites at spans of its own, and moving the
+    /// refusal there would leave the declaration unnamed. Both sides of the
+    /// difference must show something.
+    pub(crate) fn fuel_note(&self, within: Span) -> Option<(String, Span)> {
+        let notes = self.attempt.check_notes.borrow();
+        notes.iter().filter(|note| within.start <= note.span.start && note.span.end <= within.end).find_map(|note| {
+            let got = self.display_type_clean(&note.cx, &note.got)?;
+            let want = self.display_type_clean(&note.cx, &note.expected)?;
+            let (a, b) = differing_middle(&got, &want).filter(|(a, b)| !a.trim().is_empty() && !b.trim().is_empty())?;
+            Some((
+                format!(
+                    "Deciding whether this, of type `{got}`, has the type `{want}` expected here, \
+                     which differs at `{a}` against `{b}`: the claim is likely false"
+                ),
+                note.span,
+            ))
+        })
+    }
+
     /// The first checking mismatch recorded since note `from` that the probe
     /// decides, as an error: for a construction the declaration gate never
     /// sees, such as an `IWf`-route family's signature built at its
@@ -530,5 +561,39 @@ impl MismatchNotes<'_> {
     pub(crate) fn pending_refl_note(&self) -> Option<(String, Span)> {
         let notes = self.attempt.refl_notes.borrow();
         notes.iter().find_map(|n| self.probed_refl_note(n))
+    }
+}
+
+/// The parts of two spellings between their longest common prefix and
+/// suffix, widened to whole words, so `ofNat(99)` against `ofNat(100)` is
+/// `99` against `100` and not `9` against `10`. `None` when they are the
+/// same.
+fn differing_middle<'a>(a: &'a str, b: &'a str) -> Option<(&'a str, &'a str)> {
+    if a == b {
+        return None;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == ':';
+    let mut start = a.char_indices().zip(b.chars()).take_while(|((_, x), y)| x == y).last().map_or(0, |((i, x), _)| i + x.len_utf8());
+    while start > 0 && a[..start].chars().next_back().is_some_and(word) {
+        start -= a[..start].chars().next_back().map_or(1, char::len_utf8);
+    }
+    let room = a.len().min(b.len()) - start;
+    let mut end = a[start..].chars().rev().zip(b[start..].chars().rev()).take_while(|(x, y)| x == y).map(|(x, _)| x.len_utf8()).sum::<usize>().min(room);
+    while end > 0 && a[a.len() - end..].chars().next().is_some_and(word) {
+        end -= a[a.len() - end..].chars().next().map_or(1, char::len_utf8);
+    }
+    Some((&a[start..a.len() - end], &b[start..b.len() - end]))
+}
+
+#[cfg(test)]
+mod differing_middle_tests {
+    use super::differing_middle;
+
+    #[test]
+    fn the_middle_is_whole_words() {
+        assert_eq!(differing_middle("f([ofNat(97), ofNat(99)])", "f([ofNat(97), ofNat(100)])"), Some(("99", "100")));
+        assert_eq!(differing_middle("g(abc, x)", "g(abd, x)"), Some(("abc", "abd")));
+        assert_eq!(differing_middle("same", "same"), None);
+        assert_eq!(differing_middle("ab", "abab"), Some(("ab", "abab")));
     }
 }

@@ -1488,6 +1488,10 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(b, menv, out)
         }
         ExprKind::TyLit(t) => walk_ty(t, menv, out),
+        ExprKind::Ascribe { expr, ty } => {
+            scan_splices(expr, menv, out)?;
+            walk_ty(ty, menv, out)
+        }
         ExprKind::App {
             head, args, named, ..
         } => {

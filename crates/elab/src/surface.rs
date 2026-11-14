@@ -344,6 +344,7 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
             go(a);
             go(b);
         }
+        ExprKind::Ascribe { expr, .. } => go(expr),
         ExprKind::Match {
             scrut,
             motive,
@@ -528,6 +529,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
             go(a);
             go(b);
         }
+        ExprKind::Ascribe { expr, .. } => go(expr),
         ExprKind::Match {
             scrut,
             motive,
@@ -690,6 +692,10 @@ mod count_holes_impl {
                 expr(b, n);
             }
             ExprKind::TyLit(t) => ty(t, n),
+            ExprKind::Ascribe { expr: e, ty: t } => {
+                expr(e, n);
+                ty(t, n);
+            }
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
@@ -976,6 +982,7 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
             go(a);
             go(b);
         }
+        ExprKind::Ascribe { expr, .. } => go(expr),
         ExprKind::Match {
             scrut, motive, arms, ..
         } => {

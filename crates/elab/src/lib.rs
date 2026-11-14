@@ -1537,6 +1537,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         AppUnify(self).solve_from_expected(cx, result, expected, n, sols, meta_doms, guesses, span)
     }
 
+    fn result_agrees(&self, cx: &Cx, result: &Type, expected: &Type, level: &Level) -> bool {
+        self.conv_types(cx, result, expected, level)
+    }
+
     fn learn_from_solution_types(
         &self,
         cx: &Cx,

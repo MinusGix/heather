@@ -105,11 +105,13 @@ fn wrong_implicit_proof_is_kernel_rejected() {
         theorem bogus(n: Nat): add(n, 0) = add(n, 0) { sym(add_zero(n)) }
         "#,
     );
-    // Reported by the gate either way; the message now names both statements
-    // (issues/check-fallback-discards-expected-type.md).
+    // The expected type settles `sym`'s endpoints before its argument is
+    // elaborated (issues/surface-gaps-from-sha256-proof.md item 2), so the
+    // argument is checked, and the message names its own statement against
+    // the one `sym` needs of it.
     let Err(ElabError::Elab { msg, .. }) = r else { panic!("expected a rejection, got {r:?}") };
     assert!(
-        msg.contains("this has type `n = add(n, 0)`, but `add(n, 0) = add(n, 0)` is expected here"),
+        msg.contains("this has type `add(n, 0) = n`, but `add(n, 0) = add(n, 0)` is expected here"),
         "{msg}"
     );
 }

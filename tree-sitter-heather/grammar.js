@@ -45,6 +45,10 @@ module.exports = grammar({
   supertypes: $ => [$._item, $._expression, $._pattern],
 
   conflicts: $ => [
+    [$.parameter_name, $._expression],
+    [$.parameter_name, $._expression, $.lambda_binder],
+    [$.parameter_name, $.refl_expression, $.contextual_identifier],
+    [$.parameter_name, $.contextual_identifier],
     [$._expression, $.lambda_binder],
     [$.parameter_name, $.lambda_binder],
     [$.quote_expression, $.contextual_identifier],
@@ -423,6 +427,7 @@ module.exports = grammar({
       $.squash_type,
       $.boolean_reflection_expression,
       seq('(', $._expression, ')'),
+      $.ascription_expression,
       $.declaration_type_application,
       $.declaration_call_type,
       $.declaration_member_type,
@@ -521,6 +526,7 @@ module.exports = grammar({
       $.argument_slot,
       $.universe,
       $.parenthesized_expression,
+      $.ascription_expression,
       $.vector_type,
       $.squash_type,
       $.vector_expression,
@@ -560,6 +566,9 @@ module.exports = grammar({
     ),
 
     parenthesized_expression: $ => seq('(', $._expression, ')'),
+    // `(e: T)`: a type ascription. `(x: A) -> B` is a binder group instead,
+    // told apart by the arrow after it.
+    ascription_expression: $ => seq('(', field('value', $._expression), ':', field('type', $._expression), ')'),
     builtin_type: _ => choice('Code', 'Ctx', 'TyCode'),
     universe: $ => prec.right(PREC.POSTFIX, seq('Type', optional(seq('<', $.number, '>')))),
     vector_type: $ => seq('[', field('element', $._expression), ';', field('length', $._expression), ']'),

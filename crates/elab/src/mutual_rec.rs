@@ -1328,6 +1328,7 @@ impl<'a, 'g> Calls<'a, 'g> {
                 args: args.iter().map(|t| self.ty(t)).collect(),
             },
             ExprKind::TyLit(t) => ExprKind::TyLit(Box::new(self.ty(t))),
+            ExprKind::Ascribe { expr, ty } => ExprKind::Ascribe { expr: Box::new(self.expr(expr)), ty: Box::new(self.ty(ty)) },
             ExprKind::Lam { binders, body } => {
                 let body = self.bind(binders.iter().map(|b| b.name.clone()), |me| me.expr(body));
                 ExprKind::Lam { binders: binders.clone(), body: Box::new(body) }

@@ -1,0 +1,91 @@
+// What a written type, a call's expected type, a later argument or the
+// other operand says reaches the expression it is about
+// (issues/surface-gaps-from-sha256-proof.md items 1 to 4): an ascription
+// `(e: T)`, a literal inside a λ under a call checked against an equation,
+// a type argument that occurs only under the result's binders, and a list
+// literal with nothing around it naming the container. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import vector;
+
+record Tagged<A, B> { value: A, tag: B }
+
+fn tagged48(t: Nat) → Tagged<Nat, u64> { Tagged(t, 48) }
+
+// 1. `(e: T)` checks `e` at `T` and has that type, as a typed `let` would.
+theorem ascribed_word(): (130: u64).toNat() = 130 { refl }
+
+// At a neutral word, in a checking position.
+theorem ascribed_neutral(x: u64, h: x = (130: u64)): x.toNat() = 130 { j(sym(h), λ y _ => y.toNat() = 130, refl) }
+
+// At an open type, where the ascription only restates the type.
+theorem ascribed_open<A>(a: A): (a: A) = a { refl }
+
+// A group with a binder followed by an arrow is still a function type.
+fn apply_at(f: (x: Nat) → Nat) → Nat { f((1: Nat)) }
+
+// An ascription that is not the expression's type is refused.
+// expect-error: `True` is a constructor of `Bool`, which is not the expected type here
+theorem ascribed_wrong(): (True: Nat) = 1 { refl }
+
+// 2. A literal in a λ under `trans`: the second argument's domain is
+// completed by the expected type before the argument is elaborated, so
+// the λ's `48` is a word, not a `Nat`.
+theorem literal_under_trans(a, b: Nat, h: a = b, start: tagged48(a) = tagged48(a)): tagged48(a) = tagged48(b) {
+    trans(start, cong_fn(λ (t: Nat) => Tagged(t, 48), h))
+}
+
+// At an open first field.
+theorem literal_under_trans_open<A>(a, b: A, h: a = b, start: Tagged(a, BitVec::ofNat(48, n := 64)) = Tagged(a, BitVec::ofNat(48, n := 64))):
+    Tagged(a, BitVec::ofNat(48, n := 64)) = Tagged(b, BitVec::ofNat(48, n := 64)) {
+    trans(start, cong_fn(λ (t: A) => Tagged(t, 48), h))
+}
+
+// A neutral width in the λ, the expected type still saying what it is.
+theorem neutral_under_trans(a, b: Nat, w: u64, h: a = b, start: Tagged(a, w) = Tagged(a, w)): Tagged(a, w) = Tagged(b, w) {
+    trans(start, cong_fn(λ (t: Nat) => Tagged(t, w), h))
+}
+
+// The literal still has to be the right word.
+// expect-error(mismatch)
+theorem literal_under_trans_wrong(a, b: Nat, h: a = b, start: tagged48(a) = tagged48(a)): tagged48(a) = tagged48(b) {
+    trans(start, cong_fn(λ (t: Nat) => Tagged(t, 49), h))
+}
+
+// 3. A type argument that occurs only under the result's binders is fixed by
+// the arguments applied next.
+theorem take_len_after<A>(a: Nat): (xs: List<A>) → xs.take(a).len() = xs.take(a).len() { λ xs => refl }
+
+theorem take_len_word(xs: List<u8>): xs.take(3).len() = xs.take(3).len() { take_len_after(3, xs) }
+
+theorem take_len_open<A>(n: Nat, xs: List<A>): xs.take(n).len() = xs.take(n).len() { take_len_after(n, xs) }
+
+theorem drop_add_after<A>(a: Nat): (b: Nat) → (xs: List<A>) → xs.drop(b + a) = xs.drop(b + a) { λ b xs => refl }
+
+theorem drop_add_word(k: Nat, xs: List<u8>): xs.drop(16 * k + 4) = xs.drop(16 * k + 4) { drop_add_after(4, 16 * k, xs) }
+
+// The later argument must still fit the earlier ones.
+// expect-error(mismatch)
+theorem drop_add_wrong(k: Nat, xs: List<u8>): xs.drop(16 * k + 4) = xs.drop(16 * k + 5) { drop_add_after(4, 16 * k, xs) }
+
+// 4. A list literal with nothing naming its container is a list of its
+// first item's type.
+theorem single_len(b: u8): [b].len() = 1 { refl }
+
+theorem single_len_open<A>(a: A): [a, a].len() = 2 { refl }
+
+theorem lens_add(T: List<u8>, b: u8): T.len() + [b].len() = Succ(T.len()) { refl }
+
+// On the left of `++`, the literal takes the other operand's `++`.
+theorem literal_append(xs: List<u8>): ([BitVec::zero()] ++ xs).len() = Succ(xs.len()) { refl }
+
+theorem literal_append_open<A>(a: A, xs: List<A>): [a] ++ xs = Cons(a, xs) { refl }
+
+// An empty literal still names nothing, so `.len()` has no receiver type.
+// expect-error: unbound name `len`
+theorem empty_len(): [].len() = 0 { refl }

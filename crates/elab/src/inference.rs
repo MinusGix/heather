@@ -134,6 +134,25 @@ impl Inference<'_> {
     /// that the information is in the expected type and nowhere else. Every
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
+    /// `[b].len()`: a collection literal names no container, and a
+    /// receiver must, so as a receiver it is a list of its first item's
+    /// type (issues/surface-gaps-from-sha256-proof.md item 4): the call with
+    /// that receiver ascribed. Elsewhere a literal stays checking-only, since
+    /// a container is ambiguous. `None` for any other expression.
+    pub(crate) fn list_receiver(&self, cx: &Cx, e: &Expr) -> Option<Expr> {
+        let ExprKind::Dot { recv, name, tyargs, args, named } = &e.kind else { return None };
+        let ExprKind::CollectionLit(items) = &recv.kind else { return None };
+        let first = items.first()?;
+        if self.lookup_inductive("List").is_none() || self.elab_infer(cx, first).is_err() {
+            return None;
+        }
+        let at = |kind| Ty { kind, span: recv.span };
+        let list = at(TyKind::Named { name: "List".into(), args: vec![at(TyKind::TypeOf(Box::new(first.clone())))] });
+        let recv = Expr { kind: ExprKind::Ascribe { expr: recv.clone(), ty: Box::new(list) }, span: recv.span };
+        let call = ExprKind::Dot { recv: Box::new(recv), name: name.clone(), tyargs: tyargs.clone(), args: args.clone(), named: named.clone() };
+        Some(Expr { kind: call, span: e.span })
+    }
+
     pub(crate) fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         if let Some((input, discards)) = binding::generated(e) {
             return self
@@ -543,6 +562,13 @@ impl Inference<'_> {
             ExprKind::SuffixedNum { value, suffix } => Literals(self).elab_suffixed_infer(cx, value, suffix, e),
             ExprKind::Str(text) => Literals(self).elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self.0, cx, block),
+            // `(e: T)`: `e` checked at `T`, and the whole has type `T`. No
+            // term of its own, as a typed `let` contributes none.
+            ExprKind::Ascribe { expr, ty } => {
+                let (ty, level) = self.elab_ty(cx, ty)?;
+                let term = self.elab_check(cx, expr, &ty, &level)?;
+                Ok((term, ty, level))
+            }
             ExprKind::RecordUpdate { base, fields } => {
                 let literal = Constructors(self).record_update_expr(cx, base, fields, e.span)?;
                 self.elab_infer(cx, &literal)
@@ -708,6 +734,9 @@ impl Inference<'_> {
                 args,
                 named,
             } => {
+                if let Some(call) = self.list_receiver(cx, e) {
+                    return self.elab_infer_at(cx, &call, expected);
+                }
                 let receiver_cx = cx.with_dot_receiver(recv);
                 let cx = &receiver_cx;
                 let resolution =

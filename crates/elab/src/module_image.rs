@@ -1464,6 +1464,7 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::CollectionLit(values) => { w.byte(8); w.vec(values, put_expr); }
         ExprKind::Eq(lhs, rhs) => { w.byte(9); put_expr(w, lhs); put_expr(w, rhs); }
         ExprKind::TyLit(ty) => { w.byte(10); put_ty(w, ty); }
+        ExprKind::Ascribe { expr, ty } => { w.byte(28); put_expr(w, expr); put_ty(w, ty); }
         ExprKind::Refl => w.byte(11),
         ExprKind::AutoRefl => w.byte(12),
         ExprKind::Hole(name) => { w.byte(13); w.option(name.as_ref(), |w, s| w.string(s)); }
@@ -1569,6 +1570,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
                 }))?,
             },
             27 => ExprKind::SuffixedNum { value: r.numeral()?, suffix: r.string()? },
+            28 => ExprKind::Ascribe { expr: Box::new(get_expr(r)?), ty: Box::new(get_ty(r)?) },
             26 => ExprKind::Scaled(heather_syntax::ScaledLit { mant: r.numeral()?, exp: r.u64()? as i64, hex: r.bool()? }),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
