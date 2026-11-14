@@ -3582,13 +3582,23 @@ fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool
 // what `crowded_in` finds; else the first free callee-saved register of
 // `pool`, which costs its function a save (`Saving`,
 // function_ir_lower_calls); else RAX.
-fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
-    match file.first_spare(live, pool_unsaved(pool), kept) {
+//
+// A value `keeps` names (read after a later call, on a path every run of
+// the function takes) tries the callee-saved ones first: in a caller-saved register it costs a store and a load at every
+// call it lives across, in a saved one a store and a load for the whole
+// function, which its frame already has room for
+// (issues/function-ir-values-in-kept-registers.md).
+fn Node::fresh(self node: Node, file: File, live, later, crossed, keeps: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
+    let unsaved_first = match file.first_spare(live, pool_unsaved(pool), kept) {
         Some(register) => register,
         None => match node.crowded_in(file, live, later, crossed, pool) {
             Some(register) => register,
             None => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(register) => register },
         },
+    };
+    match keeps(node.output_id()) {
+        False => unsaved_first,
+        True => match file.first_spare(live, pool_saved(pool), kept) { None => unsaved_first, Some(register) => register },
     }
 }
 
@@ -3599,11 +3609,14 @@ fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, 
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
-fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+// The values that prefer a callee-saved register are `keeps` (`Node::fresh`).
+fn Node::choose_keeping(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed, keeps: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = node.fresh(file, live, later, crossed, pool, kept);
-    let reuse = match prefers_operand(node) {
+    let fresh = node.fresh(file, live, later, crossed, keeps, pool, kept);
+    // A value that prefers a saved register keeps the one `fresh` found
+    // rather than its operand's, which a call would store round.
+    let reuse = match prefers_operand(node) && !(keeps(node.output_id()) && !fresh.save_rank().same(0)) {
         False => fresh,
         True => match node.in_place(file, later) {
             None => fresh,
@@ -3617,6 +3630,14 @@ fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entri
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
+}
+
+// `choose_keeping` where every value read after a later call prefers a
+// callee-saved register.
+fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+{
+    node.choose_keeping(file, live, later, entries, registers, pool, crossed, crossed, kept)
 }
 
 // `choose_by` with what is read later, and after a later call, as lists.
