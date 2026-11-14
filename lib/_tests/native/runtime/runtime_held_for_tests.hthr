@@ -1,0 +1,183 @@
+// Probes for `for i in a..b` and `v[i]` in a function of a laid record
+// (docs/sequencing-surface-design.md §21): a range over words is a counted
+// recursion with its test in scope, and where the loop's state is the
+// receiver of a `mut self` method that recursion is a `mut self` method
+// of the receiver's type, `T::f_loop`, which the `runtime` generator
+// compiles as a loop (`runtime_held_loop_tests.hthr`) and `T::f` calls.
+// `v[i]` at a word is `v.at(i)` and `v[i] := x` is `v := v.put(i, x)`
+// (`stored_words.hthr`), each proof that `i` is inside found from the
+// range's test. Nothing here is proved by hand: each theorem restates or
+// reads what the generator published.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+// ---------------------------------------------------------------------------
+// Words, and a loop over them.
+
+laid(endian := BigEndian) record Tally { count: u64, total: u64 }
+
+// A range of numerals counts `u64` words where its body needs a word.
+runtime fn Tally::fill(mut self t: Tally) → u64 {
+    for i in 0..8 {
+        t.total := t.total + i;
+    }
+    t.count
+}
+
+// A range whose bounds are words, one of them a parameter.
+runtime fn Tally::fill_from(mut self t: Tally, a, b: u64) → u64 {
+    for i in a..b {
+        t.count := t.count + 1;
+        t.total := t.total + i;
+    }
+    t.count
+}
+
+theorem fill_held(own: List<u8>, t: Tally, length: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::fill(t), Tally::fill::bytes(own, length)) {
+    Tally::fill::runs_held(own, t, length, holds)
+}
+
+// The loop is a function of the record of its own, its pass counted from
+// where the range starts.
+theorem fill_loop_held(own: List<u8>, t: Tally, length, i: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::fill_loop(t, i), Tally::fill_loop::bytes(own, length, i)) {
+    Tally::fill_loop::runs_held(own, t, length, i, holds)
+}
+
+theorem fill_from_held(own: List<u8>, t: Tally, length, a, b: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::fill_from(t, a, b), Tally::fill_from::bytes(own, length, a, b)) {
+    Tally::fill_from::runs_held(own, t, length, a, b, holds)
+}
+
+// On bytes: a count of 1 and a total of 2; `fill` adds 0 to 7.
+def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
+
+theorem fill_bytes(): Tally::fill::bytes(TALLY_BYTES, 16) = Mutated([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 30], 1) { refl }
+
+// From 5 to 8, three passes; from 8 to 5, none.
+theorem fill_from_bytes(): Tally::fill_from::bytes(TALLY_BYTES, 16, 5, 8) = Mutated([0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 20], 4) { refl }
+theorem fill_from_empty(): Tally::fill_from::bytes(TALLY_BYTES, 16, 8, 5) = Mutated(TALLY_BYTES, 1) { refl }
+
+// ---------------------------------------------------------------------------
+// Elements at a word index.
+
+laid(endian := BigEndian) record Sched { w: [u64; 8], rounds: u64 }
+
+// Each index is inside because the range says `j < 6`.
+runtime fn Sched::expand(mut self s: Sched) → u64 {
+    for j in 0..6 {
+        s.w[j + 2] := s.w[j + 1] + s.w[j];
+    }
+    s.rounds
+}
+
+theorem expand_held(own: List<u8>, s: Sched, length: u64, holds: Sched::stored().Holds(own, length, s)):
+    Agrees<Sched, u64>(Sched::stored(), length, Sched::expand(s), Sched::expand::bytes(own, length)) {
+    Sched::expand::runs_held(own, s, length, holds)
+}
+
+// On bytes, from two ones: Fibonacci, each word read back by the passes
+// after it.
+def SCHED_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+theorem expand_bytes(): Sched::expand::bytes(SCHED_BYTES, 72).after = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// The same as a function of the record, by evaluation.
+def SCHED: Sched = Sched([1, 1, 0, 0, 0, 0, 0, 0], 0);
+theorem expand_record(): Sched::expand(SCHED).after.w = [1, 1, 2, 3, 5, 8, 13, 21] { refl }
+
+// ---------------------------------------------------------------------------
+// The same surface in pure code.
+
+// A local the loop assigns is its state; the recursion `f::run` returns it.
+fn spread(v: [u32; 64]) → [u32; 64] {
+    let mut v = v;
+    for j in 0..48 { v[j + 16] := v[j] }
+    v
+}
+
+fn word_sum(n: u64) → u64 {
+    let mut s: u64 = 0;
+    for i in 0..n { s := s + i }
+    s
+}
+
+theorem word_sum_4(): word_sum(4) = 6 { refl }
+
+// An element at a word index, its proof found from a hypothesis in scope.
+fn pick(v: [u32; 4], i: u64, h: i < 4) → u32 { v[i] }
+
+// A range of numerals whose body needs no word still lists `Nat`s, as
+// before: the loop is a fold.
+fn nat_sum(n: Nat) → Nat {
+    let mut s = 0;
+    for i in 0..n { s := s + i }
+    s
+}
+
+theorem nat_sum_4(): nat_sum(4) = 6 { refl }
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
+// Nothing says the word is inside, so no proof is found.
+// expect-error: `at`'s `inside` was left to its default
+fn loose(v: [u32; 4], i: u64) → u32 { v[i] }
+
+// An exit from a loop over words is not built yet.
+// expect-error: a `for` over words has no `break`, `continue` or `return` yet
+fn first_big(v: [u32; 4]) → u64 {
+    let mut at: u64 = 4;
+    for i in 0..4 {
+        if 9 < v[i] { at := i; break; }
+    }
+    at
+}

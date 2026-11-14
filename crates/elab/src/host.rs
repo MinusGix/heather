@@ -4414,7 +4414,26 @@ impl HostMut<'_> {
         let generator = prefix_call(&p.generator, handed);
         self.session_transaction(|me| {
             if !d.value {
-                me.elab_decl(d)?;
+                // A `for` over words in the body is lifted as a counted
+                // `mut self` method (crates/elab/src/loops.rs), declared
+                // under the same prefix: its generator runs over each
+                // before the declaration's own, which calls them.
+                let outer = me.scope.loop_methods.replace(Vec::new());
+                let elaborated = me.elab_decl(d);
+                let methods = std::mem::replace(&mut me.scope.loop_methods, outer).unwrap_or_default();
+                elaborated?;
+                for m in methods {
+                    let mlabel = format!("{prefix} fn {m}");
+                    let call = prefix_call(&p.generator, vec![Expr { kind: ExprKind::Str(m.clone()), span: d.span }]);
+                    let (members, psi) = Host(me).run_generator(&call, &mlabel, p.span).map_err(|e| match e {
+                        crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                            msg: format!("`{label}`: its loop, lifted as `{m}`, is refused by `{prefix}`: {msg}"),
+                            span,
+                        },
+                        other => other,
+                    })?;
+                    HostMut(me).publish_members(&members, psi, &mlabel, p.span)?;
+                }
             }
             // A prefix's call is `P(name, args)` or `P(name, value, args)`,
             // which the refusal says, since the writer did not spell it.

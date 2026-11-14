@@ -45,9 +45,13 @@ import sha256_compression;
 
 fn Sha256::began(s: Sha256, i: u64) → Sha256 { (s with { working = vector_update(s.working, i.toNat(), vector_get(s.hash, i.toNat(), 0)) }) }
 
-theorem Sha256::begin_all(s: Sha256): Sha256::begin(s, 0) = Mutated((s with { working = s.hash }), 8) {
-    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::begin(s, i), λ (s: Sha256) (i: u64) => Sha256::began(s, i), 8,
-        λ s i below => Sha256::begin::step(s, i, below), λ s i past => Sha256::begin::done(s, i, past), 8, s, 0, refl)
+theorem Sha256::begin_loop_all(s: Sha256): Sha256::begin_loop(s, 0) = Mutated((s with { working = s.hash }), 8) {
+    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::begin_loop(s, i), λ (s: Sha256) (i: u64) => Sha256::began(s, i), 8,
+        λ s i below => Sha256::begin_loop::step(s, i, below), λ s i past => Sha256::begin_loop::done(s, i, past), 8, s, 0, refl)
+}
+
+theorem Sha256::begin_all(s: Sha256): Sha256::begin(s) = Mutated((s with { working = s.hash }), 8) {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => { let at: u64 = 8; Mutated(m.after, at) }, Sha256::begin_loop_all(s))
 }
 
 fn Sha256::ended(s: Sha256, i: u64) → Sha256 { (s with { hash = vector_update(s.hash, i.toNat(), vector_get(s.hash, i.toNat(), 0) + vector_get(s.working, i.toNat(), 0)) }) }
@@ -66,19 +70,32 @@ fn Sha256::rounded(s: Sha256, i: u64) → Sha256 {
 
 fn Sha256::shifted(s: Sha256, i: u64) → Sha256 { (s with { working = vector_update(s.working, (7 - i).toNat(), vector_get(s.working, (6 - i).toNat(), 0)) }) }
 
-theorem Sha256::shift_all(s: Sha256): Sha256::shift(s, 0) = Mutated((s with { working = [vector_index(s.working, 0, trivial), vector_index(s.working, 0, trivial), vector_index(s.working, 1, trivial),
+theorem Sha256::shift_loop_all(s: Sha256): Sha256::shift_loop(s, 0) = Mutated((s with { working = [vector_index(s.working, 0, trivial), vector_index(s.working, 0, trivial), vector_index(s.working, 1, trivial),
         vector_index(s.working, 2, trivial), vector_index(s.working, 3, trivial), vector_index(s.working, 4, trivial), vector_index(s.working, 5, trivial), vector_index(s.working, 6, trivial)] }), 7) {
-    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::shift(s, i), λ (s: Sha256) (i: u64) => Sha256::shifted(s, i), 7,
-        λ s i below => Sha256::shift::step(s, i, below), λ s i past => Sha256::shift::done(s, i, past), 7, s, 0, refl)
+    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::shift_loop(s, i), λ (s: Sha256) (i: u64) => Sha256::shifted(s, i), 7,
+        λ s i below => Sha256::shift_loop::step(s, i, below), λ s i past => Sha256::shift_loop::done(s, i, past), 7, s, 0, refl)
 }
 
-theorem Sha256::end_all(s: Sha256): Sha256::end(s, 0) = Mutated((s with { hash = [
+theorem Sha256::shift_all(s: Sha256): Sha256::shift(s) = Mutated((s with { working = [vector_index(s.working, 0, trivial), vector_index(s.working, 0, trivial), vector_index(s.working, 1, trivial),
+        vector_index(s.working, 2, trivial), vector_index(s.working, 3, trivial), vector_index(s.working, 4, trivial), vector_index(s.working, 5, trivial), vector_index(s.working, 6, trivial)] }), 7) {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => { let at: u64 = 7; Mutated(m.after, at) }, Sha256::shift_loop_all(s))
+}
+
+theorem Sha256::end_loop_all(s: Sha256): Sha256::end_loop(s, 0) = Mutated((s with { hash = [
         vector_index(s.hash, 0, trivial) + vector_index(s.working, 0, trivial), vector_index(s.hash, 1, trivial) + vector_index(s.working, 1, trivial),
         vector_index(s.hash, 2, trivial) + vector_index(s.working, 2, trivial), vector_index(s.hash, 3, trivial) + vector_index(s.working, 3, trivial),
         vector_index(s.hash, 4, trivial) + vector_index(s.working, 4, trivial), vector_index(s.hash, 5, trivial) + vector_index(s.working, 5, trivial),
         vector_index(s.hash, 6, trivial) + vector_index(s.working, 6, trivial), vector_index(s.hash, 7, trivial) + vector_index(s.working, 7, trivial)] }), 8) {
-    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::end(s, i), λ (s: Sha256) (i: u64) => Sha256::ended(s, i), 8,
-        λ s i below => Sha256::end::step(s, i, below), λ s i past => Sha256::end::done(s, i, past), 8, s, 0, refl)
+    BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::end_loop(s, i), λ (s: Sha256) (i: u64) => Sha256::ended(s, i), 8,
+        λ s i below => Sha256::end_loop::step(s, i, below), λ s i past => Sha256::end_loop::done(s, i, past), 8, s, 0, refl)
+}
+
+theorem Sha256::end_all(s: Sha256): Sha256::end(s) = Mutated((s with { hash = [
+        vector_index(s.hash, 0, trivial) + vector_index(s.working, 0, trivial), vector_index(s.hash, 1, trivial) + vector_index(s.working, 1, trivial),
+        vector_index(s.hash, 2, trivial) + vector_index(s.working, 2, trivial), vector_index(s.hash, 3, trivial) + vector_index(s.working, 3, trivial),
+        vector_index(s.hash, 4, trivial) + vector_index(s.working, 4, trivial), vector_index(s.hash, 5, trivial) + vector_index(s.working, 5, trivial),
+        vector_index(s.hash, 6, trivial) + vector_index(s.working, 6, trivial), vector_index(s.hash, 7, trivial) + vector_index(s.working, 7, trivial)] }), 8) {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => { let at: u64 = 8; Mutated(m.after, at) }, Sha256::end_loop_all(s))
 }
 
 fn Sha256::state(v: [u32; 8]) → Sha2State(32) {
@@ -287,20 +304,29 @@ theorem Sha256::scheduled_is(v: [u32; 64]): vector_entries(Sha256::scheduled(v))
         Sha256::grown_from(48, v, 0, vector_entries(v).take(16).rev(), refl, Sha256Window::start(v)))
 }
 
-theorem Sha256::expand_all(s: Sha256): Sha256::expand(s, 0) = Mutated((s with { schedule = Sha256::scheduled(s.schedule) }), 48) {
-    trans(BitVec::counts_up(λ (s: Sha256) (j: u64) => Sha256::expand(s, j), λ (s: Sha256) (j: u64) => Sha256::expanded(s, j), 48,
-            λ s j below => Sha256::expand::step(s, j, below), λ s j past => Sha256::expand::done(s, j, past), 48, s, 0, refl),
+theorem Sha256::expand_loop_all(s: Sha256): Sha256::expand_loop(s, 0) = Mutated((s with { schedule = Sha256::scheduled(s.schedule) }), 48) {
+    trans(BitVec::counts_up(λ (s: Sha256) (j: u64) => Sha256::expand_loop(s, j), λ (s: Sha256) (j: u64) => Sha256::expanded(s, j), 48,
+            λ s j below => Sha256::expand_loop::step(s, j, below), λ s j past => Sha256::expand_loop::done(s, j, past), 48, s, 0, refl),
         cong_fn(λ (t: Sha256) => { let at: u64 = 48; Mutated(t, at) }, Sha256::expanded_from(48, s, 0)))
 }
 
-theorem Sha256::rounds_all(s: Sha256): Sha256::rounds(s, 0) =
+theorem Sha256::expand_all(s: Sha256): Sha256::expand(s) = Mutated((s with { schedule = Sha256::scheduled(s.schedule) }), 48) {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => { let at: u64 = 48; Mutated(m.after, at) }, Sha256::expand_loop_all(s))
+}
+
+theorem Sha256::rounds_loop_all(s: Sha256): Sha256::rounds_loop(s, 0) =
     Mutated((s with { working = Sha256::vector(Sha2::sha256().run(vector_entries(s.schedule), 0, 64, Sha256::state(s.working))) }), 64) {
-    trans(BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::rounds(s, i), λ (s: Sha256) (i: u64) => Sha256::rounded(s, i), 64,
-            λ s i below => Sha256::rounds::step(s, i, below), λ s i past => Sha256::rounds::done(s, i, past), 64, s, 0, refl),
+    trans(BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::rounds_loop(s, i), λ (s: Sha256) (i: u64) => Sha256::rounded(s, i), 64,
+            λ s i below => Sha256::rounds_loop::step(s, i, below), λ s i past => Sha256::rounds_loop::done(s, i, past), 64, s, 0, refl),
         cong_fn(λ (t: Sha256) => { let at: u64 = 64; Mutated(t, at) }, Sha256::rounds_from(64, s, 0, refl)))
 }
 
-theorem Sha256::run_is(s: Sha256): Sha256::run(s) = Sha256::end(Sha256::rounds(Sha256::begin(Sha256::expand(s, 0).after, 0).after, 0).after, 0) { refl }
+theorem Sha256::rounds_all(s: Sha256): Sha256::rounds(s) =
+    Mutated((s with { working = Sha256::vector(Sha2::sha256().run(vector_entries(s.schedule), 0, 64, Sha256::state(s.working))) }), 64) {
+    cong_fn(λ (m: Mutated<Sha256, u64>) => { let at: u64 = 64; Mutated(m.after, at) }, Sha256::rounds_loop_all(s))
+}
+
+theorem Sha256::run_is(s: Sha256): Sha256::run(s) = Sha256::end(Sha256::rounds(Sha256::begin(Sha256::expand(s).after).after).after) { refl }
 
 // The linked compression is the specification's: the hash value `Sha256::run`
 // leaves is `Sha2::compress` of the hash value it found and the block the
@@ -313,12 +339,12 @@ theorem Sha256::run_spec(s: Sha256):
     let s2 = (s1 with { working = s.hash });
     let R = Sha2::sha256().run(vector_entries(V), 0, 64, H);
     let s3 = (s2 with { working = Sha256::vector(R) });
-    let one: (Sha256::run(s) = Sha256::end(Sha256::rounds(Sha256::begin(s1, 0).after, 0).after, 0)) =
-        trans(Sha256::run_is(s), cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(Sha256::rounds(Sha256::begin(m.after, 0).after, 0).after, 0), Sha256::expand_all(s)));
-    let two: (Sha256::end(Sha256::rounds(Sha256::begin(s1, 0).after, 0).after, 0) = Sha256::end(Sha256::rounds(s2, 0).after, 0)) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(Sha256::rounds(m.after, 0).after, 0), Sha256::begin_all(s1));
-    let three: (Sha256::end(Sha256::rounds(s2, 0).after, 0) = Sha256::end(s3, 0)) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(m.after, 0), Sha256::rounds_all(s2));
+    let one: (Sha256::run(s) = Sha256::end(Sha256::rounds(Sha256::begin(s1).after).after)) =
+        trans(Sha256::run_is(s), cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(Sha256::rounds(Sha256::begin(m.after).after).after), Sha256::expand_all(s)));
+    let two: (Sha256::end(Sha256::rounds(Sha256::begin(s1).after).after) = Sha256::end(Sha256::rounds(s2).after)) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(Sha256::rounds(m.after).after), Sha256::begin_all(s1));
+    let three: (Sha256::end(Sha256::rounds(s2).after) = Sha256::end(s3)) =
+        cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::end(m.after), Sha256::rounds_all(s2));
     let ran: (Sha256::state(Sha256::run(s).after.hash) = H.plus(R)) =
         cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::state(m.after.hash), trans(one, trans(two, trans(three, Sha256::end_all(s3)))));
     trans(ran, cong_fn(λ (E: List<u32>) => H.plus(Sha2::sha256().run(E, 0, 64, H)), Sha256::scheduled_is(s.schedule)))

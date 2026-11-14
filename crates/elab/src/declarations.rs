@@ -586,7 +586,28 @@ impl DeclarationsMut<'_> {
     /// Each part goes through [`Elaborator::elab_decl`], so a step with loops of
     /// its own is lowered the same way.
     fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
-        let family = loops::lower(decl, self.0)?;
+        // A range of numerals lists `Nat`s, and counts words where the body
+        // needs its index to be one (docs/sequencing-surface-design.md §21):
+        // read at `Nat` first, which every range read before, and at `u64`
+        // where that is refused.
+        let lists = self.session_transaction(|me| DeclarationsMut(me).elab_loop_family(decl, loops::Ranges::Lists));
+        match lists {
+            Ok(()) => Ok(()),
+            Err(e) if loops::has_numeral_range(decl) => {
+                self.session_transaction(|me| DeclarationsMut(me).elab_loop_family(decl, loops::Ranges::Words)).map_err(|w| match (e, w) {
+                    (ElabError::Elab { msg, span }, ElabError::Elab { msg: wmsg, .. }) => ElabError::Elab {
+                        msg: format!("{msg}\n(read with the range counting `u64` words instead: {wmsg})"),
+                        span,
+                    },
+                    (e, _) => e,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn elab_loop_family(&mut self, decl: &Decl, ranges: loops::Ranges) -> R<()> {
+        let family = loops::lower(decl, self.0, ranges)?;
         for part in &family.parts {
             match part {
                 loops::Part::State(d) => self.elab_inductive(d)?,
@@ -603,6 +624,11 @@ impl DeclarationsMut<'_> {
         // minted names, which a designation takes out of the surface.
         for (designed, minted) in &family.designations {
             self.designate_access(designed, minted);
+        }
+        // Recorded once the family stands: a prefix generator runs over the
+        // loops lifted as methods (`HostMut::elab_prefixed`).
+        if let Some(methods) = self.scope.loop_methods.as_mut() {
+            methods.extend(family.methods.iter().cloned());
         }
         Ok(())
     }
