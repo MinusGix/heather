@@ -9,7 +9,8 @@ when it changes. Consistent measurement is the substitute for complexity.
 Owning issue: `issues/kernel-benchmarks.md`. The frontend has a separate
 suite for a separate question (`issues/frontend-benchmarks.md`,
 `docs/frontend-benchmarking.md`, `scripts/bench-frontend`): there, user
-latency; here, the cost model. That suite's harness is a sibling of this
+latency; here, the cost model. The code the compiler *emits* is measured
+by a third, `scripts/bench-native` (`docs/native-benchmarking.md`). That suite's harness is a sibling of this
 one's rather than a shared crate, and its doc says which four things differ
 and why each of them is one of the differences between the two questions.
 

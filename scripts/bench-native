@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# How fast the code our compiler emits runs, and what it costs to compile:
+# the linked SHA-256 and scanner (`crates/linked`) against Rust references,
+# under the same caps as every other bench. docs/native-benchmarking.md says
+# what each number means and when to re-record the snapshot
+# (`crates/linked/benches/baseline.tsv`).
+#
+# Usage: scripts/bench-native [--quick] [--no-compile] [--no-count] [--save | --check]
+#
+#   --quick       fewer, shorter samples, and only sha256_compress compiled
+#                 (shapes, not measurements; --save refuses them)
+#   --no-compile  skip compile-x86's cold and warm times (the slow part:
+#                 minutes, each SHA-256 export elaborated from an empty store)
+#   --no-count    skip the callgrind counts
+#   --check       compare against the snapshot: exit 1 when a counter rose or
+#                 the linked code got 1.25x slower, 3 when the snapshot is from
+#                 another cpu or rustc (counters still compared)
+#   --save        record this run as the snapshot
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+quick=()
+for arg in "$@"; do
+  [[ $arg == --quick ]] && quick=(--quick)
+done
+
+# Build without limits (mold reserves address space a cap would refuse):
+# the bench at opt-level 3 and at the dev profile's opt-level 0, and the
+# release compiler the compile times are of (as scripts/linked builds it).
+cargo bench -q -p heather-linked --bench native --no-run
+cargo bench -q -p heather-linked --bench native --no-run --profile dev
+if [[ " $* " != *" --no-compile "* ]]; then
+  cargo build -q --release -p heather-cli
+fi
+
+work=target/bench-native
+mkdir -p "$work"
+
+# Then run under them. The address-space cap covers valgrind's own
+# reservation and compile-x86's (scripts/linked gives it 8 GiB); the CPU cap
+# is per process, so each compile has its own.
+ulimit -v 8388608 -c 0
+ulimit -t "${HEATHER_BENCH_CPU_SECS:-1500}"
+cargo bench -q -p heather-linked --bench native --profile dev -- time "${quick[@]}" > "$PWD/$work/debug-times.tsv"
+exec cargo bench -q -p heather-linked --bench native -- report --debug-times "$PWD/$work/debug-times.tsv" \
+  --heather "$PWD/target/release/heather" "$@"
