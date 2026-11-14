@@ -90,7 +90,7 @@ pub(super) struct Shape {
     /// ([`runtime_entries`]).
     pub entries: Vec<Entry>,
     /// Whether the code is lowered from the program the optimizer makes of
-    /// this one ([`optimize`]): its definitions are then `{prefix}_opt_…`,
+    /// this one ([`optimize`]): its definitions are then `{prefix}_cut_…`,
     /// and the checks the lowering needs are stated of them.
     pub optimize: bool,
 }
@@ -101,8 +101,10 @@ pub(super) struct Shape {
 fn optimizing() -> bool { std::env::var("HEATHER_OPTIMIZE").as_deref() != Ok("off") }
 
 /// The stem the lowered program's definitions are named under: the
-/// program's own, or `{prefix}_opt` where the optimizer has been over it.
-fn lowered_stem(prefix: &str, optimize: bool) -> String { if optimize { format!("{prefix}_opt") } else { prefix.to_string() } }
+/// program's own, or `{prefix}_cut` where the optimizer has been over it
+/// (`{prefix}_opt_…` is what its stage made, `{prefix}_cut_…` that with the
+/// functions nothing reaches emptied).
+fn lowered_stem(prefix: &str, optimize: bool) -> String { if optimize { format!("{prefix}_cut") } else { prefix.to_string() } }
 
 /// Another function of a program, exported beside the program's root:
 /// `symbol` the name it is linked under, `source` the Heather function,
@@ -467,7 +469,8 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
 
 /// What the optimizer needs besides: its stage, the plans' types, and the
 /// search.
-const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_tidy", "function_ir_optimize", "pair"];
+const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_tidy", "function_ir_prune",
+    "function_ir_optimize", "pair"];
 
 /// A function's plans, as `function_ir_optimize` types them (`Passes()`),
 /// written out: a literal is elaborated against it, and the two passes'
@@ -475,9 +478,11 @@ const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "
 const PASSES: &str = "Option<Pair<Inlines, Pair<Plan, Plan>>>";
 
 /// What the optimizer made of a program: the definitions `{prefix}_opt_…`
-/// (each function, the plans that make it, the lists), which the reads and
-/// the certificate both take, and the statements that the stage makes them
-/// of the program, which are the certificate's alone.
+/// (each function, the plans that make it, the lists) and `{prefix}_cut_…`
+/// (the same with the functions nothing reaches emptied), which the reads
+/// and the certificate both take, and the statements that the stage and
+/// the emptying make them of the program, which are the certificate's
+/// alone.
 struct Optimized {
     definitions: String,
     statements: String,
@@ -494,7 +499,13 @@ struct Optimized {
 /// the search has none or the lowering refuses what it made with the
 /// planner's placement (`Function::lowers`, a read of its own: the search
 /// and the planner each hold what they evaluate).
-fn optimize(elab: &Elaborator, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize) -> Result<Optimized, String> {
+///
+/// Then the functions `roots` (the exported ones) no longer reach are
+/// emptied (`prune`): inlined everywhere, a small function is called by
+/// nothing, and its code would be emitted all the same. The certificate
+/// states the list of the functions reached as a literal, and that the
+/// program is closed under it (`program_closed`), by evaluation.
+fn optimize(elab: &Elaborator, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
     let mut fork = elab.fork();
     let source = format!("{probe}_opt_source");
     fork.elab_module_source(&source, definitions).map_err(|e| e.render(definitions))?;
@@ -560,15 +571,51 @@ theorem {prefix}_opt_ran_{k}(): optimize_stage().run({prefix}_first_{k}(), {pref
 ", below("first"), below("opt_plans"), if k == 0 { "refl".to_string() } else { format!("{prefix}_opt_ran_{}()", k - 1) }));
     }
     let last = m - 1;
+    let reach = format!("{probe}_opt_reach");
+    let text = format!("{imports}{}
+fn {prefix}_opt_reached() → List<Nat> {{ program_reached({prefix}_opt_first_{last}(), [{}]) }}
+", uses(&modules), roots.iter().map(|root| root.to_string()).collect::<Vec<_>>().join(", "));
+    fork.elab_module_source(&reach, &text).map_err(|e| e.render(&text))?;
+    // The walk lists a function once for each call it finds; the certificate
+    // states each once, in order.
+    let mut reached = read(&fork, &reach, "reached")?;
+    reached.sort_unstable();
+    reached.dedup();
     stated.push_str(&format!("
-// The program the code is lowered from: `{prefix}_program()` as the optimizer left it.
+// `{prefix}_program()` as the optimizer's stage left it, and the functions
+// the exported ones reach in it.
 fn {prefix}_opt_program() → List<Function> {{ {prefix}_opt_first_{last}() }}
+fn {prefix}_opt_live() → List<Nat> {{ [{}] }}
+
+// The program the code is lowered from: a function nothing reaches is
+// emptied, and keeps its number.
+", reached.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")));
+    for k in 0..m {
+        let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_cut_first_{}()", k - 1) };
+        let emptied = if reached.contains(&(k as u64)) { "" } else { ".emptied()" };
+        stated.push_str(&format!("fn {prefix}_cut_fn{k}() → Function {{ {prefix}_opt_fn{k}(){emptied} }}
+fn {prefix}_cut_first_{k}() → List<Function> {{ Cons({prefix}_cut_fn{k}(), {earlier}) }}
 "));
+    }
+    stated.push_str(&format!("fn {prefix}_cut_program() → List<Function> {{ {prefix}_cut_first_{last}() }}\n"));
     statements.push_str(&format!("
 // The program made does at each function whatever the program does: the
 // stage's theorem, at the plans above.
 theorem {prefix}_opt_keeps(f: Nat): ProgramRewrites({prefix}_program(), {prefix}_opt_program(), f) {{
     optimize_stage().run_rewrites({prefix}_program(), {prefix}_opt_plans_{last}(), {prefix}_opt_program(), {prefix}_opt_ran_{last}(), f)
+}}
+
+theorem {prefix}_cut_made(): prune({prefix}_opt_program(), λ (n: Nat) => n.among({prefix}_opt_live())) = {prefix}_cut_program() {{ refl }}
+
+// Every function reached calls only functions reached.
+theorem {prefix}_cut_closed(): program_closed({prefix}_opt_program(), λ (n: Nat) => n.among({prefix}_opt_live())) = True {{ refl }}
+
+// So the program the code is lowered from does at a function reached
+// whatever the program does.
+theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): ProgramRewrites({prefix}_program(), {prefix}_cut_program(), f) {{
+    ProgramRewrites::then({prefix}_program(), {prefix}_opt_program(), {prefix}_cut_program(), f, {prefix}_opt_keeps(f),
+        j({prefix}_cut_made(), λ made _ => ProgramRewrites({prefix}_opt_program(), made, f),
+            prune_rewrites(λ (n: Nat) => n.among({prefix}_opt_live()), {prefix}_opt_program(), {prefix}_cut_closed(), f, alive)))
 }}
 "));
     Ok(Optimized { definitions: stated, statements })
@@ -583,11 +630,12 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
     let m = program.functions;
     let probe = format!("{module}_probe");
     // The optimizer first: what is planned, emitted and lowered from here on
-    // is the program it made, `{prefix}_opt_…`, and the program published
+    // is the program it made, `{prefix}_cut_…`, and the program published
     // is what the theorems are about.
     let stem = lowered_stem(prefix, program.optimize);
     let (definitions, rewriting) = if program.optimize {
-        let made = optimize(elab, prefix, &probe, &imports, &definitions, m)?;
+        let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
+        let made = optimize(elab, prefix, &probe, &imports, &definitions, m, &roots)?;
         (format!("{definitions}{}", made.definitions), made.statements)
     } else { (definitions, String::new()) };
     // A function's emission after `prog`: under the program's counts of
@@ -838,12 +886,12 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
     let comma = if parameters.is_empty() { "" } else { ", " };
     // Through the optimizer, a return theorem takes both programs: the run
     // is the published one's, the lowering and its checks are of the one
-    // made, and `{prefix}_opt_keeps` says the one made does at a function
-    // whatever the published one does.
+    // made, and `{prefix}_cut_keeps` says the one made does at a function
+    // reached whatever the published one does.
     let (through, programs, quiet) = if program.optimize {
         ("_through", format!("{prefix}_program(), {stem}_program()"), format!("{prefix}_quiet(), {stem}_quiet()"))
     } else { ("", format!("{prefix}_program()"), format!("{prefix}_quiet()")) };
-    let keeps = |function: usize| if program.optimize { format!(" {prefix}_opt_keeps({function}),") } else { String::new() };
+    let keeps = |function: usize| if program.optimize { format!(" {prefix}_cut_keeps({function}, refl),") } else { String::new() };
     if program.marks.is_some() {
         // A writer: the file is any whose first span is `span`, and the
         // lending lets the marked buffers be written, so `loan` asks of

@@ -15,6 +15,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_writes;
 import function_ir_fresh;
+import function_ir_stage;
 import bitvec;
 import bool;
 import list;
@@ -153,4 +154,10 @@ theorem prune_sound(live: Nat → Bool, functions: List<Function>): program_clos
                 }), at)
         },
     }
+}
+
+// The same as a compiler cites it, at a function that is reached.
+theorem prune_rewrites(live: Nat → Bool, functions: List<Function>, closed: program_closed(functions, live) = True, f: Nat, alive: live(f) = True):
+    ProgramRewrites(functions, prune(functions, live), f) {
+    λ before arguments result after ran => prune_sound(live, functions, closed, before, f, alive, arguments, result, after, ran)
 }

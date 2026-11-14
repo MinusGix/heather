@@ -429,9 +429,19 @@ before it (`Step::Swap`, `Plan::Args`, `Plan::Inputs`), once dropping what
 nothing reads. Tidying is not polish. The lowering names a buffer by its
 home, the address and length the function was lent, and takes a load only
 where an arm compared the index with that very length; an inlined body
-reads moves of them, and is refused until it reads through. Emptying the
-functions nothing reaches any more is a theorem for the functions that are
-reached (`prune_sound`, `function_ir_prune.hthr`).
+reads moves of them, and is refused until it reads through.
+
+**Emptying is a program's, not a function's.** A callee inlined everywhere
+is called by nothing, and its code would be emitted all the same.
+`function_ir_prune.hthr` makes every function the exported ones do not
+reach one constant (`prune`, keeping each function's number, parameters and
+count of lent spans, so the program lists and lowers as before), and
+`prune_rewrites` is `ProgramRewrites` at a function that is reached, given
+that the reached ones call only reached ones (`program_closed`). It is not
+a stage: a stage's law is every function's, and an emptied function does
+not do what the old one did. The walk that finds the list
+(`program_reached`) is not trusted; the certificate states the list as a
+literal and checks closedness by evaluation.
 
 **The search is not trusted, and is evaluated.** `function_ir_optimize.hthr`:
 `optimize_stage()` is inline, then tidy, or no plan;
@@ -442,7 +452,10 @@ and states both as literals; the certificate's statement is that the stage
 makes the one from the other, checked by evaluation, a function a statement
 (`Stage::run_next`). What the search made is kept only where the lowering
 takes it with the planner's placement (`Function::lowers`); otherwise the
-function stays as it is. The return theorems take the two programs apart
+function stays as it is. Then the unreached functions are emptied, and the
+two facts compose (`ProgramRewrites::then`) into the one the return
+theorems take, at each exported function. Those theorems take the two
+programs apart
 (`compiled_returns_written_through` and its kin): the lowering and the
 checks it needs are of the program made, the run is the published one's.
 `HEATHER_OPTIMIZE=off` turns the passes off.
@@ -460,22 +473,21 @@ checks it needs are of the program made, the run is the published one's.
 - Only a program that is lent spans is optimised. One of words alone is
   lowered by `lower_program`, whose theorem is over another relation
   (`program_callees`).
-- The pipeline does not yet empty the functions left uncalled: their code
-  is still emitted.
+- An emptied function is still a function: a constant and a return. A
+  program with them removed renumbers its calls, which is a rewrite of
+  every caller and a theorem this one does not give.
 - Tidying leaves empty regions where it dropped nodes; they cost nothing in
   the code and something to read.
 
-**Counted** (`scripts/bench-native`, one machine, same run of the script
-before and after; the counter is exact, time is not):
-
-| | before | with inline and tidy |
-|---|---|---|
-| SHA-256 compression, instructions a block | 176,274 | 147,086 |
-| calls a block | 3,882 | 1,117 |
-| ns a block | 8,254 | 5,878 |
-| scanner, instructions a byte | 318.9 | 296.9 |
-
-"Before" has step 1's live-only saves.
+**What it buys, as a shape** (`scripts/bench-native` counts instructions
+exactly; its saved baseline has the numbers, and the pull requests record
+them as they were measured). On SHA-256's compression, written as methods
+that call one another, inlining removes about seven calls in ten and with
+them about a sixth of the instructions executed; what remains is dominated
+by loads and stores of words in the lent spans and by the register moves
+around them, which is steps 4 and 5's ground. The scanner, which has few
+small callees, gains a few percent. Code size grows with inlining and
+comes part of the way back with emptying.
 
 ## 10. Machine instructions added for the optimizer
 

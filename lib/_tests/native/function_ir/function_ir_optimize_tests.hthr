@@ -109,6 +109,20 @@ theorem reached_after(): program_reached(three_made(), [2]) = [2] { refl }
 theorem made_closed(): program_closed(three_made(), λ n => n.among(program_reached(three_made(), [2]))) = True { refl }
 theorem made_pruned(): prune(three_made(), λ n => n.among([2])) = [top_made(), seven_made().emptied(), xor().emptied()] { refl }
 
+// What the compiler states of the program it lowers: at the function
+// exported, the emptied program does whatever the published one did.
+theorem three_cut(): ProgramRewrites(three(), [top_made(), seven_made().emptied(), xor().emptied()], 2) {
+    ProgramRewrites::then(three(), three_made(), [top_made(), seven_made().emptied(), xor().emptied()], 2, three_keeps(2),
+        j(made_pruned(), λ made _ => ProgramRewrites(three_made(), made, 2),
+            prune_rewrites(λ n => n.among([2]), three_made(), refl, 2, refl)))
+}
+
+// Not at a function nothing reaches.
+// expect-error: `among(1, [2])` and `True` are not
+theorem three_cut_dead(): ProgramRewrites(three_made(), prune(three_made(), λ n => n.among([2])), 1) {
+    prune_rewrites(λ n => n.among([2]), three_made(), refl, 1, refl)
+}
+
 // What the compiler reads: the plans on one line, the function on the next.
 theorem seven_spelled(): Optimized(Some(seven_plan()), seven_made()).spelled() =
     "Some(Pair(Inlines(3, Both(Stay, Here(3))), Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))), Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
