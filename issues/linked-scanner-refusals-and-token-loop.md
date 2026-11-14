@@ -57,6 +57,35 @@ scope. `HEATHER_LEXER=linked` stays off by default (Minus, 2026-11-14).
   value can be refused before the shape that follows it, as the Rust lexer
   does, so the builder reads those first.
 
+## Design of the token loop
+
+- `lexer_records.hthr`: `out.scan_tokens(olen, source, length, at,
+  previous)` stores a record of sixteen bytes for each kept token (start,
+  then the token's word, big-endian), then one for the end of the file or
+  the refusal, and answers how many. Where the span has no room for the
+  next record it stops; the caller goes on from the end of the last record,
+  after a token of its kind (`heather_linked::scanner::tokens_by_records`).
+  It is fill-until-full with the resume point in the records themselves, so
+  there is no count pass and no resume word.
+- The specification is `Record::from` (`lexer_tokens.hthr`): `Scanned::from`
+  with the tokens before a refusal kept. `scan_tokens_records` proves the
+  loop stores `List::put_records` of it, for a source below `2^48`; the
+  invariant behind it is `Accepted::longest_inside` (every cut the scan
+  answers is inside the source, with a kind or reason of one byte, which
+  `scan_accept` now masks to).
+- The loop is lent two spans, so the scanner it calls is too: a callee
+  reads its caller's spans in their own places, and `scan_token` is lent
+  only the source. `scan_token_over` is `scan_token` lent `out` first and
+  not reading it (`scan_token_over_is`). With the byte read written into
+  its loop rather than called, it compiles; as a call of six words the
+  planner refused its placement.
+- Fuel bounds the loop as it bounds `Scanned::from`; the next token's
+  word is an argument, so it is computed once.
+
 ## Log
 
-- 2026-11-14: Refusals built (first PR). The token loop is the second.
+- 2026-11-14: Refusals built (first PR, #629). The token loop is the second.
+- 2026-11-14: Token loop built: `lexer_records.hthr`, exported as
+  `scan_tokens`; `tests/scanner.rs` holds `tokens_by_records` to the
+  scanner on every source of the repository at one, two, three and 4096
+  records a call.

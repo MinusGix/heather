@@ -10,11 +10,13 @@
 //! and a length (`spans` says what lending takes). The same loop is written
 //! in Heather as the specification (`lexer_tokens.hthr`, `Scanned::of`),
 //! where the kernel evaluates it, and the linked one is proved to be it
-//! (`scan_token_longest`). [`Scanner`] is what is left in Rust: it calls
-//! [`token`] once for each token, drops whitespace and comments, and makes
-//! the values an iterator hands out, which a compiled function cannot write
-//! into its caller's memory yet (`issues/native-library-exports-design.md`).
-//! Nothing in this file decides anything the automaton does not.
+//! (`scan_token_longest`). [`Scanner`] calls [`token`] once for each
+//! token, drops whitespace and comments, and hands out the tokens as an
+//! iterator. [`records`] is that loop too, in Heather: one linked call
+//! (`scan_tokens` of `lexer_records.hthr`) stores the kept tokens into a
+//! span the caller lends, sixteen bytes each, proved to be the
+//! specification's (`scan_tokens_records`); [`tokens_by_records`] reads
+//! them back. Nothing in this file decides anything the automaton does not.
 //!
 //! # A scanner, not a lexer
 //!
@@ -177,10 +179,68 @@ pub fn tokens(source: &[u8]) -> Result<Vec<Token>, Refused> {
 /// generated.
 #[inline]
 pub fn token(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
-    let word = exports::scan_token(source, at as u64, previous);
+    read_word(exports::scan_token(source, at as u64, previous))
+}
+
+/// A token's word or a refusal's, read apart.
+#[inline]
+fn read_word(word: u64) -> Result<(u64, usize), (u64, usize)> {
     let kind = word >> TOKEN_END_BITS;
     if kind == 0 {
         return Err(((word >> REFUSAL_AT_BITS) & 0xff, (word & ((1 << REFUSAL_AT_BITS) - 1)) as usize));
     }
     Ok((kind, (word & ((1 << TOKEN_END_BITS) - 1)) as usize))
+}
+
+/// The bytes of a record [`records`] stores: the offset a token starts at,
+/// then its word as [`token`] answers it, each a big-endian `u64`.
+pub const RECORD_BYTES: usize = 16;
+
+/// The tokens of `source` from `at`, after a token of kind `previous`,
+/// stored into `out` as records, and how many: one for each token that is
+/// kept (not whitespace, not a comment), then one for the end of the file
+/// at the source's length or for the refusal that stops the scan. Where
+/// `out` has no room for the next record the loop stops, and the scan goes
+/// on from the end of the last record, after a token of its kind.
+///
+/// This is `scan_tokens` of `lexer_records.hthr`: the whole token loop in
+/// one call, proved to store the records the specification lists
+/// (`scan_tokens_records`, over `Record::from`, which is `Scanned::from`
+/// with the tokens before a refusal kept).
+#[inline]
+pub fn records(out: &mut [u8], source: &[u8], at: usize, previous: u64) -> usize {
+    exports::scan_tokens(out, source, at as u64, previous) as usize
+}
+
+/// Record `i` of what [`records`] stored: where it starts, and its token's
+/// kind and end or its refusal's reason and offset.
+pub fn record(out: &[u8], i: usize) -> (usize, Result<(u64, usize), (u64, usize)>) {
+    let at = i * RECORD_BYTES;
+    let start = u64::from_be_bytes(out[at..at + 8].try_into().unwrap()) as usize;
+    let word = u64::from_be_bytes(out[at + 8..at + 16].try_into().unwrap());
+    (start, read_word(word))
+}
+
+/// Every token of a source by the linked token loop, `room` records a call
+/// (at least one): what [`tokens`] answers, with the loop in Heather.
+pub fn tokens_by_records(source: &[u8], room: usize) -> Result<Vec<Token>, Refused> {
+    let mut out = vec![0u8; room.max(1) * RECORD_BYTES];
+    let mut tokens = Vec::new();
+    let (mut at, mut previous) = (0, 0);
+    loop {
+        let stored = records(&mut out, source, at, previous);
+        for i in 0..stored {
+            match record(&out, i) {
+                (start, Err((reason, refused))) => return Err(Refused { start, reason, at: refused }),
+                (start, Ok((code, end))) => {
+                    let Some(kind) = Kind::of_code(code) else { unreachable!("the automaton accepts no kind numbered {code}") };
+                    tokens.push(Token { kind, start, end });
+                    if kind == Kind::Eof {
+                        return Ok(tokens);
+                    }
+                    (at, previous) = (end, code);
+                }
+            }
+        }
+    }
 }

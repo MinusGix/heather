@@ -289,6 +289,55 @@ compiler asks, a person or a tactic answers, the kernel checks. An
 optimization report in a conventional compiler says what it failed to do;
 this one says what proof would let it.
 
+### 5.1 How a fact reaches the lowering: it is an equation in the code
+
+A test that goes leaves a load with no test above it, and the lowering
+takes a load only where the path knows its index below the buffer's length
+(`File::bounded`). So what the replayer proved has to arrive there, and it
+does so without a new construct and without a second analysis in the
+lowering.
+
+A function's meaning is the valuations that satisfy its nodes' equations
+(`Function::Runs`), and nothing in that meaning says an id has one
+equation. So a fact is written as one more: after
+`UnsignedLessThan(64, c, i, n)`, the node `Const(1, c, 1)` says the same
+bit is one, and the two hold together exactly where `i` is below `n`.
+
+- *Adding an equation the others imply keeps every run.* That is the law
+  the replayer already has for `Derive` and `Emit`: the conclusion of a
+  rule whose premises are facts is a fact, and a node among the facts may
+  be written into the code.
+- *Dropping one keeps every run too*, trivially, so a pass that does not
+  understand an assumption may lose it and stays sound. What is lost is
+  only speed: the lowering refuses the load and the function stays as it
+  was.
+- *The lowering reads it for free.* A comparison placed `Folded` emits
+  nothing and is known as `Compared`; a one-bit constant placed `Folded`
+  emits nothing and is known as `Truth` or `Falsity`, which is what an arm
+  taken would have told it. `File::bounded` is unchanged.
+- *A requirement is an assumption nothing in the function implies.* A
+  function whose body assumes `K <= length` has no run where that fails, so
+  a caller that has a run satisfied it, and the theorem about the compiled
+  program is about the runs the source has. Required needs no mechanism
+  beyond this one; what it needs is the producer stating the requirement
+  and its own proof of the run using it.
+
+The facts themselves are wider than nodes by one kind so far,
+`Within(id, low, high)`: a word's value as a number lies between two
+literals. Ranges are not an analysis built into the replayer. They are
+rules like any other, a theorem each (a constant's range, a sum's where it
+cannot wrap, a shift's, a narrow value's, the two a branch's condition
+gives its arm), found among the facts by entailment: a premise
+`Within(id, low, high)` is met by any known range inside it. The searcher
+runs whatever analysis it likes and writes down only the derivations a
+decision needs, so the kernel replays a few steps a test and never a fixed
+point.
+
+Learn is then three things. An arm starts from the facts before the
+conditional and its condition as a constant. A comparison whose operands'
+ranges decide it derives that constant (a rule). And a conditional on a
+bit the facts say is constant is its arm (`Plan::Take`).
+
 This builds on what exists: facts as propositions with several producers,
 searched cheapest first, with a budget, is the facts-on-demand prototype
 (`docs/facts-on-demand-design.md`), and the request from a generator is its
