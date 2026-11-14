@@ -191,8 +191,8 @@ theorem mask_wrong(x: BitVec(64)): (x & 16).toNat() < 16 { bv_omega }
 // the body does, so it is counted with the body's `?`s; uncounted, it took
 // the `?`'s slot and the goal was an internal error. Its discharge mentions
 // the lifted proof through the statement
-// (issues/goal-hole-beside-a-search-in-the-statement.md).
-fn word_below(i: BitVec(64), inside: i.toNat() < 64 := bv_omega) → BitVec(64) { i }
+// (issues/goal-hole-beside-a-search-in-the-statement.md). `word_below` is
+// the one above.
 fn nat_below(n: Nat, inside: n < 64 := omega) → Nat { n }
 
 // In the result type, discharged by name.
