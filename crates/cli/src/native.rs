@@ -160,7 +160,9 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
 /// the signature each `<dir>/<function>.s` states
 /// (`heather_cli::linked::exports_rs`), and `<dir>/constants.rs`, the
 /// constants `<dir>/CONSTANTS.tsv` lists, from their `def`s
-/// (`heather_cli::linked::constants_rs`). `--check` writes nothing and fails
+/// (`heather_cli::linked::constants_rs`), and `<dir>/kinds.rs`, the token
+/// kinds of `lib/lang/lexer/lexer_kinds.hthr`'s table
+/// (`heather_cli::linked::kinds_rs`). `--check` writes nothing and fails
 /// where a file on disk is not that. `scripts/linked` runs it after the
 /// assembly is rewritten.
 ///
@@ -190,8 +192,9 @@ pub fn linked_exports(args: &[String]) -> ExitCode {
         // `scripts/linked` runs this.
         let module = |path: &str| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"));
         let constants = heather_cli::linked::constants_rs(&read("CONSTANTS.tsv")?, &module)?;
+        let kinds = heather_cli::linked::kinds_rs(&module)?;
         let mut stale = Vec::new();
-        for (name, text) in [("exports.rs", exports), ("constants.rs", constants)] {
+        for (name, text) in [("exports.rs", exports), ("constants.rs", constants), ("kinds.rs", kinds)] {
             let path = dir.join(name);
             if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == text) {
                 println!("{name}: unchanged");

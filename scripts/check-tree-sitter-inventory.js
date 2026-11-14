@@ -5,6 +5,10 @@ const parser = fs.readFileSync('crates/syntax/src/parser.rs', 'utf8');
 const lexer = fs.readFileSync('crates/syntax/src/lexer.rs', 'utf8');
 const grammar = fs.readFileSync('tree-sitter-heather/grammar.js', 'utf8');
 const inventory = JSON.parse(fs.readFileSync('tree-sitter-heather/syntax-inventory.json', 'utf8'));
+// The token kinds' spellings, from the table `TOKEN_KINDS`
+// (lib/lang/lexer/lexer_kinds.hthr) as `scripts/linked` writes it for Rust:
+// a line `Kind::<Name> => &["<spelling>", …],` for each kind that has one.
+const kinds = fs.readFileSync('crates/linked/generated/kinds.rs', 'utf8');
 
 const failures = [];
 for (const keyword of inventory.keywords) {
@@ -39,6 +43,20 @@ for (const symbol of compilerSymbols) {
 }
 for (const symbol of inventory.rejected_fixed_tokens) {
   if (!lexer.includes(`"${symbol}"`)) failures.push(`rejected manifest symbol is not used by lexer: ${symbol}`);
+}
+
+// The inventory's fixed symbols are exactly the table's spellings: a token
+// added to the table and not to the inventory, or the other way, is named.
+const tableSymbols = new Set();
+for (const match of kinds.matchAll(/^ *Kind::\w+ => &\[(.*)\],$/gm)) {
+  for (const spelling of match[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)) tableSymbols.add(JSON.parse(`"${spelling[1]}"`));
+}
+if (tableSymbols.size === 0) failures.push('no spellings read from crates/linked/generated/kinds.rs');
+for (const symbol of tableSymbols) {
+  if (!manifestedSymbols.has(symbol)) failures.push(`token kinds table spelling is missing from manifest: ${symbol}`);
+}
+for (const symbol of manifestedSymbols) {
+  if (!tableSymbols.has(symbol)) failures.push(`manifest symbol is no spelling of the token kinds table (lib/lang/lexer/lexer_kinds.hthr): ${symbol}`);
 }
 
 const parserKeywords = new Set(

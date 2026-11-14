@@ -37,6 +37,20 @@ fn the_constants_are_generated() {
         "crates/linked/generated/constants.rs is not what `heather linked-exports` writes: run scripts/linked\nexpected:\n{text}");
 }
 
+// `crates/linked/generated/kinds.rs`, the token kinds both Rust crates
+// number tokens by (`heather_linked::scanner::Kind`,
+// `heather_syntax::lexer::ScanKind`), is what its generator writes from
+// `TOKEN_KINDS` of `lib/lang/lexer/lexer_kinds.hthr`: a row or a `KIND_*`
+// changed without `scripts/linked` fails here.
+#[test]
+fn the_token_kinds_are_generated() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |path: &std::path::Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
+    let text = heather_cli::linked::kinds_rs(&|module| read(&root.join(module))).unwrap_or_else(|why| panic!("{why}"));
+    assert!(read(&root.join("crates/linked/generated/kinds.rs")).unwrap() == text,
+        "crates/linked/generated/kinds.rs is not what `heather linked-exports` writes: run scripts/linked\nexpected:\n{text}");
+}
+
 // The table's parameters are held to the code's own signature: a row that
 // names a span where the checked-in code takes a word is refused, on the
 // real files, and so is one that lends a span the other way: to read where

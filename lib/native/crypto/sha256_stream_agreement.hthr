@@ -424,10 +424,9 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
             let rest = ih(P.after, message, mn, j + 1, P.value, F.full, F.tail, F.room, omega, sized, pushed.left, pushed.right);
             let cut: (message.drop(j.toNat()) = Cons(b, message.drop(Succ(j.toNat())))) = message.drop_at(j.toNat(), zero, omega);
             let onward: (Sha2Feed(F.full, F.tail, F.room).bytes(message.drop((j + 1).toNat())) = Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))) =
-                trans(cong_fn(λ (f: Sha2Feed) => f.bytes(message.drop((j + 1).toNat())), F.eta()),
-                    trans(cong_fn(λ (k: Nat) => F.bytes(message.drop(k)), after),
-                        trans(cong_fn(λ (x: u8) => Sha2Feed::fed(full, T, room, x).bytes(message.drop(Succ(j.toNat()))), byte),
-                            sym(cong_fn(λ (r: List<u8>) => Sha2Feed(full, T, room).bytes(r), cut)))));
+                trans(cong_fn(λ (k: Nat) => F.bytes(message.drop(k)), after),
+                    trans(cong_fn(λ (x: u8) => Sha2Feed::fed(full, T, room, x).bytes(message.drop(Succ(j.toNat()))), byte),
+                        sym(cong_fn(λ (r: List<u8>) => Sha2Feed(full, T, room).bytes(r), cut))));
             j(sym(Sha256::absorb::step(s, message, mn, j, fill, inside)), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))),
                 j(onward, λ f _ => Sha256::Fed(Sha256::absorb(P.after, message, mn, j + 1, P.value), f), rest))
         },
@@ -478,7 +477,7 @@ theorem Sha256::update_took(s: Sha256, message, part: List<u8>, mn: u64, sized: 
     let fed = Sha256::absorb_from(mn.toNat(), s, part, mn, 0, s.count & 63, f.full, f.tail, f.room, omega, sized, took.tracks, fill);
     let G = f.bytes(part);
     let same: (Sha2Feed(f.full, f.tail, f.room).bytes(part.drop(zero.toNat())) = G) =
-        trans(cong_fn(λ (r: List<u8>) => Sha2Feed(f.full, f.tail, f.room).bytes(r), part.drop_zero()), cong_fn(λ (g: Sha2Feed) => g.bytes(part), f.eta()));
+        cong_fn(λ (r: List<u8>) => Sha2Feed(f.full, f.tail, f.room).bytes(r), part.drop_zero());
     let on: Sha256::Fed(A, G) = j(same, λ g _ => Sha256::Fed(A, g), fed);
     let updated: (Sha256::update(s, part, mn).after = (A.after with { count = s.count + mn })) = refl;
     let tracks: Sha256Tracks(A.after with { count = s.count + mn }, G.full, G.tail, G.room) = Sha256Tracks(on.left.hashed, on.left.held, on.left.space, on.left.whole);

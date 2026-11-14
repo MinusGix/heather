@@ -149,9 +149,12 @@ condition and stays relevant.
 
 ## 5. The lifting, and what retires it
 
-The lifting (`measure::lift_found`) now skips a default whose parameter is
-squashed (`MeasureContext::measure_default_goals`): the found proof stays
-in the call, each companion has its own, and they convert. The probes in
+A found proof at a squashed parameter does not need lifting: left in the
+call, each companion has its own, and they convert. The lifting
+(`measure::lift_found`) lifts it all the same, at its squashed type, for
+cost: the companions spell the body many times over, and a proof left at
+its call is searched for at each copy
+(`issues/squashed-found-proof-searched-per-copy.md`). The probes in
 `lib/_tests/std/core/strict_conditions_tests.hthr` show the trio on the
 issue's reproduction (`c1` over `[u32; 64]`, a store at `j + 16` of a read
 at `j + 14`, both found):
@@ -160,17 +163,22 @@ at `j + 14`, both found):
 |---|---|---|
 | `i.toNat() < n` | off (`:= { bv_omega }`, not a context search) | refused: `c1#ext` OutOfFuel |
 | `i.toNat() < n` | on (`:= bv_omega`) | ok (`c1#found_N`) |
-| `∥i.toNat() < n∥` | skipped | ok |
+| `∥i.toNat() < n∥` | off (`:= { bv_omega }`) | ok |
+| `∥i.toNat() < n∥` | on (`:= bv_omega`) | ok (`c1#found_N`), searched once |
 
 `Vec::at`, `Vec::put` and `Vec::put_byte_be` take their conditions
 squashed. After that **no library function whose result is data has a
 relevant parameter defaulted to a context search**; the remaining
 context-search defaults are evidence theorems (`CReal::…_by_nlinarith`,
 `Span::disjoint_by_ends`, …), whose results are proofs. So the lifting has
-no library customer left. It retires (a separate PR: delete
+no library customer left that needs it for the equation; its customers are
+the squashed conditions, for cost. It retires (a separate PR: delete
 `lift_found`, `FoundGoal`, the `#searched` member bases) once Minus agrees
 that a relevant condition defaulted to a search is a declaration to
-refuse or to warn about ("write it `∥P∥`") rather than to support.
+refuse or to warn about ("write it `∥P∥`") rather than to support. What
+retires the cost use is a companion that does not elaborate the body's
+syntax again, or a search remembered across the declarations of one
+recursion.
 
 ## 6. Cost
 

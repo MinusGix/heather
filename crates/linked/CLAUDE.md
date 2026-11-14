@@ -31,7 +31,12 @@ repository root.
   Heather's own scanner (compiled, linked;
   `heather_syntax::lexer::install_scanner`, `issues/self-lexer-linked.md`);
   values and every refusal stay the Rust lexer's, so output is unchanged, and
-  `HEATHER_LEXER_REPORT=1` prints who cut what. Off by default. A new token
-  kind is three numberings to extend: `lexer_scan.hthr`'s `KIND_*`,
-  `heather_linked::scanner::Kind` and `heather_syntax::lexer::scan_code`
-  (`tests/scanner.rs` holds them to each other).
+  `HEATHER_LEXER_REPORT=1` prints who cut what. Off by default.
+- **A new token kind** is a `KIND_*` in `lexer_scan.hthr` (and its states),
+  a row of `TOKEN_KINDS` in `lib/lang/lexer/lexer_kinds.hthr` (its code, its
+  `TokKind` name, its spellings), an arm of `TokKind::scan_kind`, and the
+  spellings in `tree-sitter-heather/syntax-inventory.json`. Then
+  `scripts/linked` rewrites `generated/kinds.rs`, which is both this crate's
+  `scanner::Kind` and the Rust lexer's `ScanKind`; nothing else numbers a
+  kind. The generator refuses a `KIND_*` with no row, and the module proves
+  each spelling is a token of its kind to the scanner.
