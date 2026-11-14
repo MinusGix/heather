@@ -5,7 +5,8 @@
 // refuses, the test the search puts at a function's entry and the plan it
 // finds past it, a loop whose passes keep a range, a narrowing that a
 // range makes a move, and the test of a span at an index the caller
-// computed, which orders between words decide. Tests, not library: nothing
+// computed, which orders between words decide, and a test of several
+// bounds decided by ranges where each bound is. Tests, not library: nothing
 // imports this module.
 import function_ir;
 import function_ir_eval;
@@ -342,3 +343,52 @@ theorem asked_twice(): Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3
     Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]),
         Compose(nodes([UnsignedLessThan(64, 4, 2, 1)]), Conditional(Ports([]), 4, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))),
         nodes([Const(64, 5, 0)]))), 5, 1).learn_plan().decided() = 1 { refl }
+
+// ---------------------------------------------------------------------------
+// A test of several bounds is decided where each bound is
+
+// if i < top { j = 4 * i; t = j + 4; if t < j or 32 < t { 0 } else { t } } else { 0 }.
+// The inner test is what a function tested at its entry carries to where
+// it is inlined: that the last index did not wrap and is within a length,
+// here 32 for a length known to be at least that.
+fn scaled(top: Nat) → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, top), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([ShiftLeft(64, 5, 2, 2), Const(64, 6, 4), Add(64, 7, 5, 6), UnsignedLessThan(64, 8, 7, 5), Const(64, 9, 32),
+                    UnsignedLessThan(64, 10, 9, 7), BitOr(1, 11, 8, 10)]),
+                Conditional(Ports([]), 11, Ports([]), Ports([Port(13, 64)]), nodes([Const(64, 13, 0)]), nodes([Move(64, 13, 7)]))),
+            nodes([Const(64, 13, 0)]))), 13, 1)
+}
+
+// Where i is below 8, j is at most 28, so the sum has room: it is j and 4
+// (rules 34 and 35), which is not below j (23); t is at most 32 (8); and
+// an or of two clear bits is clear (36). The test is its second arm.
+theorem scaled_decided(): scaled(8).learn_plan().decided() = 1 { refl }
+theorem scaled_made(): replay_function(rules(), scaled(8), scaled(8).learn_plan()) = Some(Function([0, 1, 2],
+    Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([ShiftLeft(64, 5, 2, 2), Const(64, 6, 4), Add(64, 7, 5, 6), UnsignedLessThan(64, 8, 7, 5), Const(64, 9, 32),
+                    UnsignedLessThan(64, 10, 9, 7), BitOr(1, 11, 8, 10)]),
+                nodes([Move(64, 13, 7)])),
+            nodes([Const(64, 13, 0)]))), 13, 1)) { refl }
+
+// Where i may be 8, t may be 36: the sum still has room, the second bound
+// is not decided, and an or with one bit unknown is not. The replayer
+// refuses the plan made for the smaller bound.
+theorem scaled_past(): scaled(9).learn_plan().decided() = 0 { refl }
+theorem scaled_past_refused(): replay_function(rules(), scaled(9), scaled(8).learn_plan()) = None { refl }
+
+// if i < top { j = 6 - i; if j < 8 { j } else { 0 } } else { 0 }: a loop
+// that counts up and indexes down. Where i is below 7 the difference
+// cannot borrow and is at most 6 (rule 39); where i may be 7 it may.
+fn downward(top: Nat) → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, top), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([Const(64, 5, 6), Sub(64, 6, 5, 2), Const(64, 7, 8), UnsignedLessThan(64, 8, 6, 7)]),
+                Conditional(Ports([]), 8, Ports([]), Ports([Port(13, 64)]), nodes([Move(64, 13, 6)]), nodes([Const(64, 13, 0)]))),
+            nodes([Const(64, 13, 0)]))), 13, 1)
+}
+
+theorem downward_decided(): downward(7).learn_plan().decided() = 1 { refl }
+theorem downward_borrows(): downward(8).learn_plan().decided() = 0 { refl }
+theorem downward_refused(): replay_function(rules(), downward(8), downward(7).learn_plan()) = None { refl }

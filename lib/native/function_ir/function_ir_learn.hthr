@@ -69,6 +69,15 @@
 // earlier walk wrote for a bit this one decides again goes
 // (`Seen::replaced`), so a test nothing reads any more is left for the
 // sweep.
+//
+// A range also says what a sum is. Where the operand's range has room for
+// the constant a sum adds, the sum is the two as numbers
+// (`Seen::sum_orders`, rules 34 and 35): so the test that it wrapped is
+// decided (`Seen::ordered`), and bytes at a constant offset are side by
+// side as bytes at a word are. A difference that cannot borrow has a
+// range, and an or of decided bits is decided (`Seen::or_decided`), so the
+// test a function tested at its entry carries is decided where the
+// function is inlined into a loop whose bound gives the index its range.
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -438,11 +447,64 @@ fn Seen::bound_written(self seen: Seen, c, l: Nat) → List<Step> {
     match flagged(seen.indexes, l) || seen.ends_at(l) { True => [Emit(Const(1, c, 1))], False => [] }
 }
 
+// An order from `base` with room for `value`: what says `base` and
+// `value` added is no more than a word, so the sum is that.
+fn known_roomy(known: List<Known>, base, value: Nat) → Option<Known> {
+    match known {
+        Nil => None,
+        Cons(first, rest) => match first.order.low.same(base) && (value + first.order.more).leb(first.order.add) {
+            True => Some(first),
+            False => known_roomy(rest, base, value),
+        },
+    }
+}
+
+record Stepped { steps: List<Step>, seen: Seen }
+
+fn Seen::proving(self seen: Seen, proved: NatMap<Bool>) → Seen {
+    Seen(seen.made, seen.range, seen.how, proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+// The steps after which the facts have that the word `at`, a word and a
+// constant added, is the two as numbers, both ways: by an order from the
+// word with room for the constant (rules 27 and 28), or by the word's
+// range with room for it below a word's top (rules 34 and 35).
+fn Seen::sum_orders(self seen: Seen, at: Nat) → Option<Stepped> {
+    match nat_map_get(seen.order.sums, at) {
+        None => None,
+        Some(sum) => match known_roomy(seen.order.known, sum.of, sum.value) {
+            Some(k) => Some(Stepped(k.why ++ [
+                Derive(27, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
+                Derive(28, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
+            ], seen.written(k.order))),
+            None => shared(seen.of(sum.of), λ range => match (range.high + sum.value).leb(word_top()) {
+                False => None,
+                True => shared(explain(100, seen.how, seen.proved, [sum.of]), λ why => Some(Stepped(why.steps ++ [
+                    Derive(34, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
+                    Derive(35, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
+                ], seen.proving(why.proved)))),
+            }),
+        },
+    }
+}
+
+// The same owed, with the two orders known.
+fn Seen::summed(self seen: Seen, at: Nat) → Option<Seen> {
+    match nat_map_get(seen.order.sums, at) {
+        None => None,
+        Some(sum) => match seen.sum_orders(at) {
+            None => None,
+            Some(stepped) => Some(stepped.seen.owing(stepped.steps).knowing(Known(Order(sum.of, sum.value, at, 0), []))
+                .knowing(Known(Order(at, 0, sum.of, sum.value), []))),
+        },
+    }
+}
+
 // A comparison an order decides: one known says its left is below its
 // right (rule 22), or its right at most its left (rule 23); or its left is
 // a word and a constant added, and an order from that word to its right
 // has room for the constant and one more (rules 28 and 24, then 22).
-fn Seen::ordered(self seen: Seen, c, l, r: Nat) → Option<Passed> {
+fn Seen::ordered_known(self seen: Seen, c, l, r: Nat) → Option<Passed> {
     shared(seen.bound_written(c, l), λ emit =>
         match known_find(seen.order.known, Order(l, 1, r, 0)) {
             Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, True, [], Derive(22, [c, l, r]), emit)),
@@ -460,6 +522,20 @@ fn Seen::ordered(self seen: Seen, c, l, r: Nat) → Option<Passed> {
                 },
             },
         })
+}
+
+// The same, and where no order known decides it: with an operand that is
+// a sum known not to wrap as the two it adds. So a sum compared with its
+// own operand, the test that it did not wrap, is decided where the
+// operand's range has room.
+fn Seen::ordered(self seen: Seen, c, l, r: Nat) → Option<Passed> {
+    match seen.ordered_known(c, l, r) {
+        Some(passed) => Some(passed),
+        None => match seen.summed(l).and_then(λ wider => wider.ordered_known(c, l, r)) {
+            Some(passed) => Some(passed),
+            None => seen.summed(r).and_then(λ wider => wider.ordered_known(c, l, r)),
+        },
+    }
 }
 
 fn spans_add(spans: List<Span>, new: Span) → List<Span> {
@@ -514,6 +590,27 @@ fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
         })))
 }
 
+// An or of bits: decided where both are clear (rule 36) or either is set
+// (rules 37 and 38), as the guard of several bounds is where each bound is.
+fn Seen::or_decided(self seen: Seen, o, l, r: Nat) → Passed {
+    match nat_map_get(seen.bits, l) {
+        Some(left) => match left {
+            True => seen.decided(o, True, [], Derive(37, [o, l, r]), []),
+            False => match nat_map_get(seen.bits, r) {
+                Some(right) => match right {
+                    True => seen.decided(o, True, [], Derive(38, [o, l, r]), []),
+                    False => seen.decided(o, False, [], Derive(36, [o, l, r]), []),
+                },
+                None => Passed([], seen),
+            },
+        },
+        None => match nat_map_get(seen.bits, r) {
+            Some(right) => match right { True => seen.decided(o, True, [], Derive(38, [o, l, r]), []), False => Passed([], seen) },
+            None => Passed([], seen),
+        },
+    }
+}
+
 fn Seen::pass(self seen: Seen, node: Node) → Passed {
     match node {
         Const(w, o, v) => match w.same(64) && v.leb(word_top()) {
@@ -548,8 +645,15 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
         BufferLoad(o, _, _) => Passed([], seen.known(o, Range(0, 255))),
         BufferStore(o, _, _, _) => Passed([], seen.known(o, Range(0, 255))),
         UnsignedLessThan(w, c, l, r) => match w.same(64) { True => seen.compared(c, l, r, node), False => Passed([], seen) },
+        Sub(w, o, l, r) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match b.high.leb(a.low) {
+                True => Passed([], seen.learn(o, Range(a.low - b.high, a.high - b.low), [l, r], Derive(39, [o, l, r, a.low, a.high, b.low, b.high]))),
+                False => Passed([], seen),
+            })),
+        },
         BitOr(w, o, l, r) => match w.same(1) {
-            True => Passed([], seen.making(o, node)),
+            True => seen.making(o, node).or_decided(o, l, r),
             False => match w.same(64) {
                 False => Passed([], seen),
                 True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
@@ -631,35 +735,6 @@ fn Seen::joined(self seen: Seen, id: Nat, join: Join) → Seen {
 // What is owed is written.
 fn Seen::settled(self seen: Seen) → Seen {
     Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
-}
-
-// An order from `base` with room for `value`: what says `base` and
-// `value` added is no more than a word, so the sum is that.
-fn known_roomy(known: List<Known>, base, value: Nat) → Option<Known> {
-    match known {
-        Nil => None,
-        Cons(first, rest) => match first.order.low.same(base) && (value + first.order.more).leb(first.order.add) {
-            True => Some(first),
-            False => known_roomy(rest, base, value),
-        },
-    }
-}
-
-record Stepped { steps: List<Step>, seen: Seen }
-
-// The steps after which the facts have that the word `at`, a word and a
-// constant added, is the two as numbers, both ways (rules 27 and 28).
-fn Seen::sum_orders(self seen: Seen, at: Nat) → Option<Stepped> {
-    match nat_map_get(seen.order.sums, at) {
-        None => None,
-        Some(sum) => match known_roomy(seen.order.known, sum.of, sum.value) {
-            None => None,
-            Some(k) => Some(Stepped(k.why ++ [
-                Derive(27, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
-                Derive(28, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
-            ], seen.written(k.order))),
-        },
-    }
 }
 
 // Two joins side by side, `hi` first in the buffer and above in the word.

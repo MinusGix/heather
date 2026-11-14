@@ -785,6 +785,23 @@ sweep once more, which drops the comparisons no access reads any more. It
 keeps the result where the lowering takes it and the function before it
 where not.
 
+That reaches the loader and each function it is inlined into at an index
+that is a word. Two places it did not reach, and what does (rules 34 to
+39). A word read at a constant offset: its bytes' indexes are the constant
+and constants added, and no order from a constant has room for them. And
+a loop whose body the loader is inlined into: the loader's own entry test
+stands there, a sum compared with its operand and with the length, the
+two or'd, and the walk decided neither the first nor the or. What decides
+them is what a range says. A sum whose operand's range has room for the
+constant below a word's top is the two as numbers: the third way a sum is
+known not to wrap, beside a test of it (25, 26) and an order with room
+(27, 28). A difference that cannot borrow is within its parts' bounds,
+crossed, which an index that counts down needs. An or of bits is clear
+where both are and set where either is. With these a join at a constant
+offset is found as one at a word is, and a loop that moves words keeps no
+test in its body where its own bound gives the index a range: a pass is a
+word loaded and a word stored.
+
 ## 10. Machine instructions added for the optimizer
 
 Minus, 2026-11-14: instructions may be added to the machine model as steps
