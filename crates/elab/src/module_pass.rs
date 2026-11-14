@@ -497,7 +497,7 @@ impl ModulePassMut<'_> {
                 // §4: a failed item's warnings are as speculative as the rest
                 // of it — it registers nothing, and it says nothing.
                 self.pass.warnings.borrow_mut().truncate(warn_mark);
-                DeltasMut(self).slice_failed();
+                DeltasMut(self).slice_failed(slice_mark, slice_source, slice_start);
             } else {
                 ResolutionMut(self).mint_pending();
                 stats::timed(stats::Timer::Lint, || NameLookup(self).run_source_lints(item, &lint_source));
