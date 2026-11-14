@@ -1,0 +1,350 @@
+# A proved optimizer: plans replayed, rules as theorems, proofs requested
+
+Status: design agreed by Minus 2026-11-14 ("Good design"); built parts are
+named in §9. It extends `docs/compilation-vision.md` (principle 3, §2.3,
+§2.4, §6.2) and does not re-derive it. What prompted it is the first
+measurement of emitted code, [linked-sha256-speed](../issues/linked-sha256-speed.md).
+The brief, in Minus's words: "elegant and extendible, rather than a big naive
+list of passes", free to use research-level techniques, and with "the ability
+to 'request' a proof from a function, wherein you know a high-value
+optimization can be done. Sometimes the proof is immediately available (it is
+already in that context), other times it can be found by a fuel-search (like
+how a typical optimizer checks things, and may want to store information), or
+just work abstractly."
+
+## 1. The design in short
+
+The optimizer is three small things proved once, and three open things that
+grow without any new soundness proof.
+
+**Proved once**
+
+- **A replayer** for each code level. It takes a program and a *plan*, which
+  is a list of moves, and returns the program with the moves made, or
+  refuses. Its one theorem says that whatever it returns means what the input
+  meant. Nothing else in the optimizer is trusted or proved.
+- **A short list of moves** the replayer knows: rewrite by a rule at a place,
+  share a value, drop a value nothing reads, put a callee's body where its
+  call was, learn a branch's condition inside its arms, and run a loop over a
+  different state.
+- **The request**: how a move that needs a fact asks for it, and the kinds of
+  answer the replayer accepts.
+
+**Open**
+
+- **Rules.** A rule is a theorem: two patterns over the IR's operators, side
+  conditions, and a proof that the sides are equal where the conditions hold.
+  An optimization of the rewriting kind is one more theorem in a table. A
+  rotate written as two shifts, a word read as four bytes, a strength
+  reduction and every constant fold are rules.
+- **Fact producers.** Anything that can prove a side condition: what is
+  already in scope, a verified analysis, a tactic under a budget, the
+  programmer.
+- **Searchers.** The code that chooses the moves. It is not trusted at all.
+  It can be greedy at first and equality saturation, a superoptimizer or a
+  learned cost model later, and none of that changes what is proved.
+
+So a pass stops being a unit of proof. A pass is a searcher: a strategy that
+writes moves. The list of passes a conventional compiler has still exists
+here, but only as strategies, and a wrong one costs speed, never correctness.
+
+The compiler already works this way in one place. The register planner
+proposes a placement and the verified lowering either lowers with it or
+refuses (`lib/native/function_ir/function_ir_lower*.hthr`). This design is
+that arrangement at every level, with one vocabulary.
+
+## 2. Why this shape
+
+- **Search can be as aggressive as we like.** Soundness never rests on a
+  heuristic, a cost model or the order strategies run in. This is principle 3
+  of the vision (untrusted search over checked witnesses) taken as the whole
+  architecture.
+- **The kernel's work stays small.** The one pass that existed before this
+  design (constant folding and dead values, `function_ir_pass.hthr`) is a
+  Heather function the kernel runs whole. That is fine for a fold. It cannot
+  be how a search runs. With plans, the search happens outside the kernel and
+  the kernel replays the plan, at a cost that grows with the plan and not
+  with the search.
+- **An optimization's proof is small and ordinary.** A rule's proof is an
+  equation about words or about a list of bytes. Those are the proofs that
+  should need no tactic written: most new optimizations become a short
+  theorem that `simp` or a bit-level decision closes.
+- **The plan is data.** It can be printed, compared between two compiler
+  versions, and cut down move by move until the instruction counter changes.
+  When emitted code is bad, there is one thing to read.
+- **It extends sideways.** A library can ship rules about its own operations
+  beside its theorems. A DSL brings its own rule table. A new target brings
+  its own. None of them touches the replayer.
+
+## 3. Moves
+
+The replayer's vocabulary is deliberately short. Each move has one law,
+proved once. The level is FunctionIR, because every producer reaches it
+(`rt`, a DSL, a hand-written instance), so one optimizer serves them all.
+
+| Move | What it does | What its law rests on | Where SHA-256 needs it |
+|---|---|---|---|
+| Rewrite | Replaces an instance of a rule's left side by its right | The rule's theorem, and its conditions answered | Rotates, a word read as a word, folded constants, a repeated test |
+| Share | Two equal values become one | Nothing; structural | The same word read twice |
+| Drop | Removes a value nothing reads | A check that nothing reads it | What rewriting leaves behind |
+| Inline | A callee's body where its call was | The callee is the program's function at that index | Most of a block's calls are four small accessors |
+| Learn | Inside an arm, the branch's condition is a fact; a test of a known condition is its arm | The branch's own meaning | The length test on every byte |
+| Restate a loop | Runs a loop over a different state | A simulation between the two states (§6) | The working variables in registers |
+
+Memory needs no move of its own. A load after a store at the same index is
+the stored value. A store after a store at the same index drops the first. A
+load after a store at another index passes over it. These are rules, the
+last one with the condition that the indexes differ, which is a request.
+
+Share and Drop exist as parts of the folding pass, and the composition of
+moves is the simulation diagrams already in the library
+(`function_ir_pass_diagrams.hthr`, `lib/std/relation/transition.hthr`). The
+first acceptance test of the replayer is to restate the folding pass as
+rules and get the same theorem with less proof.
+
+## 4. Rules: an optimization is a theorem
+
+What an author should write, with the spelling only illustrative:
+
+```heather
+rule rotate_right({w: Nat}, a, b: Nat, x: BitVec(w), fits: a + b = w):
+    (x >> a) | (x << b) = x.rotr(a)
+{ … }
+```
+
+That is an ordinary theorem with an ordinary proof. The `rule` prefix does
+one more thing: it reflects the two sides into patterns over the IR's
+operators and adds the pair, with the proof, to a rule table. The author
+never sees a pattern type.
+
+Three kinds of condition, by who answers them:
+
+- **On the instance's literals** (`a + b = w` where the shift counts are
+  numbers in the code): decided by evaluation when the rule is applied.
+  Nothing is asked of anyone.
+- **On values** (this index is below that length): a request, §5.
+- **On the program** (nothing between these two stores reads the buffer): a
+  check the replayer runs over the nodes between.
+
+What follows from rules being theorems, and is not available to a
+conventional compiler:
+
+- **A library's theorems can be its clients' optimizations.** If `Sha2`
+  proves that its big sigma is three rotates and two exclusive ors, tagging
+  that equation as a rule makes every caller's code use it. The person who
+  knows the algebra of a type writes its optimizations, in the type's own
+  file.
+- **Rule tables are values.** A target has one (what its instructions do
+  cheaply), a DSL has one, a constant-time dialect can have a smaller one
+  that leaves out every rule whose timing depends on data.
+- **Rules can be found by machine.** A candidate rule only needs a proof. So
+  a tool can enumerate small terms, keep the pairs that agree on test inputs,
+  prove them by a bit-level decision, and keep those that lower the cost.
+  Not early work, but the design leaves the door open at no cost.
+
+## 5. Requests: asking for a proof
+
+A move may need a fact about the values at its place: this index is below
+that length, these two indexes differ, this word is below 2^32. A
+**request** is that proposition, stated over the values in scope at the
+place.
+
+The replayer never searches. The plan carries an answer with each request,
+and there are five kinds:
+
+| Answer | What it is | Cost | In the brief's words |
+|---|---|---|---|
+| **In scope** | The fact is already at the place: a branch condition above it, the equation that defines a value, a requirement of the function, an invariant of the loop around it | An index | "immediately available" |
+| **Decided** | A verified analysis proves it by evaluation: a range, known bits, "this is that base plus a constant" | One evaluation step per value | "how a typical optimizer checks things" |
+| **Proved** | A proof found outside by a tactic under a budget (`omega`, `bv_omega`, `simp`), checked by the kernel | A search, bounded by fuel | "found by a fuel-search" |
+| **Required** | The fact becomes a requirement of the optimized function, and each caller owes it at its call | Nothing here; a request at each caller | "work abstractly" |
+| **Tested** | Decidable at run time and unproved: test once, branch to the fast copy or the plain one | A test and a second copy | (versioning) |
+
+If none applies, the move is not made, and the code is the plain code.
+
+**Storing what was learned**, in two forms, both checked:
+
+- *Abstract values in the plan.* The searcher attaches to each value what it
+  found out about it (its range, its known bits). The replayer checks each
+  one from the values it was computed from, one step, no fixed point. A
+  loop's invariant is stated in the plan and checked to hold at entry and to
+  be kept by a pass. So an analysis is run once, outside, and what the kernel
+  sees is its result with enough written down to check it in one sweep.
+- *Summaries of functions.* What a function's result is bounded by, which
+  bytes it may store to, what it requires. Published beside its compiled
+  code like any theorem, kept in the module's image, and recomputed only
+  when the function changes. A caller's request about a callee's result is
+  then answered In scope.
+
+**Required is the modular answer.** The optimized code is proved to agree
+with the function wherever the requirement holds. A caller that calls it
+owes the requirement, which is a request of its own with the same five
+answers, and so on outward. The record functions already work this way for
+one fact: `Stored::Holds` (the span holds the record under its length word)
+is a requirement the generator threads through every call. The length tests
+in SHA-256 go because `Holds` puts "the length word is at least the record's
+size" in scope, and the range of each offset is Decided.
+
+**Requests the compiler could not answer are reported, largest first.**
+Something like:
+
+```
+Sha256::run: 256 length tests would go
+  wanted:  Sha256::stored().layout.size <= length
+  give it: a requirement on `run`, or a theorem tagged as a fact about it
+```
+
+The programmer answers with a theorem, and the next build uses it. The
+compiler asks, a person or a tactic answers, the kernel checks. An
+optimization report in a conventional compiler says what it failed to do;
+this one says what proof would let it.
+
+This builds on what exists: facts as propositions with several producers,
+searched cheapest first, with a budget, is the facts-on-demand prototype
+(`docs/facts-on-demand-design.md`), and the request from a generator is its
+`Synth`. What is new is that requests are tied to places in a plan, that
+Required and Tested exist, and the report.
+
+## 6. Loops: one law, many optimizations
+
+A conventional compiler has a pass each for keeping memory in registers,
+strength reduction, moving invariant code out, hoisting checks, unrolling.
+Here they are one law with different choices of a relation.
+
+**The law.** A loop over state S with step s may be run as a loop over state
+T with step t when there is a relation R between the two states such that R
+holds at entry, a step of t from a state related to an S state lands in a
+state related to s's step and exits when it does, and the result is read
+back through R. That is a simulation, and the library has the diagrams for
+it (`lib/std/relation/transition.hthr`).
+
+**The instances**, each a choice of R:
+
+| Optimization | T is S with | R says |
+|---|---|---|
+| Fields in registers | some of the buffer's fields also held as words | the buffer with those words stored back is S's buffer |
+| Strength reduction | one more word `j` | `j = 4 * i` |
+| Invariant code out of the loop | one more word `v` | `v` is the value computed from the loop's inputs |
+| A check hoisted | nothing more | a fact, such as `i <= n`, which then answers requests inside the body |
+| Unrolling | nothing more | one step of t is two steps of s |
+
+The first row is the largest step for SHA-256. In this design it is not a
+special pass. The plan says which fields to lift, the step t is the old body
+after the memory rules have forwarded each load from the word that holds it,
+and the stores happen once at exit. What is new to prove is the law, once.
+
+The last column is also where invariants come from for requests: R's facts
+are In scope for every move inside the body.
+
+## 7. The machine level, and the search
+
+**The machine level already has its plan**: the placement. Growing it means
+letting the verified lowering accept more plans, each a case of its one
+theorem:
+
+- save round a call only the registers the plan names, a register left
+  unsaved being empty afterwards so that a later read of it is a refusal;
+- a frame sized by what the function saves, and none for a leaf;
+- values that live across a call placed in kept registers;
+- instruction forms: a 32-bit move to narrow a word in place of two shifts,
+  constants loaded at their size, compare and branch fused.
+
+Some forms need instructions the machine model does not have: a byte swap
+for the word read, a rotate, the 32-bit moves. Each is a line of trusted
+model (§10).
+
+**The search**, in three stages, none of which changes a proof:
+
+1. *Fixed strategies*, written as Heather functions: inline a small callee,
+   apply rules bottom up until nothing changes or a budget ends, forward
+   stores to loads, lift the fields a loop reads and writes.
+2. *Equality saturation* over the pure values of a region, with the control
+   structure kept as a skeleton (the acyclic e-graph Cranelift uses). The
+   e-graph library (`lib/std/data/egraph.hthr`) already records why each
+   pair of classes met, and that explanation is the list of Rewrite moves.
+   The cost function is the instruction counter of the standard benchmark.
+3. *Rule discovery and superoptimization* of short sequences, feeding the
+   rule table.
+
+Where the searcher runs is open. Written in Heather it is evaluated by the
+generator, and compiled natively once the compiler compiles itself, at which
+point the optimizer is one of its own customers.
+
+## 8. SHA-256's list in this design
+
+The steps the review of 2026-11-14 listed, and what each one is here:
+
+| Step from the review | What it is in this design | New proof it needs |
+|---|---|---|
+| Save only what is live; no frame for a leaf | Machine plan | Two cases of the lowering theorem |
+| Inline a small callee | The Inline move | Its law, once |
+| Narrow by a 32-bit move; small constants | Machine plan (instruction forms) | One lemma each about the x86 model |
+| Read a word as a word | A rule: four byte loads joined are a word load swapped | The rule (the equation is in `stored_words.hthr`), a load node and its lowering |
+| Drop a length test `Holds` proves | Learn, with the request answered In scope and Decided | The range domain's soundness, once |
+| Fields in registers across a loop | Restate a loop, with the memory rules | The loop law, once; three memory rules |
+| Rotates and other idioms | Rules | A short theorem each |
+| Vector and SHA instructions | A rule table for a target with those instructions, later | Model growth, Minus's call when it comes |
+
+Six of the eight need a proof once and then nothing per optimization. The
+list was written before the design, and it falls into the design's parts
+without a special case.
+
+## 9. Order of work, and what is built
+
+1. **Live-only saves and leaf frames.** Machine plans; the largest single
+   share of the counter; independent of everything else.
+2. **The replayer at FunctionIR** with Rewrite, Share and Drop, and the rule
+   table. Acceptance: the folding pass restated as rules, and the rotate
+   rule added as the first new one. Before it, a probe of what the kernel
+   pays to replay a plan of a few hundred moves over a toy operator
+   language; if that cost has the wrong shape the design changes there.
+3. **Inline.**
+4. **Requests** with the answers In scope, Decided and Required, and the
+   range domain. Acceptance: SHA-256's length tests go, with no change to
+   its source.
+5. **Memory rules and the word load.**
+6. **The loop law**, then fields in registers.
+7. The report of unanswered requests, Proved and Tested answers, then the
+   e-graph searcher.
+
+Each step is its own pull request and states instructions per block before
+and after, for SHA-256 and for the scanner (a pass lands with its counter).
+The SHA-256 source may change where it can be improved, but it is not tuned
+by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
+
+| Step | State |
+|---|---|
+| 1, live-only saves | built: `Place::Spilling`, `File::plan_call`, `File::called` (`function_ir_lower_calls.hthr`) |
+| 1, leaf frames | not built |
+| 2 to 7 | not built |
+
+## 10. Machine instructions added for the optimizer
+
+Minus, 2026-11-14: instructions may be added to the machine model as steps
+need them, each checked to be formalized correctly, with a summary kept.
+Vector and SHA instructions stay a separate decision. This table is that
+summary; a row is added in the pull request that adds the instruction.
+
+A row's check is: the manual's section for the instruction and each form,
+the encoding compared byte for byte with an assembler's, and the model's
+result compared with the real CPU's over edge operands and random ones
+(flags included where the model states them, and left undefined where the
+manual does).
+
+| Instruction and forms | Used by | Model | Checked how |
+|---|---|---|---|
+| (none yet) | | | |
+
+## 11. Where the ideas come from
+
+Validated register allocation (Rideau and Leroy, for CompCert) is the
+planner and checker the lowering already has. Translation validation
+(Pnueli, Siegel and Singerman; Necula) is the replayer's stance, made
+stronger because a plan is replayed by a proved function and not compared
+after the fact. Equality saturation (Tate and others; egg, by Willsey and
+others) and Cranelift's acyclic e-graphs are the search. Abstract values
+checked and not computed is certified abstract interpretation (Besson,
+Jensen and others). Rule discovery is Ruler and Souper. The loop law is data
+refinement. The request, a compiler whose optimizations name the proposition
+they lack and take the programmer's theorem as the answer, is this design's
+own.
