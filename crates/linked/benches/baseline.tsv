@@ -2,55 +2,55 @@
 # docs/native-benchmarking.md says how to read it and when to re-record.
 env	cpu	Intel(R) Xeon(R) Processor @ 2.30GHz
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
-env	commit	c8de183c8b30
+env	commit	bdd165c04ada
 env	date	2026-11-14
 env	sha2-backend	x86 SHA extensions
-measure	compile/sha256_compress/cold	229.73	s
-measure	compile/sha256_compress/warm	58.73	s
-measure	compile/sha256_finish/cold	260.00	s
-measure	compile/sha256_finish/warm	68.89	s
-measure	compile/sha256_init/cold	191.82	s
-measure	compile/sha256_init/warm	19.98	s
-measure	compile/sha256_next/cold	83.34	s
-measure	compile/sha256_next/warm	2.11	s
-measure	compile/sha256_t1/cold	78.26	s
-measure	compile/sha256_t1/warm	2.06	s
-measure	compile/sha256_t2/cold	82.55	s
-measure	compile/sha256_t2/warm	1.96	s
-measure	compile/sha256_update/cold	263.47	s
-measure	compile/sha256_update/warm	66.62	s
-measure	count/scanner/lexer/per-byte	99.08	instructions/byte
-measure	count/scanner/linked/per-byte	307.02	instructions/byte
+measure	compile/sha256_compress/cold	262.75	s
+measure	compile/sha256_compress/warm	77.52	s
+measure	compile/sha256_finish/cold	279.52	s
+measure	compile/sha256_finish/warm	74.85	s
+measure	compile/sha256_init/cold	198.68	s
+measure	compile/sha256_init/warm	22.92	s
+measure	compile/sha256_next/cold	87.07	s
+measure	compile/sha256_next/warm	2.39	s
+measure	compile/sha256_t1/cold	82.28	s
+measure	compile/sha256_t1/warm	2.62	s
+measure	compile/sha256_t2/cold	82.58	s
+measure	compile/sha256_t2/warm	2.02	s
+measure	compile/sha256_update/cold	266.36	s
+measure	compile/sha256_update/warm	74.19	s
+measure	count/scanner/lexer/per-byte	99.59	instructions/byte
+measure	count/scanner/linked/per-byte	307.04	instructions/byte
 measure	count/sha256/block/calls	1053	calls/block
-measure	count/sha256/block/instructions	127951	instructions/block
-measure	count/sha256/block/kind/64-bit immediates	7125	instructions/block
-measure	count/sha256/block/kind/adds	17560	instructions/block
+measure	count/sha256/block/instructions	125831	instructions/block
+measure	count/sha256/block/kind/64-bit immediates	7189	instructions/block
+measure	count/sha256/block/kind/adds	18288	instructions/block
 measure	count/sha256/block/kind/byte loads/stores	10256	instructions/block
 measure	count/sha256/block/kind/call/ret/frame	4215	instructions/block
-measure	count/sha256/block/kind/compares	9638	instructions/block
+measure	count/sha256/block/kind/compares	11822	instructions/block
 measure	count/sha256/block/kind/frame loads/stores	10534	instructions/block
-measure	count/sha256/block/kind/jumps	12557	instructions/block
-measure	count/sha256/block/kind/logic	6676	instructions/block
+measure	count/sha256/block/kind/jumps	7461	instructions/block
+measure	count/sha256/block/kind/logic	9588	instructions/block
 measure	count/sha256/block/kind/other	16	instructions/block
-measure	count/sha256/block/kind/register moves	24958	instructions/block
-measure	count/sha256/block/kind/shifts	24416	instructions/block
-measure	time/debug/scanner/lib/lexer	108.47	MB/s
-measure	time/debug/scanner/lib/linked	43.37	MB/s
-measure	time/debug/sha256/block/linked	4776	ns/block
-measure	time/debug/sha256/block/mirror	22655	ns/block
-measure	time/debug/sha256/block/sha2	1502	ns/block
-measure	time/debug/sha256/block/textbook	2005	ns/block
-measure	time/debug/sha256/stream/linked	12.89	MB/s
-measure	time/debug/sha256/stream/mirror	2.83	MB/s
-measure	time/debug/sha256/stream/sha2	63.97	MB/s
-measure	time/debug/sha256/stream/textbook	31.56	MB/s
-measure	time/release/scanner/lib/lexer	130.24	MB/s
-measure	time/release/scanner/lib/linked	56.42	MB/s
-measure	time/release/sha256/block/linked	5288	ns/block
-measure	time/release/sha256/block/mirror	2531	ns/block
+measure	count/sha256/block/kind/register moves	27870	instructions/block
+measure	count/sha256/block/kind/shifts	18592	instructions/block
+measure	time/debug/scanner/lib/lexer	112.15	MB/s
+measure	time/debug/scanner/lib/linked	44.65	MB/s
+measure	time/debug/sha256/block/linked	5122	ns/block
+measure	time/debug/sha256/block/mirror	22623	ns/block
+measure	time/debug/sha256/block/sha2	1128	ns/block
+measure	time/debug/sha256/block/textbook	2027	ns/block
+measure	time/debug/sha256/stream/linked	12.56	MB/s
+measure	time/debug/sha256/stream/mirror	2.82	MB/s
+measure	time/debug/sha256/stream/sha2	62.91	MB/s
+measure	time/debug/sha256/stream/textbook	31.51	MB/s
+measure	time/release/scanner/lib/lexer	131.68	MB/s
+measure	time/release/scanner/lib/linked	56.65	MB/s
+measure	time/release/sha256/block/linked	4683	ns/block
+measure	time/release/sha256/block/mirror	2569	ns/block
 measure	time/release/sha256/block/sha2	36	ns/block
 measure	time/release/sha256/block/textbook	229	ns/block
-measure	time/release/sha256/stream/linked	12.73	MB/s
-measure	time/release/sha256/stream/mirror	24.64	MB/s
-measure	time/release/sha256/stream/sha2	1870.69	MB/s
-measure	time/release/sha256/stream/textbook	275.55	MB/s
+measure	time/release/sha256/stream/linked	14.04	MB/s
+measure	time/release/sha256/stream/mirror	24.94	MB/s
+measure	time/release/sha256/stream/sha2	1870.75	MB/s
+measure	time/release/sha256/stream/textbook	276.95	MB/s
