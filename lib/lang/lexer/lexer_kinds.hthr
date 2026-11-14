@@ -1,0 +1,165 @@
+// The token kinds as one table: for each kind its code, its name and the
+// spellings that are a token of it (issues/lexical-grammar-as-data.md).
+//
+// A kind is numbered once, by its `KIND_*` in `lexer_scan.hthr`, which the
+// automaton's states are written with. Everything else that numbers or
+// spells a kind is this table's:
+//
+// - Rust's two copies of the numbering, `heather_linked::scanner::Kind` and
+//   the Rust lexer's `ScanKind` (`heather_syntax::lexer::scan_code`), are
+//   one generated file, `crates/linked/generated/kinds.rs`, which
+//   `scripts/linked` writes from `TOKEN_KINDS` (`heather_cli::linked::kinds_rs`,
+//   held to it by `crates/cli/tests/linked_exports.rs`). The generator
+//   refuses a `KIND_*` with no row, a row whose name is not its `KIND_*`'s
+//   (`LtEq` for `KIND_LT_EQ`: the same letters, case and `_` aside), and
+//   two rows with one spelling.
+// - The editor grammar's inventory of fixed symbols
+//   (`tree-sitter-heather/syntax-inventory.json`) is held to the
+//   spellings by `scripts/check-tree-sitter-inventory.js`.
+// - That each spelling is a whole token of its kind is proved here of the
+//   scanner (`token_kinds_spelled_*`) and tested of the Rust lexer
+//   (`crates/linked/tests/scanner.rs`).
+//
+// A kind with no spelling is a class: names, numerals, literals, holes,
+// whitespace, comments and the end of the source. A new punctuation token
+// is a `KIND_*`, its states in the automaton, and a row here.
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+import utf8;
+import lexer_scan;
+import lexer_tokens;
+
+// A kind: its code (a `KIND_*` of `lexer_scan`), its name as the Rust
+// lexer's `TokKind` spells it, and every text that is one token of it.
+record TokenKind { code: u64, name: String, spellings: List<String> }
+
+// Every kind, in code order: the row at position `k` (from 1) has code `k`.
+def TOKEN_KINDS: List<TokenKind> = [
+    TokenKind(KIND_IDENT, "Ident", []),
+    TokenKind(KIND_NUM, "Num", []),
+    TokenKind(KIND_SCALED, "Scaled", []),
+    TokenKind(KIND_CHAR, "Char", []),
+    TokenKind(KIND_STR, "Str", []),
+    TokenKind(KIND_ARG_SLOT, "ArgSlot", []),
+    TokenKind(KIND_HOLE, "Hole", []),
+    TokenKind(KIND_LPAREN, "LParen", ["("]),
+    TokenKind(KIND_RPAREN, "RParen", [")"]),
+    TokenKind(KIND_LBRACE, "LBrace", ["{"]),
+    TokenKind(KIND_RBRACE, "RBrace", ["}"]),
+    TokenKind(KIND_COMMA, "Comma", [","]),
+    TokenKind(KIND_COLON, "Colon", [":"]),
+    TokenKind(KIND_SEMI, "Semi", [";"]),
+    TokenKind(KIND_AT, "At", ["@"]),
+    TokenKind(KIND_DOT, "Dot", ["."]),
+    TokenKind(KIND_PLUS, "Plus", ["+"]),
+    TokenKind(KIND_MINUS, "Minus", ["-"]),
+    TokenKind(KIND_BANG, "Bang", ["!"]),
+    TokenKind(KIND_PLUS_PLUS, "PlusPlus", ["++"]),
+    TokenKind(KIND_STAR, "Star", ["*"]),
+    TokenKind(KIND_LT, "Lt", ["<"]),
+    TokenKind(KIND_LT_EQ, "LtEq", ["<="]),
+    TokenKind(KIND_GT, "Gt", [">"]),
+    TokenKind(KIND_LBRACKET, "LBracket", ["["]),
+    TokenKind(KIND_RBRACKET, "RBracket", ["]"]),
+    TokenKind(KIND_LSEMANTIC, "LSemantic", ["⟦"]),
+    TokenKind(KIND_RSEMANTIC, "RSemantic", ["⟧"]),
+    TokenKind(KIND_LANGLE, "LAngle", ["⟨"]),
+    TokenKind(KIND_RANGLE, "RAngle", ["⟩"]),
+    TokenKind(KIND_PIPE, "Pipe", ["|"]),
+    TokenKind(KIND_AMP, "Amp", ["&"]),
+    TokenKind(KIND_SLASH, "Slash", ["/"]),
+    TokenKind(KIND_PERCENT, "Percent", ["%"]),
+    TokenKind(KIND_SHL, "Shl", ["<<"]),
+    // A shift where a token may start one: at the start, after whitespace,
+    // `(` or `,` (`scan_begin`); two `Gt` after anything else.
+    TokenKind(KIND_SHR, "Shr", [">>"]),
+    TokenKind(KIND_ARROW, "Arrow", ["→", "->"]),
+    TokenKind(KIND_FAT_ARROW, "FatArrow", ["=>"]),
+    TokenKind(KIND_TURNSTILE, "Turnstile", ["⊢", "|-"]),
+    TokenKind(KIND_AMP_AMP, "AmpAmp", ["&&"]),
+    TokenKind(KIND_PIPE_PIPE, "PipePipe", ["||"]),
+    TokenKind(KIND_NORM_BAR, "NormBar", ["∥"]),
+    TokenKind(KIND_BULLET, "Bullet", ["∙"]),
+    TokenKind(KIND_APPROX, "Approx", ["≈"]),
+    TokenKind(KIND_CARET, "Caret", ["^"]),
+    TokenKind(KIND_SUP_INVERSE, "SupInverse", ["⁻¹"]),
+    TokenKind(KIND_JOIN, "Join", ["⊔"]),
+    TokenKind(KIND_MEET, "Meet", ["⊓"]),
+    TokenKind(KIND_NEG, "Neg", ["¬"]),
+    TokenKind(KIND_WEDGE, "Wedge", ["∧"]),
+    TokenKind(KIND_VEE, "Vee", ["∨"]),
+    TokenKind(KIND_IFF, "Iff", ["↔", "<->"]),
+    TokenKind(KIND_LARROW, "LArrow", ["←", "<-"]),
+    TokenKind(KIND_EXISTS, "Exists", ["∃"]),
+    TokenKind(KIND_BIG_SUM, "BigSum", ["∑"]),
+    TokenKind(KIND_BIG_PROD, "BigProd", ["∏"]),
+    TokenKind(KIND_UP_ARROW, "UpArrow", ["↑"]),
+    TokenKind(KIND_FORALL, "Forall", ["∀"]),
+    TokenKind(KIND_DOLLAR, "Dollar", ["$"]),
+    TokenKind(KIND_LAMBDA, "Lambda", ["λ"]),
+    TokenKind(KIND_EQ, "Eq", ["="]),
+    TokenKind(KIND_NE, "Ne", ["≠"]),
+    // Cut, and refused by the parser: `=` is the one equality.
+    TokenKind(KIND_EQ_EQ, "EqEq", ["=="]),
+    TokenKind(KIND_COLON_EQ, "ColonEq", [":="]),
+    TokenKind(KIND_COLON_COLON, "ColonColon", ["::"]),
+    TokenKind(KIND_EOF, "Eof", []),
+    // The two a scanner has and a lexer drops.
+    TokenKind(KIND_SPACE, "Space", []),
+    TokenKind(KIND_COMMENT, "Comment", []),
+    TokenKind(KIND_OPLUS, "OPlus", ["⊕"]),
+    TokenKind(KIND_TILDE, "Tilde", ["~"]),
+];
+
+// Whether the codes of `kinds` are `next`, `next + 1`, … in order.
+fn TokenKind::numbered(kinds: List<TokenKind>, next: u64) → Bool {
+    match kinds {
+        Nil => True,
+        Cons(kind, rest) => kind.code.eq_bit(next) && TokenKind::numbered(rest, next.add(1)),
+    }
+}
+
+// Whether the scanner, from the start of a source that is `spelling` and
+// nothing else, cuts one token of kind `code` that runs to its end.
+fn TokenKind::cuts(code: u64, spelling: String) → Bool {
+    match Accepted::longest(scan_begin(0), utf8::encode(spelling), 0, None) {
+        None => False,
+        Some(found) => match found.rest {
+            Nil => found.kind.eq_bit(code),
+            Cons(_, _) => False,
+        },
+    }
+}
+
+// Whether every one of `spellings` is a whole token of kind `code`.
+fn TokenKind::cuts_all(code: u64, spellings: List<String>) → Bool {
+    match spellings {
+        Nil => True,
+        Cons(spelling, rest) => TokenKind::cuts(code, spelling) && TokenKind::cuts_all(code, rest),
+    }
+}
+
+// Whether every spelling of every row of `kinds` is a whole token of its row's kind.
+fn TokenKind::spelled(kinds: List<TokenKind>) → Bool {
+    match kinds {
+        Nil => True,
+        Cons(kind, rest) => TokenKind::cuts_all(kind.code, kind.spellings) && TokenKind::spelled(rest),
+    }
+}
+
+// The table's codes are its positions, so a code names one row and the
+// rows are every code from 1 to the last.
+theorem token_kinds_numbered(): TokenKind::numbered(TOKEN_KINDS, 1) = True { refl }
+
+// The table says what the scanner does: each spelling, scanned alone, is
+// one token of its row's kind. In three parts, each within what one
+// conversion may evaluate; the last part holds the rows added since, and
+// is split again when one more row puts it past that.
+theorem token_kinds_spelled_first(): TokenKind::spelled(TOKEN_KINDS.take(24)) = True { refl }
+theorem token_kinds_spelled_middle(): TokenKind::spelled(TOKEN_KINDS.drop(24).take(24)) = True { refl }
+theorem token_kinds_spelled_last(): TokenKind::spelled(TOKEN_KINDS.drop(48)) = True { refl }

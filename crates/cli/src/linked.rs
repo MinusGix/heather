@@ -399,6 +399,154 @@ pub fn constants_rs(table: &str, module: &dyn Fn(&str) -> Result<String, String>
     Ok(text)
 }
 
+/// The module that holds the token kinds' table, `TOKEN_KINDS`, from the
+/// repository's root.
+pub const KINDS_TABLE: &str = "lib/lang/lexer/lexer_kinds.hthr";
+/// The module whose `KIND_*` constants number the token kinds.
+pub const KINDS_NUMBERED: &str = "lib/lang/lexer/lexer_scan.hthr";
+
+/// A row of `TOKEN_KINDS`: the `KIND_*` it names, its code, its name as the
+/// Rust lexer's `TokKind` spells it, and its spellings.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TokenKind {
+    pub constant: String,
+    pub code: u64,
+    pub name: String,
+    pub spellings: Vec<String>,
+}
+
+/// The rows of `TOKEN_KINDS` in [`KINDS_TABLE`], each code its `KIND_*` of
+/// [`KINDS_NUMBERED`], read from the sources as written (as
+/// [`constants_rs`] reads a `def`: nothing is evaluated, and a row that is
+/// not `TokenKind(KIND_<name>, "<Name>", ["<spelling>", …])` is refused).
+/// Refused too, so the table is the one numbering: a `KIND_*` no row
+/// names, two rows of one `KIND_*` or one spelling, a code that is not the
+/// row's position (from 1), and a name that is not its constant's (`LtEq`
+/// for `KIND_LT_EQ`: the same letters, case and `_` aside).
+pub fn token_kinds(module: &dyn Fn(&str) -> Result<String, String>) -> Result<Vec<TokenKind>, String> {
+    use heather_syntax::ast::{ExprKind, Item};
+    let parse = |path: &str| -> Result<heather_syntax::ast::File, String> {
+        heather_syntax::parse_file(&module(path)?).map_err(|e| format!("{path}: does not parse: {e:?}"))
+    };
+    let numbered = parse(KINDS_NUMBERED)?;
+    let mut codes: Vec<(String, u64)> = Vec::new();
+    for item in &numbered.items {
+        let Item::Decl(decl) = item else { continue };
+        if !decl.value || !decl.name.starts_with("KIND_") { continue }
+        let code = match (decl.body.stmts.is_empty(), &decl.body.result.kind) {
+            (true, ExprKind::Num(value)) => value.as_u64(),
+            _ => None,
+        }.ok_or_else(|| format!("{KINDS_NUMBERED}: `{}` is not `def {}: u64 = <numeral>;`", decl.name, decl.name))?;
+        codes.push((decl.name.clone(), code));
+    }
+    let table = parse(KINDS_TABLE)?;
+    let rows = table.items.iter().find_map(|item| match item {
+        Item::Decl(decl) if decl.value && decl.name == "TOKEN_KINDS" && decl.body.stmts.is_empty() => match &decl.body.result.kind {
+            ExprKind::CollectionLit(rows) => Some(rows),
+            _ => None,
+        },
+        _ => None,
+    }).ok_or_else(|| format!("{KINDS_TABLE}: no `def TOKEN_KINDS: List<TokenKind> = [ … ];`"))?;
+    let mut kinds: Vec<TokenKind> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let position = index as u64 + 1;
+        let not_a_row = || format!("{KINDS_TABLE}: row {position} of `TOKEN_KINDS` is not `TokenKind(KIND_<name>, \"<Name>\", [\"<spelling>\", …])`");
+        let ExprKind::App { head, args, named, .. } = &row.kind else { return Err(not_a_row()) };
+        let (ExprKind::Var(head), [constant, name, spellings], true) = (&head.kind, args.as_slice(), named.is_empty()) else { return Err(not_a_row()) };
+        let (true, ExprKind::Var(constant), ExprKind::Str(name), ExprKind::CollectionLit(spellings)) = (head == "TokenKind", &constant.kind, &name.kind, &spellings.kind) else {
+            return Err(not_a_row());
+        };
+        let spellings = spellings.iter().map(|spelling| match &spelling.kind {
+            ExprKind::Str(text) if !text.is_empty() => Ok(text.clone()),
+            _ => Err(not_a_row()),
+        }).collect::<Result<Vec<_>, _>>()?;
+        let code = codes.iter().find(|(named, _)| named == constant).map(|(_, code)| *code)
+            .ok_or_else(|| format!("{KINDS_TABLE}: row {position} names `{constant}`, which {KINDS_NUMBERED} does not define"))?;
+        if code != position {
+            return Err(format!("{KINDS_TABLE}: row {position} is `{constant}` = {code}; the rows are in code order, from 1"));
+        }
+        let letters = |text: &str| text.replace('_', "").to_uppercase();
+        if constant.strip_prefix("KIND_").map(letters) != Some(letters(name)) || !identifier(name) {
+            return Err(format!("{KINDS_TABLE}: row {position} names `{constant}` `{name}`; a row's name is its constant's letters"));
+        }
+        for spelling in &spellings {
+            if let Some(other) = kinds.iter().find(|kind| kind.spellings.contains(spelling)) {
+                return Err(format!("{KINDS_TABLE}: `{spelling}` spells both `{}` and `{name}`", other.name));
+            }
+        }
+        kinds.push(TokenKind { constant: constant.clone(), code, name: name.clone(), spellings });
+    }
+    if let Some((constant, code)) = codes.iter().find(|(constant, _)| !kinds.iter().any(|kind| &kind.constant == constant)) {
+        return Err(format!("{KINDS_TABLE}: `{constant}` = {code} of {KINDS_NUMBERED} has no row in `TOKEN_KINDS`"));
+    }
+    Ok(kinds)
+}
+
+/// `generated/kinds.rs`: the token kinds of [`token_kinds`] as a Rust
+/// `enum Kind`, its discriminants the codes, with every kind in code order
+/// and each kind's spellings. The linked scanner's `Kind` is this file, and
+/// so is the Rust lexer's `ScanKind` (`heather_syntax::lexer::scan_code`),
+/// so neither crate numbers a kind by hand.
+pub fn kinds_rs(module: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
+    let kinds = token_kinds(module)?;
+    let mut text = format!("// Generated by `scripts/linked` from `TOKEN_KINDS` of `{KINDS_TABLE}`
+// and the `KIND_*` constants of `{KINDS_NUMBERED}`. Not edited:
+// `crates/cli/tests/linked_exports.rs` holds this file to its generator
+// (`heather_cli::linked::kinds_rs`). Included by `heather-linked` as
+// `scanner::Kind` and by `heather-syntax` as `lexer::ScanKind`.
+
+/// A token's kind, numbered as the scanner accepts it: its `KIND_*`. A kind
+/// with no spelling is a class (names, numerals, literals, holes,
+/// whitespace, comments, the end of the source).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Kind {{
+");
+    let spelled = |kind: &TokenKind| kind.spellings.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", ");
+    for kind in &kinds {
+        let shown = kind.spellings.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
+        let doc = if shown.is_empty() { format!("`{}`.", kind.constant) } else { format!("`{}`: {shown}.", kind.constant) };
+        text.push_str(&format!("    /// {doc}\n    {} = {},\n", kind.name, kind.code));
+    }
+    text.push_str(&format!("}}
+
+impl Kind {{
+    /// Every kind, in code order: `ALL[k as usize - 1] == k`.
+    pub const ALL: [Kind; {}] = [
+", kinds.len()));
+    for kind in &kinds {
+        text.push_str(&format!("        Kind::{},\n", kind.name));
+    }
+    text.push_str("    ];
+
+    /// The kind with this code, if it is one.
+    pub const fn of_code(code: u64) -> Option<Kind> {
+        if code == 0 || code > Kind::ALL.len() as u64 {
+            return None;
+        }
+        Some(Kind::ALL[code as usize - 1])
+    }
+
+    /// The code the automaton accepts this kind with.
+    pub const fn code(self) -> u64 {
+        self as u64
+    }
+
+    /// The texts that are one token of this kind; none for a class.
+    pub const fn spellings(self) -> &'static [&'static str] {
+        match self {
+");
+    for kind in kinds.iter().filter(|kind| !kind.spellings.is_empty()) {
+        text.push_str(&format!("            Kind::{} => &[{}],\n", kind.name, spelled(kind)));
+    }
+    text.push_str("            _ => &[],
+        }
+    }
+}
+");
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +566,29 @@ mod tests {
             ("m.hthr\tBITS\tmore\n", "is not `<module>"), ("n.hthr\tBITS\n", "n.hthr was read")] {
             let refused = constants_rs(row, &module).unwrap_err();
             assert!(refused.contains(why), "{row}: {refused}");
+        }
+    }
+
+    // The table is the one numbering: each refusal names what is wrong.
+    #[test]
+    fn a_token_kind_table_is_refused_where_it_is_not_one_numbering() {
+        let numbered = "def KIND_IDENT: u64 = 1;\ndef KIND_LT_EQ: u64 = 2;\n";
+        let table = |rows: &str| -> Result<Vec<TokenKind>, String> {
+            let (numbered, rows) = (numbered.to_string(), format!("def TOKEN_KINDS: List<TokenKind> = [{rows}];\n"));
+            token_kinds(&move |path: &str| Ok(if path == KINDS_NUMBERED { numbered.clone() } else { rows.clone() }))
+        };
+        let kinds = table(r#"TokenKind(KIND_IDENT, "Ident", []), TokenKind(KIND_LT_EQ, "LtEq", ["<=", "≤"])"#).unwrap();
+        assert_eq!(kinds[1], TokenKind { constant: "KIND_LT_EQ".into(), code: 2, name: "LtEq".into(), spellings: vec!["<=".into(), "≤".into()] });
+        for (rows, why) in [
+            (r#"TokenKind(KIND_IDENT, "Ident", [])"#, "`KIND_LT_EQ` = 2 of lib/lang/lexer/lexer_scan.hthr has no row"),
+            (r#"TokenKind(KIND_LT_EQ, "LtEq", []), TokenKind(KIND_IDENT, "Ident", [])"#, "row 1 is `KIND_LT_EQ` = 2"),
+            (r#"TokenKind(KIND_IDENT, "Ident", []), TokenKind(KIND_LT_EQ, "Le", [])"#, "row 2 names `KIND_LT_EQ` `Le`"),
+            (r#"TokenKind(KIND_IDENT, "Ident", ["<="]), TokenKind(KIND_LT_EQ, "LtEq", ["<="])"#, "`<=` spells both `Ident` and `LtEq`"),
+            (r#"TokenKind(KIND_IDENT, "Ident", []), TokenKind(KIND_GT, "Gt", [])"#, "row 2 names `KIND_GT`, which"),
+            (r#"TokenKind(KIND_IDENT, "Ident", []), TokenKind(KIND_LT_EQ, "LtEq", [""])"#, "row 2 of `TOKEN_KINDS` is not"),
+        ] {
+            let refused = table(rows).expect_err(rows);
+            assert!(refused.contains(why), "{rows}: {refused}");
         }
     }
 
