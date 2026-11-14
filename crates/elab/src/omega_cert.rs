@@ -1608,6 +1608,21 @@ fn nat_affine_syntax_within(
                     });
                 }
             }
+            // `a * Succ(b)` is `a * b + a` by `mul`'s definition, which
+            // recurses on its right: the product of a variable and a pattern
+            // variable's successor opens to the product at the pattern
+            // variable, which the induction hypothesis states.
+            if let Term::Succ(pred) = &***right {
+                let product = with_arg_at(tm, 0, pred);
+                let left_nat = nat_term_source(elab, cx, &product)?;
+                let right_nat = nat_term_source(elab, cx, left)?;
+                return Ok(AffineSyntax::NatAdd {
+                    left_nat,
+                    right_nat,
+                    left: Box::new(nat_affine_syntax_within(elab, cx, &product, atoms, depth)?),
+                    right: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
+                });
+            }
         }
     }
     if let Some(args) = named_args(elab, tm, "nat::Nat::mod")
@@ -1718,16 +1733,25 @@ fn nat_affine_syntax_within(
     // (issues/omega-atoms-up-to-computation.md): `of_bit(True)` is `1`. The
     // certificate still spells the term, and the checker's conversion
     // computes it again.
-    if head_is_global(tm)
-        && let Some(value) = elab
-            .goal_oracle()
-            .nat_value(&cx.gamma, tm, ATOM_COMPUTATION_STEPS)
-            .and_then(|value| Z::try_from(value).ok())
-    {
-        return Ok(AffineSyntax::Const {
-            value,
-            source: int(value),
-        });
+    if head_is_global(tm) {
+        // A power keeps the probe's budget: `closed_power` is the gate on
+        // what the kernel is asked to evaluate there.
+        let steps = if named_args(elab, tm, "nat::Nat::pow").is_some() {
+            ATOM_COMPUTATION_STEPS
+        } else {
+            NUMERAL_COMPUTATION_STEPS
+        };
+        match elab.goal_oracle().nat_value_within(&cx.gamma, tm, steps) {
+            Ok(Some(value)) => {
+                let value = Z::from(value);
+                return Ok(AffineSyntax::Const {
+                    value,
+                    source: int(value),
+                });
+            }
+            Ok(None) => {}
+            Err(()) => stopped(format!("`{nat_source}` did not compute within {steps} steps")),
+        }
     }
     // The atom fallback (docs/omega-measure-reduction-design.md §2): before a
     // measure at a constructor pattern becomes an opaque atom, ask whether
@@ -1768,6 +1792,33 @@ fn nat_affine_syntax_within(
 /// (issues/omega-atoms-up-to-computation.md). Atoms are reflected per
 /// hypothesis, so this is a probe's budget: past it, the atom stays opaque.
 const ATOM_COMPUTATION_STEPS: u64 = 256;
+
+/// Evaluation steps a call may spend computing to a numeral before it is an
+/// atom: `u64::ofNat(0).toNat()` takes a few hundred, a layout's size a few
+/// thousand. A call stuck on a local stops long before it, so the budget is
+/// paid only by a computation that keeps going; one it stops is named in the
+/// failure report ([`stopped`]).
+const NUMERAL_COMPUTATION_STEPS: u64 = 4096;
+
+thread_local! {
+    /// What a bound stopped while reflecting the call in progress, for its
+    /// failure report.
+    static STOPPED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Note that a bound stopped opening a term; the failure report lists it.
+fn stopped(note: String) {
+    STOPPED.with(|cell| {
+        let mut notes = cell.borrow_mut();
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+    });
+}
+
+fn take_stopped() -> Vec<String> {
+    STOPPED.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
 
 fn head_is_global(tm: &Rc<Term>) -> bool {
     matches!(app_spine(tm).0, Term::GlobalTm { .. })
@@ -1865,7 +1916,15 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     // arguments is a constructor value. Everything else — a call at a
     // variable, a projection out of a neutral — is left exactly as it was,
     // and pays no reduction.
-    if !matches!(head, Term::GlobalTm { .. }) || !args.iter().any(|arg| is_ctor_value(arg)) {
+    if !matches!(head, Term::GlobalTm { .. })
+        || !args.iter().any(|arg| is_ctor_value(arg) || matches!(&***arg, Term::NatLit(_)))
+    {
+        return None;
+    }
+    // The operations `omega` reads, splits or keeps as atoms on purpose are
+    // never unfolded here: a power past `POWER_EVALUATION_STEPS` stays an
+    // atom, and `sub`, `min`, `max` have their case splits.
+    if NAT_PRIMITIVES.iter().any(|name| named_args(elab, tm, name).is_some()) {
         return None;
     }
     let candidates = recursive_field_candidates(elab, cx, tm);
@@ -1884,7 +1943,92 @@ fn computed_successor(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> 
     if !matches!(&*reduct, Term::Succ(_)) {
         return None;
     }
-    named_arithmetic_shape(elab, cx, &reduct, &[], depth)
+    // The leaves are named by the call at the parts of its arguments: the
+    // fields of an argument that is, or computes to, a constructor value,
+    // and those an argument's own call would name. `ending(z, l).len()`
+    // is `Succ` of `(zero_bytes(z) ++ be_bytes(…)).len()`, its argument's
+    // tail, and `spelled(Cons(w, rest)).len()` ends in
+    // `spelled(rest).len()`.
+    let candidates = computed_candidates(elab, cx, tm, CANDIDATE_NESTING);
+    named_arithmetic_shape(elab, cx, &reduct, &candidates, depth)
+}
+
+/// Nat operations [`reduce_and_name`] leaves to the reader.
+const NAT_PRIMITIVES: [&str; 8] = [
+    "nat::Nat::add",
+    "nat::Nat::mul",
+    "nat::Nat::pow",
+    "nat::Nat::sub",
+    "nat::Nat::div",
+    "nat::Nat::mod",
+    "nat::Nat::max",
+    "nat::Nat::min",
+];
+
+/// How deep [`computed_candidates`] looks into nested calls.
+const CANDIDATE_NESTING: u32 = 2;
+
+/// At most this many candidates are tried at each leaf.
+const CANDIDATE_LIMIT: usize = 16;
+
+/// `tm`, a global call, with one argument replaced by a part of it: a field
+/// of a constructor value the argument is or computes to, or (to `nesting`
+/// calls deep) one of the argument's own candidates. Each spells.
+fn computed_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, nesting: u32) -> Vec<Rc<Term>> {
+    let (head, args) = app_spine(tm);
+    if !matches!(head, Term::GlobalTm { .. }) {
+        return Vec::new();
+    }
+    let arity = args.len();
+    let mut out = Vec::new();
+    for (position, arg) in args.iter().enumerate() {
+        let mut parts = Vec::new();
+        let value = if is_ctor_value(arg) {
+            Some(Rc::clone(arg))
+        } else if head_is_global(arg) {
+            elab.goal_oracle()
+                .whnf_term_bounded(&cx.gamma, arg)
+                .ok()
+                .map(Rc::new)
+                .filter(is_ctor_value)
+        } else {
+            None
+        };
+        if let Some(value) = value {
+            parts.extend(constructor_fields(elab, cx, &value));
+        }
+        if nesting > 0 {
+            parts.extend(computed_candidates(elab, cx, arg, nesting - 1));
+        }
+        for part in parts {
+            let candidate = with_arg_at(tm, arity - 1 - position, &part);
+            if !out.contains(&candidate) && nat_term_source(elab, cx, &candidate).is_ok() {
+                out.push(candidate);
+            }
+            if out.len() >= CANDIDATE_LIMIT {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// The fields of a constructor value; none for anything else, or a
+/// container constructor.
+fn constructor_fields(elab: &Elaborator, cx: &Cx, value: &Rc<Term>) -> Vec<Rc<Term>> {
+    match &**value {
+        Term::Supf { shape, label, children, .. } => {
+            let Some(ind) = elab.display_tag_of(shape) else { return Vec::new() };
+            let index = crate::spelling::inj_path(label, ind.ctors.len()).ctor;
+            let Some(ctor) = ind.ctors.get(index) else { return Vec::new() };
+            if ctor.container().is_some() {
+                return Vec::new();
+            }
+            crate::spelling::tuple_fields(elab, cx, children, 0, ctor.arity(), 0).unwrap_or_default()
+        }
+        Term::Succ(inner) => vec![Rc::clone(inner)],
+        _ => Vec::new(),
+    }
 }
 
 /// The Int constructor value `OfNat(e)` a global call computes to, when `e`
@@ -1934,21 +2078,7 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
     let arity = args.len();
     let mut out = Vec::new();
     for (position, arg) in args.iter().enumerate() {
-        let fields = match &***arg {
-            Term::Supf { shape, label, children, .. } => {
-                let Some(ind) = elab.display_tag_of(shape) else { continue };
-                let index = crate::spelling::inj_path(label, ind.ctors.len()).ctor;
-                let Some(ctor) = ind.ctors.get(index) else { continue };
-                if ctor.container().is_some() { continue; }
-                let Some(fields) = crate::spelling::tuple_fields(elab, cx, children, 0, ctor.arity(), 0) else {
-                    continue;
-                };
-                fields
-            }
-            Term::Succ(inner) => vec![Rc::clone(inner)],
-            _ => continue,
-        };
-        for field in fields {
+        for field in constructor_fields(elab, cx, arg) {
             // `app_spine` counts from the head; `with_arg_at` from the outside.
             let candidate = with_arg_at(tm, arity - 1 - position, &field);
             if nat_term_source(elab, cx, &candidate).is_ok() {
@@ -2010,8 +2140,39 @@ fn named_arithmetic_reduct(
     if depth == 0 {
         return None;
     }
-    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
-    named_arithmetic_shape(elab, cx, &reduct, candidates, depth)
+    let oracle = elab.goal_oracle();
+    if let Ok(reduct) = oracle.whnf_term_bounded(&cx.gamma, tm)
+        && let Some(named) = named_arithmetic_shape(elab, cx, &Rc::new(reduct), candidates, depth)
+    {
+        return Some(named);
+    }
+    // The weak head may be past the arithmetic: `+` itself unfolds to its
+    // eliminator. So the head reducts are walked for the first whose head
+    // is arithmetic and whose leaves are named.
+    let mut walked = 0;
+    for reduct in oracle.unfold(&cx.gamma, tm, Unfold::ArithmeticBody) {
+        walked += 1;
+        if !arithmetic_head(elab, &reduct) {
+            continue;
+        }
+        if let Some(named) = named_arithmetic_shape(elab, cx, &Rc::new(reduct), candidates, depth) {
+            return Some(named);
+        }
+    }
+    if walked as u64 == Unfold::ArithmeticBody.steps()
+        && let Ok(spelled) = nat_term_source(elab, cx, tm)
+    {
+        stopped(format!("`{spelled}` reached no arithmetic within {walked} unfolding steps"));
+    }
+    None
+}
+
+/// Whether `tm`'s head is one [`named_arithmetic_shape`] reads.
+fn arithmetic_head(elab: &Elaborator, tm: &Term) -> bool {
+    matches!(tm, Term::Zero | Term::NatLit(_) | Term::Succ(_))
+        || ["nat::Nat::add", "nat::Nat::mul", "nat::Nat::div", "nat::Nat::mod"]
+            .iter()
+            .any(|name| named_args(elab, tm, name).is_some())
 }
 
 /// §2 step 2's test and step 3's rebuild, on a term already in weak head
@@ -2025,7 +2186,9 @@ fn named_arithmetic_shape(
     depth: u32,
 ) -> Option<Rc<Term>> {
     match &**tm {
-        Term::Zero => return Some(Rc::clone(tm)),
+        // A definition's base case that is a parameter or a numeral:
+        // `x.doubled(0)` is `x`.
+        Term::Zero | Term::NatLit(_) | Term::Var(_) => return Some(Rc::clone(tm)),
         Term::Succ(inner) => {
             let named = name_leaf(elab, cx, inner, candidates, depth)?;
             return Some(Rc::new(Term::Succ(named)));
@@ -2060,6 +2223,12 @@ fn name_leaf(
     if nat_term_source(elab, cx, leaf).is_ok() {
         return Some(Rc::clone(leaf));
     }
+    // A leaf that is a β-redex is its contractum, at no cost to the depth:
+    // a fold's accumulator is its step function applied
+    // (`(λ acc b => acc * 256 + b.toNat())(acc′, b2)`).
+    if let Some(contracted) = crate::spelling::beta_head(leaf) {
+        return name_leaf(elab, cx, &Rc::new(contracted), candidates, depth);
+    }
     for candidate in candidates {
         if elab
             .goal_oracle()
@@ -2083,8 +2252,46 @@ fn name_leaf(
     if let Some(shaped) = named_arithmetic_shape(elab, cx, leaf, candidates, depth) {
         return Some(shaped);
     }
+    if let Some(peeled) = peeled_successors(elab, cx, leaf, candidates) {
+        return Some(peeled);
+    }
     named_arithmetic_reduct(elab, cx, leaf, candidates, depth - 1)
 }
+
+/// Successors a leaf computes to, one after another, peeled without
+/// spending the reduction depth until what is left spells or converts to a
+/// candidate: `spelled(Cons(w, rest)).len()` is four successors of
+/// `spelled(rest).len()`. A list of known length has as many, so the peels
+/// are bounded rather than counted against the depth.
+fn peeled_successors(elab: &Elaborator, cx: &Cx, leaf: &Rc<Term>, candidates: &[Rc<Term>]) -> Option<Rc<Term>> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let mut current = Rc::clone(leaf);
+    for peels in 1..=SUCCESSOR_PEELS {
+        let reduct = oracle.whnf_term_bounded(&cx.gamma, &current).ok()?;
+        let Term::Succ(inner) = reduct else { return None };
+        // A candidate first: a reduct that spells may still be one no fact
+        // states (`(Cons(b, …) ++ t).len()`), where the candidate is the
+        // spelling the facts share.
+        let named = candidates
+            .iter()
+            .find(|candidate| {
+                oracle.convert_term(&cx.gamma, Layer::Prog, &inner, candidate, &Type::Nat, &Level::Zero).is_ok()
+            })
+            .cloned()
+            .or_else(|| nat_term_source(elab, cx, &inner).is_ok().then(|| Rc::clone(&inner)));
+        if let Some(named) = named {
+            return Some((0..peels).fold(named, |term, _| Rc::new(Term::Succ(term))));
+        }
+        current = inner;
+    }
+    None
+}
+
+/// The successors [`peeled_successors`] takes off before it gives up.
+const SUCCESSOR_PEELS: usize = 16;
 
 fn atom_list_source(atoms: &AtomTable<ReflectedAtom>) -> String {
     atoms
@@ -2422,7 +2629,54 @@ struct Collected {
     relations: Vec<ReflectedConstraint<AffineSyntax, String>>,
     names: Vec<String>,
     skipped: Vec<String>,
+    ranges: Vec<WordRange>,
 }
+
+/// A word's value is below its range: `toNat(w) < 2^n` at a literal width
+/// `n`, for an atom `toNat(w)` met anywhere, in the goal or a fact
+/// (issues/bv-omega-hypothesis-word-bound.md). Stated beside the facts, like a
+/// division atom's bounds, so it never widens what a relevance layer reads.
+struct WordRange {
+    atom: AtomId,
+    top: Z,
+    evidence: String,
+}
+
+/// Widths past this have no `i128` range to state.
+const WORD_RANGE_WIDTH: u32 = 126;
+
+/// The range of every word atom of the table whose width is a literal and
+/// whose range lemma is in scope.
+fn word_ranges(elab: &Elaborator, cx: &Cx, atoms: &AtomTable<ReflectedAtom>) -> Vec<WordRange> {
+    if elab.lookup_global(WORD_RANGE_LEMMA).is_none() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (atom, entry) in atoms.iter_with_ids() {
+        let Some(nat_source) = entry.nat_source.as_deref() else { continue };
+        if entry.division.is_some() {
+            continue;
+        }
+        let Some(args) = named_args(elab, &entry.term, "bitvec::BitVec::toNat") else { continue };
+        let [width, word] = args.as_slice() else { continue };
+        let Some(width) = nat_term_source(elab, cx, width).ok().as_deref().and_then(integer_source) else { continue };
+        let Some(top) = u32::try_from(width).ok().filter(|w| *w <= WORD_RANGE_WIDTH).and_then(|w| 2i128.checked_pow(w)) else {
+            continue;
+        };
+        let Some(word) = elab.spell_term_source(cx, word) else { continue };
+        let width = nat_lit(width);
+        out.push(WordRange {
+            atom,
+            top,
+            evidence: format!(
+                "omega::nat_lt_to_int({nat_source}, nat::Nat::pow(2, {width}), {WORD_RANGE_LEMMA}({width}, {word}))"
+            ),
+        });
+    }
+    out
+}
+
+const WORD_RANGE_LEMMA: &str = "bitvec::BitVec::toNat_lt_pow";
 
 /// An ordinary reflection, rendered: the facts, the atom list's source, the
 /// atoms' labels, and each atom's own source for CutSat.
@@ -2472,7 +2726,8 @@ fn collect_ordinary(
     if relations.is_empty() && skipped.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Collected { atoms, relations, names, skipped }))
+    let ranges = word_ranges(elab, cx, &atoms);
+    Ok(Some(Collected { atoms, relations, names, skipped, ranges }))
 }
 
 /// Reflect one fact. The caller rolls back its atoms if source spelling fails.
@@ -2820,7 +3075,19 @@ fn relevant_layers(collected: &Collected) -> Vec<std::collections::HashSet<Strin
 
 /// Render collected relations as Omega's initial facts over their atom list.
 fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
-    let Collected { atoms, mut relations, .. } = collected;
+    let Collected { atoms, mut relations, ranges, .. } = collected;
+    for range in ranges {
+        relations.push(ReflectedConstraint {
+            domain: Domain::NatEmbedded,
+            lhs: AffineSyntax::Add {
+                left: Box::new(AffineSyntax::Atom { index: range.atom, source: atoms.get(range.atom).source.clone() }),
+                right: Box::new(AffineSyntax::Const { value: 1, source: int(1) }),
+            },
+            relation: Relation::Le,
+            rhs: AffineSyntax::Const { value: range.top, source: int(range.top) },
+            evidence: range.evidence,
+        });
+    }
     let divisions = atoms
         .iter_with_ids()
         .filter_map(|(index, atom)| atom.division.clone().map(|division| (index, division)))
@@ -4189,6 +4456,7 @@ pub(crate) fn reconstruct(
         ));
     }
 
+    take_stopped();
     let ordinary = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
         collect_ordinary(elab, cx, None)
     })?;
@@ -4265,9 +4533,13 @@ pub(crate) fn reconstruct(
             let atom_count = reflected_atom_count(&facts);
             (facts, atoms_source, indexed_atom_labels(atom_count), None, None)
         };
+    let stops = take_stopped();
     refute(elab, cx, flags, reflection, true).map_err(|error| {
-        if skipped.is_empty() { error } else {
+        let error = if skipped.is_empty() { error } else {
             format!("{error}; skipped unspellable facts [{}]", skipped.join(", "))
+        };
+        if stops.is_empty() { error } else {
+            format!("{error}; left as atoms by a bound [{}]", stops.join(", "))
         }
     })
 }

@@ -542,6 +542,61 @@ impl Kind {{
     text.push_str("            _ => &[],
         }
     }
+
+    /// The longest spelling `text` starts with, as its kind and its length
+    /// in bytes; `None` where it starts with none. A lexer cuts a fixed
+    /// token by this, so a spelling is matched where the table has it and
+    /// nowhere else. (`>>` is a shift only where a token may start one, which
+    /// the bytes alone do not say: the caller decides that.)
+    pub fn spelled_at(text: &[u8]) -> Option<(Kind, usize)> {
+        match text.first()? {
+");
+    // Every spelling by its first byte, longest first, so the first that
+    // matches is the longest.
+    let mut by_first: std::collections::BTreeMap<u8, Vec<(&str, &TokenKind)>> = std::collections::BTreeMap::new();
+    for kind in &kinds {
+        for spelling in &kind.spellings {
+            by_first.entry(spelling.as_bytes()[0]).or_default().push((spelling, kind));
+        }
+    }
+    for (first, mut spellings) in by_first {
+        spellings.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.0.cmp(b.0)));
+        // A one-byte spelling is the first byte itself, so it is what is
+        // left when no longer one matches.
+        let alone = spellings.last().filter(|(spelling, _)| spelling.len() == 1).map(|(_, kind)| kind.name.clone());
+        let longer: Vec<_> = spellings.iter().filter(|(spelling, _)| spelling.len() > 1).collect();
+        text.push_str(&format!("            {first:#04x} => "));
+        if longer.is_empty() {
+            text.push_str(&format!("Some((Kind::{}, 1)),\n", alone.expect("a spelling")));
+            continue;
+        }
+        text.push_str("{\n");
+        for (index, (spelling, kind)) in longer.iter().enumerate() {
+            let keyword = if index == 0 { "                if" } else { " else if" };
+            text.push_str(&format!("{keyword} text.starts_with({spelling:?}.as_bytes()) {{\n                    Some((Kind::{}, {}))\n                }}", kind.name, spelling.len()));
+        }
+        let otherwise = alone.map(|name| format!("Some((Kind::{name}, 1))")).unwrap_or_else(|| "None".to_string());
+        text.push_str(&format!(" else {{\n                    {otherwise}\n                }}\n            }}\n"));
+    }
+    text.push_str("            _ => None,
+        }
+    }
+}
+
+/// Calls `$then!` with the name of every kind that has a spelling: the
+/// kinds a lexer's token type has as unit variants of the same names
+/// (`heather_syntax::TokKind`), which it maps to and from [`Kind`] by these.
+#[allow(unused_macros)]
+macro_rules! spelled_kinds {
+    ($then:ident) => {
+        $then! {
+");
+    for kind in kinds.iter().filter(|kind| !kind.spellings.is_empty()) {
+        text.push_str(&format!("            {}
+", kind.name));
+    }
+    text.push_str("        }
+    };
 }
 ");
     Ok(text)

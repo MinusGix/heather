@@ -16,12 +16,20 @@ name = "heather_linked"
 # against the Rust lexer. Never linked into anything shipped, and the
 # second never a dependency: the lexer is what the scanner replaces.
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["compress"] }
 heather-syntax = { path = "../syntax" }
 
 # `deny` where the workspace says `forbid`: linking the compiled bytes is
 # `global_asm!` and naming the functions in them an `unsafe extern` block, in
 # one module (`src/lib.rs`, where the certificate that justifies calling
 # them safely is named). Everything else is still refused.
+# How fast the linked code runs against Rust references, and what it costs
+# to compile (docs/native-benchmarking.md). Run through
+# `scripts/bench-native` (both profiles, the caps), never `cargo bench`.
+[[bench]]
+name = "native"
+path = "benches/native/main.rs"
+harness = false
+
 [lints.rust]
 unsafe_code = "deny"

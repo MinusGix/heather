@@ -162,9 +162,9 @@ pub fn digest(message: &[u8]) -> [u8; 32] {
 ///
 /// What is certified is that the code computes the Heather function, with
 /// the memory safety that goes with it. That the Heather function is
-/// FIPS 180-4's is not proved yet (`issues/sha2-compress-native.md`); the
-/// tests hold it to the standard's vectors and to an independent
-/// implementation.
+/// FIPS 180-4's compression is `Sha256::run_spec`
+/// (`lib/native/crypto/sha256_agreement.hthr`); the tests also hold it to
+/// the standard's vectors and to an independent implementation.
 pub mod block {
     use super::INITIAL;
     use crate::exports;
@@ -237,8 +237,10 @@ pub mod block {
 ///
 /// Each function reads and stores only under the length of the span it is
 /// in, as [`block`]'s does, and what is certified is the same: the code
-/// computes the Heather functions. That those are FIPS 180-4's is the
-/// tests' claim.
+/// computes the Heather functions. That those are FIPS 180-4's is
+/// `Sha256::linked_digest`
+/// (`lib/native/crypto/sha256_stream_agreement.hthr`): the thirty-two bytes
+/// read out below are `Sha2::digest` of the message.
 pub mod stream {
     use crate::exports;
 

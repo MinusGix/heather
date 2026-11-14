@@ -1,0 +1,55 @@
+# scripts/bench-native --save: the linked code's speed and the Rust references'.
+# docs/native-benchmarking.md says how to read it and when to re-record.
+env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
+env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
+env	commit	80141015e2db
+env	date	2026-11-14
+env	sha2-backend	x86 SHA extensions
+measure	compile/sha256_compress/cold	152.66	s
+measure	compile/sha256_compress/warm	10.00	s
+measure	compile/sha256_finish/cold	167.42	s
+measure	compile/sha256_finish/warm	10.83	s
+measure	compile/sha256_init/cold	168.39	s
+measure	compile/sha256_init/warm	4.40	s
+measure	compile/sha256_next/cold	58.09	s
+measure	compile/sha256_next/warm	2.11	s
+measure	compile/sha256_t1/cold	59.54	s
+measure	compile/sha256_t1/warm	2.28	s
+measure	compile/sha256_t2/cold	58.72	s
+measure	compile/sha256_t2/warm	2.16	s
+measure	compile/sha256_update/cold	177.52	s
+measure	compile/sha256_update/warm	12.23	s
+measure	count/scanner/lexer/per-byte	120.95	instructions/byte
+measure	count/scanner/linked/per-byte	453.25	instructions/byte
+measure	count/sha256/block/calls	3814	calls/block
+measure	count/sha256/block/instructions	215898	instructions/block
+measure	count/sha256/block/kind/64-bit immediates	7054	instructions/block
+measure	count/sha256/block/kind/adds	17560	instructions/block
+measure	count/sha256/block/kind/byte loads/stores	10272	instructions/block
+measure	count/sha256/block/kind/call/ret/frame	15259	instructions/block
+measure	count/sha256/block/kind/compares	13014	instructions/block
+measure	count/sha256/block/kind/frame loads/stores	61026	instructions/block
+measure	count/sha256/block/kind/jumps	22153	instructions/block
+measure	count/sha256/block/kind/logic	6029	instructions/block
+measure	count/sha256/block/kind/register moves	33515	instructions/block
+measure	count/sha256/block/kind/shifts	30016	instructions/block
+measure	time/debug/scanner/lib/lexer	87.80	MB/s
+measure	time/debug/scanner/lib/linked	26.85	MB/s
+measure	time/debug/sha256/block/linked	14016	ns/block
+measure	time/debug/sha256/block/mirror	33411	ns/block
+measure	time/debug/sha256/block/sha2	1544	ns/block
+measure	time/debug/sha256/block/textbook	3094	ns/block
+measure	time/debug/sha256/stream/linked	5.69	MB/s
+measure	time/debug/sha256/stream/mirror	2.37	MB/s
+measure	time/debug/sha256/stream/sha2	52.12	MB/s
+measure	time/debug/sha256/stream/textbook	25.70	MB/s
+measure	time/release/scanner/lib/lexer	101.06	MB/s
+measure	time/release/scanner/lib/linked	36.82	MB/s
+measure	time/release/sha256/block/linked	12475	ns/block
+measure	time/release/sha256/block/mirror	2815	ns/block
+measure	time/release/sha256/block/sha2	40	ns/block
+measure	time/release/sha256/block/textbook	247	ns/block
+measure	time/release/sha256/stream/linked	5.71	MB/s
+measure	time/release/sha256/stream/mirror	20.98	MB/s
+measure	time/release/sha256/stream/sha2	1640.89	MB/s
+measure	time/release/sha256/stream/textbook	237.44	MB/s

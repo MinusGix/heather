@@ -594,6 +594,7 @@ pub type Scan = fn(source: &[u8], at: usize, previous: u64) -> Option<(u64, usiz
 /// `lib/lang/lexer/lexer_kinds.hthr`, and which `heather_linked::scanner::Kind`
 /// is too. A file and not a dependency: this crate does not depend on the
 /// linked one ([`Scan`]).
+#[macro_use]
 pub mod scan_kind {
     include!("../../linked/generated/kinds.rs");
 }
@@ -660,41 +661,45 @@ pub fn scan_code(kind: &TokKind) -> u64 {
     kind.scan_kind().code()
 }
 
-impl TokKind {
-    /// The kind a scanner cuts this token as. The numbering is the
-    /// generated [`ScanKind`]'s, so this names kinds and never numbers them;
-    /// that every [`ScanKind`] but the two a lexer drops is some token's is
-    /// `crates/linked/tests/scanner.rs`.
-    #[rustfmt::skip]
-    pub fn scan_kind(&self) -> ScanKind {
-        match self {
-            TokKind::Ident(_) => ScanKind::Ident, TokKind::Num(_) | TokKind::SuffixedNum(..) => ScanKind::Num,
-            TokKind::Scaled(_) => ScanKind::Scaled, TokKind::Char(_) => ScanKind::Char, TokKind::Str(_) => ScanKind::Str,
-            TokKind::ArgSlot(_) => ScanKind::ArgSlot, TokKind::Hole(_) => ScanKind::Hole, TokKind::LParen => ScanKind::LParen,
-            TokKind::RParen => ScanKind::RParen, TokKind::LBrace => ScanKind::LBrace, TokKind::RBrace => ScanKind::RBrace,
-            TokKind::Comma => ScanKind::Comma, TokKind::Colon => ScanKind::Colon, TokKind::Semi => ScanKind::Semi,
-            TokKind::At => ScanKind::At, TokKind::Dot => ScanKind::Dot, TokKind::Plus => ScanKind::Plus,
-            TokKind::Minus => ScanKind::Minus, TokKind::Bang => ScanKind::Bang, TokKind::PlusPlus => ScanKind::PlusPlus,
-            TokKind::Star => ScanKind::Star, TokKind::Lt => ScanKind::Lt, TokKind::LtEq => ScanKind::LtEq,
-            TokKind::Gt => ScanKind::Gt, TokKind::LBracket => ScanKind::LBracket, TokKind::RBracket => ScanKind::RBracket,
-            TokKind::LSemantic => ScanKind::LSemantic, TokKind::RSemantic => ScanKind::RSemantic,
-            TokKind::LAngle => ScanKind::LAngle, TokKind::RAngle => ScanKind::RAngle, TokKind::Pipe => ScanKind::Pipe,
-            TokKind::Amp => ScanKind::Amp, TokKind::Slash => ScanKind::Slash, TokKind::Percent => ScanKind::Percent,
-            TokKind::Shl => ScanKind::Shl, TokKind::Shr => ScanKind::Shr, TokKind::Arrow => ScanKind::Arrow,
-            TokKind::FatArrow => ScanKind::FatArrow, TokKind::Turnstile => ScanKind::Turnstile,
-            TokKind::AmpAmp => ScanKind::AmpAmp, TokKind::PipePipe => ScanKind::PipePipe, TokKind::NormBar => ScanKind::NormBar,
-            TokKind::Bullet => ScanKind::Bullet, TokKind::Approx => ScanKind::Approx, TokKind::Caret => ScanKind::Caret,
-            TokKind::SupInverse => ScanKind::SupInverse, TokKind::Join => ScanKind::Join, TokKind::Meet => ScanKind::Meet,
-            TokKind::Neg => ScanKind::Neg, TokKind::Wedge => ScanKind::Wedge, TokKind::Vee => ScanKind::Vee,
-            TokKind::Iff => ScanKind::Iff, TokKind::LArrow => ScanKind::LArrow, TokKind::Exists => ScanKind::Exists,
-            TokKind::BigSum => ScanKind::BigSum, TokKind::BigProd => ScanKind::BigProd, TokKind::UpArrow => ScanKind::UpArrow,
-            TokKind::Forall => ScanKind::Forall, TokKind::Dollar => ScanKind::Dollar, TokKind::Lambda => ScanKind::Lambda,
-            TokKind::Eq => ScanKind::Eq, TokKind::Ne => ScanKind::Ne, TokKind::EqEq => ScanKind::EqEq,
-            TokKind::ColonEq => ScanKind::ColonEq, TokKind::ColonColon => ScanKind::ColonColon, TokKind::Eof => ScanKind::Eof,
-            TokKind::OPlus => ScanKind::OPlus, TokKind::Tilde => ScanKind::Tilde,
+// The kinds with a spelling are `TokKind`'s unit variants of the same
+// names, both ways: the generated list, so a symbol added to the table is
+// mapped here, and the match below stays exhaustive (a `TokKind` with no
+// row, or a row with no `TokKind`, does not compile).
+macro_rules! spelled_tok_kinds {
+    ($($name:ident)*) => {
+        impl ScanKind {
+            /// The token of a kind the table spells: the unit `TokKind` of
+            /// its name. Only [`ScanKind::spelled_at`]'s kinds are asked.
+            fn spelled_tok(self) -> TokKind {
+                match self {
+                    $(ScanKind::$name => TokKind::$name,)*
+                    _ => unreachable!("{self:?} has no spelling"),
+                }
+            }
         }
-    }
+
+        impl TokKind {
+            /// The kind a scanner cuts this token as. The numbering is the
+            /// generated [`ScanKind`]'s, so this names kinds and never
+            /// numbers them; that every [`ScanKind`] but the two a lexer
+            /// drops is some token's is `crates/linked/tests/scanner.rs`.
+            pub fn scan_kind(&self) -> ScanKind {
+                match self {
+                    TokKind::Ident(_) => ScanKind::Ident,
+                    TokKind::Num(_) | TokKind::SuffixedNum(..) => ScanKind::Num,
+                    TokKind::Scaled(_) => ScanKind::Scaled,
+                    TokKind::Char(_) => ScanKind::Char,
+                    TokKind::Str(_) => ScanKind::Str,
+                    TokKind::ArgSlot(_) => ScanKind::ArgSlot,
+                    TokKind::Hole(_) => ScanKind::Hole,
+                    TokKind::Eof => ScanKind::Eof,
+                    $(TokKind::$name => ScanKind::$name,)*
+                }
+            }
+        }
+    };
 }
+spelled_kinds!(spelled_tok_kinds);
 
 /// The token the scanner cut at `start..end` with kind `code`, its value
 /// read from those bytes alone; `None` where they are not one token of
@@ -902,55 +907,12 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             emit!(Tok { kind: TokKind::Hole(name), span: Span { start, end: i } });
             continue;
         }
-        // punctuation
-        // `get` rather than an index: the two-byte window can land *inside* a
-        // multi-byte codepoint (`(λ` puts `λ`'s first byte at `i + 1`), and
-        // slicing there panics. A non-boundary simply means "not a two-byte
-        // token".
-        // The three-byte window comes first, and for the same reason the
-        // two-byte one exists: `∙` (U+2219) is three bytes, so no shorter
-        // window can see it. `get` again rather than an index — a window that
-        // runs off the end, or lands inside a codepoint, simply means "not a
-        // token of this width".
-        if src.get(i..i + 5) == Some("⁻¹") {
-            emit!(Tok { kind: TokKind::SupInverse, span: Span { start, end: start + 5 } });
-            i += 5;
-            continue;
-        }
-        let three = src.get(i..i + 3).unwrap_or("");
-        // `<->` is three ASCII bytes and so is matched here, before the
-        // two-byte window could take a `<` off it. `<=` is unaffected: no
-        // three-byte window spells it.
-        let three_kind = match three {
-            "∙" => Some(TokKind::Bullet),
-            "≈" => Some(TokKind::Approx),
-            "⊔" => Some(TokKind::Join),
-            "⊓" => Some(TokKind::Meet),
-            "⊕" => Some(TokKind::OPlus),
-            "∧" => Some(TokKind::Wedge),
-            "∨" => Some(TokKind::Vee),
-            "↔" | "<->" => Some(TokKind::Iff),
-            "←" => Some(TokKind::LArrow),
-            "∃" => Some(TokKind::Exists),
-            "∑" => Some(TokKind::BigSum),
-            "∏" => Some(TokKind::BigProd),
-            "↑" => Some(TokKind::UpArrow),
-            "∀" => Some(TokKind::Forall),
-            "≠" => Some(TokKind::Ne),
-            "⊢" => Some(TokKind::Turnstile),
-            "→" => Some(TokKind::Arrow),
-            "∥" => Some(TokKind::NormBar),
-            "⟨" => Some(TokKind::LAngle),
-            "⟩" => Some(TokKind::RAngle),
-            "⟦" => Some(TokKind::LSemantic),
-            "⟧" => Some(TokKind::RSemantic),
-            _ => None,
-        };
-        if let Some(kind) = three_kind {
-            emit!(Tok { kind, span: Span { start, end: start + 3 } });
-            i += 3;
-            continue;
-        }
+        // A fixed token: the longest spelling the source has here of the
+        // token kinds' table (`TOKEN_KINDS`, lib/lang/lexer/lexer_kinds.hthr),
+        // matched by `ScanKind::spelled_at`, which `scripts/linked` generates
+        // from it. A symbol is added there, not here; so are `λ` and `¬`,
+        // which are not identifier characters and so reach this. Two pairs are
+        // decided before it, and `>>` after it.
         let two = src.get(i..i + 2).unwrap_or("");
         // `!` is Boolean negation, but `!=` is deliberately not an ASCII
         // alias for `≠`: keep diagnosing the pair at the lexer boundary
@@ -1000,66 +962,21 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             });
             continue;
         }
-        let (kind, len) = match two {
-            // `λ` (U+03BB) is two bytes and is *not* an identifier character,
-            // so it lexes here rather than in the identifier rule above.
-            // `fun` is the ASCII synonym and is an ordinary keyword.
-            "λ" => (TokKind::Lambda, 2),
-            // `¬` (U+00AC), two bytes like `λ` and for the same reason it
-            // cannot lex as an identifier character.
-            "¬" => (TokKind::Neg, 2),
-            "->" => (TokKind::Arrow, 2),
-            "|-" => (TokKind::Turnstile, 2),
-            "&&" => (TokKind::AmpAmp, 2),
-            "||" => (TokKind::PipePipe, 2),
-            "++" => (TokKind::PlusPlus, 2),
-            "=>" => (TokKind::FatArrow, 2),
-            "==" => (TokKind::EqEq, 2),
-            "<=" => (TokKind::LtEq, 2),
-            "<-" => (TokKind::LArrow, 2),
-            ":=" => (TokKind::ColonEq, 2),
-            "::" => (TokKind::ColonColon, 2),
-            "<<" => (TokKind::Shl, 2),
+        let (kind, len) = match ScanKind::spelled_at(&bytes[i..]) {
             // `>>` is a shift only after a space, `(`, `,` or the start of
             // the file; anywhere else it is two closers (see [`TokKind::Shr`]).
-            ">>" if start == 0 || matches!(bytes[start - 1], b'(' | b',') || bytes[start - 1].is_ascii_whitespace() => {
-                (TokKind::Shr, 2)
+            Some((ScanKind::Shr, _)) if !(start == 0 || matches!(bytes[start - 1], b'(' | b',') || bytes[start - 1].is_ascii_whitespace()) => {
+                (TokKind::Gt, 1)
             }
-            _ => match c {
-                b'(' => (TokKind::LParen, 1),
-                b')' => (TokKind::RParen, 1),
-                b'{' => (TokKind::LBrace, 1),
-                b'}' => (TokKind::RBrace, 1),
-                b'[' => (TokKind::LBracket, 1),
-                b']' => (TokKind::RBracket, 1),
-                b'|' => (TokKind::Pipe, 1),
-                b'&' => (TokKind::Amp, 1),
-                b'~' => (TokKind::Tilde, 1),
-                b'/' => (TokKind::Slash, 1),
-                b'%' => (TokKind::Percent, 1),
-                b',' => (TokKind::Comma, 1),
-                b':' => (TokKind::Colon, 1),
-                b';' => (TokKind::Semi, 1),
-                b'@' => (TokKind::At, 1),
-                b'$' => (TokKind::Dollar, 1),
-                b'.' => (TokKind::Dot, 1),
-                b'+' => (TokKind::Plus, 1),
-                b'-' => (TokKind::Minus, 1),
-                b'!' => (TokKind::Bang, 1),
-                b'*' => (TokKind::Star, 1),
-                b'^' => (TokKind::Caret, 1),
-                b'<' => (TokKind::Lt, 1),
-                b'>' => (TokKind::Gt, 1),
-                b'=' => (TokKind::Eq, 1),
-                _ => {
-                    // The whole character, not its first byte: `δ` is two.
-                    let ch = src[start..].chars().next().unwrap_or(c as char);
-                    return Err(LexError {
-                        msg: format!("unexpected character {ch:?}"),
-                        span: Span { start, end: start + ch.len_utf8() },
-                    })
-                }
-            },
+            Some((kind, len)) => (kind.spelled_tok(), len),
+            None => {
+                // The whole character, not its first byte: `δ` is two.
+                let ch = src[start..].chars().next().unwrap_or(c as char);
+                return Err(LexError {
+                    msg: format!("unexpected character {ch:?}"),
+                    span: Span { start, end: start + ch.len_utf8() },
+                });
+            }
         };
         emit!(Tok { kind, span: Span { start, end: start + len } });
         i += len;

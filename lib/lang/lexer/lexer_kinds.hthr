@@ -13,16 +13,19 @@
 //   refuses a `KIND_*` with no row, a row whose name is not its `KIND_*`'s
 //   (`LtEq` for `KIND_LT_EQ`: the same letters, case and `_` aside), and
 //   two rows with one spelling.
-// - The editor grammar's inventory of fixed symbols
-//   (`tree-sitter-heather/syntax-inventory.json`) is held to the
-//   spellings by `scripts/check-tree-sitter-inventory.js`.
+// - The Rust lexer cuts a fixed symbol by the same file
+//   (`ScanKind::spelled_at`, the longest spelling at a position), and maps
+//   a spelled kind to its `TokKind` of the same name (`spelled_kinds!`).
+// - The editor grammar is held to the spellings by
+//   `scripts/check-tree-sitter-inventory.js`.
 // - That each spelling is a whole token of its kind is proved here of the
 //   scanner (`token_kinds_spelled_*`) and tested of the Rust lexer
 //   (`crates/linked/tests/scanner.rs`).
 //
 // A kind with no spelling is a class: names, numerals, literals, holes,
 // whitespace, comments and the end of the source. A new punctuation token
-// is a `KIND_*`, its states in the automaton, and a row here.
+// is a row here, its `KIND_*` and states in the automaton, and the
+// `TokKind` variant the parser reads; then `scripts/linked`.
 import bitvec;
 import bool;
 import list;
