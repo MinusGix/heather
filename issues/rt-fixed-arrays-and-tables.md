@@ -5,7 +5,7 @@ labels: [native,compiler,representation]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-14
 ---
 
 `rt` has `Bytes(cap)`: a list of bytes in a buffer. A hash wants an
@@ -48,3 +48,8 @@ little-endian is refused by the kernel).
 ## Log
 
 - 2026-11-10: A second customer for constant tables: the scanner's automaton (`lib/lang/lexer/lexer_scan.hthr`) is a transition table written as about ninety chains of byte comparisons, because compiled code has no table to index. As a table it is a class per byte (256 entries) and a next state per (state, class), two loads a byte where the chains are a dozen compares and branches; it is also what [[lexical-grammar-as-data]] would generate. The family split in `scan_family` is the same table's first level, done by hand.
+- 2026-11-14: Taken up for the scanner's table (Minus chose this route for [[lexical-grammar-as-data]]: constant tables first, then the scanner as one generated transition table; SHA-256's `K` is the other customer, through the optimizer thread). Design for the constant-table half, agreed with the optimizer's owner:
+  - **A table read is a pure FunctionIR node**, not a load on the threaded state: `TableRead(width, output, table, index)` means `values(width, output)` is entry `index` of a table the program carries, so a read at a known index folds to a constant by one rule and moving or merging one needs no aliasing argument. Byte order is not in its meaning: it is fixed when the lowering lays the table out.
+  - **Total by construction** (Minus 2026-11-13: no junk values): a table has `2^k` entries and the index port is `k` bits wide, so every index is in range with nothing to prove; a table of another length is padded to the next power of two by whoever builds it (a scanner's (state, class) table is laid out that way anyway).
+  - **Lowering**: the entries as 64-bit words after the code (`Site.last`), the base from `LEA r64, [rip + disp32]` (native-library-exports-design §8: one instruction form, one premise that the bytes after the code read as data as well as fetch), then the existing `WordLoad` at `base + 8·index`.
+  - **Order**: (1) the `LEA` form in the x86 model, decoded, encoded and stepped; (2) the node, its equation and its lowering case with the premise threaded through `compiled_returns`; (3) the source side, a closed table read in a `runtime fn`; (4) the export placing the bytes in the `.s`. Wider loads from mutable buffers (16/32/64 with a byte-order tag) are a separate piece: one constructor with a width, not three.
