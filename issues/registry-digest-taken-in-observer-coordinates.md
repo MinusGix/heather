@@ -49,6 +49,6 @@ Test: `a_registry_digest_is_the_same_whichever_world_asks_first`
 (`crates/cli/tests/semantic.rs`), which fails without the fix.
 
 What the same measurement shows is left:
-`issues/expected-refusal-modules-never-moved.md`, and about a second per
+[[expected-refusal-modules-never-moved]], and about a second per
 moved module of loading its closure
-(`issues/build-children-replay-their-imports.md`).
+([[build-children-replay-their-imports]]).

@@ -21,7 +21,7 @@ honest by the kernel rechecking what it holds; a refused declaration leaves
 nothing to recheck.
 
 The cost, measured 2026-11-14 (4-core cloud box, release binary, self-checks
-off, after `issues/registry-digest-taken-in-observer-coordinates.md`): one
+off, after [[registry-digest-taken-in-observer-coordinates]]): one
 theorem appended to `nat`, gate build step. 152 of 554 modules carry
 directives; they cost 339 CPU-s of the step's 750, against 375 s cold. The
 other 402 modules cost 411 s, about a second each. Nearly every `_tests`
