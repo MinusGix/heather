@@ -2856,7 +2856,6 @@ impl Elaborator {
                     let (cx, ty, lvl) = self.attempt.goal_arena.named(name, on.span)?;
                     // In the goal's *own* context, not the one at the `on`.
                     let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
-                    let t = strengthen_global(&t, self.attempt.goal_arena.base());
                     self.attempt.goal_arena.solve_named(name, t);
                 }
                 // `on _: P := e;` — discharge *every* goal whose statement is
@@ -2889,7 +2888,6 @@ impl Elaborator {
                     }
                     for (k, cx, ty, lvl) in matched {
                         let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
-                        let t = strengthen_global(&t, self.attempt.goal_arena.base());
                         self.attempt.goal_arena.solve(k, t);
                     }
                 }

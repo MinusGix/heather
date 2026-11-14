@@ -4,7 +4,7 @@ use heather_kernel::rc::Rc;
 
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::Term;
-use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, OpFixity, Span, Stmt, Ty, TyKind};
+use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnStmt, OnTarget, OpFixity, Span, Stmt, Ty, TyKind};
 
 use crate::{ElabError, R, err};
 
@@ -619,15 +619,46 @@ pub(super) fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[S
     }
 }
 
-/// The walkers of [`count_holes`], at module level so that the pattern
-/// compiler can ask the same question of one expression
-/// (`docs/nested-match-patterns-design.md` §10.3): a body it would copy
-/// into several arms must not contain a hole, since a hole is keyed by its
-/// context and cannot be elaborated twice.
+/// The walkers of [`count_holes`] and [`count_tactic_slots`], at module
+/// level so that the pattern compiler can ask the same question of one
+/// expression (`docs/nested-match-patterns-design.md` §10.3): a body it would
+/// copy into several arms must not contain a hole, since a hole is keyed by
+/// its context and cannot be elaborated twice.
+///
+/// One walk serves both counts, each adding its [`Tally::score`] of every
+/// expression met: a slot is reserved for whatever the elaborator meets, and
+/// it meets a declaration's types as well as its body — a search written in
+/// a statement (`f(x, inside := bv_omega)` in a result type) once took a
+/// slot reserved for a body's `?`
+/// (issues/goal-hole-beside-a-search-in-the-statement.md).
 mod count_holes_impl {
     use super::*;
 
-    pub(super) fn ty(t: &Ty, n: &mut u32) {
+    pub(crate) struct Tally {
+        pub(crate) n: u32,
+        pub(crate) score: fn(&Expr) -> u32,
+    }
+
+    impl Tally {
+        pub(crate) fn holes() -> Tally {
+            Tally { n: 0, score: hole_score }
+        }
+    }
+
+    fn hole_score(e: &Expr) -> u32 {
+        match &e.kind {
+            ExprKind::Hole(_) => 1,
+            // The empty block's speculative `refl` may fail, and then it
+            // raises a goal — so it must be counted. The pre-count is
+            // documented as an upper bound, so counting one that turns out to
+            // be discharged by `refl` costs a reserved-but-unused slot and
+            // nothing else (issues/auto-refl-empty-block.md).
+            ExprKind::AutoRefl => 1,
+            _ => 0,
+        }
+    }
+
+    pub(super) fn ty(t: &Ty, n: &mut Tally) {
         match &t.kind {
             TyKind::Nat | TyKind::Univ { .. } => {}
             TyKind::Eq(a, b) => {
@@ -650,9 +681,10 @@ mod count_holes_impl {
             TyKind::Code { ty: t, .. } => ty(t, n),
         }
     }
-    pub(super) fn expr(e: &Expr, n: &mut u32) {
+    pub(super) fn expr(e: &Expr, n: &mut Tally) {
+        n.n += (n.score)(e);
         match &e.kind {
-            ExprKind::Hole(_) => *n += 1,
+            ExprKind::Hole(_) => {}
             ExprKind::Eq(a, b) => {
                 expr(a, n);
                 expr(b, n);
@@ -668,12 +700,7 @@ mod count_holes_impl {
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::Univ { .. } => {}
-            // The empty block's speculative `refl` may fail, and then it
-            // raises a goal — so it must be counted. The pre-count is
-            // documented as an upper bound, so counting one that turns out to
-            // be discharged by `refl` costs a reserved-but-unused slot and
-            // nothing else (issues/auto-refl-empty-block.md).
-            ExprKind::AutoRefl => *n += 1,
+            ExprKind::AutoRefl => {}
             ExprKind::App {
                 head, args, named, ..
             } => {
@@ -764,12 +791,41 @@ mod count_holes_impl {
             ExprKind::Block(b) => {
                 stmts(&b.stmts, n);
                 expr(&b.result, n);
+                ons(&b.ons, n);
             }
         }
     }
+    /// A block's `on` discharges. A hole there is refused (the arena is
+    /// frozen), so counting one is an over-count; a tactic there runs.
+    pub(super) fn ons(os: &[OnStmt], n: &mut Tally) {
+        for on in os {
+            if let OnTarget::Stmt(t) = &on.target {
+                ty(t, n);
+            }
+            expr(&on.expr, n);
+        }
+    }
+    /// Everything of a declaration the elaborator meets inside its goal
+    /// world: the telescope, the result type, and (not for an axiom) the
+    /// body, its `decreases` measure and its `on` discharges.
+    pub(super) fn decl(d: &Decl, n: &mut Tally) {
+        for p in &d.params {
+            ty(&p.ty, n);
+        }
+        ty(&d.result, n);
+        if d.kind == heather_syntax::DeclKind::Axiom {
+            return;
+        }
+        stmts(&d.body.stmts, n);
+        expr(&d.body.result, n);
+        if let Some(measure) = &d.decreases {
+            expr(measure, n);
+        }
+        ons(&d.body.ons, n);
+    }
     /// A block's statements, shared by the declaration body's own walk below
     /// so a nested block cannot be walked differently from a top-level one.
-    pub(super) fn stmts(ss: &[Stmt], n: &mut u32) {
+    pub(super) fn stmts(ss: &[Stmt], n: &mut Tally) {
         for s in ss {
             match s {
                 Stmt::Let { ty: t, expr: e, .. } => {
@@ -787,9 +843,9 @@ mod count_holes_impl {
 
 /// Every `?` in one expression — see [`count_holes_impl`].
 pub(crate) fn count_holes_expr(e: &Expr) -> u32 {
-    let mut n = 0;
+    let mut n = count_holes_impl::Tally::holes();
     count_holes_impl::expr(e, &mut n);
-    n
+    n.n
 }
 
 /// Slots an `omega` reserves for atom lists: an equality goal is two calls,
@@ -801,36 +857,30 @@ const OMEGA_ATOM_SLOTS: u32 = 2;
 /// context and atoms share a slot).
 const BV_OMEGA_ATOM_SLOTS: u32 = 4;
 
+fn tactic_slot_score(e: &Expr) -> u32 {
+    match &e.kind {
+        ExprKind::Var(v) if v == "omega" || v == "positivity" => OMEGA_ATOM_SLOTS,
+        ExprKind::Var(v) if v == "bv_omega" => 1 + BV_OMEGA_ATOM_SLOTS,
+        ExprKind::Var(v) if v == crate::measure::CLOSER => OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
+        _ => 0,
+    }
+}
+
 /// Slots a declaration's tactics may fill besides its goals: a `bv_omega`
 /// lifts its proof into one (`docs/bv-omega-design.md` §6) and every `omega`
 /// names its atom list by one (a `positivity` counts as one `omega`; a run
 /// that needs more restarts once). Reserved up front, since a slot
 /// discovered mid-body restarts the declaration; an over-count costs an
-/// unused slot.
+/// unused slot. Counted wherever [`count_holes`] looks, types included: a
+/// lifted proof that finds no slot of its own takes one counted for a `?`,
+/// and that `?` is then an internal error rather than a reported goal.
 pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
-    if decl.kind == heather_syntax::DeclKind::Axiom {
-        return 0;
-    }
-    let mut n = 0u32;
-    let mut count = |e: &Expr| {
-        walk_expr(e, &mut |x| match &x.kind {
-            ExprKind::Var(v) if v == "omega" || v == "positivity" => n += OMEGA_ATOM_SLOTS,
-            ExprKind::Var(v) if v == "bv_omega" => n += 1 + BV_OMEGA_ATOM_SLOTS,
-            ExprKind::Var(v) if v == crate::measure::CLOSER => n += OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
-            _ => {}
-        })
-    };
-    for s in &decl.body.stmts {
-        if let Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } = s {
-            count(expr);
-        }
-    }
-    count(&decl.body.result);
-    decl.body.ons.iter().for_each(|o| count(&o.expr));
+    let mut n = count_holes_impl::Tally { n: 0, score: tactic_slot_score };
+    count_holes_impl::decl(decl, &mut n);
     // A value default is elaborated in the declaration's telescope
     // (`defaults::check_default_at_declaration`), so its tactics run there.
-    decl.params.iter().filter_map(|p| p.default.as_deref()).for_each(&mut count);
-    n
+    decl.params.iter().filter_map(|p| p.default.as_deref()).for_each(|e| count_holes_impl::expr(e, &mut n));
+    n.n
 }
 
 /// Syntactic upper bound on the goals a declaration can raise: every `?` in
@@ -839,25 +889,16 @@ pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
 /// twice — which is why goals are numbered in creation order and the unused
 /// slots are padded. Under-counting is impossible: nothing invents a hole.
 pub(crate) fn count_holes(decl: &Decl) -> u32 {
-    use count_holes_impl::{expr, stmts, ty};
-    let mut n = 0;
-    for p in &decl.params {
-        ty(&p.ty, &mut n);
-    }
-    ty(&decl.result, &mut n);
-    if decl.kind == heather_syntax::DeclKind::Axiom {
-        return n;
-    }
-    stmts(&decl.body.stmts, &mut n);
-    expr(&decl.body.result, &mut n);
+    let mut tally = count_holes_impl::Tally::holes();
+    count_holes_impl::decl(decl, &mut tally);
+    let mut n = tally.n;
     // Under `decreases`, every recursive call owes one obligation hole
     // (measure.rs); calls are counted by name, which over-counts a shadowed
     // name — an upper bound, as required. The hole itself is raised in the
     // site's own `f#obl_N` (`docs/decreases-unfolding-design.md` §4), whose
     // count comes from the ordinary body walk above; this stays for the
     // measure preflight, which reserves against the *written* declaration.
-    if let Some(measure) = &decl.decreases {
-        expr(measure, &mut n);
+    if decl.decreases.is_some() && decl.kind != heather_syntax::DeclKind::Axiom {
         let base = decl.name.rsplit("::").next().unwrap_or(&decl.name);
         let mut calls = 0u32;
         let mut count = |e: &Expr| {
@@ -881,12 +922,6 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
         count(&decl.body.result);
         n += calls;
     }
-    for on in &decl.body.ons {
-        if let OnTarget::Stmt(t) = &on.target {
-            ty(t, &mut n);
-        }
-        expr(&on.expr, &mut n);
-    }
     n
 }
 
@@ -895,8 +930,12 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
 /// context and statement live there — but a `GlobalSubst` payload is scoped in
 /// the source Ψ, below the prefix (subst.rs). Applying a `g`-entry σ whose
 /// payloads are never reached renumbers every committed global back down by
-/// `g`. "Never reached" is exactly the `frozen` restriction: no new hole, so
-/// no goal occurrence survives in the payload to meet a dummy.
+/// `g`. "Never reached" is the `frozen` restriction: no new hole, so no
+/// goal occurrence survives in the payload to meet a dummy — save a *lifted*
+/// slot (a `bv_omega` proof, an `omega` atom list), which a goal's statement
+/// and so its discharge can mention; the gate re-scopes a discharge with
+/// those slots as the constants it commits for them
+/// (`Declarations::lift_proved`).
 pub(crate) fn strengthen_global(t: &Term, g: u32) -> Term {
     if g == 0 {
         return t.clone();

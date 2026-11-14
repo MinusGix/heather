@@ -1680,16 +1680,7 @@ impl DeclarationsMut<'_> {
         let mut aux = Vec::new();
         let mut earlier: HashMap<usize, (usize, LocalCtx)> = HashMap::new();
         for (j, slot) in lifted.into_iter().enumerate() {
-            let out = |dummy: Term| GlobalSubst {
-                entries: (0..base as usize)
-                    .map(|k| {
-                        heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&k) {
-                            Some((i, delta)) => Term::GlobalTm { var: GlobalVar::constant(first + *i as u32), subst: LocalSubst::id(delta) },
-                            None => dummy.clone(),
-                        }))
-                    })
-                    .collect(),
-            };
+            let out = |dummy: Term| out_of_goals(base, first, &earlier, dummy);
             let (zero, one) = (out(Term::Zero), out(Term::Succ(Rc::new(Term::Zero))));
             let into = |sigma: &GlobalSubst| (
                 slot.gamma.shift_global_above(j as u32, base).apply_global(sigma),
@@ -1721,7 +1712,40 @@ impl DeclarationsMut<'_> {
                 subst: LocalSubst::id(&gamma),
             }));
         }
+        // A discharge (`on ?g := …`) is elaborated in the goal world, and a
+        // goal's statement can mention a lifted slot (a search in the
+        // declaration's statement, `f(x, p := bv_omega)`), which its proof
+        // then mentions too: re-scope it like a lifted proof, the lifted
+        // slots as the constants just committed
+        // (issues/goal-hole-beside-a-search-in-the-statement.md).
+        for (slot, solution) in self.attempt.goal_arena.discharged() {
+            let out = |dummy: Term| out_of_goals(base, first, &earlier, dummy);
+            let shifted = solution.shift_global_above(m, base);
+            let body = shifted.apply_global(&out(Term::Zero));
+            if body != shifted.apply_global(&out(Term::Succ(Rc::new(Term::Zero)))) {
+                return err("internal: a goal's discharge mentions another goal", span);
+            }
+            sigma.entries[slot] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(body));
+        }
         Ok((sigma, aux, Some(Rc::new(world))))
+    }
+}
+
+/// The way out of the goal world for a lifted slot's term or a discharge:
+/// the `base` slots replaced, each lifted one in `earlier` (slot ↦ its order
+/// among the lifted and its context) by a reference to the constant committed
+/// for it at `first + order`, every other by `dummy`. Its caller compares the
+/// results for two dummies, so a term that reaches any other goal is refused.
+fn out_of_goals(base: u32, first: u32, earlier: &HashMap<usize, (usize, LocalCtx)>, dummy: Term) -> GlobalSubst {
+    GlobalSubst {
+        entries: (0..base as usize)
+            .map(|k| {
+                heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&k) {
+                    Some((i, delta)) => Term::GlobalTm { var: GlobalVar::constant(first + *i as u32), subst: LocalSubst::id(delta) },
+                    None => dummy.clone(),
+                }))
+            })
+            .collect(),
     }
 }
 

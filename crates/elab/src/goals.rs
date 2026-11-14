@@ -720,19 +720,36 @@ impl GoalArena {
         psi.extended((0..self.base as usize).map(|k| slots.get(k).cloned().unwrap_or_else(placeholder)))
     }
 
+    /// One entry per slot: a discharged goal's solution strengthened out of
+    /// the goal world ([`crate::strengthen_global`]), a lifted slot's term
+    /// as it stands (the gate replaces it by a reference to the global it
+    /// commits), and `0` for the padding. A discharge that mentions a lifted
+    /// slot is re-scoped by the gate from [`Self::discharged`].
     pub(super) fn substitution(&self) -> GlobalSubst {
         let goals = self.entries.borrow();
         let entries = (0..self.base as usize)
             .map(|k| {
-                GlobalEntry::Tm(
-                    goals
-                        .get(k)
-                        .and_then(|goal| goal.state.solution().cloned())
-                        .unwrap_or_else(|| Rc::new(Term::Zero)),
-                )
+                GlobalEntry::Tm(match goals.get(k).map(|goal| &goal.state) {
+                    Some(GoalState::Solved(t)) => Rc::new(crate::strengthen_global(t, self.base)),
+                    Some(state) => state.solution().cloned().unwrap_or_else(|| Rc::new(Term::Zero)),
+                    None => Rc::new(Term::Zero),
+                })
             })
             .collect();
         GlobalSubst { entries }
+    }
+
+    /// The discharged goals, each with its solution in the goal world.
+    pub(super) fn discharged(&self) -> Vec<(usize, Term)> {
+        self.entries
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, goal)| match &goal.state {
+                GoalState::Solved(t) => Some((slot, (**t).clone())),
+                _ => None,
+            })
+            .collect()
     }
 }
 
