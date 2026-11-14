@@ -22,6 +22,7 @@ fn checker() -> heather_elab::Elaborator {
         ("nat_map", include_str!("../../../lib/std/data/nat_map.hthr")),
         ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
         ("function_ir_writes", include_str!("../../../lib/native/function_ir/function_ir_writes.hthr")),
+        // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.
         // A call over views: the windows it lends and puts back.

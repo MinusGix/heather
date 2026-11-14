@@ -66,7 +66,8 @@ const DEFAULT_LIB_ROOT: &str = "lib";
 /// (`heather_syntax::lexer::install_scanner`, `issues/self-lexer-linked.md`).
 /// Off unless asked for. With it on, a token's value is still read by the
 /// Rust lexer from the token's bytes, and a source the scanner refuses is
-/// lexed again by the Rust lexer, so every message is unchanged.
+/// refused with the Rust lexer's message for the scanner's reason
+/// (`heather_syntax::lexer::ScanRefusal`), so every message is unchanged.
 fn choose_lexer() {
     match std::env::var("HEATHER_LEXER").as_deref() {
         Ok("linked") => {
@@ -81,8 +82,8 @@ fn choose_lexer() {
 }
 
 /// `HEATHER_LEXER_REPORT` (set to anything) says on stderr, as the process
-/// ends, how many sources the linked scanner cut and how many were left to
-/// the Rust lexer: the one way to see the switch, since it changes nothing
+/// ends, how many sources the linked scanner answered for (tokens or a
+/// refusal) and how many were left to the Rust lexer: the one way to see the switch, since it changes nothing
 /// else.
 fn report_lexer() {
     if std::env::var_os("HEATHER_LEXER_REPORT").is_none() {
@@ -93,7 +94,7 @@ fn report_lexer() {
         return;
     }
     let (cut, left) = heather_syntax::lexer::scanner_counts();
-    eprintln!("lexer: the linked scanner cut {cut} sources; {left} were left to the Rust lexer");
+    eprintln!("lexer: the linked scanner answered for {cut} sources; {left} were left to the Rust lexer");
 }
 
 /// `HEATHER_KERNEL_SELF_CHECKS`: how often this process re-derives what the

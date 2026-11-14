@@ -163,6 +163,16 @@ impl Elaborator {
         elab
     }
 
+    /// Put this elaborator back over `image`'s world, one it stood on
+    /// earlier: what a driver does to elaborate a module a second time
+    /// another way. As in [`Self::fork_over`], the memos keyed by Ψ position
+    /// are dropped and nothing pending comes along.
+    pub fn return_to(&mut self, image: &SemanticImage) {
+        image.committed.clone().restore(self);
+        self.take_warnings();
+        self.take_omega_reports();
+    }
+
     /// Run an operation atomically with respect to all committed session
     /// state. The original error is returned after restoring the checkpoint.
     pub(crate) fn session_transaction<T>(

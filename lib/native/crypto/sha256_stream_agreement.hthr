@@ -22,9 +22,10 @@
 // (`Sha256::digest_bytes`, by `Part::window_of`: the hash value's codec
 // loses nothing).
 //
-// A function that tests is taken at a branch by its generated equations
-// (`Sha256::push::True`, `Sha256::pad::False`), and a loop is stepped by
-// its own (`Sha256::zero::step`, `Sha256::zero::done`).
+// The chains are `simp_only` calls: a function that tests is taken at a
+// branch by its generated equations (`Sha256::push::True`,
+// `Sha256::pad::False`), and a loop is stepped by its own
+// (`Sha256::zero::step`, `Sha256::zero::done`).
 
 import logic;
 import bool;
@@ -65,16 +66,13 @@ import rt_held;
 fn Sha256::block(s: Sha256) → List<u8> { Sha2::spelled(vector_entries(s.schedule).take(16)) }
 
 theorem Sha256::len_block(s: Sha256): Sha256::block(s).len() = 64 {
-    let sixteen: (vector_entries(s.schedule).take(16).len() = 16) =
-        vector_entries(s.schedule).len_take(16, j(sym(vector_entries_len(64, s.schedule)), λ x _ => 16 <= x, trivial));
-    let spelled = Sha2::len_spelled(vector_entries(s.schedule).take(16));
-    omega
+    simp_only(Sha256::block, Sha2::len_spelled, List::len_take, discharge := omega(vector_entries_len(64, s.schedule)))
 }
 
 // The compression, of the block's bytes.
 theorem Sha256::run_block(s: Sha256):
     Sha256::state(Sha256::run(s).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(Sha256::block(s))) {
-    trans(Sha256::run_spec(s), cong_fn(λ (ws: List<u32>) => Sha2::sha256().compress(Sha256::state(s.hash), ws), sym(Sha2::words_spelled(vector_entries(s.schedule).take(16)))))
+    simp_only(Sha256::run_spec, Sha256::block, Sha2::words_spelled)
 }
 
 // A byte stored in the schedule's first sixteen words is that byte of the block replaced.
@@ -92,7 +90,7 @@ theorem Sha256::block_with_byte(s: Sha256, i: Nat, b: u8, below: i < 64):
     let at: (vector_entries(v).take(16).nth(q) = Some(w0)) =
         trans(vector_entries(v).nth_take(16, q, word), trans(vector_entries_nth(64, v, q, inside), cong_fn(λ (y: u32) => Some(y), sym(vector_get_inside(64, v, q, 0, inside)))));
     let listed: (vector_entries(vector_update(v, q, X)).take(16) = vector_entries(v).take(16).update(q, λ _ => X)) =
-        trans(cong_fn(λ (e: List<u32>) => e.take(16), vector_entries_update(64, v, q, X)), vector_entries(v).take_update(16, q, λ _ => X));
+        simp_only(vector_entries_update, List::take_update);
     let place: (4 * q + r = i) = omega;
     trans(cong_fn(λ (e: List<u32>) => Sha2::spelled(e), listed),
         trans(Sha2::spelled_update(vector_entries(v).take(16), q, r, w0, b, small, at),
@@ -117,75 +115,46 @@ record Sha256Tracks(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat) {
 // The block after one more byte.
 theorem Sha256::block_put(s: Sha256, T: List<u8>, fill, byte: u64, held: Sha256::block(s).take(T.len()) = T, at: fill.toNat() = T.len(), below: T.len() < 64):
     Sha256::block(Sha256::put(s, fill, byte).after).take(Succ(T.len())) = T ++ [byte.truncate(8, 56)] {
-    let b = byte.truncate(8, 56);
-    let size = Sha256::len_block(s);
-    let stored: (Sha256::put(s, fill, byte).after = (s with { schedule = vector_with_byte_be(s.schedule, fill.toNat(), b) })) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::put_inside(s, fill, byte, omega));
-    let block: (Sha256::block(Sha256::put(s, fill, byte).after) = Sha256::block(s).update(T.len(), λ _ => b)) =
-        trans(cong_fn(λ (x: Sha256) => Sha256::block(x), stored),
-            trans(Sha256::block_with_byte(s, fill.toNat(), b, omega), cong_fn(λ (k: Nat) => Sha256::block(s).update(k, λ _ => b), at)));
-    trans(cong_fn(λ (bytes: List<u8>) => bytes.take(Succ(T.len())), block),
-        trans(Sha256::block(s).take_update_snoc(T.len(), b, omega), cong_fn(λ (t: List<u8>) => t ++ [b], held)))
+    simp_only(Sha256::put_inside, Sha256::block_with_byte, at, List::take_update_snoc, held, discharge := omega(at, below, Sha256::len_block(s)))
 }
 
 // A byte stored leaves the hash value.
 theorem Sha256::put_hash(s: Sha256, fill, byte: u64, below: fill.toNat() < 64): Sha256::put(s, fill, byte).after.hash = s.hash {
-    cong_fn(λ (m: Mutated<Sha256, u64>) => m.after.hash, Sha256::put_inside(s, fill, byte, below))
+    simp_only(Sha256::put_inside)
 }
 
 // A byte pushed where the block has room after it.
 theorem Sha256::push_room(s: Sha256, full: List<List<u8>>, T: List<u8>, k: Nat, fill, byte: u64, t: Sha256Tracks(s, full, T, Succ(k)), at: fill.toNat() = T.len()):
     And<Sha256Tracks(Sha256::push(s, fill, byte).after, full, T ++ [byte.truncate(8, 56)], k), Sha256::push(s, fill, byte).value.toNat() = Succ(T.len())> {
-    let b = byte.truncate(8, 56);
     let space = t.space;
     let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::put(s, fill, byte).after, fill + 1)) =
         Sha256::push::False(s, fill, byte, λ same => {
             let n: (fill.toNat() = 63) = cong_fn(λ (x: u64) => x.toNat(), same);
             omega
         });
-    let single: List<u8> = [b];
-    let longer = T.len_append(single);
-    let one: (T.len() + single.len() = Succ(T.len())) = refl;
-    let next: ((fill + 1).toNat() = Succ(T.len())) = bv_omega;
-    let held: (Sha256::block(Sha256::put(s, fill, byte).after).take((T ++ [b]).len()) = T ++ [b]) =
-        j(sym(trans(longer, one)), λ n _ => Sha256::block(Sha256::put(s, fill, byte).after).take(n) = T ++ [b], Sha256::block_put(s, T, fill, byte, t.held, at, omega));
     let inside: (fill.toNat() < 64) = omega;
-    let left: (T.len() + single.len() + k = 63) = omega;
-    let after: Sha256Tracks(Sha256::put(s, fill, byte).after, full, T ++ [b], k) =
-        Sha256Tracks(trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), Sha256::put_hash(s, fill, byte, inside)), t.hashed), held, j(sym(longer), λ n _ => n + k = 63, left), t.whole);
-    j(sym(pushed), λ m _ => And<Sha256Tracks(m.after, full, T ++ [b], k), m.value.toNat() = Succ(T.len())>, And(after, next))
+    let longer = T.len_append([byte.truncate(8, 56)]);
+    let next: ((fill + 1).toNat() = Succ(T.len())) = bv_omega;
+    let held: (Sha256::block(Sha256::put(s, fill, byte).after).take((T ++ [byte.truncate(8, 56)]).len()) = T ++ [byte.truncate(8, 56)]) =
+        simp_only(List::len_append, then := Sha256::block_put(s, T, fill, byte, t.held, at, omega));
+    let hashed: (Sha256::state(Sha256::put(s, fill, byte).after.hash) = Sha2::absorbed(Sha2::sha256().start(), full)) = simp_only(Sha256::put_hash, t.hashed);
+    simp_only(pushed, then := And(Sha256Tracks(hashed, held, omega, t.whole), next))
 }
 
 // The byte that fills the block: the block is run and a new one begun.
 theorem Sha256::push_full(s: Sha256, full: List<List<u8>>, T: List<u8>, fill, byte: u64, t: Sha256Tracks(s, full, T, 0), at: fill.toNat() = T.len()):
     And<Sha256Tracks(Sha256::push(s, fill, byte).after, full ++ [T ++ [byte.truncate(8, 56)]], Nil, 63), Sha256::push(s, fill, byte).value.toNat() = 0> {
-    let b = byte.truncate(8, 56);
-    let space: (T.len() = 63) = t.space;
-    let same: (fill = 63) = bv_omega;
+    let last = T ++ [byte.truncate(8, 56)];
     let P = Sha256::put(s, fill, byte).after;
-    let zero: u64 = 0;
-    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, zero)) =
-        Sha256::push::True(s, fill, byte, same);
-    let single: List<u8> = [b];
-    let last = T ++ single;
-    let longer = T.len_append(single);
-    let sized: (last.len() = 64) = omega;
-    let count: (Succ(T.len()) = Sha256::block(P).len()) = trans(Nat::cong_succ(space), sym(Sha256::len_block(P)));
-    let block: (Sha256::block(P) = last) =
-        trans(sym(Sha256::block(P).take_len()), j(count, λ n _ => Sha256::block(P).take(n) = last, Sha256::block_put(s, T, fill, byte, t.held, at, omega)));
+    let space: (T.len() = 63) = t.space;
     let inside: (fill.toNat() < 64) = omega;
-    let before: (Sha256::state(P.hash) = Sha2::absorbed(Sha2::sha256().start(), full)) =
-        trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), Sha256::put_hash(s, fill, byte, inside)), t.hashed);
+    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, 0)) = Sha256::push::True(s, fill, byte, bv_omega);
+    let block: (Sha256::block(P) = last) =
+        trans(sym(Sha256::block(P).take_len()), simp_only(Sha256::len_block, space, using := Sha256::block_put(s, T, fill, byte, t.held, at, omega)));
     let hashed: (Sha256::state(Sha256::run(P).after.hash) = Sha2::absorbed(Sha2::sha256().start(), full ++ [last])) =
-        trans(Sha256::run_block(P),
-            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(P))), before),
-                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(bytes)), block),
-                    sym(Sha2::absorbed_snoc(Sha2::sha256().start(), full, last)))));
-    let none: List<u8> = Nil;
-    let after: Sha256Tracks(Sha256::run(P).after, full ++ [last], none, 63) =
-        Sha256Tracks(hashed, Sha256::block(Sha256::run(P).after).take_zero(), refl, Sha2::blocks_snoc(full, last, sized, t.whole));
-    let value: (zero.toNat() = 0) = refl;
-    j(sym(pushed), λ m _ => And<Sha256Tracks(m.after, full ++ [last], none, 63), m.value.toNat() = 0>, And(after, value))
+        simp_only(Sha256::run_block, Sha256::put_hash, t.hashed, block, Sha2::absorbed_snoc);
+    let sized: (last.len() = 64) = simp_only(List::len_append, space);
+    simp_only(pushed, then := And(Sha256Tracks(hashed, Sha256::block(Sha256::run(P).after).take_zero(), refl, Sha2::blocks_snoc(full, last, sized, t.whole)), refl))
 }
 
 // The context the zeroing loop leaves, from its generated step equations.
@@ -207,17 +176,14 @@ theorem Sha256::zeroed_block(n: Nat): (s: Sha256) → (i: u64) → (T: List<u8>)
             And(trans(whole, sym(T.append_nil())), refl)
         },
         Succ(m, ih) => λ s i T left at held => {
-            let z: u8 = 0;
-            let single: List<u8> = [z];
-            let P = Sha256::put(s, i, 0).after;
-            let longer = T.len_append(single);
-            let one: (T.len() + single.len() = Succ(T.len())) = refl;
             let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
-            let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) =
-                j(sym(trans(longer, one)), λ k _ => Sha256::block(P).take(k) = T ++ single, Sha256::block_put(s, T, i, 0, held, at, omega));
-            let rest = ih(P, i + 1, T ++ single, omega, omega, put);
+            let P = Sha256::put(s, i, 0).after;
+            let put: (Sha256::block(P).take((T ++ [0]).len()) = T ++ [0]) = simp_only(List::len_append, then := Sha256::block_put(s, T, i, 0, held, at, omega));
+            let sized: ((T ++ [0]).len() = T.len() + 1) = simp_only(List::len_append);
+            let rest = ih(P, i + 1, T ++ [0], omega, omega, put);
+            let step: (Sha256::zeroed(s, i, Succ(m)) = Sha256::zeroed(P, i + 1, m)) = refl;
             let inside: (i.toNat() < 64) = omega;
-            And(trans(rest.left, T.append_assoc(single, Sha2::zero_bytes(m))), trans(rest.right, Sha256::put_hash(s, i, 0, inside)))
+            simp_only(step, rest.left, rest.right, List::append_assoc, Sha256::put_hash(s, i, 0, inside))
         },
     }
 }
@@ -228,52 +194,32 @@ fn Sha256::filled(s: Sha256, fill: u64) → Sha256 { Sha256::zero(Sha256::put(s,
 // The one bit and zeros to the block's end, after the bytes it held.
 theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::filled(s, fill)) = T ++ Sha2::one_bit(63 - T.len()), Sha256::filled(s, fill).hash = s.hash> {
-    let x: u8 = BitVec::ofNat(0x80);
-    let single: List<u8> = [x];
     let P = Sha256::put(s, fill, 0x80).after;
-    let longer = T.len_append(single);
-    let one: (T.len() + single.len() = Succ(T.len())) = refl;
     let next: ((fill + 1).toNat() = fill.toNat() + 1) = bv_omega;
-    let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) =
-        j(sym(trans(longer, one)), λ k _ => Sha256::block(P).take(k) = T ++ single, Sha256::block_put(s, T, fill, 0x80, held, at, below));
+    let put: (Sha256::block(P).take((T ++ [0x80]).len()) = T ++ [0x80]) = simp_only(List::len_append, then := Sha256::block_put(s, T, fill, 0x80, held, at, below));
     let left: ((fill + 1).toNat() + (63 - T.len()) = 64) = omega;
-    let zeros = Sha256::zeroed_block(63 - T.len(), P, fill + 1, T ++ single, left, omega, put);
-    let ran: (Sha256::filled(s, fill) = Sha256::zeroed(P, fill + 1, 63 - T.len())) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::zero_from(P, fill + 1, 63 - T.len(), left));
-    let inside: (fill.toNat() < 64) = omega;
-    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), ran), trans(zeros.left, T.append_assoc(single, Sha2::zero_bytes(63 - T.len())))),
-        trans(cong_fn(λ (z: Sha256) => z.hash, ran), trans(zeros.right, Sha256::put_hash(s, fill, 0x80, inside))))
+    let sized: ((T ++ [0x80]).len() = T.len() + 1) = simp_only(List::len_append);
+    let zeros = Sha256::zeroed_block(63 - T.len(), P, fill + 1, T ++ [0x80], left, omega, put);
+    let ran: (Sha256::filled(s, fill) = Sha256::zeroed(P, fill + 1, 63 - T.len())) = simp_only(Sha256::filled, Sha256::zero_from(P, fill + 1, 63 - T.len(), left));
+    simp_only(ran, zeros.left, zeros.right, List::append_assoc, Sha256::put_hash, discharge := omega(at, below))
 }
 
 // The padding where the length still fits the block: the block is the bytes held, the one bit, and zeros.
 theorem Sha256::pad_short(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), short: T.len() < 56, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::pad(s, fill).after) = T ++ Sha2::one_bit(63 - T.len()), Sha256::pad(s, fill).after.hash = s.hash> {
-    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) = {
-        let lt: (fill.toNat() < 56) = omega;
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::pad::True(s, fill, lt))
-    };
-    let filled = Sha256::filled_block(s, T, fill, at, omega, held);
-    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), is), filled.left), trans(cong_fn(λ (z: Sha256) => z.hash, is), filled.right))
+    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) = simp_only(Sha256::pad::True(s, fill, omega));
+    simp_only(is, then := Sha256::filled_block(s, T, fill, at, omega, held))
 }
 
 // The padding where it does not: the block is run, and a block of zeros begun.
 theorem Sha256::pad_long(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), long: 56 <= T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::pad(s, fill).after) = Sha2::zero_bytes(64),
         Sha256::state(Sha256::pad(s, fill).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))> {
-    let F = Sha256::filled(s, fill);
-    let R = Sha256::run(F).after;
-    let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) =
-        cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::pad::False(s, fill, λ (lt: fill.toNat() < 56) => omega));
+    let R = Sha256::run(Sha256::filled(s, fill)).after;
+    let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) = simp_only(Sha256::pad::False(s, fill, λ (lt: fill.toNat() < 56) => omega));
     let filled = Sha256::filled_block(s, T, fill, at, below, held);
-    let none: List<u8> = Nil;
-    let zeros = Sha256::zeroed_block(64, R, 0, none, refl, refl, Sha256::block(R).take_zero());
-    let ran: (Sha256::zero(R, 0).after = Sha256::zeroed(R, 0, 64)) = cong_fn(λ (m: Mutated<Sha256, u64>) => m.after, Sha256::zero_from(R, 0, 64, refl));
-    let hashed: (Sha256::state(R.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))) =
-        trans(Sha256::run_block(F),
-            trans(cong_fn(λ (h: [u32; 8]) => Sha2::sha256().compress(Sha256::state(h), Sha2::sha256().words(Sha256::block(F))), filled.right),
-                cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(bytes)), filled.left)));
-    And(trans(cong_fn(λ (z: Sha256) => Sha256::block(z), trans(is, ran)), zeros.left),
-        trans(cong_fn(λ (z: Sha256) => Sha256::state(z.hash), trans(is, ran)), trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), zeros.right), hashed)))
+    let zeros = Sha256::zeroed_block(64, R, 0, Nil, refl, refl, Sha256::block(R).take_zero());
+    simp_only(is, Sha256::zero_from(R, 0, 64, refl), zeros.left, zeros.right, Sha256::run_block, filled.right, filled.left)
 }
 
 // The length's two words stored, and `Sha256::close` as the padding, those, and the block run.
@@ -288,7 +234,7 @@ theorem Sha256::lengthed_block(s: Sha256, count: u64):
 
 theorem Sha256::lengthed_is(s: Sha256, count: u64, n: Nat, counted: count = BitVec::ofNat(n)):
     Sha256::block(Sha256::lengthed(s, count)) = Sha256::block(s).take(56) ++ Sha2::be_bytes(8 * n, 8) {
-    trans(Sha256::lengthed_block(s, count), cong_fn(λ (l: List<u8>) => Sha256::block(s).take(56) ++ l, Sha2::length_spelled(count, n, counted)))
+    simp_only(Sha256::lengthed_block, Sha2::length_spelled(count, n, counted))
 }
 
 // The message's end where the padding fits the block it ends in.
@@ -309,17 +255,9 @@ theorem Sha256::close_short(s: Sha256, full: List<List<u8>>, T: List<u8>, room: 
     let l2 = Sha2::len_zero_bytes(55 - T.len());
     let sized: (56 = head.len()) = omega;
     let front: (Sha256::block(Pd).take(56) = head) =
-        trans(cong_fn(λ (bytes: List<u8>) => bytes.take(56), trans(padded.left, cut)), j(sym(sized), λ k _ => (head ++ Sha2::zero_bytes(8)).take(k) = head, head.take_append_len(Sha2::zero_bytes(8))));
-    let block: (Sha256::block(L) = T ++ Sha2::ending(55 - T.len(), 64 * full.len() + T.len())) =
-        trans(Sha256::lengthed_is(Pd, count, n, counted),
-            trans(cong_fn(λ (f: List<u8>) => f ++ lb, front),
-                trans(T.append_assoc(Sha2::one_bit(55 - T.len()), lb), cong_fn(λ (k: Nat) => T ++ Sha2::ending(55 - T.len(), k), total))));
-    let before: (Sha256::state(L.hash) = Sha2::absorbed(Sha2::sha256().start(), full)) = trans(cong_fn(λ (h: [u32; 8]) => Sha256::state(h), padded.right), t.hashed);
-    trans(cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::state(m.after.hash), Sha256::close_is(s, count)),
-        trans(Sha256::run_block(L),
-            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(L))), before),
-                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(bytes)), block),
-                    sym(Sha2::hash_short(full, T, t.whole, short))))))
+        simp_only(padded.left, cut, sized, List::take_append_len);
+    simp_only(Sha256::close_is, Sha256::run_block, Sha256::lengthed_is(Pd, count, n, counted), front, List::append_assoc, total, Sha2::one_bit, Sha2::ending,
+        padded.right, t.hashed, Sha2::hash_short(full, T, t.whole, short))
 }
 
 // The message's end where the padding takes a block more.
@@ -331,20 +269,8 @@ theorem Sha256::close_long(s: Sha256, full: List<List<u8>>, T: List<u8>, room: N
     let space = t.space;
     let below: (T.len() < 64) = omega;
     let padded = Sha256::pad_long(s, T, count & 63, fill, long, below, t.held);
-    let lb = Sha2::be_bytes(8 * n, 8);
-    let front: (Sha2::zero_bytes(64).take(56) = Sha2::zero_bytes(56)) = refl;
-    let block: (Sha256::block(L) = Sha2::length_block(64 * full.len() + T.len())) =
-        trans(Sha256::lengthed_is(Pd, count, n, counted),
-            trans(cong_fn(λ (bytes: List<u8>) => bytes.take(56) ++ lb, padded.left),
-                cong_fn(λ (k: Nat) => Sha2::length_block(k), total)));
-    let first = Sha2::sha256().compress(Sha2::absorbed(Sha2::sha256().start(), full), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())));
-    let before: (Sha256::state(L.hash) = first) =
-        trans(padded.right, cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len()))), t.hashed));
-    trans(cong_fn(λ (m: Mutated<Sha256, u64>) => Sha256::state(m.after.hash), Sha256::close_is(s, count)),
-        trans(Sha256::run_block(L),
-            trans(cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(Sha256::block(L))), before),
-                trans(cong_fn(λ (bytes: List<u8>) => Sha2::sha256().compress(first, Sha2::sha256().words(bytes)), block),
-                    sym(Sha2::hash_long(full, T, t.whole, long, below))))))
+    simp_only(Sha256::close_is, Sha256::run_block, Sha256::lengthed_is(Pd, count, n, counted), padded.left, total, Sha2::length_block,
+        padded.right, t.hashed, Sha2::hash_long(full, T, t.whole, long, below))
 }
 
 // A context closed holds the specification's hash of the bytes it was tracking.
@@ -365,14 +291,7 @@ theorem Sha256::push_fed(s: Sha256, full: List<List<u8>>, T: List<u8>, room: Nat
         And<Sha256Tracks(Sha256::push(s, fill, byte).after, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).full, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).tail, Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).room),
             Sha256::push(s, fill, byte).value.toNat() = Sha2Feed::fed(full, T, r, byte.truncate(8, 56)).tail.len()> {
         Zero => λ t => Sha256::push_full(s, full, T, fill, byte, t, at),
-        Succ(k) => λ t => {
-            let b = byte.truncate(8, 56);
-            let single: List<u8> = [b];
-            let longer = T.len_append(single);
-            let one: (T.len() + single.len() = Succ(T.len())) = refl;
-            let pushed = Sha256::push_room(s, full, T, k, fill, byte, t, at);
-            And(pushed.left, trans(pushed.right, sym(trans(longer, one))))
-        },
+        Succ(k) => λ t => simp_only(List::len_append, using := Sha256::push_room(s, full, T, k, fill, byte, t, at)),
     })(t)
 }
 
@@ -386,11 +305,8 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
     match n {
         Zero => λ s message mn j fill full T room left sized t at => {
             let end: (j.toNat() = message.len()) = omega;
-            let none: (message.drop(j.toNat()) = Nil) = trans(cong_fn(λ (k: Nat) => message.drop(k), end), message.drop_len());
             let done = Sha256::absorb::done(s, message, mn, j, fill, λ (lt: j.toNat() < mn.toNat()) => omega);
-            let here: Sha256::Fed(Mutated(s, fill), Sha2Feed(full, T, room)) = And(t, at);
-            j(sym(none), λ r _ => Sha256::Fed(Sha256::absorb(s, message, mn, j, fill), Sha2Feed(full, T, room).bytes(r)),
-                j(sym(done), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room)), here))
+            simp_only(done, end, List::drop_len, then := And(t, at))
         },
         Succ(m, ih) => λ s message mn j fill full T room left sized t at => {
             let zero: u8 = 0;
@@ -405,12 +321,7 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
             let after: ((j + 1).toNat() = Succ(j.toNat())) = omega;
             let rest = ih(P.after, message, mn, j + 1, P.value, F.full, F.tail, F.room, omega, sized, pushed.left, pushed.right);
             let cut: (message.drop(j.toNat()) = Cons(b, message.drop(Succ(j.toNat())))) = message.drop_at(j.toNat(), zero, omega);
-            let onward: (Sha2Feed(F.full, F.tail, F.room).bytes(message.drop((j + 1).toNat())) = Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))) =
-                trans(cong_fn(λ (k: Nat) => F.bytes(message.drop(k)), after),
-                    trans(cong_fn(λ (x: u8) => Sha2Feed::fed(full, T, room, x).bytes(message.drop(Succ(j.toNat()))), byte),
-                        sym(cong_fn(λ (r: List<u8>) => Sha2Feed(full, T, room).bytes(r), cut))));
-            j(sym(Sha256::absorb::step(s, message, mn, j, fill, inside)), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))),
-                j(onward, λ f _ => Sha256::Fed(Sha256::absorb(P.after, message, mn, j + 1, P.value), f), rest))
+            simp_only(Sha256::absorb::step(s, message, mn, j, fill, inside), after, byte, cut, Sha2Feed::byte, using := rest)
         },
     }
 }
@@ -428,7 +339,7 @@ record Sha256Took(s: Sha256, message: List<u8>) {
 theorem Sha256Took::length(s: Sha256, message: List<u8>, took: Sha256Took(s, message)): message.len() = 64 * took.feed.full.len() + took.feed.tail.len() {
     let whole = Sha2::len_joined(took.feed.full, took.tracks.whole);
     let sum = List::joined(took.feed.full).len_append(took.feed.tail);
-    let same: (took.feed.message().len() = message.len()) = cong_fn(λ (m: List<u8>) => m.len(), took.said);
+    let same: (took.feed.message().len() = message.len()) = simp_only(took.said);
     omega
 }
 
@@ -444,7 +355,7 @@ theorem Sha256Took::fill(s: Sha256, message: List<u8>, took: Sha256Took(s, messa
     let f = took.feed;
     let length = Sha256Took::length(s, message, took);
     let space = took.tracks.space;
-    Sha2::fill_of_count(s.count, f.full.len(), f.tail.len(), trans(took.counted, cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), length)), omega)
+    Sha2::fill_of_count(s.count, f.full.len(), f.tail.len(), simp_only(length, using := took.counted), omega)
 }
 
 // One more part taken.
@@ -456,15 +367,12 @@ theorem Sha256::update_took(s: Sha256, message, part: List<u8>, mn: u64, sized: 
     let A = Sha256::absorb(s, part, mn, 0, s.count & 63);
     let fed = Sha256::absorb_from(mn.toNat(), s, part, mn, 0, s.count & 63, f.full, f.tail, f.room, omega, sized, took.tracks, fill);
     let G = f.bytes(part);
-    let same: (Sha2Feed(f.full, f.tail, f.room).bytes(part.drop(zero.toNat())) = G) =
-        cong_fn(λ (r: List<u8>) => Sha2Feed(f.full, f.tail, f.room).bytes(r), part.drop_zero());
-    let on: Sha256::Fed(A, G) = j(same, λ g _ => Sha256::Fed(A, g), fed);
+    let on: Sha256::Fed(A, G) = simp_only(List::drop_zero, using := fed);
     let updated: (Sha256::update(s, part, mn).after = (A.after with { count = s.count + mn })) = refl;
     let tracks: Sha256Tracks(A.after with { count = s.count + mn }, G.full, G.tail, G.room) = Sha256Tracks(on.left.hashed, on.left.held, on.left.space, on.left.whole);
-    let said: (G.message() = message ++ part) = trans(Sha2Feed::message_bytes(part, f), cong_fn(λ (m: List<u8>) => m ++ part, took.said));
-    let word: (mn = BitVec::ofNat(part.len())) = sym(trans(cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), sized), BitVec::ofNat_toNat(64, mn)));
-    let counted: (s.count + mn = BitVec::ofNat((message ++ part).len())) =
-        trans(BitVec::ofNat_add_of(64, took.counted, word), cong_fn(λ (k: Nat) => BitVec::ofNat(k, n := 64), sym(message.len_append(part))));
+    let said: (G.message() = message ++ part) = simp_only(Sha2Feed::message_bytes, took.said);
+    let word: (mn = BitVec::ofNat(part.len())) = simp_only(sized, BitVec::ofNat_toNat);
+    let counted: (s.count + mn = BitVec::ofNat((message ++ part).len())) = simp_only(List::len_append, using := BitVec::ofNat_add_of(64, took.counted, word));
     j(sym(updated), λ u _ => Sha256Took(u, message ++ part), Sha256Took(G, tracks, said, counted))
 }
 
@@ -485,7 +393,7 @@ theorem Sha256::spell_state(v: [u32; 8]): Sha2::sha256().spell(Sha256::state(v))
 // The digest left is the specification's.
 theorem Sha256::finish_digest(s: Sha256, message: List<u8>, took: Sha256Took(s, message)):
     Sha256::digest(Sha256::finish(s).after) = Sha2::sha256().digest(message) {
-    trans(sym(Sha256::spell_state(Sha256::finish(s).after.hash)), cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().spell(h), Sha256::finish_hash(s, message, took)))
+    simp_only(Sha256::digest, sym(Sha256::spell_state(Sha256::finish(s).after.hash)), Sha256::finish_hash(s, message, took))
 }
 
 // A message in one part.
@@ -505,7 +413,7 @@ theorem Sha256::digest_bytes(span: List<u8>, length: u64, s: Sha256, holds: Sha2
     let fits: (328 + 0 <= span.len()) = omega;
     let exact = Stored::u32_be().exact_array(8, refl, Stored::be_bytes(4).exact_aligned(2, Stored::exact_be_bytes(4)));
     let read = Sha256::hash_part().window_of(exact, span, 0, fits);
-    trans(read, cong_fn(λ (c: Sha256) => Sha256::digest(c), holds.right.right))
+    simp_only(read, holds.right.right)
 }
 
 // The linked hash, on the bytes: a span that holds any context, after the

@@ -15,6 +15,10 @@ import bitvec_bytes;
 import list_window;
 import layout;
 import stored;
+import string;
+import tactic;
+import simp_laws;
+import simp;
 
 def four: List<u8> = [0x10, 0x20, 0x30, 0x40];
 
@@ -142,3 +146,6 @@ theorem words_are_the_bytes(bytes: List<u8>, at: Nat, fits: 32 + at <= bytes.len
 theorem padded_elements(): Stored::be_bytes(3).aligned(2).array(8).Exact() {
     Stored::be_bytes(3).aligned(2).exact_array(8, refl, Stored::be_bytes(3).exact_aligned(2, Stored::exact_be_bytes(3)))
 }
+
+// `simp`'s default for `Stored` passes the checks a set is held to.
+theorem simp_stored_bytes_checked(): True { by simp_check([simp_stored_bytes]) }

@@ -103,6 +103,7 @@ pub(crate) fn rename_expr(e: &mut Expr, from: &str, to: &str) {
         ExprKind::CollectionLit(xs) => for x in xs { rename_expr(x, from, to); },
         ExprKind::Eq(a, b) => { rename_expr(a, from, to); rename_expr(b, from, to); }
         ExprKind::TyLit(t) => rename_ty(t, from, to),
+        ExprKind::Ascribe { expr, ty } => { rename_expr(expr, from, to); rename_ty(ty, from, to); }
         ExprKind::Match { scrut, eqbind, motive, arms, .. } => {
             rename_expr(scrut, from, to);
             if eqbind.as_deref() == Some(from) { *eqbind = Some(to.to_string()); }
@@ -392,6 +393,7 @@ impl Deshadow {
             ExprKind::CollectionLit(xs) => for x in xs { self.expr(x); },
             ExprKind::Eq(a, b) => { self.expr(a); self.expr(b); }
             ExprKind::TyLit(t) => self.ty(t),
+            ExprKind::Ascribe { expr, ty } => { self.expr(expr); self.ty(ty); }
             ExprKind::Match { scrut, eqbind, motive, arms, .. } => {
                 self.expr(scrut);
                 if let Some(m) = motive { self.expr(m); }
@@ -472,6 +474,7 @@ pub(crate) fn walk_expr_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr) -> bool) 
         ExprKind::Lam { body, .. } => walk_expr_mut(body, f),
         ExprKind::CollectionLit(xs) => for x in xs { walk_expr_mut(x, f); },
         ExprKind::Eq(a, b) => { walk_expr_mut(a, f); walk_expr_mut(b, f); }
+        ExprKind::Ascribe { expr, .. } => walk_expr_mut(expr, f),
         ExprKind::Match { scrut, motive, arms, .. } => {
             walk_expr_mut(scrut, f);
             if let Some(m) = motive { walk_expr_mut(m, f); }

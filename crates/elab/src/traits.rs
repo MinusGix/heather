@@ -1117,6 +1117,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         CollectionLit(es) => CollectionLit(es.iter().map(|x| rename_expr(m, x)).collect()),
         Eq(a, b) => Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyLit(t) => TyLit(Box::new(rename_ty(m, t))),
+        Ascribe { expr, ty } => Ascribe { expr: Box::new(rename_expr(m, expr)), ty: Box::new(rename_ty(m, ty)) },
         Match {
             form,
             generated,

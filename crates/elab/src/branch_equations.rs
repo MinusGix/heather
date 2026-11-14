@@ -21,7 +21,7 @@
 //! The checker sees every generated declaration, so nothing here is trusted;
 //! one it refuses is skipped and the reason recorded.
 
-use heather_syntax::ast::{Arm, Block, Decl, DeclKind, Expr, ExprKind, Param, ParamOrigin, Stmt, Ty, TyKind};
+use heather_syntax::ast::{Arm, Block, Decl, DeclKind, Expr, ExprKind, Param, ParamOrigin, Pat, Stmt, Ty, TyKind};
 
 use crate::measure::{app, arrow, block, companion_ref, eq_ty, lam, subst, subst_surface_ty, var};
 use crate::surface::lowered_condition;
@@ -57,20 +57,20 @@ pub(crate) fn designed_name(name: &str, path: &[&str]) -> String {
 }
 
 /// One test on the way to a leaf: the statements in force before it, the
-/// test, which arm is taken, and the hypothesis that takes it.
+/// arm's name (`True`, `Succ`), the parameters taking it (a constructor's
+/// fields, then the hypothesis), and the proof that the test is that arm.
 #[derive(Clone)]
 struct Step {
     lets: Vec<Stmt>,
-    scrut: Expr,
-    convoy: Option<String>,
-    yes: Expr,
-    no: Expr,
-    truth: bool,
-    hyp_name: String,
-    hyp_ty: Ty,
-    /// The bit's equation, `scrut = True` (or `False`), over the hypothesis.
-    bit_eq: Expr,
+    arm: String,
+    params: Vec<(String, Ty)>,
+    chosen: Expr,
 }
+
+/// What a constructor's fields are, at the scrutinee's written type: the
+/// elaborator's answer (`DeclarationsMut::elab_branch_equations`), `None`
+/// where it cannot say.
+pub(crate) type FieldTypes<'a> = &'a dyn Fn(&Ty, &str) -> Option<Vec<(Option<String>, Ty)>>;
 
 /// A `Bool` test at the head of an expression.
 struct Test<'a> {
@@ -202,6 +202,9 @@ fn inline_expr(lets: &[Stmt], e: &Expr) -> Option<Expr> {
 struct Walk<'a> {
     decl: &'a Decl,
     reading: Reading,
+    fields: FieldTypes<'a>,
+    /// The name the arm is checked at the result type under, `result`.
+    result_name: String,
     taken: Vec<String>,
     /// Each leaf: the tests on the way, the statements in force, the leaf.
     leaves: Vec<(Vec<Step>, Vec<Stmt>, Expr)>,
@@ -216,6 +219,40 @@ impl Walk<'_> {
         let mut n = want.to_string();
         let mut k = 1;
         while self.taken.contains(&n) {
+            k += 1;
+            n = format!("{want}{k}");
+        }
+        self.taken.push(n.clone());
+        n
+    }
+
+    /// `name : R`, the declaration's result type: an equation's sides are
+    /// inferred, so a literal arm (`0` of a `u64`) would otherwise take its
+    /// default carrier.
+    fn at_result(&self, e: Expr) -> Expr {
+        let span = e.span;
+        let stated = Stmt::Let { name: self.result_name.clone(), ty: Some(self.decl.result.clone()), expr: e, span, opaque: false };
+        with_lets(&[stated], var(&self.result_name, span))
+    }
+
+    fn chooser(&self, name: &str) -> Expr {
+        let span = self.decl.body.span;
+        Expr { kind: ExprKind::TyApp { head: Box::new(var(name, span)), args: vec![self.decl.result.clone()] }, span }
+    }
+
+    /// A field binder's name as an equation's parameter: the written one
+    /// unless a parameter, a `let` on the way or an earlier binder has it.
+    fn binder_name(&mut self, want: &str, lets: &[Stmt], path: &[Step]) -> String {
+        let want = if want == "_" { "x" } else { want };
+        let clashes = |n: &str| {
+            self.decl.params.iter().any(|p| p.name == n)
+                || lets.iter().any(|st| matches!(st, Stmt::Let { name, .. } | Stmt::LetCode { name, .. } if name == n))
+                || path.iter().any(|s| s.params.iter().any(|(p, _)| p == n))
+                || n == self.result_name
+        };
+        let mut n = want.to_string();
+        let mut k = 1;
+        while clashes(&n) {
             k += 1;
             n = format!("{want}{k}");
         }
@@ -278,36 +315,114 @@ impl Walk<'_> {
                 this.too_many |= this.leaves.len() > MAX_LEAVES;
             }
         };
-        let Some(t) = bool_test(e) else {
+        let arms = match bool_test(e) {
+            Some(t) => self.bool_arms(&lets, &t),
+            None => self.ctor_arms(e, &lets, &path),
+        };
+        let Some(arms) = arms else {
             return leaf(self, path, lets);
         };
-        let mut arms = Vec::new();
-        for truth in [true, false] {
-            let Some(h) = self.hypothesis(&lets, &t, truth) else {
-                return leaf(self, path, lets);
-            };
-            arms.push(h);
+        for (arm, params, chosen, taken) in arms {
+            let mut next = path.clone();
+            next.push(Step { lets: lets.clone(), arm, params, chosen });
+            self.walk(&taken, lets.clone(), next);
         }
-        for (truth, (hyp_name, hyp_ty, bit_eq, scrut)) in [true, false].into_iter().zip(arms) {
+    }
+
+    /// The two arms of a `Bool` test: each one's hypothesis, the proof that
+    /// the test is that arm, and the arm with the test's equation given.
+    fn bool_arms(&mut self, lets: &[Stmt], t: &Test<'_>) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr)>> {
+        let span = t.scrut.span;
+        let mut hyps = Vec::new();
+        for truth in [true, false] {
+            hyps.push(self.hypothesis(lets, t, truth)?);
+        }
+        let mut out = Vec::new();
+        for (truth, (hyp_name, hyp_ty, bit_eq, scrut)) in [true, false].into_iter().zip(hyps) {
             let arm = if truth { t.yes } else { t.no };
+            let chosen = match t.convoy {
+                Some(eq) => {
+                    let chooser = if truth { "bool::Bool::convoy_true" } else { "bool::Bool::convoy_false" };
+                    app(self.chooser(chooser), vec![scrut, lam(&[eq.as_str()], t.yes.clone(), span), lam(&[eq.as_str()], t.no.clone(), span), bit_eq.clone()], span)
+                }
+                None => {
+                    let chooser = if truth { "bool::Bool::picked_true" } else { "bool::Bool::picked_false" };
+                    app(self.chooser(chooser), vec![scrut, t.yes.clone(), t.no.clone(), bit_eq.clone()], span)
+                }
+            };
             let taken = match t.convoy {
                 Some(eq) => subst(arm, &[(eq.as_str(), &bit_eq)], &mut Vec::new()),
                 None => arm.clone(),
             };
-            let mut next = path.clone();
-            next.push(Step {
-                lets: lets.clone(),
-                scrut,
-                convoy: t.convoy.cloned(),
-                yes: t.yes.clone(),
-                no: t.no.clone(),
-                truth,
-                hyp_name,
-                hyp_ty,
-                bit_eq,
-            });
-            self.walk(&taken, lets.clone(), next);
+            out.push((if truth { "True" } else { "False" }.to_string(), vec![(hyp_name, hyp_ty)], chosen, taken));
         }
+        Some(out)
+    }
+
+    /// The arms of a `match` on a parameter of an inductive type, one per
+    /// constructor written: its fields as parameters, typed from the
+    /// declaration at the parameter's written type, and `h: x = C(ȳ)`. The
+    /// proof rewrites the scrutinee to the constructor, where the `match`
+    /// computes (`j`). A `_` arm has no equation: its condition is every
+    /// other constructor's failure.
+    fn ctor_arms(&mut self, e: &Expr, lets: &[Stmt], path: &[Step]) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr)>> {
+        let ExprKind::Match { scrut, eqbind: None, motive: None, arms, .. } = &e.kind else { return None };
+        let ExprKind::Var(x) = &scrut.kind else { return None };
+        let rebound = lets.iter().any(|st| match st {
+            Stmt::Let { name, .. } | Stmt::LetCode { name, .. } => name == x,
+            Stmt::LetRecord { .. } => true,
+        });
+        let param = self.decl.params.iter().find(|p| &p.name == x)?;
+        if rebound || path.iter().any(|s| s.params.iter().any(|(p, _)| p == x)) {
+            return None;
+        }
+        let scrut_ty = param.ty.clone();
+        let span = e.span;
+        let c = self.fresh("c");
+        let mut motive_match = e.clone();
+        if let ExprKind::Match { scrut, motive, .. } = &mut motive_match.kind {
+            *scrut = Box::new(var(&c, span));
+            let r = Expr { kind: ExprKind::TyLit(Box::new(self.decl.result.clone())), span };
+            *motive = Some(Box::new(lam(&["_"], r, span)));
+        }
+        let mut out = Vec::new();
+        for arm in arms.iter().filter(|a| !a.default) {
+            let fields = (self.fields)(&scrut_ty, &arm.ctor)?;
+            if fields.len() != arm.binders.len() {
+                return None;
+            }
+            let mut params = Vec::new();
+            let mut renames: Vec<(String, Expr)> = Vec::new();
+            let mut field_names: Vec<(String, Expr)> = Vec::new();
+            for (binder, (field, ty)) in arm.binders.iter().zip(&fields) {
+                let Pat::Var { name, .. } = binder else { return None };
+                let mut all = path.to_vec();
+                all.push(Step { lets: Vec::new(), arm: String::new(), params: params.clone(), chosen: var("_", span) });
+                let fresh = self.binder_name(name, lets, &all);
+                let mut ty = ty.clone();
+                for (f, v) in &field_names {
+                    ty = subst_surface_ty(&ty, f, v);
+                }
+                if let Some(f) = field {
+                    field_names.push((f.clone(), var(&fresh, span)));
+                }
+                if name != "_" && &fresh != name {
+                    renames.push((name.clone(), var(&fresh, span)));
+                }
+                params.push((fresh, ty));
+            }
+            let value = app(var(&arm.ctor, span), params.iter().map(|(n, _)| var(n, span)).collect(), span);
+            let value = if params.is_empty() { var(&arm.ctor, span) } else { value };
+            let h = self.fresh("h");
+            params.push((h.clone(), eq_ty((**scrut).clone(), value, span)));
+            let map: Vec<(&str, &Expr)> = renames.iter().map(|(a, b)| (a.as_str(), b)).collect();
+            let taken = subst(&arm.body, &map, &mut Vec::new());
+            let motive = lam(&[c.as_str(), "_"], Expr { kind: ExprKind::Eq(Box::new(motive_match.clone()), Box::new(self.at_result(taken.clone()))), span }, span);
+            let back = app(var("sym", span), vec![var(&h, span)], span);
+            let chosen = Expr { kind: ExprKind::J { proof: Box::new(back), motive: Box::new(motive), case: Box::new(Expr { kind: ExprKind::Refl, span }) }, span };
+            out.push((arm.ctor.rsplit("::").next().unwrap_or(&arm.ctor).to_string(), params, chosen, taken));
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 }
 
@@ -337,17 +452,40 @@ pub(crate) fn candidate(decl: &Decl) -> bool {
         ons |= !b.ons.is_empty();
         e = &b.result;
     }
-    !ons && bool_test(e).is_some()
+    !ons && matches!(&e.kind, ExprKind::Match { motive: None, .. })
+}
+
+/// The designed names a reference may expect of `decl`'s first test, under
+/// which a refusal is recorded: `f::True`/`f::False`, or `f::C` per arm.
+pub(crate) fn head_names(decl: &Decl) -> Vec<String> {
+    let mut e = &*decl.body.result;
+    while let ExprKind::Block(b) = &e.kind {
+        e = &b.result;
+    }
+    if bool_test(e).is_some() {
+        return vec![designed_name(&decl.name, &["True"]), designed_name(&decl.name, &["False"])];
+    }
+    match &e.kind {
+        ExprKind::Match { arms, .. } => arms
+            .iter()
+            .filter(|a| !a.default)
+            .map(|a| designed_name(&decl.name, &[a.ctor.rsplit("::").next().unwrap_or(&a.ctor)]))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The equations of `decl`'s branches, at `reading`. `Err` says why there
 /// are none.
-pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading) -> Result<Vec<BranchEquation>, String> {
+pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, fields: FieldTypes<'_>) -> Result<Vec<BranchEquation>, String> {
     if recursive(decl, self_name) {
         return Err("the body calls the function again".into());
     }
     let span = decl.body.span;
-    let mut w = Walk { decl, reading, taken: taken_names(decl), leaves: Vec::new(), too_many: false };
+    let mut taken = taken_names(decl);
+    let result_name = ["result", "result2", "result3"].into_iter().find(|n| !taken.iter().any(|t| t == n)).unwrap_or("result_").to_string();
+    taken.push(result_name.clone());
+    let mut w = Walk { decl, reading, fields, result_name, taken, leaves: Vec::new(), too_many: false };
     let top = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
     w.walk(&top, Vec::new(), Vec::new());
     if w.too_many {
@@ -364,44 +502,25 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading) -
     };
     let args: Vec<Expr> = decl.params.iter().map(|p| var(&p.name, span)).collect();
     let lhs = call(companion_ref(decl, &decl.name, span), args);
-    let result_name = w.fresh("result");
-    let at_result = |name: &str| Expr {
-        kind: ExprKind::TyApp { head: Box::new(var(name, span)), args: vec![decl.result.clone()] },
-        span,
-    };
     let mut out = Vec::new();
     for (path, lets, leaf) in std::mem::take(&mut w.leaves) {
-        let names: Vec<&str> = path.iter().map(|s| if s.truth { "True" } else { "False" }).collect();
-        // The leaf is stated under every statement on the way to it, and
-        // checked at the declaration's result type, as the body's arm is: an
-        // equation's sides are inferred, so a literal arm (`0` of a `u64`)
-        // would otherwise take its default carrier.
-        let mut stated = lets.clone();
-        stated.push(Stmt::Let { name: result_name.clone(), ty: Some(decl.result.clone()), expr: leaf, span, opaque: false });
-        let rhs = with_lets(&stated, var(&result_name, span));
+        let names: Vec<&str> = path.iter().map(|s| s.arm.as_str()).collect();
+        // The leaf is stated under every statement on the way to it, at the
+        // declaration's result type.
+        let rhs = with_lets(&lets, w.at_result(leaf));
         let mut proof: Option<Expr> = None;
         for s in path.iter().rev() {
-            let chosen = match &s.convoy {
-                Some(eq) => {
-                    let chooser = if s.truth { "bool::Bool::convoy_true" } else { "bool::Bool::convoy_false" };
-                    app(at_result(chooser), vec![s.scrut.clone(), lam(&[eq.as_str()], s.yes.clone(), span), lam(&[eq.as_str()], s.no.clone(), span), s.bit_eq.clone()], span)
-                }
-                None => {
-                    let chooser = if s.truth { "bool::Bool::picked_true" } else { "bool::Bool::picked_false" };
-                    app(at_result(chooser), vec![s.scrut.clone(), s.yes.clone(), s.no.clone(), s.bit_eq.clone()], span)
-                }
-            };
-            let step = with_lets(&s.lets, chosen);
+            let step = with_lets(&s.lets, s.chosen.clone());
             proof = Some(match proof {
                 None => step,
                 Some(rest) => app(var("trans", span), vec![step, rest], span),
             });
         }
         let mut params = decl.params.clone();
-        for s in &path {
+        for (name, ty) in path.iter().flat_map(|s| s.params.iter()) {
             params.push(Param {
-                name: s.hyp_name.clone(),
-                ty: s.hyp_ty.clone(),
+                name: name.clone(),
+                ty: ty.clone(),
                 implicit: false,
                 is_self: false,
                 solver: None,

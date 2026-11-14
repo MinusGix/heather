@@ -5,7 +5,9 @@
 //
 // `Scanned::of(source)` is the tokens of a source: for each, its kind and
 // the bytes it spans, whitespace and comments dropped, and an end-of-file
-// token at the source's length; or the offset of the token that is refused.
+// token at the source's length; or the refusal: where the token that is
+// refused starts, why it is refused (a `REFUSED_*` of `lexer_scan`) and
+// where.
 // A token is the longest run of bytes the automaton accepts from where the
 // last one ended (`Accepted::longest`), and the state it starts in depends
 // on the kind before it (`scan_begin`). Nothing else is decided here: which
@@ -39,29 +41,44 @@ record Token { kind: u64, start: Nat, end: Nat }
 // token, and the source from there on.
 record Accepted { kind: u64, end: Nat, rest: List<u8> }
 
-// A source scanned: its tokens, or the offset of the one that is refused.
-inductive Scanned { Tokens(tokens: List<Token>), Refused(at: Nat) }
+// What a scan answers if it stops here: the token it accepted last, or a
+// refusal, its reason and the offset it was refused at. Before anything is
+// accepted it is the refusal of the token's first character
+// (`REFUSED_UNEXPECTED`).
+inductive Cut { Found(token: Accepted), Refusal(reason: u64, at: Nat) }
+
+// A source scanned: its tokens, or the refusal of one: where it starts, why
+// it is refused, and where.
+inductive Scanned { Tokens(tokens: List<Token>), Refused(start: Nat, reason: u64, at: Nat) }
 
 // What is remembered after stepping into `state` with `rest` left at `at`:
 // this position if the state accepts a kind, and what was remembered before
 // if it does not.
-fn Accepted::after(state: u64, rest: List<u8>, at: Nat, last: Option<Accepted>) → Option<Accepted> {
+fn Accepted::after(state: u64, rest: List<u8>, at: Nat, last: Cut) → Cut {
     let kind = scan_accept(state);
-    if kind.eq_bit(0) { last } else { Some(Accepted(kind, at, rest)) }
+    if kind.eq_bit(0) { last } else { Cut::Found(Accepted(kind, at, rest)) }
+}
+
+// Where the source ends at `at`, in the state `ended` that `END` takes the
+// automaton to: a refusal there if it refuses, and what was remembered if
+// it does not.
+fn Cut::ended(ended: u64, at: Nat, last: Cut) → Cut {
+    if ended.band(255).eq_bit(FAIL) { Cut::Refusal(scan_accept(ended), at) } else { last }
 }
 
 // The longest token the automaton accepts from `state` over `rest`, which
 // begins at offset `at`: it steps until the state is `DEAD` and answers the
-// last position it accepted at. `None` is a refusal: the automaton went to
-// `FAIL`, or it stopped having accepted nothing. At the end of the source it
-// is given `END` once, which no state goes on from.
-fn Accepted::longest(state: u64, rest: List<u8>, at: Nat, last: Option<Accepted>) → Option<Accepted> {
+// last position it accepted at, or the refusal before any. A state that
+// refuses answers its own reason, at the byte that took the automaton to
+// it. At the end of the source it is given `END` once, which no state goes
+// on from.
+fn Accepted::longest(state: u64, rest: List<u8>, at: Nat, last: Cut) → Cut {
     match rest {
-        Nil => if scan_step(state, END).eq_bit(FAIL) { None } else { last },
+        Nil => Cut::ended(scan_step(state, END), at, last),
         Cons(byte, tail) => {
             let next = scan_step(state, byte.zero_extend(56));
-            if next.eq_bit(FAIL) {
-                None
+            if next.band(255).eq_bit(FAIL) {
+                Cut::Refusal(scan_accept(next), at)
             } else if next.eq_bit(DEAD) {
                 last
             } else {
@@ -77,7 +94,7 @@ fn Token::kept(kind: u64) → Bool { !(kind.eq_bit(KIND_SPACE) || kind.eq_bit(KI
 fn Scanned::push(self later: Scanned, token: Token) → Scanned {
     match later {
         Tokens(tokens) => Scanned::Tokens(Cons(token, tokens)),
-        Refused(at) => Scanned::Refused(at),
+        Refused(start, reason, at) => Scanned::Refused(start, reason, at),
     }
 }
 
@@ -89,13 +106,13 @@ fn Scanned::from(fuel: Nat, previous: u64, rest: List<u8>, at: Nat) → Scanned 
     match fuel {
         Zero => match rest {
             Nil => Scanned::Tokens([Token(KIND_EOF, at, at)]),
-            Cons(_, _) => Scanned::Refused(at),
+            Cons(_, _) => Scanned::Refused(at, REFUSED_UNEXPECTED, at),
         },
         Succ(more) => match rest {
             Nil => Scanned::Tokens([Token(KIND_EOF, at, at)]),
-            Cons(_, _) => match Accepted::longest(scan_begin(previous), rest, at, None) {
-                None => Scanned::Refused(at),
-                Some(found) => {
+            Cons(_, _) => match Accepted::longest(scan_begin(previous), rest, at, Cut::Refusal(REFUSED_UNEXPECTED, at)) {
+                Refusal(reason, refused) => Scanned::Refused(at, reason, refused),
+                Found(found) => {
                     let later = Scanned::from(more, found.kind, found.rest, found.end);
                     if Token::kept(found.kind) { later.push(Token(found.kind, at, found.end)) } else { later }
                 },
@@ -109,3 +126,33 @@ fn Scanned::of(source: List<u8>) → Scanned { Scanned::from(source.len(), 0, so
 
 // The tokens of a source given as text, by its UTF-8 bytes.
 fn Scanned::of_text(text: String) → Scanned { Scanned::of(utf8::encode(text)) }
+
+// One cut of a source as the linked token loop records it
+// (`lexer_records`): where it starts, and the token found there or the
+// refusal of it.
+record Record { start: Nat, cut: Cut }
+
+// The records of `rest`, which begins at offset `at`, after a token of
+// kind `previous`: each token kept, then the end-of-file token at the
+// source's length, or the refusal that stops the scan. It is
+// `Scanned::from` with the tokens before a refusal kept (`Scanned` drops
+// them), so a caller that is lent too little room for all of them has the
+// ones it was given; `fuel` is the same bound.
+fn Record::from(fuel: Nat, previous: u64, rest: List<u8>, at: Nat) → List<Record> {
+    match rest {
+        Nil => [Record(at, Cut::Found(Accepted(KIND_EOF, at, Nil)))],
+        Cons(_, _) => match fuel {
+            Zero => [Record(at, Cut::Refusal(REFUSED_UNEXPECTED, at))],
+            Succ(more) => match Accepted::longest(scan_begin(previous), rest, at, Cut::Refusal(REFUSED_UNEXPECTED, at)) {
+                Refusal(reason, refused) => [Record(at, Cut::Refusal(reason, refused))],
+                Found(found) => {
+                    let later = Record::from(more, found.kind, found.rest, found.end);
+                    if Token::kept(found.kind) { Cons(Record(at, Cut::Found(found)), later) } else { later }
+                },
+            },
+        },
+    }
+}
+
+// The records of a source.
+fn Record::of(source: List<u8>) → List<Record> { Record::from(source.len(), 0, source, 0) }

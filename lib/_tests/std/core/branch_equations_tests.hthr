@@ -55,6 +55,21 @@ fn step64(i: u64) → u64 { if i = 63 { 0 } else { i + 1 } }
 theorem step64_wraps(i: u64, h: i = 63): step64(i) = 0 { step64::True(i, h) }
 theorem step64_counts(i: u64, h: ¬(i = 63)): step64(i) = i + 1 { step64::False(i, h) }
 
+// A `match` on a parameter of an inductive type: one equation per
+// constructor, its fields as parameters and `h: x = C(ȳ)`.
+fn pred_or(n, d: Nat) → Nat { match n { Zero => d, Succ(m) => m } }
+theorem pred_or_zero(n, d: Nat, h: n = Zero): pred_or(n, d) = d { pred_or::Zero(n, d, h) }
+theorem pred_or_succ(n, d, m: Nat, h: n = Succ(m)): pred_or(n, d) = m { pred_or::Succ(n, d, m, h) }
+// An open element type, and a field named as the arm wrote it.
+fn head_or<A>(xs: List<A>, d: A) → A { match xs { Nil => d, Cons(y, _) => y } }
+theorem head_or_cons<A>(xs: List<A>, d, y: A, ys: List<A>, h: xs = Cons(y, ys)): head_or(xs, d) = y { head_or::Cons(xs, d, y, ys, h) }
+// A test inside a constructor's arm: the names chain.
+fn sign_of(n: Nat, k: Nat) → Nat { match n { Zero => 0, Succ(m) => if m < k { 1 } else { 2 } } }
+theorem sign_of_mid(n, k, m: Nat, h: n = Succ(m), lt: m < k): sign_of(n, k) = 1 { sign_of::Succ::True(n, k, m, h, lt) }
+// A `_` arm has no equation of its own; the written arms do.
+fn is_one(n: Nat) → Bool { match n { Succ(m) => m.same(0), _ => False } }
+theorem is_one_succ(n, m: Nat, h: n = Succ(m)): is_one(n) = m.same(0) { is_one::Succ(n, m, h) }
+
 // As a `simp` law: the side condition is found among the hypotheses in scope.
 theorem clamp_simp(n: Nat, h: n < 10): clamp(n) + 1 = n + 1 { simp_only(clamp::True) }
 

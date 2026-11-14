@@ -195,10 +195,12 @@ and L1 are built, and L3's comparison runs with the loop still in Rust:
 - **One byte at a time, lookahead in the state.** `next_token` is then the
   step iterated until a token finishes, and the same step serves a process
   that reads in chunks.
-- **Errors stay in Rust at first.** The native scanner returns an error kind
-  and an offset, and Rust re-lexes that file with its own lexer for the
-  message, so diagnostics stay byte-identical and no string is built
-  natively.
+- **Errors: the reason is the scanner's, the wording Rust's.** The native
+  scanner returns a reason and an offset, and Rust builds the message from
+  them with the builders its own lexer uses, so diagnostics stay
+  byte-identical, no string is built natively, and a refused file is lexed
+  once (2026-11-14, `issues/linked-scanner-refusals-and-token-loop.md`; at
+  first Rust re-lexed the file for the message).
 - **Bootstrap.** The Rust lexer stays as stage 0 and as the oracle. The
   compiled scanner is a build input, which `build.rs` cannot produce. The
   lean: check in the generated assembly and a digest of its certificate,

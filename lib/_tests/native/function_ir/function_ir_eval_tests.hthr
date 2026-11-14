@@ -7,6 +7,11 @@ import bitvec;
 import bool;
 import list;
 import option;
+import string;
+import tactic;
+import simp_laws;
+import simp;
+import bitvec;
 
 fn no_calls() → Nat → Option<Nat> { λ _ => None }
 
@@ -71,3 +76,10 @@ theorem table_lookup_five(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitV
 theorem table_lookup_seven(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(7)]) = BitVec::ofNat(40) { refl }
 // Negative control: not the entry at the untruncated index.
 theorem table_lookup_not_past(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(1)]).eq_bit(BitVec::ofNat(10)) = False { refl }
+
+// `simp`'s default for a valuation passes the checks a set is held to, and
+// a read of what was set is a `by simp()`.
+theorem simp_valuation_reads_checked(): True { by simp_check([simp_valuation_reads]) }
+
+theorem set_read_by_simp(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w)):
+    Valuation::set(values, id, value, 64, id) = value(64) { by simp() }

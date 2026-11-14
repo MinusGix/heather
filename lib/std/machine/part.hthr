@@ -41,6 +41,8 @@ import vector;
 import bitvec_bytes;
 import layout;
 import stored;
+import string;
+import simp_laws;
 
 // A part of a stored `A` that is a `B`: a field of a record, an element
 // of an array, a field of a field. Where it is, how it is stored, what it
@@ -261,3 +263,9 @@ theorem Part::window_of<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), exa
     let within = p.within;
     trans(p.codec.window_get(exact, bytes, p.offset + at, omega), cong_fn(λ (b: B) => p.codec.write(b), p.reads(bytes, at)))
 }
+
+// `simp`'s default for a goal with a `Part` in it: a read of the whole
+// after a field's put is the whole with the field.
+register def simp_part_fields: SimpSet = simp_default("Part::fields", name_of(Part), [
+    name_of(Part::get_put),
+]);

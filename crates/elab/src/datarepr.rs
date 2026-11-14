@@ -1583,6 +1583,7 @@ pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>)
         ExprKind::CollectionLit(es) => es.iter().any(|a| mentions_free(a, names, bound)),
         ExprKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
         ExprKind::TyLit(t) => mentions_free_ty(t, names, bound),
+        ExprKind::Ascribe { expr, ty } => mentions_free(expr, names, bound) || mentions_free_ty(ty, names, bound),
         ExprKind::Match {
             scrut,
             eqbind,

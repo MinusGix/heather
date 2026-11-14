@@ -831,6 +831,36 @@ impl Elaborator {
         let plan = self.pass.slice_plan.take().expect("the slice plan was installed");
         result.map(|delta| (delta, plan.report, plan.met))
     }
+
+    /// [`Self::check_module_delta_refusing`] with a previous delta of the
+    /// same module to reproduce its accepted items from, as
+    /// [`Self::check_module_delta_from`] does. Every item the previous delta
+    /// records as contributing nothing is elaborated: a refused item is one
+    /// of those, so each refusal in `errors` is this elaborator's verdict
+    /// over this world, never one carried over
+    /// (`issues/expected-refusal-modules-never-moved.md`). An item refused
+    /// again where the previous delta has nothing leaves the prefix as it
+    /// was, and the items after it still replay.
+    pub fn check_module_delta_refusing_from(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+        previous: &ModuleDelta,
+    ) -> (ModuleDelta, Vec<ElabError>, SliceReport) {
+        assert!(self.pass.slice_plan.is_none(), "sliced module checks are not nested");
+        self.pass.slice_plan = Some(SlicePlan {
+            previous: Rc::new(previous.clone()),
+            exact: false,
+            report: SliceReport::default(),
+            force: Default::default(),
+            met: Default::default(),
+            changed: Default::default(),
+        });
+        let (delta, errors) = self.check_module_delta_refusing(module, src, dependencies);
+        let plan = self.pass.slice_plan.take().expect("the slice plan was installed");
+        (delta, errors, plan.report)
+    }
 }
 
 impl DeltasMut<'_> {
@@ -988,7 +1018,7 @@ impl DeltasMut<'_> {
     /// means the slice landed (Ψ, events, warnings) and the item is done;
     /// `false` means elaborate it. A slice the gate or the preflight checks
     /// refuse is rolled back and the item is elaborated instead.
-    pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize) -> bool {
+    pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize, inert: bool) -> bool {
         let Some(plan) = self.pass.slice_plan.as_ref() else { return false };
         if !plan.exact {
             return false;
@@ -999,6 +1029,14 @@ impl DeltasMut<'_> {
         let Some(old) = previous.items.get(index).filter(|old| old.source == source) else {
             return false;
         };
+        // What a refused item left is a slice of nothing
+        // (`slice_failed`), and a refusal is judged by elaborating: nothing
+        // reproduces it, whoever asks. Only an item whose elaboration does
+        // nothing (`inert`: an import, a later member of a mutual group,
+        // whose slice is its first member's) replays a slice of nothing.
+        if !inert && old.psi.is_empty() && old.events.is_empty() {
+            return false;
+        }
         // An item that opened a proof which has changed since is elaborated
         // again: what it computed with is not what it would compute with
         // now. Its text is unchanged, so this does not break the prefix;
@@ -1027,20 +1065,45 @@ impl DeltasMut<'_> {
         }
     }
 
-    /// An item failed under a slice plan. It contributed nothing, where the
-    /// previous delta's item at its place contributed its slice, so nothing
-    /// after it sits where the previous delta has it: a later slice names
-    /// its bindings by their positions in Ψ (its registrations, and every
-    /// reference to an earlier item), and none replays.
+    /// An item failed. It contributed nothing, and the journal says so with
+    /// a slice of nothing at its place, so that a module whose refusals are
+    /// its point keeps one slice per item of its source
+    /// ([`Elaborator::check_module_delta_refusing`]).
+    ///
+    /// Under a slice plan the prefix stays exact only if the previous
+    /// delta's item at this place contributed nothing either. Otherwise
+    /// nothing after it sits where the previous delta has it: a later slice
+    /// names its bindings by their positions in Ψ (its registrations, and
+    /// every reference to an earlier item), and none replays.
     ///
     /// Until constants this was left to the kernel: a later slice's
     /// references were distances from the end of Ψ, so over the shorter
     /// prefix they named other bindings and the recheck usually refused the
     /// slice. A slice that mentioned nothing of its own module replayed, and
     /// registered its names one position off.
-    pub(crate) fn slice_failed(&mut self) {
+    pub(crate) fn slice_failed(&mut self, mark: Option<SliceMark>, source: String, start: usize) {
+        let index = mark.and_then(|mark| {
+            let mut journal = self.pass.module_journal.borrow_mut();
+            let journal = journal.as_mut()?;
+            journal.items.push(ItemSlice {
+                source,
+                start,
+                psi: mark.psi..mark.psi,
+                events: mark.events..mark.events,
+                warnings: mark.warnings..mark.warnings,
+                unsealed: Vec::new(),
+            });
+            Some(journal.items.len() - 1)
+        });
         if let Some(plan) = self.pass.slice_plan.as_mut() {
-            plan.exact = false;
+            let same = index
+                .and_then(|index| Some((plan.previous.items.get(index)?, mark?)))
+                .is_some_and(|(old, mark)| {
+                    old.psi == (mark.psi..mark.psi) && old.events == (mark.events..mark.events)
+                });
+            if !same {
+                plan.exact = false;
+            }
         }
     }
 

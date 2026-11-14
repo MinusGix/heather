@@ -35,6 +35,7 @@ linked!("list_raise_letters.s");
 linked!("copy_span.s");
 linked!("copy_window.s");
 linked!("scan_token.s");
+linked!("scan_tokens.s");
 
 // Functions of words, declared `safe` on the strength of their certificates
 // (the crate's comment): nothing a caller passes can make the call
@@ -52,11 +53,11 @@ unsafe extern "sysv64" {
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
     /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 136 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3536 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3672 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
-    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3808 bytes.
+    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 3944 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
-    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 4488 bytes.
+    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 4896 bytes.
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 
@@ -76,6 +77,7 @@ mod raw {
         pub unsafe fn copy_span(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, count: u64, from: u64) -> u64;
         pub unsafe fn copy_window(out: *mut u8, out_length: u64, text: *const u8, text_length: u64, from: u64, end: u64) -> u64;
         pub unsafe fn scan_token(source: *const u8, source_length: u64, at: u64, previous: u64) -> u64;
+        pub unsafe fn scan_tokens(out: *mut u8, out_length: u64, source: *const u8, source_length: u64, at: u64, previous: u64) -> u64;
     }
 }
 
@@ -324,7 +326,7 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
-/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 4624 bytes.
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 5032 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -343,4 +345,32 @@ pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // The stack's room is the platform's to give, as for a function of
     // words (the crate's comment).
     unsafe { raw::scan_token(source.as_ptr(), source.len() as u64, at, previous) }
+}
+
+/// `List::scan_tokens` of `lib/lang/lexer/lexer_records.hthr`. STACK: 6120 bytes.
+pub fn scan_tokens(out: &mut [u8], source: &[u8], at: u64, previous: u64) -> u64 {
+    // SAFETY (the premises of `scan_tokens_native_returns`, in order):
+    // - the arguments are passed (`Stack::Passed`): six in their registers
+    //   and the rest above the return address, as the C ABI passes them;
+    //   the declaration's order is the table's, which the gate holds to the
+    //   code's signature.
+    // - each span's two words are its address and its length (`ArgsLent`):
+    //   its pointer and `len()`, for the spans `out`, `source`.
+    // - the bytes are readable there for the whole call (`Stack::InMemory`):
+    //   a slice is live, initialised memory while it is borrowed, and an
+    //   empty one is read nowhere.
+    // - no word the callee stores below this call's return address changes
+    //   them, and they end below 2^47 (`Loan::under`, `Loan::canonical`):
+    //   borrowed memory is never the unused stack below RSP, and Linux maps
+    //   nothing of a process above 2^47 unless it asks for that by a hint.
+    // - the bytes of `out` may be stored into, and a byte stored there reads
+    //   back and changes no other byte of a span, no word of the stack and
+    //   none of the code (`Loan::writable`, `stored`, `apart`, `keeps`,
+    //   `keeps_code`): a `&mut [u8]` is writable memory nothing else
+    //   borrows for the whole call, so it shares no byte with another
+    //   argument, with the stack below this call or with the program's
+    //   code. The code stores into no other span (the lending's marks).
+    // The stack's room is the platform's to give, as for a function of
+    // words (the crate's comment).
+    unsafe { raw::scan_tokens(out.as_mut_ptr(), out.len() as u64, source.as_ptr(), source.len() as u64, at, previous) }
 }

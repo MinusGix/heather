@@ -19,9 +19,9 @@
 
 use std::path::{Path, PathBuf};
 
-use heather_linked::scanner::{self, DEAD, END, FAIL, Kind, Scanner, Token};
+use heather_linked::scanner::{self, DEAD, END, FAIL, Kind, Refused, Scanner, Token, failed};
 use heather_syntax::lexer::{
-    SCAN_COMMENT, SCAN_SPACE, Scan, Tok, TokKind, lex, lex_rust, lex_scanned, lex_while, lex_while_scanned, scan_code, scanner_counts,
+    SCAN_COMMENT, SCAN_SPACE, Scan, ScanRefusal, Tok, TokKind, lex, lex_rust, lex_scanned, lex_while, lex_while_scanned, scan_code, scanner_counts,
     scanner_installed,
 };
 
@@ -31,16 +31,21 @@ fn kind_of(kind: &TokKind) -> Kind {
     Kind::of_code(scan_code(kind)).unwrap_or_else(|| panic!("{kind:?} has no scanner kind"))
 }
 
-/// The scanner's tokens up to the end or its refusal, and where it refused.
-fn scan(source: &str) -> (Vec<Token>, Option<usize>) {
+/// The scanner's tokens up to the end or its refusal, and the refusal.
+fn scan(source: &str) -> (Vec<Token>, Option<Refused>) {
     let mut tokens = Vec::new();
     for token in Scanner::new(source.as_bytes()) {
         match token {
             Ok(token) => tokens.push(token),
-            Err(refused) => return (tokens, Some(refused.at)),
+            Err(refused) => return (tokens, Some(refused)),
         }
     }
     (tokens, None)
+}
+
+/// The lexer's message for the scanner's refusal of a source.
+fn refusal_error(source: &str, refused: Refused) -> Option<heather_syntax::lexer::LexError> {
+    ScanRefusal::of_code(refused.reason)?.error(source, refused.start, refused.at)
 }
 
 /// A token's value, read from its span alone: the lexer on those bytes and
@@ -86,9 +91,9 @@ fn plain(tokens: &[Tok]) -> Vec<(TokKind, usize, usize)> {
     tokens.iter().map(|tok| (tok.kind.clone(), tok.span.start, tok.span.end)).collect()
 }
 
-/// The two lexers on one source: the same tokens, or both refusing. Where
-/// both refuse, the scanner's refusal is not past the lexer's unless a
-/// value before it was refused first.
+/// The two lexers on one source: the same tokens, or both refusing, with
+/// the same message at the same place: the scanner's refusal's, or where a
+/// value before it was refused first, that value's.
 fn agree(source: &str) -> Result<(), String> {
     let theirs = lex(source);
     let ours = lex_linked(source);
@@ -104,13 +109,13 @@ fn agree(source: &str) -> Result<(), String> {
         (Err(_), None) => {
             let error = theirs.as_ref().unwrap_err();
             let (tokens, refused) = scan(source);
-            let value_refused = tokens.iter().any(|token| value(source, *token).is_none());
-            match refused {
-                Some(at) if at > error.span.start && !value_refused => Err(format!(
-                    "the lexer refuses at {} ({}), the scanner only at {at}",
-                    error.span.start, error.msg
-                )),
-                _ => Ok(()),
+            if tokens.iter().any(|token| value(source, *token).is_none()) {
+                return Ok(());
+            }
+            let refused = refused.expect("a refusal");
+            match refusal_error(source, refused) {
+                Some(ours) if (&ours.msg, ours.span.start, ours.span.end) == (&error.msg, error.span.start, error.span.end) => Ok(()),
+                ours => Err(format!("the lexer refuses with {error:?}, the scanner with {refused:?}, which says {ours:?}")),
             }
         }
         (Ok(_), None) => Err(format!("the lexer accepts what the scanner refuses at {:?}", scan(source).1)),
@@ -274,7 +279,7 @@ fn every_state_stops_at_the_end() {
     for state in &states {
         for byte in [END, END + 1, 1 << 8 | 0x61, 1 << 32, u64::MAX] {
             let to = scanner::step(*state, byte);
-            assert!(to == DEAD || to == FAIL, "state {state:#x} goes to {to:#x} on {byte:#x}");
+            assert!(to == DEAD || failed(to), "state {state:#x} goes to {to:#x} on {byte:#x}");
         }
     }
 }
@@ -283,6 +288,11 @@ fn every_state_stops_at_the_end() {
 fn a_state_accepts_a_kind_or_nothing() {
     for state in reachable() {
         let code = scanner::accept(state);
+        if failed(state) {
+            // A state that refuses holds its reason where a kind would be.
+            assert!(ScanRefusal::of_code(code).is_some_and(|reason| reason != ScanRefusal::Unexpected), "state {state:#x} refuses for {code}");
+            continue;
+        }
         assert!(code == 0 || Kind::of_code(code).is_some_and(|kind| kind != Kind::Eof), "state {state:#x} accepts {code}");
     }
     assert_eq!(scanner::accept(DEAD), 0);
@@ -297,6 +307,7 @@ fn a_state_accepts_a_kind_or_nothing() {
     for byte in [0x61, 0x3e, 0x5f, 0x30, 0x28, 0xe2, END] {
         assert_eq!(scanner::step(DEAD, byte), DEAD);
         assert_eq!(scanner::step(FAIL, byte), FAIL);
+        assert_eq!(scanner::step(FAIL | 3 << 8, byte), FAIL | 3 << 8);
         assert_eq!(scanner::step(paren, byte), DEAD);
         assert_eq!(scanner::step(0xff, byte), DEAD);
         assert_eq!(scanner::step(u64::MAX, byte), DEAD);
@@ -325,7 +336,7 @@ fn the_automaton_is_one_export() {
         .filter_map(|line| line.strip_prefix("runtime fn step_"))
         .map(|rest| &rest[..rest.find('(').expect("parameters")])
         .collect();
-    assert_eq!(families.len(), 23);
+    assert_eq!(families.len(), 24);
     for family in families {
         assert_eq!(choose.matches(&format!("step_{family}(s, b)")).count(), 1, "step_{family} in scan_choose");
     }
@@ -477,6 +488,8 @@ fn what_is_refused_and_where() {
         ("1e", 0),
         ("1e+", 0),
         ("1.5e", 0),
+        ("1.5e+", 0),
+        ("x 0o", 2),
         ("1.5_", 0),
         ("1.5x", 0),
         ("1e5x", 0),
@@ -510,11 +523,52 @@ fn what_is_refused_and_where() {
         ("'\n'", 0),
         ("'\\u{41}x'", 0),
     ];
+    let mut reasons = std::collections::HashSet::new();
     for (source, at) in refused {
         let (_, where_) = scan(source);
-        assert_eq!(where_, Some(*at), "{source:?}");
+        let where_ = where_.unwrap_or_else(|| panic!("{source:?} is not refused"));
+        assert_eq!(where_.start, *at, "{source:?}");
         assert!(lex(source).is_err(), "the lexer takes {source:?}");
+        assert_agree(source, "a refusal");
+        reasons.insert(ScanRefusal::of_code(where_.reason).expect("a reason"));
     }
+    // Every reason a source given as text can be refused for is among them.
+    let missing: Vec<ScanRefusal> =
+        ScanRefusal::ALL.iter().copied().filter(|reason| *reason != ScanRefusal::NotUtf8 && !reasons.contains(reason)).collect();
+    assert_eq!(missing, []);
+}
+
+#[test]
+fn the_reasons_are_the_modules() {
+    // `def REFUSED_UNEXPECTED: u64 = 1;` and its fellows are the lexer's
+    // `ScanRefusal` numbering, and each `FAIL_*` state refuses for the
+    // reason its name says.
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
+    let camel = |name: &str| name.split('_').map(|word| word[..1].to_string() + &word[1..].to_lowercase()).collect::<String>();
+    let mut seen = 0;
+    for line in module.lines() {
+        if let Some(rest) = line.strip_prefix("def REFUSED_") {
+            let (name, value) = rest.split_once(": u64 = ").expect("a reason's definition");
+            let code: u64 = value.trim_end_matches(';').parse().expect("a reason's code");
+            let reason = ScanRefusal::of_code(code).unwrap_or_else(|| panic!("REFUSED_{name} = {code} is no `ScanRefusal`"));
+            let name = camel(name);
+            assert_eq!(format!("{reason:?}").to_lowercase(), name.to_lowercase(), "REFUSED_{name} = {code}");
+            seen += 1;
+        }
+        if let Some(rest) = line.strip_prefix("def FAIL_") {
+            let (name, value) = rest.split_once(": u64 = ").expect("a refusing state's definition");
+            let state = u64::from_str_radix(value.trim_end_matches(';').trim_start_matches("0x"), 16).expect("hexadecimal");
+            assert!(failed(state), "FAIL_{name}");
+            let reason = ScanRefusal::of_code(scanner::accept(state)).expect("a reason");
+            assert_eq!(format!("{reason:?}").to_lowercase(), camel(name).to_lowercase(), "FAIL_{name}");
+        }
+    }
+    assert_eq!(seen, ScanRefusal::ALL.len());
+    for (index, reason) in ScanRefusal::ALL.iter().enumerate() {
+        assert_eq!(*reason as u64, index as u64 + 1);
+        assert_eq!(ScanRefusal::of_code(*reason as u64), Some(*reason));
+    }
+    assert_eq!(ScanRefusal::of_code(0), None);
 }
 
 #[test]
@@ -539,15 +593,15 @@ fn a_value_is_refused_by_what_reads_it() {
 /// remembered. This is what `Scanner` ran before the loop was one linked
 /// function, and it is the reference that function is held to here at
 /// offsets no scan starts from.
-fn munch(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+fn munch(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
     let mut state = scanner::begin(previous);
-    let mut last = None;
+    let mut last = Err((ScanRefusal::Unexpected as u64, at));
     let mut next = at;
     loop {
         let byte = source.get(next).map_or(END, |byte| u64::from(*byte));
         state = scanner::step(state, byte);
-        if state == FAIL {
-            return None;
+        if failed(state) {
+            return Err((scanner::accept(state), next));
         }
         if state == DEAD || byte == END {
             return last;
@@ -555,7 +609,7 @@ fn munch(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
         next += 1;
         let kind = scanner::accept(state);
         if kind != 0 {
-            last = Some((kind, next));
+            last = Ok((kind, next));
         }
     }
 }
@@ -574,10 +628,11 @@ fn assert_token_is_the_loops(source: &[u8], at: usize, what: &str) {
 fn the_linked_loop_is_the_loop_over_the_automaton() {
     // From every offset of every probe, the ones inside a token and inside
     // a multi-byte character among them, and from past the end, where
-    // nothing is read and nothing is a token.
+    // nothing is read and nothing is a token, as far as an offset can be
+    // (below 2^47, where a span is lent).
     for source in PROBES.iter().chain(BEYOND).chain(PIECES) {
         let source = source.as_bytes();
-        for at in (0..=source.len() + 2).chain([source.len() + 4096, usize::MAX >> 8, usize::MAX]) {
+        for at in (0..=source.len() + 2).chain([source.len() + 4096, (1 << 47) - 1]) {
             assert_token_is_the_loops(source, at, &String::from_utf8_lossy(source));
         }
     }
@@ -592,9 +647,13 @@ fn the_linked_loop_is_the_loop_over_the_automaton() {
     // A token longer than any register of state could count by accident:
     // the end is a position, not a length.
     let long = format!("// {}\n{}", "c".repeat(70_000), "a".repeat(70_000));
-    assert_eq!(scanner::token(long.as_bytes(), 0, 0), Some((Kind::Comment as u64, 70_003)));
-    assert_eq!(scanner::token(long.as_bytes(), 70_004, Kind::Space as u64), Some((Kind::Ident as u64, 140_004)));
-    assert_eq!(scanner::token(long.as_bytes(), 70_003, Kind::Comment as u64), Some((Kind::Space as u64, 70_004)));
+    assert_eq!(scanner::token(long.as_bytes(), 0, 0), Ok((Kind::Comment as u64, 70_003)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_004, Kind::Space as u64), Ok((Kind::Ident as u64, 140_004)));
+    assert_eq!(scanner::token(long.as_bytes(), 70_003, Kind::Comment as u64), Ok((Kind::Space as u64, 70_004)));
+    // And so is a refusal's offset: an unterminated literal refused at the
+    // end, past every register's worth.
+    let open = format!("\"{}", "s".repeat(70_000));
+    assert_eq!(scanner::token(open.as_bytes(), 0, 0), Err((ScanRefusal::Unterminated as u64, 70_001)));
 }
 
 // Every offset of the scanner's own sources, and every offset a scan of
@@ -706,7 +765,7 @@ fn state_after(start: u64, text: &str) -> Option<u64> {
     let mut state = start;
     for byte in text.bytes() {
         state = scanner::step(state, u64::from(byte));
-        if state == DEAD || state == FAIL {
+        if state == DEAD || failed(state) {
             return None;
         }
     }
@@ -838,6 +897,10 @@ const PROBES: &[&str] = &[
     "a ⊕ ~b 42u64 0x1fi8 0u0",
     "x 42u",
     "x 1u08",
+    "x 1.5e+",
+    "0x_1 0o",
+    "\"\\u41\"",
+    "'a\\qb'",
 ];
 
 /// A Heather string literal for a source.
@@ -871,6 +934,19 @@ fn kind_constant(kind: Kind) -> String {
     name
 }
 
+fn reason_constant(reason: ScanRefusal) -> String {
+    let mut name = String::from("REFUSED");
+    let debug = format!("{reason:?}");
+    let letters: Vec<char> = debug.chars().collect();
+    for (at, ch) in letters.iter().enumerate() {
+        if at == 0 || (ch.is_uppercase() && letters[at - 1].is_lowercase()) {
+            name.push('_');
+        }
+        name.extend(ch.to_uppercase());
+    }
+    name
+}
+
 fn probes_module() -> String {
     let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
     let mut out = String::from(
@@ -894,7 +970,7 @@ fn probes_module() -> String {
         .lines()
         .filter_map(|line| line.strip_prefix("def ")?.split_once(": u64 = "))
         .map(|(name, _)| name)
-        .filter(|name| !name.starts_with("KIND_") && *name != "END")
+        .filter(|name| !name.starts_with("KIND_") && !name.starts_with("REFUSED_") && *name != "END")
         .collect();
     out.push_str("// Every state of the automaton: the stops, the starts, each family's, and a\n// finished token of each kind that has one.\n");
     out.push_str("fn lexer_states() → List<u64> {\n");
@@ -916,7 +992,7 @@ fn probes_module() -> String {
         "// After the last byte the loop gives `END` once, and no state asks for more:\n\
          // each stops there or refuses.\n\
          fn lexer_stops(states: List<u64>) → Bool {\n    match states {\n        Nil => True,\n        \
-         Cons(s, rest) => (scan_step(s, END).eq_bit(DEAD) || scan_step(s, END).eq_bit(FAIL)) && lexer_stops(rest),\n    }\n}\n\n\
+         Cons(s, rest) => (scan_step(s, END).eq_bit(DEAD) || scan_step(s, END).band(255).eq_bit(FAIL)) && lexer_stops(rest),\n    }\n}\n\n\
          theorem lexer_states_stop_at_the_end(): lexer_stops(lexer_states()) = True { refl }\n\n\
          // A state's kind is the one in its name: an identifier's, and a finished\n\
          // arrow's.\n\
@@ -925,7 +1001,10 @@ fn probes_module() -> String {
     for (number, source) in PROBES.iter().enumerate() {
         let (tokens, refused) = scan(source);
         let expected = match refused {
-            Some(at) => format!("Scanned::Refused({at})"),
+            Some(refused) => {
+                let reason = ScanRefusal::of_code(refused.reason).expect("a reason");
+                format!("Scanned::Refused({}, {}, {})", refused.start, reason_constant(reason), refused.at)
+            }
             None => {
                 let tokens: Vec<String> = tokens
                     .iter()
@@ -1000,8 +1079,8 @@ fn run_by_the_scanner(source: &str) -> Result<bool, String> {
             if (theirs.msg.as_str(), theirs.span.start, theirs.span.end) != (ours.msg.as_str(), ours.span.start, ours.span.end) {
                 return Err(format!("the lexer refuses with {theirs:?}, the scanner's run with {ours:?}"));
             }
-            if cut {
-                return Err("a refusal counted as the scanner's cut".to_string());
+            if !cut {
+                return Err("the refusal is the lexer's own: the scanner's was given up".to_string());
             }
             Ok(false)
         }
@@ -1129,38 +1208,46 @@ fn the_scanners_run_stops_where_the_lexer_stops() {
 
 // Scanners that are wrong, for what the lexer does about each.
 
-fn refuses_everything(_: &[u8], _: usize, _: u64) -> Option<(u64, usize)> {
-    None
+/// A refusal for no reason the lexer knows, everywhere.
+fn refuses_everything(_: &[u8], at: usize, _: u64) -> Result<(u64, usize), (u64, usize)> {
+    Err((0, at))
 }
 
-/// The linked scanner as far as byte 12, and a refusal from there.
-fn refuses_late(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
-    if at >= 12 { None } else { scanner::token(source, at, previous) }
+/// The linked scanner as far as byte 12, and a refusal for no reason from
+/// there.
+fn refuses_late(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
+    if at >= 12 { Err((0, at)) } else { scanner::token(source, at, previous) }
+}
+
+/// A refusal for a reason that cannot be where it is said to be: a bad
+/// escape at the start of every token, refused before it starts.
+fn misplaces_refusals(_: &[u8], at: usize, _: u64) -> Result<(u64, usize), (u64, usize)> {
+    Err((ScanRefusal::Escape as u64, at.wrapping_sub(1)))
 }
 
 /// Every identifier called a numeral.
-fn mislabels(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+fn mislabels(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
     let (code, end) = scanner::token(source, at, previous)?;
-    Some((if code == Kind::Ident.code() { Kind::Num.code() } else { code }, end))
+    Ok((if code == Kind::Ident.code() { Kind::Num.code() } else { code }, end))
 }
 
-fn ends_nowhere(_: &[u8], at: usize, _: u64) -> Option<(u64, usize)> {
-    Some((Kind::Ident.code(), at))
+fn ends_nowhere(_: &[u8], at: usize, _: u64) -> Result<(u64, usize), (u64, usize)> {
+    Ok((Kind::Ident.code(), at))
 }
 
-fn ends_past_the_source(source: &[u8], _: usize, _: u64) -> Option<(u64, usize)> {
-    Some((Kind::Ident.code(), source.len() + 8))
+fn ends_past_the_source(source: &[u8], _: usize, _: u64) -> Result<(u64, usize), (u64, usize)> {
+    Ok((Kind::Ident.code(), source.len() + 8))
 }
 
 /// One byte at a time, which is inside a character where one is longer.
-fn ends_inside_a_character(_: &[u8], at: usize, _: u64) -> Option<(u64, usize)> {
-    Some((Kind::Forall.code(), at + 1))
+fn ends_inside_a_character(_: &[u8], at: usize, _: u64) -> Result<(u64, usize), (u64, usize)> {
+    Ok((Kind::Forall.code(), at + 1))
 }
 
 /// Every identifier of two characters or more cut after its first.
-fn cuts_identifiers_short(source: &[u8], at: usize, previous: u64) -> Option<(u64, usize)> {
+fn cuts_identifiers_short(source: &[u8], at: usize, previous: u64) -> Result<(u64, usize), (u64, usize)> {
     let (code, end) = scanner::token(source, at, previous)?;
-    Some((code, if code == Kind::Ident.code() && end > at + 1 && source[at + 1].is_ascii_alphabetic() { at + 1 } else { end }))
+    Ok((code, if code == Kind::Ident.code() && end > at + 1 && source[at + 1].is_ascii_alphabetic() { at + 1 } else { end }))
 }
 
 const WRONGED: &[&str] = &[
@@ -1172,14 +1259,16 @@ const WRONGED: &[&str] = &[
     "",
 ];
 
-/// A scanner that refuses, names a kind the bytes are not, or answers an
-/// end that is no end leaves the whole source to the lexer: its tokens or
-/// its refusal, and never a panic or a loop.
+/// A scanner that refuses for no reason the lexer knows or at no place the
+/// reason can be, names a kind the bytes are not, or answers an end that is
+/// no end leaves the whole source to the lexer: its tokens or its refusal,
+/// and never a panic or a loop.
 #[test]
 fn a_scanner_that_is_wrong_about_a_token_is_not_listened_to() {
-    let scanners: [(&str, Scan); 6] = [
+    let scanners: [(&str, Scan); 7] = [
         ("refuses everything", refuses_everything),
         ("refuses late", refuses_late),
+        ("misplaces refusals", misplaces_refusals),
         ("mislabels", mislabels),
         ("ends nowhere", ends_nowhere),
         ("ends past the source", ends_past_the_source),
@@ -1194,13 +1283,14 @@ fn a_scanner_that_is_wrong_about_a_token_is_not_listened_to() {
                 (Err(theirs), Err(ours)) => assert_eq!((&theirs.msg, theirs.span.start), (&ours.msg, ours.span.start), "{name}: {source:?}"),
                 _ => panic!("{name}: {source:?}: the lexer has {theirs:?}, the run {ours:?}"),
             }
-            // The scanner's cut stood only where it was never wrong: the
+            // The scanner's answer stood only where it was never wrong: the
             // empty source, and a source `refuses_late` or `mislabels` never
-            // got to be wrong about.
+            // got to be wrong about (`refuses_late` is the linked scanner
+            // where that refuses before byte 12).
             let untouched = source.is_empty()
-                || (name == "refuses late" && source.len() <= 12)
+                || (name == "refuses late" && (source.len() <= 12 || self::scan(source).1.is_some_and(|refused| refused.start < 12)))
                 || (name == "mislabels" && theirs.as_ref().is_ok_and(|toks| !toks.iter().any(|tok| matches!(tok.kind, TokKind::Ident(_)))));
-            assert_eq!(cut, untouched && theirs.is_ok(), "{name}: {source:?}");
+            assert_eq!(cut, untouched, "{name}: {source:?}");
         }
     }
 }
@@ -1240,4 +1330,52 @@ fn a_wrong_cut_made_of_right_tokens_is_the_scanners_to_answer_for() {
     assert!(cut);
     assert_eq!(ours.len(), 5);
     assert_ne!(ours, plain(&lex_rust(source).expect("lexes")));
+}
+
+// ---------------------------------------------------------------------------
+// The token loop in Heather (`lexer_records.hthr`).
+
+// The records the linked loop stores are the tokens `Scanner` hands out, on
+// every source of the repository and on the generated pieces, with room for
+// every record and for one, two and three a call, so that a scan resumes
+// after every kind of token and ends at a refusal and at the end of the file
+// wherever the span does.
+#[test]
+fn the_linked_token_loop_is_the_scanner() {
+    let mut sources: Vec<String> = corpus().into_iter().map(|(_, text)| text).collect();
+    sources.extend(PROBES.iter().chain(BEYOND).chain(PIECES).map(|text| text.to_string()));
+    let mut refused = 0;
+    for text in &sources {
+        let source = text.as_bytes();
+        let theirs = scanner::tokens(source);
+        refused += usize::from(theirs.is_err());
+        for room in [1, 2, 3, 4096] {
+            assert_eq!(scanner::tokens_by_records(source, room), theirs, "{room} records a call: {text:?}");
+        }
+    }
+    assert!(refused > 10, "only {refused} refusals among the sources");
+}
+
+// What is stored, record by record, and nothing past the room for whole
+// records.
+#[test]
+fn the_records_stop_where_the_span_does() {
+    let ident = Kind::Ident.code();
+    let mut out = [0xaau8; 40];
+    assert_eq!(scanner::records(&mut out, b"a b c", 0, 0), 2);
+    assert_eq!(scanner::record(&out, 0), (0, Ok((ident, 1))));
+    assert_eq!(scanner::record(&out, 1), (2, Ok((ident, 3))));
+    assert_eq!(out[32..], [0xaa; 8]);
+    assert_eq!(scanner::records(&mut [], b"a b c", 0, 0), 0);
+    // From inside, after a name: the rest, and the end of the file.
+    let mut out = [0u8; 64];
+    assert_eq!(scanner::records(&mut out, b"a b c", 3, ident), 2);
+    assert_eq!(scanner::record(&out, 0), (4, Ok((ident, 5))));
+    assert_eq!(scanner::record(&out, 1), (5, Ok((Kind::Eof.code(), 5))));
+    // A refusal is the last record, after the tokens before it.
+    assert_eq!(scanner::records(&mut out, b"a \"b", 0, 0), 2);
+    assert_eq!(scanner::record(&out, 1), (2, Err((ScanRefusal::Unterminated as u64, 4))));
+    // An empty source is its end.
+    assert_eq!(scanner::records(&mut out, b"", 0, 0), 1);
+    assert_eq!(scanner::record(&out, 0), (0, Ok((Kind::Eof.code(), 0))));
 }

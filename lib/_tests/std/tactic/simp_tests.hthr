@@ -6,7 +6,7 @@
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
 import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
-import simp_laws; import simp; import list_pointwise; import bitvec;
+import simp_laws; import simp; import list_pointwise; import bitvec; import vector;
 
 // ---------------------------------------------------------------------------
 // Equations: both sides normalised, the goal closed where they meet.
@@ -267,6 +267,18 @@ theorem no_context(a, b: Regex, w: List<Nat>, h: Regex::Seq(a, b).Denotes(w)): R
 theorem by_type_defaults<A>(xs, ys: List<A>): ((xs ++ Nil) ++ ys).len() + 0 = 0 + (xs.len() + ys.len()) { by simp() }
 
 theorem defaults_nest_right<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = xs.len() + (ys.len() + zs.len()) { by simp() }
+
+// `List::windows`: a module that does not import `list_window` gets its
+// laws, since the set is registered where `simp` reaches it.
+theorem windows_default<A>(xs, ys: List<A>): (xs ++ ys).drop(xs.len()).drop(0) = ys ++ xs.drop(xs.len()) { by simp() }
+
+theorem windows_lengths<A>(xs: List<A>, i: Nat, f: A → A): xs.update(i, f).drop(i).len() = xs.len() - i { by simp() }
+
+// `Vec::entries`: a vector's entries after a `snoc` and an update.
+theorem vector_default<A>(n: Nat, v: [A; n], a, b: A): vector_entries(snoc(vector_update(v, 0, b), a)) = vector_entries(v).update(0, λ _ => b) ++ [a] { by simp() }
+
+// `BitVec::nat`: conversions that cancel; the bound a hypothesis.
+theorem bitvec_default(x: BitVec(64), y: Nat, h: y < Nat::pow(2, 64)): BitVec::ofNat(x.toNat()) = x ∧ BitVec::ofNat(y, n := 64).toNat() = y { by simp() }
 
 // `Regex`'s default is along `≈`.
 theorem regex_default(a, b: Regex, c: Nat): Regex::seq(a.deriv_simp(c), b.simplify()) ≈ Seq(a.deriv(c), b) { by simp() }

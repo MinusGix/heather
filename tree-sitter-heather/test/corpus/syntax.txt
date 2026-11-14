@@ -1060,3 +1060,50 @@ fn k(e: Either<Nat, Nat>) -> Either<Nat, Nat> { ⟨e |⟩ }
     (block
       (anonymous_constructor_expression
         (identifier)))))
+
+==================
+Type ascription
+==================
+
+theorem asc(): (130: u64).toNat() = 130 { refl }
+fn f(g: (x: Nat) -> Nat) -> Nat { g((1: Nat)) }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (declaration_binary_type
+      (declaration_call_type
+        (declaration_member_type
+          (ascription_expression
+            (number)
+            (identifier))
+          (identifier))
+        (argument_list))
+      (number))
+    (block
+      (refl_expression)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (function_type
+            (binder_group
+              (parameter_run
+                (parameter_name
+                  (identifier))
+                (identifier)))
+            (identifier)))))
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (ascription_expression
+            (number)
+            (identifier)))))))

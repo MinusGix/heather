@@ -41,6 +41,61 @@ are in the library as written.
    inside a computation. The refusal probes were chosen to differ at a
    constructor for this reason.
 
+## Status (2026-11-14, thread "Fix typing gaps from the SHA-256 proof")
+
+Probes: `lib/_tests/lang/expected_type_tests.hthr` (items 1 to 4, each with
+a neutral or open variant and a refusal), and `abd_claimed` in
+`lib/_tests/native/crypto/sha256_stream_agreement_tests.hthr` (item 7).
+
+1. **Fixed.** `(e: T)` is an expression (`ExprKind::Ascribe`): `e` checked at
+   `T`, the whole of type `T`, no term of its own. Only inside parentheses;
+   `(x: A)` followed by an arrow is still a binder group
+   (`Parser::group_then_arrow`). The tree-sitter grammar has
+   `ascription_expression`.
+2. **Fixed for a checked call.** An argument that would be inferred at a
+   domain still waiting on the call's slots is now checked when reading the
+   call's expected type first settles that domain
+   (`application::propagate_expected`): `trans(h, cong_fn(λ t =>
+   Mutated(t, 48), p))`. Not for a bare name, whose type is its own (and
+   whose mismatch is better reported against the implicit it disagreed
+   with), nor in a call holding a section's `·`. The read is kept only when every slot the result
+   waits on stands bare in it (an equation's endpoint or type, or a type),
+   since a learn-only unification of `BitVec(?m + ?n)` against
+   `BitVec(63 + 1)` concludes `?n := 1`, and only when the solved result
+   converts to the expected type. Still open: a call that is itself
+   inferred, `trans(cong_fn(λ t => Mutated(t, 48), p), q)`, whose first
+   argument has no expected type until `q` is elaborated; that needs
+   checking against a domain with metas, which this elaborator's per-call
+   scratch world does not do: [[inferred-call-arguments-see-no-expected-type]]
+   (since fixed where the later argument is a local or a `let`).
+3. **Fixed.** A spilled argument (past the declaration's parameters) whose
+   domain is already known is checked there and the spill continues, so a
+   later one teaches the implicit: `pieces_add(4, 16, 16 * k, xs)`.
+4. **Fixed where something must name the container.** A collection literal
+   stays checking-only (a container is ambiguous,
+   `crates/elab/tests/list_literals.rs`), but as a method call's receiver,
+   where a type is needed to find the method at all, a non-empty literal is
+   a `List` of its first item's type (`Inference::list_receiver`), so
+   `[b].len()` resolves; and a literal on the left of an operator takes the
+   carrier from the expected type or the other operand, as a numeral does:
+   `[BitVec::zero()] ++ xs`.
+7. **Located, not decided.** The false claim `digest_spec` at "abc" for
+   "abd" spends the gate's whole step budget (about a million steps, under
+   half a second): the two sides are calls of `digest` on lists that differ
+   in one byte, so conversion evaluates both, and no cheap check can say
+   two calls of one function disagree (they might collide). The verdict
+   stays `OutOfFuel`, but the refusal now moves to the first checking site
+   whose two types spell differently and names the part that differs
+   (`MismatchNotes::fuel_note`: "which differs at `99` against `100`").
+   The verdict itself: [[false-closed-claim-out-of-fuel]] (since then the
+   refusal also says whether the claim is false, checked again with more fuel).
+
+Workarounds removed (PR after #639): `let at: u64 = …` in
+`lib/native/crypto/sha256_agreement.hthr`, `let single: List<u8>` in
+`sha256_stream_agreement.hthr`, `pieces_add<u8>` in `sha2_stream.hthr`, and
+`fill_of_130`'s parameter in `sha2_stream_tests.hthr` (now `(130: u64)`).
+The `n := 64` sites were already gone from master.
+
 ## Done when
 
 Each is fixed or has an issue of its own, and the workarounds named above

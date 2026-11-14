@@ -1138,7 +1138,7 @@ impl SemanticSession {
         }
 
         if self.expectations && crate::expect::count(&module.src) > 0 {
-            return self.check_refusing(elab, module, key, dependencies, notices);
+            return self.check_refusing(elab, module, lint_profile, key, source, dependencies, canon, notices);
         }
 
         // A miss. What the world under the module offers it, for moving an
@@ -1155,7 +1155,7 @@ impl SemanticSession {
             match self.freshness {
                 ImageFreshness::AcceptStale => {
                     match stats::timed(stats::Timer::ImageRelocate, || {
-                        self.relocation(&world, &merkle, elab, module, source, &dependencies, view)
+                        self.relocation(&world, &merkle, elab, module, source, &dependencies, view, false)
                     }) {
                         Relocation::Moved { delta, warnings, lookups } => match stats::timed(stats::Timer::ImageRecheck, || {
                             elab.replay_module_delta(&delta, &dependencies)
@@ -1217,7 +1217,7 @@ impl SemanticSession {
                     }
                 }
                 ImageFreshness::Exact if self.audit.is_some() => {
-                    audited = Some(self.relocation(&world, &merkle, elab, module, source, &dependencies, view));
+                    audited = Some(self.relocation(&world, &merkle, elab, module, source, &dependencies, view, false));
                 }
                 ImageFreshness::Exact => {}
             }
@@ -1320,22 +1320,97 @@ impl SemanticSession {
     }
 
     /// A miss of a module with `expect-error` directives, in a session that
-    /// judges them (`docs/module-dag-design.md` §11): elaborated whole, its
-    /// errors judged here, and published with its refusal count when every
-    /// refusal is the one its directive names and nothing else failed. A
-    /// module that does not meet its directives is an ordinary failure, its
-    /// raw errors left for the caller to judge and report. Never sliced from
-    /// a previous image or moved from another world: a refusal is not
-    /// something either can carry over.
+    /// judges them (`docs/module-dag-design.md` §11): its errors are judged
+    /// here, and it is published with its refusal count when every refusal
+    /// is the one its directive names and nothing else failed. A module that
+    /// does not meet its directives is an ordinary failure, its raw errors
+    /// left for the caller to judge and report.
+    ///
+    /// A refusal is never carried over from an image: every declaration an
+    /// image records as refused is elaborated here. On the stale lanes the
+    /// declarations it records as accepted are reproduced from an image of
+    /// the same source that moves onto this world, as the early cutoff moves
+    /// a module without directives
+    /// (`issues/expected-refusal-modules-never-moved.md`); otherwise, and on
+    /// the exact lane, the module is elaborated whole.
+    #[allow(clippy::too_many_arguments)]
     fn check_refusing(
         &mut self,
         elab: &mut Elaborator,
         module: &Module,
+        lint_profile: LintProfile,
         key: ModuleCacheKey,
+        source: SourceKey,
         dependencies: ModuleDependencyIdentity,
+        canon: &Canon,
         mut notices: Vec<CacheNotice>,
     ) -> (ModuleOutcome, Option<ModuleDelta>) {
-        let (delta, errors) = elab.check_module_delta_refusing(&module.name, &module.src, dependencies);
+        let start = elab.psi().bindings.len();
+        let (world, merkle) = stats::timed(stats::Timer::ImageRelocate, || self.world_view(elab, canon));
+        let view = stats::timed(stats::Timer::ImageRelocate, || observe_world(&world, &merkle, elab, module));
+        let debug = std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some();
+        if view.is_none() && debug {
+            eprintln!("relocation-debug {}: no world view", module.name);
+        }
+        // The accepted declarations of an image of this source, moved here.
+        let mut moved = None;
+        if let (Some(view), ImageFreshness::AcceptStale) = (&view, self.freshness) {
+            match stats::timed(stats::Timer::ImageRelocate, || {
+                self.relocation(&world, &merkle, elab, module, source, &dependencies, view, true)
+            }) {
+                Relocation::Moved { delta, warnings, lookups } => match delta.with_warnings(warnings) {
+                    Ok(delta) => moved = Some((delta, lookups)),
+                    Err(why) => {
+                        if debug {
+                            eprintln!("relocation-debug {}: refused: {why}", module.name);
+                        }
+                    }
+                },
+                Relocation::NoCandidate => {
+                    if debug {
+                        eprintln!("relocation-debug {}: no candidate", module.name);
+                    }
+                }
+                Relocation::Refused(why) => {
+                    if debug {
+                        eprintln!("relocation-debug {}: refused: {why}", module.name);
+                    }
+                }
+            }
+        }
+        // Over moved declarations first, when there are any. A refusal there
+        // can read differently from the one a whole elaboration gives: what a
+        // refusal says may draw on notes the elaboration of an earlier
+        // declaration left in the pass (why a function has no unfolding
+        // equation), and a reproduced declaration leaves none. So a module
+        // that misses its directives that way is elaborated whole before it
+        // is judged to have missed them.
+        let mut sliced = None;
+        if let Some((previous, _)) = &moved {
+            let before = elab.semantic_image();
+            heather_elab::record_name_lookups();
+            let (delta, errors, report) =
+                elab.check_module_delta_refusing_from(&module.name, &module.src, dependencies.clone(), previous);
+            let looked_up = heather_elab::take_name_lookups().unwrap_or_default();
+            if errors.is_empty() || crate::expect::judge(&module.src, errors.clone()).errors.is_empty() {
+                sliced = Some((delta, errors, report.replayed, looked_up));
+            } else {
+                if debug {
+                    eprintln!("relocation-debug {}: its refusals read differently over moved declarations", module.name);
+                }
+                elab.return_to(&before);
+                elab.set_lint_profile(lint_profile);
+                moved = None;
+            }
+        }
+        let (delta, errors, replayed_items, looked_up) = match sliced {
+            Some(sliced) => sliced,
+            None => {
+                heather_elab::record_name_lookups();
+                let (delta, errors) = elab.check_module_delta_refusing(&module.name, &module.src, dependencies);
+                (delta, errors, 0, heather_elab::take_name_lookups().unwrap_or_default())
+            }
+        };
         elab.take_omega_reports();
         let warnings = elab.take_warnings();
         let refusals = if errors.is_empty() {
@@ -1356,9 +1431,30 @@ impl SemanticSession {
             }
             verdict.matched
         };
+        self.replayed_items += replayed_items;
+        if replayed_items > 0 {
+            self.relocated += 1;
+            notices.push(CacheNotice {
+                module: module.name.clone(),
+                kind: CacheNoticeKind::Relocated,
+                error: "registries and the names it wrote unchanged; its refused declarations elaborated again".into(),
+            });
+        }
+        // What the declarations reproduced from the moved image looked up is
+        // what that image's record says; the rest was recorded just now.
+        let mut lookups: BTreeSet<String> = moved.map(|(_, lookups)| lookups.into_iter().collect()).unwrap_or_default();
+        lookups.extend(looked_up);
+        let identifiers = source_identifiers(&module.src);
+        let lookups: Vec<String> = lookups.into_iter().filter(|l| !identifiers.contains(l)).collect();
+        let record = view.and_then(|view| {
+            stats::timed(stats::Timer::ImageRelocate, || world_record(&world, &merkle, start, &delta, &view, lookups))
+        });
+        // An image holding moved declarations is not this build's
+        // elaboration of them, and says so: the exact lane does not replay it.
+        let semantics = if replayed_items > 0 { SemanticsIdentity::relocated() } else { SemanticsIdentity::current() };
         let images = self.images.as_ref().expect("usable images have a cache");
         if let Err(error) = stats::timed(stats::Timer::ImagePublish, || {
-            images.publish_refused(key, &delta, &warnings, SemanticsIdentity::current(), None, refusals)
+            images.publish_refused(key, &delta, &warnings, semantics, record.as_ref().map(|r| (source, r)), refusals)
         }) {
             notices.push(CacheNotice {
                 module: module.name.clone(),
@@ -1370,7 +1466,7 @@ impl SemanticSession {
             errors: Vec::new(),
             warnings,
             replayed: false,
-            replayed_items: 0,
+            replayed_items,
             forced_items: 0,
             expected_refusals: refusals,
             notices,
@@ -1418,13 +1514,37 @@ impl SemanticSession {
             }
             world.push(wm);
         }
-        // Digests taken here are kept for the next world.
-        for wm in &world {
+        // Digests taken here are kept for the next world. A registry part
+        // names bindings by where they sit in its module's own canonical
+        // world, so its digest is taken over that world's hashes: this
+        // world's when the module's world is a prefix of it, and otherwise
+        // the same per-module hashes laid out in the module's order. Taken
+        // over this world's positions regardless, the digest would depend on
+        // which world first asked for it, and a process that met the module
+        // in another world would refuse every move over it
+        // (`issues/registry-digest-taken-in-observer-coordinates.md`).
+        let lead = usize::from(base_len > 0);
+        for (i, wm) in world.iter().enumerate() {
             if let Some(f) = self.done.get(&wm.name)
                 && f.digest.get().is_none()
                 && wm.registry.as_ref().is_some_and(|p| !p.is_inert())
             {
-                let _ = f.digest.set(wm.registry_digest(&merkle));
+                let own = &f.canon.order;
+                let digest = if i == own.len() + lead && own.iter().eq(canon.order[..own.len()].iter()) {
+                    wm.registry_digest(&merkle)
+                } else {
+                    let mut canonical: Vec<Option<Hash>> = base_hashes.iter().copied().collect();
+                    let mut known = true;
+                    for m in own.iter().chain(std::iter::once(&wm.name)) {
+                        match self.done.get(m).and_then(|f| f.hashes.as_ref()) {
+                            Some(h) => canonical.extend(h.iter().copied()),
+                            None => known = false,
+                        }
+                    }
+                    if known { wm.registry_digest(&canonical) } else { None }
+                };
+                let _ = wm.digest.set(digest);
+                let _ = f.digest.set(digest);
             }
         }
         (world, merkle)
@@ -1446,6 +1566,7 @@ impl SemanticSession {
         source: SourceKey,
         dependencies: &ModuleDependencyIdentity,
         view: &WorldView,
+        refusing: bool,
     ) -> Relocation {
         let images = self.images.as_ref().expect("usable images have a cache");
         let loaded = match stats::timed(stats::Timer::ImageDecode, || {
@@ -1456,8 +1577,10 @@ impl SemanticSession {
             Err(error) => return Relocation::Refused(format!("candidate unusable: {error}")),
         };
         // A refusal is the elaborator's verdict: moving it to another world
-        // would assert the elaborator refuses there too.
-        if loaded.refusals > 0 {
+        // would assert the elaborator refuses there too. A caller that
+        // elaborates every refused declaration again (`check_refusing`) asks
+        // for the rest of such an image, which moves like any other.
+        if loaded.refusals > 0 && !refusing {
             return Relocation::NoCandidate;
         }
         let Some(record) = &loaded.world else {

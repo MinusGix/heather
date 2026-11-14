@@ -1180,6 +1180,9 @@ impl Checking<'_> {
             // `.f` resolution has to exist in *both* modes: a projection
             // synthesizes, but the method fallback may be checking-only
             // (`p.absurd()`), and routing it through inference would break it.
+            ExprKind::Dot { .. } if let Some(call) = Inference(self.0).list_receiver(cx, e) => {
+                self.elab_check_skel_slots(cx, &call, expected, lvl, hint, skel, capture_slots)
+            }
             ExprKind::Dot {
                 recv,
                 name,

@@ -76,8 +76,7 @@ theorem Sha2::words_whole(bytes: List<u8>, m: Nat, e: bytes.len() = 4 * m):
 }
 
 theorem Sha2::len_words(bytes: List<u8>, m: Nat, e: bytes.len() = 4 * m): Sha2::sha256().words(bytes).len() = m {
-    trans(cong_fn(λ (w: List<u32>) => w.len(), Sha2::words_whole(bytes, m, e)),
-        trans(Sha2::pieces(4, m, bytes).len_map(λ (piece: List<u8>) => Sha2::word_of(piece)), Sha2::len_pieces(4, m, bytes)))
+    simp_only(Sha2::words_whole(bytes, m, e), List::len_map, Sha2::len_pieces)
 }
 
 // A block's words, then the rest's.
@@ -86,17 +85,11 @@ theorem Sha2::words_block(X, Y: List<u8>, k: Nat, first: X.len() = 64, rest: Y.l
     let V = λ (piece: List<u8>) => Sha2::word_of(piece);
     let whole = X.len_append(Y);
     let all: (Sha2::sha256().words(X ++ Y) = Sha2::pieces(4, 16 * k + 16, X ++ Y).map(V)) = Sha2::words_whole(X ++ Y, 16 * k + 16, omega);
-    let cut: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X ++ Y) ++ Sha2::pieces(4, 16 * k, (X ++ Y).drop(64))) = Sha2::pieces_add<u8>(4, 16, 16 * k, X ++ Y);
+    let cut: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X ++ Y) ++ Sha2::pieces(4, 16 * k, (X ++ Y).drop(64))) = Sha2::pieces_add(4, 16, 16 * k, X ++ Y);
     let front: (Sha2::pieces(4, 16, X ++ Y) = Sha2::pieces(4, 16, X)) = Sha2::pieces_prefix(4, 16, X, Y, first);
-    let back: ((X ++ Y).drop(64) = Y) = j(first, λ n _ => (X ++ Y).drop(n) = Y, X.drop_append_len(Y));
-    let parts: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X) ++ Sha2::pieces(4, 16 * k, Y)) =
-        trans(cut, trans(cong_fn(λ (f: List<List<u8>>) => f ++ Sha2::pieces(4, 16 * k, (X ++ Y).drop(64)), front),
-            cong_fn(λ (d: List<u8>) => Sha2::pieces(4, 16, X) ++ Sha2::pieces(4, 16 * k, d), back)));
-    let mapped: (Sha2::pieces(4, 16 * k + 16, X ++ Y).map(V) = Sha2::pieces(4, 16, X).map(V) ++ Sha2::pieces(4, 16 * k, Y).map(V)) =
-        trans(cong_fn(λ (ps: List<List<u8>>) => ps.map(V), parts), Sha2::pieces(4, 16, X).map_append(Sha2::pieces(4, 16 * k, Y), V));
-    trans(all, trans(mapped,
-        trans(cong_fn(λ (w: List<u32>) => w ++ Sha2::pieces(4, 16 * k, Y).map(V), sym(Sha2::words_whole(X, 16, first))),
-            cong_fn(λ (w: List<u32>) => Sha2::sha256().words(X) ++ w, sym(Sha2::words_whole(Y, 16 * k, omega))))))
+    let back: ((X ++ Y).drop(64) = Y) = simp_only(sym(first), List::drop_append_len);
+    let parts: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X) ++ Sha2::pieces(4, 16 * k, Y)) = simp_only(cut, front, back);
+    simp_only(all, parts, List::map_append, Sha2::words_whole(X, 16, first), Sha2::words_whole(Y, 16 * k, omega))
 }
 
 // Every block is sixty-four bytes.
@@ -126,8 +119,8 @@ theorem Sha2::words_joined(blocks: List<List<u8>>): Sha2::Blocks(blocks) →
             let W2 = Sha2::sha256().words(List::joined(rest));
             let parts: (Sha2::sha256().words(B ++ List::joined(rest)) = W1 ++ W2) = Sha2::words_block(B, List::joined(rest), rest.len(), each.left, Sha2::len_joined(rest, each.right));
             let sixteen: (W1.len() = 16) = Sha2::len_words(B, 16, each.left);
-            let front: ((W1 ++ W2).take(16) = W1) = j(sixteen, λ n _ => (W1 ++ W2).take(n) = W1, W1.take_append_len(W2));
-            let back: ((W1 ++ W2).drop(16) = W2) = j(sixteen, λ n _ => (W1 ++ W2).drop(n) = W2, W1.drop_append_len(W2));
+            let front: ((W1 ++ W2).take(16) = W1) = simp_only(sym(sixteen), List::take_append_len);
+            let back: ((W1 ++ W2).drop(16) = W2) = simp_only(sym(sixteen), List::drop_append_len);
             let cut: (Sha2::pieces(16, Succ(rest.len()), W1 ++ W2) = Cons(W1, Sha2::pieces(16, rest.len(), W2))) =
                 trans(cong_fn(λ (f: List<u32>) => Cons(f, Sha2::pieces(16, rest.len(), (W1 ++ W2).drop(16))), front),
                     cong_fn(λ (d: List<u32>) => Cons(W1, Sha2::pieces(16, rest.len(), d)), back));
@@ -197,10 +190,7 @@ fn Sha2::absorbed(hash: Sha2State(32), blocks: List<List<u8>>) → Sha2State(32)
 
 theorem Sha2::absorbed_snoc(hash: Sha2State(32), blocks: List<List<u8>>, B: List<u8>):
     Sha2::absorbed(hash, blocks ++ [B]) = Sha2::sha256().compress(Sha2::absorbed(hash, blocks), Sha2::sha256().words(B)) {
-    let W = λ (B: List<u8>) => Sha2::sha256().words(B);
-    let F = λ (hash: Sha2State(32)) (block: List<u32>) => Sha2::sha256().compress(hash, block);
-    trans(cong_fn(λ (ws: List<List<u32>>) => ws.foldl(F, hash), blocks.map_append([B], W)),
-        blocks.map(W).foldl_append([W(B)], F, hash))
+    simp_only(Sha2::absorbed, List::map_append, List::foldl_append)
 }
 
 // §5.1.1's end of a message of `length` bytes: the one bit, `zeros` zero
@@ -238,8 +228,7 @@ theorem Sha2::hash_short(full: List<List<u8>>, T: List<u8>, each: Sha2::Blocks(f
     let ends = Sha2::len_ending(55 - T.len(), n);
     let lasts = T.len_append(S);
     let sized: (last.len() = 64) = omega;
-    let joined: (Sha2::sha256().pad(M) = List::joined(full ++ [last])) =
-        trans(padded, trans(List::joined(full).append_assoc(T, S), sym(List::joined_snoc(full, last))));
+    let joined: (Sha2::sha256().pad(M) = List::joined(full ++ [last])) = simp_only(padded, List::append_assoc, List::joined_snoc);
     trans(Sha2::hash_of_blocks(M, full ++ [last], Sha2::blocks_snoc(full, last, sized, each), joined),
         Sha2::absorbed_snoc(Sha2::sha256().start(), full, last))
 }
@@ -271,11 +260,8 @@ theorem Sha2::hash_long(full: List<List<u8>>, T: List<u8>, each: Sha2::Blocks(fu
     let one: List<u8> = Cons(BitVec::ofNat(0x80), Sha2::zero_bytes(63 - T.len()));
     let padded: (Sha2::sha256().pad(M) = M ++ Sha2::ending(119 - T.len(), n)) = Sha2::pad_is(M, full.len(), T.len(), omega, 119 - T.len(), Sha2::zeros_long(full.len(), T.len(), long, below));
     let count: (119 - T.len() = 56 + (63 - T.len())) = omega;
-    let zeros: (Sha2::zero_bytes(119 - T.len()) = Sha2::zero_bytes(63 - T.len()) ++ Sha2::zero_bytes(56)) =
-        trans(cong_fn(λ (c: Nat) => Sha2::zero_bytes(c), count), Sha2::zero_bytes_add(63 - T.len(), 56));
-    let cut: (Sha2::ending(119 - T.len(), n) = one ++ Sha2::length_block(n)) =
-        cong_fn(λ (t: List<u8>) => Cons(BitVec::ofNat(0x80), t),
-            trans(cong_fn(λ (z: List<u8>) => z ++ lb, zeros), Sha2::zero_bytes(63 - T.len()).append_assoc(Sha2::zero_bytes(56), lb)));
+    let zeros: (Sha2::zero_bytes(119 - T.len()) = Sha2::zero_bytes(63 - T.len()) ++ Sha2::zero_bytes(56)) = simp_only(count, Sha2::zero_bytes_add);
+    let cut: (Sha2::ending(119 - T.len(), n) = one ++ Sha2::length_block(n)) = simp_only(zeros, List::append_assoc);
     let first = T ++ one;
     let second = Sha2::length_block(n);
     let z1 = Sha2::len_zero_bytes(63 - T.len());
@@ -285,11 +271,7 @@ theorem Sha2::hash_long(full: List<List<u8>>, T: List<u8>, each: Sha2::Blocks(fu
     let l3 = Sha2::len_be_bytes(8, 8 * n);
     let sized1: (first.len() = 64) = omega;
     let sized2: (second.len() = 64) = omega;
-    let joined: (Sha2::sha256().pad(M) = List::joined((full ++ [first]) ++ [second])) =
-        trans(padded, trans(cong_fn(λ (e: List<u8>) => M ++ e, cut),
-            trans(sym(M.append_assoc(one, second)),
-                trans(cong_fn(λ (m: List<u8>) => m ++ second, List::joined(full).append_assoc(T, one)),
-                    trans(cong_fn(λ (m: List<u8>) => m ++ second, sym(List::joined_snoc(full, first))), sym(List::joined_snoc(full ++ [first], second)))))));
+    let joined: (Sha2::sha256().pad(M) = List::joined((full ++ [first]) ++ [second])) = simp_only(List::joined_snoc, padded, cut, List::append_assoc);
     trans(Sha2::hash_of_blocks(M, (full ++ [first]) ++ [second], Sha2::blocks_snoc(full ++ [first], second, sized2, Sha2::blocks_snoc(full, first, sized1, each)), joined),
         trans(Sha2::absorbed_snoc(Sha2::sha256().start(), full ++ [first], second),
             cong_fn(λ (h: Sha2State(32)) => Sha2::sha256().compress(h, Sha2::sha256().words(second)), Sha2::absorbed_snoc(Sha2::sha256().start(), full, first))))

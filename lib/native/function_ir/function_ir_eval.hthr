@@ -34,6 +34,8 @@ import set_ops;
 import logic;
 import nat;
 import option;
+import string;
+import simp_laws;
 
 // ---------------------------------------------------------------------------
 // Ids and lists of them, decided by evaluation
@@ -137,6 +139,13 @@ theorem Valuation::set_other(values: Valuation(), id: Nat, value: (w: Nat) → B
         Inr(_) => refl,
     }
 }
+
+// `simp`'s default for a goal with a valuation in it: a read of what was
+// set, at its id or at another (the ids apart is the hypothesis).
+register def simp_valuation_reads: SimpSet = simp_default("Valuation::reads", name_of(Valuation), [
+    name_of(Valuation::set_here),
+    name_of(Valuation::set_other),
+]);
 
 fn Valuation::zero() → Valuation() { λ w id => BitVec::zero() }
 
