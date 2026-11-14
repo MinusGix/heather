@@ -57,6 +57,36 @@ theorem literal_under_trans_wrong(a, b: Nat, h: a = b, start: tagged48(a) = tagg
     trans(start, cong_fn(λ (t: Nat) => Tagged(t, 49), h))
 }
 
+// The λ in the first argument: its equation ends where the later local
+// `finish` starts, which is read before the λ is elaborated
+// (issues/inferred-call-arguments-see-no-expected-type.md).
+theorem literal_before_local(a, b: Nat, h: a = b, finish: tagged48(b) = tagged48(b)): tagged48(a) = tagged48(b) {
+    trans(cong_fn(λ (t: Nat) => Tagged(t, 48), h), finish)
+}
+
+// At an open first field.
+theorem literal_before_local_open<A>(a, b: A, h: a = b, finish: Tagged(b, BitVec::ofNat(48, n := 64)) = Tagged(b, BitVec::ofNat(48, n := 64))):
+    Tagged(a, BitVec::ofNat(48, n := 64)) = Tagged(b, BitVec::ofNat(48, n := 64)) {
+    trans(cong_fn(λ (t: A) => Tagged(t, 48), h), finish)
+}
+
+// The later argument a `let`, as proofs write it.
+theorem literal_before_let(a, b: Nat, h: a = b): tagged48(a) = tagged48(b) {
+    let finish: (tagged48(b) = tagged48(b)) = refl;
+    trans(cong_fn(λ (t: Nat) => Tagged(t, 48), h), finish)
+}
+
+// A neutral width, which needed nothing.
+theorem neutral_before_local(a, b: Nat, w: u64, h: a = b, finish: Tagged(b, w) = Tagged(b, w)): Tagged(a, w) = Tagged(b, w) {
+    trans(cong_fn(λ (t: Nat) => Tagged(t, w), h), finish)
+}
+
+// The literal still has to be the right word.
+// expect-error(mismatch)
+theorem literal_before_local_wrong(a, b: Nat, h: a = b, finish: tagged48(b) = tagged48(b)): tagged48(a) = tagged48(b) {
+    trans(cong_fn(λ (t: Nat) => Tagged(t, 49), h), finish)
+}
+
 // 3. A type argument that occurs only under the result's binders is fixed by
 // the arguments applied next.
 theorem take_len_after<A>(a: Nat): (xs: List<A>) → xs.take(a).len() = xs.take(a).len() { λ xs => refl }
