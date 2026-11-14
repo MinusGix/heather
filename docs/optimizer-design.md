@@ -496,8 +496,11 @@ literal and checks closedness by evaluation.
 `optimize_stage()` is inline, then tidy, or no plan;
 `Function::optimized(callees, wanted)` finds a function's plans and the
 function they make. `compile-x86` evaluates it a function at a time,
-callees first, reads the answer back as source (`function_ir_spelled.hthr`),
-and states both as literals; the certificate's statement is that the stage
+callees first, reads the answer back as source (`function_ir_spelled.hthr`:
+the spelling is numbers, a character's code or a marked number the compiler
+writes in decimal, because a decimal digit made in Heather is a long
+division and a function's source is mostly numbers), and states both as
+literals; the certificate's statement is that the stage
 makes the one from the other, checked by evaluation, a function a statement
 (`Stage::run_next`). What the search made is kept only where the lowering
 takes it with the planner's placement (`Function::lowers`); otherwise the

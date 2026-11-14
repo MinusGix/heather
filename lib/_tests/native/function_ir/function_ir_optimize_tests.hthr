@@ -124,12 +124,12 @@ theorem three_cut_dead(): ProgramRewrites(three_made(), prune(three_made(), λ n
 }
 
 // What the compiler reads: the plans on one line, the function on the next.
-theorem seven_spelled(): Optimized(Some(seven_plan()), seven_made()).spelled() =
+theorem seven_spelled(): spelled_text(Optimized(Some(seven_plan()), seven_made()).spelled()) =
     "Some(Pair(Inlines(3, Both(Stay, Here(3))), Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))), Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
     refl
 }
 
-theorem kept_spelled(): Optimized(None, xor()).spelled() =
+theorem kept_spelled(): spelled_text(Optimized(None, xor()).spelled()) =
     "None\nFunction([0, 1], Dataflow(Region(Ports([]), [BitXor(64, 2, 0, 1)], Ports([]))), 2, 0)" {
     refl
 }

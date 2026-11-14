@@ -35,7 +35,6 @@ import nat_map;
 import option;
 import pair;
 import string;
-import utf8;
 
 // ---------------------------------------------------------------------------
 // The stage
@@ -122,7 +121,7 @@ fn program_reached(functions: List<Function>, roots: List<Nat>) → List<Nat> {
 // ---------------------------------------------------------------------------
 // What a search found, spelled for a certificate to state
 
-fn Step::spelled(self step: Step) → String → String {
+fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
     match step {
         Keep => spell_text("Keep"),
         Drop => spell_text("Drop"),
@@ -132,9 +131,9 @@ fn Step::spelled(self step: Step) → String → String {
     }
 }
 
-fn spell_steps(steps: List<Step>) → String → String { spell_list(steps.map(λ (step: Step) => step.spelled())) }
+fn spell_steps(steps: List<Step>) → List<Nat> → List<Nat> { spell_list(steps.map(λ (step: Step) => step.spelled())) }
 
-fn Plan::spelled(self plan: Plan) → String → String {
+fn Plan::spelled(self plan: Plan) → List<Nat> → List<Nat> {
     match plan {
         Same => spell_text("Same"),
         Nodes(steps) => spell_call("Nodes", [spell_steps(steps)]),
@@ -147,7 +146,7 @@ fn Plan::spelled(self plan: Plan) → String → String {
     }
 }
 
-fn Sites::spelled(self sites: Sites) → String → String {
+fn Sites::spelled(self sites: Sites) → List<Nat> → List<Nat> {
     match sites {
         Stay => spell_text("Stay"),
         Here(room) => spell_of("Here", [room]),
@@ -158,15 +157,13 @@ fn Sites::spelled(self sites: Sites) → String → String {
     }
 }
 
-// The plan on one line and the function on the next.
-fn Optimized::spelled(self found: Optimized) → String {
+// The plan on one line and the function on the next, as the numbers the
+// compiler's evaluator reads (`function_ir_spelled.hthr`).
+fn Optimized::spelled(self found: Optimized) → List<Nat> {
     (match found.plan {
         None => spell_text("None"),
         Some(passes) => spell_call("Some", [spell_call("Pair", [
             spell_call("Inlines", [spell_number(passes.fst.bound), passes.fst.sites.spelled()]),
             spell_call("Pair", [passes.snd.fst.spelled(), passes.snd.snd.spelled()])])]),
-    })("\n" ++ found.function.spelled()(""))
+    })(spell_text("\n", found.function.spelled()([])))
 }
-
-// The same as bytes, which is what the compiler's evaluator reads.
-fn Optimized::spelled_bytes(self found: Optimized) → List<Nat> { bytes_numbers(utf8::encode(found.spelled())) }

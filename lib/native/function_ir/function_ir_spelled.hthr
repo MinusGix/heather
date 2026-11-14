@@ -3,57 +3,56 @@
 // certificate as a literal. Nothing here is part of a theorem. A wrong
 // spelling is a literal the certificate's own statements do not hold of.
 //
-// Text is written in front of what follows it (`String → String`), so a
-// spelling costs its length.
+// A spelling is numbers written in front of what follows them
+// (`List<Nat> → List<Nat>`), so it costs its length. A number is a
+// character's code, or `spell_mark()` and after it a number whose digits
+// the reader writes: a digit made here is a long division, a step for each
+// bit of the number it is of, and a function's spelling is mostly numbers.
+// `spelled_text` is what the reader makes of one.
 import function_ir;
 import bool;
+import char;
 import list;
 import nat;
 import nat_map;
 import option;
 import string;
 
-fn spell_text(text: String) → String → String { λ after => text ++ after }
-
-fn spell_digit(d: Nat) → String { "0123456789".drop(d).take(1) }
-
-// A number's decimal digits, by long division: a loop's bound is a number of
-// sixty-four bits, and `Nat::div` counts up to its numerator.
-fn spell_digits(fuel, n: Nat, after: String) → String {
-    match fuel {
-        Zero => after,
-        Succ(f) => shared(n.ldiv(10), λ parts => match parts.quot() {
-            Zero => spell_digit(parts.rem()) ++ after,
-            Succ(_) => spell_digits(f, parts.quot(), spell_digit(parts.rem()) ++ after),
-        }),
-    }
+fn spell_codes(chars: List<Char>, after: List<Nat>) → List<Nat> {
+    match chars { Nil => after, Cons(c, rest) => Cons(c.code, spell_codes(rest, after)) }
 }
 
-// Forty digits: more than a word of any width the IR has.
-fn spell_number(n: Nat) → String → String { λ after => spell_digits(40, n, after) }
+fn spell_text(text: String) → List<Nat> → List<Nat> { λ after => spell_codes(text.chars, after) }
 
-fn spell_items(items: List<String → String>, after: String) → String {
+// No character's code in what is spelled here, which is ASCII.
+fn spell_mark() → Nat { 256 }
+
+fn spell_number(n: Nat) → List<Nat> → List<Nat> { λ after => Cons(spell_mark(), Cons(n, after)) }
+
+fn spell_items(items: List<List<Nat> → List<Nat>>, after: List<Nat>) → List<Nat> {
     match items {
         Nil => after,
-        Cons(item, rest) => match rest { Nil => item(after), Cons(_, _) => item(", " ++ spell_items(rest, after)) },
+        Cons(item, rest) => match rest { Nil => item(after), Cons(_, _) => item(spell_text(", ", spell_items(rest, after))) },
     }
 }
 
 // `name(a, b)`, and a constructor of no fields as its name.
-fn spell_call(name: String, fields: List<String → String>) → String → String {
-    match fields { Nil => spell_text(name), Cons(_, _) => λ after => name ++ ("(" ++ spell_items(fields, ")" ++ after)) }
+fn spell_call(name: String, fields: List<List<Nat> → List<Nat>>) → List<Nat> → List<Nat> {
+    match fields { Nil => spell_text(name), Cons(_, _) => λ after => spell_text(name, spell_text("(", spell_items(fields, spell_text(")", after)))) }
 }
 
-fn spell_list(items: List<String → String>) → String → String { λ after => "[" ++ spell_items(items, "]" ++ after) }
+fn spell_list(items: List<List<Nat> → List<Nat>>) → List<Nat> → List<Nat> {
+    λ after => spell_text("[", spell_items(items, spell_text("]", after)))
+}
 
-fn spell_numbers(ns: List<Nat>) → String → String { spell_list(ns.map(spell_number)) }
+fn spell_numbers(ns: List<Nat>) → List<Nat> → List<Nat> { spell_list(ns.map(spell_number)) }
 
 // A constructor whose fields are numbers.
-fn spell_of(name: String, ns: List<Nat>) → String → String { spell_call(name, ns.map(spell_number)) }
+fn spell_of(name: String, ns: List<Nat>) → List<Nat> → List<Nat> { spell_call(name, ns.map(spell_number)) }
 
-fn Bool::spelled(self b: Bool) → String → String { spell_text(match b { True => "True", False => "False" }) }
+fn Bool::spelled(self b: Bool) → List<Nat> → List<Nat> { spell_text(match b { True => "True", False => "False" }) }
 
-fn Node::spelled(self node: Node) → String → String {
+fn Node::spelled(self node: Node) → List<Nat> → List<Nat> {
     match node {
         Const(w, o, v) => spell_of("Const", [w, o, v]),
         Move(w, o, a) => spell_of("Move", [w, o, a]),
@@ -75,20 +74,20 @@ fn Node::spelled(self node: Node) → String → String {
     }
 }
 
-fn Ports::spelled(self ports: Ports) → String → String {
+fn Ports::spelled(self ports: Ports) → List<Nat> → List<Nat> {
     spell_call("Ports", [spell_list(ports.entries.map(λ (port: Port) => spell_of("Port", [port.id, port.width])))])
 }
 
-fn Region::spelled(self region: Region) → String → String {
+fn Region::spelled(self region: Region) → List<Nat> → List<Nat> {
     spell_call("Region", [region.inputs.spelled(), spell_list(region.nodes.map(λ (node: Node) => node.spelled())), region.outputs.spelled()])
 }
 
-fn View::spelled(self view: View) → String → String {
+fn View::spelled(self view: View) → List<Nat> → List<Nat> {
     spell_call("View", [spell_number(view.buffer), spell_number(view.home), spell_number(view.start), spell_number(view.end),
         view.written.spelled(), spell_number(view.base), spell_number(view.length)])
 }
 
-fn StructuredRegion::spelled(self region: StructuredRegion) → String → String {
+fn StructuredRegion::spelled(self region: StructuredRegion) → List<Nat> → List<Nat> {
     match region {
         Dataflow(body) => spell_call("Dataflow", [body.spelled()]),
         Sequence(prefix, continuation) => spell_call("Sequence", [prefix.spelled(), continuation.spelled()]),
@@ -104,6 +103,49 @@ fn StructuredRegion::spelled(self region: StructuredRegion) → String → Strin
     }
 }
 
-fn Function::spelled(self function: Function) → String → String {
+fn Function::spelled(self function: Function) → List<Nat> → List<Nat> {
     spell_call("Function", [spell_numbers(function.parameters), function.body.spelled(), spell_number(function.result), spell_number(function.lent)])
 }
+
+// ---------------------------------------------------------------------------
+// What the reader makes of a spelling
+
+fn decimal_digit(d: Nat) → String { "0123456789".drop(d).take(1) }
+
+// A number's decimal digits, by long division: a loop's bound is a number of
+// sixty-four bits, and `Nat::div` counts up to its numerator.
+fn decimal_digits(fuel, n: Nat, after: String) → String {
+    match fuel {
+        Zero => after,
+        Succ(f) => shared(n.ldiv(10), λ parts => match parts.quot() {
+            Zero => decimal_digit(parts.rem()) ++ after,
+            Succ(_) => decimal_digits(f, parts.quot(), decimal_digit(parts.rem()) ++ after),
+        }),
+    }
+}
+
+// Forty digits: more than a word of any width the IR has.
+fn decimal(n: Nat) → String { decimal_digits(40, n, "") }
+
+// The character of a code: a line's end, or one of the ninety-five from a
+// space on.
+fn spelled_char(of: Nat) → String {
+    match of.same(10) {
+        True => "\n",
+        False => " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~".drop(of - 32).take(1),
+    }
+}
+
+fn spelled_from(marked: Bool, spelling: List<Nat>) → String {
+    match spelling {
+        Nil => "",
+        Cons(n, rest) => match marked {
+            True => decimal(n) ++ spelled_from(False, rest),
+            False => match n.same(spell_mark()) { True => spelled_from(True, rest), False => spelled_char(n) ++ spelled_from(False, rest) },
+        },
+    }
+}
+
+// A spelling as the text the compiler states: each marked number in
+// decimal, each code its character.
+fn spelled_text(spelling: List<Nat>) → String { spelled_from(False, spelling) }

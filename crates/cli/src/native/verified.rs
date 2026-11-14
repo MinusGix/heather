@@ -505,6 +505,23 @@ struct Optimized {
 /// nothing, and its code would be emitted all the same. The certificate
 /// states the list of the functions reached as a literal, and that the
 /// program is closed under it (`program_closed`), by evaluation.
+/// The text of a spelling (`lib/native/function_ir/function_ir_spelled.hthr`):
+/// a number is an ASCII character's code, or the mark and after it a number
+/// written here in decimal. `None` for anything else.
+fn spelled_text(spelling: &[u64]) -> Option<String> {
+    const MARK: u64 = 256;
+    let mut text = String::with_capacity(spelling.len() * 2);
+    let mut numbers = spelling.iter();
+    while let Some(&n) = numbers.next() {
+        match n {
+            MARK => text.push_str(&numbers.next()?.to_string()),
+            10 | 32..=126 => text.push(n as u8 as char),
+            _ => return None,
+        }
+    }
+    Some(text)
+}
+
 fn optimize(elab: &Elaborator, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
     let mut fork = elab.fork();
     let source = format!("{probe}_opt_source");
@@ -519,11 +536,10 @@ fn optimize(elab: &Elaborator, prefix: &str, probe: &str, imports: &str, definit
         let earlier = below("opt_first");
         let find = format!("{probe}_opt_find_{k}");
         let text = format!("{imports}{}
-fn {prefix}_opt_found_{k}() → List<Nat> {{ {prefix}_fn{k}().optimized({earlier}, Wanted::usual()).spelled_bytes() }}
+fn {prefix}_opt_found_{k}() → List<Nat> {{ {prefix}_fn{k}().optimized({earlier}, Wanted::usual()).spelled() }}
 ", uses(&modules));
         fork.elab_module_source(&find, &text).map_err(|e| e.render(&text))?;
-        let bytes: Vec<u8> = read(&fork, &find, &format!("found_{k}"))?.iter().map(|&b| b as u8).collect();
-        let found = String::from_utf8(bytes).map_err(|_| format!("function {k}'s optimisation did not read back"))?;
+        let found = spelled_text(&read(&fork, &find, &format!("found_{k}"))?).ok_or_else(|| format!("function {k}'s optimisation did not read back"))?;
         let (plan, function) = match found.split_once('\n') {
             Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
             _ => return Err(format!("function {k}'s optimisation did not read back")),

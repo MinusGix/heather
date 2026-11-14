@@ -189,6 +189,11 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
   compares). A build that fails with `undefined symbol: scan_token` is one of
   those files having lost a symbol: `git checkout HEAD --
   crates/linked/generated/<file>.s`, build, then run `scripts/linked`.
+- **A `compile-x86` that dies at the rail inside `evaluate_numbers`**: set
+  `HEATHER_READ_TRACE=1` and it reports each read's evaluator steps, time and
+  the process's peak memory during it. A read keeps everything it evaluates
+  until it ends, so the read with the steps is the one holding the memory
+  (`issues/compile-x86-address-space-margin.md`).
 - When `compile-x86` answers "the verified lowering refused this program
   with the planner's placement", it names the node refused, its place and
   what each register held (`lib/native/function_ir/function_ir_refusal.hthr`
