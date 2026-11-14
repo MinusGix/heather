@@ -70,6 +70,35 @@ impl Checking<'_> {
         self.elab_check_skel(cx, e, expected, lvl, hint, None)
     }
 
+    /// A proof of `P` given where a condition `∥P∥` is expected
+    /// (docs/strict-conditions-design.md §3): its term, checked at `P`, for
+    /// the caller to wrap in `squash`; `None` where `e` is to check as
+    /// written, because it is already a `∥P∥` or a `squash(…)`.
+    ///
+    /// A search, a tactic, `refl` or a hole runs at `P`, since none of them
+    /// proves a squash. Anything else is inferred in a probe and wrapped
+    /// only when it infers and what it proves is not itself a squash, so a
+    /// condition passed on (`inside := inside`) stays as it is.
+    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, prop: &Rc<Type>, level: &Level) -> R<Option<Term>> {
+        if let ExprKind::App { head, .. } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
+        {
+            return Ok(None);
+        }
+        let search = matches!(&e.kind, ExprKind::Hole(_))
+            || (crate::surface::count_holes_expr(e) == 0 && crate::defaults::is_discharge(e));
+        if !search {
+            let squashed = self.probe(|| match self.elab_infer(cx, e) {
+                Ok((_, got, _)) => self.whnf(cx, &got, e.span).ok().map(|w| matches!(w, Type::Squash { .. })),
+                Err(_) => None,
+            });
+            if squashed != Some(false) {
+                return Ok(None);
+            }
+        }
+        self.elab_check(cx, e, prop, level).map(Some)
+    }
+
     /// [`Self::elab_check_hinted`] plus, where the caller has one, the
     /// expected type's implicitness *skeleton*
     /// (docs/implicit-binders-design.md §6.1). Three caller classes supply
@@ -309,6 +338,11 @@ impl Checking<'_> {
                 skel,
                 capture_slots,
             );
+        }
+        if let Type::Squash { level, ty } = expected
+            && let Some(payload) = self.check_condition_squashed(cx, e, ty, level)?
+        {
+            return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) });
         }
         if let ExprKind::App {
             head,
