@@ -22,11 +22,13 @@ parses the positive fixtures with both parsers, confirms negative/recovery
 fixtures are rejected by Heather, parses Heather's checked library corpus with
 Tree-sitter, and verifies the fixed lexical inventory.
 
-When Heather gains a keyword or fixed symbol, update the Rust parser/lexer and
-`syntax-inventory.json` in the same change. The drift check will name whichever
-side is stale. The fixed symbols are exactly the spellings of the token kinds'
-table, `TOKEN_KINDS` in `lib/lang/lexer/lexer_kinds.hthr` (read from the Rust
-`scripts/linked` generates from it, `crates/linked/generated/kinds.rs`). CST productions remain hand-maintained in `grammar.js`; they
+When Heather gains a keyword, update the Rust parser and
+`syntax-inventory.json` in the same change. A fixed symbol is a row of the token
+kinds' table, `TOKEN_KINDS` in `lib/lang/lexer/lexer_kinds.hthr`, which the Rust
+lexer matches by (`crates/linked/generated/kinds.rs`, written from it by
+`scripts/linked`); the check reads the spellings there and wants each in
+`grammar.js`, but those the parser refuses (`rejected_fixed_tokens`). The drift
+check will name whichever side is stale. CST productions remain hand-maintained in `grammar.js`; they
 must not be generated mechanically from the recursive-descent parser.
 
 ## Release
