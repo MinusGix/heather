@@ -116,22 +116,32 @@ fn is_of_call(head: &Expr) -> bool {
     matches!(&head.kind, ExprKind::Var(v) if v == "When::of" || v == "when::When::of")
 }
 
-/// Do these arms name `When`'s constructors?
-pub(crate) fn when_arms(arms: &[heather_syntax::Arm]) -> bool {
-    arms.iter().any(|a| {
-        let ctor = a.ctor.rsplit("::").next().unwrap_or(&a.ctor);
-        ctor == "Present" || ctor == "Absent"
+/// The constructor the first arm naming `Present` or `Absent` writes, if one
+/// does: a cheap syntactic filter, which [`Tested::names_when`] then resolves,
+/// since another type may name its constructors so too.
+fn when_arm(arms: &[heather_syntax::Arm]) -> Option<&str> {
+    arms.iter().map(|a| a.ctor.as_str()).find(|ctor| {
+        let last = ctor.rsplit("::").next().unwrap_or(ctor);
+        last == "Present" || last == "Absent"
     })
 }
 
+/// Is `ind` `when::When`?
+fn is_when_ind(ind: &crate::inductive::Inductive) -> bool {
+    ind.name == "When" && ind.scope.module == "when"
+}
+
 /// The scrutinee of a `match` with `arms`, as the walk that infers its type
-/// alone must read it: a call under `When`'s constructors is marked to be
-/// read as its test, which is what the `match` elaborates.
+/// alone must read it: a call under an arm naming `Present`/`Absent` is
+/// marked, with that constructor, to be read as its test when the
+/// constructor is `When`'s, which is what the `match` elaborates.
 pub(crate) fn tested_marker(scrut: &Expr, arms: &[heather_syntax::Arm]) -> Option<Expr> {
-    (when_arms(arms) && is_call(scrut)).then(|| Expr {
+    let ctor = when_arm(arms).filter(|_| is_call(scrut))?;
+    let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span: scrut.span };
+    Some(Expr {
         kind: ExprKind::App {
-            head: Box::new(Expr { kind: ExprKind::Var(TESTED_MARK.to_string()), span: scrut.span }),
-            args: vec![scrut.clone()],
+            head: Box::new(var(TESTED_MARK)),
+            args: vec![scrut.clone(), var(ctor)],
             named: vec![],
             explicit: false,
             goal_oriented: false,
@@ -144,9 +154,13 @@ impl Tested<'_> {
     /// A [`tested_marker`]: the call it holds, tested.
     pub(crate) fn tested_mark(&self, cx: &Cx, e: &Expr) -> R<Option<(Cx, Expr)>> {
         let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
-        let (ExprKind::Var(v), [call]) = (&head.kind, args.as_slice()) else { return Ok(None) };
+        let (ExprKind::Var(v), [call, ctor]) = (&head.kind, args.as_slice()) else { return Ok(None) };
         if v != TESTED_MARK {
             return Ok(None);
+        }
+        let ExprKind::Var(ctor) = &ctor.kind else { return Ok(None) };
+        if !self.names_when(ctor) {
+            return Ok(Some((cx.clone(), call.clone())));
         }
         match self.tested(cx, call)? {
             Some(found) => Ok(Some(found)),
@@ -159,20 +173,51 @@ impl Tested<'_> {
         crate::name_lookup::NameLookup(self).key_of_kinds("When", &[crate::names::NameKind::Inductive]).as_deref() == Some(WHEN)
     }
 
-    /// Is `ty` a `When<_, _>`?
+    /// Does the module names resolve in (a default's owner, while its default
+    /// elaborates; else the module being elaborated) import `when`, or is it
+    /// `when`? The gate before a name lookup on a path every call takes: a
+    /// scan of the module's written imports, no table probe.
+    fn when_imported(&self) -> bool {
+        let scopes = self.scope.resolution_scopes.borrow();
+        let scope = scopes.last().map_or(self.names.scope(), |s| &**s);
+        scope.module == "when" || scope.imports_module("when")
+    }
+
+    /// Is `ty` a `When<_, _>`? Run on every call checked at a type, so the
+    /// structural read comes first: an inductive's tag names its declaration
+    /// and module, and only a type with no tag in its shape (one a definition
+    /// spells) is decoded, in a module that imports `when`.
     pub(crate) fn is_when(&self, cx: &Cx, ty: &Type) -> bool {
-        // A name lookup first: a module that cannot name `When` pays only it.
-        if !self.when_visible() {
+        match self.tag_of(ty) {
+            Some(ind) => is_when_ind(&ind),
+            None => self.when_imported() && goal_combinators::type_inductive(self, cx, ty).is_some_and(|ind| is_when_ind(&ind)),
+        }
+    }
+
+    /// Does `ctor`, as an arm writes it, resolve to `When`'s constructor? A
+    /// type of the module's own, or another import's, may name one
+    /// `Present` too; an ambiguous name is not taken for `When`'s.
+    pub(crate) fn names_when(&self, ctor: &str) -> bool {
+        if !self.when_imported() {
             return false;
         }
-        goal_combinators::type_inductive(self, cx, ty).is_some_and(|ind| ind.name == "When")
+        let lookup = crate::name_lookup::NameLookup(self);
+        // `When::Present`: the type it is qualified by.
+        if let Some((ty, _)) = ctor.rsplit_once("::") {
+            return lookup.key_of_kinds(ty, &[crate::names::NameKind::Inductive]).as_deref() == Some(WHEN);
+        }
+        lookup
+            .key_of_kinds(ctor, &[crate::names::NameKind::Ctor])
+            .and_then(|key| self.types.constructor(&key).map(|(ind, _)| is_when_ind(ind)))
+            .unwrap_or(false)
     }
 
     /// Is `e` a `match` whose arms name `When`'s constructors, with a call as
     /// its scrutinee?
-    fn when_match(e: &Expr) -> Option<&Expr> {
+    fn when_match<'x>(&self, e: &'x Expr) -> Option<&'x Expr> {
         let ExprKind::Match { scrut, arms, .. } = &e.kind else { return None };
-        (when_arms(arms) && is_call(scrut)).then_some(&**scrut)
+        let ctor = when_arm(arms).filter(|_| is_call(scrut))?;
+        self.names_when(ctor).then_some(&**scrut)
     }
 
     /// Called by every omitted default before it runs: when a probe is
@@ -274,7 +319,7 @@ impl Tested<'_> {
     /// A `match` on `When`'s constructors whose scrutinee is a call: the
     /// `match` with the call tested, and the context binding its condition.
     pub(crate) fn tested_match(&self, cx: &Cx, e: &Expr) -> R<Option<(Cx, Expr)>> {
-        let Some(scrut) = Self::when_match(e) else { return Ok(None) };
+        let Some(scrut) = self.when_match(e) else { return Ok(None) };
         let Some((bound, tested)) = self.tested(cx, scrut)? else { return Ok(None) };
         let ExprKind::Match { form, motive, arms, eqbind, generated, .. } = &e.kind else { return Ok(None) };
         let rewritten = Expr {
@@ -297,7 +342,7 @@ impl Tested<'_> {
     /// `When` is expected, or a `match` on `When`'s constructors whose
     /// scrutinee is a call.
     pub(crate) fn tested_check(&self, cx: &Cx, e: &Expr, expected: &Type) -> R<Option<(Cx, Expr)>> {
-        if Self::when_match(e).is_some() {
+        if self.when_match(e).is_some() {
             return self.tested_match(cx, e);
         }
         if !is_call(e) || !self.is_when(cx, expected) {

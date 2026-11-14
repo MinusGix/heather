@@ -333,6 +333,14 @@ language` and log rulings there.
   `When` parameter whose type is known, and the scrutinee of a `match` or
   `if let` whose arms name `Present`/`Absent`. The two stage-1 users are now
   `v.at(i)` and `add_within(a, b)` where a `When` is wanted.
+- An arm's constructor is resolved, not read by its spelling: a type of the
+  module's own (or another import's) with a constructor `Present` keeps
+  its call's first reading, and so does an ambiguous bare name;
+  `When::Present` is resolved through its type (`when_names_tests`).
+- The test of an expected type runs on every checked call, so it reads
+  structurally first: an inductive's tag names its declaration and module.
+  Only a type with no tag in its shape is decoded, and only in a module
+  that imports `when`. No table probe is on that path.
 - Refusals, as `expect-error` probes: a written condition where a `When` is
   wanted (a mismatch: the call is not tested), a condition with no decision
   ("… has no decision (`Decide<…>`) here: give `name := …` and take the
