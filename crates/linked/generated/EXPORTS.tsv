@@ -41,3 +41,4 @@ lib/native/native_tool_spans.hthr	List::raise_letters	text: span mut, count, fro
 lib/native/native_tool_spans.hthr	copy_span	out: span mut, text: span, count, from
 lib/native/native_tool_spans.hthr	copy_window	out: span mut, text: span, from, end
 lib/lang/lexer/lexer_span.hthr	scan_token	source: span, at, previous
+lib/lang/lexer/lexer_records.hthr	scan_tokens = List::scan_tokens	out: span mut, source: span, at, previous

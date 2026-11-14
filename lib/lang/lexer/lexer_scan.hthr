@@ -29,7 +29,7 @@
 //
 // A state is a word: its number in the low byte and, above it, the kind it
 // accepts (zero for none), or for `FAIL` the reason, so `scan_accept` is a
-// shift. A token that ends
+// shift and a mask. A token that ends
 // where it is first accepted (`(`, `->`, a closed string) needs no state of
 // its own: it is state 1 with its kind above, which has no way on.
 //
@@ -1231,8 +1231,10 @@ runtime fn scan_choose(f, s, b: u64) → u64 {
 runtime fn scan_step(s, b: u64) → u64 { scan_choose(scan_family(s, b), s, b) }
 
 // The kind of the token that ends in a state, zero for none; in a state
-// that refuses, the reason.
-runtime fn scan_accept(s: u64) → u64 { s.shift_right(8) }
+// that refuses, the reason. It is the byte above the state's number, so a
+// kind or a reason is one byte by its definition, whatever word it is
+// given (the token loop's records, `lexer_records`, rely on it).
+runtime fn scan_accept(s: u64) → u64 { s.shift_right(8).band(255) }
 
 // The state a token starts in, from the kind of what was scanned before it,
 // zero at the start of the source. `>>` is a shift only after a gap: the Rust

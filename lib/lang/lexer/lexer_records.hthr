@@ -1,0 +1,601 @@
+// Heather's scanner over a whole source it is lent, with the tokens stored
+// into a second span the caller lends: the token loop of
+// `crates/linked/src/scanner.rs` as compiled Heather
+// (issues/linked-scanner-refusals-and-token-loop.md, part 2).
+//
+// `out.scan_tokens(olen, source, length, at, previous)` scans `source` from
+// `at`, after a token of kind `previous`, and stores one record of sixteen
+// bytes for each token it keeps (whitespace and comments are not kept):
+// the offset the token starts at, then its word (`token_word`: the kind in
+// the top byte, the end below), each big-endian. The last record is the
+// end-of-file token at the source's length, or the refusal that stopped the
+// scan (`refusal_word`, zero in the top byte). The answer is how many
+// records were stored. Where the span has no room for the next record the
+// loop stops there, and the caller goes on from the end of the last record
+// it was given, after a token of that record's kind.
+//
+// The records are the specification's (`lexer_tokens`' `Record::from`,
+// `Scanned::from` with the tokens before a refusal kept), stored by
+// `List::put_records`: `scan_tokens_records`, at the end of this file.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import bitvec_shift_nat;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import list_window;
+import layout;
+import stored;
+import part;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import runtime;
+import runtime_file;
+import stored_words;
+import lexer_scan;
+import lexer_tokens;
+import lexer_span;
+
+// The offset a token's word ends at: its low `TOKEN_END_BITS`.
+runtime fn token_end(word: u64) → u64 { word.band(BitVec::ofNat(Nat::pow(2, TOKEN_END_BITS) - 1)) }
+
+// The kind in a word's top byte: a token's kind, and zero for a refusal.
+runtime fn token_kind(word: u64) → u64 { word.shift_right(TOKEN_END_BITS) }
+
+// The scan of one token where the source is the second span a function
+// is lent. A callee is lent its caller's spans in their own places, so a
+// function that writes `out` and reads `source` calls a scanner lent both;
+// the first is not read. It is `scan_from` and `scan_token`
+// (`scan_from_over_is`, `scan_token_over_is`).
+runtime fn scan_from_over(out: List<u8>, olen: u64, source: List<u8>, length, state, i, last: u64) → u64 decreases length.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(length) && !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD)) {
+        False => scan_stopped(state, i, last),
+        True => scan_from_over(out, olen, source, length, scan_step(state, source.byte_within(length, i).zero_extend(56)), i.add(1), scan_last(state, i, last)),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, i, length,
+            Bool::and_true_parts(i.unsigned_lt_bit(length), !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD)), h).left);
+        bv_omega
+    };
+}
+
+runtime fn scan_token_over(out: List<u8>, olen: u64, source: List<u8>, length, at, previous: u64) → u64 {
+    scan_from_over(out, olen, source, length, scan_begin(previous), at, refusal_word(REFUSED_UNEXPECTED, at))
+}
+
+// One record stored as record `n`: its start, then its word.
+runtime fn List::put_record(mut self out: List<u8>, olen, n, start, word: u64) → u64 {
+    out.put_u64_be_within(olen, n << 4, start);
+    out.put_u64_be_within(olen, (n << 4) + 8, word);
+    n + 1
+}
+
+// The word of the record that ends the scan at `at`, which the loop stops
+// at with room for it: the end-of-file token past the last byte; before it,
+// the refusal of the token there when the fuel is spent (it never is), or
+// the refusal the scanner answered.
+runtime fn records_last(length, fuel, at, word: u64) → u64 {
+    if at.unsigned_lt_bit(length) {
+        if (0u64).unsigned_lt_bit(fuel) { word } else { refusal_word(REFUSED_UNEXPECTED, at) }
+    } else {
+        token_word(KIND_EOF, at)
+    }
+}
+
+// Where the loop stops: with no room for a record, or with the last one.
+runtime fn List::records_stop(mut self out: List<u8>, olen, length, fuel, at, word, n: u64) → u64 {
+    if olen.unsigned_lt_bit((n + 1) << 4) { n } else { out.put_record(olen, n, at, records_last(length, fuel, at, word)) }
+}
+
+// The records of `source` from `at`, where the scanner answered `word`,
+// stored from record `n`: on while fuel is left, there is room for a
+// record, bytes are left and the word is a token's. What the loop stores
+// where it stops is `records_stop`'s, which decides in the specification's
+// order, so the order of the tests here is free: the fuel is first, which
+// is what the measure needs of them. The next token's word is an argument,
+// so it is computed once.
+runtime fn List::scan_records(mut self out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64) → u64 decreases fuel.toNat() {
+    match h: (0u64).unsigned_lt_bit(fuel) && (!(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0)))) {
+        False => out.records_stop(olen, length, fuel, at, word, n),
+        True => if token_kind(word).eq_bit(KIND_SPACE) || token_kind(word).eq_bit(KIND_COMMENT) {
+            out.scan_records(olen, source, length, fuel - 1, token_end(word), scan_token_over(out, olen, source, length, token_end(word), token_kind(word)), n)
+        } else {
+            out.put_record(olen, n, at, word);
+            out.scan_records(olen, source, length, fuel - 1, token_end(word), scan_token_over(out, olen, source, length, token_end(word), token_kind(word)), n + 1)
+        },
+    }
+    on ?dec1 := {
+        let some = bitvec_omega::unsigned_true(64, 0u64, fuel, Bool::and_true_parts((0u64).unsigned_lt_bit(fuel),
+            !(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0))), h).left);
+        bv_omega
+    };
+    on ?dec2 := {
+        let some = bitvec_omega::unsigned_true(64, 0u64, fuel, Bool::and_true_parts((0u64).unsigned_lt_bit(fuel),
+            !(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0))), h).left);
+        bv_omega
+    };
+}
+
+// The tokens of `source` from `at`, after a token of kind `previous`,
+// stored as records into `out` from its start; the answer is how many. The
+// fuel is the bytes left: every token is at least one byte.
+runtime fn List::scan_tokens(mut self out: List<u8>, olen: u64, source: List<u8>, length, at, previous: u64) → u64 {
+    out.scan_records(olen, source, length, length - at, at, scan_token_over(out, olen, source, length, at, previous), 0)
+}
+
+// ---------------------------------------------------------------------------
+// The scanner lent both spans is the scanner.
+
+theorem scan_from_over_is(out: List<u8>, olen: u64, source: List<u8>, length: u64, k: Nat): (state, i, last: u64) → (length - i).toNat() = k →
+    scan_from_over(out, olen, source, length, state, i, last) = scan_from(source, length, state, i, last) {
+    match k {
+        Zero => λ state i last left => {
+            let go = i.unsigned_lt_bit(length) && !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD));
+            trans(scan_from_over_unfold(out, olen, source, length, state, i, last),
+                trans((match go as λ b => go = b → (match h: b {
+                        False => scan_stopped(state, i, last),
+                        True => scan_from_over(out, olen, source, length, scan_step(state, source.byte_within(length, i).zero_extend(56)), i.add(1), scan_last(state, i, last)),
+                    }) = (match h: b {
+                        False => scan_stopped(state, i, last),
+                        True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+                    }) {
+                    False => λ _ => refl,
+                    True => λ yes => {
+                        let below = bitvec_omega::unsigned_true(64, i, length, Bool::and_true_parts(i.unsigned_lt_bit(length), !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD)), yes).left);
+                        let never: False = bv_omega;
+                        false_elim(never)
+                    },
+                })(refl), sym(scan_from_unfold(source, length, state, i, last))))
+        },
+        Succ(k1) => λ state i last left => {
+            let go = i.unsigned_lt_bit(length) && !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD));
+            trans(scan_from_over_unfold(out, olen, source, length, state, i, last),
+                trans((match go as λ b => go = b → (match h: b {
+                        False => scan_stopped(state, i, last),
+                        True => scan_from_over(out, olen, source, length, scan_step(state, source.byte_within(length, i).zero_extend(56)), i.add(1), scan_last(state, i, last)),
+                    }) = (match h: b {
+                        False => scan_stopped(state, i, last),
+                        True => scan_from(source, length, scan_at(source, length, state, i), i.add(1), scan_last(state, i, last)),
+                    }) {
+                    False => λ _ => refl,
+                    True => λ yes => {
+                        let below = bitvec_omega::unsigned_true(64, i, length, Bool::and_true_parts(i.unsigned_lt_bit(length), !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD)), yes).left);
+                        let next: ((length - i.add(1)).toNat() = k1) = bv_omega;
+                        scan_from_over_is(out, olen, source, length, k1)(scan_at(source, length, state, i), i.add(1), scan_last(state, i, last), next)
+                    },
+                })(refl), sym(scan_from_unfold(source, length, state, i, last))))
+        },
+    }
+}
+
+theorem scan_token_over_is(out: List<u8>, olen: u64, source: List<u8>, length, at, previous: u64):
+    scan_token_over(out, olen, source, length, at, previous) = scan_token(source, length, at, previous) {
+    scan_from_over_is(out, olen, source, length, (length - at).toNat())(scan_begin(previous), at, refusal_word(REFUSED_UNEXPECTED, at), refl)
+}
+
+// ---------------------------------------------------------------------------
+// What a cut can be
+
+// A cut of `source`: a token of a kind of one byte that is not zero, ending
+// inside the source with the rest of the source after it; or a refusal
+// inside the source, for a reason of one byte.
+fn Cut::inside(cut: Cut, source: List<u8>) → Type {
+    match cut {
+        Found(found) => (found.rest = source.drop(found.end)) ∧ ((found.end <= source.len()) ∧ ((found.kind.eq_bit(0) = False) ∧ (found.kind.toNat() < 256))),
+        Refusal(reason, at) => (at <= source.len()) ∧ (reason.toNat() < 256),
+    }
+}
+
+theorem scan_accept_byte(state: u64): scan_accept(state).toNat() < 256 {
+    let le: (scan_accept(state).toNat() <= 255) = BitVec::toNat_band_ofNat_le(64, state.shift_right(8), 255);
+    omega
+}
+
+theorem Accepted::after_inside(source: List<u8>, state: u64, rest: List<u8>, at: Nat, last: Cut,
+    here: source.drop(at) = rest, within: at <= source.len(), kept: Cut::inside(last, source)):
+    Cut::inside(Accepted::after(state, rest, at, last), source) {
+    (match scan_accept(state).eq_bit(0) as λ b => scan_accept(state).eq_bit(0) = b →
+        Cut::inside(if b { last } else { Cut::Found(Accepted(scan_accept(state), at, rest)) }, source) {
+        True => λ _ => kept,
+        False => λ named => ⟨sym(here), ⟨within, ⟨named, scan_accept_byte(state)⟩⟩⟩,
+    })(refl)
+}
+
+// Every cut the specification's scan answers is inside the source.
+theorem Accepted::longest_inside(source: List<u8>, rest: List<u8>): (state: u64) → (at: Nat) → (last: Cut) →
+    source.drop(at) = rest → at + rest.len() = source.len() → Cut::inside(last, source) →
+    Cut::inside(Accepted::longest(state, rest, at, last), source) {
+    match rest {
+        Nil => λ state at last here ends kept => {
+            let ended = scan_step(state, END);
+            let within: (at <= source.len()) = omega;
+            match ended.band(255).eq_bit(FAIL) as λ b => Cut::inside(if b { Cut::Refusal(scan_accept(ended), at) } else { last }, source) {
+                True => ⟨within, scan_accept_byte(ended)⟩,
+                False => kept,
+            }
+        },
+        Cons(byte, tail) => λ state at last here ends kept => {
+            let next = scan_step(state, byte.zero_extend(56));
+            let within: (at <= source.len()) = omega;
+            let left: (source.drop(Succ(at)) = tail) =
+                trans(source.drop_succ(at), trans(cong_fn(λ (l: List<u8>) => l.drop(1), here), tail.drop_zero()));
+            let ends2: (Succ(at) + tail.len() = source.len()) = omega;
+            let within2: (Succ(at) <= source.len()) = omega;
+            match next.band(255).eq_bit(FAIL) as λ b => Cut::inside(if b {
+                    Cut::Refusal(scan_accept(next), at)
+                } else if next.eq_bit(DEAD) {
+                    last
+                } else {
+                    Accepted::longest(next, tail, Succ(at), Accepted::after(next, tail, Succ(at), last))
+                }, source) {
+                True => ⟨within, scan_accept_byte(next)⟩,
+                False => match next.eq_bit(DEAD) as λ b => Cut::inside(if b { last } else { Accepted::longest(next, tail, Succ(at), Accepted::after(next, tail, Succ(at), last)) }, source) {
+                    True => kept,
+                    False => Accepted::longest_inside(source, tail)(next, Succ(at), Accepted::after(next, tail, Succ(at), last), left, ends2,
+                        Accepted::after_inside(source, next, tail, Succ(at), last, left, within2, kept)),
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The words the loop reads
+
+theorem refusal_word_kind(reason, at: u64, small: reason.toNat() < 256, fits: at.toNat() < Nat::pow(2, REFUSAL_AT_BITS)):
+    token_kind(refusal_word(reason, at)) = 0 {
+    let r = reason.take_low(8, 56);
+    j(BitVec::zero_extend_take_low_of_lt(8, 56, reason, small), λ x _ => token_kind(refusal_word(x, at)) = 0,
+        j(BitVec::zero_extend_take_low_of_lt(48, 16, at, fits), λ y _ => token_kind(refusal_word(r.zero_extend(56), y)) = 0,
+            refusal_word_parts(r, at.take_low(48, 16)).left))
+}
+
+// ---------------------------------------------------------------------------
+// The stores
+
+// The records stored into `out` from record `n`, while a whole record fits
+// under the length word: the start's word, then the cut's
+// (`List::put_record`).
+fn List::put_records(self out: List<u8>, olen, n: u64, records: List<Record>) → Mutated<List<u8>, u64> {
+    match records {
+        Nil => Mutated(out, n),
+        Cons(record, later) => if olen.unsigned_lt_bit((n + 1) << 4) {
+            Mutated(out, n)
+        } else {
+            List::put_records(List::put_record(out, olen, n, BitVec::ofNat(record.start), Accepted::word(record.cut)).after, olen, n + 1, later)
+        },
+    }
+}
+
+theorem List::put_record_count(self out: List<u8>, olen, n, start, word: u64):
+    Mutated(List::put_record(out, olen, n, start, word).after, n + 1) = List::put_record(out, olen, n, start, word) { refl }
+
+theorem List::put_records_full(self out: List<u8>, olen, n: u64, records: List<Record>, full: olen.unsigned_lt_bit((n + 1) << 4) = True):
+    List::put_records(out, olen, n, records) = Mutated(out, n) {
+    match records {
+        Nil => refl,
+        Cons(record, later) => j(sym(full), λ b _ => (if b {
+                Mutated(out, n)
+            } else {
+                List::put_records(List::put_record(out, olen, n, BitVec::ofNat(record.start), Accepted::word(record.cut)).after, olen, n + 1, later)
+            }) = Mutated(out, n), refl),
+    }
+}
+
+theorem List::put_records_room(self out: List<u8>, olen, n: u64, record: Record, later: List<Record>, room: olen.unsigned_lt_bit((n + 1) << 4) = False):
+    List::put_records(out, olen, n, Cons(record, later))
+        = List::put_records(List::put_record(out, olen, n, BitVec::ofNat(record.start), Accepted::word(record.cut)).after, olen, n + 1, later) {
+    j(sym(room), λ b _ => (if b {
+            Mutated(out, n)
+        } else {
+            List::put_records(List::put_record(out, olen, n, BitVec::ofNat(record.start), Accepted::word(record.cut)).after, olen, n + 1, later)
+        }) = List::put_records(List::put_record(out, olen, n, BitVec::ofNat(record.start), Accepted::word(record.cut)).after, olen, n + 1, later), refl)
+}
+
+// The last record, stored where there is room: what is stored at `at` is
+// the cut, and the count is one more.
+theorem List::put_records_last(self out: List<u8>, olen, n, at: u64, cut: Cut, room: olen.unsigned_lt_bit((n + 1) << 4) = False):
+    List::put_records(out, olen, n, [Record(at.toNat(), cut)]) = List::put_record(out, olen, n, at, Accepted::word(cut)) {
+    trans(List::put_records_room(out, olen, n, Record(at.toNat(), cut), Nil, room),
+        trans(cong_fn(λ (w: u64) => Mutated(List::put_record(out, olen, n, w, Accepted::word(cut)).after, n + 1), BitVec::ofNat_toNat(64)(at)),
+            List::put_record_count(out, olen, n, at, Accepted::word(cut))))
+}
+
+// ---------------------------------------------------------------------------
+// The loop's steps
+
+// The loop's test, as it states it.
+fn records_test(olen, length, fuel, at, word, n: u64) → Bool {
+    (0u64).unsigned_lt_bit(fuel) && (!(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0))))
+}
+
+// Whether a token's kind is one the loop does not keep.
+fn records_skipped(kind: u64) → Bool { kind.eq_bit(KIND_SPACE) || kind.eq_bit(KIND_COMMENT) }
+
+theorem scan_records_stops(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64, stop: records_test(olen, length, fuel, at, word, n) = False):
+    List::scan_records(out, olen, source, length, fuel, at, word, n) = List::records_stop(out, olen, length, fuel, at, word, n) {
+    List::scan_records::done(out, olen, source, length, fuel, at, word, n, stop)
+}
+
+theorem scan_records_goes(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64, go: records_test(olen, length, fuel, at, word, n) = True):
+    List::scan_records(out, olen, source, length, fuel, at, word, n) = (if records_skipped(token_kind(word)) {
+        List::scan_records(out, olen, source, length, fuel - 1, token_end(word), scan_token_over(out, olen, source, length, token_end(word), token_kind(word)), n)
+    } else {
+        List::scan_records(List::put_record(out, olen, n, at, word).after, olen, source, length, fuel - 1, token_end(word),
+            scan_token_over(List::put_record(out, olen, n, at, word).after, olen, source, length, token_end(word), token_kind(word)), n + 1)
+    }) {
+    List::scan_records::step(out, olen, source, length, fuel, at, word, n, go)
+}
+
+theorem records_stop_room(out: List<u8>, olen, length, fuel, at, word, n: u64, room: olen.unsigned_lt_bit((n + 1) << 4) = False):
+    List::records_stop(out, olen, length, fuel, at, word, n) = List::put_record(out, olen, n, at, records_last(length, fuel, at, word)) {
+    j(sym(room), λ b _ => (if b { Mutated(out, n) } else { List::put_record(out, olen, n, at, records_last(length, fuel, at, word)) })
+        = List::put_record(out, olen, n, at, records_last(length, fuel, at, word)), refl)
+}
+
+// With no room, nothing is stored.
+theorem scan_records_full(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64, full: olen.unsigned_lt_bit((n + 1) << 4) = True):
+    List::scan_records(out, olen, source, length, fuel, at, word, n) = Mutated(out, n) {
+    let rest = at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0));
+    let stop: (records_test(olen, length, fuel, at, word, n) = False) =
+        j(sym(full), λ b _ => ((0u64).unsigned_lt_bit(fuel) && (!b && rest)) = False, (0u64).unsigned_lt_bit(fuel).and_false_r());
+    trans(scan_records_stops(out, olen, source, length, fuel, at, word, n, stop),
+        j(sym(full), λ b _ => (if b { Mutated(out, n) } else { List::put_record(out, olen, n, at, records_last(length, fuel, at, word)) }) = Mutated(out, n), refl))
+}
+
+// A refusal stops the loop, wherever it stands.
+theorem records_test_refused(olen, length, fuel, at, word, n: u64, refused: token_kind(word) = 0): records_test(olen, length, fuel, at, word, n) = False {
+    let a = (0u64).unsigned_lt_bit(fuel);
+    let b = !(olen.unsigned_lt_bit((n + 1) << 4));
+    let c = at.unsigned_lt_bit(length);
+    let e2: ((b && (c && False)) = False) = trans(cong_fn(λ (x: Bool) => b && x, c.and_false_r()), b.and_false_r());
+    let e3: ((a && (b && (c && False))) = False) = trans(cong_fn(λ (x: Bool) => a && x, e2), a.and_false_r());
+    j(sym(refused), λ w _ => (a && (b && (c && !(w.eq_bit(0))))) = False, e3)
+}
+
+// Past the source's end, and before it with no fuel, the test fails.
+theorem records_test_ended(olen, length, fuel, at, word, n: u64, past: at.unsigned_lt_bit(length) = False): records_test(olen, length, fuel, at, word, n) = False {
+    let a = (0u64).unsigned_lt_bit(fuel);
+    let b = !(olen.unsigned_lt_bit((n + 1) << 4));
+    let e2: ((b && (False && !(token_kind(word).eq_bit(0)))) = False) = b.and_false_r();
+    let e3: ((a && (b && (False && !(token_kind(word).eq_bit(0))))) = False) = trans(cong_fn(λ (x: Bool) => a && x, e2), a.and_false_r());
+    j(sym(past), λ p _ => (a && (b && (p && !(token_kind(word).eq_bit(0))))) = False, e3)
+}
+
+theorem records_last_end(length, fuel, at, word: u64, past: at.unsigned_lt_bit(length) = False): records_last(length, fuel, at, word) = token_word(KIND_EOF, at) {
+    j(sym(past), λ p _ => (if p { if (0u64).unsigned_lt_bit(fuel) { word } else { refusal_word(REFUSED_UNEXPECTED, at) } } else { token_word(KIND_EOF, at) })
+        = token_word(KIND_EOF, at), refl)
+}
+
+theorem records_last_spent(length, fuel, at, word: u64, below: at.unsigned_lt_bit(length) = True, none: (0u64).unsigned_lt_bit(fuel) = False):
+    records_last(length, fuel, at, word) = refusal_word(REFUSED_UNEXPECTED, at) {
+    j(sym(below), λ p _ => (if p { if (0u64).unsigned_lt_bit(fuel) { word } else { refusal_word(REFUSED_UNEXPECTED, at) } } else { token_word(KIND_EOF, at) })
+        = refusal_word(REFUSED_UNEXPECTED, at),
+        j(sym(none), λ z _ => (if z { word } else { refusal_word(REFUSED_UNEXPECTED, at) }) = refusal_word(REFUSED_UNEXPECTED, at), refl))
+}
+
+theorem records_last_word(length, fuel, at, word: u64, below: at.unsigned_lt_bit(length) = True, fueled: (0u64).unsigned_lt_bit(fuel) = True):
+    records_last(length, fuel, at, word) = word {
+    j(sym(below), λ p _ => (if p { if (0u64).unsigned_lt_bit(fuel) { word } else { refusal_word(REFUSED_UNEXPECTED, at) } } else { token_word(KIND_EOF, at) }) = word,
+        j(sym(fueled), λ z _ => (if z { word } else { refusal_word(REFUSED_UNEXPECTED, at) }) = word, refl))
+}
+
+// Where there is no room, both sides are what they were; where there is,
+// it is `roomy`'s.
+theorem records_by_room(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64, records: List<Record>,
+    roomy: olen.unsigned_lt_bit((n + 1) << 4) = False → List::scan_records(out, olen, source, length, fuel, at, word, n) = List::put_records(out, olen, n, records)):
+    List::scan_records(out, olen, source, length, fuel, at, word, n) = List::put_records(out, olen, n, records) {
+    (match olen.unsigned_lt_bit((n + 1) << 4) as λ b => olen.unsigned_lt_bit((n + 1) << 4) = b →
+        List::scan_records(out, olen, source, length, fuel, at, word, n) = List::put_records(out, olen, n, records) {
+        True => λ full => trans(scan_records_full(out, olen, source, length, fuel, at, word, n, full), sym(List::put_records_full(out, olen, n, records, full))),
+        False => roomy,
+    })(refl)
+}
+
+// What is left of the source at `at`, read as the loop's test of the end.
+theorem records_past(source: List<u8>, length, at: u64, sized: source.len() = length.toNat(), here: source.drop(at.toNat()) = Nil): at.unsigned_lt_bit(length) = False {
+    let gone: (0 = source.len() - at.toNat()) = j(here, λ r _ => r.len() = source.len() - at.toNat(), source.len_drop(at.toNat()));
+    let le: (length.toNat() <= at.toNat()) = omega;
+    scan_past(at, length, le)
+}
+
+theorem records_below(source: List<u8>, length, at: u64, byte: u8, tail: List<u8>, sized: source.len() = length.toNat(), here: source.drop(at.toNat()) = Cons(byte, tail)):
+    at.toNat() + Succ(tail.len()) = length.toNat() {
+    let gone: (Succ(tail.len()) = source.len() - at.toNat()) = j(here, λ r _ => r.len() = source.len() - at.toNat(), source.len_drop(at.toNat()));
+    omega
+}
+
+// At the end of the source: the end-of-file record.
+theorem scan_records_at_end(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64,
+    room: olen.unsigned_lt_bit((n + 1) << 4) = False, past: at.unsigned_lt_bit(length) = False):
+    List::scan_records(out, olen, source, length, fuel, at, word, n)
+        = List::put_records(out, olen, n, [Record(at.toNat(), Cut::Found(Accepted(KIND_EOF, at.toNat(), Nil)))]) {
+    trans(scan_records_stops(out, olen, source, length, fuel, at, word, n, records_test_ended(olen, length, fuel, at, word, n, past)),
+        trans(records_stop_room(out, olen, length, fuel, at, word, n, room),
+            trans(cong_fn(λ (w: u64) => List::put_record(out, olen, n, at, w), records_last_end(length, fuel, at, word, past)),
+                sym(trans(List::put_records_last(out, olen, n, at, Cut::Found(Accepted(KIND_EOF, at.toNat(), Nil)), room),
+                    cong_fn(λ (e: u64) => List::put_record(out, olen, n, at, token_word(KIND_EOF, e)), BitVec::ofNat_toNat(64)(at)))))))
+}
+
+// Before it with the fuel spent: the refusal that does not happen.
+theorem scan_records_spent(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, word, n: u64,
+    room: olen.unsigned_lt_bit((n + 1) << 4) = False, below: at.unsigned_lt_bit(length) = True, spent: fuel.toNat() = 0):
+    List::scan_records(out, olen, source, length, fuel, at, word, n)
+        = List::put_records(out, olen, n, [Record(at.toNat(), Cut::Refusal(REFUSED_UNEXPECTED, at.toNat()))]) {
+    let none: ((0u64).unsigned_lt_bit(fuel) = False) = scan_past(0u64, fuel, omega);
+    let rest = !(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(token_kind(word).eq_bit(0)));
+    let stop: (records_test(olen, length, fuel, at, word, n) = False) = j(sym(none), λ z _ => (z && rest) = False, refl);
+    trans(scan_records_stops(out, olen, source, length, fuel, at, word, n, stop),
+        trans(records_stop_room(out, olen, length, fuel, at, word, n, room),
+            trans(cong_fn(λ (w: u64) => List::put_record(out, olen, n, at, w), records_last_spent(length, fuel, at, word, below, none)),
+                sym(trans(List::put_records_last(out, olen, n, at, Cut::Refusal(REFUSED_UNEXPECTED, at.toNat()), room),
+                    cong_fn(λ (w: u64) => List::put_record(out, olen, n, at, w), refusal_at(REFUSED_UNEXPECTED, at)))))))
+}
+
+// A refusal the scanner answered: its record, and the loop stops.
+theorem scan_records_refused(out: List<u8>, olen: u64, source: List<u8>, length, fuel, at, n: u64, reason: u64, refused: Nat,
+    room: olen.unsigned_lt_bit((n + 1) << 4) = False, below: at.unsigned_lt_bit(length) = True, fueled: (0u64).unsigned_lt_bit(fuel) = True,
+    small: reason.toNat() < 256, fits: refused < Nat::pow(2, REFUSAL_AT_BITS)):
+    List::scan_records(out, olen, source, length, fuel, at, Accepted::word(Cut::Refusal(reason, refused)), n)
+        = List::put_records(out, olen, n, [Record(at.toNat(), Cut::Refusal(reason, refused))]) {
+    let word = Accepted::word(Cut::Refusal(reason, refused));
+    let p48: (Nat::pow(2, REFUSAL_AT_BITS) = 281474976710656) = refl;
+    let same: (BitVec::ofNat(refused, n := 64).toNat() = refused) = BitVec::toNat_ofNat(64)(refused, omega);
+    let fits64: (BitVec::ofNat(refused, n := 64).toNat() < Nat::pow(2, REFUSAL_AT_BITS)) = omega;
+    let zero: (token_kind(word) = 0) = refusal_word_kind(reason, BitVec::ofNat(refused), small, fits64);
+    trans(scan_records_stops(out, olen, source, length, fuel, at, word, n, records_test_refused(olen, length, fuel, at, word, n, zero)),
+        trans(records_stop_room(out, olen, length, fuel, at, word, n, room),
+            trans(cong_fn(λ (w: u64) => List::put_record(out, olen, n, at, w), records_last_word(length, fuel, at, word, below, fueled)),
+                sym(List::put_records_last(out, olen, n, at, Cut::Refusal(reason, refused), room)))))
+}
+
+// A token the scanner found passes the loop's test.
+theorem records_test_found(olen, length, fuel, at, n: u64, kind: u64, room: olen.unsigned_lt_bit((n + 1) << 4) = False,
+    below: at.unsigned_lt_bit(length) = True, fueled: (0u64).unsigned_lt_bit(fuel) = True, named: kind.eq_bit(0) = False):
+    ((0u64).unsigned_lt_bit(fuel) && (!(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(kind.eq_bit(0))))) = True {
+    let z = (0u64).unsigned_lt_bit(fuel);
+    let f = olen.unsigned_lt_bit((n + 1) << 4);
+    let l = at.unsigned_lt_bit(length);
+    j(sym(named), λ e _ => (z && (!f && (l && !e))) = True,
+        j(sym(below), λ p _ => (z && (!f && (p && !False))) = True,
+            j(sym(room), λ r _ => (z && (!r && (True && !False))) = True,
+                j(sym(fueled), λ y _ => (y && (!False && (True && !False))) = True, refl))))
+}
+
+// ---------------------------------------------------------------------------
+// The loop stores the specification's records
+
+// From `at`, where the source has `rest` left and the scanner answers for
+// a token after one of kind `previous`, with `k` fuel: the loop stores the
+// records the specification lists, as many as there is room for. The
+// source's length is below `2^48`, which is the offsets the words carry.
+theorem scan_records_from(olen: u64, source: List<u8>, length: u64, sized: source.len() = length.toNat(),
+    small: length.toNat() < Nat::pow(2, REFUSAL_AT_BITS), k: Nat, rest: List<u8>):
+    (out: List<u8>) → (fuel, at, previous, n: u64) → fuel.toNat() = k → source.drop(at.toNat()) = rest → at.toNat() <= length.toNat() →
+    List::scan_records(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n)
+        = List::put_records(out, olen, n, Record::from(k, previous, rest, at.toNat())) {
+    match k {
+        Zero => match rest {
+            Nil => λ out fuel at previous n spent here within =>
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(0, previous, Nil, at.toNat()),
+                    λ room => scan_records_at_end(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, room,
+                        records_past(source, length, at, sized, here))),
+            Cons(byte, tail) => λ out fuel at previous n spent here within => {
+                let ends = records_below(source, length, at, byte, tail, sized, here);
+                let below = scan_below(at, length, omega);
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(0, previous, Cons(byte, tail), at.toNat()),
+                    λ room => scan_records_spent(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, room, below, spent))
+            },
+        },
+        Succ(k1) => match rest {
+            Nil => λ out fuel at previous n spent here within =>
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(Succ(k1), previous, Nil, at.toNat()),
+                    λ room => scan_records_at_end(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, room,
+                        records_past(source, length, at, sized, here))),
+            Cons(byte, tail) => λ out fuel at previous n spent here within => {
+                let ends = records_below(source, length, at, byte, tail, sized, here);
+                let below = scan_below(at, length, omega);
+                let fueled: ((0u64).unsigned_lt_bit(fuel) = True) = scan_below(0u64, fuel, omega);
+                let start = Cut::Refusal(REFUSED_UNEXPECTED, at.toNat());
+                let begin = scan_begin(previous);
+                let cut = Accepted::longest(begin, Cons(byte, tail), at.toNat(), start);
+                let scanned: (scan_token(source, length, at, previous) = Accepted::word(cut)) =
+                    trans(scan_token_longest(source, length, at, previous, sized, within),
+                        cong_fn(λ (r: List<u8>) => Accepted::word(Accepted::longest(begin, r, at.toNat(), start)), here));
+                let first: Cut::inside(start, source) = ⟨omega, omega⟩;
+                let inside: Cut::inside(cut, source) = Accepted::longest_inside(source, Cons(byte, tail))(begin, at.toNat(), start, here, omega, first);
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(Succ(k1), previous, Cons(byte, tail), at.toNat()),
+                    λ room => trans(cong_fn(λ (w: u64) => List::scan_records(out, olen, source, length, fuel, at, w, n), scanned),
+                        (match cut as λ c => Cut::inside(c, source) → List::scan_records(out, olen, source, length, fuel, at, Accepted::word(c), n)
+                            = List::put_records(out, olen, n, match c {
+                                Refusal(reason, refused) => [Record(at.toNat(), Cut::Refusal(reason, refused))],
+                                Found(found) => if Token::kept(found.kind) {
+                                    Cons(Record(at.toNat(), Cut::Found(found)), Record::from(k1, found.kind, found.rest, found.end))
+                                } else {
+                                    Record::from(k1, found.kind, found.rest, found.end)
+                                },
+                            }) {
+                            Refusal(reason, refused) => λ ins => {
+                                let at_le: (refused <= source.len()) = ins.left;
+                                scan_records_refused(out, olen, source, length, fuel, at, n, reason, refused, room, below, fueled, ins.right, omega)
+                            },
+                            Found(found) => λ ins => {
+                                let word = Accepted::word(Cut::Found(found));
+                                let p48: (Nat::pow(2, REFUSAL_AT_BITS) = 281474976710656) = refl;
+                                let p56: (Nat::pow(2, TOKEN_END_BITS) = 72057594037927936) = refl;
+                                let end_le: (found.end <= source.len()) = ins.right.left;
+                                let same: (BitVec::ofNat(found.end, n := 64).toNat() = found.end) = BitVec::toNat_ofNat(64)(found.end, omega);
+                                let fits: (BitVec::ofNat(found.end, n := 64).toNat() < Nat::pow(2, TOKEN_END_BITS)) = omega;
+                                let kind_is: (token_kind(word) = found.kind) = token_word_kind(found.kind, BitVec::ofNat(found.end), ins.right.right.right, fits);
+                                let end_is: (token_end(word) = BitVec::ofNat(found.end)) = token_word_end(found.kind, BitVec::ofNat(found.end), ins.right.right.right, fits);
+                                let at1: (token_end(word).toNat() = found.end) = trans(cong_fn(λ (w: u64) => w.toNat(), end_is), same);
+                                let here1: (source.drop(token_end(word).toNat()) = found.rest) = trans(cong_fn(λ (e: Nat) => source.drop(e), at1), sym(ins.left));
+                                let within1: (token_end(word).toNat() <= length.toNat()) = omega;
+                                let fuel1: ((fuel - 1).toNat() = k1) = bv_omega;
+                                let later = Record::from(k1, found.kind, found.rest, found.end);
+                                let later_is: (Record::from(k1, token_kind(word), found.rest, token_end(word).toNat()) = later) =
+                                    trans(cong_fn(λ (kk: u64) => Record::from(k1, kk, found.rest, token_end(word).toNat()), kind_is),
+                                        cong_fn(λ (e: Nat) => Record::from(k1, found.kind, found.rest, e), at1));
+                                let go: (records_test(olen, length, fuel, at, word, n) = True) =
+                                    j(sym(kind_is), λ kk _ => ((0u64).unsigned_lt_bit(fuel) && (!(olen.unsigned_lt_bit((n + 1) << 4)) && (at.unsigned_lt_bit(length) && !(kk.eq_bit(0))))) = True,
+                                        records_test_found(olen, length, fuel, at, n, found.kind, room, below, fueled, ins.right.right.left));
+                                // The loop from the next token, at any span and count.
+                                let next: ((o: List<u8>) → (m: u64) →
+                                    List::scan_records(o, olen, source, length, fuel - 1, token_end(word), scan_token_over(o, olen, source, length, token_end(word), token_kind(word)), m)
+                                        = List::put_records(o, olen, m, later)) = λ o m =>
+                                    trans(cong_fn(λ (w: u64) => List::scan_records(o, olen, source, length, fuel - 1, token_end(word), w, m),
+                                            scan_token_over_is(o, olen, source, length, token_end(word), token_kind(word))),
+                                        trans(scan_records_from(olen, source, length, sized, small, k1, found.rest)(o, fuel - 1, token_end(word), token_kind(word), m, fuel1, here1, within1),
+                                            cong_fn(λ (rs: List<Record>) => List::put_records(o, olen, m, rs), later_is)));
+                                let skip = List::scan_records(out, olen, source, length, fuel - 1, token_end(word), scan_token_over(out, olen, source, length, token_end(word), token_kind(word)), n);
+                                let keep = List::scan_records(List::put_record(out, olen, n, at, word).after, olen, source, length, fuel - 1, token_end(word),
+                                    scan_token_over(List::put_record(out, olen, n, at, word).after, olen, source, length, token_end(word), token_kind(word)), n + 1);
+                                trans(scan_records_goes(out, olen, source, length, fuel, at, word, n, go),
+                                    trans(cong_fn(λ (kk: u64) => if records_skipped(kk) { skip } else { keep }, kind_is),
+                                        (match records_skipped(found.kind) as λ s => (if s { skip } else { keep })
+                                            = List::put_records(out, olen, n, if !s { Cons(Record(at.toNat(), Cut::Found(found)), later) } else { later }) {
+                                            True => next(out, n),
+                                            False => trans(next(List::put_record(out, olen, n, at, word).after, n + 1),
+                                                sym(trans(List::put_records_room(out, olen, n, Record(at.toNat(), Cut::Found(found)), later, room),
+                                                    cong_fn(λ (s: u64) => List::put_records(List::put_record(out, olen, n, s, word).after, olen, n + 1, later), BitVec::ofNat_toNat(64)(at))))),
+                                        })))
+                            },
+                        })(inside)))
+            },
+        },
+    }
+}
+
+// The exported function stores the records of the source from `at`, after
+// a token of kind `previous`, from the span's start.
+theorem scan_tokens_records(out: List<u8>, olen: u64, source: List<u8>, length, at, previous: u64, sized: source.len() = length.toNat(),
+    small: length.toNat() < Nat::pow(2, REFUSAL_AT_BITS), within: at.toNat() <= length.toNat()):
+    List::scan_tokens(out, olen, source, length, at, previous)
+        = List::put_records(out, olen, 0, Record::from((length - at).toNat(), previous, source.drop(at.toNat()), at.toNat())) {
+    trans(cong_fn(λ (w: u64) => List::scan_records(out, olen, source, length, length - at, at, w, 0), scan_token_over_is(out, olen, source, length, at, previous)),
+        scan_records_from(olen, source, length, sized, small, (length - at).toNat(), source.drop(at.toNat()))(out, length - at, at, previous, 0, refl, refl, within))
+}
