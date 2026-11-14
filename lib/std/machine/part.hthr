@@ -254,3 +254,10 @@ fn Part::field<F, R, B>({fields: Stored<F>}, self p: Part<F, B>(fields), to: F â
     Part<R, B>(fields.record(to, from, back)) {
     Part::mapped(fields.padded(), to, from, back, forth).then(Part::padded(fields)).then(p)
 }
+
+// The bytes where a part lies are what the part of the held value writes.
+theorem Part::window_of<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), exact: p.codec.Exact(), bytes: List<u8>, at: Nat, fits: whole.layout.size + at <= bytes.len()):
+    bytes.window(p.offset + at, p.codec.layout.size + (p.offset + at)) = p.codec.write(p.of(whole.get(bytes, at))) {
+    let within = p.within;
+    trans(p.codec.window_get(exact, bytes, p.offset + at, omega), cong_fn(Î» (b: B) => p.codec.write(b), p.reads(bytes, at)))
+}

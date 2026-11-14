@@ -17,6 +17,10 @@ import sha256_context;
 import sha256_stream;
 import sha256_agreement;
 import sha256_stream_agreement;
+import list_window;
+import layout;
+import stored;
+import rt_held;
 
 // "abc", FIPS 180-4's own example, in one part.
 theorem abc_whole(s: Sha256):
@@ -45,4 +49,21 @@ theorem one_more_part(s: Sha256, message, part: List<u8>, mn: u64, sized: part.l
 theorem wrong_length(s: Sha256):
     Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, [0x61, 0x62, 0x63], 2).after).after) = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
     Sha256::digest_spec(s, [0x61, 0x62, 0x63], 2, refl)
+}
+
+// On the bytes: "abc" through the three functions' code leaves the
+// specification's digest at the span's start.
+theorem abc_linked(span: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(span, length, s)):
+    Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after.take(32)
+        = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    let after = Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after;
+    trans(sym(after.window_from_zero(32)), Sha256::linked_digest(span, s, length, [0x61, 0x62, 0x63], 3, holds, refl))
+}
+
+// A span not known to hold a context says nothing.
+// expect-error: unbound name `holds`
+theorem abc_unheld(span: List<u8>, s: Sha256, length: u64):
+    Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, [0x61, 0x62, 0x63], 3).after, length).after
+        .window(SHA256_DIGEST_AT, 32 + SHA256_DIGEST_AT) = Sha2::sha256().digest([0x61, 0x62, 0x63]) {
+    Sha256::linked_digest(span, s, length, [0x61, 0x62, 0x63], 3, holds, refl)
 }

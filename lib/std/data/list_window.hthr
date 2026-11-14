@@ -565,3 +565,8 @@ theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len()
         },
     }
 }
+
+// Only the empty list has no length.
+theorem List::nil_of_len_zero<A>(self xs: List<A>): xs.len() = 0 → xs = Nil {
+    match xs { Nil => λ _ => refl, Cons(_, t) => λ no => { let pos: (Cons(_, t).len() = Succ(t.len())) = refl; false_elim(omega) } }
+}

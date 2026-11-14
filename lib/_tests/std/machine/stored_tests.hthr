@@ -128,3 +128,17 @@ theorem array_back<A>(s: Stored<A>, n: Nat, xs: [A; n], bytes: List<u8>, at: Nat
 {
     s.array(n).get_put(bytes, at, xs, inside)
 }
+
+// Codecs that lose nothing: eight big-endian words read from a span are
+// the span's own bytes there.
+theorem words_are_the_bytes(bytes: List<u8>, at: Nat, fits: 32 + at <= bytes.len()):
+    bytes.window(at, 32 + at) = Stored::u32_be().array(8).write(Stored::u32_be().array(8).get(bytes, at)) {
+    Stored::u32_be().array(8).window_get(Stored::u32_be().exact_array(8, refl, Stored::be_bytes(4).exact_aligned(2, Stored::exact_be_bytes(4))), bytes, at, fits)
+}
+
+// Three bytes aligned to four are padded in an array: its stride is not
+// its size, and the array is not claimed exact.
+// expect-error: `stride(aligned(be_bytes(3), 2).layout)` and `aligned(be_bytes(3), 2).layout.size` are not
+theorem padded_elements(): Stored::be_bytes(3).aligned(2).array(8).Exact() {
+    Stored::be_bytes(3).aligned(2).exact_array(8, refl, Stored::be_bytes(3).exact_aligned(2, Stored::exact_be_bytes(3)))
+}
