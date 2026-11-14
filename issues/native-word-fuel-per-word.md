@@ -53,5 +53,5 @@ Time is unchanged: the charge had no time behind it.
 - The token-kinds proof can be one theorem again (coordinate with the
   thread that owns `lexer_kinds.hthr`).
 - Word code still costs 80–270 evaluator steps an operation in wrappers,
-  δ-unfolds, β and type decoding; that is the real-time lever, and a
-  separate issue.
+  δ-unfolds, β and type decoding; that is the real-time lever:
+  [[kernel-word-op-interpretive-cost]].
