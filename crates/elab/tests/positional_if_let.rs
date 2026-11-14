@@ -4,10 +4,14 @@
 
 use heather_elab::Elaborator;
 
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
 
 fn with_option() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", LOGIC).expect("logic");
+    e.elab_module_source("bool", BOOL).expect("bool");
     e.elab_module_source("option", OPTION).expect("option");
     e
 }

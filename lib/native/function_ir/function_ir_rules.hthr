@@ -1,0 +1,63 @@
+// The optimizer's rules over nodes (docs/optimizer-design.md §4): each a
+// clause made from an instance's numbers, with the theorem that a valuation
+// satisfying its premises satisfies its conclusion. The replayer
+// (function_ir_replay) applies a rule by its place in `rules()` where its
+// premises are among the facts, so adding one is a clause, its proof and a
+// line of the table, and no change to anything proved about the replayer.
+//
+// A rule's numbers are ids, widths and literals, as the clause reads them.
+// One that needs a side condition of its numbers (a width no wider than
+// another) answers `None` where it fails.
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import bitvec;
+import bitvec_ring;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Rules by how many numbers they take
+
+fn four_of<A>(f: Nat → Nat → Nat → Nat → A, args: List<Nat>) → Option<A> {
+    match args { Nil => None, Cons(a, r1) => match r1 { Nil => None, Cons(b, r2) => match r2 { Nil => None,
+        Cons(c, r3) => match r3 { Nil => None, Cons(d, r4) => match r4 { Nil => Some(f(a, b, c, d)), Cons(_, _) => None } } } } }
+}
+
+theorem four_of_all<A>(f: Nat → Nat → Nat → Nat → A, P: A → Type, all: (a, b, c, d: Nat) → P(f(a, b, c, d)), x: A, args: List<Nat>):
+    four_of(f, args) = Some(x) → P(x) {
+    match args { Nil => λ h => absurd(h), Cons(a, r1) => match r1 { Nil => λ h => absurd(h), Cons(b, r2) => match r2 { Nil => λ h => absurd(h),
+        Cons(c, r3) => match r3 { Nil => λ h => absurd(h), Cons(d, r4) => match r4 {
+            Nil => λ h => j(Option::some_inj(f(a, b, c, d), x, h), λ y _ => P(y), all(a, b, c, d)),
+            Cons(_, _) => λ h => absurd(h) } } } } }
+}
+
+// A rule that holds at every four numbers.
+fn Rule::four(clause: Nat → Nat → Nat → Nat → Clause, sound: (a, b, c, d: Nat) → clause(a, b, c, d).Sound()) → Rule {
+    Rule(λ args => four_of(clause, args), λ args c made => four_of_all(clause, λ (k: Clause) => k.Sound(), sound, c, args, made))
+}
+
+// ---------------------------------------------------------------------------
+// The rules
+
+// x + 0 is x: `o` the sum at width `w` of `x` and `z`, `z` the literal 0.
+fn add_zero(w, o, x, z: Nat) → Clause { Clause([Const(w, z, 0), Add(w, o, x, z)], Move(w, o, x)) }
+
+theorem add_zero_sound(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() {
+    λ values held => trans(held.right.left,
+        trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), BitVec::add_zero(w, values(w, x))))
+}
+
+// A move of a move: `o` moved from `s`, `s` from `t`, at width `w`.
+fn move_move(w, o, s, t: Nat) → Clause { Clause([Move(w, s, t), Move(w, o, s)], Move(w, o, t)) }
+
+theorem move_move_sound(w, o, s, t: Nat): move_move(w, o, s, t).Sound() {
+    λ values held => trans(held.right.left, held.left)
+}
+
+// The table a plan's `Derive` steps index. A rule keeps its place: new
+// ones are added at the end.
+fn rules() → List<Rule> { [Rule::four(add_zero, add_zero_sound), Rule::four(move_move, move_move_sound)] }

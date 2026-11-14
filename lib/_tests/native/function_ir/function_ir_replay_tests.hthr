@@ -1,0 +1,73 @@
+// Probes of the replayer (lib/native/function_ir/function_ir_replay.hthr,
+// docs/optimizer-design.md §3.2): a plan followed over a list of nodes, a
+// plan refused, and a program of two functions rewritten as a stage, with
+// what its theorem says of the rewritten program. Tests, not library:
+// nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_replay;
+import function_ir_rules;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// 1 := 0; 2 := x + 1; 3 := 2 + 1, with x the word 0: two sums with zero.
+fn sums() → List<Node> { [Const(64, 1, 0), Add(64, 2, 0, 1), Add(64, 3, 2, 1)] }
+
+// Every node dropped once its fact is learned; `add_zero` twice, then
+// `move_move`, and the one node the facts now hold is written.
+fn sums_plan() → List<Step> {
+    [Drop, Drop, Derive(0, [64, 2, 0, 1]), Drop, Derive(0, [64, 3, 2, 1]), Derive(1, [64, 3, 2, 0]), Emit(Move(64, 3, 0))]
+}
+
+theorem sums_replayed(): replay(rules(), Facts::none(), sums(), sums_plan()).map(λ r => r.nodes) = Some([Move(64, 3, 0)]) { refl }
+
+// No steps keep every node.
+theorem sums_kept(): replay(rules(), Facts::none(), sums(), []).map(λ r => r.nodes) = Some(sums()) { refl }
+
+// A rule whose premise is not among the facts is a refusal: the sum has not
+// been passed yet.
+theorem premise_missing(): replay(rules(), Facts::none(), sums(), [Drop, Derive(0, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+
+// So is a node that no fact gives, a rule the table does not have, and a
+// store dropped.
+theorem emit_unknown(): replay(rules(), Facts::none(), sums(), [Emit(Move(64, 3, 0))]).map(λ r => r.nodes) = None { refl }
+
+theorem rule_unknown(): replay(rules(), Facts::none(), sums(), [Drop, Drop, Derive(9, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+
+theorem store_dropped(): replay(rules(), Facts::none(), [BufferStore(2, 0, 0, 1)], [Drop]).map(λ r => r.nodes) = None { refl }
+
+// A leaf of nodes.
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), nodes, Ports(Nil))) }
+
+// A program of two functions, last first: function 1 is the sums and then
+// a call of function 0 on the result, function 0 its argument plus zero.
+fn two() → List<Function> {
+    [Function([0], Compose(leaf(sums()), Call(0, [3], 4)), 4), Function([0], leaf([Const(64, 1, 0), Add(64, 2, 0, 1)]), 2)]
+}
+
+fn two_plans() → List<Plan> {
+    [Both(Nodes(sums_plan()), Same), Nodes([Drop, Drop, Derive(0, [64, 2, 0, 1]), Emit(Move(64, 2, 0))])]
+}
+
+fn two_replayed() → List<Function> {
+    [Function([0], Compose(leaf([Move(64, 3, 0)]), Call(0, [3], 4)), 4), Function([0], leaf([Move(64, 2, 0)]), 2)]
+}
+
+theorem two_run(): replay_stage(rules()).run(two(), two_plans()) = Some(two_replayed()) { refl }
+
+// What the program may do, the rewritten one may.
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    did: program_effects(two())(before, f, arguments, result, after)): program_effects(two_replayed())(before, f, arguments, result, after) {
+    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, after, did)
+}
+
+// A plan in the wrong shape for its region, and too few plans.
+theorem shape_refused(): replay_stage(rules()).run(two(), [Nodes([]), Same]) = None { refl }
+
+theorem plans_short(): replay_stage(rules()).run(two(), [Same]) = None { refl }
