@@ -184,6 +184,14 @@ fn Stage::maybe<P>(self stage: Stage<P>) → Stage<Option<P>> {
         })
 }
 
+// One of two stages, by which of them the plan is for. Under `many`, a
+// function's plans are then moves of either kind in the order the search
+// chose.
+fn Stage::or<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Or<P, Q>> {
+    Stage(λ callees old plan => match plan { Inl(p) => first.rewrite(callees, old, p), Inr(q) => second.rewrite(callees, old, q) },
+        λ callees old plan => match plan { Inl(p) => first.sound(callees, old, p), Inr(q) => second.sound(callees, old, q) })
+}
+
 // A stage as often as there are plans, the function each plan makes being
 // the next plan's: no plan is the function itself. So how many times a
 // stage runs is the search's to choose, a function at a time.
