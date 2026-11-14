@@ -1331,3 +1331,51 @@ fn a_wrong_cut_made_of_right_tokens_is_the_scanners_to_answer_for() {
     assert_eq!(ours.len(), 5);
     assert_ne!(ours, plain(&lex_rust(source).expect("lexes")));
 }
+
+// ---------------------------------------------------------------------------
+// The token loop in Heather (`lexer_records.hthr`).
+
+// The records the linked loop stores are the tokens `Scanner` hands out, on
+// every source of the repository and on the generated pieces, with room for
+// every record and for one, two and three a call, so that a scan resumes
+// after every kind of token and ends at a refusal and at the end of the file
+// wherever the span does.
+#[test]
+fn the_linked_token_loop_is_the_scanner() {
+    let mut sources: Vec<String> = corpus().into_iter().map(|(_, text)| text).collect();
+    sources.extend(PROBES.iter().chain(BEYOND).chain(PIECES).map(|text| text.to_string()));
+    let mut refused = 0;
+    for text in &sources {
+        let source = text.as_bytes();
+        let theirs = scanner::tokens(source);
+        refused += usize::from(theirs.is_err());
+        for room in [1, 2, 3, 4096] {
+            assert_eq!(scanner::tokens_by_records(source, room), theirs, "{room} records a call: {text:?}");
+        }
+    }
+    assert!(refused > 10, "only {refused} refusals among the sources");
+}
+
+// What is stored, record by record, and nothing past the room for whole
+// records.
+#[test]
+fn the_records_stop_where_the_span_does() {
+    let ident = Kind::Ident.code();
+    let mut out = [0xaau8; 40];
+    assert_eq!(scanner::records(&mut out, b"a b c", 0, 0), 2);
+    assert_eq!(scanner::record(&out, 0), (0, Ok((ident, 1))));
+    assert_eq!(scanner::record(&out, 1), (2, Ok((ident, 3))));
+    assert_eq!(out[32..], [0xaa; 8]);
+    assert_eq!(scanner::records(&mut [], b"a b c", 0, 0), 0);
+    // From inside, after a name: the rest, and the end of the file.
+    let mut out = [0u8; 64];
+    assert_eq!(scanner::records(&mut out, b"a b c", 3, ident), 2);
+    assert_eq!(scanner::record(&out, 0), (4, Ok((ident, 5))));
+    assert_eq!(scanner::record(&out, 1), (5, Ok((Kind::Eof.code(), 5))));
+    // A refusal is the last record, after the tokens before it.
+    assert_eq!(scanner::records(&mut out, b"a \"b", 0, 0), 2);
+    assert_eq!(scanner::record(&out, 1), (2, Err((ScanRefusal::Unterminated as u64, 4))));
+    // An empty source is its end.
+    assert_eq!(scanner::records(&mut out, b"", 0, 0), 1);
+    assert_eq!(scanner::record(&out, 0), (0, Ok((Kind::Eof.code(), 0))));
+}

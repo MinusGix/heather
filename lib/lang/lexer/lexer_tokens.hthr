@@ -126,3 +126,33 @@ fn Scanned::of(source: List<u8>) → Scanned { Scanned::from(source.len(), 0, so
 
 // The tokens of a source given as text, by its UTF-8 bytes.
 fn Scanned::of_text(text: String) → Scanned { Scanned::of(utf8::encode(text)) }
+
+// One cut of a source as the linked token loop records it
+// (`lexer_records`): where it starts, and the token found there or the
+// refusal of it.
+record Record { start: Nat, cut: Cut }
+
+// The records of `rest`, which begins at offset `at`, after a token of
+// kind `previous`: each token kept, then the end-of-file token at the
+// source's length, or the refusal that stops the scan. It is
+// `Scanned::from` with the tokens before a refusal kept (`Scanned` drops
+// them), so a caller that is lent too little room for all of them has the
+// ones it was given; `fuel` is the same bound.
+fn Record::from(fuel: Nat, previous: u64, rest: List<u8>, at: Nat) → List<Record> {
+    match rest {
+        Nil => [Record(at, Cut::Found(Accepted(KIND_EOF, at, Nil)))],
+        Cons(_, _) => match fuel {
+            Zero => [Record(at, Cut::Refusal(REFUSED_UNEXPECTED, at))],
+            Succ(more) => match Accepted::longest(scan_begin(previous), rest, at, Cut::Refusal(REFUSED_UNEXPECTED, at)) {
+                Refusal(reason, refused) => [Record(at, Cut::Refusal(reason, refused))],
+                Found(found) => {
+                    let later = Record::from(more, found.kind, found.rest, found.end);
+                    if Token::kept(found.kind) { Cons(Record(at, Cut::Found(found)), later) } else { later }
+                },
+            },
+        },
+    }
+}
+
+// The records of a source.
+fn Record::of(source: List<u8>) → List<Record> { Record::from(source.len(), 0, source, 0) }

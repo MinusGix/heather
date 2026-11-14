@@ -1,0 +1,39 @@
+// The token loop over a source into a span of records
+// (`lib/lang/lexer/lexer_records.hthr`), evaluated by the kernel: how many
+// records it stores and what they hold, with room for all of them, for
+// fewer, and where a refusal ends the scan. The theorem that the records
+// are the specification's is in the module; `crates/linked/tests/scanner.rs`
+// runs the compiled loop against the linked scanner.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import bitvec; import bool; import list; import logic; import nat; import option; import string; import utf8;
+import rt; import rt_file; import stored_words;
+import lexer_scan; import lexer_tokens; import lexer_span; import lexer_records;
+
+// `scan_tokens` over a text from its start, into a span of zeros with room
+// for `room` records.
+fn records_probe(text: String, room: Nat) → Mutated<List<u8>, u64> {
+    List::scan_tokens(List::replicate(BitVec::ofNat(0), room * 16), BitVec::ofNat(room * 16),
+        utf8::encode(text), BitVec::ofNat(utf8::encode(text).len()), 0, 0)
+}
+
+// The word stored at a byte offset of the records.
+fn record_word(records: Mutated<List<u8>, u64>, at: Nat) → u64 {
+    records.after.u64_be_within(BitVec::ofNat(records.after.len()), BitVec::ofNat(at))
+}
+
+// Two names and the end of the file; the space between them is not kept.
+theorem records_count(): records_probe("a b", 4).value = 3 { refl }
+theorem records_first(): record_word(records_probe("a b", 4), 8) = token_word(KIND_IDENT, 1) { refl }
+theorem records_second_start(): record_word(records_probe("a b", 4), 16) = 2 { refl }
+theorem records_end_of_file(): record_word(records_probe("a b", 4), 40) = token_word(KIND_EOF, 3) { refl }
+
+// Room for two records: the two names, and the loop stops there.
+theorem records_full(): records_probe("a b", 2).value = 2 { refl }
+theorem records_none(): records_probe("a b", 0).value = 0 { refl }
+
+// A refusal is the last record, after the tokens before it.
+theorem records_refused(): records_probe("a \"b", 4).value = 2 { refl }
+theorem records_refusal_word(): record_word(records_probe("a \"b", 4), 24) = refusal_word(REFUSED_UNTERMINATED, 4) { refl }
+
+// The specification lists the same.
+theorem records_of(): (Record::of(utf8::encode("a b")).map(λ r => Accepted::word(r.cut))) = [token_word(KIND_IDENT, 1), token_word(KIND_IDENT, 3), token_word(KIND_EOF, 3)] { refl }
