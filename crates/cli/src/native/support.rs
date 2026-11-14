@@ -29,6 +29,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("bitvec_resize", include_str!("../../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("vector", include_str!("../../../../lib/std/data/vector.hthr")),
     ("bitvec_bytes", include_str!("../../../../lib/std/bitvec/bitvec_bytes.hthr")),
+    ("bitvec_rotate", include_str!("../../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("list_window", include_str!("../../../../lib/std/data/list_window.hthr")),
     ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
     ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),

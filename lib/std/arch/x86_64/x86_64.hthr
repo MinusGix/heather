@@ -19,6 +19,7 @@ import location;
 import list;
 import option;
 import certified_lookup;
+import bitvec_rotate;
 
 inductive Gpr {
     Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
@@ -223,6 +224,14 @@ inductive Instruction {
     // BSWAP r32 (0F C8+rd): the low four bytes reversed, the upper half
     // cleared as every 32-bit destination's is, and no flag changed.
     Bswap32(destination: Gpr),
+    // MOV r32, r32 (89 /r) of a register onto itself: the low half kept and
+    // the upper half cleared, as every 32-bit destination's is, and no flag
+    // changed. The settle of a 32-bit value in one instruction.
+    MovSelf32(destination: Gpr),
+    // ROR r/m32, imm8 (C1 /1 ib): the low half rotated right by the count
+    // masked to five bits, the upper half cleared; CF the result's bit 31
+    // and OF undefined at a nonzero count, the other flags kept.
+    RorRI32(destination: Gpr, immediate: BitVec(8)),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -620,6 +629,61 @@ fn bswap32_value(value: BitVec(64)) → BitVec(64) {
         BitVec::zero(), BitVec::zero(), BitVec::zero(), BitVec::zero())
 }
 
+// REX 89 /r with ModRM.reg and ModRM.r/m both the register: the REX has no
+// W, so the operation is 32-bit, and is always written, so the form is
+// three bytes for every register (`as` omits it below R8).
+fn mov_self32_bytes(destination: Gpr) → List<BitVec(8)> {
+    [rex_plain_rr(destination, destination), BitVec::ofNat(0x89), modrm_rr(destination, destination)]
+}
+
+// The low half of `value`, zero-extended: what a 32-bit destination
+// receives (Intel SDM Vol. 1, 3.4.1.1: a 32-bit operand's result is
+// zero-extended to 64 bits in the destination register).
+fn mov_self32_value(value: BitVec(64)) → BitVec(64) {
+    value.truncate(32, 32).zero_extend(32)
+}
+
+// REX C1 /1 ib: ROR's digit is RCX's code in ModRM.reg; the REX has no W
+// and is always written.
+fn ror32_bytes(destination: Gpr, immediate: BitVec(8)) → List<BitVec(8)> {
+    [rex_plain_rr(destination, Rcx), BitVec::ofNat(0xc1), modrm_rr(destination, Rcx), immediate]
+}
+
+// A 32-bit rotate masks its count to five bits (Intel SDM Vol. 2B,
+// RCL/RCR/ROL/ROR: `tempCOUNT ← (COUNT AND 1FH)` for a 32-bit operand).
+fn ror32_count(immediate: BitVec(8)) → Nat { immediate.toNat().mod(32) }
+
+// The low half rotated right by the masked count, zero-extended into the
+// register. At a masked count of zero the low half is unchanged and the
+// upper half still cleared (the destination is written).
+fn ror32_value(value: BitVec(64), count: Nat) → BitVec(64) {
+    value.truncate(32, 32).rotr(count).zero_extend(32)
+}
+
+fn ror32_defines(count: Nat, defined: DefinedFlags) → DefinedFlags {
+    match count {
+        Zero => defined,
+        Succ(_) => DefinedFlags(cf := True, pf := defined.pf, af := defined.af, zf := defined.zf,
+            sf := defined.sf, of := False),
+    }
+}
+
+// ROR's flags (Intel SDM Vol. 2B, ROR, Flags Affected): none at a masked
+// count of zero; otherwise CF is the result's most significant bit, OF is
+// defined only at a count of one (the model leaves it undefined there too,
+// as for the shifts) and SF, ZF, AF and PF are unaffected.
+fn ror32_flags(result: BitVec(64), count: Nat, flags: Flags) → Flags {
+    match count {
+        Zero => flags,
+        Succ(_) => Flags(
+            cf := result.truncate(32, 32).sign_bit(),
+            pf := flags.pf, af := flags.af, zf := flags.zf, sf := flags.sf,
+            of := False,
+            defined := ror32_defines(count, flags.defined),
+        ),
+    }
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -658,6 +722,8 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         ShiftOne(op, destination) => shift_one_bytes(op, destination),
         ShiftImm(op, destination, immediate) => shift_imm_bytes(op, destination, immediate),
         Bswap32(destination) => bswap32_bytes(destination),
+        MovSelf32(destination) => mov_self32_bytes(destination),
+        RorRI32(destination, immediate) => ror32_bytes(destination, immediate),
     }
 }
 
@@ -688,7 +754,7 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
 
 fn canonical_length(instruction: Instruction) → Nat {
     match instruction {
-        MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7, ShiftImm(_, _, _) => 4,
+        MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7, ShiftImm(_, _, _) => 4, RorRI32(_, _) => 4,
         SetBelow(destination) => setcc_length(destination), SetLess(destination) => setcc_length(destination),
         SetEqual(destination) => setcc_length(destination),
         _ => 3,
@@ -725,6 +791,8 @@ fn canonical_length_valid(instruction: Instruction) →
         ShiftOne(_, _) => And(trivial, trivial),
         ShiftImm(_, _, _) => And(trivial, trivial),
         Bswap32(_) => And(trivial, trivial),
+        MovSelf32(_) => And(trivial, trivial),
+        RorRI32(_, _) => And(trivial, trivial),
     }
 }
 
@@ -812,6 +880,8 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         ShiftOne(op, destination) => bytes = shift_one_bytes(op, destination),
         ShiftImm(op, destination, immediate) => bytes = shift_imm_bytes(op, destination, immediate),
         Bswap32(destination) => bytes = bswap32_bytes(destination),
+        MovSelf32(destination) => bytes = mov_self32_bytes(destination),
+        RorRI32(destination, immediate) => bytes = ror32_bytes(destination, immediate),
     }
 }
 
@@ -1778,6 +1848,23 @@ fn decode_shift_imm(rex, opcode, modrm, immediate: BitVec(8)) → Option<Decoded
     }
 }
 
+// REX C1 /1 ib with a register-direct ModRM and no REX.W: ROR r/m32, imm8.
+// The 64-bit shifts' decoding refuses these bytes first (ModRM.reg /1 names
+// no shift), so theirs is unchanged.
+fn decode_ror32(rex, opcode, modrm, immediate: BitVec(8)) → Option<DecodedInstruction> {
+    let destination = gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm), byte_bit2(modrm), byte_bit0(rex));
+    match opcode.eq_dec(BitVec::ofNat(0xc1)) {
+        Inr(_) => None,
+        Inl(_) => match rex.eq_dec(rex_plain_rr(destination, Rcx)) {
+            Inr(_) => None,
+            Inl(_) => match modrm.eq_dec(modrm_rr(destination, Rcx)) {
+                Inr(_) => None,
+                Inl(_) => Some(decoded_canonical(RorRI32(destination, immediate))),
+            },
+        },
+    }
+}
+
 // Four bytes are 83 /0 ib or C1 /digit ib, seven 81 /0 id; every other
 // length is refused by its shape, so no other form's decoding changes.
 fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
@@ -1793,7 +1880,10 @@ fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
                         Nil => match decode_add_ri_head(rex, opcode, modrm,
                                 BitVec::ofNat(0x83), λ d => AddRI8(d, b0)) {
                             Some(decoded) => Some(decoded),
-                            None => decode_shift_imm(rex, opcode, modrm, b0),
+                            None => match decode_shift_imm(rex, opcode, modrm, b0) {
+                                Some(decoded) => Some(decoded),
+                                None => decode_ror32(rex, opcode, modrm, b0),
+                            },
                         },
                         Cons(b1, t5) => match t5 {
                             Nil => None,
@@ -1832,6 +1922,30 @@ fn decode_bswap32(rex, escape, opcode: BitVec(8)) → Option<DecodedInstruction>
     }
 }
 
+// REX 89 /r naming one register in both ModRM fields, with no REX.W:
+// MOV r32, r32 onto itself.
+fn decode_mov_self32(rex, opcode, modrm: BitVec(8)) → Option<DecodedInstruction> {
+    let destination = gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm), byte_bit2(modrm), byte_bit0(rex));
+    match opcode.eq_dec(BitVec::ofNat(0x89)) {
+        Inr(_) => None,
+        Inl(_) => match rex.eq_dec(rex_plain_rr(destination, destination)) {
+            Inr(_) => None,
+            Inl(_) => match modrm.eq_dec(modrm_rr(destination, destination)) {
+                Inr(_) => None,
+                Inl(_) => Some(decoded_canonical(MovSelf32(destination))),
+            },
+        },
+    }
+}
+
+// The three-byte forms under a REX without W: BSWAP, then the 32-bit MOV.
+fn decode_plain_three(rex, second, third: BitVec(8)) → Option<DecodedInstruction> {
+    match decode_bswap32(rex, second, third) {
+        Some(decoded) => Some(decoded),
+        None => decode_mov_self32(rex, second, third),
+    }
+}
+
 // REX.W D1 /4, /5 or /7 with a register-direct ModRM. It is tried after the
 // two-register forms, so their decoding is unchanged.
 fn decode_shift_one(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
@@ -1844,7 +1958,7 @@ fn decode_shift_one(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
                 Cons(modrm, t3) => match t3 {
                     Cons(_, _) => None,
                     Nil => match opcode.eq_dec(BitVec::ofNat(0xd1)) {
-                        Inr(_) => decode_bswap32(rex, opcode, modrm),
+                        Inr(_) => decode_plain_three(rex, opcode, modrm),
                         Inl(_) => match ShiftOp::of_extension(gpr_from_fields(byte_bit3(modrm),
                                 byte_bit4(modrm), byte_bit5(modrm), byte_bit2(rex))) {
                             None => None,
@@ -2155,6 +2269,24 @@ theorem decode_bswap32_complete(destination: Gpr):
     }
 }
 
+theorem decode_mov_self32_complete(destination: Gpr):
+    decode_instruction(mov_self32_bytes(destination)) = Some(decoded_canonical(MovSelf32(destination)))
+{
+    match destination {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
+theorem decode_ror32_complete(destination: Gpr, immediate: BitVec(8)):
+    decode_instruction(ror32_bytes(destination, immediate)) = Some(decoded_canonical(RorRI32(destination, immediate)))
+{
+    match destination {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 theorem decode_shift_one_complete(op: ShiftOp, destination: Gpr):
     decode_instruction(shift_one_bytes(op, destination)) =
         Some(decoded_canonical(ShiftOne(op, destination)))
@@ -2350,6 +2482,12 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
         Bswap32(destination) => λ encoding =>
             j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(Bswap32(destination))),
                 decode_bswap32_complete(destination)),
+        MovSelf32(destination) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(MovSelf32(destination))),
+                decode_mov_self32_complete(destination)),
+        RorRI32(destination, immediate) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(RorRI32(destination, immediate))),
+                decode_ror32_complete(destination, immediate)),
     }(decoding)
 }
 
@@ -2392,6 +2530,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
         ShiftOne(_, _) => refl, ShiftImm(_, _, _) => refl, Bswap32(_) => refl,
+        MovSelf32(_) => refl, RorRI32(_, _) => refl,
     }
 }
 
@@ -2424,6 +2563,8 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         ShiftOne(_, _) => And(refl, refl),
         ShiftImm(_, _, _) => And(refl, refl),
         Bswap32(_) => And(refl, refl),
+        MovSelf32(_) => And(refl, refl),
+        RorRI32(_, _) => And(refl, refl),
     }
 }
 
@@ -2544,6 +2685,8 @@ theorem canonical_bytes_length(instruction: Instruction):
         ShiftOne(_, _) => refl,
         ShiftImm(_, _, _) => refl,
         Bswap32(_) => refl,
+        MovSelf32(_) => refl,
+        RorRI32(_, _) => refl,
     }
 }
 
@@ -2778,6 +2921,20 @@ fn execute_shift_imm(op: ShiftOp, destination: Gpr, immediate: BitVec(8), before
     )
 }
 
+fn execute_ror32(destination: Gpr, immediate: BitVec(8), before: Gprs, flags: Flags) → RegisterEffect {
+    let result = ror32_value(read_gpr(destination, before), ror32_count(immediate));
+    RegisterEffect(
+        gprs := write_gpr(destination, result, before),
+        flags := ror32_flags(result, ror32_count(immediate), flags),
+    )
+}
+
+theorem ror32_flags_defined(result: BitVec(64), count: Nat, flags: Flags):
+    ror32_flags(result, count, flags).defined = ror32_defines(count, flags.defined)
+{
+    match count { Zero => refl, Succ(_) => refl }
+}
+
 fn execute_shift_one(op: ShiftOp, destination: Gpr, before: Gprs, af: Bool) → RegisterEffect {
     let x = read_gpr(destination, before);
     RegisterEffect(
@@ -2943,6 +3100,11 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             gprs := write_gpr(destination, bswap32_value(read_gpr(destination, before)), before),
             flags := flags,
         ),
+        MovSelf32(destination) => RegisterEffect(
+            gprs := write_gpr(destination, mov_self32_value(read_gpr(destination, before)), before),
+            flags := flags,
+        ),
+        RorRI32(destination, immediate) => execute_ror32(destination, immediate, before, flags),
     }
 }
 
@@ -3007,6 +3169,12 @@ fn Flags::erase(self flags: Flags) → Flags { flags.fill(clear_flags()) }
 
 theorem shift_imm_flags_erase(op: ShiftOp, x: BitVec(64), count: Nat, flags: Flags):
     shift_imm_flags(op, x, count, flags).erase() = shift_imm_flags(op, x, count, flags.erase())
+{
+    match count { Zero => refl, Succ(_) => refl }
+}
+
+theorem ror32_flags_erase(result: BitVec(64), count: Nat, flags: Flags):
+    ror32_flags(result, count, flags).erase() = ror32_flags(result, count, flags.erase())
 {
     match count { Zero => refl, Succ(_) => refl }
 }
@@ -3191,6 +3359,11 @@ theorem erase_normal_commute<M>(instruction: Instruction, before: MachineState<M
                 next_rip(before.rip, decoded_canonical(ShiftImm(op, d, immediate)).length), before.memory),
             shift_imm_flags_erase(op, read_gpr(d, before.gprs), shift_count(immediate), before.flags)),
         Bswap32(_) => λ _ => refl,
+        MovSelf32(_) => λ _ => refl,
+        RorRI32(d, immediate) => λ _ => cong_fn(λ (f: Flags) => MachineState<M>(
+                write_gpr(d, ror32_value(read_gpr(d, before.gprs), ror32_count(immediate)), before.gprs), f,
+                next_rip(before.rip, decoded_canonical(RorRI32(d, immediate)).length), before.memory),
+            ror32_flags_erase(ror32_value(read_gpr(d, before.gprs), ror32_count(immediate)), ror32_count(immediate), before.flags)),
     })(reads)
 }
 
@@ -3572,6 +3745,8 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         ShiftOne(_, _) => refl,
         ShiftImm(_, _, _) => refl,
         Bswap32(_) => refl,
+        MovSelf32(_) => refl,
+        RorRI32(_, _) => refl,
     }
 }
 

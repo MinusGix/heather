@@ -1490,6 +1490,8 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                             format!("ShiftImm({op}, {}, {})", gpr(take()?)?, word(8, take()?))
                         }
                         16 => format!("Bswap32({})", gpr(take()?)?),
+                        17 => format!("MovSelf32({})", gpr(take()?)?),
+                        18 => format!("RorRI32({}, {})", gpr(take()?)?, word(8, take()?)),
                         _ => return Err(bad()),
                     };
                     instructions.push(instruction);
