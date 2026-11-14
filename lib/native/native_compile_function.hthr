@@ -83,6 +83,7 @@ import memory;
 import bitvec;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -255,46 +256,46 @@ theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
                 t.r.profile.read_agree(m, t.r.profile.store(m, t.stack.at(k), word_bytes(word)).cells, y,
                     t.stack_store_cells(m, k, below, word, y, t.lent_below(held, count, sized, b, i, inside))))
         },
-        writable := λ m b k written inside => {
+        writable := λ m b k written inside bytes fits => {
             let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let reach: (k + bytes.len() <= buffer_bytes(lent_buffers(count, held), b).len()) = fits;
             let sp = t.lent_span(held, count, sized, b, omega(short));
-            j(t.stack_writes, λ ws _ => (ws.writable(m, spans.byte(b, k), 1)) →
-                    (t.stack.writes.writable(m, spans.byte(b, k), 1)), λ e => e)(j(sym(sp.right.right), λ a _ => t.io().writable(m, next_rip(a, k), 1),
-                    t.r.byte_writable(m, layout.buffer_offset(b), k, omega(short, sp.left.right))))
+            j(t.stack_writes, λ ws _ => (ws.writable(m, spans.byte(b, k), bytes.len())) →
+                    (t.stack.writes.writable(m, spans.byte(b, k), bytes.len())), λ e => e)(j(sym(sp.right.right),
+                    λ a _ => t.io().writable(m, next_rip(a, k), bytes.len()),
+                    t.r.span_writable(m, layout.buffer_offset(b), k, bytes.len(), omega(reach, sp.left.right))))
         },
-        stored := λ m b k written inside byte => {
+        stored := λ m b k written inside bytes fits u present => {
             let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let reach: (k + bytes.len() <= buffer_bytes(lent_buffers(count, held), b).len()) = fits;
             let sp = t.lent_span(held, count, sized, b, omega(short));
-            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), [byte]), spans.byte(b, k)) = Some(byte)) →
-                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), [byte]), spans.byte(b, k)) = Some(byte)), λ e => e)(j(sym(sp.right.right), λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), [byte]), next_rip(a, k)) = Some(byte),
-                    t.r.byte_stored(m, layout.buffer_offset(b), k, byte, omega(short, sp.left.right))))
+            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), bytes), spans.byte(b, k + u)) = bytes.nth(u)) →
+                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), bytes), spans.byte(b, k + u)) = bytes.nth(u)), λ e => e)(j(sym(sp.right.right),
+                    λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), bytes), next_rip(a, k + u)) = bytes.nth(u),
+                    t.r.span_stored(m, layout.buffer_offset(b), k, bytes, omega(reach, sp.left.right), u, present)))
         },
-        apart := λ m b k written inside byte c i within other => {
+        apart := λ m b k written inside bytes fits c i within other => {
             let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let reach: (k + bytes.len() <= buffer_bytes(lent_buffers(count, held), b).len()) = fits;
             let short_c: (i < buffer_bytes(lent_buffers(count, held), c).len()) = within;
             let here = t.lent_span(held, count, sized, b, omega(short));
             let there = t.lent_span(held, count, sized, c, omega(short_c));
-            let one: (layout.buffer_offset(b) + k + 1 <= t.r.size) = omega(short, here.left.right);
-            let order: ((layout.buffer_offset(b) + k + 1 <= layout.buffer_offset(c) + i) ∨ (layout.buffer_offset(c) + i + 1 <= layout.buffer_offset(b) + k)) =
+            let span: (layout.buffer_offset(b) + k + bytes.len() <= t.r.size) = omega(reach, here.left.right);
+            let order: ((layout.buffer_offset(b) + k + bytes.len() <= layout.buffer_offset(c) + i) ∨
+                    (layout.buffer_offset(c) + i + 1 <= layout.buffer_offset(b) + k)) =
                 match b.eq_dec(c) {
-                    Inl(same) => match other {
-                        Inl(differs) => false_elim(differs(same)),
-                        Inr(differs) => {
-                            let same_offset: (layout.buffer_offset(b) = layout.buffer_offset(c)) = cong_fn<Nat, Nat>(λ n => layout.buffer_offset(n), same);
-                            match k.lt_or_ge(i) {
-                                Inl(lt) => Inl(omega(lt, same_offset)),
-                                Inr(ge) => match i.lt_or_ge(k) {
-                                    Inl(lt) => Inr(omega(lt, same_offset)),
-                                    Inr(le) => {
-                                        let equal: (k = i) = omega(ge, le);
-                                        false_elim(differs(equal))
-                                    },
-                                },
-                            }
-                        },
+                    Inl(same) => {
+                        let same_offset: (layout.buffer_offset(b) = layout.buffer_offset(c)) = cong_fn<Nat, Nat>(λ n => layout.buffer_offset(n), same);
+                        match other {
+                            Inl(differs) => false_elim(differs(same)),
+                            Inr(outside) => match outside {
+                                Inl(below) => Inr(omega(below, same_offset)),
+                                Inr(above) => Inl(omega(above, same_offset)),
+                            },
+                        }
                     },
                     Inr(differs) => match b.lt_or_ge(c) {
-                        Inl(under) => Inl(omega(layout.buffer_apart(b, buffer_bytes(lent_buffers(count, held), b).len(), c, here.right.left, under), short)),
+                        Inl(under) => Inl(omega(layout.buffer_apart(b, buffer_bytes(lent_buffers(count, held), b).len(), c, here.right.left, under), reach)),
                         Inr(over) => {
                             let above: (c < b) = match c.lt_or_ge(b) {
                                 Inl(lt) => lt,
@@ -307,29 +308,31 @@ theorem Target::loan(self t: Target, held: Buffers(), count: Nat,
                         },
                     },
                 };
-            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), [byte]), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))) →
-                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), [byte]), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))), λ e => e)(j(sym(here.right.right), λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), [byte]), next_rip(spans.at(c), i)) =
+            j(t.stack_writes, λ ws _ => (t.r.profile.read(ws.store(m, spans.byte(b, k), bytes), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))) →
+                    (t.r.profile.read(t.stack.writes.store(m, spans.byte(b, k), bytes), spans.byte(c, i)) = t.r.profile.read(m, spans.byte(c, i))), λ e => e)(j(sym(here.right.right), λ a _ => t.r.profile.read(t.r.profile.store(m, next_rip(a, k), bytes), next_rip(spans.at(c), i)) =
                         t.r.profile.read(m, next_rip(spans.at(c), i)),
-                    j(sym(there.right.right), λ y _ => t.r.profile.read(t.r.profile.store(m, next_rip(next_rip(t.r.low, layout.buffer_offset(b)), k), [byte]),
+                    j(sym(there.right.right), λ y _ => t.r.profile.read(t.r.profile.store(m, next_rip(next_rip(t.r.low, layout.buffer_offset(b)), k), bytes),
                                 next_rip(y, i)) = t.r.profile.read(m, next_rip(y, i)),
-                        t.r.store_apart(m, layout.buffer_offset(b), k, [byte], layout.buffer_offset(c), i, one, omega(short_c, there.left.right), order))))
+                        t.r.store_apart(m, layout.buffer_offset(b), k, bytes, layout.buffer_offset(c), i, span, omega(short_c, there.left.right), order))))
         },
-        keeps := λ m b k written inside byte i below => {
+        keeps := λ m b k written inside bytes fits i below => {
             let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let reach: (k + bytes.len() <= buffer_bytes(lent_buffers(count, held), b).len()) = fits;
             let sp = t.lent_span(held, count, sized, b, omega(short));
-            let one: (layout.buffer_offset(b) + k + 1 <= t.r.size) = omega(short, sp.left.right);
+            let span: (layout.buffer_offset(b) + k + bytes.len() <= t.r.size) = omega(reach, sp.left.right);
             let at: (spans.byte(b, k) = next_rip(t.r.low, layout.buffer_offset(b) + k)) =
                 trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, k), sp.right.right), rip_compose(t.r.low, layout.buffer_offset(b), k));
-            j(t.stack_writes, λ ws _ => (read_word(t.io().data, ws.store(m, spans.byte(b, k), [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))) →
-                    (read_word(t.io().data, t.stack.writes.store(m, spans.byte(b, k), [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))), λ e => e)(j(sym(at), λ a _ => read_word(t.io().data, t.r.profile.store(m, a, [byte]), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i)),
-                    t.stack_read_store(m, layout.buffer_offset(b) + k, [byte], one, i, below)))
+            j(t.stack_writes, λ ws _ => (read_word(t.io().data, ws.store(m, spans.byte(b, k), bytes), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))) →
+                    (read_word(t.io().data, t.stack.writes.store(m, spans.byte(b, k), bytes), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i))), λ e => e)(j(sym(at), λ a _ => read_word(t.io().data, t.r.profile.store(m, a, bytes), t.stack.at(i)) = read_word(t.io().data, m, t.stack.at(i)),
+                    t.stack_read_store(m, layout.buffer_offset(b) + k, bytes, span, i, below)))
         },
-        keeps_code := λ m b k written inside byte bytes at resident => {
+        keeps_code := λ m b k written inside bytes fits code at resident => {
             let short: (k < buffer_bytes(lent_buffers(count, held), b).len()) = inside;
+            let reach: (k + bytes.len() <= buffer_bytes(lent_buffers(count, held), b).len()) = fits;
             let sp = t.lent_span(held, count, sized, b, omega(short));
-            j(t.stack_writes, λ ws _ => (CodeResident(t.io().fetch, ws.store(m, spans.byte(b, k), [byte]), bytes, at)) →
-                    (CodeResident(t.io().fetch, t.stack.writes.store(m, spans.byte(b, k), [byte]), bytes, at)), λ e => e)(j(sym(sp.right.right), λ a _ => CodeResident(t.io().fetch, t.r.profile.store(m, next_rip(a, k), [byte]), bytes, at),
-                    t.r.byte_keeps_code(m, layout.buffer_offset(b), k, byte, omega(short, sp.left.right), bytes, at, resident)))
+            j(t.stack_writes, λ ws _ => (CodeResident(t.io().fetch, ws.store(m, spans.byte(b, k), bytes), code, at)) →
+                    (CodeResident(t.io().fetch, t.stack.writes.store(m, spans.byte(b, k), bytes), code, at)), λ e => e)(j(sym(sp.right.right), λ a _ => CodeResident(t.io().fetch, t.r.profile.store(m, next_rip(a, k), bytes), code, at),
+                    t.r.span_keeps_code(m, layout.buffer_offset(b), k, bytes, omega(reach, sp.left.right), code, at, resident)))
         },
     )
 }
@@ -564,33 +567,33 @@ theorem Target::in_memory(self t: Target, env: Env, room: Nat, v: Nat → BitVec
     }⟩
 }
 
-// A byte stored inside its buffer: the region holds the file with that
-// byte set. The buffers lie below the saved RSP and the room's count.
-theorem Target::based_byte(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
-    buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
-    t.Based(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), room, t.r.stored_cells(v, t.layout().buffer_offset(buf) + i, [c]),
-        t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
+// Bytes stored inside their buffer: the region holds the file with them
+// written over it. The buffers lie below the saved RSP and the room's count.
+theorem Target::based_span(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+    buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, bytes: List<BitVec(8)>, reach: bytes.len() + i <= cap):
+    t.Based(Env(env.words, store_span(env.buffers, buf, i, bytes), env.args), room, t.r.stored_cells(v, t.layout().buffer_offset(buf) + i, bytes),
+        t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), bytes)) {
     let layout = t.layout();
     let q = layout.buffer_offset(buf) + i;
     let so = layout.stack_offset();
     let ends = layout.buffer_end(buf, cap, found);
     let stack: (so = layout.scratch_offset() + (t.caps.largest() + 1)) = refl;
     let slots: (so + 16 <= t.r.size) = t.fits;
-    let fits: (q + 1 <= t.r.size) = omega(ends, stack, slots, below);
-    let w = t.r.stored_cells(v, q, [c]);
-    let m2 = t.r.profile.store(m, next_rip(t.r.low, q), [c]);
-    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k short => t.r.cells_outside(v, q, [c], so + k, {
-        let past: (q + 1 <= so + k) = omega(ends, stack, below);
+    let fits: (q + bytes.len() <= t.r.size) = omega(ends, stack, slots, reach);
+    let w = t.r.stored_cells(v, q, bytes);
+    let m2 = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k short => t.r.cells_outside(v, q, bytes, so + k, {
+        let past: (q + bytes.len() <= so + k) = omega(ends, stack, reach);
         Inr(past)
     }));
-    let counted: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k short => t.r.cells_outside(v, q, [c], so + 8 + k, {
-        let past: (q + 1 <= so + 8 + k) = omega(ends, stack, below);
+    let counted: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k short => t.r.cells_outside(v, q, bytes, so + 8 + k, {
+        let past: (q + bytes.len() <= so + 8 + k) = omega(ends, stack, reach);
         Inr(past)
     }));
     let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m2, y, t.args),
-        argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, q, [c], fits), word_in(v, so), t.args, based.right.right.right.left));
-    ⟨t.r.store_holds(v, m, based.left, q, [c], fits),
-     ⟨layout.buffers_byte(t.r, env, v, based.right.left, buf, cap, found, i, below, c),
+        argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, q, bytes, fits), word_in(v, so), t.args, based.right.right.right.left));
+    ⟨t.r.store_holds(v, m, based.left, q, bytes, fits),
+     ⟨layout.buffers_span(t.r, env, v, based.right.left, buf, cap, found, i, below, bytes, reach),
       ⟨based.right.right.left, ⟨argv, trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), counted), based.right.right.right.right)⟩⟩⟩⟩
 }
 
@@ -609,7 +612,7 @@ theorem readable_same<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs, 
 // Along its stores the region holds some file with the caller's count of
 // buffers and the buffers not lent as they were: a word stored below `i`
 // leaves the file and the words from `i` up, and a byte put into a buffer
-// lent sets that byte of it (`Target::based_byte`). Where the stores end,
+// lent writes those bytes over it (`Target::based_span`). Where the stores end,
 // the buffers lent read in memory both as that file has them and as the
 // function left them (`Stack::InMemory`), so the file is the one the call
 // answers (`relent_is`).
@@ -646,24 +649,25 @@ theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVe
                 let b0 = put.witness;
                 let k0 = put.proof.witness;
                 let within: (k0 < buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = put.proof.proof.left.right;
-                let byte = put.proof.proof.right.witness;
+                let bytes = put.proof.proof.right.witness;
+                let reach: (k0 + bytes.len() <= buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = put.proof.proof.right.proof.left;
                 let sp = t.lent_span(env.buffers, count, sized, b0, omega(within));
-                let after_file = store_byte(file, b0, k0, byte);
+                let after_file = store_span(file, b0, k0, bytes);
                 let q = layout.buffer_offset(b0) + k0;
                 let address: (spans.byte(b0, k0) = next_rip(t.r.low, q)) =
                     trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, k0), sp.right.right), rip_compose(t.r.low, layout.buffer_offset(b0), k0));
-                let stored: (b = t.r.profile.store(a, next_rip(t.r.low, q), [byte])) = trans(put.proof.proof.right.proof,
-                    trans(t.stack_stored(a, spans.byte(b0, k0), [byte]),
-                        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ x => t.r.profile.store(a, x, [byte]), address)));
-                let one: (q + 1 <= t.r.size) = omega(within, sp.left.right);
-                let there: holding(after_file, t.r.profile.store(a, next_rip(t.r.low, q), [byte])) =
-                    ⟨Exists(t.r.stored_cells(kept.proof.left.left.witness, q, [byte]),
-                        t.based_byte(Env(env.words, file, env.args), room, kept.proof.left.left.witness, a, kept.proof.left.left.proof, b0,
-                            buffer_bytes(lent_buffers(count, env.buffers), b0).len(), sp.right.left, k0, within, byte)),
-                    t.frames_store(a, q, [byte], one, words, i, kept.proof.left.right)⟩;
+                let stored: (b = t.r.profile.store(a, next_rip(t.r.low, q), bytes)) = trans(put.proof.proof.right.proof.right,
+                    trans(t.stack_stored(a, spans.byte(b0, k0), bytes),
+                        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ x => t.r.profile.store(a, x, bytes), address)));
+                let span: (q + bytes.len() <= t.r.size) = omega(reach, sp.left.right);
+                let there: holding(after_file, t.r.profile.store(a, next_rip(t.r.low, q), bytes)) =
+                    ⟨Exists(t.r.stored_cells(kept.proof.left.left.witness, q, bytes),
+                        t.based_span(Env(env.words, file, env.args), room, kept.proof.left.left.witness, a, kept.proof.left.left.proof, b0,
+                            buffer_bytes(lent_buffers(count, env.buffers), b0).len(), sp.right.left, k0, within, bytes, omega(reach))),
+                    t.frames_store(a, q, bytes, span, words, i, kept.proof.left.right)⟩;
                 Exists(after_file, ⟨j(sym(stored), λ x _ => holding(after_file, x), there),
-                    ⟨trans(file.len_update(b0, λ (bytes: List<BitVec(8)>) => bytes.update(k0, λ (_: BitVec(8)) => byte)), kept.proof.right.left),
-                        λ c past => trans(buffer_bytes_store_other(file, b0, k0, byte, c, λ same => false_elim(omega(same, past, sp.left.left))),
+                    ⟨trans(file.len_update(b0, λ (xs: List<BitVec(8)>) => xs.put_window(k0, bytes)), kept.proof.right.left),
+                        λ c past => trans(buffer_bytes_span_other(file, b0, k0, bytes, c, λ same => false_elim(omega(same, past, sp.left.left))),
                             kept.proof.right.right(c, past))⟩⟩)
             },
         }, m, m2, start, wrote);

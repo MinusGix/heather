@@ -69,6 +69,7 @@ import x86_64_layout;
 import x86_64_store;
 import x86_64_stack;
 import x86_64_lending;
+import x86_64_views;
 import x86_64_kept;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -78,6 +79,7 @@ import bitvec_nat;
 import bitvec_resize;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -663,6 +665,41 @@ theorem Stack::trail_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
     ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), [byte]), trail.left,
         stack.wrote_in_put(d + 64, lending.spans(), memory, b, k, written, inside, byte)),
      stack.in_memory_put(top, lending, loan, now, memory, trail.right, b, k, written, inside, byte)⟩
+}
+
+// Bytes stored into a buffer the lending lets a call write, from a byte
+// inside it: the file with them written over it is the one in memory.
+theorem Stack::in_memory_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
+    held: stack.InMemory(lending, now, memory), b, k: Nat, written: lending.written(b) = True,
+    inside: k < buffer_bytes(lending.buffers, b).len(), bytes: List<BitVec(8)>, fits: k + bytes.len() <= buffer_bytes(lending.buffers, b).len()):
+    stack.InMemory(lending, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes)) {
+    let stored = stack.writes.store(memory, lending.spans().byte(b, k), bytes);
+    λ c => match b.eq_dec(c) {
+        Inl(same) => j(same, λ x _ => (buffer_bytes(store_span(now, b, k, bytes), x).len() = buffer_bytes(lending.buffers, x).len()) ∧
+                Readable(data, stored, address_of(lending.addresses, x), buffer_bytes(store_span(now, b, k, bytes), x)),
+            j(sym(buffer_bytes_spanned(now, b, k, bytes, omega(inside, held(b).left))), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧
+                    Readable(data, stored, address_of(lending.addresses, b), ys),
+                ⟨trans(buffer_bytes(now, b).len_put_window(k, bytes, omega(fits, held(b).left)), held(b).left),
+                 loan.store_reads(memory, b, k, written, inside, bytes, fits, buffer_bytes(now, b), held(b).left, held(b).right)⟩)),
+        Inr(differs) => {
+            let reach: (buffer_bytes(now, c).len() <= buffer_bytes(lending.buffers, c).len()) = omega(held(c).left);
+            j(sym(buffer_bytes_span_other(now, b, k, bytes, c, differs)), λ ys _ =>
+                    (ys.len() = buffer_bytes(lending.buffers, c).len()) ∧ Readable(data, stored, address_of(lending.addresses, c), ys),
+                ⟨held(c).left, loan.store_keeps(memory, b, k, written, inside, bytes, fits, c, differs, buffer_bytes(now, c), reach, held(c).right)⟩)
+        },
+    }
+}
+
+// And the trail is kept, the file now the one with them written.
+theorem Stack::trail_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), d: Nat, entry: M, now: Buffers(), memory: M,
+    trail: stack.Trail(lending, d, entry, now, memory), b, k: Nat, written: lending.written(b) = True,
+    inside: k < buffer_bytes(lending.buffers, b).len(), bytes: List<BitVec(8)>, fits: k + bytes.len() <= buffer_bytes(lending.buffers, b).len()):
+    stack.Trail(lending, d, entry, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes)) {
+    ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), bytes), trail.left,
+        stack.wrote_in_store(d + 64, lending.spans(), memory, b, k, written, inside, bytes, fits)),
+     stack.in_memory_span(top, lending, loan, now, memory, trail.right, b, k, written, inside, bytes, fits)⟩
 }
 
 // What a call gives function `f` of the file `now`: the homes of the
@@ -2740,12 +2777,12 @@ theorem store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
                             site.Resident(stack.writes.store(s.memory, x, [low_byte(w)])) ∧
                                 ready(after, s.gprs, stack.writes.store(s.memory, x, [low_byte(w)]));
                         let done: goal(cell, values(64, store.value)) =
-                            ⟨loan.keeps_code(s.memory, store.buffer, k, written, inside, byte,
+                            ⟨loan.keeps_code(s.memory, store.buffer, k, written, inside, [byte], inside,
                                 assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident),
                              ⟨held.left, ⟨held.right.left, stack.trail_put(top, lending, loan, d, s0.memory, before, s.memory,
                                 held.right.right, store.buffer, k, written, inside, byte)⟩⟩⟩;
                         ⟨plain, ⟨j(sym(at), λ x _ => stack.writes.writable(s.memory, x, 1),
-                                loan.writable(s.memory, store.buffer, k, written, inside)),
+                                loan.writable(s.memory, store.buffer, k, written, inside, [byte], inside)),
                             j(sym(at), λ x _ => goal(x, read_gpr(source.register, s.gprs)), j(value, λ w _ => goal(cell, w), done))⟩⟩
                     }),
                 site.moves_load_byte(stack.writes, fits, within.witness, put, 0, the_load, within.proof,

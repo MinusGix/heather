@@ -27,6 +27,7 @@ import bitvec;
 import bitvec_bytes;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -61,6 +62,30 @@ theorem buffer_bytes_store_other(buffers: Buffers(), buffer, index: Nat, byte: B
     buffer_bytes(store_byte(buffers, buffer, index, byte), other) = buffer_bytes(buffers, other) {
     let set = λ (bytes: List<BitVec(8)>) => bytes.update(index, λ (_: BitVec(8)) => byte);
     let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(bytes) => bytes };
+    cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
+}
+
+// Bytes written over buffer `buffer` from `index`: what a store of them
+// into a span leaves, where the buffer has room for them.
+fn store_span(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>) → Buffers() {
+    buffers.update(buffer, λ xs => xs.put_window(index, bytes))
+}
+
+theorem buffer_bytes_spanned(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>, inside: index < buffer_bytes(buffers, buffer).len()):
+    buffer_bytes(store_span(buffers, buffer, index, bytes), buffer) = buffer_bytes(buffers, buffer).put_window(index, bytes) {
+    let set = λ (xs: List<BitVec(8)>) => xs.put_window(index, bytes);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(xs) => xs };
+    (match buffers.nth(buffer) as λ found => buffers.nth(buffer) = found → index < read(found).len() →
+        read(buffers.update(buffer, set).nth(buffer)) = set(read(found)) {
+        None => λ none below => false_elim(below),
+        Some(xs) => λ some below => cong_fn(read, buffers.nth_update_here(buffer, set, xs, some)),
+    })(refl, inside)
+}
+
+theorem buffer_bytes_span_other(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>, other: Nat, differs: buffer ≠ other):
+    buffer_bytes(store_span(buffers, buffer, index, bytes), other) = buffer_bytes(buffers, other) {
+    let set = λ (xs: List<BitVec(8)>) => xs.put_window(index, bytes);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(xs) => xs };
     cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
 }
 
