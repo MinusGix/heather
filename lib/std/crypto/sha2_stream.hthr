@@ -85,7 +85,7 @@ theorem Sha2::words_block(X, Y: List<u8>, k: Nat, first: X.len() = 64, rest: Y.l
     let V = λ (piece: List<u8>) => Sha2::word_of(piece);
     let whole = X.len_append(Y);
     let all: (Sha2::sha256().words(X ++ Y) = Sha2::pieces(4, 16 * k + 16, X ++ Y).map(V)) = Sha2::words_whole(X ++ Y, 16 * k + 16, omega);
-    let cut: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X ++ Y) ++ Sha2::pieces(4, 16 * k, (X ++ Y).drop(64))) = Sha2::pieces_add<u8>(4, 16, 16 * k, X ++ Y);
+    let cut: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X ++ Y) ++ Sha2::pieces(4, 16 * k, (X ++ Y).drop(64))) = Sha2::pieces_add(4, 16, 16 * k, X ++ Y);
     let front: (Sha2::pieces(4, 16, X ++ Y) = Sha2::pieces(4, 16, X)) = Sha2::pieces_prefix(4, 16, X, Y, first);
     let back: ((X ++ Y).drop(64) = Y) = simp_only(sym(first), List::drop_append_len);
     let parts: (Sha2::pieces(4, 16 * k + 16, X ++ Y) = Sha2::pieces(4, 16, X) ++ Sha2::pieces(4, 16 * k, Y)) = simp_only(cut, front, back);
