@@ -113,7 +113,10 @@ impl Defaults<'_> {
         }
         // A condition a search was left with can also be tested, where the
         // caller can name `When` (docs/when-design.md §4).
-        let or_test = if is_context_search(&default.expr) && crate::tested::Tested(self).when_visible() {
+        let or_test = if is_context_search(&default.expr)
+            && !matches!(&default.expr.kind, ExprKind::Var(v) if v == crate::tested::KNOWN)
+            && crate::tested::Tested(self).when_visible()
+        {
             " or use the call where a `When` is wanted (a `match` on `Present`/`Absent`), which tests it"
         } else {
             ""
@@ -278,11 +281,11 @@ pub(crate) struct DefaultGoal {
 /// body's are lifted into declarations of their own
 /// (issues/found-proof-differs-across-recursion-companions.md).
 pub(crate) fn is_context_search(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Var(v) if matches!(v.as_str(), "omega" | "bv_omega" | "linarith" | "nlinarith" | "positivity"))
+    matches!(&e.kind, ExprKind::Var(v) if matches!(v.as_str(), "omega" | "bv_omega" | "linarith" | "nlinarith" | "positivity" | crate::tested::KNOWN))
 }
 
 pub(crate) fn is_discharge(e: &Expr) -> bool {
-    const SEARCHES: [&str; 9] = ["omega", "positivity", "ring", "linarith", "nlinarith", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
+    const SEARCHES: [&str; 10] = ["omega", "positivity", "ring", "linarith", "nlinarith", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH, crate::tested::KNOWN];
     const TACTICS: [&str; 11] = ["omega", "ring", "linarith", "nlinarith", "rewrite", "subst", "simp_only", "simp_show", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
     surface::count_holes_expr(e) > 0
         || match &e.kind {

@@ -4,7 +4,7 @@ status: open
 labels: [performance,testing,cache]
 area: infrastructure
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 A fresh container's library gate costs what master changed since the seed was published, and every thread's container pays it again. The seed is published once a night, by a green sentinel run, as an archive ten times the size of the images in use.
@@ -41,3 +41,4 @@ Checked without pushing: the archive built from the published seed and from a st
 ## Done when
 
 A fresh container started a few hours after a merge finds images for all but the modules its own round changes.
+- 2026-11-14: The scheduled refresh (every four hours, a new session per run) published its first seed at 09:00 UTC for master efd0372: 115 MB, seeded in 4 s, and the gate's build step over it builds nothing (4 s). The run that produced it took 12.7 minutes on a fresh container, 514 s of it the gate over the seed of the night before: 257 commits, 184 of 557 library modules edited. By module that build step (444 s, 1550 CPU-s) is 59% modules edited since the seed, 19% unedited importers that re-elaborated and 22% replays at about a second each. The whole library from an empty store is 369 s and 1396 CPU-s, so a day-old seed costs more than no seed; a tenth of the difference is the verdict file ([[verdict-store-rewritten-per-process]]).

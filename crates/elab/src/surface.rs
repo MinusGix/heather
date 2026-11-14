@@ -861,7 +861,7 @@ fn tactic_slot_score(e: &Expr) -> u32 {
     match &e.kind {
         ExprKind::Var(v) if v == "omega" || v == "positivity" => OMEGA_ATOM_SLOTS,
         ExprKind::Var(v) if v == "bv_omega" => 1 + BV_OMEGA_ATOM_SLOTS,
-        ExprKind::Var(v) if v == crate::measure::CLOSER => OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
+        ExprKind::Var(v) if v == crate::measure::CLOSER || v == crate::tested::KNOWN => OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
         _ => 0,
     }
 }

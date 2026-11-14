@@ -183,7 +183,7 @@ fn spread_words(v: [u32; 64], j: u64) → [u32; 64]
     if h: j < 48 { spread_words(v.put(j + 16, v.at(j)), j + 1) } else { v }
 }
 
-theorem spread_unfolds(v: [u32; 64], j: u64): True { let step = spread_words_unfold(v, j); trivial }
+theorem spread_unfolds(v: [u32; 64], j: u64): True { let step = spread_words::unfold(v, j); trivial }
 
 // ---------------------------------------------------------------------------
 // What is refused, each by its reason.

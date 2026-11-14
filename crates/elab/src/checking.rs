@@ -917,6 +917,15 @@ impl Checking<'_> {
                     Err(_) => Err(stuck),
                 }
             }
+            // `known`: a hypothesis, a side of a conjunction, then the
+            // arithmetic searches (docs/when-design.md §5).
+            ExprKind::Var(name)
+                if name == crate::tested::KNOWN
+                    && !self.shadowed(cx, name)
+                    && Constructors(self).ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                crate::tested::Tested(self).known(cx, expected, lvl, e.span)
+            }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
             // reconstruction returns an ordinary Heather
@@ -1358,6 +1367,11 @@ impl Checking<'_> {
                 // of the suite itself (the issue's 2026-08-17 log), so the
                 // cheap variants the issue proposed — leaves only, whnf'd types
                 // only — buy nothing worth the narrowing.
+                // A `When<T, P>` where a `T` is wanted takes its value
+                // (docs/when-design.md §5).
+                if let Some(value) = crate::tested::Tested(self).coerce(cx, e, &t, &got, &head, lvl)? {
+                    return Ok(value);
+                }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)
             }

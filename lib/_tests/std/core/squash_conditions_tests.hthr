@@ -64,7 +64,7 @@ fn squashed_spread(v: [u32; 64], j: u64) → [u32; 64]
 }
 theorem squashed_spread_unfolds(v: [u32; 64], j: u64):
     squashed_spread(v, j) = (if h: j < 48 { squashed_spread(word_put(v, j + 16, word_at(v, j + 14)), j + 1) } else { v })
-{ squashed_spread_unfold(v, j) }
+{ squashed_spread::unfold(v, j) }
 
 // Negative control: relevant conditions whose default is not a context
 // search the lifting knows (a block), so nothing is lifted, and the
@@ -76,4 +76,4 @@ fn relevant_spread(v: [u32; 64], j: u64) → [u32; 64]
     if h: j < 48 { relevant_spread(relevant_put(v, j + 16, relevant_at(v, j + 14)), j + 1) } else { v }
 }
 // expect-error: no unfolding equation for `relevant_spread`
-theorem relevant_spread_unfolds(v: [u32; 64], j: u64): True { let u = relevant_spread_unfold(v, j); trivial }
+theorem relevant_spread_unfolds(v: [u32; 64], j: u64): True { let u = relevant_spread::unfold(v, j); trivial }

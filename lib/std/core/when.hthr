@@ -2,7 +2,7 @@
 // (docs/when-design.md). It is a decision of `P` that carries a value on its
 // yes side: `When<Unit, P>` is a decision of `P`, and nobody supplies a
 // decision procedure for `P` in general, since whoever built the value
-// decided this case. With the proof the value is taken (`w.val(h)`); without
+// decided this case. With the proof the value is taken (`w.val()`, the proof found by `known`, or `w.val(holds := h)`); without
 // it a `match` puts the reader in the branch, with `P` or `¬P` in hand.
 //
 // Heather keeps proof relevance, so a `match` on a `When` eliminates into
@@ -18,7 +18,7 @@ inductive When<T, P> { Present(value: T, holds: P), Absent(fails: ¬P) }
 
 // The value, given the condition. The `Absent` arm cannot be reached: its
 // refutation meets the proof.
-fn When::val<T, P>(self w: When<T, P>, holds: P) → T {
+fn When::val<T, P>(self w: When<T, P>, holds: P := known) → T {
     match w { Present(value, _) => value, Absent(fails) => false_elim(fails(holds)) }
 }
 
@@ -105,16 +105,16 @@ theorem When::of_cases<P: Decide, T>(f: P → T, M: When<T, P> → Type,
 // ---------------------------------------------------------------------------
 // Laws a client cites.
 
-theorem When::val_present<T, P>(value: T, holds, h: P): Present<T, P>(value, holds).val(h) = value { refl }
+theorem When::val_present<T, P>(value: T, holds, h: P): Present<T, P>(value, holds).val(holds := h) = value { refl }
 
-theorem When::map_val<T, U, P>(w: When<T, P>, f: T → U, h: P): w.map(f).val(h) = f(w.val(h)) {
+theorem When::map_val<T, U, P>(w: When<T, P>, f: T → U, h: P): w.map(f).val(holds := h) = f(w.val(holds := h)) {
     match w {
         Present(_, _) => refl,
         Absent(fails) => false_elim(fails(h)),
     }
 }
 
-theorem When::restate_val<T, P, Q>(w: When<T, P>, to: Q → P, from: P → Q, h: Q): w.restate(to, from).val(h) = w.val(to(h)) {
+theorem When::restate_val<T, P, Q>(w: When<T, P>, to: Q → P, from: P → Q, h: Q): w.restate(to, from).val(holds := h) = w.val(holds := to(h)) {
     match w {
         Present(_, _) => refl,
         Absent(fails) => false_elim(fails(to(h))),
@@ -153,7 +153,7 @@ theorem When::is_present_iff<T, P>(w: When<T, P>): w.is_present() = True ↔ P {
 
 // The same, through `option`: `Some` exactly when `P`, and then its value is
 // the one `val` takes.
-theorem When::option_val<T, P>(w: When<T, P>, h: P): w.option() = Some(w.val(h)) {
+theorem When::option_val<T, P>(w: When<T, P>, h: P): w.option() = Some(w.val(holds := h)) {
     match w {
         Present(_, _) => refl,
         Absent(fails) => false_elim(fails(h)),
@@ -165,7 +165,7 @@ theorem When::option_some_iff<T, P>(w: When<T, P>): (∃ v: T, w.option() = Some
             Present(_, holds) => λ _ => holds,
             Absent(_) => λ no => Option::none_ne_some(s.witness, no, P),
         })(s.proof),
-        mpr := λ h => Exists(witness := w.val(h), proof := When::option_val(w, h)))
+        mpr := λ h => Exists(witness := w.val(holds := h), proof := When::option_val(w, h)))
 }
 
 // A refuted condition leaves nothing.
@@ -180,8 +180,8 @@ theorem When::option_none<T, P>(w: When<T, P>, fails: ¬P): w.option() = None {
 // not look at its proof (`same`: `Vec::at` and checked arithmetic pass
 // `refl`). Without `same` the two sides take `f` at two proofs, and Heather
 // does not identify them in general (docs/when-design.md §7).
-theorem When::of_val<P: Decide, T>(f: P → T, same: (a, b: P) → f(a) = f(b), h: P): When::of<P, T>(f).val(h) = f(h) {
-    When::of_cases<P, T>(f, λ w => w.val(h) = f(h),
+theorem When::of_val<P: Decide, T>(f: P → T, same: (a, b: P) → f(a) = f(b), h: P): When::of<P, T>(f).val(holds := h) = f(h) {
+    When::of_cases<P, T>(f, λ w => w.val(holds := h) = f(h),
         λ holds => same(holds, h),
         λ fails => false_elim(fails(h)))
 }
