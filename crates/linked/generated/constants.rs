@@ -10,3 +10,6 @@ pub const SHA256_CONTEXT_BYTES: u32 = 328;
 
 /// `SHA256_DIGEST_AT` of `lib/native/crypto/sha256_context.hthr`.
 pub const SHA256_DIGEST_AT: u32 = 0;
+
+/// `REFUSAL_AT_BITS` of `lib/lang/lexer/lexer_span.hthr`.
+pub const REFUSAL_AT_BITS: u32 = 48;

@@ -233,9 +233,9 @@ fn a_token_at_an_unmapped_page_is_scanned_to_the_spans_end_only() {
     // after it.
     let page = [b'a'; PAGE];
     let span = pages.ending_at_the_boundary(&page);
-    assert_eq!(scanner::token(span, 0, 0), Some((scanner::Kind::Ident.code(), PAGE)));
-    assert_eq!(scanner::token(span, PAGE - 1, 0), Some((scanner::Kind::Ident.code(), PAGE)));
-    assert_eq!(scanner::token(span, PAGE, 0), None);
+    assert_eq!(scanner::token(span, 0, 0), Ok((scanner::Kind::Ident.code(), PAGE)));
+    assert_eq!(scanner::token(span, PAGE - 1, 0), Ok((scanner::Kind::Ident.code(), PAGE)));
+    assert_eq!(scanner::token(span, PAGE, 0), Err((1, PAGE)));
 }
 
 /// What `raise_span` leaves and answers, in plain Rust: the bytes from
@@ -675,8 +675,13 @@ fn the_scanners_loop_at_both_stack_alignments() {
         let text = text.as_bytes();
         for at in 0..=text.len() as u64 + 1 {
             for previous in [0, scanner::Kind::Ident.code()] {
-                // The word `scanner::token` reads apart: the kind above the end.
-                let expected = scanner::token(text, at as usize, previous).map_or(0, |(kind, end)| kind << heather_linked::constants::TOKEN_END_BITS | end as u64);
+                // The word `scanner::token` reads apart: the kind above the
+                // end, or the reason above the offset refused at.
+                use heather_linked::constants::{REFUSAL_AT_BITS, TOKEN_END_BITS};
+                let expected = match scanner::token(text, at as usize, previous) {
+                    Ok((kind, end)) => kind << TOKEN_END_BITS | end as u64,
+                    Err((reason, refused)) => reason << REFUSAL_AT_BITS | refused as u64,
+                };
                 let what = String::from_utf8_lossy(text);
                 assert_eq!(entered!(0, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, the platform's alignment");
                 assert_eq!(entered!(8, scan_token, text, at, previous), (expected, KEPT), "{what:?} from {at}, RSP eight lower");

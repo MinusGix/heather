@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [self-lexer,nh-library]
 blocked-by: [heather-lexer-evaluated, native-library-exports-design]
 created: 2026-11-10
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 Stage L3 of `docs/native-lexer-crypto-roadmap.md` §3: Heather's scanner,
@@ -68,3 +68,4 @@ checked-in artifact to `lib/lang/lexer.hthr`.
   What is left before the default can move: the speed ([[linked-scanner-speed-unmeasured]]; with the switch every token is also read once by the Rust lexer for its value, so the switch costs more than the scan alone), the values in Heather ([[heather-lexer-evaluated]]), and the refusal's message from Heather. The done-when here asks for the token stream on every file under `lib/` and a green suite with the switch on: the first holds by the tests above; the second is a suite run under `HEATHER_LEXER=linked`, recorded below when it has been made.
 - 2026-11-12: Filed from the switch: [[lex-while-eof-position-by-kind]].
 - 2026-11-12: The binary now links what it generates, which a merge conflict in `generated/` turns into a build that cannot repair itself: [[linked-assembly-bootstrap]] has the recovery (restore a complete file, build, `scripts/linked`).
+- 2026-11-14: A refusal is the scanner's now ([[linked-scanner-refusals-and-token-loop]]): `scan_token` answers a reason and the offset refused at, the automaton naming the reason on the edge that refuses, and `lex_scanned` words it with the Rust lexer's own message builders (`ScanRefusal`) instead of lexing the file again. A value the span's reading refuses is the answer too. The Scope's "Rust re-lexes the file with its own lexer for the message" is retired.

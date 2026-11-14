@@ -23,6 +23,11 @@ fn lexer_states() → List<u64> {
         HEX_FRAC_BAD, FRAC_MARK, FRAC_SIGN, BAD_MARK, BAD_SIGN, STR, STR_ESC, STR_U, STR_BRACE, STR_HEX, CHR,
         CHR_3, CHR_2, CHR_1, CHR_CLOSE, CHR_ESC, CHR_U, CHR_BRACE, CHR_HEX, LEAD_CE, LEAD_C2, SLOT, SLOT_E2,
         SLOT_82, LEAD_E2, SUP_MINUS, SUP_LEAD, SUP_ONE, ARROWS, RELATIONS, LATTICE, BRACKETS, OPERATORS,
+        DEC_FRAC_MARK, DEC_FRAC_SIGN, SUF_ZEROS, CHR_MORE, CHR_MORE_ESC, CHR_MORE_U, CHR_MORE_BRACE,
+        CHR_MORE_HEX, FAIL_BANG_EQ, FAIL_DIGIT, FAIL_MARK, FAIL_SIGNED_MARK, FAIL_LEADING_UNDERSCORE,
+        FAIL_UNDERSCORE, FAIL_NO_DIGITS, FAIL_AFTER, FAIL_AFTER_MARK, FAIL_AFTER_SIGNED_MARK,
+        FAIL_AFTER_UNDERSCORE, FAIL_LEADING_ZEROS, FAIL_FRACTION_UNDERSCORE, FAIL_UNTERMINATED,
+        FAIL_CHAR_COUNT, FAIL_ESCAPE_END, FAIL_ESCAPE, FAIL_ESCAPE_BRACE, FAIL_ESCAPE_HEX, FAIL_NOT_UTF8,
         DONE_CHAR, DONE_STR, DONE_LPAREN, DONE_RPAREN, DONE_LBRACE, DONE_RBRACE, DONE_COMMA, DONE_SEMI,
         DONE_AT, DONE_DOT, DONE_PLUS_PLUS, DONE_STAR, DONE_LT_EQ, DONE_GT, DONE_LBRACKET, DONE_RBRACKET,
         DONE_LSEMANTIC, DONE_RSEMANTIC, DONE_LANGLE, DONE_RANGLE, DONE_PERCENT, DONE_SHL, DONE_SHR,
@@ -38,7 +43,7 @@ fn lexer_states() → List<u64> {
 fn lexer_stops(states: List<u64>) → Bool {
     match states {
         Nil => True,
-        Cons(s, rest) => (scan_step(s, END).eq_bit(DEAD) || scan_step(s, END).eq_bit(FAIL)) && lexer_stops(rest),
+        Cons(s, rest) => (scan_step(s, END).eq_bit(DEAD) || scan_step(s, END).band(255).eq_bit(FAIL)) && lexer_stops(rest),
     }
 }
 
@@ -127,47 +132,47 @@ theorem lexer_probe_18(): Scanned::of_text("@ . ; ! * ^ % $ / [ ] { }") =
 { refl }
 
 theorem lexer_probe_19(): Scanned::of_text("x 12abc") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_DIGIT, 4)
 { refl }
 
 theorem lexer_probe_20(): Scanned::of_text("a != b") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_BANG_EQ, 3)
 { refl }
 
 theorem lexer_probe_21(): Scanned::of_text("s \"abc") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_UNTERMINATED, 6)
 { refl }
 
 theorem lexer_probe_22(): Scanned::of_text("'ab'") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_CHAR_COUNT, 3)
 { refl }
 
 theorem lexer_probe_23(): Scanned::of_text("0x") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_NO_DIGITS, 2)
 { refl }
 
 theorem lexer_probe_24(): Scanned::of_text("1.5e") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_AFTER_MARK, 4)
 { refl }
 
 theorem lexer_probe_25(): Scanned::of_text("x δ") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_UNEXPECTED, 2)
 { refl }
 
 theorem lexer_probe_26(): Scanned::of_text("0x1.8_p3") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_FRACTION_UNDERSCORE, 7)
 { refl }
 
 theorem lexer_probe_27(): Scanned::of_text("\"\\q\"") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_ESCAPE, 2)
 { refl }
 
 theorem lexer_probe_28(): Scanned::of_text("a # b") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_UNEXPECTED, 2)
 { refl }
 
 theorem lexer_probe_29(): Scanned::of_text("1__0") =
-    Scanned::Refused(0)
+    Scanned::Refused(0, REFUSED_UNDERSCORE, 2)
 { refl }
 
 theorem lexer_probe_30(): Scanned::of_text("a ⊕ ~b 42u64 0x1fi8 0u0") =
@@ -175,9 +180,25 @@ theorem lexer_probe_30(): Scanned::of_text("a ⊕ ~b 42u64 0x1fi8 0u0") =
 { refl }
 
 theorem lexer_probe_31(): Scanned::of_text("x 42u") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_MARK, 5)
 { refl }
 
 theorem lexer_probe_32(): Scanned::of_text("x 1u08") =
-    Scanned::Refused(2)
+    Scanned::Refused(2, REFUSED_LEADING_ZEROS, 6)
+{ refl }
+
+theorem lexer_probe_33(): Scanned::of_text("x 1.5e+") =
+    Scanned::Refused(2, REFUSED_AFTER_SIGNED_MARK, 7)
+{ refl }
+
+theorem lexer_probe_34(): Scanned::of_text("0x_1 0o") =
+    Scanned::Refused(0, REFUSED_LEADING_UNDERSCORE, 2)
+{ refl }
+
+theorem lexer_probe_35(): Scanned::of_text("\"\\u41\"") =
+    Scanned::Refused(0, REFUSED_ESCAPE_BRACE, 3)
+{ refl }
+
+theorem lexer_probe_36(): Scanned::of_text("'a\\qb'") =
+    Scanned::Refused(0, REFUSED_ESCAPE, 3)
 { refl }

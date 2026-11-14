@@ -32,16 +32,24 @@ theorem span_no_shift_after_a_name(): span_probe(">>", 0, KIND_IDENT) = token_wo
 // A comment with no newline ends where the source does.
 theorem span_comment(): span_probe("// c", 0, 0) = token_word(KIND_COMMENT, 4) { refl }
 
-// Refusals are zero: a string never closed, a numeral run into a name,
-// and nothing at all at the end or past it.
-theorem span_unclosed(): span_probe("\"ab", 0, 0) = 0 { refl }
-theorem span_bad_numeral(): span_probe("12abc", 0, 0) = 0 { refl }
-theorem span_at_the_end(): span_probe("ab", 2, KIND_IDENT) = 0 { refl }
-theorem span_past_the_end(): span_probe("ab", 9, 0) = 0 { refl }
-theorem span_empty(): span_probe("", 0, 0) = 0 { refl }
+// A refusal is its reason and the offset refused at: a string never
+// closed, at the end; a numeral run into a name, at the letter; a `_`
+// with no digit after it, at what follows; and where nothing at all is
+// accepted, at the end or past it, the first character, which begins no
+// token.
+theorem span_unclosed(): span_probe("\"ab", 0, 0) = refusal_word(REFUSED_UNTERMINATED, 3) { refl }
+theorem span_bad_numeral(): span_probe("12abc", 0, 0) = refusal_word(REFUSED_DIGIT, 2) { refl }
+theorem span_lone_underscore(): span_probe("x 1_;", 2, KIND_SPACE) = refusal_word(REFUSED_UNDERSCORE, 4) { refl }
+theorem span_unexpected(): span_probe("a # b", 2, KIND_SPACE) = refusal_word(REFUSED_UNEXPECTED, 2) { refl }
+theorem span_at_the_end(): span_probe("ab", 2, KIND_IDENT) = refusal_word(REFUSED_UNEXPECTED, 2) { refl }
+theorem span_past_the_end(): span_probe("ab", 9, 0) = refusal_word(REFUSED_UNEXPECTED, 9) { refl }
+theorem span_empty(): span_probe("", 0, 0) = refusal_word(REFUSED_UNEXPECTED, 0) { refl }
+
+// No refusal is a token: the top byte, a token's kind, is zero.
+theorem span_refusal_is_no_token(): span_probe("12abc", 0, 0).shift_right(TOKEN_END_BITS) = 0 { refl }
 
 // The specification's scan at the same place, as the same word
 // (`scan_token_longest` says so of every source; this is one).
 theorem span_assign(): span_probe("x := 1", 2, KIND_SPACE) = token_word(KIND_COLON_EQ, 4) { refl }
 theorem span_assign_specified():
-    Accepted::word(Accepted::longest(scan_begin(KIND_SPACE), utf8::encode("x := 1").drop(2), 2, None)) = token_word(KIND_COLON_EQ, 4) { refl }
+    Accepted::word(Accepted::longest(scan_begin(KIND_SPACE), utf8::encode("x := 1").drop(2), 2, Cut::Refusal(REFUSED_UNEXPECTED, 2))) = token_word(KIND_COLON_EQ, 4) { refl }

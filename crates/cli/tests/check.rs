@@ -100,9 +100,9 @@ fn the_linked_lexer_changes_nothing_but_who_cuts_the_tokens() {
         let ((rust_report, rust_err), (linked_report, linked_err)) = (lexer_report(&rust), lexer_report(&linked));
         assert_eq!(rust_err, linked_err, "{args:?}");
         assert_eq!(rust_report, "lexer: the Rust lexer (no scanner installed)");
-        // Every source lexes, so every one is the scanner's cut.
+        // Every source is the scanner's to answer for.
         let cut: u64 = linked_report
-            .strip_prefix("lexer: the linked scanner cut ")
+            .strip_prefix("lexer: the linked scanner answered for ")
             .and_then(|rest| rest.strip_suffix(" sources; 0 were left to the Rust lexer"))
             .unwrap_or_else(|| panic!("{args:?}: {linked_report}"))
             .parse()
@@ -111,11 +111,12 @@ fn the_linked_lexer_changes_nothing_but_who_cuts_the_tokens() {
     }
 }
 
-/// A source that does not lex is the Rust lexer's to refuse, so the message
-/// and its place are the same with the switch on.
+/// A source that does not lex is refused by the scanner, for a reason the
+/// Rust lexer words, so the message and its place are the same with the
+/// switch on and the source is not lexed a second time.
 #[test]
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-fn the_linked_lexer_leaves_a_refusal_to_the_rust_lexer() {
+fn the_linked_lexer_refuses_as_the_rust_lexer_does() {
     let dir = std::env::temp_dir().join(format!("heather-linked-lexer-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a directory");
     let file = dir.join("unlexable.hthr");
@@ -129,7 +130,7 @@ fn the_linked_lexer_leaves_a_refusal_to_the_rust_lexer() {
     let ((_, rust_err), (linked_report, linked_err)) = (lexer_report(&rust), lexer_report(&linked));
     assert!(rust_err.contains("unlexable.hthr:2:"), "{rust_err}");
     assert_eq!(rust_err, linked_err);
-    assert!(!linked_report.ends_with(" 0 were left to the Rust lexer"), "{linked_report}");
+    assert!(linked_report.ends_with(" 0 were left to the Rust lexer"), "{linked_report}");
 }
 
 /// A value the switch does not know is said, and the Rust lexer runs.

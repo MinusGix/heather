@@ -23,10 +23,13 @@
 // and `a::` is a name and a `::` unless a name follows). `FAIL` is a refusal
 // that no earlier accept excuses: `12abc` is refused, not cut into `12` and
 // `abc`. After the last byte the loop gives `END` once; every state answers
-// it with `DEAD` or `FAIL`.
+// it with `DEAD` or `FAIL`. A state that refuses says why (`REFUSED_*`), and
+// the reason, with where the token starts and where it was refused, is all
+// the Rust lexer's message for it needs.
 //
 // A state is a word: its number in the low byte and, above it, the kind it
-// accepts (zero for none), so `scan_accept` is a shift. A token that ends
+// accepts (zero for none), or for `FAIL` the reason, so `scan_accept` is a
+// shift. A token that ends
 // where it is first accepted (`(`, `->`, a closed string) needs no state of
 // its own: it is state 1 with its kind above, which has no way on.
 //
@@ -167,7 +170,10 @@ def KIND_TILDE: u64 = 70;
 
 // No way on: the token is the last one accepted.
 def DEAD: u64 = 0;
-// A refusal no earlier accept excuses. It is its own successor.
+// A refusal no earlier accept excuses. It is its own successor. A state
+// that refuses is `FAIL` in the low byte and, above it where an accepting
+// state has its kind, the reason it refuses (`REFUSED_*` below), so
+// `scan_failed` reads the low byte and `scan_accept` the reason.
 def FAIL: u64 = 2;
 // What the loop gives after the last byte.
 def END: u64 = 256;
@@ -252,6 +258,100 @@ def LATTICE: u64 = 0x0092;
 def BRACKETS: u64 = 0x0093;
 def OPERATORS: u64 = 0x0098;
 
+// Where the decimal fraction's exponent letter was read (`1.5e`), apart
+// from `EXP_MARK`: a letter that no exponent follows is refused as a
+// character after the literal here, and as a digit of the numeral there.
+def DEC_FRAC_MARK: u64 = 0x003e;
+def DEC_FRAC_SIGN: u64 = 0x003f;
+// A width suffix's leading zero and the digits after it, which the suffix
+// is refused for once they end.
+def SUF_ZEROS: u64 = 0x0046;
+// A character literal past its one scalar value: refused at its closing
+// quote, which this family runs to so the refusal can say how many it holds.
+def CHR_MORE: u64 = 0x00a0;
+def CHR_MORE_ESC: u64 = 0x00a1;
+def CHR_MORE_U: u64 = 0x00a2;
+def CHR_MORE_BRACE: u64 = 0x00a3;
+def CHR_MORE_HEX: u64 = 0x00a4;
+
+// ---------------------------------------------------------------------------
+// Refusals: why a source is refused, each the Rust lexer's message
+// (`crates/syntax/src/lexer.rs`, `ScanRefusal`, which numbers them as these
+// do and builds the message from the reason, where the token starts and
+// where it was refused). Where the scan refused is the offset of the byte
+// that took the automaton to `FAIL`, or the source's length where `END`
+// did; a reason says what the message is about in terms of that offset.
+
+// Nothing was accepted from where the token starts: the character there
+// begins no token. The loop's answer before any state accepts.
+def REFUSED_UNEXPECTED: u64 = 1;
+// `!=`, refused since `≠` is the only spelling of inequality.
+def REFUSED_BANG_EQ: u64 = 2;
+// The byte refused is a letter or digit that is no digit of the numeral's
+// radix.
+def REFUSED_DIGIT: u64 = 3;
+// The byte before the one refused is a letter that began nothing (an
+// exponent letter no digit follows, a suffix letter no width does), refused
+// as a digit; the byte two before, after a sign.
+def REFUSED_MARK: u64 = 4;
+def REFUSED_SIGNED_MARK: u64 = 5;
+// The byte refused is a `_` before any digit (`0x_1`); the byte before the
+// one refused is a `_` no digit follows.
+def REFUSED_LEADING_UNDERSCORE: u64 = 6;
+def REFUSED_UNDERSCORE: u64 = 7;
+// A radix prefix with no digit after it.
+def REFUSED_NO_DIGITS: u64 = 8;
+// A character a name could continue with, glued to a finished literal: the
+// byte refused, the exponent letter before it, the exponent letter two
+// before it, the `_` before it.
+def REFUSED_AFTER: u64 = 9;
+def REFUSED_AFTER_MARK: u64 = 10;
+def REFUSED_AFTER_SIGNED_MARK: u64 = 11;
+def REFUSED_AFTER_UNDERSCORE: u64 = 12;
+// A width suffix written with a leading zero, refused where its digits end.
+def REFUSED_LEADING_ZEROS: u64 = 13;
+// A hexadecimal fraction with a misplaced `_`, which the exponent refused
+// confirms as a literal.
+def REFUSED_FRACTION_UNDERSCORE: u64 = 14;
+// A character or string literal the end of a line or of the source closes.
+def REFUSED_UNTERMINATED: u64 = 15;
+// A character literal of no scalar value or of more than one, refused at
+// its closing quote.
+def REFUSED_CHAR_COUNT: u64 = 16;
+// An escape: the source ends after its `\`; the byte refused follows a `\`
+// and begins no escape; it follows `\u` and is not `{`; it is in a
+// `\u{…}` and is no hexadecimal digit.
+def REFUSED_ESCAPE_END: u64 = 17;
+def REFUSED_ESCAPE: u64 = 18;
+def REFUSED_ESCAPE_BRACE: u64 = 19;
+def REFUSED_ESCAPE_HEX: u64 = 20;
+// A byte that cannot be where it is in UTF-8, which a source given as text
+// never holds.
+def REFUSED_NOT_UTF8: u64 = 21;
+
+// The states that refuse, one for each reason a byte can be refused for.
+def FAIL_BANG_EQ: u64 = 0x0202;
+def FAIL_DIGIT: u64 = 0x0302;
+def FAIL_MARK: u64 = 0x0402;
+def FAIL_SIGNED_MARK: u64 = 0x0502;
+def FAIL_LEADING_UNDERSCORE: u64 = 0x0602;
+def FAIL_UNDERSCORE: u64 = 0x0702;
+def FAIL_NO_DIGITS: u64 = 0x0802;
+def FAIL_AFTER: u64 = 0x0902;
+def FAIL_AFTER_MARK: u64 = 0x0a02;
+def FAIL_AFTER_SIGNED_MARK: u64 = 0x0b02;
+def FAIL_AFTER_UNDERSCORE: u64 = 0x0c02;
+def FAIL_LEADING_ZEROS: u64 = 0x0d02;
+def FAIL_FRACTION_UNDERSCORE: u64 = 0x0e02;
+def FAIL_UNTERMINATED: u64 = 0x0f02;
+def FAIL_CHAR_COUNT: u64 = 0x1002;
+def FAIL_ESCAPE_END: u64 = 0x1102;
+def FAIL_ESCAPE: u64 = 0x1202;
+def FAIL_ESCAPE_BRACE: u64 = 0x1302;
+def FAIL_ESCAPE_HEX: u64 = 0x1402;
+def FAIL_NOT_UTF8: u64 = 0x1502;
+
+// ---------------------------------------------------------------------------
 // A finished token of each kind that ends where it is first accepted: state 1,
 // which has no way on.
 def DONE_CHAR: u64 = 0x0401;
@@ -312,8 +412,8 @@ def DONE_TILDE: u64 = 0x4601;
 // The families: each state's way on, one byte further.
 
 // The three states with no way on: `DEAD`, a finished token, and `FAIL`,
-// which stays a refusal.
-runtime fn step_stop(s, b: u64) → u64 { if s.eq_bit(FAIL) { FAIL } else { DEAD } }
+// which stays the refusal it is.
+runtime fn step_stop(s, b: u64) → u64 { if s.band(255).eq_bit(FAIL) { s } else { DEAD } }
 
 // The start of a token is the one state with a way on for every kind of
 // first byte, more than one function of a size that certifies holds. So it
@@ -488,7 +588,7 @@ runtime fn step_doubles(s, b: u64) → u64 {
         // After `!`: `!=` is refused, since `≠` is the only spelling of
         // inequality.
         // Bytes: 61 `=`.
-        if b.eq_bit(61) { FAIL }
+        if b.eq_bit(61) { FAIL_BANG_EQ }
         else { DEAD }
     } else if s.eq_bit(PIPE) {
         // After `|`: `|-` or `||`.
@@ -526,7 +626,7 @@ runtime fn step_decimal(s, b: u64) → u64 {
         else if b.eq_bit(98) { BIN_START }
         else if b.bor(32).eq_bit(101) { EXP_MARK }
         else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
         else if b.eq_bit(46) { DEC_DOT }
         else { DEAD }
     } else if s.eq_bit(DEC) {
@@ -538,15 +638,17 @@ runtime fn step_decimal(s, b: u64) → u64 {
         else if b.eq_bit(95) { DEC_UNDER }
         else if b.bor(32).eq_bit(101) { EXP_MARK }
         else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
         else if b.eq_bit(46) { DEC_DOT }
         else { DEAD }
     } else if s.eq_bit(DEC_UNDER) {
         // After a `_` in a decimal numeral: it sits between two digits,
-        // or before an exponent.
+        // or before an exponent. A letter after it is a digit refused, and
+        // anything else leaves the `_` with no digit after it.
         if b.sub(48).unsigned_lt_bit(10) { DEC }
         else if b.bor(32).eq_bit(101) { EXP_MARK }
-        else { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
+        else { FAIL_UNDERSCORE }
     } else if s.eq_bit(DEC_DOT) {
         // After a decimal numeral and a `.`: a digit makes it a
         // fraction, and anything else leaves the point to the next
@@ -565,36 +667,47 @@ runtime fn step_fraction(s, b: u64) → u64 {
         // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(10) { DEC_FRAC }
         else if b.eq_bit(95) { DEC_FRAC_UNDER }
-        else if b.bor(32).eq_bit(101) { EXP_MARK }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
+        else if b.bor(32).eq_bit(101) { DEC_FRAC_MARK }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_AFTER }
         else { DEAD }
     } else if s.eq_bit(DEC_FRAC_UNDER) {
         // After a `_` in a decimal fraction: only a digit may follow.
         if b.sub(48).unsigned_lt_bit(10) { DEC_FRAC }
-        else { FAIL }
+        else { FAIL_AFTER_UNDERSCORE }
     } else if s.eq_bit(EXP_MARK) {
         // After an exponent letter that a numeral cannot otherwise hold:
         // a digit or a signed digit must follow.
         // Bytes: 43 `+`, 45 `-`.
         if b.sub(48).unsigned_lt_bit(10) { EXP }
         else if b.eq_bit(43) || b.eq_bit(45) { EXP_SIGN }
-        else { FAIL }
+        else { FAIL_MARK }
     } else if s.eq_bit(EXP_SIGN) {
         // After an exponent letter and its sign.
         if b.sub(48).unsigned_lt_bit(10) { EXP }
-        else { FAIL }
+        else { FAIL_SIGNED_MARK }
     } else if s.eq_bit(EXP) {
         // In an exponent's digits. Nothing a name could continue with
         // may follow the literal.
         // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(10) { EXP }
         else if b.eq_bit(95) { EXP_UNDER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_AFTER }
         else { DEAD }
     } else if s.eq_bit(EXP_UNDER) {
         // After a `_` in an exponent.
         if b.sub(48).unsigned_lt_bit(10) { EXP }
-        else { FAIL }
+        else { FAIL_AFTER_UNDERSCORE }
+    } else if s.eq_bit(DEC_FRAC_MARK) {
+        // After a decimal fraction's exponent letter, which is the
+        // literal's end if no exponent follows it.
+        // Bytes: 43 `+`, 45 `-`.
+        if b.sub(48).unsigned_lt_bit(10) { EXP }
+        else if b.eq_bit(43) || b.eq_bit(45) { DEC_FRAC_SIGN }
+        else { FAIL_AFTER_MARK }
+    } else if s.eq_bit(DEC_FRAC_SIGN) {
+        // After a decimal fraction's exponent letter and its sign.
+        if b.sub(48).unsigned_lt_bit(10) { EXP }
+        else { FAIL_AFTER_SIGNED_MARK }
     } else {
         DEAD
     }
@@ -607,38 +720,48 @@ runtime fn step_fraction(s, b: u64) → u64 {
 runtime fn step_octal(s, b: u64) → u64 {
     if s.eq_bit(OCT_START) {
         // After `0o`: at least one digit.
+        // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(8) { OCT }
-        else { FAIL }
+        else if b.eq_bit(95) { FAIL_LEADING_UNDERSCORE }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
+        else { FAIL_NO_DIGITS }
     } else if s.eq_bit(OCT) {
         // In an octal numeral.
         // Bytes: 95 `_`, 117 `u`, 105 `i`.
         if b.sub(48).unsigned_lt_bit(8) { OCT }
         else if b.eq_bit(95) { OCT_UNDER }
         else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
         else { DEAD }
     } else if s.eq_bit(OCT_UNDER) {
         // After a `_` in an octal numeral.
         if b.sub(48).unsigned_lt_bit(8) { OCT }
-        else { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
+        else { FAIL_UNDERSCORE }
     } else if s.eq_bit(SUF_LETTER) {
         // After a numeral and a suffix's letter: the width's first digit,
         // since `42u` is no numeral.
         if b.eq_bit(48) { SUF_ZERO }
         else if b.sub(48).unsigned_lt_bit(10) { SUF }
-        else { FAIL }
+        else { FAIL_MARK }
     } else if s.eq_bit(SUF) {
         // In a width. Nothing a name could continue with may follow it.
         // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(10) { SUF }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL_AFTER }
         else { DEAD }
     } else if s.eq_bit(SUF_ZERO) {
         // A width of `0`, which no digit may follow: a width is written
-        // without leading zeros.
+        // without leading zeros, and is refused for it where its digits
+        // end.
         // Bytes: 95 `_`.
-        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL }
+        if b.sub(48).unsigned_lt_bit(10) { SUF_ZEROS }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { FAIL_AFTER }
         else { DEAD }
+    } else if s.eq_bit(SUF_ZEROS) {
+        // In a width's digits after a leading zero.
+        if b.sub(48).unsigned_lt_bit(10) { SUF_ZEROS }
+        else { FAIL_LEADING_ZEROS }
     } else {
         DEAD
     }
@@ -648,20 +771,24 @@ runtime fn step_octal(s, b: u64) → u64 {
 runtime fn step_binary(s, b: u64) → u64 {
     if s.eq_bit(BIN_START) {
         // After `0b`: at least one digit.
+        // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(2) { BIN }
-        else { FAIL }
+        else if b.eq_bit(95) { FAIL_LEADING_UNDERSCORE }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
+        else { FAIL_NO_DIGITS }
     } else if s.eq_bit(BIN) {
         // In a binary numeral.
         // Bytes: 95 `_`, 117 `u`, 105 `i`.
         if b.sub(48).unsigned_lt_bit(2) { BIN }
         else if b.eq_bit(95) { BIN_UNDER }
         else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
         else { DEAD }
     } else if s.eq_bit(BIN_UNDER) {
         // After a `_` in a binary numeral.
         if b.sub(48).unsigned_lt_bit(2) { BIN }
-        else { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) { FAIL_DIGIT }
+        else { FAIL_UNDERSCORE }
     } else {
         DEAD
     }
@@ -671,8 +798,11 @@ runtime fn step_binary(s, b: u64) → u64 {
 runtime fn step_hex(s, b: u64) → u64 {
     if s.eq_bit(HEX_START) {
         // After `0x`: at least one digit.
+        // Bytes: 95 `_`.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { HEX }
-        else { FAIL }
+        else if b.eq_bit(95) { FAIL_LEADING_UNDERSCORE }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
+        else { FAIL_NO_DIGITS }
     } else if s.eq_bit(HEX) {
         // In a hexadecimal numeral. `p` or `P` is its exponent letter,
         // `u` or `i` (no digit here) begins a width suffix, and a `.` may
@@ -682,14 +812,15 @@ runtime fn step_hex(s, b: u64) → u64 {
         else if b.eq_bit(95) { HEX_UNDER }
         else if b.bor(32).eq_bit(112) { EXP_MARK }
         else if b.eq_bit(117) || b.eq_bit(105) { SUF_LETTER }
-        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
         else if b.eq_bit(46) { HEX_DOT }
         else { DEAD }
     } else if s.eq_bit(HEX_UNDER) {
         // After a `_` in a hexadecimal numeral.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { HEX }
         else if b.bor(32).eq_bit(112) { EXP_MARK }
-        else { FAIL }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) { FAIL_DIGIT }
+        else { FAIL_UNDERSCORE }
     } else if s.eq_bit(HEX_DOT) {
         // After a hexadecimal numeral and a `.`.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { HEX_FRAC }
@@ -750,12 +881,12 @@ runtime fn step_hex_exponent(s, b: u64) → u64 {
         // After an ill-formed hexadecimal fraction and `p`: the exponent
         // that would confirm it refuses it.
         // Bytes: 43 `+`, 45 `-`.
-        if b.sub(48).unsigned_lt_bit(10) { FAIL }
+        if b.sub(48).unsigned_lt_bit(10) { FAIL_FRACTION_UNDERSCORE }
         else if b.eq_bit(43) || b.eq_bit(45) { BAD_SIGN }
         else { DEAD }
     } else if s.eq_bit(BAD_SIGN) {
         // After an ill-formed hexadecimal fraction, `p` and a sign.
-        if b.sub(48).unsigned_lt_bit(10) { FAIL }
+        if b.sub(48).unsigned_lt_bit(10) { FAIL_FRACTION_UNDERSCORE }
         else { DEAD }
     } else {
         DEAD
@@ -770,9 +901,9 @@ runtime fn step_string(s, b: u64) → u64 {
         // or the end.
         if b.eq_bit(34) { DONE_STR }
         else if b.eq_bit(92) { STR_ESC }
-        else if b.eq_bit(10) { FAIL }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
         else if b.unsigned_lt_bit(256) { STR }
-        else { FAIL }
+        else { FAIL_UNTERMINATED }
     } else if s.eq_bit(STR_ESC) {
         // After `\` in a string: `n t r \ ' " 0`, or `u` (117) for a
         // braced scalar value.
@@ -780,22 +911,23 @@ runtime fn step_string(s, b: u64) → u64 {
         // `0`.
         if b.eq_bit(110) || b.eq_bit(116) || b.eq_bit(114) || b.eq_bit(92) || b.eq_bit(39) || b.eq_bit(34) || b.eq_bit(48) { STR }
         else if b.eq_bit(117) { STR_U }
-        else { FAIL }
+        else if b.unsigned_lt_bit(256) { FAIL_ESCAPE }
+        else { FAIL_ESCAPE_END }
     } else if s.eq_bit(STR_U) {
         // After `\u` in a string.
         // Bytes: 123 `{`.
         if b.eq_bit(123) { STR_BRACE }
-        else { FAIL }
+        else { FAIL_ESCAPE_BRACE }
     } else if s.eq_bit(STR_BRACE) {
         // After `\u{` in a string: at least one hexadecimal digit.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { STR_HEX }
-        else { FAIL }
+        else { FAIL_ESCAPE_HEX }
     } else if s.eq_bit(STR_HEX) {
         // In the digits of a `\u{…}` escape in a string.
         // Bytes: 125 `}`.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { STR_HEX }
         else if b.eq_bit(125) { STR }
-        else { FAIL }
+        else { FAIL_ESCAPE_HEX }
     } else {
         DEAD
     }
@@ -808,33 +940,38 @@ runtime fn step_char(s, b: u64) → u64 {
         // first byte says how many continuation bytes follow.
         // Bytes: 92 `\`, 39 `'`.
         if b.eq_bit(92) { CHR_ESC }
-        else if b.eq_bit(39) { FAIL }
-        else if b.eq_bit(10) { FAIL }
+        else if b.eq_bit(39) { FAIL_CHAR_COUNT }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
         else if b.unsigned_lt_bit(128) { CHR_CLOSE }
         else if b.sub(0xc2).unsigned_lt_bit(30) { CHR_1 }
         else if b.sub(0xe0).unsigned_lt_bit(16) { CHR_2 }
         else if b.sub(0xf0).unsigned_lt_bit(5) { CHR_3 }
-        else { FAIL }
+        else if b.unsigned_lt_bit(256) { FAIL_NOT_UTF8 }
+        else { FAIL_UNTERMINATED }
     } else if s.eq_bit(CHR_3) {
         // In a character literal's scalar value, three continuation
         // bytes to go.
         if b.sub(0x80).unsigned_lt_bit(64) { CHR_2 }
-        else { FAIL }
+        else { FAIL_NOT_UTF8 }
     } else if s.eq_bit(CHR_2) {
         // In a character literal's scalar value, two continuation bytes
         // to go.
         if b.sub(0x80).unsigned_lt_bit(64) { CHR_1 }
-        else { FAIL }
+        else { FAIL_NOT_UTF8 }
     } else if s.eq_bit(CHR_1) {
         // In a character literal's scalar value, one continuation byte
         // to go.
         if b.sub(0x80).unsigned_lt_bit(64) { CHR_CLOSE }
-        else { FAIL }
+        else { FAIL_NOT_UTF8 }
     } else if s.eq_bit(CHR_CLOSE) {
-        // After a character literal's one scalar value: only the closing
-        // `'` (39).
+        // After a character literal's one scalar value: the closing `'`
+        // (39), or more of the literal, which is refused at its close.
+        // Bytes: 92 `\`.
         if b.eq_bit(39) { DONE_CHAR }
-        else { FAIL }
+        else if b.eq_bit(92) { CHR_MORE_ESC }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
+        else if b.unsigned_lt_bit(256) { CHR_MORE }
+        else { FAIL_UNTERMINATED }
     } else {
         DEAD
     }
@@ -848,22 +985,65 @@ runtime fn step_char_escape(s, b: u64) → u64 {
         // `0`, 117 `u`.
         if b.eq_bit(110) || b.eq_bit(116) || b.eq_bit(114) || b.eq_bit(92) || b.eq_bit(39) || b.eq_bit(34) || b.eq_bit(48) { CHR_CLOSE }
         else if b.eq_bit(117) { CHR_U }
-        else { FAIL }
+        else if b.unsigned_lt_bit(256) { FAIL_ESCAPE }
+        else { FAIL_ESCAPE_END }
     } else if s.eq_bit(CHR_U) {
         // After `\u` in a character literal.
         // Bytes: 123 `{`.
         if b.eq_bit(123) { CHR_BRACE }
-        else { FAIL }
+        else { FAIL_ESCAPE_BRACE }
     } else if s.eq_bit(CHR_BRACE) {
         // After `\u{` in a character literal.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { CHR_HEX }
-        else { FAIL }
+        else { FAIL_ESCAPE_HEX }
     } else if s.eq_bit(CHR_HEX) {
         // In the digits of a `\u{…}` escape in a character literal.
         // Bytes: 125 `}`.
         if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { CHR_HEX }
         else if b.eq_bit(125) { CHR_CLOSE }
-        else { FAIL }
+        else { FAIL_ESCAPE_HEX }
+    } else {
+        DEAD
+    }
+}
+
+// Character literals past their one scalar value, which are refused: the
+// literal is read to its closing quote as a string is, escapes and all, so
+// that the refusal is where the Rust lexer's is and can say how many scalar
+// values the literal holds.
+runtime fn step_char_more(s, b: u64) → u64 {
+    if s.eq_bit(CHR_MORE) {
+        // In the rest of a character literal.
+        // Bytes: 39 `'`, 92 `\`.
+        if b.eq_bit(39) { FAIL_CHAR_COUNT }
+        else if b.eq_bit(92) { CHR_MORE_ESC }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
+        else if b.unsigned_lt_bit(256) { CHR_MORE }
+        else { FAIL_UNTERMINATED }
+    } else if s.eq_bit(CHR_MORE_ESC) {
+        // After `\` in the rest of a character literal.
+        // Bytes: 110 `n`, 116 `t`, 114 `r`, 92 `\`, 39 `'`, 34 `"`, 48
+        // `0`, 117 `u`.
+        if b.eq_bit(110) || b.eq_bit(116) || b.eq_bit(114) || b.eq_bit(92) || b.eq_bit(39) || b.eq_bit(34) || b.eq_bit(48) { CHR_MORE }
+        else if b.eq_bit(117) { CHR_MORE_U }
+        else if b.unsigned_lt_bit(256) { FAIL_ESCAPE }
+        else { FAIL_ESCAPE_END }
+    } else if s.eq_bit(CHR_MORE_U) {
+        // After `\u` in the rest of a character literal.
+        // Bytes: 123 `{`.
+        if b.eq_bit(123) { CHR_MORE_BRACE }
+        else { FAIL_ESCAPE_BRACE }
+    } else if s.eq_bit(CHR_MORE_BRACE) {
+        // After `\u{` in the rest of a character literal.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { CHR_MORE_HEX }
+        else { FAIL_ESCAPE_HEX }
+    } else if s.eq_bit(CHR_MORE_HEX) {
+        // In the digits of a `\u{…}` escape in the rest of a character
+        // literal.
+        // Bytes: 125 `}`.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { CHR_MORE_HEX }
+        else if b.eq_bit(125) { CHR_MORE }
+        else { FAIL_ESCAPE_HEX }
     } else {
         DEAD
     }
@@ -1028,7 +1208,7 @@ runtime fn scan_choose(f, s, b: u64) → u64 {
             if f.unsigned_lt_bit(21) {
                 if f.unsigned_lt_bit(19) { step_char_escape(s, b) } else if f.unsigned_lt_bit(20) { step_two_byte(s, b) } else { step_three_byte(s, b) }
             } else {
-                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else { DEAD }
+                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else if f.unsigned_lt_bit(24) { step_char_more(s, b) } else { DEAD }
             }
         }
     }
@@ -1050,7 +1230,8 @@ runtime fn scan_choose(f, s, b: u64) → u64 {
 // kernel runs this function too (`lexer_tokens.hthr`).
 runtime fn scan_step(s, b: u64) → u64 { scan_choose(scan_family(s, b), s, b) }
 
-// The kind of the token that ends in a state, zero for none.
+// The kind of the token that ends in a state, zero for none; in a state
+// that refuses, the reason.
 runtime fn scan_accept(s: u64) → u64 { s.shift_right(8) }
 
 // The state a token starts in, from the kind of what was scanned before it,
