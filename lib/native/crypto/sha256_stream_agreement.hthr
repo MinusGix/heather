@@ -16,6 +16,12 @@
 // run is the specification's compression by `Sha256::run_spec`
 // (`sha256_agreement.hthr`).
 //
+// On the bytes: `Sha256::linked_digest`. A span that holds any context
+// has, after the three functions' code, the specification's digest in the
+// thirty-two bytes where the context lays its hash value
+// (`Sha256::digest_bytes`, by `Part::window_of`: the hash value's codec
+// loses nothing).
+//
 // The functions that test without evidence (`push`, `pad`) are restated
 // by their test's bit (`Sha256::pushed`, `Sha256::padded`) and the loops
 // stepped by `Bool::convoy_true`, as in `sha256_agreement.hthr`.
@@ -49,6 +55,12 @@ import sha256_filling;
 import sha256_padding;
 import sha256_stream;
 import rt;
+import pair;
+import layout;
+import stored;
+import part;
+import laid;
+import rt_held;
 
 fn Sha256::block(s: Sha256) → List<u8> { Sha2::spelled(vector_entries(s.schedule).take(16)) }
 
@@ -531,4 +543,32 @@ theorem Sha256::digest_spec(s: Sha256, message: List<u8>, mn: u64, sized: messag
     let none: List<u8> = Nil;
     let took: Sha256Took(Sha256::update(Sha256::init(s).after, message, mn).after, none ++ message) = Sha256::update_took(Sha256::init(s).after, none, message, mn, sized, Sha256::init_took(s));
     Sha256::finish_digest(Sha256::update(Sha256::init(s).after, message, mn).after, message, took)
+}
+
+// A span that holds a context has the context's digest where the hash
+// value lies.
+theorem Sha256::digest_bytes(span: List<u8>, length: u64, s: Sha256, holds: Sha256::stored().Holds(span, length, s)):
+    span.window(SHA256_DIGEST_AT, 32 + SHA256_DIGEST_AT) = Sha256::digest(s) {
+    let inside: (328 <= length.toNat()) = holds.left;
+    let own: (length.toNat() <= span.len()) = holds.right.left;
+    let fits: (328 + 0 <= span.len()) = omega;
+    let exact = Stored::u32_be().exact_array(8, refl, Stored::be_bytes(4).exact_aligned(2, Stored::exact_be_bytes(4)));
+    let read = Sha256::hash_part().window_of(exact, span, 0, fits);
+    trans(read, cong_fn(λ (c: Sha256) => Sha256::digest(c), holds.right.right))
+}
+
+// The linked hash, on the bytes: a span that holds any context, after the
+// code of `init`, `update` over the message and `finish`, has the
+// specification's digest where the context lays its hash value.
+theorem Sha256::linked_digest(span: List<u8>, s: Sha256, length: u64, message: List<u8>, mn: u64,
+    holds: Sha256::stored().Holds(span, length, s), sized: message.len() = mn.toNat()):
+    Sha256::finish::bytes(Sha256::update::bytes(Sha256::init::bytes(span, length).after, length, message, mn).after, length).after
+        .window(SHA256_DIGEST_AT, 32 + SHA256_DIGEST_AT) = Sha2::sha256().digest(message) {
+    let begun = Sha256::init::bytes(span, length).after;
+    let taken = Sha256::update::bytes(begun, length, message, mn).after;
+    let h1: Sha256::stored().Holds(begun, length, Sha256::init(s).after) = Sha256::init_holds(span, s, length, holds);
+    let h2 = Sha256::update_holds(begun, Sha256::init(s).after, length, message, mn, h1);
+    let h3 = Sha256::finish_holds(taken, Sha256::update(Sha256::init(s).after, message, mn).after, length, h2);
+    trans(Sha256::digest_bytes(Sha256::finish::bytes(taken, length).after, length, Sha256::finish(Sha256::update(Sha256::init(s).after, message, mn).after).after, h3),
+        Sha256::digest_spec(s, message, mn, sized))
 }
