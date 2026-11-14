@@ -14,7 +14,7 @@ fn alias_before(m: Nat, out: List<Nat>) → List<Nat> decreases m {
 theorem alias_before_lit(): alias_before(3, List::Nil) = [1, 2, 3] { refl }
 theorem alias_before_unfolds(m: Nat, out: List<Nat>):
     alias_before(m, out) = (match h: decide_bit<1 <= m>() { True => alias_before(m - 1, List::Cons(m, out)), False => out }) {
-    alias_before_unfold(m, out)
+    alias_before::unfold(m, out)
 }
 
 // The same through `let`s inside the arm.
@@ -26,7 +26,7 @@ fn alias_inside(m: Nat, out: List<Nat>) → List<Nat> decreases m {
 }
 theorem alias_inside_unfolds(m: Nat, out: List<Nat>):
     alias_inside(m, out) = (match h: decide_bit<1 <= m>() { True => alias_inside(m - 1, List::Cons(m, out)), False => out }) {
-    alias_inside_unfold(m, out)
+    alias_inside::unfold(m, out)
 }
 
 // A `let` that rebinds the measured parameter: the measure's `m` is the
@@ -38,7 +38,7 @@ fn shadowed(m: Nat, out: List<Nat>) → List<Nat> decreases m {
 theorem shadowed_lit(): shadowed(3, List::Nil) = [0, 1, 2] { refl }
 theorem shadowed_unfolds(m: Nat, out: List<Nat>):
     shadowed(m, out) = (match h: decide_bit<1 <= m>() { True => shadowed(m - 1, List::Cons(m - 1, out)), False => out }) {
-    shadowed_unfold(m, out)
+    shadowed::unfold(m, out)
 }
 
 // A binder the obligation needs, shadowed later, before the condition's
@@ -51,7 +51,7 @@ fn rebound(n: Nat, out: List<Nat>) → List<Nat> decreases n {
 theorem rebound_lit(): rebound(3, List::Nil) = [1, 2, 3] { refl }
 theorem rebound_unfolds(n: Nat, out: List<Nat>):
     rebound(n, out) = (match h: decide_bit<1 <= n>() { True => rebound(n - 1, List::Cons(n, out)), False => out }) {
-    rebound_unfold(n, out)
+    rebound::unfold(n, out)
 }
 
 // An arm binder that shadows the measured parameter.
@@ -87,7 +87,7 @@ fn fill(c: Counter, m: Nat) → Mutated<Counter, Nat> decreases m {
 theorem fill_lit(): fill(Counter(0, []), 2).after = Counter(3, [1, 2]) { refl }
 theorem fill_unfolds(c: Counter, m: Nat):
     fill(c, m) = (match h: decide_bit<1 <= m>() { False => Mutated(c, m), True => fill(Counter::tick(c, m).after, m - 1) }) {
-    fill_unfold(c, m)
+    fill::unfold(c, m)
 }
 
 fn fill2(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
@@ -98,7 +98,7 @@ fn fill2(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
 }
 theorem fill2_unfolds(c: Counter, m: Nat, acc: Nat):
     fill2(c, m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => fill2(Counter::tick(Counter::tick(c, m).after, 1).after, m - 1, acc + Counter::tick(c, m).value) }) {
-    fill2_unfold(c, m, acc)
+    fill2::unfold(c, m, acc)
 }
 
 // A `mut` parameter updated before the loop test.
@@ -111,7 +111,7 @@ fn param_rec(mut c: Counter, m: Nat) → Nat decreases m {
 }
 theorem param_rec_unfolds(c: Counter, m: Nat):
     param_rec(c, m) = (match h: decide_bit<1 <= m>() { False => Counter::tick(c, m).after.n, True => param_rec(Counter::tick(c, m).after, m - 1) }) {
-    param_rec_unfold(c, m)
+    param_rec::unfold(c, m)
 }
 
 // A method that is not `mut self`, called on a `let mut` local: an ordinary call.
@@ -123,7 +123,7 @@ fn plain(c: Counter, m: Nat, acc: Nat) → Nat decreases m {
 }
 theorem plain_unfolds(c: Counter, m: Nat, acc: Nat):
     plain(c, m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => plain(Counter::tick(c, c.n).after, m - 1, acc + c.n) }) {
-    plain_unfold(c, m, acc)
+    plain::unfold(c, m, acc)
 }
 
 // A branch under the loop test's arm, each way round a self-call
@@ -141,7 +141,7 @@ fn two_var(m: Nat, acc: Nat, flip: Bool) → Nat decreases m {
 theorem two_var_lit(): two_var(5, 0, True) = 3 { refl }
 theorem two_var_unfolds(m: Nat, acc: Nat, flip: Bool):
     two_var(m, acc, flip) = (match h: decide_bit<1 <= m>() { False => acc, True => match flip { True => two_var(m - 1, acc + 1, False), False => two_var(m - 1, acc, True) } }) {
-    two_var_unfold(m, acc, flip)
+    two_var::unfold(m, acc, flip)
 }
 
 // The same branch as an `if`.
@@ -153,7 +153,7 @@ fn by_if(m: Nat, acc: Nat, flip: Bool) → Nat decreases m {
 }
 theorem by_if_unfolds(m: Nat, acc: Nat, flip: Bool):
     by_if(m, acc, flip) = (match h: decide_bit<1 <= m>() { False => acc, True => if flip { by_if(m - 1, acc + 1, False) } else { by_if(m - 1, acc, True) } }) {
-    by_if_unfold(m, acc, flip)
+    by_if::unfold(m, acc, flip)
 }
 
 // An early way out under the loop test, on a test with its own equation.
@@ -169,7 +169,7 @@ fn early(m: Nat, acc: Nat) → Nat decreases m {
 theorem early_lit(): early(10, 0) = 3 { refl }
 theorem early_unfolds(m: Nat, acc: Nat):
     early(m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match g: decide_bit<3 <= acc>() { True => acc, False => early(m - 1, acc + 1) } }) {
-    early_unfold(m, acc)
+    early::unfold(m, acc)
 }
 
 // A computed inner scrutinee with no equation: its arms' obligations do
@@ -185,7 +185,7 @@ fn computed(m: Nat, acc: Nat) → Nat decreases m {
 }
 theorem computed_unfolds(m: Nat, acc: Nat):
     computed(m, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match decide_bit<3 <= acc>() { True => computed(m - 1, acc), False => computed(m - 1, acc + 2) } }) {
-    computed_unfold(m, acc)
+    computed::unfold(m, acc)
 }
 
 // Two levels of branching, a `mut self` call in the innermost arm.
@@ -205,7 +205,7 @@ theorem deep_unfolds(m: Nat, a: Bool, b: Bool, acc: Nat):
     deep(m, a, b, acc) = (match h: decide_bit<1 <= m>() { False => acc, True => match a {
         True => match b { True => deep(m - 1, False, b, acc + 1), False => deep(m - 1, a, True, acc + 2) },
         False => deep(m - 1, True, b, acc) } }) {
-    deep_unfold(m, a, b, acc)
+    deep::unfold(m, a, b, acc)
 }
 
 // An `if` with evidence as the loop test itself.
@@ -214,7 +214,7 @@ fn top_if(m: Nat, acc: Nat) → Nat decreases m {
 }
 theorem top_if_unfolds(m: Nat, acc: Nat):
     top_if(m, acc) = (if h: 1 <= m { top_if(m - 1, acc + m) } else { acc }) {
-    top_if_unfold(m, acc)
+    top_if::unfold(m, acc)
 }
 
 // An open element type.
@@ -229,7 +229,7 @@ fn poly<A>(xs: List<A>, m: Nat, flip: Bool) → List<A> decreases m {
 }
 theorem poly_unfolds<A>(xs: List<A>, m: Nat, flip: Bool):
     poly(xs, m, flip) = (match h: decide_bit<1 <= m>() { False => xs, True => match flip { True => poly(xs, m - 1, False), False => poly(xs.tail(), m - 1, True) } }) {
-    poly_unfold(xs, m, flip)
+    poly::unfold(xs, m, flip)
 }
 
 // Negative control: a match below the loop test's arm on the measured
@@ -243,7 +243,7 @@ fn on_measure(m: Nat, acc: Nat) → Nat decreases m {
 }
 // expect-error: a `match` below another `match`'s arm on a variable the measure mentions
 theorem on_measure_unfolds(m: Nat, acc: Nat): on_measure(m, acc) = on_measure(m, acc) {
-    trans(on_measure_unfold(m, acc), refl)
+    trans(on_measure::unfold(m, acc), refl)
 }
 
 // A self-call inside a method call's receiver, under a measure that is a
@@ -271,7 +271,7 @@ fn List::count_down(self xs: List<Nat>, m: Nat) → List<Nat> decreases m {
 theorem count_down_lit(): List::Nil.count_down(3) = [1, 2, 3] { refl }
 theorem count_down_unfolds(xs: List<Nat>, m: Nat):
     xs.count_down(m) = (match h: decide_bit<1 <= m>() { False => xs, True => List::Cons(m, xs).count_down(m - 1) }) {
-    List::count_down_unfold(xs, m)
+    List::count_down::unfold(xs, m)
 }
 
 // The self-call by its base name, as a structural method's is.
@@ -371,7 +371,7 @@ theorem fill_all_lit(): Counter::fill_all(Counter(0, []), 2) = Mutated(Counter(3
 theorem fill_all_unfolds(c: Counter, m: Nat):
     Counter::fill_all(c, m)
         = (match h: decide_bit<1 <= m>() { False => Mutated(c, m), True => Counter::fill_all(Counter::tick(c, m).after, m - 1) }) {
-    Counter::fill_all_unfold(c, m)
+    Counter::fill_all::unfold(c, m)
 }
 
 // The call's value bound and used by the next call.
@@ -391,7 +391,7 @@ theorem fill_carry_unfolds(c: Counter, m, last: Nat):
             False => Mutated(c, last),
             True => Counter::fill_carry(Counter::tick(c, m).after, m - 1, Counter::tick(c, m).value),
         }) {
-    Counter::fill_carry_unfold(c, m, last)
+    Counter::fill_carry::unfold(c, m, last)
 }
 
 // A measured loop whose body updates a field of the receiver, by a method
@@ -415,7 +415,7 @@ theorem ledger_fill_unfolds(l: Ledger, m: Nat):
             False => Mutated(l, l.rounds),
             True => Ledger::fill(Ledger(Counter::tick(l.count, m).after, l.rounds + 1), m - 1),
         }) {
-    Ledger::fill_unfold(l, m)
+    Ledger::fill::unfold(l, m)
 }
 
 // Negative control: the method's own call at an arm's end still has to

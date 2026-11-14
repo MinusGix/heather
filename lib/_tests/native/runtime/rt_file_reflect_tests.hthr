@@ -142,7 +142,7 @@ fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
 
 // The pin of a loop is of its step: the body with its own call answered by
 // `again` is the recursor's step with an ih that drops its proof.
-theorem raise_from_tail_step(rest: List<List<BitVec(8)>>, span: List<BitVec(8)>, place, length, i: BitVec(64),
+theorem raise_from_step(rest: List<List<BitVec(8)>>, span: List<BitVec(8)>, place, length, i: BitVec(64),
     again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>):
     raise_from_rt().body.tail_sem(raise_world(rest), Word(64), again, [Word(64), Word(64), Word(64)], Pair(i, Pair(length, Pair(place, trivial))), span) =
         raise_from::body(length.sub(i).toNat(), λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => again([place, y1, y2], s),

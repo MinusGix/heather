@@ -1,6 +1,6 @@
 // Probes of `sha256_schedule`: its two loops proved through the step
-// equations the elaborator generates (`Sha256::begin_step`,
-// `Sha256::expand_done`, …) and the counting rule of
+// equations the elaborator generates (`Sha256::begin::step`,
+// `Sha256::expand::done`, …) and the counting rule of
 // `lib/std/bitvec/bitvec_loop.hthr` (issues/loop-invariant-rules.md), with no
 // unfolding or induction written here. `Sha256::begin` copies the hash value
 // into the working variables; `Sha256::expand` leaves the whole schedule
@@ -26,7 +26,7 @@ import bitvec_loop;
 theorem begin_all(s: Sha256): Sha256::begin(s, 0) = Mutated((s with { working = s.hash }), 8) {
     BitVec::loop_up(λ s i => Sha256::begin(s, i),
         λ s i => (s with { working = vector_update(s.working, i.toNat(), vector_get(s.hash, i.toNat(), 0)) }),
-        λ s i => Mutated(s, i), 8, Sha256::begin_step, Sha256::begin_done, s, 0, decide)
+        λ s i => Mutated(s, i), 8, Sha256::begin::step, Sha256::begin::done, s, 0, decide)
 }
 
 // Schedule word `t` from the four §6.2.2 names, read from `w`.
@@ -96,7 +96,7 @@ theorem expand_keeps(start: [u32; 64], s: Sha256, j: u64, below: j < 48, inv: fo
 theorem expand_all(s: Sha256):
     Sha256::expand(s, 0) = Mutated(BitVec::run_up(expand_next, s, 0, 48), 48) {
     BitVec::loop_up(λ s j => Sha256::expand(s, j), expand_next, λ s j => Mutated(s, j), 48,
-        Sha256::expand_step, Sha256::expand_done, s, 0, decide)
+        Sha256::expand::step, Sha256::expand::done, s, 0, decide)
 }
 
 // What `Sha256::expand` leaves: the whole schedule §6.2.2 step 1 computes

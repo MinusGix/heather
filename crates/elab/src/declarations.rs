@@ -692,7 +692,7 @@ impl DeclarationsMut<'_> {
                     if built {
                         self.designate_access(&format!("{}::ext", decl.name), &measure::ext_name(&decl.name));
                         self.designate_access(&format!("{}::irrel", decl.name), &measure::irrel_name(&decl.name));
-                        // `f_step` and `f_done`: `f_unfold` at the arm its
+                        // `f::step` and `f::done`: `f_unfold` at the arm its
                         // test picks (issues/loop-invariant-rules.md). Built
                         // where the body is one test, and, like the
                         // companions, skipped with the reason recorded where
@@ -714,15 +714,16 @@ impl DeclarationsMut<'_> {
         Ok(())
     }
 
-    /// `f_step` and `f_done` (`measure::step_equations`), elaborated after
+    /// `f::step` and `f::done` (`measure::step_equations`), elaborated after
     /// `f_unfold`, which they are proved from. They need `Bool::convoy_true`
     /// and the decision lemmas, so a module that cannot name those gets
-    /// neither; a refusal is recorded under the equation's name.
+    /// neither; a refusal is recorded under the designed spelling, which a
+    /// reference then reports.
     fn elab_step_equations(&mut self, decl: &Decl, self_name: &str) {
         let needs = ["bool::Bool::convoy_true", "bool::Bool::convoy_false", "bool::decide_bit_of", "bool::decide_bit_of_not"];
-        let names = [measure::step_name(&decl.name), measure::done_name(&decl.name)];
+        let designed = [format!("{}::step", decl.name), format!("{}::done", decl.name)];
         let refuse = |this: &mut Self, why: String| {
-            for n in &names {
+            for n in &designed {
                 this.pass.unfold_refusals.borrow_mut().insert(n.clone(), why.clone());
             }
         };
@@ -733,12 +734,14 @@ impl DeclarationsMut<'_> {
             Ok(parts) => parts,
             Err(why) => return refuse(self, why),
         };
-        for part in parts {
+        for part in &parts {
             if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
                 let why = format!("the generated `{}` was refused ({e})", part.decl.name);
                 return refuse(self, why);
             }
         }
+        self.designate_access(&designed[0], &measure::step_name(&decl.name));
+        self.designate_access(&designed[1], &measure::done_name(&decl.name));
     }
 
     /// N > 1 adjacent `decreases` declarations that call one another

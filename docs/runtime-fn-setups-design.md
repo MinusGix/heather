@@ -1219,7 +1219,7 @@ round settled:
   agree on, since the measure is below one there. `Fun::Bounded` (the
   measure below `2^64`) is `BitVec::toNat_lt_pow`.
 - **`Guarded` is the function's `ext` and `irrel`.** The body's tail meaning
-  converts with `f::body` at an ih that drops its proof (`count_down_body_step`,
+  converts with `f::body` at an ih that drops its proof (`count_down_step`,
   `refl`), so `Guarded` is `f::ext` (the step's congruence in its ih, which
   the elaborator already generates for `f_unfold`) with the agreement it
   asks for from `f::irrel` and the hypothesis: three applications, no split,

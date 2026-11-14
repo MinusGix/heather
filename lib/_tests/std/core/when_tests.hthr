@@ -192,7 +192,7 @@ fn sum_from({n: Nat}, v: [Nat; n], i: Nat) → Nat decreases n - i {
 theorem sum_from_lit(): sum_from(small(), 0) = 18 { refl }
 theorem sum_from_unfolds({n: Nat}, v: [Nat; n], i: Nat):
     sum_from(v, i) = (match v.nth(i) { Present(x, h) => x + @sum_from(n, v, i + 1), Absent(_) => 0 }) {
-    sum_from_unfold(v, i)
+    sum_from::unfold(v, i)
 }
 
 // A `When`-returning function called in the body.
@@ -203,7 +203,7 @@ fn count_from({n: Nat}, v: [Nat; n], i: Nat) → Nat decreases n - i {
 theorem count_from_lit(): count_from(small(), 1) = 2 { refl }
 theorem count_from_unfolds({n: Nat}, v: [Nat; n], i: Nat):
     count_from(v, i) = (match entry(v, i) { Present(_, h) => 1 + @count_from(n, v, i + 1), Absent(_) => 0 }) {
-    count_from_unfold(v, i)
+    count_from::unfold(v, i)
 }
 
 // ---------------------------------------------------------------------------

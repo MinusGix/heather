@@ -4813,21 +4813,23 @@ pub(crate) fn companions(
 // test with an equation (`if h: P { … } else { … }`, `match h: b { True => …,
 // False => … }`), it is the convoy match on the test's bit. A proof about the
 // loop wants the arm the test picks, with the test as its hypothesis: one
-// equation per arm, `f_step` where the arm calls `f` again and `f_done` where
+// equation per arm, `f::step` where the arm calls `f` again and `f::done` where
 // it does not (issues/loop-invariant-rules.md). Each is `f_unfold` followed
 // by `Bool::convoy_true`/`convoy_false`, which choose the arm at the
 // hypothesis's own proof, so the arm is stated exactly as `f_unfold` spells
 // it: the found proofs it passes are the same `f#found_N` terms.
 
-/// `f_step` — the arm of the body's test that recurses, under the test.
+/// `f#step`, spelled `f::step` — the arm of the body's test that recurses,
+/// under the test. A designed spelling, as `f::ext` is, so that no name a
+/// module may declare is taken.
 pub(crate) fn step_name(name: &str) -> String {
-    format!("{name}_step")
+    format!("{name}#step")
 }
 
-/// `f_done` — the arm of the body's test that does not recurse, under the
-/// test's failure.
+/// `f#done`, spelled `f::done` — the arm of the body's test that does not
+/// recurse, under the test's failure.
 pub(crate) fn done_name(name: &str) -> String {
-    format!("{name}_done")
+    format!("{name}#done")
 }
 
 /// What one arm of the test is stated under: the hypothesis's name and type,

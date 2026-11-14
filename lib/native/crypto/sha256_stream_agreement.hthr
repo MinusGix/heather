@@ -192,7 +192,7 @@ fn Sha256::zeroed(s: Sha256, i: u64, n: Nat) → Sha256 { BitVec::run_up(λ (s: 
 
 theorem Sha256::zero_from(s: Sha256, i: u64, n: Nat, left: i.toNat() + n = 64): Sha256::zero(s, i) = Mutated(Sha256::zeroed(s, i, n), 64) {
     BitVec::counts_up(λ (s: Sha256) (i: u64) => Sha256::zero(s, i), λ (s: Sha256) (i: u64) => Sha256::put(s, i, 0).after, 64,
-        λ s i below => Sha256::zero_step(s, i, below), λ s i past => Sha256::zero_done(s, i, past), n, s, i, left)
+        λ s i below => Sha256::zero::step(s, i, below), λ s i past => Sha256::zero::done(s, i, past), n, s, i, left)
 }
 
 // The block's first bytes kept, zeros after them, and the hash value left.
@@ -392,7 +392,7 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
         Zero => λ s message mn j fill full T room left sized t at => {
             let end: (j.toNat() = message.len()) = omega;
             let none: (message.drop(j.toNat()) = Nil) = trans(cong_fn(λ (k: Nat) => message.drop(k), end), message.drop_len());
-            let done = Sha256::absorb_done(s, message, mn, j, fill, λ (lt: j.toNat() < mn.toNat()) => omega);
+            let done = Sha256::absorb::done(s, message, mn, j, fill, λ (lt: j.toNat() < mn.toNat()) => omega);
             let here: Sha256::Fed(Mutated(s, fill), Sha2Feed(full, T, room)) = And(t, at);
             j(sym(none), λ r _ => Sha256::Fed(Sha256::absorb(s, message, mn, j, fill), Sha2Feed(full, T, room).bytes(r)),
                 j(sym(done), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room)), here))
@@ -416,7 +416,7 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
                     trans(cong_fn(λ (k: Nat) => F.bytes(message.drop(k)), after),
                         trans(cong_fn(λ (x: u8) => Sha2Feed::fed(full, T, room, x).bytes(message.drop(Succ(j.toNat()))), byte),
                             sym(cong_fn(λ (r: List<u8>) => Sha2Feed(full, T, room).bytes(r), cut)))));
-            j(sym(Sha256::absorb_step(s, message, mn, j, fill, inside)), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))),
+            j(sym(Sha256::absorb::step(s, message, mn, j, fill, inside)), λ m _ => Sha256::Fed(m, Sha2Feed(full, T, room).bytes(message.drop(j.toNat()))),
                 j(onward, λ f _ => Sha256::Fed(Sha256::absorb(P.after, message, mn, j + 1, P.value), f), rest))
         },
     }

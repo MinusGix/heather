@@ -1,5 +1,5 @@
 // Probes of `lib/std/bitvec/bitvec_loop.hthr` and of the step equations a
-// `decreases` function with a test gets (`f_step`, `f_done`,
+// `decreases` function with a test gets (`f::step`, `f::done`,
 // issues/loop-invariant-rules.md): a loop counting a word up to a bound,
 // proved through `BitVec::loop_up` and `BitVec::run_up_invariant` with no
 // induction written. Tests, not library: nothing outside lib/_tests imports
@@ -19,15 +19,15 @@ import bitvec_loop;
 fn tally(i: u64, acc: Nat) → Nat decreases (8 - i).toNat() {
     if h: i < 8 { tally(i + 1, acc + 1) } else { acc }
 }
-theorem tally_steps(i: u64, acc: Nat, h: i < 8): tally(i, acc) = tally(i + 1, acc + 1) { tally_step(i, acc, h) }
-theorem tally_stops(i: u64, acc: Nat, h: ¬(i < 8)): tally(i, acc) = acc { tally_done(i, acc, h) }
+theorem tally_steps(i: u64, acc: Nat, h: i < 8): tally(i, acc) = tally(i + 1, acc + 1) { tally::step(i, acc, h) }
+theorem tally_stops(i: u64, acc: Nat, h: ¬(i < 8)): tally(i, acc) = acc { tally::done(i, acc, h) }
 
 // The loop's result from the rule, at a neutral accumulator and a literal
 // start: the iterated step computes.
 theorem tally_from_zero(acc: Nat): tally(0, acc) = acc + 8 {
     let below: (0u64 <= 8u64) = decide;
     BitVec::loop_up(λ (a: Nat) (i: u64) => tally(i, a), λ (a: Nat) _ => a + 1, λ (a: Nat) _ => a, 8,
-        λ a i h => tally_step(i, a, h), λ a i h => tally_done(i, a, h), acc, 0, below)
+        λ a i h => tally::step(i, a, h), λ a i h => tally::done(i, a, h), acc, 0, below)
 }
 
 // The same loop from a neutral start, through an invariant: what the
@@ -43,7 +43,7 @@ theorem tally_gains(start: u64, acc: Nat, below: start <= 8): tally(start, acc) 
             },
             (8 - start).toNat(), acc, start, bv_omega, refl);
     trans(BitVec::loop_up(λ (a: Nat) (i: u64) => tally(i, a), λ (a: Nat) _ => a + 1, λ (a: Nat) _ => a, 8,
-        λ a i h => tally_step(i, a, h), λ a i h => tally_done(i, a, h), acc, start, below), gained)
+        λ a i h => tally::step(i, a, h), λ a i h => tally::done(i, a, h), acc, start, below), gained)
 }
 
 // A written `match h: b` on a `Bool`: the hypothesis is the equation.
@@ -53,8 +53,8 @@ fn drain(n: Nat, out: List<Nat>) → List<Nat> decreases n {
         False => drain(n - 1, Cons(n, out)),
     }
 }
-theorem drain_steps(n: Nat, out: List<Nat>, h: n.leb(0) = False): drain(n, out) = drain(n - 1, Cons(n, out)) { drain_step(n, out, h) }
-theorem drain_stops(n: Nat, out: List<Nat>, h: n.leb(0) = True): drain(n, out) = out { drain_done(n, out, h) }
+theorem drain_steps(n: Nat, out: List<Nat>, h: n.leb(0) = False): drain(n, out) = drain(n - 1, Cons(n, out)) { drain::step(n, out, h) }
+theorem drain_stops(n: Nat, out: List<Nat>, h: n.leb(0) = True): drain(n, out) = out { drain::done(n, out, h) }
 
 // An open element type and an implicit length: the equations quantify
 // both.
@@ -62,17 +62,17 @@ fn fill<A>({n: Nat}, v: [A; n], x: A, i: u64) → [A; n] decreases (8 - i).toNat
     if h: i < 8 { @fill(n, vector_update(v, i.toNat(), x), x, i + 1) } else { v }
 }
 theorem fill_steps<A>(n: Nat, v: [A; n], x: A, i: u64, h: i < 8): fill(v, x, i) = fill(vector_update(v, i.toNat(), x), x, i + 1) {
-    fill_step(v, x, i, h)
+    fill::step(v, x, i, h)
 }
-theorem fill_stops<A>(n: Nat, v: [A; n], x: A, i: u64, h: ¬(i < 8)): fill(v, x, i) = v { fill_done(v, x, i, h) }
+theorem fill_stops<A>(n: Nat, v: [A; n], x: A, i: u64, h: ¬(i < 8)): fill(v, x, i) = v { fill::done(v, x, i, h) }
 
 // Both arms call again: there is no one step, so neither equation is made,
 // and a reference says why.
 fn ping(i: u64, n: Nat) → Nat decreases (8 - i).toNat() {
     if h: i < 4 { ping(i + 1, n + 1) } else { if g: i < 8 { ping(i + 1, n) } else { n } }
 }
-// expect-error: no step equation `ping_step`
-theorem ping_steps(i: u64, n: Nat, h: i < 4): ping(i, n) = ping(i + 1, n + 1) { ping_step(i, n, h) }
+// expect-error: no step equation `ping::step`
+theorem ping_steps(i: u64, n: Nat, h: i < 4): ping(i, n) = ping(i + 1, n + 1) { ping::step(i, n, h) }
 
 // A loop returning `Mutated`, the shape of a `mut self` loop over a word.
 fn twos(s, i: u64) → Mutated<u64, u64> decreases (5 - i).toNat() {
@@ -83,18 +83,18 @@ fn twos(s, i: u64) → Mutated<u64, u64> decreases (5 - i).toNat() {
 // the generated `twos_step` and `twos_done`.
 theorem twos_all(s: u64): twos(s, 0) = Mutated(s + 2 + 2 + 2 + 2 + 2, 5) {
     BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
-        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 5, s, 0, refl)
+        λ s i below => twos::step(s, i, below), λ s i past => twos::done(s, i, past), 5, s, 0, refl)
 }
 
 // From the middle, with the passes left counted.
 theorem twos_from_three(s: u64): twos(s, 3) = Mutated(s + 2 + 2, 5) {
     BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
-        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 2, s, 3, refl)
+        λ s i below => twos::step(s, i, below), λ s i past => twos::done(s, i, past), 2, s, 3, refl)
 }
 
 // A wrong count of passes is not an instance: the lemma asks `i + n = bound`.
 // expect-error: needs both sides to be definitionally equal
 theorem twos_miscounted(s: u64): twos(s, 3) = Mutated(s + 2 + 2 + 2, 5) {
     BitVec::counts_up(λ (s: u64) (i: u64) => twos(s, i), λ (s: u64) (i: u64) => s + 2, 5,
-        λ s i below => twos_step(s, i, below), λ s i past => twos_done(s, i, past), 3, s, 3, refl)
+        λ s i below => twos::step(s, i, below), λ s i past => twos::done(s, i, past), 3, s, 3, refl)
 }

@@ -6,7 +6,7 @@
 // loop, `CoTree::iter` of a pass (issues/partial-fn-tail-iter.md), and its
 // result and its divergence are proved by the invariant rule
 // `CoTree::iter_sound`; a body with a bound call is `CoTree::rec`, and its
-// result is proved by fixpoint induction over `f::body`. `f_unfold` is the
+// result is proved by fixpoint induction over `f::body`. `f::unfold` is the
 // definition. A `while` with no measure runs in `Partial` and in
 // `CoTree<_>(E)`, with a bind in its body and several locals, and is refused
 // in a carrier that cannot iterate and in pure code. `CoTree` itself is a
@@ -149,7 +149,7 @@ partial fn tri(n: Nat) → Nat {
     match n { Zero => Pointed::ret(0), Succ(m) => { let r <- tri(m); Pointed::ret(n + r) } }
 }
 theorem tri_4(): CoTree::after(Events::none(), 40, tri(4)) = ORet(10) { refl }
-theorem tri_is(n: Nat): tri(n) = CoTree::rec(Events::calls(Nat, Nat), Events::none(), tri::body, n) { tri_unfold(n) }
+theorem tri_is(n: Nat): tri(n) = CoTree::rec(Events::calls(Nat, Nat), Events::none(), tri::body, n) { tri::unfold(n) }
 // A bound call's safety: `CoTree::safe_call_bind`, the continuation safe at
 // every answer.
 theorem tri_body_safe(n: Nat): CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, tri::body(n), λ r => n <= r) {
@@ -286,7 +286,7 @@ partial fn halve_down(n: Nat) → Nat {
     match m { Zero => Pointed::ret(0), Succ(_) => halve_down(m - 1) }
 }
 theorem halve_down_lit(): CoTree::after(Events::none(), 40, halve_down(9)) = ORet(0) { refl }
-theorem halve_down_is(n: Nat): halve_down(n) = CoTree::iter(Events::none(), halve_down::body, n) { halve_down_unfold(n) }
+theorem halve_down_is(n: Nat): halve_down(n) = CoTree::iter(Events::none(), halve_down::body, n) { halve_down::unfold(n) }
 
 // The negative controls: a carrier with no `Iterate` instance, and pure code.
 // expect-error: a `while` with no measure may go round forever, so it runs only in a block over a carrier that can iterate

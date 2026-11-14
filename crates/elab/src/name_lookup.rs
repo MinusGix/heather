@@ -157,6 +157,14 @@ impl NameLookup<'_> {
         if let Some(target) = self.access_alias(name) {
             return self.key_of_declared_kinds(target, kinds);
         }
+        // `f::unfold`, the unfolding equation's designed spelling, is the
+        // declared `f_unfold` (docs/decreases-unfolding-design.md §2), which
+        // stays a deprecated spelling of it.
+        if let Some(base) = name.strip_suffix("::unfold")
+            && let Some(k) = self.key_of_kinds(&format!("{base}_unfold"), kinds)
+        {
+            return Some(k);
+        }
         // A designed path under its module's name, `m::f::rec`: `m`'s own
         // `f::rec`, as `m::f` is `m`'s `f`.
         let (module, path) = name.split_once("::")?;

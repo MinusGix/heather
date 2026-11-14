@@ -289,7 +289,7 @@ theorem Bool::false_eq_unique(p: False = False): refl = p {
 // hypothesis. Each arm may read its equation, so the proofs of `b = True`
 // being one (`true_eq_unique`) is what lets the hypothesis stand for the
 // convoy's own `refl`. The step equations of a `decreases` function are
-// `f_unfold` followed by one of these (issues/loop-invariant-rules.md).
+// `f::unfold` followed by one of these (issues/loop-invariant-rules.md).
 theorem Bool::convoy_true<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = True):
     ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = yes(e) {
     (match b as λ c => (e2: c = True) → (yes2: (c = True) → A) → (no2: (c = False) → A) →

@@ -53,7 +53,7 @@ fn count_up(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
     }
 }
 theorem count_up_lit(): count_up(60) = 4 { refl }
-theorem count_up_at_end(): count_up(64) = 0 { refl }
+theorem count_up_done(): count_up(64) = 0 { refl }
 
 // The test as the proposition `i < 64`.
 fn count_up_if(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
@@ -152,7 +152,7 @@ fn climb(acc, j: BitVec(64)) → BitVec(64)
     decreases (48 - j).toNat() {
     if h: j < 48 { climb(acc + word_below(j + 16), j + 1) } else { acc }
 }
-theorem climb_unfolds(acc, j: BitVec(64)): True { let step = climb_unfold(acc, j); trivial }
+theorem climb_unfolds(acc, j: BitVec(64)): True { let step = climb::unfold(acc, j); trivial }
 
 // expect-error: `word_below`'s `inside` was left to its default, which did not give
 fn climb_loose(j: BitVec(64)) → BitVec(64) { word_below(j + 16) }
