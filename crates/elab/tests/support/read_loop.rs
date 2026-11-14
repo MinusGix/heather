@@ -28,7 +28,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("set_solve", include_str!("../../../../lib/std/data/set/set_solve.hthr")),
     ("set_ops", include_str!("../../../../lib/std/data/set/set_ops.hthr")),
     ("bitvec_concat", include_str!("../../../../lib/std/bitvec/bitvec_concat.hthr")),
-    ("bitvec_resize", include_str!("../../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("bitvec_shift_nat", include_str!("../../../../lib/std/bitvec/bitvec_shift_nat.hthr")),
     ("simp_laws", include_str!("../../../../lib/std/tactic/simp_laws.hthr")),
 ];

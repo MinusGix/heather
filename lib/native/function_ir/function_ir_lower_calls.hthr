@@ -1117,6 +1117,7 @@ fn File::emit_table(self file: File, saves: Nat, prog: Prog, nodes: List<Node>, 
                 Into(destination) => lowered.table_into(saves, prog, table, destination, rest, names),
                 Folded => None,
                 Saving(_) => None,
+                Spilling(_) => None,
             },
         },
     }
@@ -1166,6 +1167,7 @@ fn File::emit_wide(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, n
         Cons(place, rest) => match place {
             Folded => None,
             Saving(_) => None,
+            Spilling(_) => None,
             Into(destination) => match file.wide_from(saves, prog, homes, wide, destination, rest, names) {
                 None => None,
                 Some(loaded) => emit_kept_nodes(saves, loaded.prog, loaded.file, nodes_rest(nodes), loaded.placement, loaded.names),
@@ -1594,6 +1596,7 @@ theorem File::emit_table_grows(self file: File, saves: Nat, prog: Prog, nodes: L
                 Into(destination) => lowered.table_into_grows(saves, prog, table, destination, rest, names),
                 Folded => trivial,
                 Saving(_) => trivial,
+                Spilling(_) => trivial,
             },
         },
     }
@@ -1647,6 +1650,7 @@ theorem File::emit_wide_grows(self file: File, saves: Nat, prog: Prog, homes: Li
         Cons(place, rest) => match place {
             Folded => trivial,
             Saving(_) => trivial,
+            Spilling(_) => trivial,
             Into(destination) => (match file.wide_from(saves, prog, homes, wide, destination, rest, names) as λ e => Grows(prog, e) →
                 Grows(prog, match e {
                     None => None,
@@ -2310,6 +2314,7 @@ theorem File::emit_wide_emits<M>(self file: File, saves: Nat, site: Site<M>, lai
             MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, file.emit_wide(saves, prog, homes, nodes, wide, Cons(q, rest), names)) {
             Folded => trivial,
             Saving(_) => trivial,
+            Spilling(_) => trivial,
             Into(destination) => (match file.wide_from(saves, prog, homes, wide, destination, rest, names) as λ e =>
                 MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, loads, e) →
                 MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, facts, match e {
@@ -2491,6 +2496,7 @@ theorem File::emit_table_emits<M>(self file: File, saves: Nat, site: Site<M>, la
                     Into(destination) => lowered.table_into(saves, prog, table, destination, rest, names),
                     Folded => None,
                     Saving(_) => None,
+                    Spilling(_) => None,
                 },
             },
         }) {
@@ -2502,6 +2508,7 @@ theorem File::emit_table_emits<M>(self file: File, saves: Nat, site: Site<M>, la
                     front, keeps, table, parts, destination, rest, names),
                 Folded => trivial,
                 Saving(_) => trivial,
+                Spilling(_) => trivial,
             },
         },
     })(lower_nodes_keeps<M>(values, nodes_front(nodes), placement, file))
