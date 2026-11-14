@@ -306,4 +306,236 @@ impl Kind {
             _ => &[],
         }
     }
+
+    /// The longest spelling `text` starts with, as its kind and its length
+    /// in bytes; `None` where it starts with none. A lexer cuts a fixed
+    /// token by this, so a spelling is matched where the table has it and
+    /// nowhere else. (`>>` is a shift only where a token may start one, which
+    /// the bytes alone do not say: the caller decides that.)
+    pub fn spelled_at(text: &[u8]) -> Option<(Kind, usize)> {
+        match text.first()? {
+            0x21 => Some((Kind::Bang, 1)),
+            0x24 => Some((Kind::Dollar, 1)),
+            0x25 => Some((Kind::Percent, 1)),
+            0x26 => {
+                if text.starts_with("&&".as_bytes()) {
+                    Some((Kind::AmpAmp, 2))
+                } else {
+                    Some((Kind::Amp, 1))
+                }
+            }
+            0x28 => Some((Kind::LParen, 1)),
+            0x29 => Some((Kind::RParen, 1)),
+            0x2a => Some((Kind::Star, 1)),
+            0x2b => {
+                if text.starts_with("++".as_bytes()) {
+                    Some((Kind::PlusPlus, 2))
+                } else {
+                    Some((Kind::Plus, 1))
+                }
+            }
+            0x2c => Some((Kind::Comma, 1)),
+            0x2d => {
+                if text.starts_with("->".as_bytes()) {
+                    Some((Kind::Arrow, 2))
+                } else {
+                    Some((Kind::Minus, 1))
+                }
+            }
+            0x2e => Some((Kind::Dot, 1)),
+            0x2f => Some((Kind::Slash, 1)),
+            0x3a => {
+                if text.starts_with("::".as_bytes()) {
+                    Some((Kind::ColonColon, 2))
+                } else if text.starts_with(":=".as_bytes()) {
+                    Some((Kind::ColonEq, 2))
+                } else {
+                    Some((Kind::Colon, 1))
+                }
+            }
+            0x3b => Some((Kind::Semi, 1)),
+            0x3c => {
+                if text.starts_with("<->".as_bytes()) {
+                    Some((Kind::Iff, 3))
+                } else if text.starts_with("<-".as_bytes()) {
+                    Some((Kind::LArrow, 2))
+                } else if text.starts_with("<<".as_bytes()) {
+                    Some((Kind::Shl, 2))
+                } else if text.starts_with("<=".as_bytes()) {
+                    Some((Kind::LtEq, 2))
+                } else {
+                    Some((Kind::Lt, 1))
+                }
+            }
+            0x3d => {
+                if text.starts_with("==".as_bytes()) {
+                    Some((Kind::EqEq, 2))
+                } else if text.starts_with("=>".as_bytes()) {
+                    Some((Kind::FatArrow, 2))
+                } else {
+                    Some((Kind::Eq, 1))
+                }
+            }
+            0x3e => {
+                if text.starts_with(">>".as_bytes()) {
+                    Some((Kind::Shr, 2))
+                } else {
+                    Some((Kind::Gt, 1))
+                }
+            }
+            0x40 => Some((Kind::At, 1)),
+            0x5b => Some((Kind::LBracket, 1)),
+            0x5d => Some((Kind::RBracket, 1)),
+            0x5e => Some((Kind::Caret, 1)),
+            0x7b => Some((Kind::LBrace, 1)),
+            0x7c => {
+                if text.starts_with("|-".as_bytes()) {
+                    Some((Kind::Turnstile, 2))
+                } else if text.starts_with("||".as_bytes()) {
+                    Some((Kind::PipePipe, 2))
+                } else {
+                    Some((Kind::Pipe, 1))
+                }
+            }
+            0x7d => Some((Kind::RBrace, 1)),
+            0x7e => Some((Kind::Tilde, 1)),
+            0xc2 => {
+                if text.starts_with("¬".as_bytes()) {
+                    Some((Kind::Neg, 2))
+                } else {
+                    None
+                }
+            }
+            0xce => {
+                if text.starts_with("λ".as_bytes()) {
+                    Some((Kind::Lambda, 2))
+                } else {
+                    None
+                }
+            }
+            0xe2 => {
+                if text.starts_with("⁻¹".as_bytes()) {
+                    Some((Kind::SupInverse, 5))
+                } else if text.starts_with("←".as_bytes()) {
+                    Some((Kind::LArrow, 3))
+                } else if text.starts_with("↑".as_bytes()) {
+                    Some((Kind::UpArrow, 3))
+                } else if text.starts_with("→".as_bytes()) {
+                    Some((Kind::Arrow, 3))
+                } else if text.starts_with("↔".as_bytes()) {
+                    Some((Kind::Iff, 3))
+                } else if text.starts_with("∀".as_bytes()) {
+                    Some((Kind::Forall, 3))
+                } else if text.starts_with("∃".as_bytes()) {
+                    Some((Kind::Exists, 3))
+                } else if text.starts_with("∏".as_bytes()) {
+                    Some((Kind::BigProd, 3))
+                } else if text.starts_with("∑".as_bytes()) {
+                    Some((Kind::BigSum, 3))
+                } else if text.starts_with("∙".as_bytes()) {
+                    Some((Kind::Bullet, 3))
+                } else if text.starts_with("∥".as_bytes()) {
+                    Some((Kind::NormBar, 3))
+                } else if text.starts_with("∧".as_bytes()) {
+                    Some((Kind::Wedge, 3))
+                } else if text.starts_with("∨".as_bytes()) {
+                    Some((Kind::Vee, 3))
+                } else if text.starts_with("≈".as_bytes()) {
+                    Some((Kind::Approx, 3))
+                } else if text.starts_with("≠".as_bytes()) {
+                    Some((Kind::Ne, 3))
+                } else if text.starts_with("⊓".as_bytes()) {
+                    Some((Kind::Meet, 3))
+                } else if text.starts_with("⊔".as_bytes()) {
+                    Some((Kind::Join, 3))
+                } else if text.starts_with("⊕".as_bytes()) {
+                    Some((Kind::OPlus, 3))
+                } else if text.starts_with("⊢".as_bytes()) {
+                    Some((Kind::Turnstile, 3))
+                } else if text.starts_with("⟦".as_bytes()) {
+                    Some((Kind::LSemantic, 3))
+                } else if text.starts_with("⟧".as_bytes()) {
+                    Some((Kind::RSemantic, 3))
+                } else if text.starts_with("⟨".as_bytes()) {
+                    Some((Kind::LAngle, 3))
+                } else if text.starts_with("⟩".as_bytes()) {
+                    Some((Kind::RAngle, 3))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Calls `$then!` with the name of every kind that has a spelling: the
+/// kinds a lexer's token type has as unit variants of the same names
+/// (`heather_syntax::TokKind`), which it maps to and from [`Kind`] by these.
+#[allow(unused_macros)]
+macro_rules! spelled_kinds {
+    ($then:ident) => {
+        $then! {
+            LParen
+            RParen
+            LBrace
+            RBrace
+            Comma
+            Colon
+            Semi
+            At
+            Dot
+            Plus
+            Minus
+            Bang
+            PlusPlus
+            Star
+            Lt
+            LtEq
+            Gt
+            LBracket
+            RBracket
+            LSemantic
+            RSemantic
+            LAngle
+            RAngle
+            Pipe
+            Amp
+            Slash
+            Percent
+            Shl
+            Shr
+            Arrow
+            FatArrow
+            Turnstile
+            AmpAmp
+            PipePipe
+            NormBar
+            Bullet
+            Approx
+            Caret
+            SupInverse
+            Join
+            Meet
+            Neg
+            Wedge
+            Vee
+            Iff
+            LArrow
+            Exists
+            BigSum
+            BigProd
+            UpArrow
+            Forall
+            Dollar
+            Lambda
+            Eq
+            Ne
+            EqEq
+            ColonEq
+            ColonColon
+            OPlus
+            Tilde
+        }
+    };
 }

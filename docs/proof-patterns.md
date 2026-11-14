@@ -336,9 +336,9 @@ Not diagnosed well yet:
   `check` hides the review tier of lints, and some suite tests assert none
   fire.
 - `scripts/fmt` on new or edited `.hthr` files.
-- New surface syntax: `scripts/check-tree-sitter`, and new lexer symbols in
-  tree-sitter-heather/syntax-inventory.json and the token kinds' table
-  (`lib/lang/lexer/lexer_kinds.hthr`, `crates/linked/CLAUDE.md`).
+- New surface syntax: `scripts/check-tree-sitter`; a new keyword in
+  tree-sitter-heather/syntax-inventory.json, a new symbol a row of the token
+  kinds' table (`lib/lang/lexer/lexer_kinds.hthr`, `crates/linked/CLAUDE.md`).
 
 ## 7. Measuring a proof's cost
 
