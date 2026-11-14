@@ -257,6 +257,57 @@ theorem decide_bit_split<P: Decide>(M: Bool → Type, yes: P → M(True), no: ¬
     }
 }
 
+// A decided bit from what it decides: the converses of `decide_bit_true`
+// and `decide_bit_false`. A step equation (`f_step`, `f_done`) takes the
+// proposition and reads the bit's equation back with these.
+theorem decide_bit_of<P: Decide>(p: P): decide_bit<P>() = True {
+    (match decide_bit<P>() as λ c => (decide_bit<P>() = c) → c = True {
+        True => λ _ => refl,
+        False => λ e => absurd_of(p, decide_bit_false<P>(e)),
+    })(refl)
+}
+
+theorem decide_bit_of_not<P: Decide>(n: ¬P): decide_bit<P>() = False {
+    (match decide_bit<P>() as λ c => (decide_bit<P>() = c) → c = False {
+        True => λ e => absurd_of(decide_bit_true<P>(e), n),
+        False => λ _ => refl,
+    })(refl)
+}
+
+// A proof that a constructor of `Bool` equals itself is `refl`: matching the
+// equation's free end on the constructor says which type it has.
+theorem Bool::true_eq_unique(p: True = True): refl = p {
+    j(p, λ w q => ((match w as λ c => (True = c) → Type { True => λ r => refl = r, False => λ _ => False = False })(q)), refl)
+}
+
+theorem Bool::false_eq_unique(p: False = False): refl = p {
+    j(p, λ w q => ((match w as λ c => (False = c) → Type { True => λ _ => True = True, False => λ r => refl = r })(q)), refl)
+}
+
+// The convoy a test with an equation lowers to (`if h: P`, `match h: b`),
+// at a bit whose value a hypothesis gives: the arm it picks, applied to that
+// hypothesis. Each arm may read its equation, so the proofs of `b = True`
+// being one (`true_eq_unique`) is what lets the hypothesis stand for the
+// convoy's own `refl`. The step equations of a `decreases` function are
+// `f_unfold` followed by one of these (issues/loop-invariant-rules.md).
+theorem Bool::convoy_true<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = True):
+    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = yes(e) {
+    (match b as λ c => (e2: c = True) → (yes2: (c = True) → A) → (no2: (c = False) → A) →
+        ((match c as λ d => (c = d) → A { True => yes2, False => no2 })(refl)) = yes2(e2) {
+        True => λ e2 yes2 no2 => { let u: (refl = e2) = Bool::true_eq_unique(e2); cong(u, f := yes2) },
+        False => λ e2 => absurd(e2),
+    })(e, yes, no)
+}
+
+theorem Bool::convoy_false<A>(b: Bool, yes: (b = True) → A, no: (b = False) → A, e: b = False):
+    ((match b as λ c => (b = c) → A { True => yes, False => no })(refl)) = no(e) {
+    (match b as λ c => (e2: c = False) → (yes2: (c = True) → A) → (no2: (c = False) → A) →
+        ((match c as λ d => (c = d) → A { True => yes2, False => no2 })(refl)) = no2(e2) {
+        True => λ e2 => absurd(e2),
+        False => λ e2 yes2 no2 => { let u: (refl = e2) = Bool::false_eq_unique(e2); cong(u, f := no2) },
+    })(e, yes, no)
+}
+
 // Reflection (issues/reflection-through-decide-instances.md): a closed
 // decided proposition is *proved* by running its decision and reading the
 // side it took. `or_index` is that reading (a `Nat`: it was written when the

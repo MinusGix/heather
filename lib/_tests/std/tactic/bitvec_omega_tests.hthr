@@ -53,7 +53,7 @@ fn count_up(i: BitVec(64)) → Nat decreases (64 - i).toNat() {
     }
 }
 theorem count_up_lit(): count_up(60) = 4 { refl }
-theorem count_up_done(): count_up(64) = 0 { refl }
+theorem count_up_at_end(): count_up(64) = 0 { refl }
 
 // The test as the proposition `i < 64`.
 fn count_up_if(i: BitVec(64)) → Nat decreases (64 - i).toNat() {

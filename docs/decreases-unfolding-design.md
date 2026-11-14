@@ -344,6 +344,33 @@ are then *computation*, not further generation: `f_unfold(0)` has type
 proof uses it exactly that way — `Zero => hv_unfold(0)` checks against
 `hv(0) = 0` — so N generated theorems would buy nothing over one. Probed.
 
+### 6.1 One equation per arm of a test (2026-11-14)
+
+The exception is a body that is one **test with an equation**: `if h: P`,
+which lowers to the convoy on `decide_bit<P>()`, or a written `match h: b`
+on a `Bool`. There `f_unfold`'s right-hand side does not reduce to an arm at
+open arguments, since the bit is stuck, and choosing the arm by hand meant a
+match whose motive the arms' use of the equation made ill-typed. So two
+more theorems are generated after `f_unfold`, under the test
+(issues/loop-invariant-rules.md):
+
+- `f_step(x̄, h: P)`: `f(x̄)` is the arm that calls `f` again;
+- `f_done(x̄, h: ¬P)`: `f(x̄)` is the arm that does not.
+
+For `match h: b` the hypotheses are `b = True` and `b = False`. Each is
+`trans(f_unfold(x̄), Bool::convoy_true(bit, λ e => yes, λ e => no, e₀))`,
+where `e₀` is the bit's equation read back from the hypothesis
+(`decide_bit_of`), so the arm is stated exactly as `f_unfold` spells it:
+its lifted `f#found_N` proofs included, applied to the hypothesis. That
+the convoy's own `refl` can be replaced by `e₀` is `Bool::true_eq_unique`:
+a proof of `True = True` is `refl`, by matching the free end of the
+equation on `Bool`'s constructors, with no axiom. `let`s before the test
+(a `mut self` body's `let s__1 = s;`) are kept on both sides, and a test
+that reads them is declined. Nothing is generated where both arms or
+neither call again, or the body is not one test; a reference to the name
+then says why. A declaration of the same name in the module wins over the
+recorded refusal, but collides with a generated equation.
+
 ## 7. When it is generated, and what it costs
 
 - **`fn` only.** A `theorem` is opaque (`crates/elab/src/lib.rs:2544`), so

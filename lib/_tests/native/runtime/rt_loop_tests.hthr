@@ -87,7 +87,7 @@ theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured([], Word(64), [W
 
 // The body with its recursion answered by `again` is the recursor's step
 // with an ih that drops its proof.
-theorem count_down_step(n, acc: BitVec(64), again: List<BitVec(64)> → BitVec(64)):
+theorem count_down_body_step(n, acc: BitVec(64), again: List<BitVec(64)> → BitVec(64)):
     count_down_body().tail_sem(count_down_world(), 0, Word(64), again, [Word(64), Word(64)], Pair(acc, Pair(n, trivial))) =
         count_down::body(n.toNat(), λ (y1: BitVec(64)) (y2: BitVec(64)) _ => again([y1, y2]), n, acc, nat::Nat::lt_succ_self(n.toNat())) { refl }
 

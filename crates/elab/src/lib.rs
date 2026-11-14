@@ -2458,6 +2458,12 @@ impl Elaborator {
         // shape stopped it (docs/decreases-unfolding-design.md §3), since
         // "unknown name" is the wrong thing to say about an equation the
         // reader is right to expect.
+        // A step equation's name is an ordinary one, which a module may have
+        // declared itself where none was generated: what is declared wins.
+        let declared = NameLookup(self).resolve_declared(name);
+        if matches!(declared, NameRes::Found(_)) {
+            return declared;
+        }
         if let Some(why) = self.pass.unfold_refusals.borrow().get(name) {
             // A reason that already names the document that explains it — a
             // group's, `docs/mutual-recursion-design.md` §6 — points there
@@ -2467,12 +2473,17 @@ impl Elaborator {
             } else {
                 ", see docs/decreases-unfolding-design.md §3"
             };
+            if name.ends_with("_unfold") {
+                return NameRes::Restricted(format!(
+                    "no unfolding equation for `{}`: {why}{see}",
+                    name.strip_suffix("_unfold").unwrap_or(name)
+                ));
+            }
             return NameRes::Restricted(format!(
-                "no unfolding equation for `{}`: {why}{see}",
-                name.strip_suffix("_unfold").unwrap_or(name)
+                "no step equation `{name}` (issues/loop-invariant-rules.md): {why}"
             ));
         }
-        NameLookup(self).resolve_declared(name)
+        declared
     }
 
     /// Run reflection or generation with names resolved as if read in a

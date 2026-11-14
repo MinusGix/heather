@@ -1,0 +1,108 @@
+// Probes of `sha256_schedule`: its two loops proved through the step
+// equations the elaborator generates (`Sha256::begin_step`,
+// `Sha256::expand_done`, …) and the counting rule of
+// `lib/std/bitvec/bitvec_loop.hthr` (issues/loop-invariant-rules.md), with no
+// unfolding or induction written here. `Sha256::begin` copies the hash value
+// into the working variables; `Sha256::expand` leaves the whole schedule
+// §6.2.2 step 1 computes from the first sixteen words. Tests, not library:
+// nothing imports this module.
+import logic;
+import bool;
+import nat;
+import omega;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import vector;
+import stored_words;
+import sha256_round;
+import sha256_context;
+import sha256_schedule;
+import bitvec_loop;
+
+// Step 2: the loop is the working variables set to the hash value. The step
+// `g` is the arm with its stores' found proofs dropped, which is what they
+// unfold to.
+theorem begin_all(s: Sha256): Sha256::begin(s, 0) = Mutated((s with { working = s.hash }), 8) {
+    BitVec::loop_up(λ s i => Sha256::begin(s, i),
+        λ s i => (s with { working = vector_update(s.working, i.toNat(), vector_get(s.hash, i.toNat(), 0)) }),
+        λ s i => Mutated(s, i), 8, Sha256::begin_step, Sha256::begin_done, s, 0, decide)
+}
+
+// Schedule word `t` from the four §6.2.2 names, read from `w`.
+fn sched_next(w: [u32; 64], t: Nat) → u32 {
+    sha256_next(vector_get(w, t - 2, 0).zero_extend(32), vector_get(w, t - 7, 0).zero_extend(32),
+        vector_get(w, t - 15, 0).zero_extend(32), vector_get(w, t - 16, 0).zero_extend(32)).truncate(32, 32)
+}
+
+// One pass of `Sha256::expand`, as a function: the word it stores at `j + 16`.
+fn expand_word(w: [u32; 64], j: u64) → u32 {
+    sha256_next(vector_get(w, (j + 14).toNat(), 0).zero_extend(32), vector_get(w, (j + 9).toNat(), 0).zero_extend(32),
+        vector_get(w, (j + 1).toNat(), 0).zero_extend(32), vector_get(w, j.toNat(), 0).zero_extend(32)).truncate(32, 32)
+}
+
+fn expand_next(s: Sha256, j: u64) → Sha256 {
+    s with { schedule = vector_update(s.schedule, (j + 16).toNat(), expand_word(s.schedule, j)) }
+}
+
+// The schedule from `start`: its first sixteen words, and every word from
+// 16 up to `upto` the one §6.2.2 computes from those before it.
+fn follows(w, start: [u32; 64], upto: Nat) → Type {
+    ((t: Nat) → t < 16 → vector_get(w, t, 0) = vector_get(start, t, 0)) ∧
+    ((t: Nat) → 16 <= t → t < upto → vector_get(w, t, 0) = sched_next(w, t))
+}
+
+theorem expand_word_is(w: [u32; 64], j: u64, t: Nat, at: t = j.toNat() + 16, below: j.toNat() < 48): expand_word(w, j) = sched_next(w, t) {
+    let a: ((j + 14).toNat() = t - 2) = bv_omega;
+    let b: ((j + 9).toNat() = t - 7) = bv_omega;
+    let c: ((j + 1).toNat() = t - 15) = bv_omega;
+    let d: (j.toNat() = t - 16) = omega;
+    rewrite(a, rewrite(b, rewrite(c, rewrite(d, refl))))
+}
+
+theorem sched_next_update(w: [u32; 64], i: Nat, x: u32, t: Nat, from: 16 <= t, upto: t <= i):
+    sched_next(vector_update(w, i, x), t) = sched_next(w, t) {
+    let a = vector_get_update_other(64, w, i, t - 2, x, 0, λ e => omega);
+    let b = vector_get_update_other(64, w, i, t - 7, x, 0, λ e => omega);
+    let c = vector_get_update_other(64, w, i, t - 15, x, 0, λ e => omega);
+    let d = vector_get_update_other(64, w, i, t - 16, x, 0, λ e => omega);
+    rewrite(a, rewrite(b, rewrite(c, rewrite(d, refl))))
+}
+
+theorem expand_keeps(start: [u32; 64], s: Sha256, j: u64, below: j < 48, inv: follows(s.schedule, start, j.toNat() + 16)):
+    follows(expand_next(s, j).schedule, start, (j + 1).toNat() + 16) {
+    let lim: (j.toNat() < 48) = bv_omega;
+    let w = s.schedule;
+    let big = (j + 16).toNat();
+    let e_big: (big = j.toNat() + 16) = bv_omega;
+    let e_next: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
+    let x = expand_word(w, j);
+    let first = λ (t: Nat) (low: t < 16) => trans(vector_get_update_other(64, w, big, t, x, 0, λ e => omega), inv.left(t, low));
+    let second: ((t: Nat) → 16 <= t → t < (j + 1).toNat() + 16 → vector_get(vector_update(w, big, x), t, 0) = sched_next(vector_update(w, big, x), t)) =
+        λ t from upto => match t.lt_or_ge(big) {
+        Inl(_) => trans(vector_get_update_other(64, w, big, t, x, 0, λ e => omega),
+            trans(inv.right(t, from, omega), sym(sched_next_update(w, big, x, t, from, omega)))),
+        Inr(_) => {
+            let at: (t = big) = omega;
+            let same = vector_get_update_same(64, w, big, x, 0, omega);
+            let made = expand_word_is(w, j, big, e_big, bv_omega);
+            let back = sched_next_update(w, big, x, big, omega, Nat::le_refl(big));
+            rewrite(at, trans(same, trans(made, sym(back))))
+        },
+    };
+    And(first, second)
+}
+
+theorem expand_all(s: Sha256):
+    Sha256::expand(s, 0) = Mutated(BitVec::run_up(expand_next, s, 0, 48), 48) {
+    BitVec::loop_up(λ s j => Sha256::expand(s, j), expand_next, λ s j => Mutated(s, j), 48,
+        Sha256::expand_step, Sha256::expand_done, s, 0, decide)
+}
+
+// What `Sha256::expand` leaves: the whole schedule §6.2.2 step 1 computes
+// from the first sixteen words.
+theorem expand_follows(s: Sha256): follows(BitVec::run_up(expand_next, s, 0, 48).schedule, s.schedule, 64) {
+    BitVec::run_up_invariant(expand_next, λ s2 j => follows(s2.schedule, s.schedule, j.toNat() + 16), 48,
+        λ s2 j below inv => expand_keeps(s.schedule, s2, j, below, inv), 48, s, 0, refl,
+        And(λ t low => refl, λ t from upto => { let low: (t < 16) = upto; absurd_of(low, omega) }))
+}

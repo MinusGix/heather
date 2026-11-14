@@ -268,6 +268,35 @@ theorem vector_index_update_other<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a
     }
 }
 
+// The same two facts read with `vector_get`, which needs no bound: what a
+// loop over a vector's entries keeps from one step to the next.
+theorem vector_get_update_same<A>(n: Nat): (v: [A; n]) → (i: Nat) → (a, pad: A) → i < n → vector_get(vector_update(v, i, a), i, pad) = a {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (a, pad: A) → i < m → vector_get(vector_update(v, i, a), i, pad) = a {
+        Zero => λ v i a pad inside => false_elim(inside),
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ a pad inside => refl,
+            Succ(i1) => λ a pad inside => ih(tail(v), i1, a, pad, inside),
+        },
+    }
+}
+
+theorem vector_get_update_other<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a, pad: A) → ¬(j = i) →
+    vector_get(vector_update(v, i, a), j, pad) = vector_get(v, j, pad) {
+    match n as λ m => (v: [A; m]) → (i, j: Nat) → (a, pad: A) → ¬(j = i) → vector_get(vector_update(v, i, a), j, pad) = vector_get(v, j, pad) {
+        Zero => λ v i j a pad other => refl,
+        Succ(_, ih) => λ v i j a pad => match i {
+            Zero => match j {
+                Zero => λ other => false_elim(other(refl)),
+                Succ(_) => λ other => refl,
+            },
+            Succ(i1) => match j {
+                Zero => λ other => refl,
+                Succ(j1) => λ other => ih(tail(v), i1, j1, a, pad, λ same => other(cong_fn(λ (m: Nat) => Succ(m), same))),
+            },
+        },
+    }
+}
+
 // Two vectors with the same entries are one.
 theorem vector_ext<A>(n: Nat): (v, w: [A; n]) → ((j: Nat) → (inside: j < n) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
     match n as λ m => (v, w: [A; m]) → ((j: Nat) → (inside: j < m) → vector_index(v, j, inside) = vector_index(w, j, inside)) → v = w {
