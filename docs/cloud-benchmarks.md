@@ -50,13 +50,14 @@ Cloud-specific measurement discipline:
   The same case can differ by an order of magnitude between them, and the
   probes name the state in the case kind.
 
-## 2. The four harnesses, and what each one is for
+## 2. The five harnesses, and what each one is for
 
 | harness | question | records in |
 |---|---|---|
 | `scripts/bench` | the kernel's cost model: exponents of reduction, substitution, conversion | `crates/kernel/benches/baseline.tsv` |
 | `scripts/bench-frontend` | the wait for one file: latency and phase split of elaboration | `crates/elab/benches/baseline.tsv` |
 | `scripts/bench-probes` | where the real library and the native compiler spend: one slow declaration or one fixed cost at a time, through the CLI the suite runs | `perf/bench/results.tsv` |
+| `scripts/bench-native` | the code the compiler emits: the linked SHA-256 and scanner against Rust references, instructions per block, compile time (`docs/native-benchmarking.md`) | `crates/linked/benches/baseline.tsv` |
 | `scripts/perf snapshot` / `ab` | the diary of whole files and the suite; whether one change made a file faster | `perf/snapshots/*.json` (`env.source = cloud`) |
 
 The first two run in-process over closures they build from source, which
