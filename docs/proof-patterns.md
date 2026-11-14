@@ -300,6 +300,15 @@ property of Heather.
   closed count computes, and `BitVec::run_up_invariant` carries what each
   step keeps (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`,
   `issues/loop-invariant-rules.md`).
+- **A function that tests is cited by its branch equations, never
+  restated.** A `fn` whose body (after its `let`s) is an `if`, `if h:` or a
+  `match` on a `Bool` has `f::True(x̄, h: P)` and `f::False(x̄, h: ¬P)`:
+  the call is the arm, under the condition as the source wrote it (`b =
+  True` for a `Bool`), and `f::False::True` where the `else` tests again.
+  Pass the hypothesis as the comparison it is: a word's `i < 64` is
+  `i.toNat() < 64` by conversion, so a typed `let lt: (i.toNat() < 64) =
+  omega` is accepted for it. They are `simp` laws too, with the hypothesis
+  found in scope (`issues/definition-branch-equations.md`).
 
 ## 5. Names and syntax
 

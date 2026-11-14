@@ -1,0 +1,68 @@
+// Probes of a definition's own equations, one per branch
+// (issues/definition-branch-equations.md): `f::True` and `f::False` for a
+// test at the head of the body, chained (`f::False::True`) where an arm is a
+// test again, each under its condition as the source wrote it. Varied over
+// the four axes of docs/testing-generated-terms.md: a literal and a neutral
+// argument, an open element type, a checking position, and negative
+// controls. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import omega; import tactic; import bitvec; import bitvec_omega;
+
+// `if P` on a `Nat` comparison: the hypothesis is `P`, and `¬P` for the else.
+fn clamp(n: Nat) → Nat { if n < 10 { n } else { 10 } }
+
+theorem clamp_small(n: Nat, h: n < 10): clamp(n) = n { clamp::True(n, h) }
+theorem clamp_big(n: Nat, h: ¬(n < 10)): clamp(n) = 10 { clamp::False(n, h) }
+// At a literal, the hypothesis is a closed fact.
+theorem clamp_three(): clamp(3) = 3 { clamp::True(3, omega) }
+// In a checking position: the equation's type is compared by conversion.
+theorem clamp_le(n: Nat, h: n < 10): clamp(n) <= 9 {
+    let e: (clamp(n) = n) = clamp::True(n, h);
+    j(sym(e), λ m _ => m <= 9, omega)
+}
+
+// `if h: P` names its evidence: the hypothesis takes that name, and an arm
+// that uses the evidence is stated with it.
+fn pred_below(n: Nat) → Nat { if h: 0 < n { n - 1 } else { 0 } }
+theorem pred_below_pos(n: Nat, h: 0 < n): pred_below(n) = n - 1 { pred_below::True(n, h) }
+theorem pred_below_zero(): pred_below(0) = 0 { pred_below::False(0, omega) }
+
+// An open element type, tested on a `Bool`: the hypothesis is the bit's
+// equation, since a `Bool` is not a proposition.
+fn choose<A>(b: Bool, x, y: A) → A { if b { x } else { y } }
+theorem choose_true<A>(b: Bool, x, y: A, h: b = True): choose(b, x, y) = x { choose::True(b, x, y, h) }
+theorem choose_false<A>(x, y: A): choose(False, x, y) = y { choose::False(False, x, y, refl) }
+
+// A `match` on a `Bool`, with and without an equation.
+fn pick(b: Bool, x, y: Nat) → Nat { match b { True => x, False => y } }
+theorem pick_true(x, y: Nat): pick(True, x, y) = x { pick::True(True, x, y, refl) }
+fn pick_eq(b: Bool, x, y: Nat) → Nat { match e: b { True => x, False => y } }
+theorem pick_eq_false(b: Bool, x, y: Nat, e: b = False): pick_eq(b, x, y) = y { pick_eq::False(b, x, y, e) }
+
+// A test inside an arm, reading a `let` before it: the inner condition is
+// stated with the `let`'s value, and both hypotheses are taken.
+fn bucket(n: Nat) → Nat {
+    let m = n + 1;
+    if m < 5 { 0 } else { if m < 9 { 1 } else { 2 } }
+}
+theorem bucket_low(n: Nat, h: n + 1 < 5): bucket(n) = 0 { bucket::True(n, h) }
+theorem bucket_mid(n: Nat, a: ¬(n + 1 < 5), b: n + 1 < 9): bucket(n) = 1 { bucket::False::True(n, a, b) }
+theorem bucket_high(n: Nat, a: ¬(n + 1 < 5), b: ¬(n + 1 < 9)): bucket(n) = 2 { bucket::False::False(n, a, b) }
+
+// A word comparison, and a literal arm at the declaration's carrier: the
+// equation's sides are checked at the result type, so `0` is a `u64`.
+fn step64(i: u64) → u64 { if i = 63 { 0 } else { i + 1 } }
+theorem step64_wraps(i: u64, h: i = 63): step64(i) = 0 { step64::True(i, h) }
+theorem step64_counts(i: u64, h: ¬(i = 63)): step64(i) = i + 1 { step64::False(i, h) }
+
+// As a `simp` law: the side condition is found among the hypotheses in scope.
+theorem clamp_simp(n: Nat, h: n < 10): clamp(n) + 1 = n + 1 { simp_only(clamp::True) }
+
+// Negative controls. The other arm's equation is not this one.
+// expect-error: but `clamp(n) = 10` is expected here
+theorem clamp_wrong(n: Nat, h: n < 10): clamp(n) = 10 { clamp::True(n, h) }
+
+// A recursion's equations are its unfolding's, not these.
+fn tally(b: Bool, n: Nat) → Nat { if b { 0 } else { match n { Zero => 0, Succ(m) => tally(b, m) } } }
+// expect-error: no branch equation `tally::True`
+theorem tally_true(n: Nat): tally(True, n) = 0 { tally::True(True, n, refl) }
