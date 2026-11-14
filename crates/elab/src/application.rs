@@ -560,47 +560,70 @@ fn propagate_expected(
     span: Span,
 ) -> bool {
     let gamma = || LocalSubst::id(&cx.gamma);
-    // Which of the remaining parameters take a slot, and whether that slot
-    // is held back; `None` for an argument that is unknown here.
+    // How each remaining parameter is filled here: a slot, held back or
+    // not; a local variable's or a `let`'s own term, whose type is known
+    // without elaborating anything; or unknown.
+    enum Take {
+        Slot(bool),
+        Local(Term, Type, Level),
+        Unknown,
+    }
     let mut takes = Vec::with_capacity(rest_mask.len());
     for (i, &implicit) in rest_mask.iter().enumerate() {
         if implicit {
             let solver = params.get(first_param + i).is_some_and(|p| p.solver.is_some());
-            takes.push(Some(solver));
+            takes.push(Take::Slot(solver));
         } else {
             let Some(arg) = rest_args.next() else { return false };
-            takes.push(waits(arg).then_some(true));
+            takes.push(if waits(arg) {
+                Take::Slot(true)
+            } else if let ExprKind::Var(name) = &arg.kind
+                && (cx.names.contains(name) || cx.aliases.iter_inner().any(|alias| alias.name == *name))
+                && let Ok((term, ty, level)) = elab.infer_application_argument(cx, arg)
+            {
+                Take::Local(term, ty, level)
+            } else {
+                Take::Unknown
+            });
         }
     }
     if rest_args.next().is_some() {
         return false;
     }
-    let walk = |stand_in: u64| -> Option<(Type, Level, Vec<Type>, Vec<usize>)> {
+    // The result past the remaining parameters, the slots' domains, the
+    // held slots, and each local argument's domain beside its type.
+    type Walked = (Type, Level, Vec<Type>, Vec<usize>, Vec<(Type, Type, Level)>);
+    let walk = |stand_in: u64| -> Option<Walked> {
         let stand_in = Rc::new(Term::NatLit(stand_in.into()));
         let mut ty = cod.apply_local(&gamma().extended(Rc::clone(&stand_in)));
         let mut doms = meta_doms.to_vec();
         let mut held = Vec::new();
+        let mut locals = Vec::new();
         let mut slot = next_meta;
         let mut level = cod_level.clone();
         for take in &takes {
-            let Type::Pi { dom, cod, cod_level, .. } = elab.whnf_for_application(cx, &ty, n, span).ok()? else { return None };
+            let Type::Pi { dom, cod, cod_level, dom_level } = elab.whnf_for_application(cx, &ty, n, span).ok()? else { return None };
             level = cod_level;
             let argument = match take {
-                Some(hold) => {
+                Take::Slot(hold) => {
                     doms.push((*dom).clone());
                     if *hold { held.push(slot as usize); }
                     slot += 1;
                     Rc::new(Term::GlobalTm { var: GlobalVar::index(slot - 1), subst: gamma() })
                 }
-                None => Rc::clone(&stand_in),
+                Take::Local(term, got, _) => {
+                    locals.push(((*dom).clone(), got.clone(), dom_level));
+                    Rc::new(term.shift_global(n))
+                }
+                Take::Unknown => Rc::clone(&stand_in),
             };
             ty = cod.apply_local(&gamma().extended(argument));
         }
-        Some((ty, level, doms, held))
+        Some((ty, level, doms, held, locals))
     };
-    let Some((result, level, doms, held)) = walk(u64::MAX - 1) else { return false };
-    let Some((other, _, other_doms, _)) = walk(u64::MAX - 2) else { return false };
-    if result != other || doms != other_doms || !slots_bare(cx, &result, n, sols) {
+    let Some((result, level, doms, held, locals)) = walk(u64::MAX - 1) else { return false };
+    let Some((other, _, other_doms, _, other_locals)) = walk(u64::MAX - 2) else { return false };
+    if result != other || doms != other_doms || locals != other_locals || !slots_bare(cx, &result, n, sols) {
         return false;
     }
     let before = sols.to_vec();
@@ -608,14 +631,31 @@ fn propagate_expected(
     for &slot in &held {
         if matches!(sols[slot], Sol::Unsolved) { sols[slot] = Sol::Withheld; }
     }
-    let read = elab.solve_application_from_expected(cx, &result, expected, n, sols, &doms, Guesses::Postpone(owed.postponed()), span);
+    // A later local's type is read first, as its own turn will read it
+    // (`trans(cong_fn(λ t => Pair(t, 48), p), q)`, where `q` says what the
+    // first equation ends at); each read must settle its domain to the
+    // local's type, or none is kept.
+    let mut learned = true;
+    for (dom, got, level) in &locals {
+        elab.unify_application_argument_type(cx, dom, got, n, sols, &doms, Guesses::Postpone(owed.postponed()), span);
+        if !zonked(dom, n, sols).is_some_and(|dom| elab.result_agrees(cx, &dom, got, level)) {
+            learned = false;
+            break;
+        }
+    }
+    let read = if learned {
+        elab.solve_application_from_expected(cx, &result, expected, n, sols, &doms, Guesses::Postpone(owed.postponed()), span)
+    } else {
+        Ok(())
+    };
     for &slot in &held {
         if matches!(sols[slot], Sol::Withheld) && matches!(before[slot], Sol::Unsolved) { sols[slot] = Sol::Unsolved; }
     }
     // Unification here is learn-only, and may have kept half of a pairing
     // that failed (`?b ++ X` against `ys ++ D` solving `?b := ys`): kept only
     // when the result it solved is the expected type.
-    if read.is_ok()
+    if learned
+        && read.is_ok()
         && zonked(dom, n, sols).is_some()
         && zonked(&result, n, sols).is_some_and(|result| elab.result_agrees(cx, &result, expected, &level))
     {
