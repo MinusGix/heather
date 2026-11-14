@@ -1865,21 +1865,52 @@ theorem in_place_same<M>(code: List<Instruction>, destination: Gpr, f, g: BitVec
         λ y _ => GprsAgree(execute_block_normal(code, s).gprs, write_gpr(destination, y, s.gprs)), runs(s))
 }
 
-// The destination cleared above its low `width` bits.
-fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+fn settle_shifts(destination: Gpr, width: Nat) → List<Instruction> {
     shift_code(OpShl, destination, 64 - width) ++ shift_code(OpShr, destination, 64 - width)
 }
 
-theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
-    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+// The destination cleared above its low `width` bits: at 32 a 32-bit move
+// of the register onto itself, which clears the upper half as every 32-bit
+// destination's is; at another width SHL then SHR by what is left of the
+// register.
+fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+    match width.eq_dec(32) {
+        Inl(_) => [MovSelf32(destination)],
+        Inr(_) => settle_shifts(destination, width),
+    }
+}
+
+// What the 32-bit move leaves is the low half widened again.
+theorem mov_self32_resize(x: BitVec(64)): mov_self32_value(x) = x.resize(32).resize(64) {
+    trans(cong_fn(λ (y: BitVec(32)) => y.zero_extend(32), sym(BitVec::ofNat_toNat_truncate(32, 32, x))),
+        sym(BitVec::resize_zero_extend(32, 32, x.resize(32))))
+}
+
+theorem in_place_mov_self32<M>(destination: Gpr): InPlace<M>([MovSelf32(destination)], destination, mov_self32_value) {
+    λ s query => refl
+}
+
+theorem in_place_settle_shifts<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_shifts(destination, width), destination, λ x => x.resize(width).resize(64))
 {
-    in_place_same<M>(settle_code(destination, width), destination,
+    in_place_same<M>(settle_shifts(destination, width), destination,
         λ x => x.shift_left(64 - width).shift_right(64 - width), λ x => x.resize(width).resize(64),
         λ x => BitVec::shift_pair_resize(width, 64, high, x),
         in_place_then<M>(shift_code(OpShl, destination, 64 - width), shift_code(OpShr, destination, 64 - width),
             destination, λ x => x.shift_left(64 - width), λ x => x.shift_right(64 - width),
             in_place_shift<M>(OpShl, destination, 64 - width, fits),
             in_place_shift<M>(OpShr, destination, 64 - width, fits)))
+}
+
+theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+{
+    match width.eq_dec(32) {
+        Inl(at) => j(sym(at), λ v _ => InPlace<M>([MovSelf32(destination)], destination, λ x => x.resize(v).resize(64)),
+            in_place_same<M>([MovSelf32(destination)], destination, mov_self32_value, λ x => x.resize(32).resize(64),
+                mov_self32_resize, in_place_mov_self32<M>(destination))),
+        Inr(_) => in_place_settle_shifts<M>(destination, width, high, fits),
+    }
 }
 
 // What in-place code leaves, at the kinds the file holds its operand and
