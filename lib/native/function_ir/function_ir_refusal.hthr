@@ -22,6 +22,7 @@ import function_ir_lower_views;
 import function_ir_lower_calls;
 import function_ir_compile;
 import function_ir_writes;
+import function_ir_spelled;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -36,10 +37,11 @@ import logic;
 import nat;
 import option;
 import string;
-import derive;
 import utf8;
 
-fn refusal_number(n: Nat) → String { decimal_name(20, n) }
+// By long division (`spell_number`): a loop's bound is a number of
+// sixty-four bits, and `decimal_name` divides by counting up to it.
+fn refusal_number(n: Nat) → String { spell_number(n, "") }
 
 fn refusal_numbers(ns: List<Nat>) → String {
     match ns {

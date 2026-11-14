@@ -162,6 +162,38 @@ fn Stage::then<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Pair<P, Q
         })
 }
 
+// A stage that may leave a function as it is: no plan is the function
+// itself. A search that finds nothing for a function, or whose finding
+// something later refuses, falls back to this.
+fn Stage::maybe<P>(self stage: Stage<P>) → Stage<Option<P>> {
+    Stage(λ callees old plan => match plan { None => Some(old), Some(p) => stage.rewrite(callees, old, p) },
+        λ callees old plan => match plan {
+            None => λ new made arguments result before after ran =>
+                j(Option::some_inj(old, new, made), λ g _ => g.Runs(program_effects(callees), arguments, result, before, after), ran),
+            Some(p) => stage.sound(callees, old, p),
+        })
+}
+
+// Whatever `old` may do called at its function `f`, `new` may: what a
+// compiler that lowers `new` owes for a theorem about `old`
+// (`compiled_returns_written_through` and its kin). A stage gives it at
+// every function (`Stage::run_rewrites`); emptying the functions nothing
+// reaches gives it at the ones that are reached (`prune_sound`).
+fn ProgramRewrites(old, new: List<Function>, f: Nat) → Type {
+    (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        program_effects(old, before, f, arguments, result, after) → program_effects(new, before, f, arguments, result, after)
+}
+
+theorem ProgramRewrites::then(old, mid, new: List<Function>, f: Nat, first: ProgramRewrites(old, mid, f), second: ProgramRewrites(mid, new, f)):
+    ProgramRewrites(old, new, f) {
+    λ before arguments result after ran => second(before, arguments, result, after, first(before, arguments, result, after, ran))
+}
+
+theorem Stage::run_rewrites<P>(self stage: Stage<P>, functions: List<Function>, plans: List<P>, new: List<Function>,
+    made: stage.run(functions, plans) = Some(new), f: Nat): ProgramRewrites(functions, new, f) {
+    λ before arguments result after ran => stage.run_sound(functions, plans, new, made, before, f, arguments, result, after, ran)
+}
+
 // ---------------------------------------------------------------------------
 // The function a call names
 

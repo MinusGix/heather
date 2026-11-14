@@ -1,0 +1,121 @@
+// Probes of the optimizer as the compiler runs it
+// (lib/native/function_ir/function_ir_optimize.hthr, docs/optimizer-design.md
+// §3, §9): what the search finds for a program, callees first; the stage
+// making the functions it found from the plans it found; a function left as
+// it is; what the lowering is asked; the functions a root reaches before
+// and after; and what the compiler reads. Tests, not library: nothing
+// imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_fresh;
+import function_ir_inline;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_tidy;
+import function_ir_prune;
+import function_ir_spelled;
+import function_ir_optimize;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+import string;
+
+fn nodes(ns: List<Node>) → StructuredRegion { StructuredRegion::of_nodes(ns) }
+
+// Function 2 is x ↦ (x ^ 7) + x by a call of function 1, x ↦ x ^ 7, which
+// calls function 0, the exclusive or.
+fn xor() → Function { Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2) }
+fn seven() → Function { Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2) }
+fn top() → Function { Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2) }
+fn three() → List<Function> { [top(), seven(), xor()] }
+
+// Nothing to inline in function 0, and nothing to tidy.
+fn xor_plan() → Pair<Inlines, Pair<Plan, Plan>> { Pair(Inlines(3, Stay), Pair(Nodes([Keep]), Nodes([Keep]))) }
+
+theorem xor_found(): xor().optimized([], Wanted::usual()) = Optimized(Some(xor_plan()), xor()) { refl }
+
+// Function 1 with its call inlined: the exclusive or reads the caller's
+// own values, and the moves of the arguments are gone. The move of the
+// result stays: 2 is the function's result.
+fn seven_plan() → Pair<Inlines, Pair<Plan, Plan>> {
+    Pair(Inlines(3, Both(Stay, Here(3))),
+        Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))),
+            Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))))
+}
+
+fn seven_made() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]), Compose(nodes([]), Compose(nodes([BitXor(64, 5, 0, 1)]), nodes([Move(64, 2, 5)])))), 2)
+}
+
+theorem seven_found(): seven().optimized([xor()], Wanted::usual()) = Optimized(Some(seven_plan()), seven_made()) { refl }
+
+// Function 2 takes function 1 as the search left it, so no call is left in
+// it and every move is read through: the sum reads the exclusive or.
+fn top_plan() → Pair<Inlines, Pair<Plan, Plan>> {
+    Pair(Inlines(3, Both(Here(6), Stay)),
+        Pair(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
+                Nodes([Swap(8, 0)])),
+            Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))))
+}
+
+fn top_made() → Function {
+    Function([0], Compose(
+        Compose(nodes([]), Compose(Compose(nodes([Const(64, 4, 7)]), Compose(nodes([]), Compose(nodes([BitXor(64, 8, 0, 4)]), nodes([])))), nodes([]))),
+        nodes([Add(64, 2, 8, 0)])), 2)
+}
+
+theorem top_found(): top().optimized([seven_made(), xor()], Wanted::usual()) = Optimized(Some(top_plan()), top_made()) { refl }
+
+fn three_made() → List<Function> { [top_made(), seven_made(), xor()] }
+
+// The stage makes those functions from those plans: what a certificate
+// states, a function a statement (`Stage::run_next`).
+theorem three_run(): optimize_stage().run(three(), [Some(top_plan()), Some(seven_plan()), Some(xor_plan())]) = Some(three_made()) { refl }
+
+// And the program made does at each function whatever the program did.
+theorem three_keeps(f: Nat): ProgramRewrites(three(), three_made(), f) {
+    optimize_stage().run_rewrites(three(), [Some(top_plan()), Some(seven_plan()), Some(xor_plan())], three_made(), three_run(), f)
+}
+
+// No plan is the function itself.
+theorem three_kept(): optimize_stage().run(three(), [None, None, None]) = Some(three()) { refl }
+
+// A function kept among functions rewritten: function 2 as it is still
+// calls function 1.
+theorem three_some(): optimize_stage().run(three(), [None, Some(seven_plan()), None]) = Some([top(), seven_made(), xor()]) { refl }
+
+// A plan in another shape than the function's is refused.
+theorem shape_refused(): optimize_stage().run(three(), [Some(seven_plan()), None, None]) = None { refl }
+
+// A function that would be larger than the room asked for is left as it is.
+theorem no_room(): top().optimized([seven_made(), xor()], Wanted(40, 1)) = Optimized(None, top()) { refl }
+
+// With nothing small enough to inline, a function's plans keep it.
+theorem none_small(): top().optimized([seven_made(), xor()], Wanted(0, 400)).function = top() { refl }
+
+// The lowering takes what the search made, with the planner's placement.
+theorem made_lowers(): top_made().lowers(2, [0, 0, 0]) = True { refl }
+
+// Function 2 reaches all three functions before, and itself alone after:
+// the other two are emptied, and the program is closed under what is left.
+theorem reached_before(): program_reached(three(), [2]) = [0, 1, 2] { refl }
+theorem reached_after(): program_reached(three_made(), [2]) = [2] { refl }
+theorem made_closed(): program_closed(three_made(), λ n => n.among(program_reached(three_made(), [2]))) = True { refl }
+theorem made_pruned(): prune(three_made(), λ n => n.among([2])) = [top_made(), seven_made().emptied(), xor().emptied()] { refl }
+
+// What the compiler reads: the plans on one line, the function on the next.
+theorem seven_spelled(): Optimized(Some(seven_plan()), seven_made()).spelled() =
+    "Some(Pair(Inlines(3, Both(Stay, Here(3))), Pair(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))), Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+    refl
+}
+
+theorem kept_spelled(): Optimized(None, xor()).spelled() =
+    "None\nFunction([0, 1], Dataflow(Region(Ports([]), [BitXor(64, 2, 0, 1)], Ports([]))), 2, 0)" {
+    refl
+}

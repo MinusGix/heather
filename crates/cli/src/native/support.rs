@@ -66,6 +66,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_lower_views", include_str!("../../../../lib/native/function_ir/function_ir_lower_views.hthr")),
     ("x86_64_stack_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
     ("function_ir_lower_calls", include_str!("../../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
+    ("function_ir_stage", include_str!("../../../../lib/native/function_ir/function_ir_stage.hthr")),
     ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
     ("x86_64_asm_table", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
     ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),

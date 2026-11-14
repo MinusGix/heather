@@ -1,0 +1,172 @@
+// The optimizer as the compiler runs it (docs/optimizer-design.md §3, §9):
+// one stage that inlines a function's wanted calls and tidies what that
+// leaves, a plan a function; the search that finds a function's plan; and
+// what the compiler reads of it.
+//
+// The stage is the theorem. The search is not trusted: it proposes a plan
+// and the function the plan makes, the compiler states both in the
+// certificate as literals, and the kernel checks that the stage makes the
+// one from the other (`Stage::run_next`, a function a statement). A
+// function the search has no plan for, or whose rewriting the lowering
+// refuses with the planner's placement, is left as it is: no plan is the
+// function itself (`Stage::maybe`).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import function_ir_lower_calls;
+import function_ir_refusal;
+import function_ir_stage;
+import function_ir_fresh;
+import function_ir_inline;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_tidy;
+import function_ir_prune;
+import function_ir_spelled;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import option;
+import pair;
+import string;
+import utf8;
+
+// ---------------------------------------------------------------------------
+// The stage
+
+// A function's plans: where to inline, then what to read through and what
+// to drop; or none, and the function stays as it is.
+fn Passes() → Type { Option<Pair<Inlines, Pair<Plan, Plan>>> }
+
+fn optimize_stage() → Stage<Passes()> { inline_stage().then(tidy_stage(rules())).maybe() }
+
+// ---------------------------------------------------------------------------
+// The search (not trusted)
+
+// What a search is asked for: callees no larger than `small` are inlined,
+// and a function that would be larger than `room` afterwards is left as it
+// is. A function's rewriting is one statement of a certificate, and the
+// kernel's fuel is a statement's, so there is a size past which the
+// statement would not check.
+record Wanted { small: Nat, room: Nat }
+
+fn Wanted::usual() → Wanted { Wanted(40, 400) }
+
+// The plans a search found and the function they make. The plans' type is
+// written out, not `Passes()`: a value is read back by its field's type.
+record Optimized { plan: Option<Pair<Inlines, Pair<Plan, Plan>>>, function: Function }
+
+// A function with its wanted calls inlined and the result tidied, and the
+// plans that say so; the function as it is where a pass has no plan for
+// it. `callees` are the functions before it as the search left them, so
+// what is inlined is already tidied.
+fn Function::optimized(self function: Function, callees: List<Function>, wanted: Wanted) → Optimized {
+    shared(Inlines(function.top(), function.body.inline_all(callees, inline_small(wanted.small))), λ inlines =>
+        shared(inline_function(callees, function, inlines), λ inlined => match inlined {
+            None => Optimized(None, function),
+            Some(mid) => shared(mid.tidy_plan(rules()), λ found => match found {
+                None => Optimized(None, function),
+                Some(tidy) => shared(tidy_stage(rules()).rewrite(callees, mid, tidy), λ made => match made {
+                    None => Optimized(None, function),
+                    Some(new) => match new.body.size().leb(wanted.room) {
+                        True => Optimized(Some(Pair(inlines, tidy)), new),
+                        False => Optimized(None, function),
+                    },
+                }),
+            }),
+        }))
+}
+
+// Whether the lowering takes a function with the planner's placement, as
+// the program's function `k` under its counts of lent buffers. The
+// compiler asks this of what a search made before it keeps it: the planner
+// can run out of registers in a function that inlining made larger
+// (issues/function-ir-planner-register-pressure.md).
+fn Function::lowers(self function: Function, k: Nat, counts: List<Nat>) → Bool {
+    match function.emit_lent(Start, k, function.plan(), counts.len(), counts) { None => False, Some(_) => True }
+}
+
+// ---------------------------------------------------------------------------
+// The functions a program's roots reach
+
+fn StructuredRegion::called(self region: StructuredRegion, after: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(_) => after,
+        Sequence(_, continuation) => continuation.called(after),
+        Compose(prefix, continuation) => prefix.called(continuation.called(after)),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.called(when_false.called(after)),
+        Call(callee, _, _) => Cons(callee, after),
+        Loop(_, _, _, _, body, _, _, _, _) => body.called(after),
+        Lend(_, callee, _, _) => Cons(callee, after),
+    }
+}
+
+// A function calls only functions before it, so one walk from the last
+// function finds them all.
+fn program_reached(functions: List<Function>, roots: List<Nat>) → List<Nat> {
+    match functions {
+        Nil => roots,
+        Cons(last, earlier) => match earlier.len().among(roots) {
+            True => program_reached(earlier, last.body.called(roots)),
+            False => program_reached(earlier, roots),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What a search found, spelled for a certificate to state
+
+fn Step::spelled(self step: Step) → String → String {
+    match step {
+        Keep => spell_text("Keep"),
+        Drop => spell_text("Drop"),
+        Emit(node) => spell_call("Emit", [node.spelled()]),
+        Derive(rule, args) => spell_call("Derive", [spell_number(rule), spell_numbers(args)]),
+        Swap(a, b) => spell_of("Swap", [a, b]),
+    }
+}
+
+fn spell_steps(steps: List<Step>) → String → String { spell_list(steps.map(λ (step: Step) => step.spelled())) }
+
+fn Plan::spelled(self plan: Plan) → String → String {
+    match plan {
+        Same => spell_text("Same"),
+        Nodes(steps) => spell_call("Nodes", [spell_steps(steps)]),
+        Then(steps, rest) => spell_call("Then", [spell_steps(steps), rest.spelled()]),
+        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
+        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
+        Body(body) => spell_call("Body", [body.spelled()]),
+        Args(arguments) => spell_call("Args", [spell_numbers(arguments)]),
+        Inputs(inputs, body) => spell_call("Inputs", [spell_numbers(inputs), body.spelled()]),
+    }
+}
+
+fn Sites::spelled(self sites: Sites) → String → String {
+    match sites {
+        Stay => spell_text("Stay"),
+        Here(room) => spell_of("Here", [room]),
+        Then(rest) => spell_call("Then", [rest.spelled()]),
+        Both(first, second) => spell_call("Both", [first.spelled(), second.spelled()]),
+        Arms(when_true, when_false) => spell_call("Arms", [when_true.spelled(), when_false.spelled()]),
+        Body(body) => spell_call("Body", [body.spelled()]),
+    }
+}
+
+// The plan on one line and the function on the next.
+fn Optimized::spelled(self found: Optimized) → String {
+    (match found.plan {
+        None => spell_text("None"),
+        Some(passes) => spell_call("Some", [spell_call("Pair", [
+            spell_call("Inlines", [spell_number(passes.fst.bound), passes.fst.sites.spelled()]),
+            spell_call("Pair", [passes.snd.fst.spelled(), passes.snd.snd.spelled()])])]),
+    })("\n" ++ found.function.spelled()(""))
+}
+
+// The same as bytes, which is what the compiler's evaluator reads.
+fn Optimized::spelled_bytes(self found: Optimized) → List<Nat> { bytes_numbers(utf8::encode(found.spelled())) }

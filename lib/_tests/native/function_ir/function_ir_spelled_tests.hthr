@@ -1,0 +1,63 @@
+// Probes of the IR spelled as source
+// (lib/native/function_ir/function_ir_spelled.hthr): numbers, a word's
+// largest among them; every node; every region; a function. That a
+// spelling reads back as what was spelled is what a certificate checks,
+// where the compiler states a function it read this way. Tests, not
+// library: nothing imports this module.
+import function_ir;
+import function_ir_spelled;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+theorem zero_spelled(): spell_number(0, "") = "0" { refl }
+theorem number_spelled(): spell_number(1090, ";") = "1090;" { refl }
+
+// A loop's bound is this number: long division, not a count up to it.
+theorem word_spelled(): spell_number(18446744073709551615, "") = "18446744073709551615" { refl }
+
+theorem numbers_spelled(): spell_numbers([3, 20, 100], "") = "[3, 20, 100]" { refl }
+theorem none_spelled(): spell_numbers([], "") = "[]" { refl }
+
+// One of each node.
+fn every() → List<Node> {
+    [Const(64, 1, 5), Move(64, 2, 1), Add(64, 3, 1, 2), Sub(64, 4, 3, 1), BitAnd(32, 5, 4, 3), BitOr(32, 6, 5, 4),
+        BitXor(32, 7, 6, 5), ShiftLeft(64, 8, 7, 3), LogicalShiftRight(64, 9, 8, 3), ArithmeticShiftRight(64, 10, 9, 3),
+        UnsignedLessThan(64, 11, 10, 9), SignedLessThan(64, 12, 11, 10), Equal(64, 13, 12, 11), BufferLoad(14, 0, 13),
+        BufferStore(15, 0, 13, 14), Resize(64, 8, 16, 15), SignResize(8, 64, 17, 16)]
+}
+
+theorem nodes_spelled(): spell_list(every().map(λ (node: Node) => node.spelled()), "") =
+    "[Const(64, 1, 5), Move(64, 2, 1), Add(64, 3, 1, 2), Sub(64, 4, 3, 1), BitAnd(32, 5, 4, 3), BitOr(32, 6, 5, 4), BitXor(32, 7, 6, 5), ShiftLeft(64, 8, 7, 3), LogicalShiftRight(64, 9, 8, 3), ArithmeticShiftRight(64, 10, 9, 3), UnsignedLessThan(64, 11, 10, 9), SignedLessThan(64, 12, 11, 10), Equal(64, 13, 12, 11), BufferLoad(14, 0, 13), BufferStore(15, 0, 13, 14), Resize(64, 8, 16, 15), SignResize(8, 64, 17, 16)]" {
+    refl
+}
+
+fn leaf(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), ns, Ports(Nil))) }
+
+theorem sequence_spelled(): Sequence(Region(Ports([Port(0, 64)]), [Move(64, 1, 0)], Ports([Port(1, 64)])), leaf([])).spelled()("") =
+    "Sequence(Region(Ports([Port(0, 64)]), [Move(64, 1, 0)], Ports([Port(1, 64)])), Dataflow(Region(Ports([]), [], Ports([]))))" {
+    refl
+}
+
+theorem conditional_spelled(): Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8), leaf([])).spelled()("") =
+    "Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8), Dataflow(Region(Ports([]), [], Ports([]))))" {
+    refl
+}
+
+theorem loop_spelled(): Loop([2], 18446744073709551615, [3], 4, Compose(leaf([Const(1, 7, 1)]), leaf([])), 7, [6], [8], 9).spelled()("") =
+    "Loop([2], 18446744073709551615, [3], 4, Compose(Dataflow(Region(Ports([]), [Const(1, 7, 1)], Ports([]))), Dataflow(Region(Ports([]), [], Ports([])))), 7, [6], [8], 9)" {
+    refl
+}
+
+theorem lend_spelled(): Lend([View(0, 1, 2, 3, True, 4, 5), View(1, 6, 7, 8, False, 9, 10)], 2, [4, 5, 9, 10], 11).spelled()("") =
+    "Lend([View(0, 1, 2, 3, True, 4, 5), View(1, 6, 7, 8, False, 9, 10)], 2, [4, 5, 9, 10], 11)" {
+    refl
+}
+
+theorem function_spelled(): Function([0, 1, 2], leaf([BufferLoad(3, 0, 2)]), 3, 1).spelled()("") =
+    "Function([0, 1, 2], Dataflow(Region(Ports([]), [BufferLoad(3, 0, 2)], Ports([]))), 3, 1)" {
+    refl
+}

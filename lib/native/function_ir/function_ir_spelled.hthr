@@ -1,0 +1,109 @@
+// A function of the IR spelled as the source that states it: what the
+// compiler reads back when a search has made a function, to state it in a
+// certificate as a literal. Nothing here is part of a theorem. A wrong
+// spelling is a literal the certificate's own statements do not hold of.
+//
+// Text is written in front of what follows it (`String → String`), so a
+// spelling costs its length.
+import function_ir;
+import bool;
+import list;
+import nat;
+import nat_map;
+import option;
+import string;
+
+fn spell_text(text: String) → String → String { λ after => text ++ after }
+
+fn spell_digit(d: Nat) → String { "0123456789".drop(d).take(1) }
+
+// A number's decimal digits, by long division: a loop's bound is a number of
+// sixty-four bits, and `Nat::div` counts up to its numerator.
+fn spell_digits(fuel, n: Nat, after: String) → String {
+    match fuel {
+        Zero => after,
+        Succ(f) => shared(n.ldiv(10), λ parts => match parts.quot() {
+            Zero => spell_digit(parts.rem()) ++ after,
+            Succ(_) => spell_digits(f, parts.quot(), spell_digit(parts.rem()) ++ after),
+        }),
+    }
+}
+
+// Forty digits: more than a word of any width the IR has.
+fn spell_number(n: Nat) → String → String { λ after => spell_digits(40, n, after) }
+
+fn spell_items(items: List<String → String>, after: String) → String {
+    match items {
+        Nil => after,
+        Cons(item, rest) => match rest { Nil => item(after), Cons(_, _) => item(", " ++ spell_items(rest, after)) },
+    }
+}
+
+// `name(a, b)`, and a constructor of no fields as its name.
+fn spell_call(name: String, fields: List<String → String>) → String → String {
+    match fields { Nil => spell_text(name), Cons(_, _) => λ after => name ++ ("(" ++ spell_items(fields, ")" ++ after)) }
+}
+
+fn spell_list(items: List<String → String>) → String → String { λ after => "[" ++ spell_items(items, "]" ++ after) }
+
+fn spell_numbers(ns: List<Nat>) → String → String { spell_list(ns.map(spell_number)) }
+
+// A constructor whose fields are numbers.
+fn spell_of(name: String, ns: List<Nat>) → String → String { spell_call(name, ns.map(spell_number)) }
+
+fn Bool::spelled(self b: Bool) → String → String { spell_text(match b { True => "True", False => "False" }) }
+
+fn Node::spelled(self node: Node) → String → String {
+    match node {
+        Const(w, o, v) => spell_of("Const", [w, o, v]),
+        Move(w, o, a) => spell_of("Move", [w, o, a]),
+        Add(w, o, a, b) => spell_of("Add", [w, o, a, b]),
+        Sub(w, o, a, b) => spell_of("Sub", [w, o, a, b]),
+        BitAnd(w, o, a, b) => spell_of("BitAnd", [w, o, a, b]),
+        BitOr(w, o, a, b) => spell_of("BitOr", [w, o, a, b]),
+        BitXor(w, o, a, b) => spell_of("BitXor", [w, o, a, b]),
+        ShiftLeft(w, o, a, b) => spell_of("ShiftLeft", [w, o, a, b]),
+        LogicalShiftRight(w, o, a, b) => spell_of("LogicalShiftRight", [w, o, a, b]),
+        ArithmeticShiftRight(w, o, a, b) => spell_of("ArithmeticShiftRight", [w, o, a, b]),
+        UnsignedLessThan(w, o, a, b) => spell_of("UnsignedLessThan", [w, o, a, b]),
+        SignedLessThan(w, o, a, b) => spell_of("SignedLessThan", [w, o, a, b]),
+        Equal(w, o, a, b) => spell_of("Equal", [w, o, a, b]),
+        BufferLoad(o, b, i) => spell_of("BufferLoad", [o, b, i]),
+        BufferStore(o, b, i, v) => spell_of("BufferStore", [o, b, i, v]),
+        Resize(f, t, o, a) => spell_of("Resize", [f, t, o, a]),
+        SignResize(f, t, o, a) => spell_of("SignResize", [f, t, o, a]),
+    }
+}
+
+fn Ports::spelled(self ports: Ports) → String → String {
+    spell_call("Ports", [spell_list(ports.entries.map(λ (port: Port) => spell_of("Port", [port.id, port.width])))])
+}
+
+fn Region::spelled(self region: Region) → String → String {
+    spell_call("Region", [region.inputs.spelled(), spell_list(region.nodes.map(λ (node: Node) => node.spelled())), region.outputs.spelled()])
+}
+
+fn View::spelled(self view: View) → String → String {
+    spell_call("View", [spell_number(view.buffer), spell_number(view.home), spell_number(view.start), spell_number(view.end),
+        view.written.spelled(), spell_number(view.base), spell_number(view.length)])
+}
+
+fn StructuredRegion::spelled(self region: StructuredRegion) → String → String {
+    match region {
+        Dataflow(body) => spell_call("Dataflow", [body.spelled()]),
+        Sequence(prefix, continuation) => spell_call("Sequence", [prefix.spelled(), continuation.spelled()]),
+        Compose(prefix, continuation) => spell_call("Compose", [prefix.spelled(), continuation.spelled()]),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => spell_call("Conditional",
+            [inputs.spelled(), spell_number(condition), arguments.spelled(), outputs.spelled(), when_true.spelled(), when_false.spelled()]),
+        Call(callee, arguments, result) => spell_call("Call", [spell_number(callee), spell_numbers(arguments), spell_number(result)]),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => spell_call("Loop",
+            [spell_numbers(inputs), spell_number(bound), spell_numbers(parameters), spell_number(count), body.spelled(), spell_number(exit),
+                spell_numbers(next), spell_numbers(outputs), spell_number(exhausted)]),
+        Lend(views, callee, arguments, result) => spell_call("Lend",
+            [spell_list(views.map(λ (view: View) => view.spelled())), spell_number(callee), spell_numbers(arguments), spell_number(result)]),
+    }
+}
+
+fn Function::spelled(self function: Function) → String → String {
+    spell_call("Function", [spell_numbers(function.parameters), function.body.spelled(), spell_number(function.result), spell_number(function.lent)])
+}
