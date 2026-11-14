@@ -54,8 +54,9 @@ declarations as slices and elaborates each refused declaration again
 - A refused item leaves a slice of nothing in the journal
   (`DeltasMut::slice_failed`), so a module with refusals has one slice per
   item of its source and a later slice sits where the file has it.
-- No slice of nothing is reproduced (`try_replay_slice`); the item is
-  elaborated. That is also what stops a plain session from replaying a
+- No slice of nothing is reproduced (`try_replay_slice`) unless the item is
+  one whose elaboration does nothing (an import, a later member of a mutual
+  group); the item is elaborated. That is also what stops a plain session from replaying a
   refusal out of a judging session's image, which the missing slice used to
   do by accident.
 - An item refused where the previous delta has nothing leaves the prefix

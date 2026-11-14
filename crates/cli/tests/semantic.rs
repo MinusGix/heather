@@ -678,7 +678,8 @@ fn a_module_with_directives_moves_what_it_accepted_and_judges_its_refusals_again
         let (moved, relocated, psi) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
         assert!(moved.errors.is_empty(), "{again}: {:?}", moved.errors);
         assert!(!moved.replayed, "{again}: an image of refusals replayed whole");
-        assert_eq!((moved.expected_refusals, moved.replayed_items), (1, 2), "{again}");
+        // The import, `before` and `after` replay; `bad` is elaborated.
+        assert_eq!((moved.expected_refusals, moved.replayed_items), (1, 3), "{again}");
         assert!(moved.notices.iter().any(|n| n.kind == CacheNoticeKind::Relocated), "{again}");
         assert!(relocated >= 1, "{again}");
         assert!(psi == fresh_psi, "{again}: the stale lane's world differs from a fresh elaboration");

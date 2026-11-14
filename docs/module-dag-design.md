@@ -335,8 +335,9 @@ reproduce, so such an image is replayed whole only
 
 What such an image does carry anywhere is its accepted declarations, which
 the kernel can recheck like any other image's. The delta keeps one slice per
-item of the source, a refused item's being a slice of nothing, and no slice
-of nothing is ever reproduced: the item is elaborated. So on the stale lanes
+item of the source, a refused item's being a slice of nothing, and a slice
+of nothing is reproduced only for an item that cannot be refused (an import,
+a later member of a mutual group): any other is elaborated. So on the stale lanes
 a miss looks for an image of the same source that moves onto this world, as
 the early cutoff does (`docs/module-interface-cutoff-design.md` §3), replays
 the accepted declarations from it as slices, and elaborates each refused

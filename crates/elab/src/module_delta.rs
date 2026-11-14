@@ -1018,7 +1018,7 @@ impl DeltasMut<'_> {
     /// means the slice landed (Ψ, events, warnings) and the item is done;
     /// `false` means elaborate it. A slice the gate or the preflight checks
     /// refuse is rolled back and the item is elaborated instead.
-    pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize) -> bool {
+    pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize, inert: bool) -> bool {
         let Some(plan) = self.pass.slice_plan.as_ref() else { return false };
         if !plan.exact {
             return false;
@@ -1031,11 +1031,10 @@ impl DeltasMut<'_> {
         };
         // What a refused item left is a slice of nothing
         // (`slice_failed`), and a refusal is judged by elaborating: nothing
-        // reproduces it, whoever asks. An accepted item that contributes
-        // nothing (a later member of a mutual group, whose slice is its first
-        // member's) is elaborated here too, which costs nothing; `slice_end`
-        // then finds the prefix exact.
-        if old.psi.is_empty() && old.events.is_empty() {
+        // reproduces it, whoever asks. Only an item whose elaboration does
+        // nothing (`inert`: an import, a later member of a mutual group,
+        // whose slice is its first member's) replays a slice of nothing.
+        if !inert && old.psi.is_empty() && old.events.is_empty() {
             return false;
         }
         // An item that opened a proof which has changed since is elaborated

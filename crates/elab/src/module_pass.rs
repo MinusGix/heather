@@ -210,7 +210,7 @@ impl ModulePassMut<'_> {
             let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start, item_is_inert(item, idx, &plan)) {
                 if let Some(mark) = slice_mark {
                     DeltasMut(self).slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
@@ -476,7 +476,7 @@ impl ModulePassMut<'_> {
             let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
             // included: nothing is re-run over it.
-            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start) {
+            if !forced && DeltasMut(self).try_replay_slice(idx, &slice_source, slice_start, item_is_inert(item, idx, &plan)) {
                 if let Some(mark) = slice_mark {
                     DeltasMut(self).slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
@@ -529,5 +529,17 @@ impl ModulePassMut<'_> {
             errs.push(e);
         }
         errs
+    }
+}
+
+/// Does elaborating this item do nothing ([`ModulePassMut::elab_item_at`])?
+/// An import, which `enter_module` already acted on, and every member of a
+/// mutual group but its first, which elaborates the group. Such an item
+/// cannot be refused, so a slice of nothing is all it ever leaves.
+fn item_is_inert(item: &Item, idx: usize, plan: &ItemPlan) -> bool {
+    match item {
+        Item::Import(_) => true,
+        Item::Decl(_) | Item::Inductive(_) => plan.in_group.get(&idx).is_some_and(|&g| plan.groups[g][0] != idx),
+        _ => false,
     }
 }
