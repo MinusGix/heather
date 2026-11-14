@@ -71,14 +71,22 @@ theorem run_held(own: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().
     Sha256::run::runs_held(own, s, length, holds)
 }
 
-theorem rounds_held(own: List<u8>, s: Sha256, length, i: u64, holds: Sha256::stored().Holds(own, length, s)):
-    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::rounds(s, i), Sha256::rounds::bytes(own, length, i)) {
-    Sha256::rounds::runs_held(own, s, length, i, holds)
+theorem rounds_held(own: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(own, length, s)):
+    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::rounds(s), Sha256::rounds::bytes(own, length)) {
+    Sha256::rounds::runs_held(own, s, length, holds)
 }
 
-theorem expand_held(own: List<u8>, s: Sha256, length, t: u64, holds: Sha256::stored().Holds(own, length, s)):
-    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::expand(s, t), Sha256::expand::bytes(own, length, t)) {
-    Sha256::expand::runs_held(own, s, length, t, holds)
+theorem expand_held(own: List<u8>, s: Sha256, length: u64, holds: Sha256::stored().Holds(own, length, s)):
+    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::expand(s), Sha256::expand::bytes(own, length)) {
+    Sha256::expand::runs_held(own, s, length, holds)
+}
+
+// A `for` loop of a function of the record is a function of the record of
+// its own, the pass counted from where the range starts: what the
+// generator compiles it as, and what a proof about the loop names.
+theorem expand_loop_held(own: List<u8>, s: Sha256, length, j: u64, holds: Sha256::stored().Holds(own, length, s)):
+    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::expand_loop(s, j), Sha256::expand_loop::bytes(own, length, j)) {
+    Sha256::expand_loop::runs_held(own, s, length, j, holds)
 }
 
 // The context at the start of "abc": the initial hash value, and the
@@ -87,10 +95,10 @@ def ABC: Sha256 = Sha256([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e
     [0x61626380, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0);
 
 // The schedule's last word (FIPS 180-4's worked example of "abc").
-theorem abc_schedule(): vector_get(Sha256::expand(ABC, 0).after.schedule, 63, 0) = 0x12b1edeb { refl }
+theorem abc_schedule(): vector_get(Sha256::expand(ABC).after.schedule, 63, 0) = 0x12b1edeb { refl }
 
 // The working variables after the first round: a and e.
-def ABC_BEGUN: Sha256 = Sha256::begin(Sha256::expand(ABC, 0).after, 0).after;
+def ABC_BEGUN: Sha256 = Sha256::begin(Sha256::expand(ABC).after).after;
 
 def ABC_ROUND: Sha256 = Sha256::turn(ABC_BEGUN, Sha256::t1(ABC_BEGUN, 0, ABC_BEGUN.schedule.at(0).zero_extend(32)).value).after;
 

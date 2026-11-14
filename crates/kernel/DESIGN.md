@@ -549,9 +549,12 @@ never landed.
 Conversion compares two vectors over such an element type by their words,
 before Σ-η, packing a structural side by the `fst`/`snd` η would have taken;
 a side that is two stuck spines is left to the neutral-first guard, and a
-difference settles the comparison at the bit it appears on. Native steps
-charge one fuel unit per bit, which is strictly less than the structural path
-spent, so no verdict that fuel allowed becomes a refusal. What does not
+difference settles the comparison at the bit it appears on. A native run
+charges one fuel unit per word, as a literal's entry does: a run is at most
+one word, so the charge stays proportional to the data, and it is strictly
+less than the structural path spent, so no verdict that fuel allowed becomes
+a refusal. (It was one unit per bit until 2026-11-14, which made the
+accounting most of the steps of word-level code with no time behind it.) What does not
 classify — an open `Fin` index, a recursion on a shift count, a state type
 above the cap — folds exactly as it does today, and what does not meet the
 criterion — an element type with a payload of its own, an open width, a chain

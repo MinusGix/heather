@@ -167,6 +167,7 @@ pub fn place_root(place: &Expr) -> Option<&str> {
     match &place.kind {
         ExprKind::Var(x) => Some(x),
         ExprKind::Dot { recv, args: None, tyargs, named, .. } if tyargs.is_empty() && named.is_empty() => place_root(recv),
+        ExprKind::Index { recv, .. } => place_root(recv),
         _ => None,
     }
 }
@@ -181,6 +182,16 @@ pub fn place_update(place: &Expr, value: Expr) -> Option<(String, Expr)> {
             let span = place.span;
             let field = RecordLitField { name: name.clone(), expr: value, span };
             place_update(recv, Expr { kind: ExprKind::RecordUpdate { base: recv.clone(), fields: vec![field] }, span })
+        }
+        // `p[i] := e` is `p := p.put(i, e)`: the receiver's own `put`, as
+        // `p[i]` reads through its `at` (§21).
+        ExprKind::Index { recv, idx } => {
+            let span = place.span;
+            let put = Expr {
+                kind: ExprKind::Dot { recv: recv.clone(), name: "put".into(), tyargs: vec![], args: Some(vec![(**idx).clone(), value]), named: vec![] },
+                span,
+            };
+            place_update(recv, put)
         }
         _ => None,
     }

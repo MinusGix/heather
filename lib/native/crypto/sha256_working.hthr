@@ -66,20 +66,17 @@ import sha256_schedule;
 // Seven of the working variables each moved to the next: h takes g first
 // and b takes a last, so that a word is read before it is stored over
 // (step 3). Pass `i` moves working variable 6 − i.
-runtime fn Sha256::shift(mut self s: Sha256, i: u64) → u64
-    decreases (7 - i).toNat() {
-    if h: i < 7 {
-        s.working := s.working.put(7 - i, s.working.at(6 - i));
-        s.shift(i + 1)
-    } else {
-        i
+runtime fn Sha256::shift(mut self s: Sha256) → u64 {
+    for i in 0..7 {
+        s.working[7 - i] := s.working[6 - i];
     }
+    7
 }
 
 // The working variables after a round, from the two new words: the seven
 // move, then a and e are stored, e over the d that moved there.
 runtime fn Sha256::set(mut self s: Sha256, first, fifth: u64) → u64 {
-    s.shift(0);
+    s.shift();
     s.working := vector_update(vector_update(s.working, 0, first.truncate(32, 32)), 4, fifth.truncate(32, 32));
     fifth
 }

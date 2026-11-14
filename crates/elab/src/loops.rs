@@ -52,6 +52,10 @@ pub(crate) enum Part {
 /// The lowered family, and the designed spellings to install after it.
 pub(crate) struct Family {
     pub(crate) parts: Vec<Part>,
+    /// The counted loops lifted as `mut self` methods of the declaration's
+    /// receiver type (minted names, in the order they are elaborated): a
+    /// prefix generator over the declaration runs over each of them too.
+    pub(crate) methods: Vec<String>,
     /// `f_unfold : f(x̄) = <the lowered body>` by `refl` (§7.1), attempted
     /// after the family and skipped, with its reason recorded, if refused.
     pub(crate) unfold: Decl,
@@ -73,6 +77,20 @@ fn loop_parts(e: &Expr) -> Option<(&Expr, &LamBinder, &Block, Vec<&str>)> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some((&args[0], binders.first()?, b, vars))
+}
+
+/// Does the declaration's body hold a `for` over a range of numerals?
+pub(crate) fn has_numeral_range(decl: &Decl) -> bool {
+    let e = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span: decl.body.span };
+    let mut found = false;
+    crate::surface::walk_expr(&e, &mut |x| {
+        if let Some((iter, ..)) = loop_parts(x)
+            && let Some((lo, hi)) = range_parts(iter)
+        {
+            found |= matches!(lo.kind, ExprKind::Num(_)) && matches!(hi.kind, ExprKind::Num(_));
+        }
+    });
+    found
 }
 
 /// Does the declaration's body hold a lowered loop?
@@ -126,6 +144,13 @@ fn param(name: &str, ty: Ty, span: Span) -> Param {
 struct Lift<'a> {
     decl: &'a Decl,
     tys: &'a dyn BinderTys,
+    /// Whether a range of numerals counts words (`u64`) rather than
+    /// listing `Nat`s ([`Ranges`]).
+    ranges: Ranges,
+    /// The counted loops lifted as `mut self` methods, by minted name.
+    methods: Vec<String>,
+    /// Counted loops lifted so far, for their tests' private names.
+    next_if: usize,
     loops: usize,
     next: usize,
     parts: Vec<Part>,
@@ -356,6 +381,12 @@ impl<'a> Lift<'a> {
         let (iter, x, body, vars) = loop_parts(e).expect("a loop");
         if let Some((cond, measure)) = while_parts(iter) {
             return self.lift_while(e, scope, cond, measure);
+        }
+        if let Some((lo, hi)) = range_parts(iter) {
+            let typed = self.typed(scope);
+            if let Some(word) = self.word_range(&typed, &lo, &hi) {
+                return self.lift_counted(e, scope, lo, hi, word);
+            }
         }
         let span = e.span;
         let typed = self.typed(scope);
@@ -658,6 +689,282 @@ impl Lift<'_> {
     }
 }
 
+/// How a `for` over a range of numerals, `for i in 0..n`, counts: through
+/// a list of `Nat`s (§17), or as a word (§21). A range whose bounds are
+/// words counts words either way.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ranges {
+    Lists,
+    Words,
+}
+
+/// `a..b` as the parser writes it in a `for` header (§17): `List::range(b)`
+/// for `0..b`, `List::range_from(a, b - a)` otherwise. The bounds.
+fn range_parts(e: &Expr) -> Option<(Expr, Expr)> {
+    let ExprKind::App { head, args, named, .. } = &e.kind else { return None };
+    let ExprKind::Var(f) = &head.kind else { return None };
+    if !named.is_empty() {
+        return None;
+    }
+    match (f.as_str(), args.as_slice()) {
+        ("List::range", [hi]) => Some((Expr { kind: ExprKind::Num(heather_numeral::Numeral::ZERO), span: e.span }, hi.clone())),
+        ("List::range_from", [lo, len]) => {
+            let ExprKind::App { head: minus, args: diff, .. } = &len.kind else { return None };
+            if !matches!(&minus.kind, ExprKind::OpSymbol { symbol, .. } if symbol == "-") {
+                return None;
+            }
+            match diff.as_slice() {
+                [hi, lo2] if lo2.span == lo.span && format!("{lo2:?}") == format!("{lo:?}") => Some((lo.clone(), hi.clone())),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Is `t` a fixed-width word, `u64` or `BitVec(w)`?
+fn is_word_ty(t: &Ty) -> bool {
+    match &t.kind {
+        TyKind::Named { name, args } => {
+            let base = name.rsplit("::").next().unwrap_or(name);
+            (args.is_empty() && matches!(base, "u8" | "u16" | "u32" | "u64")) || base == "BitVec"
+        }
+        TyKind::OfExpr(e) => match &e.kind {
+            ExprKind::App { head, .. } => matches!(&head.kind, ExprKind::Var(n) if n.rsplit("::").next() == Some("BitVec")),
+            ExprKind::Var(n) => matches!(n.rsplit("::").next(), Some("u8" | "u16" | "u32" | "u64")),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn op(sym: &str, args: Vec<Expr>, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(Expr { kind: ExprKind::OpSymbol { symbol: sym.into(), fixity: heather_syntax::OpFixity::Infix }, span }),
+            args,
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
+}
+
+fn num(n: u64, span: Span) -> Expr { Expr { kind: ExprKind::Num(heather_numeral::Numeral::from_u64(n)), span } }
+
+fn marked(marker: &str, e: Expr, span: Span) -> Expr { call(var(marker, span), vec![e], span) }
+
+impl Lift<'_> {
+    /// The word type a range over `lo..hi` counts, if it counts one: a
+    /// bound's own type where it is a word, and `u64` for numerals under
+    /// [`Ranges::Words`].
+    fn word_range(&self, typed: &[Binder], lo: &Expr, hi: &Expr) -> Option<Ty> {
+        let numeral = |e: &Expr| matches!(e.kind, ExprKind::Num(_));
+        let mut found: Option<Ty> = None;
+        for b in [lo, hi] {
+            if numeral(b) {
+                continue;
+            }
+            let t = self.infer(typed, b)?;
+            if !is_word_ty(&t) {
+                return None;
+            }
+            found.get_or_insert(t);
+        }
+        match found {
+            Some(t) => Some(t),
+            None if self.ranges == Ranges::Words => Some(named_ty("u64", vec![], lo.span)),
+            None => None,
+        }
+    }
+
+    /// Lift one `for i in lo..hi` over words (§21): a recursion that counts
+    /// `i` from `lo` up to `hi`, its body under the test `i < hi`, so a proof
+    /// the body needs about `i` (an index inside an array) is found from it.
+    ///
+    /// Where the loop's state is the receiver of a `mut self` method, the
+    /// recursion is a `mut self` method of the receiver's type,
+    /// `T::f#run(mut self x: T, c̄, i: W) → W decreases (hi - i).toNat() {
+    /// if i < hi { body; x.f#run(c̄, i + 1) } else { i } }`, the shape a
+    /// `runtime fn` of a laid record compiles as a loop; otherwise
+    /// `f#run(c̄, v̄, i: W) → S`, returning the state.
+    fn lift_counted(&mut self, e: &Expr, scope: &[Local], lo: Expr, hi: Expr, word: Ty) -> R<(Expr, bool, Option<Expr>)> {
+        let (_, x, body, vars) = loop_parts(e).expect("a loop");
+        let span = e.span;
+        if has_leaf(&body.result, &[heather_syntax::NEXT, heather_syntax::BRK, heather_syntax::RET]) {
+            return err("a `for` over words has no `break`, `continue` or `return` yet", span);
+        }
+        let typed = self.typed(scope);
+        let ty_of = |n: &str| typed.iter().rev().find(|b| b.name == n);
+        let mut state_tys = Vec::new();
+        for v in &vars {
+            match ty_of(v).and_then(|b| b.ty.clone()) {
+                Some(t) => state_tys.push(t),
+                None => {
+                    return err(
+                        format!("the type of `{v}`, which this `for` assigns, could not be recovered: annotate \
+                                 it, `let mut {v}: T = …;`"),
+                        span,
+                    );
+                }
+            }
+        }
+        // Captures: what the body or the upper bound reads.
+        let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+        let mut captures: Vec<(String, Ty)> = Vec::new();
+        for (i, b) in typed.iter().enumerate() {
+            if typed[i + 1..].iter().any(|c| c.name == b.name)
+                || b.name == x.name
+                || vars.contains(&b.name.as_str())
+                || b.name.starts_with('#')
+                || !(measure::mentions_context(&whole, &b.name) || measure::mentions_context(&hi, &b.name))
+            {
+                continue;
+            }
+            let Some(t) = b.ty.clone() else {
+                return err(
+                    format!("the type of `{}`, which this `for` reads, could not be recovered: annotate its \
+                             `let`", b.name),
+                    span,
+                );
+            };
+            captures.push((b.name.clone(), t));
+        }
+        // The receiver of a `mut self` method, when it is the whole state.
+        let receiver = self
+            .decl
+            .params
+            .iter()
+            .find(|p| p.is_self)
+            .filter(|p| vars.as_slice() == [p.name.as_str()])
+            .filter(|_| matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD))
+            .cloned();
+        let (mut run, state, run_designed, state_designed) = self.names("run");
+        // A method of the receiver's type is a member under a name of its
+        // own, `T::f_loop` (`T::f_loop2` for a second loop): a generator
+        // over it, and a proof about it, name it as they name `T::f`.
+        if receiver.is_some() {
+            run = if self.loops == 1 { format!("{}_loop", self.decl.name) } else { format!("{}_loop{}", self.decl.name, self.next) };
+        }
+        let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
+        let single = vars.len() == 1;
+        let state_ty = if single { state_tys[0].clone() } else { named_ty(&state, tyargs, span) };
+        if !single {
+            self.push_state(&state, &vars, &state_tys, span);
+            self.designations.push((state_designed, state.clone()));
+        }
+        let i = var(&x.name, span);
+        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        let mut again = body.clone();
+        let end = again.result.span;
+        let next = op("+", vec![i.clone(), num(1, end)], end);
+        let capture_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
+        let (result, recur, done, entry) = match &receiver {
+            Some(r) => {
+                params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+                params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+                params.push(param(&x.name, word.clone(), span));
+                // `x.f#run(c̄, i + 1)`, as a `mut self` method's own call
+                // that ends its body (§19.3).
+                let method = run.rsplit("::").next().unwrap_or(&run).to_string();
+                let dot = |args: Vec<Expr>, at: Span| Expr {
+                    kind: ExprKind::Dot { recv: Box::new(var(&r.name, at)), name: method.clone(), tyargs: vec![], args: Some(args), named: vec![] },
+                    span: at,
+                };
+                let mut on = capture_args(end);
+                on.push(next);
+                let recur = marked(heather_syntax::MUTATED_WHOLE, dot(on, end), end);
+                let done = call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), i.clone()], span);
+                let mut first = capture_args(span);
+                first.push(lo.clone());
+                let entry = marked(heather_syntax::MUTATED_AFTER, dot(first, span), span);
+                let result = Ty { kind: TyKind::Named { name: heather_syntax::MUTATED_RECORD.into(), args: vec![r.ty.clone(), word.clone()] }, span };
+                self.methods.push(run.clone());
+                (result, recur, done, entry)
+            }
+            None => {
+                params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+                params.extend(vars.iter().zip(&state_tys).map(|(v, t)| param(v, t.clone(), span)));
+                params.push(param(&x.name, word.clone(), span));
+                let state_of = |at: Span| {
+                    let args: Vec<Expr> = vars.iter().map(|v| var(v, at)).collect();
+                    if single { args.into_iter().next().expect("one local") } else { call(var(&state, at), args, at) }
+                };
+                let mut on = capture_args(end);
+                on.extend(vars.iter().map(|v| var(v, end)));
+                on.push(next);
+                let recur = call(var(&run, end), on, end);
+                let mut first = capture_args(span);
+                first.extend(vars.iter().map(|v| var(v, span)));
+                first.push(lo.clone());
+                (state_ty.clone(), recur, state_of(span), call(var(&run, span), first, span))
+            }
+        };
+        *again.result = recur;
+        // `if i < hi { body; again } else { done }`, spelled as the parser
+        // spells an `if` whose branches do not name its evidence: a match on
+        // the comparison's bit with the bit's equation bound, which a search
+        // in the body reads as the test (an index inside an array).
+        let test = op("<", vec![i.clone(), hi.clone()], span);
+        let proposition = Ty { kind: TyKind::OfExpr(Box::new(test.clone())), span };
+        let bit = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp { head: Box::new(var("decide_bit", span)), args: vec![proposition] },
+                    span,
+                }),
+                args: vec![],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        self.next_if += 1;
+        let branch = Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::If,
+                generated: false,
+                scrut: Box::new(bit),
+                eqbind: Some(format!("__if_bit_for{}", self.next_if)),
+                motive: None,
+                arms: vec![
+                    Arm { ctor: "True".into(), default: false, binders: vec![], body: Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, span },
+                    Arm { ctor: "False".into(), default: false, binders: vec![], body: done, span },
+                ],
+            },
+            span,
+        };
+        let measure = Expr {
+            kind: ExprKind::Dot { recv: Box::new(op("-", vec![hi.clone(), i.clone()], span)), name: "toNat".into(), tyargs: vec![], args: Some(vec![]), named: vec![] },
+            span,
+        };
+        self.parts.push(Part::Decl(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_interface: false,
+            partial: None,
+            unfolding: Vec::new(),
+            is_evidence: false,
+            value: false,
+            elaborates: None,
+            name: run.clone(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result,
+            decreases: Some(measure),
+            body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
+            span,
+        }));
+        if receiver.is_none() {
+            self.designations.push((measure::unfold_name(&run_designed), measure::unfold_name(&run)));
+            self.designations.push((run_designed, run.clone()));
+        }
+        Ok((entry, single, None))
+    }
+}
+
 /// `\0while(cond, measure)`: a `while`'s header in a loop marker's list.
 fn while_parts(e: &Expr) -> Option<(&Expr, &Expr)> {
     let ExprKind::App { head, args, .. } = &e.kind else { return None };
@@ -719,13 +1026,16 @@ fn contains_loop(e: &Expr) -> bool {
 }
 
 /// Lower a declaration whose body holds loops (module docs).
-pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys) -> R<Family> {
+pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Family> {
     if decl.decreases.is_some() {
         return err("a `for` in a `decreases` function is not supported yet: lift the loop into a function of its own", decl.span);
     }
     let mut lift = Lift {
         decl,
         tys,
+        ranges,
+        methods: Vec::new(),
+        next_if: 0,
         loops: count_loops(&decl.body),
         next: 0,
         parts: Vec::new(),
@@ -774,5 +1084,5 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys) -> R<Family> {
         span,
     };
     parts.push(Part::Decl(Decl { body, ..decl.clone() }));
-    Ok(Family { parts, unfold, designations: lift.designations })
+    Ok(Family { parts, methods: lift.methods, unfold, designations: lift.designations })
 }

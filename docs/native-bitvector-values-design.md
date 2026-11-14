@@ -529,6 +529,17 @@ width from being free. The evaluator-step counts in the after column will
 therefore fall by the compute factor and not to zero, which is the right
 reading of the number.
 
+*Amended 2026-11-14 (issue `native-word-fuel-per-word`):* a run charges
+**one unit per word**, not per bit. A run is at most `BIT_RUN_WIDTH_CAP`
+bits, so the charge is still proportional to the data (a wider vector is
+one run per word, each charged) and still at most what the structural path
+spends; what changed is the constant. Charged per bit, the accounting was
+most of the steps of word-level code — a third of the token-kinds table's
+check, half of a chain of additions — with no time behind it, so a closed
+verdict over `u64` code ran out of fuel at a fraction of the work fuel
+allows anything else. A literal's entry already charged one unit for the
+same reason (DESIGN.md, "A vector literal is a term").
+
 **Certgen controls unchanged.** The perturbed-library mutation controls and
 the native x86 gates are not touched; a round that changes them has changed a
 verdict.
@@ -611,9 +622,9 @@ paragraph and before the "Owed to ch. 07" note. Not yet applied.
 >
 > Conversion compares two native words by their words, before Σ-η, and packs
 > a structural side against a native one by the projections η would have
-> performed. Native steps charge one fuel unit per bit, which is strictly
-> less than the structural path spent, so no verdict that fuel allowed
-> becomes a refusal. What does not classify — an open `Fin` index, a
+> performed. Native steps charge one fuel unit per word (originally per bit;
+> see §8's amendment), which is strictly less than the structural path
+> spent, so no verdict that fuel allowed becomes a refusal. What does not classify — an open `Fin` index, a
 > recursion on a shift count, a state type above the cap — folds exactly as
 > it does today.
 
