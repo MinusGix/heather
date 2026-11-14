@@ -5850,7 +5850,13 @@ fn homes_ids(homes: List<Lent>) → List<Nat> {
 }
 
 fn Node::uses_buffer(self node: Node, b: Nat) → Bool {
-    match node { BufferLoad(_, buffer, _) => buffer.same(b), BufferStore(_, buffer, _, _) => buffer.same(b), _ => False }
+    match node {
+        BufferLoad(_, buffer, _) => buffer.same(b),
+        BufferStore(_, buffer, _, _) => buffer.same(b),
+        WideLoad(_, _, buffer, _) => buffer.same(b),
+        WideStore(_, _, buffer, _, _) => buffer.same(b),
+        _ => False,
+    }
 }
 
 fn nodes_use_buffer(nodes: List<Node>, b: Nat) → Bool {
