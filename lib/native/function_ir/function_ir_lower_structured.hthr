@@ -738,6 +738,20 @@ fn Node::planned_file(self node: Node, place: Place, file: File) → File {
     }
 }
 
+// A word of four bytes (`WideLoad(4, …)`) is the first node of its leaf
+// and the nodes after it lower from the file it leaves: the word in the
+// register chosen, at width 32 (`function_ir_lower_calls`,
+// `File::emit_wide`).
+fn Node::planned_wide(self node: Node, place: Place, file: File) → Option<File> {
+    match node {
+        WideLoad(bytes, output, _, _) => match bytes.same(4) {
+            False => None,
+            True => match place { Into(destination) => Some(file.write(destination, Some(Held(output, Narrow(32))))), Folded => None, Saving(_) => None },
+        },
+        _ => None,
+    }
+}
+
 // The registers a plan made `apart` keeps clear: the ones something is
 // wanted in.
 fn kept_clear(apart: Bool, registers: List<Gpr>) → List<Gpr> { match apart { True => registers, False => [] } }
@@ -773,7 +787,10 @@ fn plan_block(nodes: List<Node>, file: File, live: Reads(), entries: List<Port>,
                     entries, registers, pool, λ (id: Nat) => reads_has(crossed, id), kept_clear(apart, registers))),
             };
             shared(chosen, λ (place: Place) => match node.lower_at(place, file) {
-                None => Planned([place], node.planned_file(place, file)),
+                None => match node.planned_wide(place, file) {
+                    None => Planned([place], node.planned_file(place, file)),
+                    Some(loaded) => plan_block(rest, loaded, later, entries, registers, pool, folds, crossed, apart).put(place),
+                },
                 Some(step) => plan_block(rest, step.file, later, entries, registers, pool, folds, crossed, apart).put(place),
             })
         }),

@@ -3366,7 +3366,7 @@ fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
         BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
-        Resize(_, _, _, _) => True, _ => False,
+        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, _ => False,
     }
 }
 
