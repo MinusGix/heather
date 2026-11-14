@@ -33,6 +33,7 @@ const X86_MODULES: &[(&str, &str)] = &[
     ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("bitvec", BITVEC),
+    ("bitvec_rotate", include_str!("../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),

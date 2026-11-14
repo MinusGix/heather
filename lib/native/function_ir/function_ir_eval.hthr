@@ -26,6 +26,7 @@
 
 import function_ir;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bool;
 import list;
@@ -264,6 +265,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         BitXor(_, _, left, right) => [left, right],
         ShiftLeft(_, _, value, _) => [value],
         LogicalShiftRight(_, _, value, _) => [value],
+        RotateRight(_, _, value, _) => [value],
         ArithmeticShiftRight(_, _, value, _) => [value],
         UnsignedLessThan(_, _, left, right) => [left, right],
         SignedLessThan(_, _, left, right) => [left, right],
@@ -296,6 +298,7 @@ fn Node::value(self node: Node, values: Valuation(), buffers: Buffers() := Nil) 
         BitXor(_, _, left, right) => λ w => values(w, left).bxor(values(w, right)),
         ShiftLeft(_, _, value, amount) => λ w => values(w, value).shift_left(amount),
         LogicalShiftRight(_, _, value, amount) => λ w => values(w, value).shift_right(amount),
+        RotateRight(_, _, value, amount) => λ w => values(w, value).rotr(amount),
         ArithmeticShiftRight(_, _, value, amount) => λ w => values(w, value).arithmetic_shift_right(amount),
         UnsignedLessThan(width, _, left, right) => bit_value(values(width, left).unsigned_lt_bit(values(width, right))),
         SignedLessThan(width, _, left, right) => bit_value(values(width, left).signed_lt_bit(values(width, right))),
@@ -337,6 +340,8 @@ theorem Node::holds_of(self node: Node, values, after: Valuation(), buffers: Buf
             sym(cong_fn(λ (x: BitVec(width)) => x.shift_left(amount), kept(width, value, Inl(refl))))),
         LogicalShiftRight(width, _, value, amount) => λ at_output kept => trans(at_output(width),
             sym(cong_fn(λ (x: BitVec(width)) => x.shift_right(amount), kept(width, value, Inl(refl))))),
+        RotateRight(width, _, value, amount) => λ at_output kept => trans(at_output(width),
+            sym(cong_fn(λ (x: BitVec(width)) => x.rotr(amount), kept(width, value, Inl(refl))))),
         ArithmeticShiftRight(width, _, value, amount) => λ at_output kept => trans(at_output(width),
             sym(cong_fn(λ (x: BitVec(width)) => x.arithmetic_shift_right(amount), kept(width, value, Inl(refl))))),
         UnsignedLessThan(width, _, left, right) => λ at_output kept => trans(at_output(1), trans(
@@ -869,6 +874,7 @@ theorem Node::value_same_over(self node: Node, buffers: Buffers(), values, other
         BitXor(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bxor(y), same(w, left), same(w, right)),
         ShiftLeft(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), same(w, value)),
         LogicalShiftRight(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount), same(w, value)),
+        RotateRight(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount), same(w, value)),
         ArithmeticShiftRight(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount), same(w, value)),
         UnsignedLessThan(width, _, left, right) => λ w => cong_fn(λ (b: Bool) => bit_value(b, w),
             eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), same(width, left), same(width, right))),

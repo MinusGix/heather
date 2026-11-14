@@ -52,6 +52,7 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_stage;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bitvec_nat;
 import bool;
@@ -88,6 +89,7 @@ fn Node::same(self a: Node, b: Node) → Bool {
         BitXor(w, o, l, r) => match b { BitXor(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
         ShiftLeft(w, o, l, r) => match b { ShiftLeft(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
         LogicalShiftRight(w, o, l, r) => match b { LogicalShiftRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        RotateRight(w, o, l, r) => match b { RotateRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
         ArithmeticShiftRight(w, o, l, r) => match b { ArithmeticShiftRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
         UnsignedLessThan(w, o, l, r) => match b { UnsignedLessThan(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
         SignedLessThan(w, o, l, r) => match b { SignedLessThan(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
@@ -144,6 +146,7 @@ theorem Node::same_sound(self a: Node): (b: Node) → a.same(b) = True → a = b
         BitXor(w, o, l, r) => λ b => match b { BitXor(w2, o2, l2, r2) => λ h => con4(λ p q s t => BitXor(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         ShiftLeft(w, o, l, r) => λ b => match b { ShiftLeft(w2, o2, l2, r2) => λ h => con4(λ p q s t => ShiftLeft(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         LogicalShiftRight(w, o, l, r) => λ b => match b { LogicalShiftRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => LogicalShiftRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        RotateRight(w, o, l, r) => λ b => match b { RotateRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => RotateRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         ArithmeticShiftRight(w, o, l, r) => λ b => match b { ArithmeticShiftRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => ArithmeticShiftRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         UnsignedLessThan(w, o, l, r) => λ b => match b { UnsignedLessThan(w2, o2, l2, r2) => λ h => con4(λ p q s t => UnsignedLessThan(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
         SignedLessThan(w, o, l, r) => λ b => match b { SignedLessThan(w2, o2, l2, r2) => λ h => con4(λ p q s t => SignedLessThan(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
@@ -559,6 +562,7 @@ theorem Node::pure_holds(self node: Node, values: Valuation(), before, after: Bu
         BitXor(_, _, _, _) => λ _ ran => ran.left,
         ShiftLeft(_, _, _, _) => λ _ ran => ran.left,
         LogicalShiftRight(_, _, _, _) => λ _ ran => ran.left,
+        RotateRight(_, _, _, _) => λ _ ran => ran.left,
         ArithmeticShiftRight(_, _, _, _) => λ _ ran => ran.left,
         UnsignedLessThan(_, _, _, _) => λ _ ran => ran.left,
         SignedLessThan(_, _, _, _) => λ _ ran => ran.left,
@@ -585,6 +589,7 @@ theorem Node::pure_runs(self node: Node, values: Valuation(), file: Buffers()): 
         BitXor(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         ShiftLeft(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         LogicalShiftRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        RotateRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         ArithmeticShiftRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         UnsignedLessThan(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
         SignedLessThan(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
@@ -799,6 +804,7 @@ fn Node::reading(self node: Node, facts: Facts, a, b: Nat) → Option<Node> {
         BitXor(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(BitXor(w, o, a, b))),
         ShiftLeft(w, o, v, n) => facts.reads(w, v, a).then(Some(ShiftLeft(w, o, a, n))),
         LogicalShiftRight(w, o, v, n) => facts.reads(w, v, a).then(Some(LogicalShiftRight(w, o, a, n))),
+        RotateRight(w, o, v, n) => facts.reads(w, v, a).then(Some(RotateRight(w, o, a, n))),
         ArithmeticShiftRight(w, o, v, n) => facts.reads(w, v, a).then(Some(ArithmeticShiftRight(w, o, a, n))),
         UnsignedLessThan(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(UnsignedLessThan(w, o, a, b))),
         SignedLessThan(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(SignedLessThan(w, o, a, b))),
@@ -882,6 +888,10 @@ theorem Node::reading_runs(self node: Node, facts: Facts, values: Valuation(), h
             let got = facts.reads_one(values, held, w, v, a, LogicalShiftRight(w, o, a, n), new, made);
             j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.shift_right(n), got.left)), ran.right⟩)
         },
+        RotateRight(w, o, v, n) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, v, a, RotateRight(w, o, a, n), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.rotr(n), got.left)), ran.right⟩)
+        },
         ArithmeticShiftRight(w, o, v, n) => λ new made ran => {
             let got = facts.reads_one(values, held, w, v, a, ArithmeticShiftRight(w, o, a, n), new, made);
             j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(n), got.left)), ran.right⟩)
@@ -963,6 +973,7 @@ fn Node::at(self node: Node, id: Nat) → Node {
         BitXor(w, _, l, r) => BitXor(w, id, l, r),
         ShiftLeft(w, _, x, n) => ShiftLeft(w, id, x, n),
         LogicalShiftRight(w, _, x, n) => LogicalShiftRight(w, id, x, n),
+        RotateRight(w, _, x, n) => RotateRight(w, id, x, n),
         ArithmeticShiftRight(w, _, x, n) => ArithmeticShiftRight(w, id, x, n),
         UnsignedLessThan(w, _, l, r) => UnsignedLessThan(w, id, l, r),
         SignedLessThan(w, _, l, r) => SignedLessThan(w, id, l, r),
@@ -995,6 +1006,7 @@ theorem Node::at_agrees(self node: Node, id: Nat, values: Valuation()): node.pur
         BitXor(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         ShiftLeft(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         LogicalShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        RotateRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         ArithmeticShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         UnsignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         SignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
@@ -1032,6 +1044,7 @@ theorem Node::rereading_runs(self node: Node, facts: Facts, values: Valuation(),
         BitXor(w, o, l, r) => λ new made ran => BitXor(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         ShiftLeft(w, o, x, n) => λ new made ran => ShiftLeft(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         LogicalShiftRight(w, o, x, n) => λ new made ran => LogicalShiftRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        RotateRight(w, o, x, n) => λ new made ran => RotateRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         ArithmeticShiftRight(w, o, x, n) => λ new made ran => ArithmeticShiftRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         UnsignedLessThan(w, o, l, r) => λ new made ran => UnsignedLessThan(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
         SignedLessThan(w, o, l, r) => λ new made ran => SignedLessThan(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),

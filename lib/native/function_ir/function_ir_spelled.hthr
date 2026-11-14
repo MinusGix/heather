@@ -63,6 +63,7 @@ fn Node::spelled(self node: Node) → List<Nat> → List<Nat> {
         BitXor(w, o, a, b) => spell_of("BitXor", [w, o, a, b]),
         ShiftLeft(w, o, a, b) => spell_of("ShiftLeft", [w, o, a, b]),
         LogicalShiftRight(w, o, a, b) => spell_of("LogicalShiftRight", [w, o, a, b]),
+        RotateRight(w, o, a, b) => spell_of("RotateRight", [w, o, a, b]),
         ArithmeticShiftRight(w, o, a, b) => spell_of("ArithmeticShiftRight", [w, o, a, b]),
         UnsignedLessThan(w, o, a, b) => spell_of("UnsignedLessThan", [w, o, a, b]),
         SignedLessThan(w, o, a, b) => spell_of("SignedLessThan", [w, o, a, b]),

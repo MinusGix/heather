@@ -12,6 +12,7 @@
 import bitvec;
 import bitvec_bytes;
 import bitvec_resize;
+import bitvec_rotate;
 import bool;
 import list;
 import list_window;
@@ -99,6 +100,11 @@ inductive Node {
     // The bytes of a `width`-bit word reversed (`BitVec::swap_bytes`); the
     // lowering takes `width` 32.
     ByteSwap(width: Nat, output: Nat, source: Nat),
+    // `value` rotated right by the immediate `amount` (`BitVec::rotr`,
+    // defined as the shift pair `value >> amount | value << (width -
+    // amount)`, so the node and the pair it replaces mean the same by
+    // unfolding: `rotate_right_of_shifts`); the lowering takes `width` 32.
+    RotateRight(width: Nat, output: Nat, value: Nat, amount: Nat),
 }
 
 record Region {
@@ -130,6 +136,7 @@ fn node_output(node: Node) → Port {
         WideLoad(bytes, output, _, _) => Port(output, 8 * bytes),
         WideStore(bytes, output, _, _, _) => Port(output, 8 * bytes),
         ByteSwap(width, output, _) => Port(output, width),
+        RotateRight(width, output, _, _) => Port(output, width),
     }
 }
 
@@ -401,6 +408,8 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
              HasAvailableDirectoryPort(directory, value, 8 * bytes, index)),
         ByteSwap(width, output, source) =>
             UnaryImmediateNodeIndexed(directory, index, width, output, source),
+        RotateRight(width, output, value, _) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, value),
     }
 }
 
@@ -851,7 +860,27 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
         WideStore(_, _, _, _, _) => True,
         ByteSwap(width, output, source) =>
             values(width, output) = values(width, source).swap_bytes(),
+        RotateRight(width, output, value, amount) =>
+            values(width, output) = values(width, value).rotr(amount),
     }
+}
+
+// The shift pair a rotation is spelled as, three nodes, means the rotation
+// (`BitVec::rotr` is the pair, so it is the OR's equation unfolded): what a
+// rule of the optimizer rewriting the pair into one `RotateRight` cites,
+// premises in the order the nodes are written (the right shift, the left
+// shift by what is left of the width, the OR of the two in that order).
+theorem rotate_right_of_shifts(values: Valuation(), width, output, value, amount, right, left: Nat,
+    shifted_right: NodeHolds(values, LogicalShiftRight(width, right, value, amount)),
+    shifted_left: NodeHolds(values, ShiftLeft(width, left, value, width - amount)),
+    joined: NodeHolds(values, BitOr(width, output, right, left))):
+    NodeHolds(values, RotateRight(width, output, value, amount))
+{
+    let pair: (values(width, right).bor(values(width, left)) =
+            values(width, value).shift_right(amount).bor(values(width, value).shift_left(width - amount))) =
+        trans(cong_fn(λ (x: BitVec(width)) => x.bor(values(width, left)), shifted_right),
+            cong_fn(λ (y: BitVec(width)) => values(width, value).shift_right(amount).bor(y), shifted_left));
+    trans(joined, pair)
 }
 
 // (A recursive call takes positional arguments only, so each recursive

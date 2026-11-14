@@ -231,6 +231,10 @@ fn Instruction::written(self instruction: Instruction) → Written {
         ShiftImm(_, _, _) => RegisterAndStatus,
         // A byte swap leaves the flags.
         Bswap32(_) => Register,
+        // A 32-bit move leaves the flags.
+        MovSelf32(_) => Register,
+        // A rotate writes CF (and leaves OF undefined) at a nonzero count.
+        RorRI32(_, _) => RegisterAndStatus,
     }
 }
 
@@ -239,6 +243,7 @@ fn Instruction::written(self instruction: Instruction) → Written {
 fn every_instruction() → List<Instruction> {
     [MovRR(Rax, Rax), MovRI(Rax, BitVec::ofNat(0)), AddRR(Rax, Rax), SubRR(Rax, Rax), AndRR(Rax, Rax), OrRR(Rax, Rax), XorRR(Rax, Rax),
         CmpRR(Rax, Rax), SetBelow(Al), SetLess(Al), SetEqual(Al), TestRR(Rax, Rax), AddRI8(Rax, BitVec::ofNat(0)),
-        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0)), Bswap32(Rax)]
+        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0)), Bswap32(Rax),
+        MovSelf32(Rax), RorRI32(Rax, BitVec::ofNat(0))]
 }
-theorem inventory_size(): every_instruction().len() = 17 { refl }
+theorem inventory_size(): every_instruction().len() = 19 { refl }

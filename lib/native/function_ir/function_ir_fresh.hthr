@@ -19,6 +19,7 @@ import function_ir_state;
 import function_ir_writes;
 import function_ir_views;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bool;
 import list;
@@ -180,6 +181,8 @@ theorem Node::holds_agree(self node: Node, values, other: Valuation(), buffers: 
             sym(cong_fn(λ (x: BitVec(width)) => x.shift_left(amount), agree(value, Inr(Inl(refl)), width))))),
         LogicalShiftRight(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
             sym(cong_fn(λ (x: BitVec(width)) => x.shift_right(amount), agree(value, Inr(Inl(refl)), width))))),
+        RotateRight(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
+            sym(cong_fn(λ (x: BitVec(width)) => x.rotr(amount), agree(value, Inr(Inl(refl)), width))))),
         ArithmeticShiftRight(width, output, value, amount) => λ agree h => trans(agree(output, Inl(refl), width), trans(h,
             sym(cong_fn(λ (x: BitVec(width)) => x.arithmetic_shift_right(amount), agree(value, Inr(Inl(refl)), width))))),
         UnsignedLessThan(width, output, left, right) => λ agree h => trans(agree(output, Inl(refl), 1), trans(h,
@@ -219,6 +222,7 @@ theorem Node::runs_agree(self node: Node, values, other: Valuation(), before, af
         BitXor(width, output, left, right) => λ agree ran => ⟨BitXor(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         ShiftLeft(width, output, value, amount) => λ agree ran => ⟨ShiftLeft(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         LogicalShiftRight(width, output, value, amount) => λ agree ran => ⟨LogicalShiftRight(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
+        RotateRight(width, output, value, amount) => λ agree ran => ⟨RotateRight(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         ArithmeticShiftRight(width, output, value, amount) => λ agree ran => ⟨ArithmeticShiftRight(width, output, value, amount).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         UnsignedLessThan(width, output, left, right) => λ agree ran => ⟨UnsignedLessThan(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
         SignedLessThan(width, output, left, right) => λ agree ran => ⟨SignedLessThan(width, output, left, right).holds_agree(values, other, before, agree, ran.left), ran.right⟩,
