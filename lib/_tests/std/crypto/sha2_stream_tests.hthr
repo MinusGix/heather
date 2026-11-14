@@ -17,7 +17,7 @@ theorem fed_three(): Sha2Feed(Nil, Nil, 63).bytes([0x61, 0x62, 0x63]).message() 
 // The sixty-fourth byte completes a block.
 theorem fed_last(full: List<List<u8>>, tail: List<u8>, b: u8): Sha2Feed(full, tail, 0).byte(b).full = full ++ [tail ++ [b]] { refl }
 
-theorem fill_of_130(count: u64, is: count = 130): (count & 63).toNat() = 2 { Sha2::fill_of_count(count, 2, 2, is, trivial) }
+theorem fill_of_130(): ((130: u64) & 63).toNat() = 2 { Sha2::fill_of_count(130, 2, 2, refl, trivial) }
 
 theorem two_words(a, b: u32): Sha2::sha256().words(Sha2::spelled([a, b])) = [a, b] { Sha2::words_spelled([a, b]) }
 

@@ -176,12 +176,11 @@ theorem Sha256::zeroed_block(n: Nat): (s: Sha256) → (i: u64) → (T: List<u8>)
             And(trans(whole, sym(T.append_nil())), refl)
         },
         Succ(m, ih) => λ s i T left at held => {
-            let single: List<u8> = [0];
             let next: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
             let P = Sha256::put(s, i, 0).after;
-            let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) = simp_only(List::len_append, then := Sha256::block_put(s, T, i, 0, held, at, omega));
-            let sized: ((T ++ single).len() = T.len() + 1) = simp_only(List::len_append);
-            let rest = ih(P, i + 1, T ++ single, omega, omega, put);
+            let put: (Sha256::block(P).take((T ++ [0]).len()) = T ++ [0]) = simp_only(List::len_append, then := Sha256::block_put(s, T, i, 0, held, at, omega));
+            let sized: ((T ++ [0]).len() = T.len() + 1) = simp_only(List::len_append);
+            let rest = ih(P, i + 1, T ++ [0], omega, omega, put);
             let step: (Sha256::zeroed(s, i, Succ(m)) = Sha256::zeroed(P, i + 1, m)) = refl;
             let inside: (i.toNat() < 64) = omega;
             simp_only(step, rest.left, rest.right, List::append_assoc, Sha256::put_hash(s, i, 0, inside))
@@ -195,13 +194,12 @@ fn Sha256::filled(s: Sha256, fill: u64) → Sha256 { Sha256::zero(Sha256::put(s,
 // The one bit and zeros to the block's end, after the bytes it held.
 theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), below: T.len() < 64, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::filled(s, fill)) = T ++ Sha2::one_bit(63 - T.len()), Sha256::filled(s, fill).hash = s.hash> {
-    let single: List<u8> = [BitVec::ofNat(0x80)];
     let P = Sha256::put(s, fill, 0x80).after;
     let next: ((fill + 1).toNat() = fill.toNat() + 1) = bv_omega;
-    let put: (Sha256::block(P).take((T ++ single).len()) = T ++ single) = simp_only(List::len_append, then := Sha256::block_put(s, T, fill, 0x80, held, at, below));
+    let put: (Sha256::block(P).take((T ++ [0x80]).len()) = T ++ [0x80]) = simp_only(List::len_append, then := Sha256::block_put(s, T, fill, 0x80, held, at, below));
     let left: ((fill + 1).toNat() + (63 - T.len()) = 64) = omega;
-    let sized: ((T ++ single).len() = T.len() + 1) = simp_only(List::len_append);
-    let zeros = Sha256::zeroed_block(63 - T.len(), P, fill + 1, T ++ single, left, omega, put);
+    let sized: ((T ++ [0x80]).len() = T.len() + 1) = simp_only(List::len_append);
+    let zeros = Sha256::zeroed_block(63 - T.len(), P, fill + 1, T ++ [0x80], left, omega, put);
     let ran: (Sha256::filled(s, fill) = Sha256::zeroed(P, fill + 1, 63 - T.len())) = simp_only(Sha256::filled, Sha256::zero_from(P, fill + 1, 63 - T.len(), left));
     simp_only(ran, zeros.left, zeros.right, List::append_assoc, Sha256::put_hash, discharge := omega(at, below))
 }
