@@ -68,54 +68,13 @@ pub fn begin(previous: u64) -> u64 {
     exports::scan_begin(previous)
 }
 
-/// A token's kind, numbered as `lexer_scan.hthr`'s `KIND_*` constants are
-/// (the test `the_kinds_are_the_modules` reads them from the source). The
-/// names are `heather_syntax::TokKind`'s, with the two kinds a scanner has
-/// and a lexer drops: [`Kind::Space`] and [`Kind::Comment`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-#[rustfmt::skip]
-pub enum Kind {
-    Ident = 1, Num = 2, Scaled = 3, Char = 4, Str = 5, ArgSlot = 6, Hole = 7, LParen = 8,
-    RParen = 9, LBrace = 10, RBrace = 11, Comma = 12, Colon = 13, Semi = 14, At = 15, Dot = 16,
-    Plus = 17, Minus = 18, Bang = 19, PlusPlus = 20, Star = 21, Lt = 22, LtEq = 23, Gt = 24,
-    LBracket = 25, RBracket = 26, LSemantic = 27, RSemantic = 28, LAngle = 29, RAngle = 30,
-    Pipe = 31, Amp = 32, Slash = 33, Percent = 34, Shl = 35, Shr = 36, Arrow = 37, FatArrow = 38,
-    Turnstile = 39, AmpAmp = 40, PipePipe = 41, NormBar = 42, Bullet = 43, Approx = 44, Caret = 45,
-    SupInverse = 46, Join = 47, Meet = 48, Neg = 49, Wedge = 50, Vee = 51, Iff = 52, LArrow = 53,
-    Exists = 54, BigSum = 55, BigProd = 56, UpArrow = 57, Forall = 58, Dollar = 59, Lambda = 60,
-    Eq = 61, Ne = 62, EqEq = 63, ColonEq = 64, ColonColon = 65, Eof = 66, Space = 67, Comment = 68,
-    OPlus = 69, Tilde = 70,
-}
-
-impl Kind {
-    /// Every kind, in code order: `ALL[k as usize - 1] == k`.
-    #[rustfmt::skip]
-    pub const ALL: [Kind; 70] = [
-        Kind::Ident, Kind::Num, Kind::Scaled, Kind::Char, Kind::Str, Kind::ArgSlot, Kind::Hole,
-        Kind::LParen, Kind::RParen, Kind::LBrace, Kind::RBrace, Kind::Comma, Kind::Colon, Kind::Semi,
-        Kind::At, Kind::Dot, Kind::Plus, Kind::Minus, Kind::Bang, Kind::PlusPlus, Kind::Star, Kind::Lt,
-        Kind::LtEq, Kind::Gt, Kind::LBracket, Kind::RBracket, Kind::LSemantic, Kind::RSemantic,
-        Kind::LAngle, Kind::RAngle, Kind::Pipe, Kind::Amp, Kind::Slash, Kind::Percent, Kind::Shl,
-        Kind::Shr, Kind::Arrow, Kind::FatArrow, Kind::Turnstile, Kind::AmpAmp, Kind::PipePipe,
-        Kind::NormBar, Kind::Bullet, Kind::Approx, Kind::Caret, Kind::SupInverse, Kind::Join,
-        Kind::Meet, Kind::Neg, Kind::Wedge, Kind::Vee, Kind::Iff, Kind::LArrow, Kind::Exists,
-        Kind::BigSum, Kind::BigProd, Kind::UpArrow, Kind::Forall, Kind::Dollar, Kind::Lambda, Kind::Eq,
-        Kind::Ne, Kind::EqEq, Kind::ColonEq, Kind::ColonColon, Kind::Eof, Kind::Space, Kind::Comment,
-        Kind::OPlus, Kind::Tilde,
-    ];
-
-    /// The kind with this code, if it is one.
-    pub fn of_code(code: u64) -> Option<Kind> {
-        let index = usize::try_from(code).ok()?.checked_sub(1)?;
-        Kind::ALL.get(index).copied()
-    }
-
-    /// The code the automaton accepts this kind with.
-    pub fn code(self) -> u64 {
-        self as u64
-    }
-}
+// A token's kind, `Kind`: the names are `heather_syntax::TokKind`'s, with
+// the two kinds a scanner has and a lexer drops (`Kind::Space`,
+// `Kind::Comment`), and the codes are `lexer_scan.hthr`'s `KIND_*`. Written
+// from the table `TOKEN_KINDS` (`lib/lang/lexer/lexer_kinds.hthr`) by
+// `scripts/linked`, as the Rust lexer's `ScanKind` is: one file, so neither
+// crate numbers a kind by hand.
+include!("../generated/kinds.rs");
 
 /// A token: its kind, and the bytes `start..end` of the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

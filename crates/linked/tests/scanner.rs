@@ -25,78 +25,10 @@ use heather_syntax::lexer::{
     scanner_installed,
 };
 
-/// The scanner's kind for a lexer token.
+/// The scanner's kind for a lexer token: the lexer's own `scan_code`, whose
+/// numbering is the generated `kinds.rs` this crate's [`Kind`] also is.
 fn kind_of(kind: &TokKind) -> Kind {
-    match kind {
-        TokKind::Ident(_) => Kind::Ident,
-        TokKind::Num(_) | TokKind::SuffixedNum(..) => Kind::Num,
-        TokKind::Scaled(_) => Kind::Scaled,
-        TokKind::Char(_) => Kind::Char,
-        TokKind::Str(_) => Kind::Str,
-        TokKind::ArgSlot(_) => Kind::ArgSlot,
-        TokKind::Hole(_) => Kind::Hole,
-        TokKind::LParen => Kind::LParen,
-        TokKind::RParen => Kind::RParen,
-        TokKind::LBrace => Kind::LBrace,
-        TokKind::RBrace => Kind::RBrace,
-        TokKind::Comma => Kind::Comma,
-        TokKind::Colon => Kind::Colon,
-        TokKind::Semi => Kind::Semi,
-        TokKind::At => Kind::At,
-        TokKind::Dot => Kind::Dot,
-        TokKind::Plus => Kind::Plus,
-        TokKind::Minus => Kind::Minus,
-        TokKind::Bang => Kind::Bang,
-        TokKind::PlusPlus => Kind::PlusPlus,
-        TokKind::Star => Kind::Star,
-        TokKind::Lt => Kind::Lt,
-        TokKind::LtEq => Kind::LtEq,
-        TokKind::Gt => Kind::Gt,
-        TokKind::LBracket => Kind::LBracket,
-        TokKind::RBracket => Kind::RBracket,
-        TokKind::LSemantic => Kind::LSemantic,
-        TokKind::RSemantic => Kind::RSemantic,
-        TokKind::LAngle => Kind::LAngle,
-        TokKind::RAngle => Kind::RAngle,
-        TokKind::Pipe => Kind::Pipe,
-        TokKind::Amp => Kind::Amp,
-        TokKind::OPlus => Kind::OPlus,
-        TokKind::Tilde => Kind::Tilde,
-        TokKind::Slash => Kind::Slash,
-        TokKind::Percent => Kind::Percent,
-        TokKind::Shl => Kind::Shl,
-        TokKind::Shr => Kind::Shr,
-        TokKind::Arrow => Kind::Arrow,
-        TokKind::FatArrow => Kind::FatArrow,
-        TokKind::Turnstile => Kind::Turnstile,
-        TokKind::AmpAmp => Kind::AmpAmp,
-        TokKind::PipePipe => Kind::PipePipe,
-        TokKind::NormBar => Kind::NormBar,
-        TokKind::Bullet => Kind::Bullet,
-        TokKind::Approx => Kind::Approx,
-        TokKind::Caret => Kind::Caret,
-        TokKind::SupInverse => Kind::SupInverse,
-        TokKind::Join => Kind::Join,
-        TokKind::Meet => Kind::Meet,
-        TokKind::Neg => Kind::Neg,
-        TokKind::Wedge => Kind::Wedge,
-        TokKind::Vee => Kind::Vee,
-        TokKind::Iff => Kind::Iff,
-        TokKind::LArrow => Kind::LArrow,
-        TokKind::Exists => Kind::Exists,
-        TokKind::BigSum => Kind::BigSum,
-        TokKind::BigProd => Kind::BigProd,
-        TokKind::UpArrow => Kind::UpArrow,
-        TokKind::Forall => Kind::Forall,
-        TokKind::Dollar => Kind::Dollar,
-        TokKind::Lambda => Kind::Lambda,
-        TokKind::Eq => Kind::Eq,
-        TokKind::Ne => Kind::Ne,
-        TokKind::EqEq => Kind::EqEq,
-        TokKind::ColonEq => Kind::ColonEq,
-        TokKind::ColonColon => Kind::ColonColon,
-        TokKind::Eof => Kind::Eof,
-    }
+    Kind::of_code(scan_code(kind)).unwrap_or_else(|| panic!("{kind:?} has no scanner kind"))
 }
 
 /// The scanner's tokens up to the end or its refusal, and where it refused.
@@ -264,27 +196,19 @@ impl Lcg {
 // ---------------------------------------------------------------------------
 // The automaton's contract with the loop around it.
 
+// `Kind` is generated from `TOKEN_KINDS` (`lib/lang/lexer/lexer_kinds.hthr`),
+// which `heather_cli::linked::token_kinds` holds to the module's `KIND_*`
+// constants; this holds `of_code` to `ALL`, and the automaton's other
+// constants to the module.
 #[test]
 fn the_kinds_are_the_modules() {
-    // `def KIND_IDENT: u64 = 1;` and its fellows, read from the source the
-    // linked code was compiled from, are `Kind`'s numbering.
-    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
-    let mut seen = 0;
-    for line in module.lines() {
-        let Some(rest) = line.strip_prefix("def KIND_") else { continue };
-        let (name, value) = rest.split_once(": u64 = ").expect("a kind's definition");
-        let code: u64 = value.trim_end_matches(';').parse().expect("a kind's code");
-        let kind = Kind::of_code(code).unwrap_or_else(|| panic!("KIND_{name} = {code} is no `Kind`"));
-        assert_eq!(format!("{kind:?}").to_uppercase(), name.replace('_', ""), "KIND_{name} = {code}");
-        seen += 1;
-    }
-    assert_eq!(seen, Kind::ALL.len());
     for (index, kind) in Kind::ALL.iter().enumerate() {
         assert_eq!(kind.code(), index as u64 + 1);
         assert_eq!(Kind::of_code(kind.code()), Some(*kind));
     }
     assert_eq!(Kind::of_code(0), None);
-    assert_eq!(Kind::of_code(71), None);
+    assert_eq!(Kind::of_code(Kind::ALL.len() as u64 + 1), None);
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
     let constant = |name: &str| -> u64 {
         let line = module.lines().find(|line| line.starts_with(&format!("def {name}: u64 = "))).expect(name);
         let value = line.split_once(" = ").expect("a definition").1.trim_end_matches(';');
@@ -296,6 +220,31 @@ fn the_kinds_are_the_modules() {
     assert_eq!(constant("DEAD"), DEAD);
     assert_eq!(constant("FAIL"), FAIL);
     assert_eq!(constant("END"), END);
+}
+
+// The table's spellings are what both lexers cut: each, alone, is one
+// token of its kind that runs to its end, to the Rust lexer and to the
+// linked scanner. (The module proves the second of the evaluated scanner,
+// `token_kinds_spelled_*`; this is the compiled one, and the Rust lexer the
+// table is no theorem about.) The `>>` row holds at the start of a source,
+// where it is a shift.
+#[test]
+fn the_spellings_are_both_lexers() {
+    let mut spelled = 0;
+    for kind in Kind::ALL {
+        for spelling in kind.spellings() {
+            let toks = lex(spelling).unwrap_or_else(|error| panic!("{spelling:?} of {kind:?} does not lex: {}", error.msg));
+            let [tok, eof] = toks.as_slice() else { panic!("{spelling:?} of {kind:?} is not one token: {toks:?}") };
+            assert!(matches!(eof.kind, TokKind::Eof));
+            assert_eq!((kind_of(&tok.kind), tok.span.start, tok.span.end), (kind, 0, spelling.len()), "{spelling:?} to the Rust lexer");
+            assert_eq!(scan(spelling), (vec![Token { kind, start: 0, end: spelling.len() }, Token { kind: Kind::Eof, start: spelling.len(), end: spelling.len() }], None),
+                "{spelling:?} to the linked scanner");
+            spelled += 1;
+        }
+    }
+    // A control: a spelling the table does not have is not a token.
+    assert!(lex("!=").is_err());
+    assert!(spelled > 60, "{spelled}");
 }
 
 /// Every state the automaton can be in: the two starts and what stepping
@@ -1074,10 +1023,10 @@ fn nothing_here_installs_a_scanner() {
     assert_eq!(scanner_counts(), (0, 0));
 }
 
-/// The numbering is written three times: `lexer_scan.hthr`'s `KIND_*`
-/// constants, [`Kind`] (held to the module by `the_kinds_are_the_modules`),
-/// and the lexer's `scan_code`, which this holds to [`Kind`] at every kind
-/// of token there is.
+/// The numbering is written once, in `TOKEN_KINDS`, and both crates read
+/// it from the generated `kinds.rs`; what is left to hold is the lexer's
+/// naming (`TokKind::scan_kind`): every kind but the two a lexer drops is
+/// some token's, which this finds on every source of the repository.
 #[test]
 fn the_lexers_codes_are_the_scanners() {
     assert_eq!(SCAN_SPACE, Kind::Space.code());
@@ -1085,7 +1034,6 @@ fn the_lexers_codes_are_the_scanners() {
     let mut seen = std::collections::HashSet::new();
     let mut hold = |source: &str| {
         for tok in lex(source).expect("lexes") {
-            assert_eq!(scan_code(&tok.kind), kind_of(&tok.kind).code(), "{:?}", tok.kind);
             seen.insert(kind_of(&tok.kind));
         }
     };
