@@ -449,3 +449,58 @@ theorem field_call_apart(nb: NumC, a, b: Nat): nb.number(a) = nb.number(b) { ome
 // (issues/omega-certificate-drops-type-arguments.md).
 theorem nil_typed(n: Nat, h: n + List::Nil<Nat>.len() = 3): n <= 3 { omega }
 theorem nil_typed_goal(n: Nat): n + List::Nil<Bool>.len() = n { omega }
+
+// ---- Terms opened before the search (issues/omega-opens-closed-terms.md) ----
+
+// A product at a successor is the product at its predecessor plus the
+// factor, by `mul`'s definition: the induction hypothesis states the former.
+theorem mul_succ_open(a, k: Nat, h: a * k = 10): a * Succ(k) = 10 + a { omega }
+theorem mul_succ_checking(a, k: Nat, h: a * k <= 10): a <= 10 + a {
+    let open: (a * Succ(k) <= 10 + a) = omega;
+    omega
+}
+// Control: the successor adds a factor's worth, so dropping it is refused.
+// expect-error: `omega` got stuck
+theorem mul_succ_dropped(a, k: Nat): a * Succ(k) = a * k { omega }
+
+// A call whose argument computes to a constructor is the call at the
+// constructor's fields, at an open element type and through a recursion.
+fn wrap<A>(x: A, xs: List<A>) → List<A> { Cons(x, xs) }
+fn doubled_each<A>(xs: List<A>) → List<A> {
+    match xs { Nil => Nil, Cons(x, rest) => wrap(x, wrap(x, doubled_each(rest))) }
+}
+theorem wrap_len<A>(x: A, xs: List<A>): wrap(x, xs).len() = xs.len() + 1 { omega }
+theorem doubled_each_len<A>(xs: List<A>): doubled_each(xs).len() = 2 * xs.len() {
+    match xs {
+        Nil => refl,
+        Cons(x, rest) => {
+            let more = doubled_each_len(rest);
+            omega
+        },
+    }
+}
+theorem wrap_len_checking<A>(x: A, xs: List<A>, h: xs.len() < 5): wrap(x, xs).len() <= 5 {
+    let k: (wrap(x, xs).len() = Succ(xs.len())) = omega;
+    omega
+}
+// Control: the constructor's field is one shorter, not as long.
+// expect-error: `omega` got stuck
+theorem wrap_len_wrong<A>(x: A, xs: List<A>): wrap(x, xs).len() = xs.len() { omega }
+
+// A definition's base case that is a parameter is that parameter.
+fn shifted(x, n: Nat) → Nat { match n { Zero => x, Succ(k) => shifted(x, k) + 1 } }
+theorem shifted_zero(x, y: Nat, h: y < x): y < shifted(x, 0) { omega }
+
+// A fold over a list of known length is the arithmetic it builds.
+fn digits(ds: List<Nat>) → Nat { ds.foldl(λ (acc: Nat) (d: Nat) => acc * 10 + d, 0) }
+theorem digits_three(a, b, c: Nat): digits([a, b, c]) = 100 * a + 10 * b + c { omega }
+// Control: the order of the digits is kept.
+// expect-error: `omega` got stuck
+theorem digits_swapped(a, b, c: Nat): digits([a, b, c]) = 100 * c + 10 * b + a { omega }
+
+// A closed call is its numeral, past the few hundred steps an atom's
+// other probes spend.
+theorem closed_numeral(n: Nat, h: n < List::replicate(True, 300).len()): n < 301 { omega }
+// Control: a computation past the bound stays an atom, and the report names it.
+// expect-error: did not compute within 4096 steps
+theorem closed_past_bound(n: Nat, h: n < List::replicate(True, 100000).len()): n < 100001 { omega }

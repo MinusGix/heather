@@ -172,6 +172,18 @@ property of Heather.
   `omega(g.ok)` replaces an `is_true_and`/`leb_sound` chain or an `_elim`
   whose conjuncts only feed omega ([[omega-reads-bool-guards]]); a stuck
   `match` inside the guard is still not read.
+- **Bind no `refl` to open a term for it.** `omega` computes a closed call
+  to its numeral (`zero.toNat()`), opens `a * Succ(b)` to `a * b + a`,
+  names a call at the fields of an argument that computes to a
+  constructor (`Sha2::ending(z, l).len()` is `Succ` of its tail's length,
+  `spelled(Cons(w, rest)).len()` four successors of `spelled(rest).len()`),
+  follows a definition to its arithmetic (`x.doubled(0)` is `x`, a fold
+  over `[b0, b1, b2, b3]` the sum it builds), and states every word's range
+  `w.toNat() < 2^n` at a literal width, met in the goal or only in a fact,
+  so no `toNat_lt_pow` beside a `bv_omega` either
+  ([[omega-opens-closed-terms]], design §22). Each opening is bounded; a
+  term a bound stopped is listed after the residual as `left as atoms by a
+  bound [...]`, and that is the term to state if a fact is still needed.
 - **Over records and layouts at a literal program, prefer Nat step lemmas**
   (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
   The kernel converts the atoms' definitions. omega does read a field at

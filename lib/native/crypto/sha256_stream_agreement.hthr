@@ -178,7 +178,6 @@ theorem Sha256::push_full(s: Sha256, full: List<List<u8>>, T: List<u8>, fill, by
     let single: List<u8> = [b];
     let last = T ++ single;
     let longer = T.len_append(single);
-    let one: (T.len() + single.len() = Succ(T.len())) = refl;
     let sized: (last.len() = 64) = omega;
     let count: (Succ(T.len()) = Sha256::block(P).len()) = trans(Nat::cong_succ(space), sym(Sha256::len_block(P)));
     let block: (Sha256::block(P) = last) =
@@ -323,7 +322,6 @@ theorem Sha256::close_short(s: Sha256, full: List<List<u8>>, T: List<u8>, room: 
         trans(cong_fn(λ (z: List<u8>) => T ++ Cons(BitVec::ofNat(0x80), z), zeros), sym(T.append_assoc(Sha2::one_bit(55 - T.len()), Sha2::zero_bytes(8))));
     let l1 = T.len_append(Sha2::one_bit(55 - T.len()));
     let l2 = Sha2::len_zero_bytes(55 - T.len());
-    let ones: (Sha2::one_bit(55 - T.len()).len() = Succ(Sha2::zero_bytes(55 - T.len()).len())) = refl;
     let sized: (56 = head.len()) = omega;
     let front: (Sha256::block(Pd).take(56) = head) =
         trans(cong_fn(λ (bytes: List<u8>) => bytes.take(56), trans(padded.left, cut)), j(sym(sized), λ k _ => (head ++ Sha2::zero_bytes(8)).take(k) = head, head.take_append_len(Sha2::zero_bytes(8))));
@@ -418,7 +416,6 @@ theorem Sha256::absorb_from(n: Nat): (s: Sha256) → (message: List<u8>) → (mn
             let P = Sha256::push(s, fill, B);
             let F = Sha2Feed::fed(full, T, room, B.truncate(8, 56));
             let inside: (j.toNat() < mn.toNat()) = omega;
-            let top = BitVec::toNat_lt_pow(64, mn);
             let next: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
             let after: ((j + 1).toNat() = Succ(j.toNat())) = omega;
             let rest = ih(P.after, message, mn, j + 1, P.value, F.full, F.tail, F.room, omega, sized, pushed.left, pushed.right);
@@ -447,7 +444,6 @@ theorem Sha256Took::length(s: Sha256, message: List<u8>, took: Sha256Took(s, mes
     let whole = Sha2::len_joined(took.feed.full, took.tracks.whole);
     let sum = List::joined(took.feed.full).len_append(took.feed.tail);
     let same: (took.feed.message().len() = message.len()) = cong_fn(λ (m: List<u8>) => m.len(), took.said);
-    let opened: (took.feed.message().len() = (List::joined(took.feed.full) ++ took.feed.tail).len()) = refl;
     omega
 }
 
@@ -472,7 +468,6 @@ theorem Sha256::update_took(s: Sha256, message, part: List<u8>, mn: u64, sized: 
     let f = took.feed;
     let fill = Sha256Took::fill(s, message, took);
     let zero: u64 = 0;
-    let start: (zero.toNat() = 0) = refl;
     let A = Sha256::absorb(s, part, mn, 0, s.count & 63);
     let fed = Sha256::absorb_from(mn.toNat(), s, part, mn, 0, s.count & 63, f.full, f.tail, f.room, omega, sized, took.tracks, fill);
     let G = f.bytes(part);

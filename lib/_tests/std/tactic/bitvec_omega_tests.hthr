@@ -230,3 +230,21 @@ theorem searches_left_open(j: BitVec(64), n: Nat, h: j < 48, k: n < 10):
 // A goal another goal's statement mentions is spelled by its name.
 // expect-error: ?rest : word_below(j + ofNat(16), inside := ?p) = j + ofNat(16)
 theorem goal_in_goal(j: BitVec(64), h: j < 48): word_below(j + 16, inside := ?p) = j + 16 { ?rest }
+
+// ---- Every word's range, met in the goal or only in a fact (issues/bv-omega-hypothesis-word-bound.md) ----
+
+// `m` appears only in the fact, and the fact's bound on `j` is what keeps
+// `j + 1` from wrapping.
+theorem next_below_fact_word(j, m: BitVec(64), inside: j.toNat() < m.toNat()): (j + 1).toNat() = j.toNat() + 1 { bv_omega }
+// `omega` itself states the range of each word it meets, at a literal width.
+theorem range_from_fact(j, m: BitVec(8), h: j.toNat() < m.toNat()): j.toNat() < 255 { omega }
+theorem range_in_goal(x: BitVec(16)): x.toNat() <= 65535 { omega }
+theorem range_checking(x: BitVec(8), k: Nat, h: k = x.toNat()): k < 300 {
+    let r: (x.toNat() < 256) = omega;
+    omega
+}
+// Control: the range's top is reached, so a bound one below it is refused.
+// expect-error: `omega` got stuck
+theorem range_not_below_top(x: BitVec(8)): x.toNat() < 255 { omega }
+// A closed word is its value.
+theorem closed_word(k: Nat): BitVec::ofNat(5, n := 64).toNat() + k = k + 5 { omega }
