@@ -145,6 +145,6 @@ fn calls_itself() → Function { Function(parameters := [0], body := Call(0, [0]
 theorem recursion_refused(): lower_program([calls_itself()], []) = None { refl }
 theorem forward_call_refused(): lower_program([double(), calls_itself()], [Into(Rax)]) = None { refl }
 
-// Seven arguments do not fit the six registers.
-fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0], 1), result := 1) }
-theorem seven_arguments_refused(): lower_program([wide(), double()], [Into(Rax)]) = None { refl }
+// Nine arguments do not fit the six registers and the two stack words.
+fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0, 0, 0], 1), result := 1) }
+theorem nine_arguments_refused(): lower_program([wide(), double()], [Into(Rax)]) = None { refl }
