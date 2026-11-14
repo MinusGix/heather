@@ -487,6 +487,64 @@ theorem nodes_hold_blind(values: Valuation(), buffers: Buffers(), nodes: List<No
 }
 
 // ---------------------------------------------------------------------------
+// A table read: the last node of its leaf
+
+// A leaf whose last node reads a constant table (`TableRead`): the nodes
+// before it lower as one block, then the table sits in the code and the
+// word at the index is loaded from it (`function_ir_lower_calls`,
+// `File::emit_table`).
+record TableLeaf { width: Nat, output: Nat, bits: Nat, index: Nat, entries: List<Nat> }
+
+fn Node::as_table(self node: Node) → Option<TableLeaf> {
+    match node { TableRead(width, output, bits, index, entries) => Some(TableLeaf(width, output, bits, index, entries)), _ => None }
+}
+
+fn leaf_table(nodes: List<Node>) → Option<TableLeaf> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match rest { Nil => node.as_table(), Cons(_, _) => leaf_table(rest) },
+    }
+}
+
+// The nodes before the last.
+fn nodes_front(nodes: List<Node>) → List<Node> {
+    match nodes {
+        Nil => Nil,
+        Cons(node, rest) => match rest { Nil => Nil, Cons(_, _) => Cons(node, nodes_front(rest)) },
+    }
+}
+
+fn TableLeaf::Holds(self table: TableLeaf, values: Valuation()) → Type {
+    values(table.width, table.output) = BitVec::ofNat(table_entry(table.entries, values(table.bits, table.index).toNat()))
+}
+
+theorem Node::as_table_holds(self node: Node, values: Valuation(), table: TableLeaf):
+    node.as_table() = Some(table) → NodeHolds(values, node) → table.Holds(values) {
+    match node {
+        TableRead(_, _, _, _, _) => λ found holds =>
+            j(found, λ o _ => o.All(λ (t: TableLeaf) => t.Holds(values)), holds),
+        _ => λ no _ => absurd(no),
+    }
+}
+
+theorem leaf_table_holds(values: Valuation(), table: TableLeaf, nodes: List<Node>):
+    leaf_table(nodes) = Some(table) → NodesHold(values, nodes) → NodesHold(values, nodes_front(nodes)) ∧ table.Holds(values) {
+    match nodes {
+        Nil => λ no _ => absurd(no),
+        Cons(node, rest) => (match rest as λ r =>
+            (leaf_table(r) = Some(table) → NodesHold(values, r) → NodesHold(values, nodes_front(r)) ∧ table.Holds(values)) →
+            leaf_table(Cons(node, r)) = Some(table) → NodesHold(values, Cons(node, r)) →
+                NodesHold(values, nodes_front(Cons(node, r))) ∧ table.Holds(values) {
+            Nil => λ _ found holds => ⟨trivial, node.as_table_holds(values, table, found, holds.left)⟩,
+            Cons(_, _) => λ later found holds => {
+                let inner = later(found, holds.right);
+                ⟨⟨holds.left, inner.left⟩, inner.right⟩
+            },
+        })(leaf_table_holds(values, table, rest)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The load's code
 
 // A register written that is none of `registers`.
