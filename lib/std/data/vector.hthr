@@ -286,3 +286,32 @@ theorem vector_update_past<A>(n: Nat, v: [A; n], i: Nat, a: A, past: n <= i): ve
     vector_ext(n, vector_update(v, i, a), v, λ j inside => vector_index_update_other(n, v, i, j, a, inside, λ same =>
         i.lt_irrefl(i.lt_of_lt_of_le(n, i, j(same, λ k _ => k < n, inside), past))))
 }
+
+// `vector_get` of an update, inside the vector: the element stored, and any other unchanged.
+theorem vector_get_update_same<A>(n: Nat, v: [A; n], i: Nat, a, pad: A, inside: i < n): vector_get(vector_update(v, i, a), i, pad) = a {
+    trans(vector_get_inside(n, vector_update(v, i, a), i, pad, inside), vector_index_update_same(n, v, i, i, a, inside, refl))
+}
+
+theorem vector_get_update_other<A>(n: Nat, v: [A; n], i, k: Nat, a, pad: A, inside: k < n, other: ¬(k = i)): vector_get(vector_update(v, i, a), k, pad) = vector_get(v, k, pad) {
+    trans(vector_get_inside(n, vector_update(v, i, a), k, pad, inside),
+        trans(vector_index_update_other(n, v, i, k, a, inside, other), sym(vector_get_inside(n, v, k, pad, inside))))
+}
+
+// An updated vector's entries are the entries updated.
+theorem vector_entries_update<A>(n: Nat): (v: [A; n]) → (i: Nat) → (a: A) → vector_entries(vector_update(v, i, a)) = vector_entries(v).update(i, λ _ => a) {
+    match n as λ m => (v: [A; m]) → (i: Nat) → (a: A) → vector_entries(vector_update(v, i, a)) = vector_entries(v).update(i, λ _ => a) {
+        Zero => λ v i a => refl,
+        Succ(_, ih) => λ v i => match i {
+            Zero => λ a => refl,
+            Succ(k) => λ a => cong_fn(λ (t: List<A>) => Cons(head(v), t), ih(tail(v), k, a)),
+        },
+    }
+}
+
+// A vector with one more at its end has that one last among its entries.
+theorem vector_entries_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) → vector_entries(snoc(xs, x)) = vector_entries(xs) ++ [x] {
+    match n as λ m => (xs: [A; m]) → (x: A) → vector_entries(snoc(xs, x)) = vector_entries(xs) ++ [x] {
+        Zero => λ xs x => refl,
+        Succ(_, ih) => λ xs x => cong_fn(λ (t: List<A>) => Cons(head(xs), t), ih(tail(xs), x)),
+    }
+}

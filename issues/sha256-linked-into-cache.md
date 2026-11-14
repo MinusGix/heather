@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [crypto-hash,nh-library]
 blocked-by: [native-library-exports-design, sha2-compress-native]
 created: 2026-11-10
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 Stage C2 of `docs/native-lexer-crypto-roadmap.md` §4: the compiled, proved
@@ -58,3 +58,4 @@ regeneration gate holds the checked-in artifact to its source.
   than its instruction share, since the code is straight-line: the
   `merkle_walk_ns` column is 0.22 s of a 15 s run.
 - 2026-11-12: What this issue waits on has changed shape (2026-11-12, [[sha2-compress-native]]'s log). There is a linked SHA-256 with `crates/cache`'s three calls, `heather_linked::sha256::stream::Sha256` (`new`, `update`, `finish`), every byte of it compiled Heather with its certificate, the padding included, so the "smallest trusted wrapper" in Rust is now 328 bytes lent and three calls. It is **not proved against the specification**: the certificates say the code computes the Heather functions, and that those are SHA-256 rests on tests (the NIST vectors, the `sha2` crate at every length and every split). So the title's "proved" is not met, and switching the cache to it today would put tested-but-unproved code under every cache key in place of tested Rust. Nothing here was switched; the switch, with or without the proof first, is Minus's. Also to weigh before it: the linked code takes a byte at a time and keeps its working variables in memory, so it is much slower than the scalar Rust path, unmeasured ([[linked-scanner-speed-unmeasured]] is the same question for the scanner).
+- 2026-11-14: The linked hash is now proved against the specification: `Sha256::digest_spec` (`lib/native/crypto/sha256_stream_agreement.hthr`) says the digest a context holds after `init`, `update` and `finish` is `Sha2::digest` of the message, for any number of parts (`Sha256::update_took`, `Sha256::finish_digest`), over `Sha256::run_spec` for the compression. With the generator's `*_holds` theorems it reaches the record the span holds after the linked code. One seam is left before the bytes the Rust wrapper copies out: [[stored-record-bytes-from-held-value]]. The switch is still Minus's, and the speed question is unchanged. A tactic gap met on the way: [[bv-omega-hypothesis-word-bound]].
