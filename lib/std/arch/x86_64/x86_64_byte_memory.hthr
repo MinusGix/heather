@@ -109,6 +109,20 @@ theorem X86Profile::read_at(self x: X86Profile, m: X86Memory(x), a: BitVec(64), 
         (match r { Ok(byte) => Some(byte), Err(_) => None }) = Some<BitVec(8)>(m.cells(a)), refl)
 }
 
+// An executable address is below the canonical boundary: above it the
+// profile gives no permission.
+theorem X86Profile::executable_canonical(self x: X86Profile, m: X86Memory(x), a: BitVec(64), exec: x.perm(m, a).execute = True):
+    a.toNat() < Nat::pow(2, 47) {
+    match low: Succ(a.toNat()).leb(Nat::pow(2, 47)) {
+        True => Succ(a.toNat()).leb_sound(Nat::pow(2, 47), Bool::is_true_of_eq(low)),
+        False => {
+            let none: (x.perm(m, a) = Perm::none()) =
+                j(sym(low), λ s _ => (match s { True => m.perms(a), False => Perm::none() }) = Perm::none(), refl);
+            absurd(trans(sym(exec), cong_fn<Perm, Bool>(λ p => p.execute, none)))
+        },
+    }
+}
+
 // A read sees the cell and the permission, nothing else: memories with the
 // same permissions whose cell agrees there read alike.
 theorem X86Profile::read_agree(self x: X86Profile, m: X86Memory(x), cells: BitVec(64) → BitVec(8), a: BitVec(64), same: cells(a) = m.cells(a)):
@@ -291,6 +305,7 @@ fn DataRegion::stack(self r: DataRegion) → Stack<X86Memory(r.profile)>(r.profi
         },
         keeps_code := λ m i fits word bytes at resident =>
             r.profile.store_keeps_code(m, next_rip(r.low, i), word_bytes(word), r.not_executed(m, i, 8, fits), bytes, at, resident),
+        sees_code := λ m a exec => ⟨refl, r.profile.executable_canonical(m, a, exec)⟩,
         readable := λ m i fits => {
             let a = next_rip(r.low, i);
             let o = λ (t: Nat) => r.profile.read(m, next_rip(a, t));

@@ -421,6 +421,7 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
         BufferStore(_, buffer, index, value) => BufferStore(dest, buffer, index, value),
         Resize(from, to, _, source) => Resize(from, to, dest, source),
         SignResize(from, to, _, source) => SignResize(from, to, dest, source),
+        TableRead(width, _, bits, index, entries) => TableRead(width, dest, bits, index, entries),
     }
 }
 

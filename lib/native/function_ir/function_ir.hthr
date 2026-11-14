@@ -73,6 +73,14 @@ inductive Node {
     // complement: sign-extended when `to` is wider, its low `to` bits when
     // narrower (`BitVec::sresize`; `BitVec::sresize_sign_extend`).
     SignResize(from: Nat, to: Nat, output: Nat, source: Nat),
+    // Entry `index` of a constant table, a `width`-bit word: the index is a
+    // `bits`-bit word and the table has `2^bits` entries (validity's), so
+    // every index names one and none is a junk value. The entries are the
+    // node's own, so a read at a known index folds by evaluation and two
+    // reads of one table are the same node; byte order is not in the
+    // meaning, the lowering lays the table out
+    // (issues/rt-fixed-arrays-and-tables.md).
+    TableRead(width: Nat, output: Nat, bits: Nat, index: Nat, entries: List<Nat>),
 }
 
 record Region {
@@ -100,6 +108,7 @@ fn node_output(node: Node) → Port {
         BufferStore(output, _, _, _) => Port(output, 64),
         Resize(_, to, output, _) => Port(output, to),
         SignResize(_, to, output, _) => Port(output, to),
+        TableRead(width, output, _, _, _) => Port(output, width),
     }
 }
 
@@ -358,6 +367,10 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
         SignResize(from, to, output, source) =>
             ProducedAt(directory, index, output, to) ∧
             HasAvailableDirectoryPort(directory, source, from, index),
+        TableRead(width, output, bits, at, entries) =>
+            ProducedAt(directory, index, output, width) ∧
+            (HasAvailableDirectoryPort(directory, at, bits, index) ∧
+             entries.len() = Nat::pow(2, bits)),
     }
 }
 
@@ -628,6 +641,12 @@ fn buffer_byte(buffers: Buffers(), buffer, index: Nat) → BitVec(8) {
 // A byte as a word, zero-extended, as a load leaves it in a register.
 fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
 
+// Entry `index` of a constant table, zero past its end (where validity
+// leaves no index).
+fn table_entry(entries: List<Nat>, index: Nat) → Nat {
+    match entries.nth(index) { None => 0, Some(entry) => entry }
+}
+
 // A node's equation. A load reads `buffers`, which no node of a region
 // changes: a store's equation is the state evaluation's
 // (`function_ir_state`), and it constrains nothing here.
@@ -679,6 +698,8 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
             values(to, output) = BitVec::ofNat(values(from, source).toNat()),
         SignResize(from, to, output, source) =>
             values(to, output) = values(from, source).sresize(to),
+        TableRead(width, output, bits, index, entries) =>
+            values(width, output) = BitVec::ofNat(table_entry(entries, values(bits, index).toNat())),
     }
 }
 

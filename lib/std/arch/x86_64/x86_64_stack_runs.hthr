@@ -21,6 +21,8 @@ import x86_64_stack;
 import x86_64_kept;
 import x86_64_asm;
 import x86_64_asm_runs;
+import memory;
+import bitvec_shift_nat;
 import bitvec;
 import bool;
 import list;
@@ -415,6 +417,222 @@ theorem Site::lea_lands<M>(self site: Site<M>, s: MachineState<M>, from: Nat, le
     trans(lea_rip_result(lea, s),
         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 7, lea.displacement), here),
             jumps_forward(site.origin, from, 7, lea.displacement, to, lands)))
+}
+
+// Eight resident code bytes read as their word through a data access that
+// sees code (`Stack.sees_code`), below the canonical boundary: a word of a
+// constant table placed in the code.
+theorem Stack::code_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    b0, b1, b2, b3, b4, b5, b6, b7: BitVec(8), rest: List<BitVec(8)>, start: BitVec(64),
+    resident: CodeResident(fetch, memory, Cons(b0, Cons(b1, Cons(b2, Cons(b3, Cons(b4, Cons(b5, Cons(b6, Cons(b7, rest)))))))), start)):
+    (start.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, start) = Some(immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7))) {
+    let r1 = resident.right.right.right;
+    let r2 = r1.right.right.right;
+    let r3 = r2.right.right.right;
+    let r4 = r3.right.right.right;
+    let r5 = r4.right.right.right;
+    let r6 = r5.right.right.right;
+    let r7 = r6.right.right.right;
+    let s0 = stack.sees_code(memory, start, resident.left);
+    let s7 = stack.sees_code(memory, next_rip(start, 7), r7.left);
+    let e0: (data.read(memory, next_rip(start, 0)) = Some(b0)) = trans(s0.left, resident.right.left);
+    let e1: (data.read(memory, next_rip(start, 1)) = Some(b1)) = trans(stack.sees_code(memory, next_rip(start, 1), r1.left).left, r1.right.left);
+    let e2: (data.read(memory, next_rip(start, 2)) = Some(b2)) = trans(stack.sees_code(memory, next_rip(start, 2), r2.left).left, r2.right.left);
+    let e3: (data.read(memory, next_rip(start, 3)) = Some(b3)) = trans(stack.sees_code(memory, next_rip(start, 3), r3.left).left, r3.right.left);
+    let e4: (data.read(memory, next_rip(start, 4)) = Some(b4)) = trans(stack.sees_code(memory, next_rip(start, 4), r4.left).left, r4.right.left);
+    let e5: (data.read(memory, next_rip(start, 5)) = Some(b5)) = trans(stack.sees_code(memory, next_rip(start, 5), r5.left).left, r5.right.left);
+    let e6: (data.read(memory, next_rip(start, 6)) = Some(b6)) = trans(stack.sees_code(memory, next_rip(start, 6), r6.left).left, r6.right.left);
+    let e7: (data.read(memory, next_rip(start, 7)) = Some(b7)) = trans(s7.left, r7.right.left);
+    let top: (Succ(Nat::pow(2, 47)) <= Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let low = s0.right;
+    let last: (next_rip(start, 7).toNat() = start.toNat() + 7) = BitVec::offset_toNat(64, start, 7, omega(low, top));
+    let high = s7.right;
+    ⟨omega(last, high), word_of_eight(data.read(memory, next_rip(start, 0)), data.read(memory, next_rip(start, 1)),
+        data.read(memory, next_rip(start, 2)), data.read(memory, next_rip(start, 3)), data.read(memory, next_rip(start, 4)),
+        data.read(memory, next_rip(start, 5)), data.read(memory, next_rip(start, 6)), data.read(memory, next_rip(start, 7)),
+        b0, b1, b2, b3, b4, b5, b6, b7, e0, e1, e2, e3, e4, e5, e6, e7)⟩
+}
+
+// A table of words laid out in the code, little-endian, entry by entry,
+// and its entry `index` as the load reads it (zero past the end, where a
+// read is never placed).
+fn table_bytes(entries: List<Nat>) → List<BitVec(8)> {
+    match entries { Nil => [], Cons(entry, rest) => word_bytes(BitVec::ofNat(entry)) ++ table_bytes(rest) }
+}
+fn table_word(entries: List<Nat>, index: Nat) → BitVec(64) {
+    BitVec::ofNat(match entries.nth(index) { None => 0, Some(entry) => entry })
+}
+theorem table_bytes_length(entries: List<Nat>): table_bytes(entries).len() = 8 * entries.len() {
+    match entries {
+        Nil => refl,
+        Cons(entry, rest) => {
+            let inner = table_bytes_length(rest);
+            trans(List::len_append(word_bytes(BitVec::ofNat(entry)), table_bytes(rest)), omega(inner))
+        },
+    }
+}
+
+// Entry `index` of a resident table reads as its word, below the canonical
+// boundary.
+theorem Stack::table_word_at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    entries: List<Nat>): (index: Nat) → (start: BitVec(64)) → CodeResident(fetch, memory, table_bytes(entries), start) → index < entries.len() →
+    (next_rip(start, 8 * index).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        (read_word(data, memory, next_rip(start, 8 * index)) = Some(table_word(entries, index))) {
+    match entries {
+        Nil => λ index start resident inside => { let bad: False = omega(inside); false_elim(bad) },
+        Cons(entry, rest) => λ index start resident inside => {
+            let w = BitVec::ofNat(entry, n := 64);
+            let parts = resident_split(fetch, memory, word_bytes(w), table_bytes(rest), start, resident);
+            match index {
+                Zero => {
+                    let got = stack.code_word(memory, imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w),
+                        imm_byte6(w), imm_byte7(w), table_bytes(rest), start, resident);
+                    ⟨got.left, trans(got.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), immediate_bytes_roundtrip(w)))⟩
+                },
+                Succ(k) => {
+                    let later = stack.table_word_at(memory, rest, k, next_rip(start, 8), parts.right, omega(inside));
+                    let moved: (next_rip(next_rip(start, 8), 8 * k) = next_rip(start, 8 * Succ(k))) =
+                        trans(rip_compose(start, 8, 8 * k), rip_count(start, omega));
+                    j(moved, λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, a) = Some(table_word(rest, k))), later)
+                },
+            }
+        },
+    }
+}
+
+// The indexed address is `index` words past the base, when eight times the
+// index does not wrap.
+theorem indexed_address_at(load: IndexedWordLoad, gprs: Gprs, start: BitVec(64), index: Nat,
+    base_at: read_gpr(load.base.gpr(), gprs) = start, index_at: read_gpr(load.index.gpr(), gprs).toNat() = index,
+    small: index * 8 < Nat::pow(2, 64)): indexed_address(load, gprs) = next_rip(start, 8 * index) {
+    let x = read_gpr(load.index.gpr(), gprs);
+    let fits: (x.toNat() * Nat::pow(2, 3) < Nat::pow(2, 64)) = j(sym(index_at), λ v _ => v * Nat::pow(2, 3) < Nat::pow(2, 64), small);
+    let shifted: (x.shift_left(3).toNat() = 8 * index) = trans(BitVec::toNat_shift_left(64, x, 3, fits), omega(index_at));
+    trans(sym(BitVec::iter_add_eq_add(64, read_gpr(load.base.gpr(), gprs), x.shift_left(3))),
+        trans(BitVec::cong_iterate_increment_count(64, read_gpr(load.base.gpr(), gprs), shifted),
+            BitVec::cong_iterate_increment(64, 8 * index, base_at)))
+}
+
+// The word at entry `index` of a table at `base` (`IndexedWordLoad`), as a
+// piece: no `Asm` constructor of its own.
+fn asm_indexed_load(load: IndexedWordLoad) → Asm { Piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
+
+// The indexed load at a label: the eight bytes at the address read as a
+// word, below the canonical boundary.
+theorem Site::moves_indexed_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: IndexedWordLoad, at: asm_back(site.program, k) = At(before, name, asm_indexed_load(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
+        (indexed_address(load, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(site.data, s.memory, indexed_address(load, s.gprs)) = Some(word)) ∧ post(indexed_word_load_after(load, word, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 4, pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = indexed_word_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitIndexedWordLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, asm_indexed_load(load), at, here),
+             Exists(found.witness, IndexedWordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), 4, here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A constant table read in place
+
+// A table read where it is used: LEA of the table's address, which is the
+// bytes after the jump that skips them, the jump, the table, and the load
+// of its entry at the index register into the register the LEA wrote. No
+// label is named, so the program's labels say nothing of it.
+fn table_lea(destination: Gpr) → Asm {
+    Piece(lea_rip_bytes(LeaRip(destination := destination, displacement := BitVec::ofNat(5))), 7,
+        lea_rip_length(LeaRip(destination := destination, displacement := BitVec::ofNat(5))))
+}
+fn table_jump(length: Nat) → Asm { Piece(near_control_bytes(JumpNear(BitVec::ofNat(length))), 5, refl) }
+fn table_piece(entries: List<Nat>) → Asm { Piece(table_bytes(entries), 8 * entries.len(), table_bytes_length(entries)) }
+fn table_read_load(base: SibBase, index: SibIndex) → IndexedWordLoad { IndexedWordLoad(destination := base.gpr(), base := base, index := index) }
+fn table_read_prog(prog: Prog, base: SibBase, index: SibIndex, entries: List<Nat>) → Prog {
+    At(At(At(At(prog, 0, table_lea(base.gpr())), 0, table_jump(8 * entries.len())), 0, table_piece(entries)), 0,
+        asm_indexed_load(table_read_load(base, index)))
+}
+
+// The table read at a label: from registers `g` whose index register holds
+// an index inside the table, the base register ends holding the entry,
+// having held the table's address, and nothing else changes. The jump's
+// displacement must read back as the table's length (`jump`, checked by
+// whoever emits it).
+theorem Site::moves_table_read<M>(self site: Site<M>, writes: ByteWrites<M>, stack: Stack<M>(site.fetch, site.data),
+    fits: FillsFit(site.program, no_fills()), k: Nat, prog: Prog, base: SibBase, index: SibIndex, entries: List<Nat>,
+    at: asm_back(site.program, k) = table_read_prog(prog, base, index, entries),
+    jump: BitVec::ofNat(8 * entries.len(), n := 32).sign_extend(32).toNat() = 8 * entries.len(),
+    apart: (!base.gpr().same(index.gpr())).IsTrue(),
+    pre, post: Gprs → M → Type,
+    step: (g: Gprs) → (m: M) → pre(g, m) → (read_gpr(index.gpr(), g).toNat() < entries.len()) ∧
+        post(write_gpr(base.gpr(), table_word(entries, read_gpr(index.gpr(), g).toNat()),
+            write_gpr(base.gpr(), next_rip(site.origin, prog_len(prog) + 12), g)), m)):
+    site.Moves(writes, prog_len(prog), prog_len(table_read_prog(prog, base, index, entries)),
+        λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory)) {
+    λ s0 here resident holds => {
+        let p = prog_len(prog);
+        let n = entries.len();
+        let d = base.gpr();
+        let lea = LeaRip(destination := d, displacement := BitVec::ofNat(5));
+        let control = JumpNear(BitVec::ofNat(8 * n));
+        let load = table_read_load(base, index);
+        let with_lea = At(prog, 0, table_lea(d));
+        let with_jump = At(with_lea, 0, table_jump(8 * n));
+        let with_table = At(with_jump, 0, table_piece(entries));
+        let back = λ (j: Nat) => trans(sym(asm_back_back(k, site.program, j)), cong_fn<Prog, Prog>(λ q => asm_back(q, j), at));
+        let at_lea: (asm_back(site.program, 3 + k) = with_lea) = back(3);
+        let at_jump: (asm_back(site.program, 2 + k) = with_jump) = back(2);
+        let at_table: (asm_back(site.program, 1 + k) = with_table) = back(1);
+        // The LEA: the table's address, 5 past its end.
+        let s1 = lea_rip_after(lea, s0);
+        let five: (BitVec::ofNat(5, n := 32).sign_extend(32).toNat() = 5) = refl;
+        let address: (near_branch_target(s0.rip, 7, BitVec::ofNat(5)) = next_rip(site.origin, p + 12)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 7, BitVec::ofNat(5)), here),
+                jumps_forward(site.origin, p, 7, BitVec::ofNat(5), p + 12, omega(five)));
+        let one: FetchedStep(site.fetch, site.data, s0, s1) = Exists(EmitLeaRip(lea),
+            ⟨site.item_fetched(fits, s0, resident, 3 + k, prog, 0, table_lea(d), at_lea, here), refl⟩);
+        let here1: (s1.rip = next_rip(site.origin, p + 7)) = site.rip_after(s0, p, 7, here);
+        // The jump over the table.
+        let s2 = execute_near_control(control, s1);
+        let two: FetchedStep(site.fetch, site.data, s1, s2) = Exists(EmitNear(control),
+            ⟨site.item_fetched(fits, s1, resident, 2 + k, with_lea, 0, table_jump(8 * n), at_jump, here1), ⟨refl, refl⟩⟩);
+        let here2: (s2.rip = next_rip(site.origin, (p + 12) + 8 * n)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, BitVec::ofNat(8 * n)), here1),
+                jumps_forward(site.origin, p + 7, 5, BitVec::ofNat(8 * n), (p + 12) + 8 * n, omega(jump)));
+        // The load of the entry.
+        let g = s0.gprs;
+        let got = step(g, s0.memory, holds);
+        let i = read_gpr(index.gpr(), g).toNat();
+        let table_at = site.item_resident(fits, s0.memory, resident, 1 + k, with_jump, 0, table_piece(entries), at_table);
+        let word = stack.table_word_at(s0.memory, entries, i, next_rip(site.origin, p + 12), table_at, got.left);
+        let base_at: (read_gpr(d, s2.gprs) = next_rip(site.origin, p + 12)) =
+            trans(read_gpr_after_write(d, near_branch_target(s0.rip, 7, BitVec::ofNat(5)), g), address);
+        let index_at: (read_gpr(index.gpr(), s2.gprs).toNat() = i) =
+            cong_fn<BitVec(64), Nat>(λ x => x.toNat(), write_spares(d, index.gpr(), near_branch_target(s0.rip, 7, BitVec::ofNat(5)), g, apart));
+        let small: (i * 8 < Nat::pow(2, 64)) = {
+            let wide = BitVec::toNat_lt_pow(64, BitVec::ofNat(8 * n, n := 32).sign_extend(32));
+            omega(got.left, jump, wide)
+        };
+        let at_address: (indexed_address(load, s2.gprs) = next_rip(next_rip(site.origin, p + 12), 8 * i)) =
+            indexed_address_at(load, s2.gprs, next_rip(site.origin, p + 12), i, base_at, index_at, small);
+        let s3 = indexed_word_load_after(load, table_word(entries, i), s2);
+        let three: FetchedStep(site.fetch, site.data, s2, s3) = Exists(EmitIndexedWordLoad(load),
+            ⟨site.item_fetched(fits, s2, resident, k, with_table, 0, asm_indexed_load(load), at, here2),
+             Exists(table_word(entries, i), IndexedWordLoadStep(
+                canonical := j(sym(at_address), λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), word.left),
+                present := j(sym(at_address), λ a _ => read_word(site.data, s0.memory, a) = Some(table_word(entries, i)), word.right),
+                execution := refl))⟩);
+        let steps = machine_steps_trans(site.fetch, site.data, writes, s0, s1, s3,
+            machine_steps_of_fetched(site.fetch, site.data, writes, s0, s1, fetched_steps_one(site.fetch, site.data, s0, s1, one)),
+            machine_steps_trans(site.fetch, site.data, writes, s1, s2, s3,
+                machine_steps_of_fetched(site.fetch, site.data, writes, s1, s2, fetched_steps_one(site.fetch, site.data, s1, s2, two)),
+                machine_steps_of_fetched(site.fetch, site.data, writes, s2, s3, fetched_steps_one(site.fetch, site.data, s2, s3, three))));
+        let rewritten = j(sym(address), λ a _ => post(write_gpr(d, table_word(entries, i), write_gpr(d, a, g)), s0.memory), got.right);
+        Exists(s3, ⟨steps, ⟨site.rip_after(s2, (p + 12) + 8 * n, 4, here2), ⟨resident, rewritten⟩⟩⟩)
+    }
 }
 
 // ---------------------------------------------------------------------------

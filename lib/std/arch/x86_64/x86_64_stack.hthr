@@ -244,6 +244,11 @@ record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
     // Every word of it reads as some word, whatever was stored there: what
     // a frame not yet written holds.
     readable: (memory: M) → (i: Nat) → i + 8 <= size → Exists<BitVec(64)>(λ word => read_word(data, memory, next_rip(low, i)) = Some(word)),
+    // Code reads as data, below the canonical boundary: a constant table
+    // placed in the code is read where it was fetched from
+    // (issues/rt-fixed-arrays-and-tables.md).
+    sees_code: (memory: M) → (a: BitVec(64)) → fetch.executable(memory, a) = True →
+        (data.read(memory, a) = fetch.read_byte(memory, a)) ∧ (a.toNat() < Nat::pow(2, 47)),
 }
 
 fn Stack::at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat) → BitVec(64) {

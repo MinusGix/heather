@@ -298,6 +298,8 @@ theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Va
         Resize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := w),
             agree(from, source, Inl(refl))),
         SignResize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), agree(from, source, Inl(refl))),
+        TableRead(_, _, bits, index, entries) => λ agree w => cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(entries, x.toNat()), n := w),
+            agree(bits, index, Inl(refl))),
     }
 }
 

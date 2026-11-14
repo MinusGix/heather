@@ -655,3 +655,58 @@ theorem beside_stores_read_only<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M
         fetch, data, last, origin, stack, top)(Lending::reading([1, 1], addresses, buffers), refl, loan, 0, trivial,
         λ b => match b { Zero => λ _ => refl, Succ(_) => λ no => false_elim(no) }, arguments, result, before, after)
 }
+
+// ---------------------------------------------------------------------------
+// A constant table read
+
+// table(i): the entry of [10, 20, 30, 40] at the low two bits of `i`. The
+// index is resized to its two bits in the leaf, so it is in a register
+// at its narrow width when the read takes it.
+fn table() → Function {
+    Function(parameters := [0], lent := 0,
+        body := Dataflow(Region(inputs := Ports([word(0)]),
+            nodes := [Resize(from := 64, to := 2, output := 1, source := 0),
+                TableRead(width := 64, output := 2, bits := 2, index := 1, entries := [10, 20, 30, 40])],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+theorem table_evaluable(): program_evaluable([table()]).IsTrue() { trivial }
+theorem table_reads(): program_eval_over([], [table()], 0, [w(5)]) = w(20) { refl }
+
+theorem table_present(): lower_program_lent([table()], plan_program([table()]), [0]).is_some().IsTrue() { trivial }
+
+// The index settled to its two bits in RDI, the table's address in RAX,
+// the jump over its four words, then RAX loaded from [RAX + RDI*8].
+fn table_program() → Prog {
+    table_read_prog(Start.label(1).put(Block([frame_allocate()])).put(Block(settle_code(Rdi, 2))),
+        BRax, XRdi, [10, 20, 30, 40])
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem table_planned(): plan_program([table()]) = [Into(Rdi), Into(Rax)] { refl }
+theorem table_lowers(): lower_program_lent([table()], plan_program([table()]), [0]) = Some(table_program()) { refl }
+
+// Called, it returns the entry its meaning says, whatever memory holds
+// beside its own code.
+theorem table_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([0], addresses, buffers).spans())):
+    Site<M>(fetch, data, table_program(), last, origin).CallsOver(stack, program_effects([table()]), 1,
+        Lending::reading([0], addresses, buffers), top) {
+    lower_program_lent_correct<M>([table()], plan_program([table()]), Lending::reading([0], addresses, buffers), table_program(),
+        table_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
+        λ b stores => false_elim(program_quiet_stores([table()], b, trivial, stores)))
+}
+
+// An index the leaf does not narrow is a word, which no table has room
+// for: the read is refused.
+fn table_wide() → Function {
+    Function(parameters := [0], lent := 0,
+        body := Dataflow(Region(inputs := Ports([word(0)]),
+            nodes := [TableRead(width := 64, output := 2, bits := 64, index := 0, entries := [10, 20, 30, 40])],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+theorem table_wide_refused(): lower_program_lent([table_wide()], plan_program([table_wide()]), [0]) = None { refl }

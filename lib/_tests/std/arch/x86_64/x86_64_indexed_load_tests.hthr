@@ -1,0 +1,52 @@
+// MOV r64, [base + index*8] (`IndexedWordLoad`, x86_64_data_read;
+// `asm_indexed_load`, x86_64_stack_runs): its bytes are the manual's, the
+// step decoder reads them back without taking the plain load's SIB for one,
+// and the address is the base plus eight times the index. Tests, not
+// library (docs/test-value-audit.md §4.5).
+import x86_64; import x86_64_data_read; import x86_64_fetched_code; import x86_64_step_forms; import x86_64_asm; import x86_64_stack_runs;
+import bitvec; import bool; import list; import logic; import nat; import option;
+
+// `mov rax, [rbx + rcx*8]` is 48 8B 04 CB; `mov r9, [r12 + r13*8]` is
+// 4F 8B 0C EC (REX.R, REX.X and REX.B all set).
+theorem indexed_rax_bytes(): indexed_word_load_bytes(IndexedWordLoad(destination := Rax, base := BRbx, index := XRcx)) =
+    [BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xcb)] { refl }
+theorem indexed_r9_bytes(): indexed_word_load_bytes(IndexedWordLoad(destination := R9, base := BR12, index := XR13)) =
+    [BitVec::ofNat(0x4f), BitVec::ofNat(0x8b), BitVec::ofNat(0x0c), BitVec::ofNat(0xec)] { refl }
+
+// The decoder reads both back.
+theorem indexed_rax_decodes(): decode_step_form(indexed_word_load_bytes(IndexedWordLoad(destination := Rax, base := BRbx, index := XRcx))) =
+    Some(FormEmitted(EmitIndexedWordLoad(IndexedWordLoad(destination := Rax, base := BRbx, index := XRcx)))) { refl }
+theorem indexed_r9_decodes(): decode_step_form(indexed_word_load_bytes(IndexedWordLoad(destination := R9, base := BR12, index := XR13))) =
+    Some(FormEmitted(EmitIndexedWordLoad(IndexedWordLoad(destination := R9, base := BR12, index := XR13)))) { refl }
+
+// The plain load from [RSP] and from [R12] has a SIB naming no index: it
+// stays the plain load.
+theorem rsp_load_is_plain(): decode_step_form(word_load_bytes(WordLoad(destination := Rcx, base := Rsp))) =
+    Some(FormEmitted(EmitWordLoad(WordLoad(destination := Rcx, base := Rsp)))) { refl }
+theorem r12_load_is_plain(): decode_step_form(word_load_bytes(WordLoad(destination := Rcx, base := R12))) =
+    Some(FormEmitted(EmitWordLoad(WordLoad(destination := Rcx, base := R12)))) { refl }
+
+// Negative controls: an index at scale 4 (SIB 8B) is no form, and an index
+// with base 101 under mod 00 (an absolute address, not RBP) is none either.
+theorem scale_four_is_none(): decode_step_form([BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0x8b)]) = None { refl }
+theorem absolute_base_is_none(): decode_step_form([BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xcd)]) = None { refl }
+
+// The address: base 1000 and index 3 read at 1024.
+fn sample_gprs() → Gprs { write_gpr(Rcx, BitVec::ofNat(3), write_gpr(Rbx, BitVec::ofNat(1000), zero_gprs())) }
+theorem indexed_address_scales():
+    indexed_address(IndexedWordLoad(destination := Rax, base := BRbx, index := XRcx), sample_gprs()) = BitVec::ofNat(1024) { refl }
+theorem indexed_address_not_unscaled():
+    indexed_address(IndexedWordLoad(destination := Rax, base := BRbx, index := XRcx), sample_gprs()).eq_bit(BitVec::ofNat(1003)) = False { refl }
+
+// A table read in place (`table_read_prog`, x86_64_stack_runs): LEA rax,
+// [rip + 5] (48 8D 05 05 00 00 00), JMP over the 16 table bytes (E9 10 00
+// 00 00), the two entries little-endian, then MOV rax, [rax + rcx*8].
+theorem table_read_length(): prog_len(table_read_prog(Start, BRax, XRcx, [1, 2])) = 32 { refl }
+theorem table_read_bytes(): assemble(no_fills(), table_read_prog(Start, BRax, XRcx, [1, 0x0102]), []) =
+    [BitVec::ofNat(0x48), BitVec::ofNat(0x8d), BitVec::ofNat(0x05), BitVec::ofNat(5), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(0xe9), BitVec::ofNat(16), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(1), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(2), BitVec::ofNat(1), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xc8)] { refl }
+// The jump's displacement reads back as the table's length.
+theorem table_jump_reads_back(): BitVec::ofNat(16, n := 32).sign_extend(32).toNat() = 16 { refl }
