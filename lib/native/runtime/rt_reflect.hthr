@@ -559,6 +559,12 @@ fn rt_base_chars(cs: List<Char>, acc: List<Char>) → List<Char> {
 
 fn rt_base_name(name: String) → String { String(rt_base_chars(name.chars, [])) }
 
+// Whether `name` is the member `base` of the vector type (`Vec::at`). The
+// host names a global by its last part alone, so this reads the base; each
+// caller goes on to require the receiver to be an array field of the record,
+// which is what tells `Vec::put` from a record's own `put`.
+fn rt_vec_member(name: String, base: String) → Bool { Known::str_same(rt_base_name(name), base) }
+
 // The field `name` of `r` where `r` is a constructor's value of a type
 // with one constructor that the program holds neither as a record nor by
 // a repr: the field's own term, which is what the read computes to. A
@@ -751,20 +757,30 @@ fn rt_element_at(k: Known, args: List<Handle>) → Tac<Option<ElementRead>> {
                     None => pure(None),
                     Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
                         None => pure(None),
-                        Some(e) => rt_to_nat_of(i).bind(λ word => match word {
-                            None => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` at an index that is not a word's `toNat()`: write `vector_get(t." ++ p.snd ++ ", i.toNat(), 0)`, or `vector_index` at a literal"),
-                            Some(w) => {
-                                let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
-                                let same <- defeq(Hd(pad), App(e.narrow, App(App(Global(of_nat), NatLit(64)), NatLit(0))));
-                                match same {
-                                    False => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get` with a value past the end that is not 0: the code answers 0 there"),
-                                    True => e.reads_at(w).bind(λ r => pure(Some(r))),
-                                }
-                            },
-                        }),
+                        Some(e) => rt_refuse("an element of the array field `" ++ p.snd ++ "` by `vector_get`, which answers a value past the end: write `t." ++ p.snd ++ ".at(i)` at a word `i`, whose proof that it is inside is found where it is called, or `vector_index` at a literal"),
                     },
                 }),
             },
+        },
+    }
+}
+
+// An element of an array field the setup named, read at an index that is
+// a word: `x.f.at(i, _)` (`Vec::at`) stands for the accessor's read of the
+// array at `i`. The proof that `i` is inside is the source's and is not
+// read here.
+fn rt_element_word(k: Known, args: List<Handle>) → Tac<Option<ElementRead>> {
+    match args.nth(0) {
+        None => pure(None),
+        Some(v) => match args.nth(1) {
+            None => pure(None),
+            Some(i) => rt_field_of_local(k, v).bind(λ field => match field {
+                None => pure(None),
+                Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
+                    None => pure(None),
+                    Some(e) => e.reads_at(i).bind(λ r => pure(Some(r))),
+                },
+            }),
         },
     }
 }
@@ -776,7 +792,10 @@ fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Element
     match k.named {
         Nil => pure(None),
         Cons(_, _) => match Known::str_same(rt_base_name(name), "vector_index") {
-            False => match Known::str_same(rt_base_name(name), "vector_get") { False => pure(None), True => rt_element_at(k, args) },
+            False => match rt_vec_member(name, "at") {
+                True => rt_element_word(k, args),
+                False => match Known::str_same(rt_base_name(name), "vector_get") { False => pure(None), True => rt_element_at(k, args) },
+            },
             True => match args.nth(0) {
                 None => pure(None),
                 Some(v) => match args.nth(1) {

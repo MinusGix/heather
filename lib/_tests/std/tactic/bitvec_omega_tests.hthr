@@ -130,6 +130,32 @@ theorem binder_phantom_declines(xs: List<Phantom(3)>, k, t: Nat, v: Phantom(3),
     omega
 }
 
+// ---- A bound stated of a sum is not the sum's own bound ----
+
+// `g` bounds `toNat(j + 16)`, which says nothing about whether `j + 16`
+// wrapped, so the sum's fact cannot be read from it (reading it took the
+// fact it was to give: issues/found-proof-differs-across-recursion-companions.md).
+theorem stated_of_sum_is_no_bound(j: BitVec(64), b: j < 48, g: (j + 16).toNat() < 64): j.toNat() < 64 { bv_omega }
+
+// ---- A proof left to a default, found from the test around the call ----
+
+fn word_below(i: BitVec(64), inside: i.toNat() < 64 := bv_omega) → BitVec(64) { i }
+
+// An operator whose operands are such calls: each has its type once the
+// declaration has the goal slots its searches want
+// (issues/operator-on-call-with-defaulted-argument.md).
+fn two_below(j: BitVec(64), h: j < 48) → BitVec(64) { word_below(j + 14) + word_below(j) }
+
+// Under `decreases` each found proof is a declaration of its own, so the
+// body and the unfolding equation name one term.
+fn climb(acc, j: BitVec(64)) → BitVec(64)
+    decreases (48 - j).toNat() {
+    if h: j < 48 { climb(acc + word_below(j + 16), j + 1) } else { acc }
+}
+theorem climb_unfolds(acc, j: BitVec(64)): True { let step = climb_unfold(acc, j); trivial }
+
+// expect-error: `word_below`'s `inside` was left to its default, which did not give
+fn climb_loose(j: BitVec(64)) → BitVec(64) { word_below(j + 16) }
 // ---- A word under a mask is at most the mask (issues/bv-omega-masked-word-bound.md) ----
 
 // The index into a ring of sixteen words.

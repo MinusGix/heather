@@ -914,20 +914,49 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
 
    **An element at an index that is a word** is built
    (`lib/_tests/native/runtime/runtime_held_index_tests.hthr`):
-   `vector_get(t.f, i.toNat(), 0)` reads it and `t.f := vector_update(t.f,
-   i.toNat(), x)` stores it, at an array of words.
+   `t.f.at(i)` reads it and `t.f := t.f.put(i, x)` stores it, at an
+   array of words, with `i` the word itself. They are methods of the
+   vector type (`Vec::at`, `Vec::put`).
 
-   The element is the **total** one. `vector_get` answers its pad past
-   the vector's end and `vector_update` changes nothing there, and the
-   code does the same: it tests the index against the array's count,
-   reads 0 past it and stores nothing. So the function of the record
-   has no bound to prove at the access, the span function needs none to
-   be the record function, and a loop's body is the same term whether or
-   not its test bounds the index. The alternative, an index with a proof
-   (`vector_index(v, i.toNat(), inside)`), saves the comparison and
-   costs a proof parameter in compiled code, and the bound a schedule's
-   `w[t - 16]` needs is not the one its loop's test gives; the
-   comparison a proof would make unnecessary is item 5's.
+   The element **takes a proof that the index is inside**, and the
+   proof is found, not written (Minus, 2026-11-13: a value for past the
+   end is a sign of too little automation). `Vec::at`, `Vec::put`
+   and `Vec::put_byte_be` (`stored_words.hthr`) each have a last
+   parameter `inside: i.toNat() < n := bv_omega`: left out, the search
+   reads the tests around the call (`if h: i < 64`) and the call is
+   refused where it finds none. So a loop is written with a counter its
+   test bounds every index by (SHA-256's schedule counts `j` to 48 and
+   writes `W[j + 16]`). This was first built total (`vector_get(…, 0)`,
+   `vector_update`, the code answering 0 past the end); those forms are
+   now refused in a function of a record, with the form to write.
+
+   Two steps, of which the first is built. *The source requires the
+   proof*: each function is defined as the total one beside it, so the
+   function of the record and its pin are unchanged, and the code still
+   makes the accessor's compare, which the proof says is never failed.
+   *The code drops the compare*: the record theory then has to carry
+   each site's bound to the accessor's unchecked law, which is the same
+   facts-on-a-path a callee's proof parameter needs (a caller's meaning
+   names its callee as a total function of record and words today), so
+   an index whose bound is an invariant and not a test (`Sha256::put`'s
+   fill below 64) is tested where it is used for now.
+
+   What the first step needed of the language:
+
+   - *A found proof is one term* (`measure::lift_found`,
+     issues/found-proof-differs-across-recursion-companions.md). Under
+     `decreases` a body's syntax is elaborated once for each generated
+     declaration, and a search that reads its context found a different
+     proof each time; the kernel was then left comparing two proofs at
+     the same head where the companions need one call. Each such proof
+     is now a theorem `f#found_N` over the binders its goal and the
+     facts about them name, found once and passed by name at the call.
+   - *An `if h:`'s test is a fact a search can read* where a branch
+     does not name `h` (issues/if-evidence-hidden-from-tactics.md).
+   - *An operator on such a call*
+     (issues/operator-on-call-with-defaulted-argument.md): a defaulted
+     parameter is no reason to wait for an expected type, and a probe
+     that fails only for want of a goal slot asks for the restart.
 
    - *Library.* A codec's accessor has a checked element reader and
      writer beside its word's (`Accessor`'s `read_at`, `write_at`,
@@ -952,11 +981,11 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      and the accessor's laws are the codec's there. A store's offset and
      count are read off the literals that bound them, as a field's
      offset is; a read needs no such knowledge.
-   - *Reflector.* `vector_get` at a field of the record and a word's
-     `toNat()` stands for the accessor's checked read; a field's new
-     value that is the field under `vector_update`s at words is one
-     store for each, the innermost first. The index is any word the body
-     computes.
+   - *Reflector.* `Vec::at` at a field of the record stands for the
+     accessor's checked read at its index word; a field's new value that
+     is the field under `Vec::put`s is one store for each, the
+     innermost first. The index is any word the body computes, and the
+     proof is not read.
    - *Generator.* An array is marked whole, by its part: one entry and
      one application of the array's lemma, whatever its count.
 

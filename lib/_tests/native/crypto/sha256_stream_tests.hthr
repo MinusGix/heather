@@ -140,13 +140,12 @@ theorem with_byte_last(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n :=
 // Past the word's bytes it is the word.
 theorem with_byte_past(): BitVec::with_byte_be(4, BitVec::ofNat(0x11223344, n := 32), 4, b(0xab)) = BitVec::ofNat(0x11223344) { refl }
 
-// `Sha256::put` is what the generator says of it: a span that holds a
-// context is left holding the context with that byte of its schedule
-// replaced.
-theorem put_holds(span: List<BitVec(8)>, s: Sha256, length, at, byte: BitVec(64), holds: Sha256::stored().Holds(span, length, s)):
-    Sha256::stored().Holds(Sha256::put::bytes(span, length, at, byte).after, length,
-        s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }) {
-    Sha256::put::runs_held(span, s, length, at, byte, holds).holds
+// `Sha256::put` is what the generator says of it: the bytes do what the
+// function of the context does, which replaces that byte of the schedule
+// where `at` is inside the block and nothing where it is not.
+theorem put_held(span: List<BitVec(8)>, s: Sha256, length, at, byte: BitVec(64), holds: Sha256::stored().Holds(span, length, s)):
+    Agrees<Sha256, u64>(Sha256::stored(), length, Sha256::put(s, at, byte), Sha256::put::bytes(span, length, at, byte)) {
+    Sha256::put::runs_held(span, s, length, at, byte, holds)
 }
 // On bytes it is one byte changed, and none past the schedule's.
 theorem put_one_byte(): words_from(Sha256::put::bytes(ones(), w(328), w(6), w(0xab)).after, [0xffffffff, 0xffffffff, 0xffffabff], 60) = True { refl }

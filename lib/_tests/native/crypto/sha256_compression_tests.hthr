@@ -87,12 +87,12 @@ def ABC: Sha256 = Sha256([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e
     [0x61626380, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0);
 
 // The schedule's last word (FIPS 180-4's worked example of "abc").
-theorem abc_schedule(): vector_get(Sha256::expand(ABC, 16).after.schedule, 63, 0) = 0x12b1edeb { refl }
+theorem abc_schedule(): vector_get(Sha256::expand(ABC, 0).after.schedule, 63, 0) = 0x12b1edeb { refl }
 
 // The working variables after the first round: a and e.
-def ABC_BEGUN: Sha256 = Sha256::begin(Sha256::expand(ABC, 16).after, 0).after;
+def ABC_BEGUN: Sha256 = Sha256::begin(Sha256::expand(ABC, 0).after, 0).after;
 
-def ABC_ROUND: Sha256 = Sha256::turn(ABC_BEGUN, Sha256::t1(ABC_BEGUN, 0).value).after;
+def ABC_ROUND: Sha256 = Sha256::turn(ABC_BEGUN, Sha256::t1(ABC_BEGUN, 0, ABC_BEGUN.schedule.at(0).zero_extend(32)).value).after;
 
 theorem abc_round_a(): vector_get(ABC_ROUND.working, 0, 0) = 0x5d6aebcd { refl }
 theorem abc_round_e(): vector_get(ABC_ROUND.working, 4, 0) = 0xfa2a4622 { refl }

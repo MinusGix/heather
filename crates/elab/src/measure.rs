@@ -153,6 +153,23 @@ pub(crate) trait BinderTys {
     fn ctor_fields(&self, scrut: &Ty, ctor: &str) -> Option<Vec<Ty>>;
     fn local_evidence(&self, decl: &Decl, scope: &[Binder], goal: &Ty, arithmetic: bool) -> Option<Expr>;
     fn infer_local(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[Binder], expr: &Expr) -> Option<Ty>;
+    /// The proofs `call` leaves to a default that searches its context, with
+    /// their goals over the telescope `scope`. Empty where there is none, or
+    /// where a goal has no spelling there.
+    fn default_goals(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[Binder], call: &Expr) -> Vec<FoundGoal>;
+    /// Whether the global `callee` has a parameter defaulted to such a search.
+    fn has_context_default(&self, callee: &str) -> bool;
+    /// Whether some type's member of this base name has one: a method call
+    /// `v.name(…)` may then leave a proof to it.
+    fn member_has_context_default(&self, name: &str) -> bool;
+}
+
+/// A proof a call leaves to its parameter's default: the parameter, the goal
+/// at this call, and the default that searches for it.
+pub(crate) struct FoundGoal {
+    pub(crate) name: String,
+    pub(crate) goal: Ty,
+    pub(crate) default: Expr,
 }
 
 /// A binder in scope during the walk, with the surface type a lifted
@@ -348,6 +365,87 @@ pub(crate) fn body_name(name: &str) -> String {
 /// `f#obl_N` — one self-call site's obligation, lifted out of the body (§4).
 pub(crate) fn obl_name(name: &str, site: usize) -> String {
     format!("{name}#obl_{site}")
+}
+
+/// `f#found_N` — a proof one of the body's calls left to a default that
+/// searches its context, lifted out so that the body and every companion
+/// name the same term ([`lift_found`]).
+pub(crate) fn found_name(name: &str, n: usize) -> String {
+    format!("{name}#found_{n}")
+}
+
+/// `decl` with every proof its body's calls leave to a context-reading
+/// default (`inside: i.toNat() < n := bv_omega`) found once, as a theorem
+/// `f#found_N` over the binders its goal and facts name, and passed at the
+/// call by name; and those theorems, to be elaborated first.
+///
+/// Why: the lowering elaborates the body's syntax once per generated
+/// declaration (`f#body`, `f#ext`, the unfolding equation's right side), and
+/// a search that reads its context returns a different proof term in each.
+/// The kernel then has to compare two proofs argument by argument where the
+/// companions need the calls to be the same term
+/// (issues/found-proof-differs-across-recursion-companions.md). A lifted
+/// proof is one name applied to the same binders everywhere.
+///
+/// `None` where no call leaves such a proof, or the walk declines (a binder
+/// with no type): the declaration is then lowered as written.
+pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn BinderTys) -> Option<(Decl, Vec<Lowered>)> {
+    let mut any = false;
+    let mut scan = |x: &Expr| {
+        if let ExprKind::App { head, .. } = &x.kind {
+            let callee = match &head.kind {
+                ExprKind::TyApp { head, .. } => &head.kind,
+                other => other,
+            };
+            if let ExprKind::Var(n) = callee && n != name && tys.has_context_default(n) {
+                any = true;
+            }
+        }
+        if let ExprKind::Dot { name: member, args: Some(_), .. } = &x.kind && tys.member_has_context_default(member) {
+            any = true;
+        }
+    };
+    for s in &decl.body.stmts {
+        match s {
+            Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } =>
+                crate::surface::walk_expr(expr, &mut scan),
+        }
+    }
+    crate::surface::walk_expr(&decl.body.result, &mut scan);
+    if !any { return None; }
+    let refs: Vec<&Param> = decl.params.iter().collect();
+    let solo = solo(decl, name, measure);
+    let mut state = Rewrite {
+        decl,
+        name,
+        params: &refs,
+        measure,
+        ons: &decl.body.ons,
+        omega_available: false,
+        tys,
+        lift: false,
+        members: &solo,
+        caller: 0,
+        next: 1,
+        eqs: 0,
+        refinements: Vec::new(),
+        scrut_aliases: Vec::new(),
+        auto_eqs: AutoEqs::Off,
+        auto_n: 0,
+        scope: scope_of(decl),
+        sites: Vec::new(),
+        obls: Vec::new(),
+        found_only: true,
+        found: Vec::new(),
+        error: None,
+    };
+    let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
+    let result = state.expr(&decl.body.result);
+    if state.error.is_some() || state.found.is_empty() { return None; }
+    let mut lifted = decl.clone();
+    lifted.body.stmts = stmts;
+    lifted.body.result = Box::new(result);
+    Some((lifted, state.found))
 }
 
 /// `f#rec` — the eliminator on the bound, lifted out of `f`.
@@ -654,6 +752,8 @@ pub(crate) fn lower(
         scope: scope_of(decl),
         sites: Vec::new(),
         obls: Vec::new(),
+        found_only: false,
+        found: Vec::new(),
         error: None,
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -1020,6 +1120,8 @@ pub(crate) fn lower_group(
             scope: scope_of(m.decl),
             sites: Vec::new(),
             obls: Vec::new(),
+            found_only: false,
+            found: Vec::new(),
             error: None,
         };
         let stmts: Vec<Stmt> = m.decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -1669,6 +1771,11 @@ struct Rewrite<'a> {
     /// One entry per site in source order: the lifted `f#obl_N`, or `None`
     /// where the site's obligation stayed at the call (§4).
     obls: Vec<Option<Lowered>>,
+    /// [`lift_found`]'s walk: the body is kept as written (its recursive
+    /// calls, its matches) and only a call's found proofs are lifted, into
+    /// `found`.
+    found_only: bool,
+    found: Vec<Lowered>,
     error: Option<crate::ElabError>,
 }
 
@@ -2114,6 +2221,80 @@ impl<'a> Rewrite<'a> {
         })
     }
 
+    /// The proofs the call `e` leaves to a context-reading default, each
+    /// lifted into `f#found_N` and given back as the named argument that
+    /// passes it. `e` is the call as written: the query elaborates it whole,
+    /// its arguments' own defaults included.
+    fn found_proofs(&mut self, e: &Expr, named: &[heather_syntax::NamedArg]) -> Vec<heather_syntax::NamedArg> {
+        let signatures: Vec<_> = self.members.iter().map(|m|
+            (m.name.clone(), pi_over(&m.params, m.result.clone(), e.span))).collect();
+        let goals = self.tys.default_goals(self.decl, &signatures, &self.scope, e);
+        goals.into_iter().filter_map(|g| {
+            if named.iter().any(|a| a.name == g.name) { return None; }
+            let proof = self.lift_found_proof(&g, e.span)?;
+            Some(heather_syntax::NamedArg { name: g.name, name_span: e.span, expr: proof, span: e.span })
+        }).collect()
+    }
+
+    /// `theorem f#found_N(ȳ): goal { let fact… = …; default }` over the
+    /// binders the goal and the facts in scope about them name, and the
+    /// reference `f#found_N(ȳ)`. The facts are bound in the body so the
+    /// search reads them, as a lifted obligation's are.
+    fn lift_found_proof(&mut self, g: &FoundGoal, span: Span) -> Option<Expr> {
+        let mut facts = Vec::new();
+        for (i, b) in self.scope.iter().enumerate().rev() {
+            let Some(ty) = &b.ty else { continue };
+            if self.scope[i + 1..].iter().any(|c| c.name == b.name) { continue; }
+            if facts.len() < 16 && arithmetic_fact(ty, &g.goal, &self.scope) {
+                facts.push(Stmt::Let { name: format!("__found_fact_{}", facts.len()), ty: None,
+                    expr: var(&b.name, span), span, opaque: false });
+            }
+        }
+        let search = Block { stmts: facts, result: Box::new(g.default.clone()), ons: Vec::new(), span };
+        let evidence = Expr { kind: ExprKind::Block(Box::new(search.clone())), span };
+        let selected = select_scope(&self.scope, &g.goal, Some(&evidence))?;
+        let mut params = Vec::new();
+        let mut args = Vec::new();
+        let mut aliases: Vec<(String, Expr)> = Vec::new();
+        let unalias_ty = |t: &Ty, aliases: &[(String, Expr)]| {
+            aliases.iter().fold(t.clone(), |t, (n, v)| subst_surface_ty(&t, n, v))
+        };
+        let mut lets = Vec::new();
+        for b in selected {
+            let ty = b.ty.clone()?;
+            if let Some(value) = &b.value {
+                let mut seen = Vec::new();
+                let value = aliases.iter().fold(value.clone(), |v, (n, a)| subst(&v, &[(n.as_str(), a)], &mut seen));
+                lets.push(Stmt::Let { name: b.name.clone(), ty: Some(unalias_ty(&ty, &aliases)), expr: value.clone(), span, opaque: false });
+                aliases.push((b.name.clone(), value));
+                continue;
+            }
+            params.push(param(&b.name, unalias_ty(&ty, &aliases), span));
+            args.push(var(&b.name, span));
+        }
+        lets.extend(search.stmts);
+        let name = found_name(&self.decl.name, self.found.len() + 1);
+        let decl = Decl {
+            kind: DeclKind::Theorem,
+            is_meta: false,
+            is_evidence: false,
+            is_interface: false, partial: None,
+            value: false,
+            elaborates: None,
+            name: name.clone(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result: unalias_ty(&g.goal, &aliases),
+            decreases: None,
+            unfolding: Vec::new(),
+            body: Block { stmts: lets, ..search },
+            span: self.decl.span,
+        };
+        self.found.push(Lowered { decl, obligations: Obligations { sites: Vec::new() } });
+        let head = companion_ref(self.decl, &name, span);
+        Some(if args.is_empty() { head } else { app(head, args, span) })
+    }
+
     /// Query the ordinary elaborator in an isolated local telescope. Recursive
     /// signatures are neutral locals used only for recovering types; emitted
     /// calls still go through the well-founded induction hypothesis.
@@ -2233,6 +2414,8 @@ impl<'a> Rewrite<'a> {
             scope: self.scope.clone(),
             sites: self.sites.clone(),
             obls: self.obls.iter().map(|_| None).collect(),
+            found_only: self.found_only,
+            found: Vec::new(),
             error: None,
         }
     }
@@ -2314,6 +2497,27 @@ impl<'a> Rewrite<'a> {
                 // included — is rewritten to the shared induction hypothesis
                 // (`docs/mutual-recursion-design.md` §3); a group has no
                 // separate self-call route.
+                if self.found_only {
+                    let mut named = named;
+                    if let ExprKind::Var(n) = callee
+                        && !self.scope.iter().any(|b| b.name == *n)
+                        && !self.members.iter().any(|m| m.name == *n)
+                        && self.tys.has_context_default(n)
+                    {
+                        let given = self.found_proofs(e, &named);
+                        named.extend(given);
+                    }
+                    return Expr {
+                        kind: ExprKind::App {
+                            head: Box::new(self.expr(head)),
+                            args,
+                            named,
+                            explicit: *explicit,
+                            goal_oriented: *goal_oriented,
+                        },
+                        span,
+                    };
+                }
                 let target = match callee {
                     ExprKind::Var(n) if !self.scope.iter().any(|b| b.name == *n) => {
                         self.members.iter().position(|m| m.name == *n)
@@ -2372,7 +2576,8 @@ impl<'a> Rewrite<'a> {
                 motive,
                 arms,
             } => {
-                if !matches!(scrut.kind, ExprKind::Var(_))
+                if !self.found_only
+                    && !matches!(scrut.kind, ExprKind::Var(_))
                     && let Some(ty) = self.scrut_ty(scrut)
                 {
                     // Give the dependent match one shared scrutinee in its
@@ -2392,7 +2597,7 @@ impl<'a> Rewrite<'a> {
                         result: Box::new(matched), ons: Vec::new(), span,
                     })), span });
                 }
-                let refine = if *form == MatchForm::Match {
+                let refine = if *form == MatchForm::Match && !self.found_only {
                     self.refining_match(scrut, eqbind)
                 } else {
                     None
@@ -2404,7 +2609,7 @@ impl<'a> Rewrite<'a> {
                 // A match on a computed scrutinee whose arms recurse may
                 // owe its arms the equation (design §4): number it, and bind
                 // one where the policy admits it.
-                if self.auto_candidate(*form, scrut, &eqbind, arms) {
+                if !self.found_only && self.auto_candidate(*form, scrut, &eqbind, arms) {
                     let n = self.auto_n;
                     self.auto_n += 1;
                     if self.auto_eqs.admits(n) {
@@ -2469,14 +2674,15 @@ impl<'a> Rewrite<'a> {
                 tyargs,
                 args,
                 named,
-            } => ExprKind::Dot {
-                recv: Box::new(self.expr(recv)),
-                name: name.clone(),
-                tyargs: tyargs.clone(),
-                args: args
-                    .as_ref()
-                    .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
-                named: named
+            } => {
+                // A method call that may leave a proof to a search
+                // (`v.at(i)`): asked as a call of a global is.
+                let given = if self.found_only && args.is_some() && self.tys.member_has_context_default(name) {
+                    self.found_proofs(e, named)
+                } else {
+                    Vec::new()
+                };
+                let mut named: Vec<heather_syntax::NamedArg> = named
                     .iter()
                     .map(|n| heather_syntax::NamedArg {
                         name: n.name.clone(),
@@ -2484,8 +2690,18 @@ impl<'a> Rewrite<'a> {
                         expr: self.expr(&n.expr),
                         span: n.span,
                     })
-                    .collect(),
-            },
+                    .collect();
+                named.extend(given);
+                ExprKind::Dot {
+                    recv: Box::new(self.expr(recv)),
+                    name: name.clone(),
+                    tyargs: tyargs.clone(),
+                    args: args
+                        .as_ref()
+                        .map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
+                    named,
+                }
+            }
             ExprKind::Index { recv, idx } => ExprKind::Index {
                 recv: Box::new(self.expr(recv)),
                 idx: Box::new(self.expr(idx)),
@@ -2550,7 +2766,8 @@ impl<'a> Rewrite<'a> {
             // it is refused where it is written rather than left to surface
             // as an unbound name in generated code.
             ExprKind::Var(n)
-                if self.members.len() > 1
+                if !self.found_only
+                    && self.members.len() > 1
                     && self.members.iter().any(|m| m.name == *n)
                     && !self.scope.iter().any(|b| b.name == *n) =>
             {
@@ -4207,6 +4424,8 @@ pub(crate) fn companions(
         scope: scope_of(decl),
         sites: Vec::new(),
         obls: Vec::new(),
+        found_only: false,
+        found: Vec::new(),
         error: None,
     };
     let arg_vars: Vec<Expr> = params.iter().map(|p| var(&p.name, span)).collect();

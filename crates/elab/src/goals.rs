@@ -233,6 +233,20 @@ impl GoalArena {
         self.base
     }
 
+    /// The capacity a restart has been asked for so far (0 for none).
+    pub(super) fn requested_base(&self) -> u32 {
+        self.requested_base.get()
+    }
+
+    /// Ask for a restart at `base` slots at least: how a probe that failed
+    /// for want of capacity hands its request past its own rollback, which
+    /// forgets it.
+    pub(super) fn request_base(&self, base: u32) {
+        if self.restart_enabled.get() {
+            self.requested_base.set(self.requested_base.get().max(base));
+        }
+    }
+
     pub(super) fn take_requested_base(&self) -> u32 {
         self.requested_base.replace(0)
     }

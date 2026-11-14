@@ -68,12 +68,11 @@ impl MeasureContext<'_> {
         Some(proof)
     }
 
-    pub(crate) fn infer_measure_local(
-        &self, decl: &Decl, signatures: &[(String, Ty)],
-        scope: &[measure::Binder], expr: &Expr,
-    ) -> Option<Ty> {
-        let stripped = heather_syntax::without_decrease_labels(expr);
-        let expr = &stripped;
+    /// A disposable elaborator and the walk's local telescope in it: the type
+    /// parameters, the members' neutral signatures, then every binder in
+    /// scope. `None` where a binder has no type (it cannot be left out: its
+    /// name could then resolve to an unrelated global).
+    fn measure_query(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder]) -> Option<(Elaborator, Cx)> {
         let mut query = self.0.clone();
         query.attempt.prepare();
         query.attempt.goal_arena.configure(0, 0);
@@ -99,6 +98,68 @@ impl MeasureContext<'_> {
                     level, depth: cx.names.len() });
             }
         }
+        Some((query, cx))
+    }
+
+    /// The proofs `call` leaves to a default that searches its context, each
+    /// with the goal it is found at, as a surface type over the walk's
+    /// telescope. Read off an elaboration of the call that records its
+    /// defaults, then checked: the call elaborates again with a local of
+    /// each goal's type given by name.
+    pub(crate) fn measure_default_goals(
+        &self, decl: &Decl, signatures: &[(String, Ty)],
+        scope: &[measure::Binder], call: &Expr,
+    ) -> Option<Vec<measure::FoundGoal>> {
+        let stripped = heather_syntax::without_decrease_labels(call);
+        let (query, cx) = self.measure_query(decl, signatures, scope)?;
+        *query.pass.default_goals.borrow_mut() = Some(Vec::new());
+        query.elab_infer(&cx, &stripped).ok()?;
+        let recorded = query.pass.default_goals.borrow_mut().take()?;
+        // An argument's own defaults are elaborated before the call's, so
+        // the call's are the last run of distinct parameters of one owner.
+        let owner = recorded.last()?.owner.clone();
+        let mut own: Vec<&crate::defaults::DefaultGoal> = Vec::new();
+        for goal in recorded.iter().rev() {
+            if goal.owner != owner || own.iter().any(|g| g.index == goal.index) { break; }
+            own.push(goal);
+        }
+        own.reverse();
+        let mut found = Vec::new();
+        for goal in own {
+            if !crate::defaults::is_context_search(&goal.default) { continue; }
+            let wrapper = format!("fn __measure_type() -> {} {{ 0 }}", goal.goal.as_ref()?);
+            let mut file = heather_syntax::parse_file(&wrapper).ok()?;
+            let Item::Decl(parsed) = file.items.pop()? else { return None; };
+            let mut ty = parsed.result;
+            ty.span = call.span;
+            found.push(measure::FoundGoal { name: goal.name.clone(), goal: ty, default: goal.default.clone() });
+        }
+        if found.is_empty() { return None; }
+        // The check: with each goal assumed, the call takes the assumptions.
+        let (check, mut cx) = self.measure_query(decl, signatures, scope)?;
+        let mut given = stripped.clone();
+        for (i, f) in found.iter().enumerate() {
+            let local = format!("__found_given_{i}");
+            let (ty, level) = check.elab_ty(&cx, &f.goal).ok()?;
+            cx.push_skel(local.clone(), ty, level, skel_of_ty(&f.goal));
+            let arg = heather_syntax::NamedArg { name: f.name.clone(), name_span: call.span,
+                expr: Expr { kind: ExprKind::Var(local), span: call.span }, span: call.span };
+            match &mut given.kind {
+                ExprKind::App { named, .. } | ExprKind::Dot { named, .. } => named.push(arg),
+                _ => return None,
+            }
+        }
+        check.elab_infer(&cx, &given).ok()?;
+        Some(found)
+    }
+
+    pub(crate) fn infer_measure_local(
+        &self, decl: &Decl, signatures: &[(String, Ty)],
+        scope: &[measure::Binder], expr: &Expr,
+    ) -> Option<Ty> {
+        let stripped = heather_syntax::without_decrease_labels(expr);
+        let expr = &stripped;
+        let (query, cx) = self.measure_query(decl, signatures, scope)?;
         let (term, ty, level) = query.elab_infer(&cx, expr).ok()?;
         let mut surface = if let Some(source) = query.spell_type_source(&cx, &ty) {
             let wrapper = format!("fn __measure_type() -> {source} {{ 0 }}");

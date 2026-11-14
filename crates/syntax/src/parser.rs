@@ -6433,7 +6433,18 @@ impl Parser {
         // With evidence the match is still on the bit, convoyed, and each
         // branch binds `h` from the instance's `reflects` at that equation:
         // `decide_true<P>(e): P`, `decide_false<P>(e): ¬P`.
-        let eqbind = evidence.as_ref().map(|_| self.hygienic("if_bit"));
+        //
+        // The equation's name is one a tactic's reading of the context
+        // lists (`omega_cert::local_fact_entries` passes over `#` names)
+        // where a branch does not bind `h` itself: `h` was written, so
+        // the test is a fact of that branch, and a proof found there
+        // (`omega`, `bv_omega`, a parameter's default) reads it as the
+        // bit's equation, as it reads a `match h:`'s. The term is the same
+        // either way.
+        let eqbind = evidence.as_ref().map(|_| {
+            let hidden = self.hygienic("if_bit");
+            if yes_names && no_names { hidden } else { format!("__if_bit{}", &hidden["#if_bit".len()..]) }
+        });
         // A branch that never names the evidence binds none: the function
         // is then a plain convoy, which a proof that cases the same test can
         // abstract (an evidence term is typed by the instance's bit, not by

@@ -186,7 +186,10 @@ impl Callables<'_> {
         if n_args > params.iter().filter(|p| !p.implicit).count() {
             return false;
         }
-        if !params.iter().any(|p| p.implicit && p.solver.is_none()) {
+        // A parameter left to its default is filled by the default, not by
+        // an expected type: it is no reason to wait for one
+        // (issues/operator-on-call-with-defaulted-argument.md).
+        if !params.iter().any(|p| p.implicit && p.solver.is_none() && p.default.is_none()) {
             return false;
         }
         // Everything past here depends only on the declaration, so it is
@@ -232,6 +235,7 @@ impl Callables<'_> {
             let p = &params[i];
             p.implicit
                 && p.solver.is_none()
+                && p.default.is_none()
                 && !params.iter().enumerate().skip(i + 1).any(|(j, q)| {
                     !q.implicit && mentions_binder(&doms[j], j as u32, (j - 1 - i) as u32)
                 })

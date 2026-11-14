@@ -1,6 +1,6 @@
 ---
 title: A tactic under `if h: c { … }` does not see the test unless the branch writes `h`
-status: open
+status: closed
 labels: [elaboration,tactics,ergonomics]
 area: language
 created: 2026-11-13
@@ -25,3 +25,4 @@ The parser lowers `if h: c` to a `match` on `decide_bit<c>()` with a hygienic eq
 ## Log
 
 - 2026-11-13: Filed from PR #551's thread (indexing with an implicit proof). Related: [[found-proof-differs-across-recursion-companions]].
+- 2026-11-13: Built on PR #607 as the fix above (`crates/syntax/src/parser.rs`): the equation is `__if_bitN` when a branch does not bind the evidence, so `omega` and `bv_omega` read it. The whole library was elaborated again with it (the sweep of PR #607's round).
