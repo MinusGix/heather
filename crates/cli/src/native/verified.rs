@@ -549,6 +549,10 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// is decided writes moves of its own (a narrowing of a value already in
 /// range).
 ///
+/// Last, where bytes of a span are joined into a word, a load of the word
+/// is put beside them and the join found a move of it (`find_worded`); the
+/// byte loads then go with the sweep.
+///
 /// What the stages made is kept where it is within the search's room
 /// (`Function::fits`) and the lowering takes it with the planner's
 /// placement (`Function::lowers`, a read of its own: a search and the
@@ -655,6 +659,25 @@ fn {name}() → Function {{
                 if lowers(&mut fork, &modules, &learned, "learned_")? { made = learned; }
             }
             if made.is_empty() && !tidied.is_empty() && lowers(&mut fork, &modules, &tidied, "")? { made = tidied; }
+        }
+        // Bytes joined into a word, read as one load: the load is put
+        // after the last of the byte loads, the walk finds the join a
+        // move of its word, the byte loads are swept, and a last walk
+        // drops the tests no access reads any more. Kept where the
+        // lowering takes it, which asks that the load's span is tested.
+        {
+            let past = if made.iter().any(|staged| staged.stage == Stage::Guard) { "_past" } else { "" };
+            let last = made.last().map(|last| last.function.clone());
+            let put = run(&mut fork, &mut modules, "w", &named(&made), last, &[(Stage::Inline, format!("find_worded{past}({earlier})"))])?;
+            if !put.is_empty() {
+                let mut worded = made.clone();
+                worded.extend(put);
+                let last = worded.last().map(|last| last.function.clone());
+                worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
+                    &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
+                        replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
+                if lowers(&mut fork, &modules, &worded, "worded_")? { made = worded; }
+            }
         }
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
