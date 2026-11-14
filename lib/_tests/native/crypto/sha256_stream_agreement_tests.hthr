@@ -71,8 +71,10 @@ theorem abc_unheld(span: List<u8>, s: Sha256, length: u64):
 // A true theorem claimed at another message is refused out of fuel, since
 // the two sides are calls of one function and deciding them evaluates
 // both; the refusal names the site and the bytes where the claim differs
-// (issues/surface-gaps-from-sha256-proof.md item 7).
-// expect-error: which differs at `99` against `100`
+// (issues/surface-gaps-from-sha256-proof.md item 7), and, checked again
+// with more fuel, that the claim is false
+// (issues/false-closed-claim-out-of-fuel.md).
+// expect-error: which differs at `99` against `100`; with 8 times the budget the kernel computes both sides and finds them different: the claim is false
 theorem abd_claimed(s: Sha256):
     Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, [0x61, 0x62, 0x63], 3).after).after) = Sha2::sha256().digest([0x61, 0x62, 0x64]) {
     Sha256::digest_spec(s, [0x61, 0x62, 0x63], 3, refl)

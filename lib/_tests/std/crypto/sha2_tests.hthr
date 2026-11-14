@@ -237,3 +237,10 @@ theorem sha512_blocks_at_127(): Sha2::sha512().blocks(List::replicate(BitVec::ze
 theorem sha512_blocks_at_128(): Sha2::sha512().blocks(List::replicate(BitVec::zero(), 128)).len() = 2 { refl }
 theorem sha512_blocks_at_239(): Sha2::sha512().blocks(List::replicate(BitVec::zero(), 239)).len() = 2 { refl }
 theorem sha512_blocks_at_240(): Sha2::sha512().blocks(List::replicate(BitVec::zero(), 240)).len() = 3 { refl }
+
+// Twice the vector by one `refl` is right but costs more than a conversion
+// is allowed (one digest is just under it); the refusal says so, having
+// checked it again with more fuel (issues/false-closed-claim-out-of-fuel.md).
+// expect-error: the proof is right, but checks only with up to
+theorem sha256_abc_twice_at_once():
+    Sha2::sha256().digest(sha256_abc_message()) ++ Sha2::sha256().digest(sha256_abc_message()) = sha256_abc_digest() ++ sha256_abc_digest() { refl }

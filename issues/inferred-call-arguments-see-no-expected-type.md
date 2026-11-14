@@ -1,6 +1,6 @@
 ---
 title: An inferred call's arguments see no expected type
-status: open
+status: closed
 labels: [elaborator,inference]
 area: language
 created: 2026-11-14
@@ -32,3 +32,19 @@ ascribe the literal: `Mutated(t, (48: u64))`.
 Probe: `literal_under_trans` in `lib/_tests/lang/expected_type_tests.hthr`
 covers the checked case. A probe of this case should be added once it is
 fixed.
+
+## Resolution (2026-11-14)
+
+Fixed for the case that met it: before an argument is inferred blind,
+`application::propagate_expected` now reads, besides the expected type, the
+type of every later argument that is a local variable or a `let` (its type
+is known without elaborating anything), as that argument's own turn would.
+`trans(cong_fn(λ t => Tagged(t, 48), h), finish)` checks its first argument
+at `tagged48(a) = tagged48(b)`. Each local's read must settle its domain to
+the local's type, or nothing is kept, as for the expected type.
+
+Not covered: a later argument that has to be elaborated (a call), and a call
+with no expected type whose first endpoint only the expected type would
+say. Those still default; ascription (`(48: u64)`) is the spelling there.
+Probes: `literal_before_local*`, `literal_before_let` in
+`lib/_tests/lang/expected_type_tests.hthr`.
