@@ -5,7 +5,7 @@
 // (docs/testing-generated-terms.md). Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import option; import when;
-import pair; import vector; import bitvec; import bitvec_nat; import stored_words;
+import omega; import pair; import vector; import bitvec; import bitvec_nat; import stored_words;
 
 // ---------------------------------------------------------------------------
 // The constructors and members at closed values.
@@ -15,13 +15,15 @@ theorem present_option(h: True): Present<Nat, True>(7, h).option() = Some(7) { r
 theorem absent_option(n: ¬False): Absent<Nat, False>(n).option() = None { refl }
 theorem present_map(h: True): Present<Nat, True>(7, h).map(λ x => x + 1).option() = Some(8) { refl }
 theorem absent_unwrap(n: ¬False): Absent<Nat, False>(n).unwrap_or(3) = 3 { refl }
+theorem present_decision(h: True): Present<Nat, True>(7, h).decision() = Inl(h) { refl }
+theorem absent_decision(n: ¬False): Absent<Nat, False>(n).decision() = Inr(n) { refl }
 
 // ---------------------------------------------------------------------------
 // User 1: a word of an array, read where it is (`Vec::at`, PR #607).
 
-fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64) → When<BitVec(w), i.toNat() < n> {
-    When::of(λ h => v.at(i, inside := h))
-}
+// The call where a `When` is wanted is its test (docs/when-design.md §4):
+// `When::of(λ h => v.at(i, inside := h))`.
+fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64) → When<BitVec(w), i.toNat() < n> { v.at(i) }
 
 fn three() → [u64; 3] { [10, 20, 30] }
 
@@ -71,9 +73,7 @@ theorem add_within_toNat(a, b: u64, fits: a.toNat() + b.toNat() < Nat::pow(2, 64
     toNat_add(64, a, b, fits)
 }
 
-fn checked_add(a, b: u64) → When<u64, a.toNat() + b.toNat() < Nat::pow(2, 64)> {
-    When::of(λ h => add_within(a, b, fits := h))
-}
+fn checked_add(a, b: u64) → When<u64, a.toNat() + b.toNat() < Nat::pow(2, 64)> { add_within(a, b) }
 
 theorem checked_add_small(): checked_add(2, 3).option() = Some(5) { refl }
 theorem checked_add_wraps(): checked_add(18446744073709551615, 1).is_present() = False { refl }
@@ -85,16 +85,30 @@ theorem checked_add_val(a, b: u64, h: a.toNat() + b.toNat() < Nat::pow(2, 64)): 
 
 // ---------------------------------------------------------------------------
 // An open element type, through the Nat-indexed `vector_index`, which does
-// use its proof: `same` asks that `i < n`'s proofs are one, which the kernel
-// sees because `Le` reduces to a unit at closed and to a shared stuck term at
-// open arguments (docs/when-design.md §7).
+// use its proof: two proofs of `i < n` at an open `i` and `n` are not
+// convertible, so `same` is `vector_index_irrel`, not `refl`
+// (docs/when-design.md §7).
 
 fn entry<A>({n: Nat}, v: [A; n], i: Nat) → When<A, i < n> {
     When::of(λ h => vector_index(v, i, h))
 }
 
+// The Nat-indexed read as a proof-taking function with a found condition.
+fn Vec::nth<A>({n: Nat}, self v: [A; n], i: Nat, inside: i < n := omega) → A { vector_index(v, i, inside) }
+
 theorem entry_lit<A>(x, y, z: A): entry<A>([x, y, z], 1).option() = Some(y) { refl }
 theorem entry_past<A>(x, y: A): entry<A>([x, y], 2).option() = None { refl }
+
+theorem entry_val<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(h) = vector_index(v, i, h) {
+    When::of_val(λ h => vector_index(v, i, h), λ a b => vector_index_irrel(v, i, a, b), h)
+}
+
+// `refl` is not `same` here: the read at the decision's proof and the read at
+// `h` are two stuck terms.
+// expect-error(kernel)
+theorem entry_val_refl<A>({n: Nat}, v: [A; n], i: Nat, h: i < n): entry(v, i).val(h) = vector_index(v, i, h) {
+    When::of_val(λ h => vector_index(v, i, h), λ a b => refl, h)
+}
 
 // Chaining: two reads, absent when either index is past the end.
 fn both<A>({n: Nat}, v: [A; n], i, k: Nat) → When<Pair<A, A>, i < n ∧ k < n> {
@@ -106,6 +120,93 @@ theorem both_lit(): both<Nat>([1, 2, 3], 0, 2).option() = Some(Pair(1, 3)) { ref
 theorem both_past(): both<Nat>([1, 2, 3], 0, 3).is_present() = False { refl }
 
 // ---------------------------------------------------------------------------
+// The tested call in each place a `When` is wanted (docs/when-design.md §4):
+// a result, an annotated `let`, an argument, a `match` and an `if let` on
+// its constructors. Where a `T` is wanted the same call finds its proof.
+
+fn nth_or<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    match v.nth(i) { Present(x, _) => x, Absent(_) => d }
+}
+
+fn nth_if<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    if let Present(x, _) = v.nth(i) { x } else { d }
+}
+
+fn nth_let<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    let w: When<A, i < n> = v.nth(i);
+    w.unwrap_or(d)
+}
+
+fn present_count<T, P>(w: When<T, P>) → Nat { match w { Present(_, _) => 1, Absent(_) => 0 } }
+
+// An argument is a place a `When` is wanted once the parameter's type is
+// known; at an implicit still open the call is inferred, and finds its proof.
+fn nth_arg<A>({n: Nat}, v: [A; n], i: Nat) → Nat { present_count<A, i < n>(v.nth(i)) }
+
+// The proof the `Present` arm holds is the condition: the read is taken again
+// with it, and nothing is searched.
+fn nth_again<A>({n: Nat}, v: [A; n], i: Nat, d: A) → A {
+    match v.nth(i) { Present(_, h) => v.nth(i, inside := h), Absent(_) => d }
+}
+
+// Where the condition is known and a `T` is wanted, the search finds it.
+fn nth_known<A>({n: Nat}, v: [A; n], i: Nat, h: i < n) → A { v.nth(i) }
+
+fn small() → [Nat; 3] { [5, 6, 7] }
+
+theorem nth_or_lit(): nth_or(small(), 2, 0) = 7 { refl }
+theorem nth_or_past(): nth_or(small(), 3, 0) = 0 { refl }
+theorem nth_if_lit(): nth_if(small(), 0, 0) = 5 { refl }
+theorem nth_let_past(): nth_let(small(), 9, 1) = 1 { refl }
+theorem nth_arg_lit(): nth_arg(small(), 1) = 1 { refl }
+theorem nth_arg_past(): nth_arg(small(), 3) = 0 { refl }
+theorem nth_again_lit(): nth_again(small(), 1, 0) = 6 { refl }
+
+// At a neutral index the tested call is `When::of` at the read, so the laws
+// of `when` apply to it as written.
+theorem nth_or_inside<A>({n: Nat}, v: [A; n], i: Nat, d: A, h: i < n): nth_or(v, i, d) = vector_index(v, i, h) {
+    When::of_cases<i < n, A>(λ p => v.nth(i, inside := p),
+        λ w => match w { Present(x, _) => x, Absent(_) => d } = vector_index(v, i, h),
+        λ p => vector_index_irrel(v, i, p, h),
+        λ fails => false_elim(fails(h)))
+}
+
+theorem nth_or_outside<A>({n: Nat}, v: [A; n], i: Nat, d: A, h: ¬(i < n)): nth_or(v, i, d) = d {
+    When::of_cases<i < n, A>(λ p => v.nth(i, inside := p),
+        λ w => match w { Present(x, _) => x, Absent(_) => d } = d,
+        λ p => false_elim(h(p)),
+        λ _ => refl)
+}
+
+// ---------------------------------------------------------------------------
+// docs/when-design.md §7.1: a tested read in a `decreases` body. The arm's
+// proof is what the measure needs, and the unfolding equation's walk types
+// the scrutinee as the `match` does (`Rewrite::match_scrut_ty`), so its
+// lifted obligation sees the proof too. The call names its proof, so there
+// is nothing found to differ between the lowered companions.
+
+fn sum_from({n: Nat}, v: [Nat; n], i: Nat) → Nat decreases n - i {
+    match v.nth(i) { Present(x, h) => x + @sum_from(n, v, i + 1), Absent(_) => 0 }
+}
+
+theorem sum_from_lit(): sum_from(small(), 0) = 18 { refl }
+theorem sum_from_unfolds({n: Nat}, v: [Nat; n], i: Nat):
+    sum_from(v, i) = (match v.nth(i) { Present(x, h) => x + @sum_from(n, v, i + 1), Absent(_) => 0 }) {
+    sum_from_unfold(v, i)
+}
+
+// A `When`-returning function called in the body.
+fn count_from({n: Nat}, v: [Nat; n], i: Nat) → Nat decreases n - i {
+    match entry(v, i) { Present(_, h) => 1 + @count_from(n, v, i + 1), Absent(_) => 0 }
+}
+
+theorem count_from_lit(): count_from(small(), 1) = 2 { refl }
+theorem count_from_unfolds({n: Nat}, v: [Nat; n], i: Nat):
+    count_from(v, i) = (match entry(v, i) { Present(_, h) => 1 + @count_from(n, v, i + 1), Absent(_) => 0 }) {
+    count_from_unfold(v, i)
+}
+
+// ---------------------------------------------------------------------------
 // Negative controls.
 
 // An index past the end gives no value.
@@ -115,3 +216,21 @@ theorem word_at_outside_some(): word_at(three(), 3).option() = Some(0) { refl }
 // `val` takes the condition, and nothing else stands for it.
 // expect-error(mismatch)
 fn val_without(v: [u64; 3], i: u64) → u64 { word_at(v, i).val(trivial) }
+
+// A `When` is wanted, and the call names its condition: it is not tested,
+// and its value is not a `When`.
+// expect-error(mismatch)
+fn written_condition({n: Nat}, v: [Nat; n], i: Nat, h: i < n) → When<Nat, i < n> { v.nth(i, inside := h) }
+
+// A condition with no decision cannot be tested.
+fn Undecided(n: Nat) → Type { (k: Nat) → k <= n }
+fn take_undecided(n: Nat, p: Undecided(n) := omega) → Nat { n }
+// expect-error: has no decision
+fn tested_undecided(n: Nat) → When<Nat, Undecided(n)> { take_undecided(n) }
+
+// Only the first condition left to a search is tested; a later one is still
+// searched, with the first's proof in scope, and refused when not found.
+fn two_conditions(i, k: Nat, first: i < 4 := omega, second: i + k < 5 := omega) → Nat { i + k }
+fn second_follows(i: Nat) → When<Nat, i < 4> { two_conditions(i, 1) }
+// expect-error: `second` was left to its default
+fn second_unknown(i, k: Nat) → When<Nat, i < 4> { two_conditions(i, k) }

@@ -419,6 +419,11 @@ pub(crate) struct DynamicScope {
     /// ([`Members::refuse_unthreaded_mut_call`](crate::dispatch::Members::refuse_unthreaded_mut_call),
     /// docs/effects-capabilities-design.md §2.2). `None` everywhere else.
     pub(crate) mut_call_site: Cell<Option<Span>>,
+    /// The call whose condition a probe is capturing
+    /// ([`Tested`](crate::tested::Tested)): its span, and where the capture
+    /// goes. Not among the probe's restored cells: `Tested` sets and resets
+    /// it around its probe, and the capture is the probe's answer.
+    pub(crate) tested_site: RefCell<Option<crate::tested::Site>>,
 }
 
 /// The values of [`DynamicScope`]'s cells, for a probe to put back
@@ -471,6 +476,7 @@ impl DynamicScope {
             omega_settled_guards,
             ring_depth,
             mut_call_site,
+            tested_site: _,
         } = self;
         ScopeCells {
             misplaced_recursion: misplaced_recursion.borrow().clone(),
