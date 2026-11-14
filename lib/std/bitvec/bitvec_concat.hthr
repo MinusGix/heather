@@ -17,7 +17,6 @@ fn Nat::doubled(self x: Nat, n: Nat) → Nat { match n { Zero => x, Succ(k) => x
 theorem Nat::doubled_succ(self x: Nat, k: Nat): x.doubled(Succ(k)) = x.doubled(k) + x.doubled(k) { x.doubled(k).twice_add_self() }
 
 theorem Nat::doubled_eight(self x: Nat): x.doubled(8) = 256 * x {
-    let d0: (x.doubled(0) = x) = refl;
     let d1 = x.doubled_succ(0);
     let d2 = x.doubled_succ(1);
     let d3 = x.doubled_succ(2);

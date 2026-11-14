@@ -39,7 +39,6 @@ theorem Sha2::pieces_prefix<A>(size, n: Nat): (xs, ys: List<A>) → xs.len() = s
         Zero => λ xs ys e => refl,
         Succ(k, ih) => λ xs ys e => {
             let dropped = xs.len_drop(size);
-            let open: (size * Succ(k) = size * k + size) = refl;
             let front: ((xs ++ ys).take(size) = xs.take(size)) = xs.take_append_inside(ys, size, omega);
             let back: ((xs ++ ys).drop(size) = xs.drop(size) ++ ys) = xs.drop_append_inside(ys, size, omega);
             let rest: (Sha2::pieces(size, k, xs.drop(size) ++ ys) = Sha2::pieces(size, k, xs.drop(size))) = ih(xs.drop(size), ys, omega);
@@ -112,7 +111,6 @@ theorem Sha2::len_joined(blocks: List<List<u8>>): Sha2::Blocks(blocks) → List:
             let more = Sha2::len_joined(rest, each.right);
             let whole = B.len_append(List::joined(rest));
             let first = each.left;
-            let open: (64 * Succ(rest.len()) = 64 * rest.len() + 64) = refl;
             omega
         },
     }
@@ -215,7 +213,6 @@ theorem Sha2::len_ending(zeros, length: Nat): Sha2::ending(zeros, length).len() 
     let zs = List::len_replicate(BitVec::zero(n := 8), zeros);
     let cs = Sha2::len_be_bytes(8, 8 * length);
     let tail = Sha2::zero_bytes(zeros).len_append(Sha2::be_bytes(8 * length, 8));
-    let one: (Sha2::ending(zeros, length).len() = Succ(Sha2::zero_bytes(zeros).append(Sha2::be_bytes(8 * length, 8)).len())) = refl;
     omega
 }
 
@@ -284,7 +281,6 @@ theorem Sha2::hash_long(full: List<List<u8>>, T: List<u8>, each: Sha2::Blocks(fu
     let z1 = Sha2::len_zero_bytes(63 - T.len());
     let z2 = Sha2::len_zero_bytes(56);
     let l1 = T.len_append(one);
-    let ones: (one.len() = Succ(Sha2::zero_bytes(63 - T.len()).len())) = refl;
     let l2 = Sha2::zero_bytes(56).len_append(lb);
     let l3 = Sha2::len_be_bytes(8, 8 * n);
     let sized1: (first.len() = 64) = omega;
@@ -309,8 +305,6 @@ theorem Sha2::word_of_bytes(b0, b1, b2, b3: u8): Sha2::word_of([b0, b1, b2, b3])
     let v1 = BitVec::toNat_concat_byte(8, b1, w0);
     let v2 = BitVec::toNat_concat_byte(16, b2, w1);
     let v3 = BitVec::toNat_concat_byte(24, b3, w2);
-    let none: (BitVec::nil().toNat() = 0) = refl;
-    let spelled: (Sha2::be_value([b0, b1, b2, b3]) = (((0 * 256 + b0.toNat()) * 256 + b1.toNat()) * 256 + b2.toNat()) * 256 + b3.toNat()) = refl;
     let value: (Sha2::be_value([b0, b1, b2, b3]) = w3.toNat()) = omega;
     trans(cong_fn(λ (x: Nat) => BitVec::ofNat(x, n := 32), value), BitVec::ofNat_toNat(32, w3))
 }
@@ -331,8 +325,6 @@ theorem Sha2::len_spelled(ws: List<u32>): Sha2::spelled(ws).len() = 4 * ws.len()
         Nil => refl,
         Cons(w, rest) => {
             let more = Sha2::len_spelled(rest);
-            let here: (Sha2::spelled(Cons(w, rest)).len() = Succ(Succ(Succ(Succ(Sha2::spelled(rest).len()))))) = refl;
-            let open: (4 * Succ(rest.len()) = 4 * rest.len() + 4) = refl;
             omega
         },
     }
