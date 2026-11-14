@@ -404,7 +404,78 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 |---|---|
 | 1, live-only saves | built: `Place::Spilling`, `File::plan_call`, `File::called` (`function_ir_lower_calls.hthr`) |
 | 1, leaf frames | not built |
-| 2 to 7 | not built |
+| 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
+| 3, inline | built, and run by `compile-x86`: §9.1 |
+| 4 to 7 | not built |
+
+### 9.1 What is built, as built
+
+**One law a function.** `function_ir_stage.hthr`: a `Stage<P>` rewrites a
+function by a plan over its callees as the stage left them, and owes
+`Rewrites(callees, old, new)`, that the new function may do whatever the
+old may. `Stage::run_sound` lifts that to programs once, for every stage.
+`Stage::then` makes two stages one (so a pass reads callees every pass has
+been over, and a program's rewriting is stated once a function), and
+`Stage::maybe` adds the plan that leaves a function as it is.
+`ProgramRewrites(old, new, f)` is what a compiler lowering `new` owes for a
+theorem about `old`.
+
+**The passes.** Inline is a stage of its own (`function_ir_inline.hthr`):
+the callee's body with its ids raised above the caller's bound, parameters
+bound by moves from the arguments, the result by a move back. The replayer
+is a stage (`replay_stage`), and tidying is the replayer twice
+(`function_ir_tidy.hthr`): once reading every node through the moves
+before it (`Step::Swap`, `Plan::Args`, `Plan::Inputs`), once dropping what
+nothing reads. Tidying is not polish. The lowering names a buffer by its
+home, the address and length the function was lent, and takes a load only
+where an arm compared the index with that very length; an inlined body
+reads moves of them, and is refused until it reads through. Emptying the
+functions nothing reaches any more is a theorem for the functions that are
+reached (`prune_sound`, `function_ir_prune.hthr`).
+
+**The search is not trusted, and is evaluated.** `function_ir_optimize.hthr`:
+`optimize_stage()` is inline, then tidy, or no plan;
+`Function::optimized(callees, wanted)` finds a function's plans and the
+function they make. `compile-x86` evaluates it a function at a time,
+callees first, reads the answer back as source (`function_ir_spelled.hthr`),
+and states both as literals; the certificate's statement is that the stage
+makes the one from the other, checked by evaluation, a function a statement
+(`Stage::run_next`). What the search made is kept only where the lowering
+takes it with the planner's placement (`Function::lowers`); otherwise the
+function stays as it is. The return theorems take the two programs apart
+(`compiled_returns_written_through` and its kin): the lowering and the
+checks it needs are of the program made, the run is the published one's.
+`HEATHER_OPTIMIZE=off` turns the passes off.
+
+**Limits, each a next step.**
+
+- A function is rewritten whole or not at all. One refused call site (the
+  planner out of registers in a loop, issues/function-ir-planner-register-pressure.md)
+  keeps the function as it was; a search a site at a time would keep the
+  rest.
+- What is inlined is every callee no larger than a constant, into a
+  function no larger than another (`Wanted::usual()`). The second is there
+  because a function's rewriting is one statement and the kernel's fuel is
+  a statement's; stating a large function a region at a time removes it.
+- Only a program that is lent spans is optimised. One of words alone is
+  lowered by `lower_program`, whose theorem is over another relation
+  (`program_callees`).
+- The pipeline does not yet empty the functions left uncalled: their code
+  is still emitted.
+- Tidying leaves empty regions where it dropped nodes; they cost nothing in
+  the code and something to read.
+
+**Counted** (`scripts/bench-native`, one machine, same run of the script
+before and after; the counter is exact, time is not):
+
+| | before | with inline and tidy |
+|---|---|---|
+| SHA-256 compression, instructions a block | 176,274 | 147,086 |
+| calls a block | 3,882 | 1,117 |
+| ns a block | 8,254 | 5,878 |
+| scanner, instructions a byte | 318.9 | 296.9 |
+
+"Before" has step 1's live-only saves.
 
 ## 10. Machine instructions added for the optimizer
 
