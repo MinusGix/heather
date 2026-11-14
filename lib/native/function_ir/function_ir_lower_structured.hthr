@@ -25,6 +25,7 @@ import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_asm;
 import x86_64_asm_runs;
+import x86_64_stack_runs;
 import bitvec;
 import bool;
 import list;
@@ -730,8 +731,8 @@ fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Co
 // own), and nothing else is known to follow.
 fn Node::planned_file(self node: Node, place: Place, file: File) → File {
     match node {
-        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file },
-        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file },
+        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, Spilling(_) => file },
+        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, Spilling(_) => file },
         _ => file,
     }
 }
@@ -838,6 +839,56 @@ fn File::loop_state(self file: File, inputs, live: List<Nat>, pool, taken: List<
     }
 }
 
+// What a caller saves around a call: the caller-saved registers but RAX,
+// slot `k` holding the `k`th.
+fn saved_registers() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
+
+fn Gpr::caller_saved(self register: Gpr) → Bool {
+    match register { Rcx => True, Rdx => True, Rsi => True, Rdi => True, R8 => True, R9 => True, R10 => True, R11 => True, _ => False }
+}
+
+// Whether a mask's lowest bit is set.
+fn mask_odd(n: Nat) → Bool { match n { Zero => False, Succ(m) => Bool::not(mask_odd(m)) } }
+
+fn masked(registers: List<Gpr>, mask: Nat) → List<Gpr> {
+    match registers {
+        Nil => [],
+        Cons(register, rest) => match mask_odd(mask) { True => Cons(register, masked(rest, mask.half())), False => masked(rest, mask.half()) },
+    }
+}
+
+// A slot of the file after a call: none where the call left a register a
+// caller saves unsaved, the file's otherwise.
+fn left_slot(spare: Bool, slot: Option<Held>) → Option<Held> { match spare { True => None, False => slot } }
+
+// The file after a call that saved `saved`: the result in RAX, the saved
+// registers and the ones no caller saves as before.
+fn File::called(self file: File, saved: List<Gpr>, result: Nat) → File {
+    File(slots_of(λ (register: Gpr) => match register.same(Rax) {
+        True => Some(Held(result, Word)),
+        False => left_slot(register.caller_saved() && saved.spare(register), file.at(register)),
+    }), file.known)
+}
+
+// The registers of `registers` holding a word read after a call, as a mask:
+// what the call saves.
+fn call_mask(registers: List<Gpr>, file: File, after: Reads()) → Nat {
+    match registers {
+        Nil => 0,
+        Cons(register, rest) => (match file.at(register) {
+            None => 0,
+            Some(held) => match reads_has(after, held.id) { True => 1, False => 0 },
+        }) + 2 * call_mask(rest, file, after),
+    }
+}
+
+// A call planned: it saves the registers whose words are read after it, and
+// its result is in RAX.
+fn File::plan_call(self file: File, result: Nat, after: Reads()) → Planned {
+    shared(call_mask(saved_registers(), file, after), λ (mask: Nat) =>
+        Planned([Spilling(mask)], file.called(masked(saved_registers(), mask), result)))
+}
+
 fn into_all(registers: List<Gpr>) → List<Place> {
     match registers { Nil => [], Cons(register, rest) => Cons(Into(register), into_all(rest)) }
 }
@@ -901,11 +952,11 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                 }
             }),
         // The views' nodes as a block the call's words are read after, everything
-        // read after the lend crossing its call; then the call's result in RAX.
+        // read after the lend crossing its call; then the call (`File::plan_call`).
         Lend(views, _, arguments, result) => shared(reads_add(after, views_homes(views) ++ arguments), λ (rest: Reads()) =>
             shared(plan_block(views_nodes(views), file, reads_add(rest, reads_of(views_nodes(views), [])), entries, registers, pool, folds, after, apart),
-                λ (first: Planned) => first.joined(Planned([], first.file.write(Rax, Some(Held(result, Word))))))),
-        Call(_, _, result) => Planned([], file.write(Rax, Some(Held(result, Word)))),
+                λ (first: Planned) => first.joined(first.file.plan_call(result, after)))),
+        Call(_, _, result) => file.plan_call(result, after),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
             let live = Cons(limit, inputs);
             let read = reads_from(Cons(count, Cons(exit, next)));

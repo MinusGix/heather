@@ -553,6 +553,7 @@ fn File::emit_load(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, l
         Cons(place, rest) => match place {
             Folded => None,
             Saving(_) => None,
+            Spilling(_) => None,
             Into(destination) => file.load_from(saves, prog, homes, load, destination, rest, names),
         },
     }
@@ -669,6 +670,7 @@ fn File::emit_store(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, 
         Cons(place, rest) => match place {
             Folded => None,
             Saving(_) => None,
+            Spilling(_) => None,
             Into(destination) => file.store_from(saves, prog, homes, store, destination, rest, names),
         },
     }

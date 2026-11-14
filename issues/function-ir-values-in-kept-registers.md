@@ -5,7 +5,7 @@ labels: [native,x86,ir,planner,proofs]
 area: heather-in-heather
 milestone: [hih-passes,nh-library]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 A function that calls plans its values in the caller-saved registers only (`call_pool`, `function_ir_lower_calls.hthr`), and every call spills all of them to the frame and reloads them ([[function-ir-verified-live-spills]] owns making that only the live ones). So a value that lives across a call costs a store and a load at each call, and a calling loop with five state words has three registers left in its body ([[function-ir-planner-register-pressure]], which was fixed without adding registers).
@@ -49,3 +49,4 @@ Amended 2026-11-12: the first two bullets of what it takes are built (the log ha
     - No plan that lowered before moved. A value takes a saved register only after what costs nothing: a free caller-saved register, then RAX or the register of an operand that dies at the node as before (`Node::fresh`), and the same order for the register a branch's arms meet in (`pick_targets`). So every linked export differs from before in its frames' size alone, and none of them saves. Two orders tried first were worse: a saved register before RAX and a dying operand grew four exports, and a saved register for a branch's meeting register made the scanner's loop save R12 for the path it takes when its count of passes runs out, a store and a load a token for code that does not run.
   - A loop's own registers (`File::free_or_rax`) take a saved register when the pool is full, where they used to fall back on RAX. No export is there, so it is untested on the machine.
   - The count is a prefix of one order, so a function is never asked to save RBX alone. The planner takes them in that order, so it costs nothing today.
+- 2026-11-14: [[function-ir-verified-live-spills]] is built (a call stores only the registers whose values are read after it), so the planner's preference now pays: a value read after a call costs a store and a load at that call in a caller-saved register and nothing in a saved one, against one save pair for the function. The choice is by counts (calls the value lives across, weighted by loop depth, against the function's entry and exit), which is the kind of cost question `docs/optimizer-design.md` §7 gives to an untrusted searcher. Not built.

@@ -483,7 +483,9 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
         for n in read(&fork, &probe, &format!("plan_{k}"))? {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // A function's count of saves (`Place::number`).
+                // What a call saves, a mask, and a function's count of
+                // saves (`Place::number`).
+                n if n >= 32 => format!("Spilling({})", n - 32),
                 n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });

@@ -56,7 +56,7 @@ fn Gpr::shown(self register: Gpr) → String {
 }
 
 fn Place::shown(self place: Place) → String {
-    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count) }
+    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count), Spilling(mask) => "spilling " ++ refusal_number(mask) }
 }
 
 // What is wrong with a place whatever the node: a callee-saved register
@@ -73,6 +73,7 @@ fn Place::unsaved(self place: Place, saves: Nat) → String {
         },
         Folded => "",
         Saving(_) => " (a count of saves, which is no node's place)",
+        Spilling(_) => " (what a call saves, which is no node's place)",
     }
 }
 

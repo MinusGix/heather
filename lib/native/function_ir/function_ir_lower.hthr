@@ -2721,7 +2721,10 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // how many of them, in `kept_order` (function_ir_lower_reads,
 // `placement_saves` in function_ir_lower_calls). Where a node's place is
 // wanted it is a refusal.
-inductive Place { Into(register: Gpr), Folded, Saving(count: Nat) }
+// `Spilling(mask)` is a call's: which of the eight registers a caller saves
+// the call saves round itself, bit `k` the `k`th (function_ir_lower_calls,
+// `call_saves`).
+inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), Spilling(mask: Nat) }
 
 fn Node::fold(self node: Node, file: File) → Option<Lowered> {
     match node {
@@ -2780,7 +2783,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
 }
 
 fn Node::lower_at(self node: Node, place: Place, file: File) → Option<Lowered> {
-    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None }
+    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None, Spilling(_) => None }
 }
 
 theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
@@ -2790,6 +2793,7 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
         Into(destination) => node.lower_keeps<M>(values, destination, file),
         Folded => node.fold_keeps<M>(values, file),
         Saving(_) => trivial,
+        Spilling(_) => trivial,
     }
 }
 

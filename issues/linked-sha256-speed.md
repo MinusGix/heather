@@ -69,3 +69,7 @@ a choice yet.
 The ratio to the cache's scalar path is small enough that
 [[sha256-linked-into-cache]] is a decision about trust and not about time,
 and the number is tracked.
+
+## Log
+
+- 2026-11-14: Cause (2), first half, is fixed: a call saves only the registers whose values are read after it ([[function-ir-verified-live-spills]], closed). The compression went from 216,000 to 175,969 instructions a block and the scanner from 5.11e9 to 3.57e9 over `lib/`, and time moved about 5% on each: the saves were cheap instructions. What the profile's shares do not show is which instructions are on the dependent path; the word accessors (four byte loads, shifts and tests behind a call) and the working variables' moves through memory are. The design the remaining steps follow is `docs/optimizer-design.md`.

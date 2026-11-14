@@ -88,9 +88,96 @@ import omega;
 // SysV's: arguments in RDI, RSI, RDX, RCX, R8, R9, the result in RAX.
 fn argument_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
 
-// What a caller saves around a call: the caller-saved registers but RAX,
-// slot `k` holding the `k`th.
-fn saved_registers() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
+// A call saves a list of them the placement names (`Spilling`, a mask over
+// the eight, bit `k` the `k`th), slot `k` holding the list's `k`th, and all
+// eight where the placement names none. Untrusted like every place: a
+// register the call does not save is no word of the file after it
+// (`File::called`), so a value read there later is not found and the
+// lowering refuses (issues/function-ir-verified-live-spills.md).
+fn saves_named(saved: List<Gpr>) → Bool {
+    match saved { Nil => True, Cons(register, rest) => register.caller_saved() && saves_named(rest) }
+}
+
+// At most eight, for the frame's eight slots, and each a register a caller
+// saves.
+fn saves_ok(saved: List<Gpr>) → Bool { saved.len().leb(8) && saves_named(saved) }
+
+// What a call saves, and the places after the call's.
+fn call_saves(placement: List<Place>) → List<Gpr> {
+    match placement {
+        Nil => saved_registers(),
+        Cons(place, _) => match place {
+            Spilling(mask) => masked(saved_registers(), mask),
+            Into(_) => saved_registers(),
+            Folded => saved_registers(),
+            Saving(_) => saved_registers(),
+        },
+    }
+}
+fn after_saves(placement: List<Place>) → List<Place> {
+    match placement {
+        Nil => [],
+        Cons(place, rest) => match place { Spilling(_) => rest, Into(_) => placement, Folded => placement, Saving(_) => placement },
+    }
+}
+
+// A register no caller saves is none of a list of them.
+theorem saved_spare(saved: List<Gpr>, query: Gpr, other: query.caller_saved() = False): saves_named(saved).IsTrue() → saved.spare(query) = True {
+    match saved {
+        Nil => λ _ => refl,
+        Cons(register, rest) => λ named => {
+            let both = Bool::is_true_and(register.caller_saved(), saves_named(rest), named);
+            let tail = saved_spare(rest, query, other, both.right);
+            match s: register.same(query) {
+                True => {
+                    let here: query.caller_saved().IsTrue() = j(register.same_sound(query, s), λ y _ => y.caller_saved().IsTrue(), both.left);
+                    absurd(trans(sym(eq_true_of_is_true(query.caller_saved(), here)), other))
+                },
+                False => tail,
+            }
+        },
+    }
+}
+
+// A register the reloads do not name is as they found it, and one they
+// name is as it was saved.
+theorem restore_spare(registers: List<Gpr>, saved: Gprs, query: Gpr): (gprs: Gprs) → registers.spare(query) = True →
+    read_gpr(query, restore(registers, saved, gprs)) = read_gpr(query, gprs) {
+    match registers {
+        Nil => λ gprs _ => refl,
+        Cons(register, rest) => λ gprs spare => match s: register.same(query) {
+            True => absurd(j(s, λ b _ => (!b && rest.spare(query)) = True, spare)),
+            False => trans(restore_spare(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs),
+                    j(s, λ b _ => (!b && rest.spare(query)) = True, spare)),
+                cong_fn<Bool, BitVec(64)>(λ b => match b { False => gprs.at(query), True => read_gpr(register, saved) }, s)),
+        },
+    }
+}
+
+theorem restore_named(registers: List<Gpr>, saved: Gprs, query: Gpr): (gprs: Gprs) → registers.spare(query) = False →
+    read_gpr(query, restore(registers, saved, gprs)) = read_gpr(query, saved) {
+    match registers {
+        Nil => λ gprs no => absurd(no),
+        Cons(register, rest) => λ gprs named => match later: rest.spare(query) {
+            False => restore_named(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs), later),
+            True => match s: register.same(query) {
+                False => absurd(j(later, λ c _ => (!False && c) = False, j(s, λ b _ => (!b && rest.spare(query)) = False, named))),
+                True => trans(restore_spare(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs), later),
+                    j(register.same_sound(query, s), λ y _ => read_gpr(y, write_gpr(register, read_gpr(register, saved), gprs)) = read_gpr(y, saved),
+                        read_gpr_after_write(register, read_gpr(register, saved), gprs))),
+            },
+        },
+    }
+}
+
+theorem left_slot_rep(values: Valuation(), saved: List<Gpr>, before, after: Gprs, query: Gpr, slot: Option<Held>,
+    held: SlotRep(values, slot, read_gpr(query, before))):
+    SlotRep(values, left_slot(saved.spare(query), slot), read_gpr(query, restore(saved, before, after))) {
+    match s: saved.spare(query) {
+        True => trivial,
+        False => j(sym(restore_named(saved, before, query, after, s)), λ w _ => SlotRep(values, slot, w), held),
+    }
+}
 
 // What a callee keeps besides the stack pointer.
 fn callee_kept() → List<Gpr> { [Rbx, Rbp, R12, R13, R14, R15] }
@@ -777,33 +864,33 @@ fn stack_raise(count: Nat) → List<Instruction> {
 // A call's code after `prog`: the spills, the stack pointer lowered and
 // the words it passes on the stack stored from `sources`, the argument
 // moves, the CALL, the stack pointer back, the reloads.
-fn call_staged(prog: Prog, sources: List<Gpr>) → Prog {
-    sources.spills(At(saved_registers().spills(prog, 0), 0, Block(stack_lower(sources.len()))), 0)
+fn call_staged(saved: List<Gpr>, prog: Prog, sources: List<Gpr>) → Prog {
+    sources.spills(At(saved.spills(prog, 0), 0, Block(stack_lower(sources.len()))), 0)
 }
-fn call_prog(prog: Prog, sources: List<Gpr>, moves: List<Instruction>, callee: Nat) → Prog {
-    saved_registers().reloads(At(At(At(call_staged(prog, sources), 0, Block(moves)), 0, CallTo(Succ(callee))), 0,
+fn call_prog(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, moves: List<Instruction>, callee: Nat) → Prog {
+    saved.reloads(At(At(At(call_staged(saved, prog, sources), 0, Block(moves)), 0, CallTo(Succ(callee))), 0,
         Block(stack_raise(sources.len()))), 0)
 }
 
-theorem staged_within(prog: Prog, sources: List<Gpr>): prog.Within(call_staged(prog, sources)) {
-    let spilled = saved_registers().spills(prog, 0);
+theorem staged_within(saved: List<Gpr>, prog: Prog, sources: List<Gpr>): prog.Within(call_staged(saved, prog, sources)) {
+    let spilled = saved.spills(prog, 0);
     let lowered = At(spilled, 0, Block(stack_lower(sources.len())));
-    prog.within_trans(spilled, call_staged(prog, sources), Prog::within_spills(saved_registers(), prog, 0),
-        spilled.within_trans(lowered, call_staged(prog, sources), spilled.within_then(0, Block(stack_lower(sources.len()))),
+    prog.within_trans(spilled, call_staged(saved, prog, sources), Prog::within_spills(saved, prog, 0),
+        spilled.within_trans(lowered, call_staged(saved, prog, sources), spilled.within_then(0, Block(stack_lower(sources.len()))),
             Prog::within_spills(sources, lowered, 0)))
 }
 
-theorem call_within(prog: Prog, sources: List<Gpr>, code: List<Instruction>, callee: Nat): prog.Within(call_prog(prog, sources, code, callee)) {
-    let staged = call_staged(prog, sources);
+theorem call_within(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, code: List<Instruction>, callee: Nat): prog.Within(call_prog(saved, prog, sources, code, callee)) {
+    let staged = call_staged(saved, prog, sources);
     let moved = At(staged, 0, Block(code));
     let called = At(moved, 0, CallTo(Succ(callee)));
     let raised = At(called, 0, Block(stack_raise(sources.len())));
-    let out_prog = saved_registers().reloads(raised, 0);
-    prog.within_trans(staged, out_prog, staged_within(prog, sources),
+    let out_prog = saved.reloads(raised, 0);
+    prog.within_trans(staged, out_prog, staged_within(saved, prog, sources),
         staged.within_trans(moved, out_prog, staged.within_then(0, Block(code)),
             moved.within_trans(called, out_prog, moved.within_then(0, CallTo(Succ(callee))),
                 called.within_trans(raised, out_prog, called.within_then(0, Block(stack_raise(sources.len()))),
-                    Prog::within_reloads(saved_registers(), raised, 0)))))
+                    Prog::within_reloads(saved, raised, 0)))))
 }
 
 // A call's argument moves, ordered (round 4). A move goes once its target
@@ -920,7 +1007,7 @@ fn File::sources(self file: File, ids: List<Nat>) → Option<List<Gpr>> {
 // The call once the stack pointer is no longer a word of the file
 // (`staged`): the words past the sixth stored from the registers that
 // hold them, the first six moved into theirs.
-fn File::emit_call_staged(self file: File, staged: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
+fn File::emit_call_staged(self file: File, saved: List<Gpr>, staged: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
     placement: List<Place>, names: Nat) → Option<Emitted> {
     match staged.sources(arguments.drop(6)) {
         None => None,
@@ -932,21 +1019,31 @@ fn File::emit_call_staged(self file: File, staged: File, prog: Prog, callee: Nat
                 Some(moves) => match moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()) &&
                     leaves_all(moves.code, callee_saved()) {
                     False => None,
-                    True => Some(Emitted(call_prog(prog, sources, moves.code, callee), file.write(Rax, Some(Held(result, Word))), placement, names)),
+                    True => Some(Emitted(call_prog(saved, prog, sources, moves.code, callee), file.called(saved, result), placement, names)),
                 },
             },
         },
     }
 }
 
-// The call, refused where the callee is not below `bound`, the callee's
-// buffers are not its leading arguments, it passes more than eight words,
-// or the arguments do not all reach their registers and slots.
-fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
+// The call saving `saved`, refused where the callee is not below `bound`,
+// the callee's buffers are not its leading arguments, it passes more than
+// eight words, or the arguments do not all reach their registers and slots.
+fn File::emit_call_saving(self file: File, saved: List<Gpr>, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → Option<Emitted> {
     match Succ(callee).leb(bound) && (args_lend(homes, lent_count(counts, callee), 0, arguments) && arguments.drop(6).len().leb(2)) {
         False => None,
-        True => file.emit_call_staged(file.write(Rsp, None), prog, callee, arguments, result, placement, names),
+        True => file.emit_call_staged(saved, file.write(Rsp, None), prog, callee, arguments, result, placement, names),
+    }
+}
+
+// The call, saving what the placement names (`call_saves`), refused where
+// that is no list of at most eight registers a caller saves.
+fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
+    names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → Option<Emitted> {
+    match saves_ok(call_saves(placement)) {
+        False => None,
+        True => file.emit_call_saving(call_saves(placement), prog, callee, arguments, result, after_saves(placement), names, bound, counts, homes),
     }
 }
 
@@ -1035,7 +1132,8 @@ fn loop_registers(n: Nat, placement: List<Place>) → Option<LoopRegisters> {
                 Cons(flag, rest) => match counter {
                     Folded => None,
                     Saving(_) => None,
-                    Into(c) => match flag { Folded => None, Saving(_) => None, Into(f) => Some(LoopRegisters([], c, f, rest)) },
+                    Spilling(_) => None,
+                    Into(c) => match flag { Folded => None, Saving(_) => None, Spilling(_) => None, Into(f) => Some(LoopRegisters([], c, f, rest)) },
                 },
             },
         },
@@ -1044,6 +1142,7 @@ fn loop_registers(n: Nat, placement: List<Place>) → Option<LoopRegisters> {
             Cons(place, after) => match place {
                 Folded => None,
                 Saving(_) => None,
+                Spilling(_) => None,
                 Into(register) => match loop_registers(m, after) {
                     None => None,
                     Some(registers) => Some(LoopRegisters(Cons(register, registers.state), registers.counter, registers.flag, registers.rest)),
@@ -1326,6 +1425,7 @@ theorem emit_quiet_leaf_grows(saves: Nat, prog: Prog, file: File, nodes: List<No
             Cons(place, rest) => match place as λ q => Grows(prog, file.emit_load(saves, prog, homes, load, Cons(q, rest), names)) {
                 Folded => trivial,
                 Saving(_) => trivial,
+                Spilling(_) => trivial,
                 Into(destination) => file.load_from_grows(saves, prog, load, destination, rest, names, homes),
             },
         },
@@ -1380,15 +1480,16 @@ theorem emit_leaf_grows(saves: Nat, prog: Prog, file: File, nodes: List<Node>, p
             Cons(place, rest) => match place as λ q => Grows(prog, file.emit_store(saves, prog, homes, store, Cons(q, rest), names)) {
                 Folded => trivial,
                 Saving(_) => trivial,
+                Spilling(_) => trivial,
                 Into(destination) => file.store_from_grows(saves, prog, store, destination, rest, names, homes),
             },
         },
     }
 }
 
-theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
+theorem File::emit_call_saving_grows(self file: File, saved: List<Gpr>, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>):
-    Grows(prog, file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes)) {
+    Grows(prog, file.emit_call_saving(saved, prog, callee, arguments, result, placement, names, bound, counts, homes)) {
     let staged = file.write(Rsp, None);
     let ports = word_ports(arguments.take(6));
     let order = staged.call_moves(arguments.take(6));
@@ -1402,11 +1503,20 @@ theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, argument
                     None => trivial,
                     Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                         False => trivial,
-                        True => call_within(prog, sources, moves.code, callee),
+                        True => call_within(saved, prog, sources, moves.code, callee),
                     },
                 },
             },
         },
+    }
+}
+
+theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
+    names, bound: Nat, counts: List<Nat>, homes: List<Lent>):
+    Grows(prog, file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes)) {
+    match saves_ok(call_saves(placement)) {
+        False => trivial,
+        True => file.emit_call_saving_grows(call_saves(placement), prog, callee, arguments, result, after_saves(placement), names, bound, counts, homes),
     }
 }
 
@@ -1766,6 +1876,7 @@ theorem emit_quiet_leaf_emits<M>(saves: Nat, site: Site<M>, laid: site.program.l
                     file.emit_load(saves, prog, homes, load, Cons(q, rest), names)) {
                     Folded => trivial,
                     Saving(_) => trivial,
+                    Spilling(_) => trivial,
                     Into(destination) => file.load_from_emits<M>(saves, site, laid, stack, lending, values, d, s0, lent, prog, load, destination, rest,
                         names, homes),
                 },
@@ -2227,6 +2338,7 @@ theorem emit_leaf_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out
                         after, file.emit_store(saves, prog, homes, store, Cons(q, rest), names)) {
                         Folded => trivial,
                         Saving(_) => trivial,
+                        Spilling(_) => trivial,
                         Into(destination) => file.store_from_runs<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, prog, store,
                             destination, rest, names, allowed(store.buffer, leaf_store_stores(nodes, store, found)), before, after, homes),
                     },
@@ -2508,11 +2620,11 @@ theorem kept_agree(registers: List<Gpr>, before, left, right: Gprs, agree: GprsA
 // the call's start (`g0`) and the stack pointer below the words, the trail
 // over the file `now`, the saved registers' words in their slots, and the
 // arguments past the sixth from the stack pointer up.
-fn Stack::Staged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending,
+fn Stack::Staged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending,
     values: Valuation(), d: Nat, s0: MachineState<M>, now: Buffers(), g0: Gprs, file: File, count: Nat, arguments: List<Nat>,
     x: MachineState<M>) → Type {
     (file.Represents(values, x.gprs) ∧ (Kept(callee_kept(), g0, x.gprs) ∧ (read_gpr(Rsp, x.gprs) = stack.at(d - 8 * count)))) ∧
-        ((stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory)) ∧
+        ((stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)) ∧
             stack.Passes(words_of(values, arguments.drop(6)), Nil, d - 8 * count, g0, x.memory))
 }
 
@@ -2520,26 +2632,26 @@ fn Stack::Staged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
 // words below the frame, the words passed (`Passes`, from it up), the
 // callee-saved registers as at the call's start (`g0`), the trail over the
 // file `now`, and the saved registers' words in their slots.
-fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, d: Nat,
+fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), g0: Gprs, count: Nat, words: List<BitVec(64)>, x: MachineState<M>) → Type {
     (read_gpr(Rsp, x.gprs) = stack.at(d - 8 * count)) ∧ (stack.Passes(words, argument_registers(), d - 8 * count, x.gprs, x.memory) ∧
         (Kept(callee_kept(), g0, x.gprs) ∧
-            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory))))
+            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory))))
 }
 
 // And after it: the stack pointer where the CALL left from, the answer in
 // RAX, the rest kept, over the file the callee left.
-fn Stack::Called<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, d: Nat,
+fn Stack::Called<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), g0: Gprs, count: Nat, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rsp, t.gprs) = stack.at(d - 8 * count)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
-        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, t.memory))))
+        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
 }
 
 // And with the stack pointer back at the frame.
-fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, d: Nat,
+fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), g0: Gprs, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rsp, t.gprs) = stack.at(d)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
-        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, t.memory))))
+        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
 }
 
 // The CALL, against the callee's contract: the return address is a word
@@ -2552,7 +2664,7 @@ fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 // `leaves` are what relates the two: the caller's file in memory is the
 // callee's, and what the callee stored and left is stored under the
 // caller's spans and leaves the caller's file.
-theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     effects: Effects(), bound: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     inner: Lending, d: Nat, s0: MachineState<M>,
     room: 136 * bound + 24 <= d, fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, callee: Nat, below: Succ(callee) <= bound,
@@ -2569,19 +2681,18 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
         stack.WroteIn((d - 8 * count) - 8, lending.spans(), u, t) ∧ stack.InMemory(lending, after, t),
     g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(Succ(callee)))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words, x),
-        λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, count, answer, t)) {
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x),
+        λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, answer, t)) {
     let spans = lending.spans();
     let c = d - 8 * count;
     let back: ((c - 8) + 8 = c) = Nat::sub_add_cancel(8, c, { omega });
     let entered: ((c - 8) + 8 <= stack.size) = { omega };
     let deep: (136 * Succ(callee) <= c - 8) = { omega };
     let below_top: ((c - 8) + 8 <= top) = { omega };
-    let eight: (saved_registers().len() = 8) = refl;
-    let slots: (d + 8 * (0 + saved_registers().len()) <= top) = { omega };
+    let slots: (d + 8 * (0 + saved.len()) <= top) = { omega };
     let at_c: (stack.at((c - 8) + 8) = stack.at(c)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
     let displacement = asm_jump_of(asm_labels(site.program), prog_len(prog), CallTo(Succ(callee)));
-    let pushes: (x: MachineState<M>) → stack.ArgsReady(lending, d, s0, before, g0, count, words, x) →
+    let pushes: (x: MachineState<M>) → stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x) →
         (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) ∧ (stack.Wrote(d, x.memory, call_near_after(stack.writes, displacement, x).memory) ∧
             (stack.Trail(lending, d, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) ∧
              stack.Passed(words, c - 8, call_near_after(stack.writes, displacement, x)))) = λ x held => {
@@ -2613,8 +2724,8 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
         call_lands(asm_labels(site.program), k, site.program, prog, 0, Succ(callee), site.program.laid_out_lands(laid), at),
         stack.CalledOver(effects, inner, top, callee, words, answer, inner_before, inner_after),
         stack.AnsweredOver(inner, answer, inner_after), returns,
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words, x),
-        λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, count, answer, t),
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x),
+        λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, answer, t),
         λ _ => c - 8,
         λ x held => {
             let pushed = pushes(x, held);
@@ -2634,53 +2745,62 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
             ⟨trans(rsp_t, at_c), ⟨returned.left, ⟨kept_trans(callee_kept(), g0, x.gprs, t.gprs, held.right.right.left, kept_u),
               ⟨⟨stack.wrote_in_trans(d + 64, spans, s0.memory, u.memory, t.memory, pushed.right.right.left.left,
                     stack.wrote_in_deeper(d, d + 64, { omega }, spans, u.memory, t.memory, callee_wrote)), handed.right⟩,
-               stack.saved_unchanged(d, top, g0, x.memory, t.memory, unchanged, saved_registers(), 0, slots,
+               stack.saved_unchanged(d, top, g0, x.memory, t.memory, unchanged, saved, 0, slots,
                     held.right.right.right.right)⟩⟩⟩⟩
         })
 }
 
-// After the reloads: the file before the call, with the answer in RAX.
-theorem call_restores(values: Valuation(), file: File, result: Nat, before, after: Gprs,
+// After the reloads: the file before the call where the call saved it, with
+// the answer in RAX; a caller-saved register the call did not save is no
+// word of the file.
+theorem call_restores(saved: List<Gpr>, named: saves_named(saved).IsTrue(), values: Valuation(), file: File, result: Nat, before, after: Gprs,
     represents: file.Represents(values, before), rax: read_gpr(Rax, after) = values(64, result),
     kept: Kept(callee_kept(), before, after), rsp: read_gpr(Rsp, after) = read_gpr(Rsp, before)):
-    file.write(Rax, Some(Held(result, Word))).Represents(values, restore(saved_registers(), before, after)) {
+    file.called(saved, result).Represents(values, restore(saved, before, after)) {
+    let other = λ (query: Gpr) (no: query.caller_saved() = False) =>
+        restore_spare(saved, before, query, after, saved_spare(saved, query, no, named));
     ⟨λ query => match query {
-        Rax => sym(rax),
-        Rcx => represents.left(Rcx), Rdx => represents.left(Rdx),
-        Rbx => j(sym(kept.left), λ w _ => SlotRep(values, file.at(Rbx), w), represents.left(Rbx)),
-        Rsp => j(sym(rsp), λ w _ => SlotRep(values, file.at(Rsp), w), represents.left(Rsp)),
-        Rbp => j(sym(kept.right.left), λ w _ => SlotRep(values, file.at(Rbp), w), represents.left(Rbp)),
-        Rsi => represents.left(Rsi), Rdi => represents.left(Rdi), R8 => represents.left(R8), R9 => represents.left(R9),
-        R10 => represents.left(R10), R11 => represents.left(R11),
-        R12 => j(sym(kept.right.right.left), λ w _ => SlotRep(values, file.at(R12), w), represents.left(R12)),
-        R13 => j(sym(kept.right.right.right.left), λ w _ => SlotRep(values, file.at(R13), w), represents.left(R13)),
-        R14 => j(sym(kept.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R14), w), represents.left(R14)),
-        R15 => j(sym(kept.right.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R15), w), represents.left(R15)),
+        Rax => sym(trans(other(Rax, refl), rax)),
+        Rcx => left_slot_rep(values, saved, before, after, Rcx, file.at(Rcx), represents.left(Rcx)),
+        Rdx => left_slot_rep(values, saved, before, after, Rdx, file.at(Rdx), represents.left(Rdx)),
+        Rbx => j(sym(trans(other(Rbx, refl), kept.left)), λ w _ => SlotRep(values, file.at(Rbx), w), represents.left(Rbx)),
+        Rsp => j(sym(trans(other(Rsp, refl), rsp)), λ w _ => SlotRep(values, file.at(Rsp), w), represents.left(Rsp)),
+        Rbp => j(sym(trans(other(Rbp, refl), kept.right.left)), λ w _ => SlotRep(values, file.at(Rbp), w), represents.left(Rbp)),
+        Rsi => left_slot_rep(values, saved, before, after, Rsi, file.at(Rsi), represents.left(Rsi)),
+        Rdi => left_slot_rep(values, saved, before, after, Rdi, file.at(Rdi), represents.left(Rdi)),
+        R8 => left_slot_rep(values, saved, before, after, R8, file.at(R8), represents.left(R8)),
+        R9 => left_slot_rep(values, saved, before, after, R9, file.at(R9), represents.left(R9)),
+        R10 => left_slot_rep(values, saved, before, after, R10, file.at(R10), represents.left(R10)),
+        R11 => left_slot_rep(values, saved, before, after, R11, file.at(R11), represents.left(R11)),
+        R12 => j(sym(trans(other(R12, refl), kept.right.right.left)), λ w _ => SlotRep(values, file.at(R12), w), represents.left(R12)),
+        R13 => j(sym(trans(other(R13, refl), kept.right.right.right.left)), λ w _ => SlotRep(values, file.at(R13), w), represents.left(R13)),
+        R14 => j(sym(trans(other(R14, refl), kept.right.right.right.right.left)), λ w _ => SlotRep(values, file.at(R14), w), represents.left(R14)),
+        R15 => j(sym(trans(other(R15, refl), kept.right.right.right.right.right.left)), λ w _ => SlotRep(values, file.at(R15), w),
+            represents.left(R15)),
     }, represents.right⟩
 }
 
 // A word in the slots lies below the frame's top.
-theorem slot_inside(d, i, size: Nat, high: i + 8 <= d + 8 * (0 + saved_registers().len()), fits: d + 64 <= size):
+theorem slot_inside(saved: List<Gpr>, eight: saved.len() <= 8, d, i, size: Nat, high: i + 8 <= d + 8 * (0 + saved.len()), fits: d + 64 <= size):
     (i + 8 <= size) ∧ (i + 8 <= d + 64) {
-    let eight: (saved_registers().len() = 8) = refl;
     ⟨{ omega }, { omega }⟩
 }
 
 // The spills: words of the frame, which keep the trail.
-theorem call_spills<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_spills<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), d: Nat, s0: MachineState<M>,
     fits: d + 64 <= stack.size, under: d + 64 <= top, now: Buffers(), prog: Prog,
-    g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), within: saved_registers().spills(prog, 0).Within(site.program)):
-    site.Moves(stack.writes, prog_len(prog), prog_len(saved_registers().spills(prog, 0)),
+    g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), within: saved.spills(prog, 0).Within(site.program)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(saved.spills(prog, 0)),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, now, x.memory),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, now, x.memory) ∧
-            stack.Saved(d, saved_registers(), 0, g0, x.memory))) {
-    let small: (0 + saved_registers().len() <= 16) = { omega };
-    let slots: (d + 8 * (0 + saved_registers().len()) <= stack.size) = { omega };
-    site.moves_spills(stack, site.program.laid_out_fits(laid), d, g0, rsp_g0, saved_registers(), prog, 0, small, slots,
+            stack.Saved(d, saved, 0, g0, x.memory))) {
+    let small: (0 + saved.len() <= 16) = { omega };
+    let slots: (d + 8 * (0 + saved.len()) <= stack.size) = { omega };
+    site.moves_spills(stack, site.program.laid_out_fits(laid), d, g0, rsp_g0, saved, prog, 0, small, slots,
         λ (m: M) => stack.Trail(lending, d, s0.memory, now, m),
         λ memory i low high word kept => {
-            let inside = slot_inside(d, i, stack.size, high, fits);
+            let inside = slot_inside(saved, eight, d, i, stack.size, high, fits);
             stack.trail_store(top, lending, loan, d, under, s0.memory, now, memory, kept, i, inside.right, word)
         },
         within)
@@ -2691,25 +2811,25 @@ theorem call_spills<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
 // (`sources`), below the frame: the trail and the saved registers' slots
 // are kept. The stack pointer is no word of the file from here on
 // (`staged`).
-theorem call_stages<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_stages<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), values: Valuation(), d: Nat, s0: MachineState<M>,
     fits: d + 64 <= stack.size, under: d + 64 <= top, deep: 24 <= d, now: Buffers(), prog: Prog, file: File, arguments: List<Nat>,
     sources: List<Gpr>, few: sources.len() <= 2, same: sources.len() = arguments.drop(6).len(),
     sourced: file.write(Rsp, None).outputs_check(word_ports(arguments.drop(6)), sources).IsTrue(),
     g0: Gprs, represents: file.Represents(values, g0), rsp_g0: read_gpr(Rsp, g0) = stack.at(d),
-    within: call_staged(prog, sources).Within(site.program)):
-    site.Moves(stack.writes, prog_len(saved_registers().spills(prog, 0)), prog_len(call_staged(prog, sources)),
+    within: call_staged(saved, prog, sources).Within(site.program)):
+    site.Moves(stack.writes, prog_len(saved.spills(prog, 0)), prog_len(call_staged(saved, prog, sources)),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧
-            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory)),
-        λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, now, g0, file.write(Rsp, None), sources.len(), arguments, x)) {
+            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+        λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, file.write(Rsp, None), sources.len(), arguments, x)) {
     let count = sources.len();
     let staged = file.write(Rsp, None);
-    let spilled = saved_registers().spills(prog, 0);
+    let spilled = saved.spills(prog, 0);
     let lowered = At(spilled, 0, Block(stack_lower(count)));
     let g1 = stack_lowered(count, g0);
     let low = d - 8 * count;
-    let frame = λ (m: M) => stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m);
-    let lowered_in = lowered.within_trans(call_staged(prog, sources), site.program, Prog::within_spills(sources, lowered, 0), within);
+    let frame = λ (m: M) => stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m);
+    let lowered_in = lowered.within_trans(call_staged(saved, prog, sources), site.program, Prog::within_spills(sources, lowered, 0), within);
     let first = site.moves_of_pure(stack.writes, prog_len(spilled), prog_len(spilled) + block_length(stack_lower(count)),
         λ (g: Gprs) (m: M) => (g = g0) ∧ frame(m), λ (g: Gprs) (m: M) => (g = g1) ∧ frame(m),
         λ memory => site.runs_block(site.program.laid_out_fits(laid), lowered_in.witness, spilled, 0, stack_lower(count), lowered_in.proof,
@@ -2724,7 +2844,7 @@ theorem call_stages<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
             let inside: (i + 8 <= d) = { omega };
             ⟨stack.trail_store(top, lending, loan, d, under, s0.memory, now, memory, held.left, i, { omega }, word),
              stack.saved_unchanged(d, stack.size, g0, memory, stack.writes.store(memory, stack.at(i), word_bytes(word)),
-                stack.store_below(memory, i, d, { omega }, inside, word), saved_registers(), 0, { omega }, held.right)⟩
+                stack.store_below(memory, i, d, { omega }, inside, word), saved, 0, { omega }, held.right)⟩
         }, within);
     let agree = stack.lowered_agree(d, count, few, deep, g0, rsp_g0);
     let lowered_file: staged.Represents(values, g1) = staged.represents_agree(values, g1, write_gpr(Rsp, stack.at(low), g0), agree,
@@ -2735,16 +2855,16 @@ theorem call_stages<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
     let length: (words.len() = count) = trans(words_of_len(values, arguments.drop(6)), sym(same));
     let kept1: Kept(callee_kept(), g0, g1) = kept_agree(callee_kept(), g0, g1, write_gpr(Rsp, stack.at(low), g0), agree,
         kept_past_rsp(g0, stack.at(low)));
-    site.moves_trans(stack.writes, prog_len(spilled), prog_len(lowered), prog_len(call_staged(prog, sources)),
+    site.moves_trans(stack.writes, prog_len(spilled), prog_len(lowered), prog_len(call_staged(saved, prog, sources)),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ frame(x.memory),
         λ (x: MachineState<M>) => (x.gprs = g1) ∧ frame(x.memory),
-        λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, now, g0, staged, count, arguments, x),
+        λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, staged, count, arguments, x),
         first,
-        site.moves_weaken(stack.writes, prog_len(lowered), prog_len(call_staged(prog, sources)),
+        site.moves_weaken(stack.writes, prog_len(lowered), prog_len(call_staged(saved, prog, sources)),
             λ (x: MachineState<M>) => (x.gprs = g1) ∧ frame(x.memory),
             λ (x: MachineState<M>) => (x.gprs = g1) ∧ (frame(x.memory) ∧ stack.Saved(low, sources, 0, g1, x.memory)),
             λ (x: MachineState<M>) => (x.gprs = g1) ∧ frame(x.memory),
-            λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, now, g0, staged, count, arguments, x),
+            λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, staged, count, arguments, x),
             second, λ x held => held,
             λ x held => {
                 let stacked = stack.saved_passes(low, g1, g0, x.memory, words, sources, 0, { omega }, held.right.right, args);
@@ -2758,22 +2878,22 @@ theorem call_stages<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
 
 // The argument moves: the first six words into their registers, the rest
 // on the stack as the stores before them left them.
-theorem call_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+theorem call_moves<M>(saved: List<Gpr>, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
     values: Valuation(), d: Nat, s0: MachineState<M>, now: Buffers(), prog: Prog, staged: File, arguments: List<Nat>, count: Nat,
     moves: Lowered, moves_keeps: Keeps<M>(values, staged, True, moves),
     placed: moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()).IsTrue(),
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
     g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(moves.code))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code),
-        λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, now, g0, staged, count, arguments, x),
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, now, g0, count, words_of(values, arguments), x)) {
+        λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, staged, count, arguments, x),
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, now, g0, count, words_of(values, arguments), x)) {
     let low = d - 8 * count;
-    let rest = λ (m: M) => (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m)) ∧
+    let rest = λ (m: M) => (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)) ∧
         stack.Passes(words_of(values, arguments.drop(6)), Nil, low, g0, m);
     let pre = λ (g: Gprs) (m: M) => (staged.Represents(values, g) ∧ (Kept(callee_kept(), g0, g) ∧ (read_gpr(Rsp, g) = stack.at(low)))) ∧ rest(m);
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(low)) ∧
         (stack.Passes(words_of(values, arguments), argument_registers(), low, g, m) ∧ (Kept(callee_kept(), g0, g) ∧
-            (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m))));
+            (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m))));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
             site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
@@ -2797,21 +2917,20 @@ theorem call_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
             }))
 }
 
-theorem saved_fit(d, size: Nat, fits: d + 64 <= size):
-    (0 + saved_registers().len() <= 16) ∧ (d + 8 * (0 + saved_registers().len()) <= size) {
-    let eight: (saved_registers().len() = 8) = refl;
+theorem saved_fit(saved: List<Gpr>, eight: saved.len() <= 8, d, size: Nat, fits: d + 64 <= size):
+    (0 + saved.len() <= 16) ∧ (d + 8 * (0 + saved.len()) <= size) {
     ⟨{ omega }, { omega }⟩
 }
 
 // The stack pointer back at the frame after the CALL.
-theorem call_raises<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+theorem call_raises<M>(saved: List<Gpr>, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
     d: Nat, s0: MachineState<M>, now: Buffers(), g0: Gprs, count: Nat, few: count <= 2, deep: 24 <= d, answer: BitVec(64),
     prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(stack_raise(count)))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(stack_raise(count)),
-        λ (t: MachineState<M>) => stack.Called(lending, d, s0, now, g0, count, answer, t),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, now, g0, answer, t)) {
+        λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, now, g0, count, answer, t),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, now, g0, answer, t)) {
     let rest = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧ (Kept(callee_kept(), g0, g) ∧
-        (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m)));
+        (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)));
     let pre = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(d - 8 * count)) ∧ rest(g, m);
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(d)) ∧ rest(g, m);
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(stack_raise(count)), pre, post,
@@ -2831,7 +2950,7 @@ theorem call_raises<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
 // spills, the words passed on the stack, the argument moves, the CALL, the
 // stack pointer raised. The CALL is `step`, whatever it is proved against
 // (`call_step`, `lend_step`).
-theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_returns<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     values: Valuation(), d: Nat, s0: MachineState<M>, fits: d + 64 <= stack.size, under: d + 72 <= top, deep: 24 <= d,
     prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat,
@@ -2841,22 +2960,21 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
     placed: moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()).IsTrue(),
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
     g0: Gprs, represents: file.Represents(values, g0), rsp_g0: read_gpr(Rsp, g0) = stack.at(d), before, after: Buffers(),
-    step: (k: Nat) → asm_back(site.program, k) = At(At(call_staged(prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))) →
-        site.Moves(stack.writes, prog_len(At(call_staged(prog, sources), 0, Block(moves.code))),
-            prog_len(At(call_staged(prog, sources), 0, Block(moves.code))) + 5,
-            λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, sources.len(), words_of(values, arguments), x),
-            λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, sources.len(), values(64, result), t)),
-    within: At(At(At(call_staged(prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))), 0,
+    step: (k: Nat) → asm_back(site.program, k) = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))) →
+        site.Moves(stack.writes, prog_len(At(call_staged(saved, prog, sources), 0, Block(moves.code))),
+            prog_len(At(call_staged(saved, prog, sources), 0, Block(moves.code))) + 5,
+            λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, sources.len(), words_of(values, arguments), x),
+            λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, sources.len(), values(64, result), t)),
+    within: At(At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))), 0,
         Block(stack_raise(sources.len()))).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog),
-        prog_len(At(At(At(call_staged(prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))), 0, Block(stack_raise(sources.len())))),
+        prog_len(At(At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))), 0, Block(stack_raise(sources.len())))),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, g0, values(64, result), t)) {
-    let saved = saved_registers();
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, values(64, result), t)) {
     let count = sources.len();
     let staged_file = file.write(Rsp, None);
     let spilled = saved.spills(prog, 0);
-    let staged = call_staged(prog, sources);
+    let staged = call_staged(saved, prog, sources);
     let moved = At(staged, 0, Block(moves.code));
     let called = At(moved, 0, CallTo(Succ(callee)));
     let raised = At(called, 0, Block(stack_raise(count)));
@@ -2872,64 +2990,69 @@ theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
     site.moves_trans(stack.writes, prog_len(prog), prog_len(spilled), prog_len(raised),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, g0, answer, t),
-        call_spills<M>(site, laid, stack, top, lending, loan, d, s0, fits, { omega }, before, prog, g0, rsp_g0, spilled_in),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
+        call_spills<M>(saved, eight, site, laid, stack, top, lending, loan, d, s0, fits, { omega }, before, prog, g0, rsp_g0, spilled_in),
     site.moves_trans(stack.writes, prog_len(spilled), prog_len(staged), prog_len(raised),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
-        λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, before, g0, staged_file, count, arguments, x),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, g0, answer, t),
-        call_stages<M>(site, laid, stack, top, lending, loan, values, d, s0, fits, { omega }, deep, before, prog, file, arguments, sources, few,
+        λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, before, g0, staged_file, count, arguments, x),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
+        call_stages<M>(saved, eight, site, laid, stack, top, lending, loan, values, d, s0, fits, { omega }, deep, before, prog, file, arguments, sources, few,
             same, sourced, g0, represents, rsp_g0, staged_in),
     site.moves_trans(stack.writes, prog_len(staged), prog_len(moved), prog_len(raised),
-        λ (x: MachineState<M>) => stack.Staged(lending, values, d, s0, before, g0, staged_file, count, arguments, x),
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words, x),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, g0, answer, t),
-        call_moves<M>(site, laid, stack, lending, values, d, s0, before, staged, staged_file, arguments, count, moves, moves_keeps, placed,
+        λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, before, g0, staged_file, count, arguments, x),
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
+        call_moves<M>(saved, site, laid, stack, lending, values, d, s0, before, staged, staged_file, arguments, count, moves, moves_keeps, placed,
             leaves, g0, moved_in.witness, moved_in.proof),
     site.moves_trans(stack.writes, prog_len(moved), prog_len(called), prog_len(raised),
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words, x),
-        λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, count, answer, t),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, g0, answer, t),
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x),
+        λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, answer, t),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
         step(called_in.witness, called_in.proof),
-        call_raises<M>(site, laid, stack, lending, d, s0, after, g0, count, few, deep, answer, called, within.witness, within.proof)))))
+        call_raises<M>(saved, site, laid, stack, lending, d, s0, after, g0, count, few, deep, answer, called, within.witness, within.proof)))))
 }
 
 // The reloads write no callee-saved register, so they keep what the body
 // keeps.
-theorem reloads_keep(saved, after: Gprs): Kept(callee_saved(), after, restore(saved_registers(), saved, after)) {
-    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩
+theorem reloads_keep(saved: List<Gpr>, named: saves_named(saved).IsTrue(), held, after: Gprs):
+    Kept(callee_saved(), after, restore(saved, held, after)) {
+    let other = λ (query: Gpr) (no: query.caller_saved() = False) =>
+        restore_spare(saved, held, query, after, saved_spare(saved, query, no, named));
+    ⟨other(Rbx, refl), ⟨other(Rbp, refl), ⟨other(Rsp, refl), ⟨other(R12, refl), ⟨other(R13, refl), ⟨other(R14, refl), ⟨other(R15, refl),
+        trivial⟩⟩⟩⟩⟩⟩⟩
 }
 
-theorem kept_restored(saves: Nat, before, saved, after: Gprs, kept: Kept(body_kept(saves), before, after)):
-    Kept(body_kept(saves), before, restore(saved_registers(), saved, after)) {
-    let reloaded = restore(saved_registers(), saved, after);
-    let all = reloads_keep(saved, after);
+theorem kept_restored(saved: List<Gpr>, named: saves_named(saved).IsTrue(), saves: Nat, before, held, after: Gprs,
+    kept: Kept(body_kept(saves), before, after)):
+    Kept(body_kept(saves), before, restore(saved, held, after)) {
+    let reloaded = restore(saved, held, after);
+    let all = reloads_keep(saved, named, held, after);
     kept_trans(body_kept(saves), before, after, reloaded, kept,
         body_kept_of(saves, after, reloaded, all.right.right.left, saved_kept(after, reloaded, all)))
 }
 
 // From the return through the reloads.
-theorem call_finishes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+theorem call_finishes<M>(saved: List<Gpr>, eight: saved.len() <= 8, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
     values: Valuation(), d: Nat, s0: MachineState<M>, now: Buffers(), rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), fits: d + 64 <= stack.size,
     file: File, result: Nat, called: Prog, g0: Gprs, represents: file.Represents(values, g0),
     rsp_g0: read_gpr(Rsp, g0) = stack.at(d), kept_g0: Kept(body_kept(saves), s0.gprs, g0),
-    within: saved_registers().reloads(called, 0).Within(site.program)):
-    site.Moves(stack.writes, prog_len(called), prog_len(saved_registers().reloads(called, 0)),
-        λ (t: MachineState<M>) => stack.Returned(lending, d, s0, now, g0, values(64, result), t),
-        λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, now, t)) {
-    let saved = saved_registers();
-    let sizes = saved_fit(d, stack.size, fits);
-    let out_file = file.write(Rax, Some(Held(result, Word)));
+    within: saved.reloads(called, 0).Within(site.program)):
+    site.Moves(stack.writes, prog_len(called), prog_len(saved.reloads(called, 0)),
+        λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, now, g0, values(64, result), t),
+        λ (t: MachineState<M>) => file.called(saved, result).Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, now, t)) {
+    let sizes = saved_fit(saved, eight, d, stack.size, fits);
+    let out_file = file.called(saved, result);
     λ s3 here resident after_call => {
         let reloading = site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g0, saved, called, 0, s3.gprs, sizes.left,
-            sizes.right, trivial, after_call.left, λ (m: M) => stack.Trail(lending, d, s0.memory, now, m), within);
+            sizes.right, Bool::is_true_of_eq(saved_spare(saved, Rsp, refl, named)), after_call.left,
+            λ (m: M) => stack.Trail(lending, d, s0.memory, now, m), within);
         let e = reloading(s3, here, resident, ⟨refl, after_call.right.right.right⟩);
         let kept_s3: Kept(body_kept(saves), s0.gprs, s3.gprs) =
             kept_trans(body_kept(saves), s0.gprs, g0, s3.gprs, kept_g0,
                 body_kept_of(saves, g0, s3.gprs, trans(after_call.left, sym(rsp_g0)), after_call.right.right.left));
         let finished = j(sym(e.proof.right.right.right.left), λ g _ => out_file.Represents(values, g) ∧ Kept(body_kept(saves), s0.gprs, g),
-            ⟨call_restores(values, file, result, g0, s3.gprs, represents, after_call.right.left, after_call.right.right.left,
-                trans(after_call.left, sym(rsp_g0))), kept_restored(saves, s0.gprs, g0, s3.gprs, kept_s3)⟩);
+            ⟨call_restores(saved, named, values, file, result, g0, s3.gprs, represents, after_call.right.left, after_call.right.right.left,
+                trans(after_call.left, sym(rsp_g0))), kept_restored(saved, named, saves, s0.gprs, g0, s3.gprs, kept_s3)⟩);
         Exists(e.witness, ⟨e.proof.left, ⟨e.proof.right.left, ⟨e.proof.right.right.left,
             ⟨finished.left, ⟨finished.right, e.proof.right.right.right.right⟩⟩⟩⟩⟩)
     }
@@ -2938,7 +3061,7 @@ theorem call_finishes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
 // The call, its argument moves found: under `Facts`, from which the CALL
 // The call, its sources and argument moves found: under `Facts`, from
 // which the CALL is proved for the registers the call starts with.
-theorem call_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_emits<M>(saved: List<Gpr>, eight: saved.len() <= 8, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     values: Valuation(), d: Nat, s0: MachineState<M>,
     rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), fits: d + 64 <= stack.size, under: d + 72 <= top, deep: 24 <= d,
@@ -2949,30 +3072,30 @@ theorem call_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     placed: moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()).IsTrue(),
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(), Facts: Type, before, after: Buffers(),
     step: Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
-        asm_back(site.program, k) = At(At(call_staged(prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))) →
-        site.Moves(stack.writes, prog_len(At(call_staged(prog, sources), 0, Block(moves.code))),
-            prog_len(At(call_staged(prog, sources), 0, Block(moves.code))) + 5,
-            λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, sources.len(), words_of(values, arguments), x),
-            λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, sources.len(), values(64, result), t))):
+        asm_back(site.program, k) = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))) →
+        site.Moves(stack.writes, prog_len(At(call_staged(saved, prog, sources), 0, Block(moves.code))),
+            prog_len(At(call_staged(saved, prog, sources), 0, Block(moves.code))) + 5,
+            λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, sources.len(), words_of(values, arguments), x),
+            λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, sources.len(), values(64, result), t))):
     EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
-        before, after, Emitted(call_prog(prog, sources, moves.code, callee), file.write(Rax, Some(Held(result, Word))), placement, names)) {
-    let called = At(At(call_staged(prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee)));
+        before, after, Emitted(call_prog(saved, prog, sources, moves.code, callee), file.called(saved, result), placement, names)) {
+    let called = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee)));
     let raised = At(called, 0, Block(stack_raise(sources.len())));
-    let out_prog = saved_registers().reloads(raised, 0);
-    ⟨call_within(prog, sources, moves.code, callee),
+    let out_prog = saved.reloads(raised, 0);
+    ⟨call_within(saved, prog, sources, moves.code, callee),
      λ within s here resident holds => {
         let trailed: stack.Trailed(saves, lending, d, s0, before, s) = holds.right;
         let rsp_s: (read_gpr(Rsp, s.gprs) = stack.at(d)) = trans(trailed.left.left, rsp0);
         site.moves_trans(stack.writes, prog_len(prog), prog_len(raised), prog_len(out_prog),
             λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
-            λ (t: MachineState<M>) => stack.Returned(lending, d, s0, after, s.gprs, values(64, result), t),
-            λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧
+            λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, s.gprs, values(64, result), t),
+            λ (t: MachineState<M>) => file.called(saved, result).Represents(values, t.gprs) ∧
                 stack.Trailed(saves, lending, d, s0, after, t),
-            call_returns<M>(site, laid, stack, top, lending, loan, values, d, s0, fits, under, deep, prog, file, callee,
+            call_returns<M>(saved, eight, site, laid, stack, top, lending, loan, values, d, s0, fits, under, deep, prog, file, callee,
                 arguments, result, sources, few, same, sourced, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, before, after,
                 step(holds.left.right, s.gprs, holds.left.left, rsp_s),
-                raised.within_trans(out_prog, site.program, Prog::within_reloads(saved_registers(), raised, 0), within)),
-            call_finishes<M>(saves, site, laid, stack, lending, values, d, s0, after, rsp0, fits, file, result, raised, s.gprs, holds.left.left, rsp_s,
+                raised.within_trans(out_prog, site.program, Prog::within_reloads(saved, raised, 0), within)),
+            call_finishes<M>(saved, eight, named, saves, site, laid, stack, lending, values, d, s0, after, rsp0, fits, file, result, raised, s.gprs, holds.left.left, rsp_s,
                 trailed.left, within),
             s, here, resident, ⟨refl, trailed.right⟩)
      }⟩
@@ -2980,7 +3103,7 @@ theorem call_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
 
 // The call once the stack pointer is no word of the file: its sources
 // found and checked, then its argument moves.
-theorem File::emit_call_staged_steps<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+theorem File::emit_call_staged_steps<M>(self file: File, saved: List<Gpr>, eight: saved.len() <= 8, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
@@ -2990,14 +3113,14 @@ theorem File::emit_call_staged_steps<M>(self file: File, saves: Nat, site: Site<
         (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
         asm_back(site.program, k) = At(moved, 0, CallTo(Succ(callee))) →
         site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
-            λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words_of(values, arguments), x),
-            λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, count, values(64, result), t))):
+            λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words_of(values, arguments), x),
+            λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, values(64, result), t))):
     MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
-        before, after, file.emit_call_staged(file.write(Rsp, None), prog, callee, arguments, result, placement, names)) {
+        before, after, file.emit_call_staged(saved, file.write(Rsp, None), prog, callee, arguments, result, placement, names)) {
     let staged = file.write(Rsp, None);
     let ports = word_ports(arguments.take(6));
     let order = staged.call_moves(arguments.take(6));
-    let out_file = file.write(Rax, Some(Held(result, Word)));
+    let out_file = file.called(saved, result);
     match found: staged.sources(arguments.drop(6)) {
         None => trivial,
         Some(sources) => match sourcing: sources.len().same(arguments.drop(6).len()) &&
@@ -3017,7 +3140,7 @@ theorem File::emit_call_staged_steps<M>(self file: File, saves: Nat, site: Site<
                         None => None,
                         Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                             False => None,
-                            True => Some(Emitted(call_prog(prog, sources, moves.code, callee), out_file, placement, names)),
+                            True => Some(Emitted(call_prog(saved, prog, sources, moves.code, callee), out_file, placement, names)),
                         },
                     }) {
                     None => λ _ => trivial,
@@ -3029,10 +3152,10 @@ theorem File::emit_call_staged_steps<M>(self file: File, saves: Nat, site: Site<
                                     leaves_all(moves.code, callee_saved()),
                                     is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
                                         checked));
-                                call_emits<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, rsp0, fits, under, deep,
+                                call_emits<M>(saved, eight, named, saves, site, laid, stack, top, lending, loan, values, d, s0, rsp0, fits, under, deep,
                                     prog, file, callee, arguments, result, placement, names, sources, few_sources, same, sourced.right,
                                     moves, keeps, both.left, both.right, Facts, before, after,
-                                    step(sources.len(), few_sources, At(call_staged(prog, sources), 0, Block(moves.code))))
+                                    step(sources.len(), few_sources, At(call_staged(saved, prog, sources), 0, Block(moves.code))))
                             },
                         },
                 })(move_outputs_keeps<M>(values, ArgumentMove::ports(order), staged, ArgumentMove::registers(order)))
@@ -3044,7 +3167,7 @@ theorem File::emit_call_staged_steps<M>(self file: File, saves: Nat, site: Site<
 // The call, whatever its CALL is proved against: a callee entered over the
 // caller's file (`File::emit_call_runs`) or over views of it
 // (`File::emit_lend_runs`).
-theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+theorem File::emit_call_saving_steps<M>(self file: File, saved: List<Gpr>, eight: saved.len() <= 8, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
@@ -3054,10 +3177,10 @@ theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, lai
         (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
         asm_back(site.program, k) = At(moved, 0, CallTo(Succ(callee))) →
         site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
-            λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, before, g0, count, words_of(values, arguments), x),
-            λ (t: MachineState<M>) => stack.Called(lending, d, s0, after, g0, count, values(64, result), t))):
+            λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words_of(values, arguments), x),
+            λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, values(64, result), t))):
     MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
-        before, after, file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes)) {
+        before, after, file.emit_call_saving(saved, prog, callee, arguments, result, placement, names, bound, counts, homes)) {
     let lends = args_lend(homes, lent_count(counts, callee), 0, arguments);
     let short = arguments.drop(6).len().leb(2);
     match under_bound: Succ(callee).leb(bound) && (lends && short) {
@@ -3066,9 +3189,39 @@ theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, lai
             let allowed = Bool::is_true_and(Succ(callee).leb(bound), lends && short,
                 is_true_of_eq(Succ(callee).leb(bound) && (lends && short), under_bound));
             let rest = Bool::is_true_and(lends, short, allowed.right);
-            file.emit_call_staged_steps<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, rsp0, fits, under, deep, prog, callee,
+            file.emit_call_staged_steps<M>(saved, eight, named, saves, site, laid, stack, top, lending, loan, values, d, s0, rsp0, fits, under, deep, prog, callee,
                 arguments, result, placement, names, Facts, before, after, arguments.drop(6).len().leb_sound(2, rest.right),
                 step(Succ(callee).leb_sound(bound, allowed.left), rest.left))
+        },
+    }
+}
+
+// The call as the placement has it saved: the list is checked, and the
+// CALL is proved for the list the placement names.
+theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, lending: Lending,
+    loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
+    fits: d + 64 <= stack.size, under: d + 72 <= top, deep: 24 <= d, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
+    placement: List<Place>, names: Nat, counts: List<Nat>, homes: List<Lent>, Facts: Type, before, after: Buffers(),
+    step: call_saves(placement).len() <= 8 → Succ(callee) <= bound → args_lend(homes, lent_count(counts, callee), 0, arguments).IsTrue() →
+        (count: Nat) → count <= 2 →
+        (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        asm_back(site.program, k) = At(moved, 0, CallTo(Succ(callee))) →
+        site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
+            λ (x: MachineState<M>) => stack.ArgsReady(call_saves(placement), lending, d, s0, before, g0, count, words_of(values, arguments), x),
+            λ (t: MachineState<M>) => stack.Called(call_saves(placement), lending, d, s0, after, g0, count, values(64, result), t))):
+    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
+        before, after, file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes)) {
+    let saved = call_saves(placement);
+    match ok: saves_ok(saved) {
+        False => trivial,
+        True => {
+            let both = Bool::is_true_and(saved.len().leb(8), saves_named(saved), is_true_of_eq(saves_ok(saved), ok));
+            let eight = saved.len().leb_sound(8, both.left);
+            file.emit_call_saving_steps<M>(saved, eight, both.right, saves, site, laid, stack, top, bound, lending, loan, values, d, s0, rsp0,
+                fits, under, deep, prog, callee, arguments, result, after_saves(placement), names, counts, homes, Facts, before, after,
+                step(eight))
         },
     }
 }
@@ -3093,8 +3246,8 @@ theorem File::emit_call_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
         StructuredRegionRunsOver(effects, values, Call(callee, arguments, result), before, after) ∧
             HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after,
-        λ below lend count few moved facts g0 represents rsp_g0 k at =>
-            call_step<M>(site, laid, stack, top, effects, bound, lending, loan, lending, d, s0, room, fits, under, moved, callee, below,
+        λ eight below lend count few moved facts g0 represents rsp_g0 k at =>
+            call_step<M>(call_saves(placement), eight, site, laid, stack, top, effects, bound, lending, loan, lending, d, s0, room, fits, under, moved, callee, below,
                 count, few, words_of(values, arguments), values(64, result), before, after, before, after, facts.left, returns(below),
                 args_lend_lent(values, lending.addresses, lending.buffers, homes, facts.right, lent_count(lending.counts, callee), 0,
                     arguments, lend),
@@ -3110,7 +3263,7 @@ theorem File::emit_call_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
 // (`Lendable::reads`); what it stored under the views it stored under the
 // scope's spans (`Lendable::wrote`), and what it left of the written
 // windows is the scope's file with them put back (`Lendable::put_reads`).
-theorem lend_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem lend_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     effects: Effects(), bound: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, bound, lending.counts, needs, top),
     values: Valuation(), d: Nat, s0: MachineState<M>,
@@ -3122,12 +3275,12 @@ theorem lend_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
     answered: effects(viewed(views, values, mid), callee, words_of(values, arguments), values(64, result), left),
     g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(Succ(callee)))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
-        λ (x: MachineState<M>) => stack.ArgsReady(lending, d, s0, mid, g0, count, words_of(values, arguments), x),
-        λ (t: MachineState<M>) => stack.Called(lending, d, s0, put_views(views, values, left, mid), g0, count, values(64, result), t)) {
+        λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, mid, g0, count, words_of(values, arguments), x),
+        λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, put_views(views, values, left, mid), g0, count, values(64, result), t)) {
     let inner = lending.lend(views, values);
     let level = (d - 8 * count) - 8;
     let low: (level <= top) = { omega };
-    call_step<M>(site, laid, stack, top, effects, bound, lending, loan, inner, d, s0, room, fits, under, prog, callee, below, count, few,
+    call_step<M>(saved, eight, site, laid, stack, top, effects, bound, lending, loan, inner, d, s0, room, fits, under, prog, callee, below, count, few,
         words_of(values, arguments), values(64, result), mid, put_views(views, values, left, mid), viewed(views, values, mid), left,
         answered,
         calls(inner, refl, lendable.loan(loan), callee, below, asks, words_of(values, arguments), values(64, result),
@@ -3201,12 +3354,12 @@ theorem File::emit_lend_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
                             λ left => first.file.emit_call_steps<M>(saves, site, laid, stack, top, bound, lending, loan, values, d, s0, rsp0, fits,
                                 under, { omega }, first.prog, callee, args, result, first.placement, first.names, lending.counts, views_lents(views),
                                 First(mid) ∧ Answered(mid, left), mid, put_views(views, values, left, mid),
-                                λ below lend count few moved holds g0 represents rsp_g0 k at => {
+                                λ eight below lend count few moved holds g0 represents rsp_g0 k at => {
                                     let still = nodes_run_still(values, nodes, before, mid, views_nodes_quiet(views), holds.left.left);
                                     let lendable = views_lendable_sound(views, first.file, homes, values, g0, lending.addresses,
                                         lending.buffers, before, lending.written, represents, holds.left.right, checks.left, checks.right,
                                         still.right, allowed);
-                                    lend_step<M>(site, laid, stack, top, effects, bound, lending, loan, needs, calls, values, d, s0, room,
+                                    lend_step<M>(call_saves(first.placement), eight, site, laid, stack, top, effects, bound, lending, loan, needs, calls, values, d, s0, room,
                                         fits, under, moved, views, callee, below, count, few, args, result, asks, lendable, lend, mid, left,
                                         holds.right, g0, k, at)
                                 }))))
@@ -4794,10 +4947,10 @@ fn Function::emit_body(self function: Function, saves: Nat, prog: Prog, k: Nat, 
 // of its nodes come after. Untrusted like every place: the body's code is
 // checked to leave the registers the count does not cover.
 fn placement_saves(placement: List<Place>) → Nat {
-    match placement { Nil => 0, Cons(place, _) => match place { Saving(count) => count, Into(_) => 0, Folded => 0 } }
+    match placement { Nil => 0, Cons(place, _) => match place { Saving(count) => count, Into(_) => 0, Folded => 0, Spilling(_) => 0 } }
 }
 fn placement_body(placement: List<Place>) → List<Place> {
-    match placement { Nil => [], Cons(place, rest) => match place { Saving(_) => rest, Into(_) => placement, Folded => placement } }
+    match placement { Nil => [], Cons(place, rest) => match place { Saving(_) => rest, Into(_) => placement, Folded => placement, Spilling(_) => placement } }
 }
 
 // Function `k`'s code after `prog`: its label, its frame, the saves its
@@ -5060,6 +5213,7 @@ fn places_saves(places: List<Place>) → Nat {
             Into(register) => register.save_rank().max(places_saves(rest)),
             Folded => places_saves(rest),
             Saving(_) => places_saves(rest),
+            Spilling(_) => places_saves(rest),
         },
     }
 }
@@ -5430,6 +5584,7 @@ theorem emit_leaf_quiet(saves: Nat, prog: Prog, file: File, nodes: List<Node>, p
             Cons(place, rest) => match place as λ p => Quiets(nodes_quiet(nodes), file.emit_store(saves, prog, [], store, Cons(p, rest), names)) {
                 Folded => trivial,
                 Saving(_) => trivial,
+                Spilling(_) => trivial,
                 Into(_) => trivial,
             },
         },
