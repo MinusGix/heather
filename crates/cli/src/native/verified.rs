@@ -1513,6 +1513,17 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
             10 => format!("LoadByte(ByteLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
             11 => format!("StoreByte(ByteStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
             12 => "Syscall".to_string(),
+            // A piece: its length and its bytes, stated as they are. Its
+            // measure is a verdict (x86_64_asm), `True` at a literal's
+            // bytes, so the literal is the lowering's piece whichever
+            // lemma measured that one.
+            13 => {
+                let len = take()?;
+                let mut bytes = Vec::new();
+                for _ in 0..len { bytes.push(word(8, take()?)); }
+                let list = bytes.iter().rev().fold("Nil".to_string(), |rest, b| format!("Cons({b}, {rest})"));
+                format!("Piece({list}, {len}, trivial)")
+            }
             _ => return Err("the lowering emitted an item the compiler does not state".into()),
         };
         items.push((name, item));

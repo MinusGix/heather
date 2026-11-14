@@ -515,7 +515,7 @@ theorem indexed_address_at(load: IndexedWordLoad, gprs: Gprs, start: BitVec(64),
 
 // The word at entry `index` of a table at `base` (`IndexedWordLoad`), as a
 // piece: no `Asm` constructor of its own.
-fn asm_indexed_load(load: IndexedWordLoad) → Asm { Piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
+fn asm_indexed_load(load: IndexedWordLoad) → Asm { Asm::piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
 
 // The indexed load at a label: the eight bytes at the address read as a
 // word, below the canonical boundary.
@@ -545,11 +545,11 @@ theorem Site::moves_indexed_load<M>(self site: Site<M>, writes: ByteWrites<M>, f
 // of its entry at the index register into the register the LEA wrote. No
 // label is named, so the program's labels say nothing of it.
 fn table_lea(destination: Gpr) → Asm {
-    Piece(lea_rip_bytes(LeaRip(destination := destination, displacement := BitVec::ofNat(5))), 7,
+    Asm::piece(lea_rip_bytes(LeaRip(destination := destination, displacement := BitVec::ofNat(5))), 7,
         lea_rip_length(LeaRip(destination := destination, displacement := BitVec::ofNat(5))))
 }
-fn table_jump(length: Nat) → Asm { Piece(near_control_bytes(JumpNear(BitVec::ofNat(length))), 5, refl) }
-fn table_piece(entries: List<Nat>) → Asm { Piece(table_bytes(entries), 8 * entries.len(), table_bytes_length(entries)) }
+fn table_jump(length: Nat) → Asm { Asm::piece(near_control_bytes(JumpNear(BitVec::ofNat(length))), 5, refl) }
+fn table_piece(entries: List<Nat>) → Asm { Asm::piece(table_bytes(entries), 8 * entries.len(), table_bytes_length(entries)) }
 fn table_read_load(base: SibBase, index: SibIndex) → IndexedWordLoad { IndexedWordLoad(destination := base.gpr(), base := base, index := index) }
 fn table_read_prog(prog: Prog, base: SibBase, index: SibIndex, entries: List<Nat>) → Prog {
     At(At(At(At(prog, 0, table_lea(base.gpr())), 0, table_jump(8 * entries.len())), 0, table_piece(entries)), 0,
@@ -661,8 +661,8 @@ theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fit
 
 // MOV r32, [base] and MOV [base], r32 as pieces: neither needs its own
 // `Asm` item, since what a run over one does is the theorem below.
-fn asm_dword_load(load: DwordLoad) → Asm { Piece(dword_load_bytes(load), dword_load_bytes(load).len(), refl) }
-fn asm_dword_store(store: DwordStore) → Asm { Piece(dword_store_bytes(store), 3, refl) }
+fn asm_dword_load(load: DwordLoad) → Asm { Asm::piece(dword_load_bytes(load), dword_load_bytes(load).len(), refl) }
+fn asm_dword_store(store: DwordStore) → Asm { Asm::piece(dword_store_bytes(store), 3, refl) }
 
 // The doubleword load at a label: the four bytes at the base read low
 // first, below the canonical boundary, the destination's upper half cleared.

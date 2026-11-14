@@ -810,6 +810,18 @@ The first three were added and first checked by the wide-access work
 assembler's bytes and the processor's results as theorems); the checks
 above were run again, independently, when the optimizer took them in.
 
+An instruction added this way needs no item of its own in the assembler and
+nothing in the compiler's Rust. It is a piece (`Asm::piece`,
+`x86_64_asm.hthr`): its bytes, their length, and a theorem for what a run
+over it does. `Asm::numbers` writes a piece as its bytes, and `compile-x86`
+states it back as the literal piece of those bytes. The literal is the
+lowering's piece by computation because a piece's measure is held as a
+verdict, which is `True` at closed bytes and so has one proof, whichever
+lemma measured the piece (`indexed_piece_literal`, `table_piece_literal` in
+`lib/_tests/std/arch/x86_64/x86_64_indexed_load_tests.hthr`). The first
+compile of SHA-256 with the word load failed for want of this: the reader
+refused the piece.
+
 ## 11. Where the ideas come from
 
 Validated register allocation (Rideau and Leroy, for CompCert) is the
