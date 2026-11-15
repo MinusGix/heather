@@ -90,13 +90,17 @@ fn decode_rr_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
 }
 
 // 83 /0 ib and 81 /0 id: ADD of a sign-extended immediate into r/m, read
-// from the bytes after ModRM; D1 /4, /5 and /7 the one-bit shifts of r/m;
-// any other opcode is a two-register form.
+// from the bytes after ModRM, and 83 /7 ib and 81 /7 id CMP of r/m with
+// one; D1 /4, /5 and /7 the one-bit shifts of r/m; any other opcode is a
+// two-register form.
 fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) → Option<StepForm> {
     match opcode.eq_dec(BitVec::ofNat(0x83)) {
         Inl(_) => match rest {
             Nil => None,
-            Cons(b0, _) => emitted_form(AddRI8(rm, b0)),
+            Cons(b0, _) => match reg.same(Rdi) {
+                True => emitted_form(CmpRI8(rm, b0)),
+                False => emitted_form(AddRI8(rm, b0)),
+            },
         },
         Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x81)) {
             Inr(_) => match opcode.eq_dec(BitVec::ofNat(0xd1)) {
@@ -123,7 +127,10 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
                         Nil => None,
                         Cons(b2, t3) => match t3 {
                             Nil => None,
-                            Cons(b3, _) => emitted_form(AddRI32(rm, imm32_from_bytes(b0, b1, b2, b3))),
+                            Cons(b3, _) => match reg.same(Rdi) {
+                                True => emitted_form(CmpRI32(rm, imm32_from_bytes(b0, b1, b2, b3))),
+                                False => emitted_form(AddRI32(rm, imm32_from_bytes(b0, b1, b2, b3))),
+                            },
                         },
                     },
                 },
@@ -283,8 +290,27 @@ fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<S
     }
 }
 
+// REX B8+r id (MOV r32, imm32): the register likewise, four bytes after.
+fn decode_mov_ri32_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(b0, t1) => match t1 {
+            Nil => None,
+            Cons(b1, t2) => match t2 {
+                Nil => None,
+                Cons(b2, t3) => match t3 {
+                    Nil => None,
+                    Cons(b3, _) => emitted_form(MovRI32(
+                        gpr_from_fields(byte_bit0(opcode), byte_bit1(opcode), byte_bit2(opcode), byte_bit0(rex)),
+                        imm32_from_bytes(b0, b1, b2, b3))),
+                },
+            },
+        },
+    }
+}
+
 // REX.W B8+r io: the register is in the opcode's low bits, extended by REX.B.
-fn decode_mov_ri_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+fn decode_mov_ri64_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
         Cons(b0, t1) => match t1 {
@@ -311,6 +337,14 @@ fn decode_mov_ri_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<
                 },
             },
         },
+    }
+}
+
+// B8+r under REX.W is MOV r64, imm64, under a REX without it MOV r32, imm32.
+fn decode_mov_ri_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match byte_bit3(rex) {
+        True => decode_mov_ri64_form(rex, opcode, rest),
+        False => decode_mov_ri32_form(rex, opcode, rest),
     }
 }
 
@@ -550,6 +584,16 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
             Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
             R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
         },
+        CmpRI8(left, immediate) =>
+            cong_fn(λ (d: Gpr) => emitted_form(CmpRI8(d, immediate)), rm_of_fields(left, Rdi, True, True)),
+        CmpRI32(left, immediate) =>
+            trans(cong_fn(λ (d: Gpr) => emitted_form(CmpRI32(d, imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
+                    imm32_byte2(immediate), imm32_byte3(immediate)))), rm_of_fields(left, Rdi, True, True)),
+                cong_fn(λ (v: BitVec(32)) => emitted_form(CmpRI32(left, v)), imm32_bytes_roundtrip(immediate))),
+        MovRI32(destination, immediate) =>
+            trans(cong_fn(λ (d: Gpr) => emitted_form(MovRI32(d, imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
+                    imm32_byte2(immediate), imm32_byte3(immediate)))), gpr_fields_roundtrip(destination)),
+                cong_fn(λ (v: BitVec(32)) => emitted_form(MovRI32(destination, v)), imm32_bytes_roundtrip(immediate))),
         MovSelf32(destination) => match destination {
             Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
             R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,

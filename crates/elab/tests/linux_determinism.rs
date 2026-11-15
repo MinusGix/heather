@@ -26,7 +26,7 @@ fn determinism_refusals() {
     for (name, from, to) in [
         ("add_read_as_sub", "Inl(_) => emitted_form(AddRR(rm, reg)),", "Inl(_) => emitted_form(SubRR(rm, reg)),"),
         ("store_read_as_register", "Cons(modrm, tail) => match byte_bit7(modrm) {", "Cons(modrm, tail) => match !byte_bit7(modrm) {"),
-        ("immediate_dropped", "Cons(b0, _) => emitted_form(AddRI8(rm, b0)),", "Cons(_, _) => emitted_form(AddRI8(rm, BitVec::ofNat(0))),"),
+        ("immediate_dropped", "False => emitted_form(AddRI8(rm, b0)),", "False => emitted_form(AddRI8(rm, BitVec::ofNat(0))),"),
         ("syscall_elsewhere", "match opcode.eq_dec(BitVec::ofNat(0x05)) {", "match opcode.eq_dec(BitVec::ofNat(0x06)) {"),
         ("byte_store_read_as_word", "match opcode.eq_dec(BitVec::ofNat(0x88)) {", "match opcode.eq_dec(BitVec::ofNat(0x89)) {"),
         ("word_load_read_as_store", "match opcode.eq_dec(BitVec::ofNat(0x8b)) {", "match opcode.eq_dec(BitVec::ofNat(0x8a)) {"),
