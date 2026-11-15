@@ -1,7 +1,8 @@
 // Probes of a lending (x86_64_lending; docs/native-one-compiler-design.md
 // §2.6): two spans of a data region lent above an offset `top`, the first
 // to write and the second to read, by `DataRegion::loan`, and what the
-// laws give a borrower and its caller. Then the control: no lending has a
+// laws give a borrower and its caller, for one byte stored and for four
+// in one store. Then the control: no lending has a
 // written span that shares its first byte with another. Tests, not
 // library: nothing imports this module.
 import x86_64;
@@ -11,11 +12,13 @@ import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
 import x86_64_lending;
+import x86_64_views;
 import x86_64_byte_memory;
 import memory;
 import bitvec;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -91,6 +94,16 @@ theorem put_reads_back(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86
     pair_loan(r, top, fits).put_reads(m, 0, k, refl, inside, byte, xs, whole, reads)
 }
 
+// Four bytes stored into the written span in one store, as far as its end:
+// it reads its bytes with those four written over them from `k`.
+theorem four_read_back(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86Memory(r.profile), k: Nat, inside: k + 4 <= 16,
+    a, b, c, d: BitVec(8), xs: List<BitVec(8)>, whole: xs.len() = 16, reads: Readable(r.profile.data(), m, next_rip(r.low, top), xs)):
+    Readable(r.profile.data(), r.profile.store(m, next_rip(next_rip(r.low, top), k), [a, b, c, d]), next_rip(r.low, top),
+        xs.put_window(k, [a, b, c, d])) {
+    let start: (k < 16) = omega(inside);
+    pair_loan(r, top, fits).store_reads(m, 0, k, refl, start, [a, b, c, d], inside, xs, whole, reads)
+}
+
 // The span lent to read reads what it did after anything the borrower may
 // store, into its own room or the other span.
 theorem read_span_kept(r: DataRegion, top: Nat, fits: top + 32 <= r.size, i: Nat, low: i <= top, ys: List<BitVec(8)>, short: ys.len() <= 16,
@@ -119,6 +132,19 @@ theorem put_allowed(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), k:
     r.stack().wrote_in_put(i, pair_spans(r, top), m, 0, k, refl, inside, byte)
 }
 
+// Four bytes in one store are a store the borrower may make, up to the
+// span's last byte and not past it.
+theorem four_allowed(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), a, b, c, d: BitVec(8)):
+    r.stack().WroteIn(i, pair_spans(r, top), m, r.profile.store(m, next_rip(next_rip(r.low, top), 12), [a, b, c, d])) {
+    r.stack().wrote_in_store(i, pair_spans(r, top), m, 0, 12, refl, trivial, [a, b, c, d], trivial)
+}
+
+// expect-error: `omega` got stuck
+theorem four_past_end_refused(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), a, b, c, d: BitVec(8)):
+    r.stack().WroteIn(i, pair_spans(r, top), m, r.profile.store(m, next_rip(next_rip(r.low, top), 13), [a, b, c, d])) {
+    r.stack().wrote_in_store(i, pair_spans(r, top), m, 0, 13, refl, trivial, [a, b, c, d], omega)
+}
+
 // expect-error(kernel): the kernel rejected `put_refused`: NotConvertible
 theorem put_refused(r: DataRegion, top: Nat, i: Nat, m: X86Memory(r.profile), k: Nat, inside: k < 16, byte: BitVec(8)):
     r.stack().WroteIn(i, pair_spans(r, top), m, r.profile.store(m, next_rip(next_rip(r.low, top + 16), k), [byte])) {
@@ -143,8 +169,8 @@ theorem written_span_unshared<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     let seen = λ (byte: BitVec(8)) => {
         let after = stack.writes.store(memory, spans.byte(b, 0), [byte]);
         let back: (data.read(after, next_rip(spans.at(c), 0)) = Some(byte)) =
-            j(same, λ a _ => data.read(after, next_rip(a, 0)) = Some(byte), loan.stored(memory, b, 0, written, some, byte));
-        trans(sym(back), loan.apart(memory, b, 0, written, some, byte, c, 0, other, Inl(differs)))
+            j(same, λ a _ => data.read(after, next_rip(a, 0)) = Some(byte), loan.stored(memory, b, 0, written, some, [byte], some, 0, trivial));
+        trans(sym(back), loan.apart(memory, b, 0, written, some, [byte], some, c, 0, other, Inl(differs)))
     };
     let both: (Some<BitVec(8)>(BitVec::ofNat(0)) = Some<BitVec(8)>(BitVec::ofNat(1))) = trans(seen(BitVec::ofNat(0)), sym(seen(BitVec::ofNat(1))));
     let verdict: (True = False) = cong_fn<Option<BitVec(8)>, Bool>(λ o => match o { None => True, Some(v) => v.eq_bit(BitVec::ofNat(0)) }, both);

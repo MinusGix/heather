@@ -24,11 +24,15 @@ import function_ir;
 import function_ir_eval;
 import nat_map;
 import bitvec;
+import bitvec_bytes;
 import bool;
 import list;
+import list_window;
+import omega;
 import logic;
 import nat;
 import option;
+import vector;
 
 // A region's words and the buffers beside them.
 record State { values: Valuation(), buffers: Buffers() }
@@ -62,6 +66,113 @@ theorem buffer_bytes_store_other(buffers: Buffers(), buffer, index: Nat, byte: B
     cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
 }
 
+// Bytes written over buffer `buffer` from `index`: what a store of them
+// into a span leaves, where the buffer has room for them.
+fn store_span(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>) → Buffers() {
+    buffers.update(buffer, λ xs => xs.put_window(index, bytes))
+}
+
+theorem buffer_bytes_spanned(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>, inside: index < buffer_bytes(buffers, buffer).len()):
+    buffer_bytes(store_span(buffers, buffer, index, bytes), buffer) = buffer_bytes(buffers, buffer).put_window(index, bytes) {
+    let set = λ (xs: List<BitVec(8)>) => xs.put_window(index, bytes);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(xs) => xs };
+    (match buffers.nth(buffer) as λ found => buffers.nth(buffer) = found → index < read(found).len() →
+        read(buffers.update(buffer, set).nth(buffer)) = set(read(found)) {
+        None => λ none below => false_elim(below),
+        Some(xs) => λ some below => cong_fn(read, buffers.nth_update_here(buffer, set, xs, some)),
+    })(refl, inside)
+}
+
+theorem buffer_bytes_span_other(buffers: Buffers(), buffer, index: Nat, bytes: List<BitVec(8)>, other: Nat, differs: buffer ≠ other):
+    buffer_bytes(store_span(buffers, buffer, index, bytes), other) = buffer_bytes(buffers, other) {
+    let set = λ (xs: List<BitVec(8)>) => xs.put_window(index, bytes);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => [], Some(xs) => xs };
+    cong_fn(read, buffers.nth_update_other(buffer, set, other, λ same => differs(sym(same))))
+}
+
+// Bytes stored from `index` of buffer `buffer`, the first at `index` and
+// each where the buffer has one: one `store_byte` after another.
+fn store_bytes(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); k]) → Buffers() {
+    (match k as λ m => Buffers() → Nat → [BitVec(8); m] → Buffers() {
+        Zero => λ file at bytes => file,
+        Succ(_, ih) => λ file at bytes => ih(store_byte(file, buffer, at, head(bytes)), Succ(at), tail(bytes)),
+    })(buffers, index, bytes)
+}
+
+// A word of `bytes` bytes stored from `index`, the least significant
+// first: what `WideStore` does to the file.
+fn store_word(buffers: Buffers(), buffer, index, bytes: Nat, word: BitVec(8 * bytes)) → Buffers() {
+    store_bytes(bytes, buffers, buffer, index, word.bytes_le(bytes))
+}
+
+// The first byte is stored at `index`, then the rest from the next.
+theorem store_bytes_succ(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); Succ(k)]):
+    store_bytes(Succ(k), buffers, buffer, index, bytes) = store_bytes(k, store_byte(buffers, buffer, index, head(bytes)), buffer, Succ(index), tail(bytes)) {
+    refl
+}
+
+// From no buffers there is nothing to store into.
+theorem store_bytes_nil(k: Nat): (buffer, index: Nat) → (bytes: [BitVec(8); k]) → store_bytes(k, Nil, buffer, index, bytes) = Nil {
+    match k as λ m => (buffer, index: Nat) → (bytes: [BitVec(8); m]) → store_bytes(m, Nil, buffer, index, bytes) = Nil {
+        Zero => λ buffer index bytes => refl,
+        Succ(j, ih) => λ buffer index bytes => ih(buffer, Succ(index), tail(bytes)),
+    }
+}
+
+// A four-byte word is four byte stores, at `index + 0` to `index + 3`, its
+// bytes low first.
+theorem store_word_four(buffers: Buffers(), buffer, index: Nat, word: BitVec(32)):
+    store_word(buffers, buffer, index, 4, word) =
+        store_byte(store_byte(store_byte(store_byte(buffers, buffer, index, vector_get(word.bytes_le(4), 0, BitVec::zero())),
+            buffer, index + 1, vector_get(word.bytes_le(4), 1, BitVec::zero())),
+            buffer, index + 2, vector_get(word.bytes_le(4), 2, BitVec::zero())),
+            buffer, index + 3, vector_get(word.bytes_le(4), 3, BitVec::zero())) {
+    refl
+}
+
+// A word's four bytes, low first: what `store_word` stores of it.
+fn four_bytes(word: BitVec(32)) → List<BitVec(8)> {
+    [vector_get(word.bytes_le(4), 0, BitVec::zero()), vector_get(word.bytes_le(4), 1, BitVec::zero()),
+     vector_get(word.bytes_le(4), 2, BitVec::zero()), vector_get(word.bytes_le(4), 3, BitVec::zero())]
+}
+
+// Inside its buffer, a four-byte word stored one byte at a time is its four
+// bytes written over the buffer at once (`store_span`), what the machine's
+// one store leaves; every other buffer is as it was either way.
+theorem buffer_bytes_store_word_four(buffers: Buffers(), buffer, index: Nat, word: BitVec(32),
+    fits: 4 + index <= buffer_bytes(buffers, buffer).len()):
+    (other: Nat) → buffer_bytes(store_word(buffers, buffer, index, 4, word), other) =
+        buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), other) {
+    let c = λ (i: Nat) => vector_get(word.bytes_le(4), i, BitVec::zero());
+    let s1 = store_byte(buffers, buffer, index, c(0));
+    let s2 = store_byte(s1, buffer, index + 1, c(1));
+    let s3 = store_byte(s2, buffer, index + 2, c(2));
+    let xs = buffer_bytes(buffers, buffer);
+    let written: (buffer_bytes(store_word(buffers, buffer, index, 4, word), buffer) =
+            xs.update(index, λ (_: BitVec(8)) => c(0)).update(index + 1, λ (_: BitVec(8)) => c(1))
+                .update(index + 2, λ (_: BitVec(8)) => c(2)).update(index + 3, λ (_: BitVec(8)) => c(3))) =
+        trans(buffer_bytes_stored(s3, buffer, index + 3, c(3)),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 3, λ (_: BitVec(8)) => c(3)),
+                trans(buffer_bytes_stored(s2, buffer, index + 2, c(2)),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 2, λ (_: BitVec(8)) => c(2)),
+                        trans(buffer_bytes_stored(s1, buffer, index + 1, c(1)),
+                            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => ys.update(index + 1, λ (_: BitVec(8)) => c(1)),
+                                buffer_bytes_stored(buffers, buffer, index, c(0))))))));
+    let here: (buffer_bytes(store_word(buffers, buffer, index, 4, word), buffer) =
+            buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), buffer)) =
+        trans(written, trans(sym(List::put_window_update_from(four_bytes(word), xs, index, fits)),
+            sym(buffer_bytes_spanned(buffers, buffer, index, four_bytes(word), omega(fits)))));
+    λ other => match buffer.eq_dec(other) {
+        Inl(same) => j(same, λ o _ => buffer_bytes(store_word(buffers, buffer, index, 4, word), o) =
+            buffer_bytes(store_span(buffers, buffer, index, four_bytes(word)), o), here),
+        Inr(differs) => trans(buffer_bytes_store_other(s3, buffer, index + 3, c(3), other, differs),
+            trans(buffer_bytes_store_other(s2, buffer, index + 2, c(2), other, differs),
+                trans(buffer_bytes_store_other(s1, buffer, index + 1, c(1), other, differs),
+                    trans(buffer_bytes_store_other(buffers, buffer, index, c(0), other, differs),
+                        sym(buffer_bytes_span_other(buffers, buffer, index, four_bytes(word), other, differs)))))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Nodes
 
@@ -71,6 +182,11 @@ fn Node::run(self node: Node, values: Valuation(), buffers: Buffers()) → State
         BufferStore(output, buffer, index, value) => {
             let after = store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value)));
             State(Valuation::set(values, output, load_value(after, buffer, index, values)), after)
+        },
+        WideLoad(bytes, output, buffer, index) => State(Valuation::set(values, output, wide_value(buffers, buffer, index, bytes, values)), buffers),
+        WideStore(bytes, output, buffer, index, value) => {
+            let after = store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value));
+            State(Valuation::set(values, output, wide_value(after, buffer, index, bytes, values)), after)
         },
         _ => State(node.step(values), buffers),
     }
@@ -88,7 +204,7 @@ fn run_nodes(nodes: List<Node>, values: Valuation(), buffers: Buffers()) → Sta
 
 // Whether a node touches no buffer.
 fn Node::pure(self node: Node) → Bool {
-    match node { BufferLoad(_, _, _) => False, BufferStore(_, _, _, _) => False, _ => True }
+    match node { BufferLoad(_, _, _) => False, BufferStore(_, _, _, _) => False, WideLoad(_, _, _, _) => False, WideStore(_, _, _, _, _) => False, _ => True }
 }
 
 fn nodes_pure(nodes: List<Node>) → Bool {
@@ -116,6 +232,10 @@ theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(),
         BufferStore(_, _, _, _) => λ no => false_elim(no),
         Resize(_, _, _, _) => λ _ => refl,
         SignResize(_, _, _, _) => λ _ => refl,
+        TableRead(_, _, _, _, _) => λ _ => refl,
+        WideLoad(_, _, _, _) => λ no => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no => false_elim(no),
+        ByteSwap(_, _, _) => λ _ => refl,
     }(pure)
 }
 
@@ -139,6 +259,14 @@ theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, 
         BufferStore(_, _, _, _) => refl,
         Resize(_, _, _, _) => refl,
         SignResize(_, _, _, _) => refl,
+        TableRead(_, _, _, _, _) => refl,
+        WideLoad(_, _, _, _) => refl,
+        WideStore(bytes, output, buffer, index, value) => {
+            let empty = store_bytes_nil(bytes, buffer, values(64, index).toNat(), values(8 * bytes, value).bytes_le(bytes));
+            j(sym(empty), λ file _ => State(Valuation::set(values, output, wide_value(file, buffer, index, bytes, values)), file) =
+                State(Valuation::set(values, output, wide_value(Nil, buffer, index, bytes, values)), Nil), refl)
+        },
+        ByteSwap(_, _, _) => refl,
     }
 }
 

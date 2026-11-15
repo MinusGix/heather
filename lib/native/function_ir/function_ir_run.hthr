@@ -37,6 +37,8 @@ fn Node::run_value(self node: Node, values: Valuation(), buffers: Buffers()) →
     match node {
         BufferStore(_, buffer, index, value) =>
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values),
+        WideStore(bytes, _, buffer, index, value) =>
+            wide_value(store_word(buffers, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value)), buffer, index, bytes, values),
         _ => node.value(values, buffers := buffers),
     }
 }
@@ -58,6 +60,7 @@ theorem Node::run_step(self node: Node, values: Valuation(), buffers: Buffers())
     (!node.stores()).IsTrue() → node.run(values, buffers) = State(node.step(values, buffers := buffers), buffers) {
     match node {
         BufferStore(_, _, _, _) => λ no => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no => false_elim(no),
         _ => λ _ => refl,
     }
 }
@@ -95,6 +98,18 @@ theorem Node::run_holds(self node: Node, values, after: Valuation(), before: Buf
                     trans(Valuation::set_here(values, output, load_value(mid, buffer, index, values), 64),
                         trans(word_value_word(byte_word(buffer_byte(mid, buffer, values(64, index).toNat()))),
                             sym(cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(mid, buffer, x.toNat())), at_index)))));
+                ⟨stored, named⟩
+            },
+            WideStore(bytes, output, buffer, index, value) => λ _ at_output kept => {
+                let mid = store_word(before, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value));
+                let at_index: (after(64, index) = values(64, index)) = kept(64, index, Inl(refl));
+                let at_value: (after(8 * bytes, value) = values(8 * bytes, value)) = kept(8 * bytes, value, Inr(Inl(refl)));
+                let stored: (mid = store_word(before, buffer, after(64, index).toNat(), bytes, after(8 * bytes, value))) =
+                    sym(eq2(λ (x: BitVec(64)) (y: BitVec(8 * bytes)) => store_word(before, buffer, x.toNat(), bytes, y), at_index, at_value));
+                let named: (after(8 * bytes, output) = buffer_word(mid, buffer, after(64, index).toNat(), bytes)) = trans(at_output(8 * bytes),
+                    trans(Valuation::set_here(values, output, wide_value(mid, buffer, index, bytes, values), 8 * bytes),
+                        trans(BitVec::ofNat_toNat(8 * bytes, buffer_word(mid, buffer, values(64, index).toNat(), bytes)),
+                            sym(cong_fn(λ (x: BitVec(64)) => buffer_word(mid, buffer, x.toNat(), bytes), at_index)))));
                 ⟨stored, named⟩
             },
             _ => λ no _ _ => absurd(no),

@@ -655,3 +655,274 @@ theorem beside_stores_read_only<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M
         fetch, data, last, origin, stack, top)(Lending::reading([1, 1], addresses, buffers), refl, loan, 0, trivial,
         λ b => match b { Zero => λ _ => refl, Succ(_) => λ no => false_elim(no) }, arguments, result, before, after)
 }
+
+// ---------------------------------------------------------------------------
+// A constant table read
+
+// table(i): the entry of [10, 20, 30, 40] at the low two bits of `i`. The
+// index is resized to its two bits in the leaf, so it is in a register
+// at its narrow width when the read takes it.
+fn table() → Function {
+    Function(parameters := [0], lent := 0,
+        body := Dataflow(Region(inputs := Ports([word(0)]),
+            nodes := [Resize(from := 64, to := 2, output := 1, source := 0),
+                TableRead(width := 64, output := 2, bits := 2, index := 1, entries := [10, 20, 30, 40])],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+theorem table_evaluable(): program_evaluable([table()]).IsTrue() { trivial }
+theorem table_reads(): program_eval_over([], [table()], 0, [w(5)]) = w(20) { refl }
+
+theorem table_present(): lower_program_lent([table()], plan_program([table()]), [0]).is_some().IsTrue() { trivial }
+
+// The index settled to its two bits in RDI, the table's address in RAX,
+// the jump over its four words, then RAX loaded from [RAX + RDI*8].
+fn table_program() → Prog {
+    table_read_prog(Start.label(1).put(Block([frame_allocate()])).put(Block(settle_code(Rdi, 2))),
+        BRax, XRdi, [10, 20, 30, 40])
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem table_planned(): plan_program([table()]) = [Into(Rdi), Into(Rax)] { refl }
+theorem table_lowers(): lower_program_lent([table()], plan_program([table()]), [0]) = Some(table_program()) { refl }
+
+// Called, it returns the entry its meaning says, whatever memory holds
+// beside its own code.
+theorem table_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([0], addresses, buffers).spans())):
+    Site<M>(fetch, data, table_program(), last, origin).CallsOver(stack, program_effects([table()]), 1,
+        Lending::reading([0], addresses, buffers), top) {
+    lower_program_lent_correct<M>([table()], plan_program([table()]), Lending::reading([0], addresses, buffers), table_program(),
+        table_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
+        λ b stores => false_elim(program_quiet_stores([table()], b, trivial, stores)))
+}
+
+// An index the leaf does not narrow is a word, which no table has room
+// for: the read is refused.
+fn table_wide() → Function {
+    Function(parameters := [0], lent := 0,
+        body := Dataflow(Region(inputs := Ports([word(0)]),
+            nodes := [TableRead(width := 64, output := 2, bits := 64, index := 0, entries := [10, 20, 30, 40])],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+theorem table_wide_refused(): lower_program_lent([table_wide()], plan_program([table_wide()]), [0]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A big-endian word in one access (WideLoad, ByteSwap)
+
+// What the optimizer writes before a word of four bytes from `i`: `i`
+// below the length, then `t = i + 3` below it too, the access in the arm
+// both tests take. The word is read as `ByteSwap(32, WideLoad(4, …))` and
+// widened; 0 where either test fails.
+fn zero_arm(inputs: List<Port>) → StructuredRegion {
+    Dataflow(Region(inputs := Ports(inputs), nodes := [Const(width := 64, output := 4, value := 0)], outputs := Ports([word(4)])))
+}
+fn be_read(inputs: List<Port>) → StructuredRegion {
+    Dataflow(Region(inputs := Ports(inputs), nodes := [WideLoad(4, 8, 0, 2), ByteSwap(32, 9, 8), Resize(32, 64, 4, 9)],
+        outputs := Ports([word(4)])))
+}
+// `t = i + k`, then the arm under `t below length`.
+fn spanned_by(k: Nat, arm: StructuredRegion) → StructuredRegion {
+    Sequence(
+        Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [Const(width := 64, output := 5, value := k), Add(width := 64, output := 6, left := 2, right := 5),
+                UnsignedLessThan(width := 64, output := 7, left := 6, right := 1)],
+            outputs := Ports([word(0), word(1), word(2), bit(7)])),
+        Conditional(Ports([word(0), word(1), word(2), bit(7)]), 7, Ports([word(0), word(2)]), Ports([word(4)]),
+            arm, zero_arm([word(0), word(2)])))
+}
+// The body under `i below length`.
+fn index_guarded(body: StructuredRegion) → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(1), word(2)]), Ports([word(4)]),
+                body, zero_arm([word(0), word(1), word(2)]))),
+        result := 4)
+}
+
+fn be_word() → Function { index_guarded(spanned_by(3, be_read([word(0), word(2)]))) }
+
+fn bytes5() → Buffers() { [[b(1), b(2), b(3), b(4), b(5)]] }
+theorem be_word_evaluable(): program_evaluable([be_word()]).IsTrue() { trivial }
+theorem be_word_reads(): program_eval_over(bytes5(), [be_word()], 0, [w(4096), w(5), w(1)]) = w(0x02030405) { refl }
+theorem be_word_last(): program_eval_over(bytes5(), [be_word()], 0, [w(4096), w(5), w(0)]) = w(0x01020304) { refl }
+theorem be_word_short(): program_eval_over(bytes5(), [be_word()], 0, [w(4096), w(5), w(2)]) = w(0) { refl }
+
+// The address formed in RAX as a byte load's is, the doubleword loaded
+// over it and swapped in place; `t` is RDX plus 3 in RAX, compared and
+// dropped. The planner continues past the load, from the file it leaves.
+fn be_word_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([]))
+        .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
+        .put(Block([MovRR(Rax, Rdx), AddRI8(Rax, b(3))]))
+        .put(Block([CmpRR(Rax, Rsi)])).put(Jcc(AE, 4))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(asm_dword_load(DwordLoad(Rax, Rax))).put(Block([Bswap32(Rax)])).put(Jmp(5))
+        .label(4).put(Block([MovRI(Rax, w(0))]))
+        .label(5).put(Jmp(3))
+        .label(2).put(Block([MovRI(Rax, w(0))]))
+        .label(3)
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem be_word_planned():
+    plan_program([be_word()]) = [Folded, Folded, Into(Rax), Folded, Into(Rax), Into(Rax), Into(Rax), Into(Rax), Into(Rax)] { refl }
+theorem be_word_lowers(): lower_program_lent([be_word()], plan_program([be_word()]), [1]) = Some(be_word_program()) { refl }
+
+// Whatever the buffers hold and wherever the lending laws let them lie.
+theorem be_word_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, be_word_program(), last, origin).CallsOver(stack, program_effects([be_word()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([be_word()], plan_program([be_word()]), Lending::reading([1], addresses, buffers), be_word_program(),
+        be_word_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
+        λ b stores => false_elim(program_quiet_stores([be_word()], b, trivial, stores)))
+}
+
+// The controls: `i below length` alone, `t` that is `i + 2`, and `t`
+// below length without `i` below it (`t` may have wrapped) are each
+// refused.
+fn be_unspanned() → Function { index_guarded(be_read([word(0), word(1), word(2)])) }
+fn be_short_span() → Function { index_guarded(spanned_by(2, be_read([word(0), word(2)]))) }
+fn be_unguarded() → Function { Function(parameters := [0, 1, 2], lent := 1, body := spanned_by(3, be_read([word(0), word(2)])), result := 4) }
+theorem be_unspanned_refused(): lower_program_lent([be_unspanned()], plan_program([be_unspanned()]), [1]) = None { refl }
+theorem be_short_span_refused(): lower_program_lent([be_short_span()], plan_program([be_short_span()]), [1]) = None { refl }
+theorem be_unguarded_refused(): lower_program_lent([be_unguarded()], plan_program([be_unguarded()]), [1]) = None { refl }
+
+// What the file knows: `t` recorded as `i + 3` (`Known::Offset`, from the
+// `Add` of a known constant) and tested below the length, at any file.
+fn spanned_file(file: File, k: Nat) → File {
+    file.know(Offset(6, 2, k)).know(Compared(7, function_ir_lower::Below, 6, 1)).know(Truth(7))
+}
+theorem span_known(file: File): spanned_file(file, 3).span_bounded(2, 1, 3) = True { refl }
+theorem span_orders(file: File, values: Valuation(), gprs: Gprs, represents: spanned_file(file, 3).Represents(values, gprs),
+    no_wrap: values(64, 2).toNat() + 3 < Nat::pow(2, 64)): values(64, 2).toNat() + 3 < values(64, 1).toNat() {
+    spanned_file(file, 3).span_bounded_sound(values, gprs, 2, 1, 3, represents, no_wrap, trivial)
+}
+theorem span_other_offset(): spanned_file(File::empty(), 2).span_bounded(2, 1, 3) = False { refl }
+theorem span_other_index(): spanned_file(File::empty(), 3).span_bounded(0, 1, 3) = False { refl }
+// The `Add` of a known 3 records it: with `t` then tested, the span is known.
+fn added(file: File) → Option<Lowered> { Add(width := 64, output := 6, left := 2, right := 5).lower(Rax, file) }
+fn tested(out: Option<Lowered>) → Bool {
+    match out { None => False, Some(l) => l.file.know(Compared(7, function_ir_lower::Below, 6, 1)).know(Truth(7)).span_bounded(2, 1, 3) }
+}
+theorem add_records_offset(): tested(added(File::empty().write(Rdx, Some(Held(2, Word))).know(Constant(5, 3)))) = True { refl }
+theorem add_of_two_not_span(): tested(added(File::empty().write(Rdx, Some(Held(2, Word))).know(Constant(5, 2)))) = False { refl }
+
+// ---------------------------------------------------------------------------
+// A big-endian word stored in one access (ByteSwap, WideStore)
+
+// The store's mirror of `be_word`: the low half of `v` swapped and stored
+// as four bytes from `i`, in the arm both tests take; 1 there, 0 where
+// either test fails. The store's own output (the word read back) is not
+// used past the leaf.
+fn be_write(inputs: List<Port>) → StructuredRegion {
+    Dataflow(Region(inputs := Ports(inputs),
+        nodes := [Const(width := 64, output := 4, value := 1), Resize(64, 32, 10, 13), ByteSwap(32, 11, 10), WideStore(4, 12, 0, 2, 11)],
+        outputs := Ports([word(4)])))
+}
+fn put_zero() → StructuredRegion {
+    Dataflow(Region(inputs := Ports([word(0), word(2), word(13)]), nodes := [Const(width := 64, output := 4, value := 0)],
+        outputs := Ports([word(4)])))
+}
+// `t = i + k`, then the store under `t below length`.
+fn put_spanned_by(k: Nat) → StructuredRegion {
+    Sequence(
+        Region(inputs := Ports([word(0), word(1), word(2), word(13)]),
+            nodes := [Const(width := 64, output := 5, value := k), Add(width := 64, output := 6, left := 2, right := 5),
+                UnsignedLessThan(width := 64, output := 7, left := 6, right := 1)],
+            outputs := Ports([word(0), word(1), word(2), word(13), bit(7)])),
+        Conditional(Ports([word(0), word(1), word(2), word(13), bit(7)]), 7, Ports([word(0), word(2), word(13)]), Ports([word(4)]),
+            be_write([word(0), word(2), word(13)]), put_zero()))
+}
+// The body under `i below length`.
+fn put_guarded(body: StructuredRegion) → Function {
+    Function(parameters := [0, 1, 2, 13], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2), word(13)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), word(13), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), word(13), bit(3)]), 3, Ports([word(0), word(1), word(2), word(13)]), Ports([word(4)]),
+                body, Dataflow(Region(inputs := Ports([word(0), word(1), word(2), word(13)]),
+                    nodes := [Const(width := 64, output := 4, value := 0)], outputs := Ports([word(4)]))))),
+        result := 4)
+}
+fn be_put() → Function { put_guarded(put_spanned_by(3)) }
+
+theorem be_put_evaluable(): program_evaluable([be_put()]).IsTrue() { trivial }
+theorem be_put_stores(): program_stores([be_put()], 0) = True { refl }
+fn put5() → Buffers() { [[b(1), b(2), b(3), b(4), b(5)]] }
+fn put5_at1() → Buffers() { [[b(1), b(0x11), b(0x22), b(0x33), b(0x44)]] }
+theorem be_put_runs(a: BitVec(64)): program_run([be_put()], put5(), 0, [a, w(5), w(1), w(0x99_11223344)]) = Ending(w(1), put5_at1()) { refl }
+theorem be_put_past(a: BitVec(64)): program_run([be_put()], put5(), 0, [a, w(5), w(2), w(0x11223344)]) = Ending(w(0), put5()) { refl }
+
+// The two tests as for the load; in the arm, 1 in RAX, the value's low
+// half settled in RCX and swapped there, the address formed in R8, and the
+// doubleword stored over it. Nothing is read back.
+fn be_put_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([]))
+        .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
+        .put(Block([MovRR(Rax, Rdx), AddRI8(Rax, b(3))]))
+        .put(Block([CmpRR(Rax, Rsi)])).put(Jcc(AE, 4))
+        .put(Block(List::append([MovRI(Rax, w(1))], List::append(settle_code(Rcx, 32), [Bswap32(Rcx), MovRR(R8, Rdi), AddRR(R8, Rdx)]))))
+        .put(asm_dword_store(DwordStore(R8, Rcx))).put(Jmp(5))
+        .label(4).put(Block([MovRI(Rax, w(0))]))
+        .label(5).put(Jmp(3))
+        .label(2).put(Block([MovRI(Rax, w(0))]))
+        .label(3)
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem be_put_planned():
+    plan_program([be_put()]) = [Folded, Folded, Into(Rax), Folded, Into(Rax), Into(Rcx), Into(Rcx), Into(R8), Into(Rax), Into(Rax)] { refl }
+theorem be_put_lowers(): lower_program_lent([be_put()], plan_program([be_put()]), [1]) = Some(be_put_program()) { refl }
+
+theorem be_put_allowed(lending: Lending, written: lending.written(0) = True):
+    (b: Nat) → program_stores([be_put()], b).IsTrue() → lending.written(b) = True {
+    λ b => match b { Zero => λ _ => written, Succ(_) => λ no => false_elim(no) }
+}
+
+// Lent to be written, wherever the lending laws let the buffer lie.
+theorem be_put_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, be_put_program(), last, origin).CallsOver(stack, program_effects([be_put()]), 1,
+        writing([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([be_put()], plan_program([be_put()]), writing([1], addresses, buffers), be_put_program(),
+        be_put_lowers(), fetch, data, last, origin, stack, top, loan, trivial, be_put_allowed(writing([1], addresses, buffers), refl))
+}
+
+// So the code, over 1 2 3 4 5 with 0x11223344 put at 1: it returns 1, and
+// 1 11 22 33 44 is the file in memory.
+theorem be_put_word<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, put5()).spans())):
+    Site<M>(fetch, data, be_put_program(), last, origin).Returns(stack, asm_labels(be_put_program())(1),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), w(1), w(0x99_11223344)], i, s) ∧ 136 * 1 <= i) ∧
+            stack.LentOver(writing([1], addresses, put5()), top, 0, [a, w(5), w(1), w(0x99_11223344)], put5())(i, s),
+        stack.AnsweredOver(writing([1], addresses, put5()), w(1), put5_at1())) {
+    compiled_returns_run<M>([be_put()], plan_program([be_put()]), writing([1], addresses, put5()), be_put_program(), be_put_lowers(),
+        be_put_evaluable(), trivial, be_put_allowed(writing([1], addresses, put5()), refl), fetch, data, last, origin, stack, top, loan, 0, trivial,
+        [a, w(5), w(1), w(0x99_11223344)], trivial, put5(), Ending(w(1), put5_at1()), be_put_runs(a))
+}
+
+// The controls, as for the load: `i below length` alone, `t` that is
+// `i + 2`, and `t` below length without `i` below it are each refused.
+fn put_unspanned() → Function { put_guarded(be_write([word(0), word(1), word(2), word(13)])) }
+fn put_short_span() → Function { put_guarded(put_spanned_by(2)) }
+fn put_unguarded() → Function { Function(parameters := [0, 1, 2, 13], lent := 1, body := put_spanned_by(3), result := 4) }
+theorem put_controls_evaluable(): program_evaluable([put_unspanned(), put_short_span(), put_unguarded()]).IsTrue() { trivial }
+theorem put_unspanned_refused(): lower_program_lent([put_unspanned()], plan_program([put_unspanned()]), [1]) = None { refl }
+theorem put_short_span_refused(): lower_program_lent([put_short_span()], plan_program([put_short_span()]), [1]) = None { refl }
+theorem put_unguarded_refused(): lower_program_lent([put_unguarded()], plan_program([put_unguarded()]), [1]) = None { refl }

@@ -48,14 +48,16 @@ fn Effects::keeping(callees: Buffers() → Callees()) → Effects() {
 // ---------------------------------------------------------------------------
 // Nodes
 
-fn Node::stores(self node: Node) → Bool { match node { BufferStore(_, _, _, _) => True, _ => False } }
+fn Node::stores(self node: Node) → Bool { match node { BufferStore(_, _, _, _) => True, WideStore(_, _, _, _, _) => True, _ => False } }
 
 fn nodes_quiet(nodes: List<Node>) → Bool {
     match nodes { Nil => True, Cons(node, rest) => !node.stores() && nodes_quiet(rest) }
 }
 
 // Whether a node stores into buffer `b`.
-fn Node::stores_to(self node: Node, b: Nat) → Bool { match node { BufferStore(_, buffer, _, _) => buffer.same(b), _ => False } }
+fn Node::stores_to(self node: Node, b: Nat) → Bool {
+    match node { BufferStore(_, buffer, _, _) => buffer.same(b), WideStore(_, _, buffer, _, _) => buffer.same(b), _ => False }
+}
 
 fn nodes_store(nodes: List<Node>, b: Nat) → Bool {
     match nodes { Nil => False, Cons(node, rest) => node.stores_to(b) || nodes_store(rest, b) }
@@ -70,6 +72,7 @@ theorem nodes_quiet_store(nodes: List<Node>, b: Nat): nodes_quiet(nodes).IsTrue(
             match Bool::is_true_or(node.stores_to(b), nodes_store(rest, b), stores) {
                 Inl(here) => (match node as λ n => (!n.stores()).IsTrue() → n.stores_to(b).IsTrue() → False {
                     BufferStore(_, _, _, _) => λ no _ => no,
+                    WideStore(_, _, _, _, _) => λ no _ => no,
                     _ => λ _ never => never,
                 })(both.left, here),
                 Inr(later) => nodes_quiet_store(rest, b, both.right, later),
@@ -86,6 +89,9 @@ fn Node::Runs(self node: Node, values: Valuation(), before, after: Buffers()) �
         BufferStore(output, buffer, index, value) =>
             (after = store_byte(before, buffer, values(64, index).toNat(), low_byte(values(64, value)))) ∧
                 (values(64, output) = byte_word(buffer_byte(after, buffer, values(64, index).toNat()))),
+        WideStore(bytes, output, buffer, index, value) =>
+            (after = store_word(before, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value))) ∧
+                (values(8 * bytes, output) = buffer_word(after, buffer, values(64, index).toNat(), bytes)),
         _ => NodeHolds(values, node, buffers := before) ∧ (after = before),
     }
 }
@@ -102,6 +108,7 @@ theorem Node::runs_quiet(self node: Node, values: Valuation(), file: Buffers()):
     (!node.stores()).IsTrue() → NodeHolds(values, node, buffers := file) → node.Runs(values, file, file) {
     match node {
         BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no _ => false_elim(no),
         _ => λ _ holds => ⟨holds, refl⟩,
     }
 }
@@ -122,6 +129,7 @@ theorem Node::runs_still(self node: Node, values: Valuation(), before, after: Bu
     (!node.stores()).IsTrue() → node.Runs(values, before, after) → (after = before) ∧ NodeHolds(values, node, buffers := before) {
     match node {
         BufferStore(_, _, _, _) => λ no _ => false_elim(no),
+        WideStore(_, _, _, _, _) => λ no _ => false_elim(no),
         _ => λ _ ran => ⟨ran.right, ran.left⟩,
     }
 }
@@ -482,7 +490,7 @@ theorem program_quiet_stores(functions: List<Function>, b: Nat): program_quiet(f
 fn marked(marks: List<Bool>, b: Nat) → Bool { match marks.nth(b) { None => False, Some(mark) => mark } }
 
 fn Node::stores_within(self node: Node, marks: List<Bool>) → Bool {
-    match node { BufferStore(_, buffer, _, _) => marked(marks, buffer), _ => True }
+    match node { BufferStore(_, buffer, _, _) => marked(marks, buffer), WideStore(_, _, buffer, _, _) => marked(marks, buffer), _ => True }
 }
 
 fn nodes_store_within(nodes: List<Node>, marks: List<Bool>) → Bool {
@@ -493,6 +501,8 @@ theorem Node::stores_marked(self node: Node, marks: List<Bool>, b: Nat): node.st
     marked(marks, b).IsTrue() {
     match node as λ n => n.stores_within(marks).IsTrue() → n.stores_to(b).IsTrue() → marked(marks, b).IsTrue() {
         BufferStore(_, buffer, _, _) => λ within here =>
+            j(buffer.same_sound(b, eq_true_of_is_true(buffer.same(b), here)), λ x _ => marked(marks, x).IsTrue(), within),
+        WideStore(_, _, buffer, _, _) => λ within here =>
             j(buffer.same_sound(b, eq_true_of_is_true(buffer.same(b), here)), λ x _ => marked(marks, x).IsTrue(), within),
         _ => λ _ never => false_elim(never),
     }

@@ -37,6 +37,7 @@ import bitvec;
 import bitvec_nat;
 import bool;
 import list;
+import list_window;
 import logic;
 import nat;
 import option;
@@ -88,6 +89,110 @@ theorem cells_update(v, w: Nat → BitVec(8), c: BitVec(8), n: Nat): (o, i: Nat)
                 other(o, λ same => false_elim(omega(same))),
                 ih(Succ(o), l, below, trans(cong_fn<Nat, BitVec(8)>(λ p => w(p), Nat::add_succ_left(o, l)), here),
                     λ p ne => other(p, λ same => ne(trans(same, sym(Nat::add_succ_left(o, l))))))),
+        },
+    }
+}
+
+// Bytes stored inside a buffer: it reads them from `i`, and every other
+// buffer reads what it did.
+theorem Env::buffer_spanned_here(self env: Env, buf, i: Nat, bytes: List<BitVec(8)>, inside: i < env.buffer(buf).len()):
+    Env(env.words, store_span(env.buffers, buf, i, bytes), env.args).buffer(buf) = env.buffer(buf).put_window(i, bytes) {
+    let f = λ (xs: List<BitVec(8)>) => xs.put_window(i, bytes);
+    let read = λ (found: Option<List<BitVec(8)>>) => match found { None => Nil, Some(xs) => xs };
+    (match env.buffers.nth(buf) as λ found => env.buffers.nth(buf) = found → i < read(found).len() →
+        read(env.buffers.update(buf, f).nth(buf)) = f(read(found)) {
+        None => λ none below => false_elim(below),
+        Some(xs) => λ some below => cong_fn(read, env.buffers.nth_update_here(buf, f, xs, some)),
+    })(refl, inside)
+}
+
+theorem Env::buffer_spanned_other(self env: Env, buf, i: Nat, bytes: List<BitVec(8)>, b: Nat, ne: b ≠ buf):
+    Env(env.words, store_span(env.buffers, buf, i, bytes), env.args).buffer(b) = env.buffer(b) {
+    cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ o => match o { None => Nil, Some(xs) => xs },
+        env.buffers.nth_update_other(buf, λ (xs: List<BitVec(8)>) => xs.put_window(i, bytes), b, ne))
+}
+
+// Cells that differ only from `o + i`, where they hold `bytes`: the list
+// with `bytes` written over it from `i`.
+theorem cells_put_window(v, w: Nat → BitVec(8), n, o, i: Nat, bytes: List<BitVec(8)>, fits: bytes.len() + i <= n,
+    inside: (t: Nat) → t < bytes.len() → Some(w(o + i + t)) = bytes.nth(t),
+    outside: (p: Nat) → (p < o + i) ∨ (o + i + bytes.len() <= p) → w(p) = v(p)):
+    cells_at(w, o, n) = cells_at(v, o, n).put_window(i, bytes) {
+    let xs = cells_at(v, o, n);
+    let xs_len: (xs.len() = n) = cells_len(v, n, o);
+    let start: (i <= xs.len()) = omega(fits, xs_len);
+    let len: (xs.put_window(i, bytes).len() = n) = trans(xs.len_put_window(i, bytes, omega(fits, xs_len)), xs_len);
+    cells_at(w, o, n).ext_nth(xs.put_window(i, bytes), trans(cells_len(w, n, o), sym(len)), λ k short => {
+        let below: (k < n) = j(cells_len(w, n, o), λ m _ => k < m, short);
+        let here: (cells_at(w, o, n).nth(k) = Some(w(o + k))) = cells_nth(w, n, o, k, below);
+        match k.lt_or_ge(i) {
+            Inl(before) => trans(here, trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ c => Some(c), outside(o + k, Inl(omega(before)))),
+                trans(sym(cells_nth(v, n, o, k, below)), sym(xs.nth_put_window_before(i, bytes, k, before, start))))),
+            Inr(from) => match k.lt_or_ge(bytes.len() + i) {
+                Inl(within) => {
+                    let parts: (k = (k - i) + i) = omega(from);
+                    let at: (o + k = o + i + (k - i)) = omega(from);
+                    trans(here, trans(cong_fn<Nat, Option<BitVec(8)>>(λ p => Some(w(p)), at),
+                        trans(inside(k - i, omega(from, within)),
+                            trans(sym(xs.nth_put_window_inside(i, bytes, k - i, omega(from, within), start)),
+                                cong_fn<Nat, Option<BitVec(8)>>(λ p => xs.put_window(i, bytes).nth(p), sym(parts))))))
+                },
+                Inr(past) => {
+                    let parts: (k = (k - (bytes.len() + i)) + (bytes.len() + i)) = omega(past);
+                    trans(here, trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ c => Some(c), outside(o + k, Inr(omega(past)))),
+                        trans(sym(cells_nth(v, n, o, k, below)),
+                            trans(cong_fn<Nat, Option<BitVec(8)>>(λ p => xs.nth(p), parts),
+                                trans(sym(xs.nth_put_window_after(i, bytes, k - (bytes.len() + i), start)),
+                                    cong_fn<Nat, Option<BitVec(8)>>(λ p => xs.put_window(i, bytes).nth(p), sym(parts)))))))
+                },
+            },
+        }
+    })
+}
+
+// Bytes stored inside their buffer: the buffers the cells keep, with those
+// bytes written over it.
+theorem Layout::buffers_span(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8),
+    kept: (b, cap: Nat) → layout.capacities.nth(b) = Some(cap) → env.buffer(b) = cells_at(v, layout.buffer_offset(b), cap),
+    buf, cap: Nat, found: layout.capacities.nth(buf) = Some(cap), i: Nat, below: i < cap, bytes: List<BitVec(8)>, fits: bytes.len() + i <= cap):
+    (b, cb: Nat) → layout.capacities.nth(b) = Some(cb) →
+    Env(env.words, store_span(env.buffers, buf, i, bytes), env.args).buffer(b) =
+        cells_at(r.stored_cells(v, layout.buffer_offset(buf) + i, bytes), layout.buffer_offset(b), cb) {
+    let o = layout.buffer_offset(buf);
+    let q = o + i;
+    let w = r.stored_cells(v, q, bytes);
+    let after = Env(env.words, store_span(env.buffers, buf, i, bytes), env.args);
+    λ b cb found_b => match b.eq_dec(buf) {
+        Inl(here) => {
+            let cap_same: (cb = cap) = Option::some_inj(cb, cap, trans(sym(found_b), j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cap), found)));
+            let some: (i < env.buffer(buf).len()) = j(sym(kept(buf, cap, found)), λ xs _ => i < xs.len(),
+                j(sym(cells_len(v, cap, o)), λ m _ => i < m, below));
+            let updated: (cells_at(w, o, cap) = cells_at(v, o, cap).put_window(i, bytes)) = cells_put_window(v, w, cap, o, i, bytes, fits,
+                λ t short => {
+                    let present = bytes.nth_present(t, short);
+                    trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ c => Some(c), r.cells_inside(v, q, bytes, t, present.witness, present.proof)),
+                        sym(present.proof))
+                },
+                λ p away => r.cells_outside(v, q, bytes, p, away));
+            let stored: (after.buffer(buf) = cells_at(w, o, cap)) = trans(env.buffer_spanned_here(buf, i, bytes, some),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs.put_window(i, bytes), kept(buf, cap, found)), sym(updated)));
+            j(sym(here), λ x _ => after.buffer(x) = cells_at(w, layout.buffer_offset(x), cb),
+                j(sym(cap_same), λ k _ => after.buffer(buf) = cells_at(w, o, k), stored))
+        },
+        Inr(other) => {
+            let o_b = layout.buffer_offset(b);
+            let away: ((t: Nat) → t < cb → (o_b + t < q) ∨ (q + bytes.len() <= o_b + t)) = λ t short => match b.lt_or_ge(buf) {
+                Inl(under) => {
+                    let gap = layout.buffer_apart(b, cb, buf, found_b, under);
+                    Inl(omega(gap, short))
+                },
+                Inr(over) => {
+                    let gap = layout.buffer_apart(buf, cap, b, found, omega(over, other));
+                    Inr(omega(gap, fits))
+                },
+            };
+            trans(env.buffer_spanned_other(buf, i, bytes, b, other),
+                trans(kept(b, cb, found_b), cells_agree(v, w, cb, o_b, λ t short => sym(r.cells_outside(v, q, bytes, o_b + t, away(t, short))))))
         },
     }
 }

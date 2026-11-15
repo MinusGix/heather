@@ -10,12 +10,15 @@
 // grow from without inheriting `ir_v1`'s constructor-tree value model.
 
 import bitvec;
+import bitvec_bytes;
+import bitvec_resize;
 import bool;
 import list;
 import list_window;
 import logic;
 import nat;
 import option;
+import vector;
 
 // Stable IDs are Nats in the first representation. A port records the type
 // independently of its uses, so validation—not the raw node constructor—pins
@@ -73,6 +76,29 @@ inductive Node {
     // complement: sign-extended when `to` is wider, its low `to` bits when
     // narrower (`BitVec::sresize`; `BitVec::sresize_sign_extend`).
     SignResize(from: Nat, to: Nat, output: Nat, source: Nat),
+    // Entry `index` of a constant table, a `width`-bit word: the index is a
+    // `bits`-bit word and the table has `2^bits` entries (validity's), so
+    // every index names one and none is a junk value. The entries are the
+    // node's own, so a read at a known index folds by evaluation and two
+    // reads of one table are the same node; byte order is not in the
+    // meaning, the lowering lays the table out
+    // (issues/rt-fixed-arrays-and-tables.md).
+    TableRead(width: Nat, output: Nat, bits: Nat, index: Nat, entries: List<Nat>),
+    // The `bytes` bytes of buffer `buffer` from the 64-bit word `index`, the
+    // first the least significant, as a word of `8 * bytes` bits; a byte past
+    // the buffer's end reads zero, as `BufferLoad`'s does (`buffer_word`).
+    // Total and defined by bytes, so a rewrite between byte loads and one
+    // wide load needs no premise: whether the bytes are inside is the
+    // lowering's to know (docs/optimizer-design.md, step 5).
+    WideLoad(bytes: Nat, output: Nat, buffer: Nat, index: Nat),
+    // The `8 * bytes`-bit word `value` stored from `index`, least significant
+    // byte first, each byte where the buffer has one and nothing past its
+    // end: exactly `bytes` `BufferStore`s (`store_word`). `output` is what
+    // `WideLoad` then reads.
+    WideStore(bytes: Nat, output: Nat, buffer: Nat, index: Nat, value: Nat),
+    // The bytes of a `width`-bit word reversed (`BitVec::swap_bytes`); the
+    // lowering takes `width` 32.
+    ByteSwap(width: Nat, output: Nat, source: Nat),
 }
 
 record Region {
@@ -100,6 +126,10 @@ fn node_output(node: Node) → Port {
         BufferStore(output, _, _, _) => Port(output, 64),
         Resize(_, to, output, _) => Port(output, to),
         SignResize(_, to, output, _) => Port(output, to),
+        TableRead(width, output, _, _, _) => Port(output, width),
+        WideLoad(bytes, output, _, _) => Port(output, 8 * bytes),
+        WideStore(bytes, output, _, _, _) => Port(output, 8 * bytes),
+        ByteSwap(width, output, _) => Port(output, width),
     }
 }
 
@@ -358,6 +388,19 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
         SignResize(from, to, output, source) =>
             ProducedAt(directory, index, output, to) ∧
             HasAvailableDirectoryPort(directory, source, from, index),
+        TableRead(width, output, bits, at, entries) =>
+            ProducedAt(directory, index, output, width) ∧
+            (HasAvailableDirectoryPort(directory, at, bits, index) ∧
+             entries.len() = Nat::pow(2, bits)),
+        WideLoad(bytes, output, _, at) =>
+            ProducedAt(directory, index, output, 8 * bytes) ∧
+            HasAvailableDirectoryPort(directory, at, 64, index),
+        WideStore(bytes, output, _, at, value) =>
+            ProducedAt(directory, index, output, 8 * bytes) ∧
+            (HasAvailableDirectoryPort(directory, at, 64, index) ∧
+             HasAvailableDirectoryPort(directory, value, 8 * bytes, index)),
+        ByteSwap(width, output, source) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, source),
     }
 }
 
@@ -625,8 +668,60 @@ fn buffer_byte(buffers: Buffers(), buffer, index: Nat) → BitVec(8) {
     }
 }
 
+// Byte `index` of buffer `buffer` is the entry of its bytes, zero past
+// their end.
+theorem buffer_byte_entry(buffers: Buffers(), buffer, index: Nat):
+    buffer_byte(buffers, buffer, index) = buffer_bytes(buffers, buffer).nth(index).unwrap_or(BitVec::zero()) {
+    let zero: BitVec(8) = BitVec::zero();
+    let entry = λ (bytes: List<BitVec(8)>) => (match bytes.nth(index) as λ o => (match o { None => zero, Some(byte) => byte }) = o.unwrap_or(zero) {
+        None => refl,
+        Some(_) => refl,
+    });
+    (match buffers.nth(buffer) as λ found =>
+        (match found { None => zero, Some(bytes) => match bytes.nth(index) { None => zero, Some(byte) => byte } }) =
+            (match found { None => [], Some(bytes) => bytes }).nth(index).unwrap_or(zero) {
+        None => refl,
+        Some(bytes) => entry(bytes),
+    })
+}
+
+// The `bytes` bytes of buffer `buffer` from byte `start`, the first the
+// least significant: the word `WideLoad` reads.
+fn buffer_word(buffers: Buffers(), buffer, start, bytes: Nat) → BitVec(8 * bytes) {
+    BitVec::of_bytes_le(buffer_bytes(buffers, buffer).vector_at(start, bytes, BitVec::zero()))
+}
+
+// Byte `k` of it is the buffer's byte `start + k`, the sum not wrapped.
+theorem buffer_word_byte(buffers: Buffers(), buffer, start, bytes, k: Nat, inside: k < bytes):
+    vector_get(buffer_word(buffers, buffer, start, bytes).bytes_le(bytes), k, BitVec::zero()) = buffer_byte(buffers, buffer, start + k) {
+    let entries = buffer_bytes(buffers, buffer).vector_at(start, bytes, BitVec::zero());
+    trans(cong_fn(λ (v: [BitVec(8); bytes]) => vector_get(v, k, BitVec::zero()), BitVec::bytes_le_of_bytes_le(bytes, entries)),
+        trans(buffer_bytes(buffers, buffer).vector_at_get(BitVec::zero(), bytes, start, k, inside), sym(buffer_byte_entry(buffers, buffer, start + k))))
+}
+
+// One byte of it is the byte a `BufferLoad` reads, at width 8.
+theorem buffer_word_one(buffers: Buffers(), buffer, start: Nat): buffer_word(buffers, buffer, start, 1) = buffer_byte(buffers, buffer, start) {
+    sym(buffer_byte_entry(buffers, buffer, start))
+}
+
+// Four bytes of it are the four bytes joined, the first lowest.
+theorem buffer_word_four(buffers: Buffers(), buffer, start: Nat):
+    buffer_word(buffers, buffer, start, 4) = buffer_byte(buffers, buffer, start).concat(buffer_byte(buffers, buffer, start + 1).concat(
+        buffer_byte(buffers, buffer, start + 2).concat(buffer_byte(buffers, buffer, start + 3)))) {
+    let entry = λ (k: Nat) => buffer_bytes(buffers, buffer).nth(k).unwrap_or(BitVec::zero());
+    trans(BitVec::of_bytes_le_four(entry(start), entry(start + 1), entry(start + 2), entry(start + 3)),
+        rewrite(buffer_byte_entry(buffers, buffer, start), buffer_byte_entry(buffers, buffer, start + 1),
+            buffer_byte_entry(buffers, buffer, start + 2), buffer_byte_entry(buffers, buffer, start + 3), refl))
+}
+
 // A byte as a word, zero-extended, as a load leaves it in a register.
 fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
+
+// Entry `index` of a constant table, zero past its end (where validity
+// leaves no index).
+fn table_entry(entries: List<Nat>, index: Nat) → Nat {
+    match entries.nth(index) { None => 0, Some(entry) => entry }
+}
 
 // A node's equation. A load reads `buffers`, which no node of a region
 // changes: a store's equation is the state evaluation's
@@ -679,6 +774,13 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
             values(to, output) = BitVec::ofNat(values(from, source).toNat()),
         SignResize(from, to, output, source) =>
             values(to, output) = values(from, source).sresize(to),
+        TableRead(width, output, bits, index, entries) =>
+            values(width, output) = BitVec::ofNat(table_entry(entries, values(bits, index).toNat())),
+        WideLoad(bytes, output, buffer, index) =>
+            values(8 * bytes, output) = buffer_word(buffers, buffer, values(64, index).toNat(), bytes),
+        WideStore(_, _, _, _, _) => True,
+        ByteSwap(width, output, source) =>
+            values(width, output) = values(width, source).swap_bytes(),
     }
 }
 

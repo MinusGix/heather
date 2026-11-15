@@ -264,6 +264,10 @@ theorem Node::run_wide_on(self node: Node, values, other: Valuation(), buffers: 
         },
         Resize(_, _, _, _) => λ _ never => false_elim(never),
         SignResize(_, _, _, _) => λ _ never => false_elim(never),
+        TableRead(_, _, _, _, _) => λ _ never => false_elim(never),
+        WideLoad(_, _, _, _) => λ _ never => false_elim(never),
+        WideStore(_, _, _, _, _) => λ _ never => false_elim(never),
+        ByteSwap(_, _, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -350,6 +354,10 @@ theorem Scope::clean_coherent(self s: Scope, node: Node, values: Valuation(), en
         BufferStore(_, _, _, _) => λ never => false_elim(never),
         Resize(_, _, _, _) => λ never => false_elim(never),
         SignResize(_, _, _, _) => λ never => false_elim(never),
+        TableRead(_, _, _, _, _) => λ never => false_elim(never),
+        WideLoad(_, _, _, _) => λ never => false_elim(never),
+        WideStore(_, _, _, _, _) => λ never => false_elim(never),
+        ByteSwap(_, _, _) => λ never => false_elim(never),
     }
 }
 

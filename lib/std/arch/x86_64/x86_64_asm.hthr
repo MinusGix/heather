@@ -420,6 +420,7 @@ fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
         ShiftOne(op, d) => [14, match op { OpShl => 0, OpShr => 1, OpSar => 2 }, d.index()],
         ShiftImm(op, d, immediate) => [15, match op { OpShl => 0, OpShr => 1, OpSar => 2 }, d.index(),
             immediate.toNat()],
+        Bswap32(d) => [16, d.index()],
     }
 }
 
