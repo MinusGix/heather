@@ -6,7 +6,7 @@ created: 2026-08-16
 updated: 2026-08-16
 ---
 
-`docs/datarepr-design.md` §1.4 note 5, filed standalone after the note's
+`docs/native/datarepr-design.md` §1.4 note 5, filed standalone after the note's
 friction became duplication rather than noise
 ([[true-prop-trivial-hypotheses]] half 1, 2026-08-16).
 

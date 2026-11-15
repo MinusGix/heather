@@ -10,7 +10,7 @@ name = "heather_cache"
 
 # Zero SHIPPED dependencies — for this crate the reason is not the workspace
 # default but a trust argument of its own: believing a cache entry is believing
-# its hash, so the hash is first-party (docs/cache-v1-design.md §2,
+# its hash, so the hash is first-party (docs/infrastructure/cache-v1-design.md §2,
 # issues/dependency-policy.md).
 [dependencies]
 heather-kernel-lib = { path = "../kernel-lib" }

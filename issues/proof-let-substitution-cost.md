@@ -107,7 +107,7 @@ bisection. The next large program will have longer chains.
   - `pieces` changed nothing: its uses are projections into argument positions, and nothing fans them out.
 
   For the design, the lets worth `have` are the **certificate/lemma-result** lets that later **data** lets project from. That is also the rule a diagnostic can point at: the let with the largest path multiplier whose value is a neutral application.
-- 2026-09-25: LANDED: `have x = e;` (docs/have-design.md), an opaque block binding that elaborates to the kernel's annotated redex `app(λ(x: T). rest; …; v)`. Full suite 2979 passed, 0 failed.
+- 2026-09-25: LANDED: `have x = e;` (docs/language/have-design.md), an opaque block binding that elaborates to the kernel's annotated redex `app(λ(x: T). rest; …; v)`. Full suite 2979 passed, 0 failed.
   - **Acceptance 1** (the fan-out family, linear): `crates/elab/tests/have.rs::a_fan_out_chain_of_haves_checks_in_linear_time` asserts it on the exact kernel counters. `let` at k = 10 costs 4,099 queries; `have` costs 60 at k = 10 and 210 at k = 40.
   - **Acceptance 2** (the one body): the unsplit `read_print_after_read` with `have` on `counted`, `w`, `st` and `ln` checks at **30,806 queries / 4,279 misses** (release, width one). The split form is 66,235 / 9,348 and the unsplit `let` form 3.44M / 492K. The library keeps its split, which is still a fine style; the probe is the evidence, per the acceptance's "or record why".
   - **Residue, each with an owner:** the transparent case (the `dep` family, `OutOfFuel` at k = 16) goes to [[kernel-typing-memo-on-node-identity]]. The "say which let to `have`" half goes to [[let-fanout-diagnostic]]. Images and shift copies are named in the memo issue's reach section.

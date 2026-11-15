@@ -1,4 +1,4 @@
-//! Round 4 of `docs/host-elaboration-interface-design.md` (§19): `generate
+//! Round 4 of `docs/metaprogramming/host-elaboration-interface-design.md` (§19): `generate
 //! g(args);` runs a `Tac<List<Decl>>` at a module's top level and publishes
 //! the declarations it builds. The library's probes
 //! (`lib/_tests/std/tactic/derive_tests.hthr`) pin what Heather can state:

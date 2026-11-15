@@ -115,7 +115,7 @@ theorem short_store_differs(): Stored::u32_be().get(List::put_u32_be_within(six(
     .eq_bit(Stored::u32_be().get(Stored::u32_be().put(six(), 0, BitVec::ofNat(0xdeadbeef)), 0)) = False { refl }
 
 // The index methods take their bound squashed
-// (docs/strict-conditions-design.md): a proof of the bound is accepted for
+// (docs/language/strict-conditions-design.md): a proof of the bound is accepted for
 // it, and two calls whose proofs differ are one, at a neutral index.
 theorem at_proofs_interchangeable(v: [u32; 64], i: u64, p: i.toNat() < 64, q: i.toNat() < 64):
     v.at(i, inside := p) = v.at(i, inside := q) { refl }

@@ -133,7 +133,7 @@ impl MeasureContext<'_> {
             let mut ty = parsed.result;
             // A condition the callee takes squashed (`∥P∥`) is lifted too,
             // at its squashed type. Two searches finding two terms would
-            // convert there (docs/strict-conditions-design.md §5), so this
+            // convert there (docs/language/strict-conditions-design.md §5), so this
             // is for cost alone: the companions spell the body many times
             // over, and a proof left at its call is searched for at every
             // copy (issues/squashed-found-proof-searched-per-copy.md).

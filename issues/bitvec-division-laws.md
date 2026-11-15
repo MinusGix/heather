@@ -7,7 +7,7 @@ created: 2026-11-03
 updated: 2026-11-06
 ---
 
-`lib/std/bitvec/bitvec_div.hthr` (docs/fixed-width-integers-design.md §4)
+`lib/std/bitvec/bitvec_div.hthr` (docs/library/fixed-width-integers-design.md §4)
 defines `udivrem` by restoring long division and `sdiv`/`srem` over the
 magnitudes. The probes (`lib/_tests/std/bitvec/bitvec_div_tests.hthr`) are
 closed values only.

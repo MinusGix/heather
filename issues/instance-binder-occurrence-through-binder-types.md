@@ -28,7 +28,7 @@ check does not walk.
 The premise the message rests on does not hold for this shape. `A` is not
 undeterminable: candidate-head unification elaborates the instance against the
 goal `Decide<Id(List<Nat>, xs, ys)>`, and the lowered `Id` carries the endpoint
-type (`docs/decidable-equation-carrier-design.md`), so `?A := Nat` is solved by
+type (`docs/language/classes/decidable-equation-carrier-design.md`), so `?A := Nat` is solved by
 the same unification that solves `?xs` and `?ys`. The refusal is the check
 being conservative about *where* a binder may be determined from, not the
 resolver declining.
@@ -56,12 +56,12 @@ head-absent refusal still fires for a binder nothing determines
 
 ## What it assumes from elsewhere
 
-- The occurrence rule and its two halves: `docs/value-generic-instances-design.md`
+- The occurrence rule and its two halves: `docs/language/classes/value-generic-instances-design.md`
   §4.1, [[instance-binder-occurrence]].
-- The endpoint carrier in the key: `docs/decidable-equation-carrier-design.md`.
+- The endpoint carrier in the key: `docs/language/classes/decidable-equation-carrier-design.md`.
 
 ## Log
 
 - 2026-09-18: Filed from the `Char`/`String` rework, whose generic list
   equality is its first customer.
-- 2026-09-24: 2026-09-24: Landed. The occurrence rule and Paterson's variable condition now consult the elaborated head when the written one lacks a binder (docs/value-generic-instances-design.md §4.4), and the unifier re-spells an inline lowering against a code reference (docs/unifier-completeness-design.md §10.2). lib/std/data/list.hthr has the generic instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>; decide answers at List<Nat>, List<Char> and List<List<Nat>> (crates/elab/tests/char_string_literals.rs). bitvec's four order instances drop their @. Full suite 2945 passed.
+- 2026-09-24: 2026-09-24: Landed. The occurrence rule and Paterson's variable condition now consult the elaborated head when the written one lacks a binder (docs/language/classes/value-generic-instances-design.md §4.4), and the unifier re-spells an inline lowering against a code reference (docs/elaborator/unifier-completeness-design.md §10.2). lib/std/data/list.hthr has the generic instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>; decide answers at List<Nat>, List<Char> and List<List<Nat>> (crates/elab/tests/char_string_literals.rs). bitvec's four order instances drop their @. Full suite 2945 passed.

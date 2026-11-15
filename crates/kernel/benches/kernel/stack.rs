@@ -19,7 +19,7 @@
 //! value-nested chain of [[eval-native-frame-size]]: the one recursion the
 //! depth budget (`reduce::NATIVE_DEPTH_LIMIT`) counts, so its bytes per
 //! level times that bound is the stack a budgeted run can stand on
-//! (docs/native-depth-budget-design.md §8).
+//! (docs/kernel/native-depth-budget-design.md §8).
 //!
 //! The number is a property of the *code and the compiler*, not of the
 //! machine: frame sizes come out of codegen. So unlike times, it is
@@ -55,7 +55,7 @@ pub enum Kind {
     /// loop: one counted level per `f`, from syntax of fixed depth (the shape
     /// of `eval_differential.rs`'s `nested_scrutinee_value`). The scrutinee
     /// is not the bare `x`: a variable head is forced on the machine's own
-    /// loop and costs no native depth (docs/native-depth-budget-design.md
+    /// loop and costs no native depth (docs/kernel/native-depth-budget-design.md
     /// §9), so it would measure nothing.
     EvalNestedScrutinee,
 }

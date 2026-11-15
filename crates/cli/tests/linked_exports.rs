@@ -4,7 +4,7 @@
 //! every export, a `safe fn` for each function of words, and for each
 //! function over a span a safe wrapper over `&[u8]`, or `&mut [u8]` where
 //! the code stores, whose `SAFETY` comment is the certificate's premises
-//! (docs/native-library-exports-design.md §6, §7). It is written by
+//! (docs/native/native-library-exports-design.md §6, §7). It is written by
 //! `heather_cli::linked::exports_rs` from `EXPORTS.tsv` and the signature
 //! each assembly file states, which `compile-x86` writes from the values
 //! its certificate is stated with. This holds the file on disk to that, so

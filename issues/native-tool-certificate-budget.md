@@ -20,7 +20,7 @@ tool to meet them, and fits only after trimming.
   (constant truths for the pool's slices) and `nodes_inputs` four times, and
   `List::takes` re-tested the group. Dropping those cut cat FILE's lowering
   by about a third and it fits, without much margin. A tool past cat FILE's
-  size (the §2 tools of `docs/native-real-programs-plan.md`: `wc`, `grep -F`,
+  size (the §2 tools of `docs/native/native-real-programs-plan.md`: `wc`, `grep -F`,
   `sort`) will not.
 - **`<s>_elf_entry`** (`lowered.entry(low) = {p}_at_N()`): a buffer's
   initial bytes are stored one `MOV/MOV/store` each, the address a full

@@ -1,4 +1,4 @@
-//! Arbitrary-precision natural numerals (`docs/wide-numerals-design.md`).
+//! Arbitrary-precision natural numerals (`docs/language/wide-numerals-design.md`).
 //!
 //! One type shared by the lexer, the AST, the elaborator and the kernel, so
 //! that a numeral is the number it spells at every stage. It is in the

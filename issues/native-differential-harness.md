@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-10
 ---
 
-Both targets of `docs/native-lexer-crypto-roadmap.md` replace a Rust
+Both targets of `docs/native/native-lexer-crypto-roadmap.md` replace a Rust
 component by compiled Heather, and both need the same test: run the export
 against the Rust reference on a corpus and on random inputs.
 `examples/x86-native/main.c` does this by hand for one function.

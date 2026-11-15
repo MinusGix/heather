@@ -11,7 +11,7 @@ updated: 2026-11-02
 A method-syntax call of a `mut self` method on a local that is not mutable,
 `let p = y.m(a);` with a plain `let y`, elaborates to the `Mutated<T, R>`
 record instead of being refused, so the error surfaces later, where `p` is
-used as the answer (`docs/effects-capabilities-design.md` §2.2). The
+used as the answer (`docs/language/effects-capabilities-design.md` §2.2). The
 sequencing design's refusal table (§10) wants it refused at the call: "call
 it on a `let mut` local, or write `@M::m(…)` for the pair".
 

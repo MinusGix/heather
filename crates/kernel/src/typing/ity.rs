@@ -1,11 +1,11 @@
 //! **Deferred types**: what the checker passes between its rules
-//! (`docs/intro-by-type-design.md` §3.2).
+//! (`docs/elaborator/intro-by-type-design.md` §3.2).
 //!
 //! An inferred or expected type is either syntax — what every rule but the
 //! five checked spellings produces — or a *description* of a component of
 //! something that reduces to a former, un-spelled. The description is the
 //! "reduction provenance" of
-//! `docs/conversion-query-traversal-design.md` §10.3 written down as a datum
+//! `docs/kernel/conversion-query-traversal-design.md` §10.3 written down as a datum
 //! instead of computed: `fst@(T; p)` infers *the first component of whatever
 //! `T` reduces to* without ever spelling it, which is the exponential object
 //! this round exists to stop constructing.
@@ -31,7 +31,7 @@
 //! on this tree): the six `@` rules of `Tc::tm_infer_at`, and the Π view
 //! a *checking* λ takes of a `Sel` expected type. `app@` forms one only when
 //! its head's type is not already a syntactic Π
-//! (`docs/app-by-head-type-design.md` §3.1). No other rule constructs
+//! (`docs/elaborator/app-by-head-type-design.md` §3.1). No other rule constructs
 //! one — `app`'s result is `cod[arg/x]` from its own annotations, `fst`'s is
 //! its annotation, the four λ inference arms materialize. So on a
 //! declaration with no `@` form the checker's behaviour is byte-identical to
@@ -63,7 +63,7 @@ pub(crate) enum Sel {
     Cod,
     /// `T[a/x]` of `Π(x:S). T` — the result of a checked application
     /// `app@(f; a)` whose head's type needed reduction
-    /// (`docs/app-by-head-type-design.md` §3.2). The Π analogue of
+    /// (`docs/elaborator/app-by-head-type-design.md` §3.2). The Π analogue of
     /// [`Sel::Snd`], and scoped where its `of` is, unlike [`Sel::Cod`].
     App(Rc<Term>),
 }

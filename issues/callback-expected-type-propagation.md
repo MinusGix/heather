@@ -54,7 +54,7 @@ arrives too late before expanding inference machinery.
   retaining inference fallback when the callback must teach its result type.
   The global checking-only classifier and cross-call inference are unchanged.
   Both calculator pipeline laws now use `.map(λ (n: Nat) => Some([n]))`.
-  Design: `docs/callback-expected-types-design.md`. Five regression tests
+  Design: `docs/elaborator/callback-expected-types-design.md`. Five regression tests
   cover expected results, later arguments, neutral/open inputs, dependent
   scoping, inference fallback, and rejection controls. Full `scripts/test`:
   **2652 passed, 0 failed, 5 ignored**. Reversed equalities whose left endpoint

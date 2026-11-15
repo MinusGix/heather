@@ -18,7 +18,7 @@ projection spine.
 ## What it did
 
 `Tc::projection_at_spine` types `snd@(snd@(… p))` as a chain of selections
-over `p`'s type (`ITy::Sel`, `docs/intro-by-type-design.md` §3.2). Selecting
+over `p`'s type (`ITy::Sel`, `docs/elaborator/intro-by-type-design.md` §3.2). Selecting
 the second component of a Σ instantiates its codomain at the first, so the
 `j`-th selection carries the term `fst@(snd@ʲ⁻¹(p))` (`Sel::Snd`).
 

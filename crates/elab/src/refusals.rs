@@ -54,7 +54,7 @@ impl Refusals<'_> {
     /// the site it was recorded at (`issues/elab-diagnostic-probe-cost.md`).
     /// This is the only place a rejection is reported from — the parallel
     /// gate's join reports no note, discards its pass and replays it serially
-    /// (`docs/parallel-kernel-gate-design.md` §5.1) — so the candidates are
+    /// (`docs/kernel/parallel-kernel-gate-design.md` §5.1) — so the candidates are
     /// always in hand, at every width.
     ///
     /// A written `refl`'s note ([`MismatchNotes::note_refl_mismatch`]) travels a third

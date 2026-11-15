@@ -558,7 +558,7 @@ impl LevelNf {
     /// [`Level`] stops being canonical**, `Level::equiv` stops being `==`,
     /// and every structural term comparison — [`crate::conv`]'s `code_eq`
     /// among them — silently becomes *too fine*: the exact defect `code_eq`
-    /// once had (see `docs/ch05-06-lemma-audit.md`, §Static Code),
+    /// once had (see `docs/kernel/ch05-06-lemma-audit.md`, §Static Code),
     /// reintroduced by a feature that looks unrelated. Any such sort must
     /// come with a decision procedure for level equality and a new
     /// representation, not just a new `Level` constructor.

@@ -1,7 +1,7 @@
 # A tighter structured x86 lowering — design
 
 > **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
-> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> per-function certificate path (`docs/native/native-program-logic-design.md` §3.2); `compile-x86`
 > compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
 > The document stays for its reasoning. The last commit with the code is `82521eab`.
 
@@ -9,9 +9,9 @@ Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 d
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/archive/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
-that filed this), `docs/function-ir-design.md` (regions and the certified
-lowering), `docs/fetched-step-determinism-design.md` §5 (what a new
-instruction form owes the step decoder) and `docs/x86-64-execution-boundary.md`.
+that filed this), `docs/native/function-ir-design.md` (regions and the certified
+lowering), `docs/native/fetched-step-determinism-design.md` §5 (what a new
+instruction form owes the step decoder) and `docs/native/x86-64-execution-boundary.md`.
 
 ## 1. What the lowering emits today (V1, measured 2026-09-29)
 

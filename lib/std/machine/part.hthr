@@ -1,5 +1,5 @@
 // Parts of what is stored: a field of a record, an element of an array,
-// a field of a field, as a value (docs/layout-design.md §5.3). The fourth
+// a field of a field, as a value (docs/native/layout-design.md §5.3). The fourth
 // piece over `layout.hthr` and `stored.hthr`: a `Stored<A>` says how an
 // `A` is bytes, and a `Part<A, B>(whole)` says where in those bytes a `B`
 // is, how it is stored there, what it is of the whole (`of`) and what the

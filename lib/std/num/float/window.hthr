@@ -1,4 +1,4 @@
-// Rounding in a window of a format (docs/floating-point-design.md §15).
+// Rounding in a window of a format (docs/library/floating-point-design.md §15).
 //
 // A window of `F` keeps its precision and its specials and only `c + 1` of
 // its binades, from `emin + j` up: `F.window(j, c)`. Its floats are `F`'s

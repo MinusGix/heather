@@ -1,5 +1,5 @@
 // One theory, two carriers: the constructive ordered-field interface
-// (lib/std/algebra/ordered_field.hthr, docs/constructive-ordered-field-design.md)
+// (lib/std/algebra/ordered_field.hthr, docs/library/constructive-ordered-field-design.md)
 // used at the rationals and at the regular Cauchy reals.
 //
 // Each generic theorem below is proved once, at the weakest layer it needs,

@@ -39,7 +39,7 @@ places, and `applied_field`'s source spellings take any receiver
 Applied fields were not the cause. The speller writes a zero-argument
 section function as a bare `Hurwitz::one<A>`, and a bare `f<A>` whose next
 parameters hold a solver (the section's dictionary) filled them only at an
-expected type (the bare-reference route, docs/unifier-completeness-design.md
+expected type (the bare-reference route, docs/elaborator/unifier-completeness-design.md
 §5.3). Inferred, as an argument whose domain was still open or as a dot
 receiver, it stayed the dictionary-awaiting function. In plain user code:
 

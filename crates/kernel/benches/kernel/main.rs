@@ -73,7 +73,7 @@ kernel benchmarks — run via scripts/bench
   --no-stack          skip the stack probe (it spawns subprocesses)
   --stack-only        run only the stack probe (works in a debug build too,
                       where frames are several times fatter — see
-                      docs/benchmarking.md)
+                      docs/infrastructure/benchmarking.md)
   --baseline <path>   use another baseline file
 "
     );

@@ -1,4 +1,4 @@
-// Stored words as compiled code (docs/layout-design.md §4 and §6): what a
+// Stored words as compiled code (docs/native/layout-design.md §4 and §6): what a
 // `runtime fn` does to read a word from a span and to store one, each
 // proved to be the codec's `get` or `put` (`lib/std/machine/stored.hthr`).
 // The codec says what the bytes mean; these say what the machine does, a
@@ -466,7 +466,7 @@ fn vector_with_byte_be({n: Nat}, v: [u32; n], i: Nat, b: u8) → [u32; n] {
 // and no value stands for an entry that is not there. The proof is taken
 // squashed (`∥…∥`): two calls that differ only in the proof a search
 // found are one call to the kernel, so a `decreases` body's companions,
-// which find their own, agree (docs/strict-conditions-design.md). A proof
+// which find their own, agree (docs/language/strict-conditions-design.md). A proof
 // of the bound itself is accepted for it (`inside := h`).
 //
 // Each is defined as the total function beside it (`vector_get` at 0,

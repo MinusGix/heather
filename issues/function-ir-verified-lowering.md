@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-11-09
 ---
 
-Round S4 of `docs/native-program-logic-design.md` (§3.2, §9): lower
+Round S4 of `docs/native/native-program-logic-design.md` (§3.2, §9): lower
 FunctionIR's pure regions to x86 by a Heather function whose correctness is
 one theorem, replacing the per-function certificate path (Rust lowering,
 `heather_emit`, the structured and control-block certificates).
@@ -329,7 +329,7 @@ costs a refusal, never a wrong program.
    `branches.hthr`'s `composed` and the new `either` take this route.
    `native_structured_composition.rs` is gone, and `native_branches.rs`
    now runs both against C, with a refusal control.
-5. **The bounded loop** (`docs/native-effect-source-design.md` §5.4, L3):
+5. **The bounded loop** (`docs/native/native-effect-source-design.md` §5.4, L3):
    FunctionIR's loop of at most `bound` passes with an explicit `Exhausted`
    outcome, lowered and proved inside `emit_calls`.
 
@@ -398,5 +398,5 @@ costs a refusal, never a wrong program.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[function-ir-multi-word-calls]] (`lib/native/function_ir/function_ir.hthr`); [[function-ir-x86-shift-legalization]] (`lib/native/function_ir/function_ir_lower.hthr`).
-- 2026-11-09: 2026-11-09: passes composing by simulation-diagram composition, and the four machine closure kits made one, are filed as [[transition-systems-and-simulations]] (docs/native-mathematics-survey.md §3).
+- 2026-11-09: 2026-11-09: passes composing by simulation-diagram composition, and the four machine closure kits made one, are filed as [[transition-systems-and-simulations]] (docs/surveys/native-mathematics-survey.md §3).
 - 2026-11-09: `lower_nodes` is also a star diagram from leaves to x86 code, composed after the pass (`compile_star`, `List::compiled_runs` in function_ir_lower_diagrams.hthr): [[s4-lowering-as-diagram]].

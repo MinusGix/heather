@@ -3,7 +3,7 @@
 //! Mounted once by each family binary (tests/families/) and `use`d by its
 //! member files as `crate::support` — never re-declared with `mod support;`,
 //! which would give the member a private copy of every `OnceLock` here
-//! (docs/elab-test-families-design.md). Each family uses a different part of
+//! (docs/infrastructure/elab-test-families-design.md). Each family uses a different part of
 //! it, so unused-item warnings here are expected.
 //!
 //! Orientation, so nobody greps for these twice (finding the prelude took a
@@ -123,7 +123,7 @@ fn semantic_test_base_in(
     // The checked-in prefix goes through the declaration-verdict store as
     // well (`with_decl_cache`'s trust argument, below): a replayed image's
     // stored definitions ask the store the question the cold gate answered
-    // (`docs/parallel-kernel-gate-design.md` §5.3), so a binary that replays
+    // (`docs/kernel/parallel-kernel-gate-design.md` §5.3), so a binary that replays
     // an unchanged prefix no longer rechecks every body per process. The
     // gate is sealed to `NoGate` before the caller's own content, as ever.
     let decl_cache = heather_cache::shared_store(&repo_root(), heather_cache::DECL_CACHE);
@@ -235,7 +235,7 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// (`issues/elaborator-snapshot-across-test-binaries.md`): identical prefix
 /// work, re-kernel-checked once per binary otherwise. The CLI already owns
 /// the mechanism that makes paying it once sound — the content-addressed
-/// declaration cache behind `heather check --cache` (docs/cache-v1-design.md)
+/// declaration cache behind `heather check --cache` (docs/infrastructure/cache-v1-design.md)
 /// — and the elaborator exposes the seam it installs through
 /// (`Elaborator::set_gate`).
 ///
@@ -553,7 +553,7 @@ theorem cong_bin_abs({a: Bin}, {b: Bin}, p: a = b): bin_abs(a) = bin_abs(b) {
     };
 }
 
-/// `Bin` as a repr of `Nat` — the v1 stretch of `docs/datarepr-design.md`
+/// `Bin` as a repr of `Nat` — the v1 stretch of `docs/native/datarepr-design.md`
 /// §5.1 item 4, and the one non-identity repr the suite has. Shared rather
 /// than copied because `datarepr.rs` and `reprgen.rs` both pin it and a
 /// private copy would drift from the obligations it is the fixture for.

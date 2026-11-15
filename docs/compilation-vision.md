@@ -28,7 +28,7 @@ so a round can read the argument instead of re-making it.
 1. **Kerneltime and runtime are different worlds.** An ordinary `fn` is
    mathematics; it never runs. Spec types (`Nat`, `List`) are never run
    either: their runtime representations are chosen separately
-   (`issues/datarepr-separation.md`, `docs/datarepr-design.md` §0).
+   (`issues/datarepr-separation.md`, `docs/native/datarepr-design.md` §0).
 2. **The certificate is logical; everything else is operational.** A
    compiled artifact carries a proof that it agrees with the function. Which
    artifact runs, how it was found, how it was searched for, how artifacts
@@ -49,7 +49,7 @@ so a round can read the argument instead of re-making it.
    output) and move into the verified theorem as they stabilise: a
    lifecycle, not a fork (`in-language-certificate-emission`, 2026-08-11).
 5. **No per-program hand proofs.** The native compiler is proved once
-   (`docs/native-program-logic-design.md`). A generated, kernel-checked
+   (`docs/native/native-program-logic-design.md`). A generated, kernel-checked
    certificate per program is fine; a human writing one is not.
 6. **Small, inspectable statements per stage.** Per-pass certificates with
    small statements, never one leap with a page-long statement
@@ -107,7 +107,7 @@ so a round can read the argument instead of re-making it.
 
 Everything that runs is reached through `Compile(f)`: code for `f`, plus the
 proof that the code agrees with `f`. It is an operation-indexed class keyed on
-the function (`docs/runtime-fn-setups-design.md` §9.3). Callers find their
+the function (`docs/native/runtime-fn-setups-design.md` §9.3). Callers find their
 callees' code by instance search. Who produced an instance is invisible to
 the caller, which is what lets every kind of producer below compose with
 every other.
@@ -132,7 +132,7 @@ The kinds differ in *where the term comes from*:
 
 - **`rt`, the general language.** Its terms are reflected from ordinary
   function bodies by a generator, and tied to the function by a pin
-  (`docs/runtime-fn-setups-design.md`). This is the common path: write
+  (`docs/native/runtime-fn-setups-design.md`). This is the common path: write
   Heather, mark it `runtime fn`, get code. Its setups (default, ownership,
   constant time) are judgments and lowerings over the same terms.
 - **DSLs.** The user writes terms of the language as data (a regex, a
@@ -209,11 +209,11 @@ optimization that uses it is proved once under it as a hypothesis.
   and register convention) that lets other code call it.
 - **Passes.** Optimizations between and within levels are certified passes:
   a structural algebra plus local laws, with one generic induction proving the
-  pass sound (`docs/certified-pass-algebra-probe.md`;
+  pass sound (`docs/metaprogramming/certified-pass-algebra-probe.md`;
   `function-ir-pass-in-heather` is the first real one). A pass that needs a
   fact takes it as a hypothesis of its local law.
 - **One compiler serves the levels** (Minus, 2026-11-11: "unify first and
-  then export"; `docs/native-one-compiler-design.md`). `write-elf` and
+  then export"; `docs/native/native-one-compiler-design.md`). `write-elf` and
   `compile-x86` share FunctionIR and the region lowering and grew apart
   above it. The direction is one compiler of functions: a frame, System V
   registers, buffers lent, a body that may have effects. A pure function,
@@ -233,7 +233,7 @@ optimization that uses it is proved once under it as a hypothesis.
   is proved at every file, call one another over the same span, and a
   tool's call of one is proved to answer as the Heather function at the
   tool's buffer: `wc -l` counts with a `runtime fn`. What is left of it
-  is writes. They are designed (`docs/native-one-compiler-design.md`
+  is writes. They are designed (`docs/native/native-one-compiler-design.md`
   §2.6): the file is state the meaning threads, and a caller lends a
   span by laws that say what a store into it leaves, which are what
   Rust's `&` and `&mut` give. The memory half is built
@@ -269,7 +269,7 @@ optimization that uses it is proved once under it as a hypothesis.
   program and its run stated at every file (`f::runs_over`), with
   nothing proved for the function in particular. The third joint is
   built but for its last step
-  (`docs/native-procedures-are-functions-design.md`, steps 5a to 5c): a
+  (`docs/native/native-procedures-are-functions-design.md`, steps 5a to 5c): a
   statement's words are in a frame of its activation, the callee saves
   what it keeps and counts its own depth, one function emits every
   call, and one contract says a callee runs as its tree
@@ -288,9 +288,9 @@ optimization that uses it is proved once under it as a hypothesis.
 
 ### 2.5 Memory a function is lent
 
-Proposed 2026-11-10 (`docs/native-library-exports-design.md`); Minus's
+Proposed 2026-11-10 (`docs/native/native-library-exports-design.md`); Minus's
 answer (2026-11-11) was to join the two compilers first, so it lands in
-the order of `docs/native-one-compiler-design.md`. Principle 1 applied to
+the order of `docs/native/native-one-compiler-design.md`. Principle 1 applied to
 memory:
 
 - **A buffer is a value in every level's meaning.** A list of bytes in
@@ -318,7 +318,7 @@ Built for reads in the function compiler (2026-11-11,
 by loops and handed on by calls; the guard is the conditional the source
 already has, known in the arm it selects, so the lowering emits no check
 of its own. One thing the list above leaves open is settled in
-`docs/native-one-compiler-design.md` §2.3: the lowered code is handed an
+`docs/native/native-one-compiler-design.md` §2.3: the lowered code is handed an
 address as a word, so "no meaning mentions an address" needs the
 evaluation not to depend on that word. An export gets this from its
 agreement equation over an open word; a program's tree needs it as a
@@ -346,7 +346,7 @@ runtime fn checksum(buf: Bytes(4096), n: BitVec(64)) → BitVec(32) {
 ```
 
 Exists in part: the back half and `compile-x86`'s Rust reflector. Designed:
-`docs/runtime-fn-setups-design.md`, `docs/sequencing-surface-design.md`.
+`docs/native/runtime-fn-setups-design.md`, `docs/language/sequencing-surface-design.md`.
 
 ### 3.2 A borrow-checked function and its side-proofs
 
@@ -388,7 +388,7 @@ regex def is_hex = "[0-9a-f]+";
 // meaning of its term.
 ```
 
-The frontend half exists (2026-11-01, `docs/value-definitions-design.md` §4):
+The frontend half exists (2026-11-01, `docs/metaprogramming/value-definitions-design.md` §4):
 `def`, prefix generators that rewrite the `def` they prefix, and
 `lib/std/text/regex/regex.hthr`, whose `regex def is_hex = "[0-9a-f]+";` publishes
 `is_hex` as `Regex::accepts` of the parsed term (a Brzozowski-derivative
@@ -422,7 +422,7 @@ fn sum_prefix(xs: Bytes(4096), k: Nat) → BitVec(64) { … xs[i] … }   // i <
 ```
 
 A prototype exists over a small language of checked reads
-(`docs/facts-on-demand-design.md`): a generator asks for `InBounds` per
+(`docs/native/facts-on-demand-design.md`): a generator asks for `InBounds` per
 read, the producers (a verified range analysis, user lemmas) answer first,
 the compiler's own budgeted exhaustive check after them, and a read with no
 proof keeps its check. Over `rt` code it waits on `runtime fn` reflection.
@@ -499,19 +499,19 @@ decides.
 
 | part | state | owner |
 |---|---|---|
-| back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
-| `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
+| back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native/native-program-logic-design.md`, `docs/native/native-effect-source-design.md` |
+| `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/native/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads and writes inside one file (a program lends its buffers to a function it calls, which may store into them); a function that reads a span its Rust caller owns is exported, its declaration generated from the certificate's signature; the scanner's loop is one such function, proved to be the specification's scan of a token and called once a token from Rust; a function that stores into a span its Rust caller lends is exported too, the spans it may write read off its program and its wrapper taking `&mut [u8]` | `docs/native-one-compiler-design.md`, `docs/native-library-exports-design.md`, milestone `nh-library` |
-| facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
-| DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
-| restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed (§2.5) and built for reads and writes inside one file (a program lends its buffers to a function it calls, which may store into them); a function that reads a span its Rust caller owns is exported, its declaration generated from the certificate's signature; the scanner's loop is one such function, proved to be the specification's scan of a token and called once a token from Rust; a function that stores into a span its Rust caller lends is exported too, the spans it may write read off its program and its wrapper taking `&mut [u8]` | `docs/native/native-one-compiler-design.md`, `docs/native/native-library-exports-design.md`, milestone `nh-library` |
+| facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/native/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
+| DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/metaprogramming/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
+| restricted dialects | constant time surveyed | `docs/surveys/constant-time-survey.md` |
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |
-| certified passes | probe passed | `docs/certified-pass-algebra-probe.md`, `function-ir-pass-in-heather` |
-| representations | v1 built | `docs/datarepr-design.md` |
+| certified passes | probe passed | `docs/metaprogramming/certified-pass-algebra-probe.md`, `function-ir-pass-in-heather` |
+| representations | v1 built | `docs/native/datarepr-design.md` |
 | specialization (`CallCtx`) | sketched | `docs/archive/surface-v3.md` §1, §3 |
 | contracts across calls | direction issue | `issues/proof-carrying-function-analysis.md` |
-| foreign code as an instance | surveyed, not scheduled | `docs/foreign-binaries-survey.md`, `issues/foreign-binary-contracts.md` |
+| foreign code as an instance | surveyed, not scheduled | `docs/surveys/foreign-binaries-survey.md`, `issues/foreign-binary-contracts.md` |
 
 ---
 
@@ -620,7 +620,7 @@ instance(f) NoAlias(f, i) := by search(budget := small) { alias_tactic }   // an
   ran) stays cheap; a searched fact is budgeted per request, and the budget
   is a knob (`optimize(aggressive)`, Q8).
 
-The first prototype of this section is `docs/facts-on-demand-design.md`: a
+The first prototype of this section is `docs/native/facts-on-demand-design.md`: a
 fact is a proposition whose producers are evidence rules (no coherence is
 needed, since no one observes which proof was found), a producer that
 searches is an evidence rule whose premise runs a tactic, and a generator

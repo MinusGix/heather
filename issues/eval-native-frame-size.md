@@ -26,7 +26,7 @@ Halving the frame doubles the headroom at both ends at once, which is worth more
 
 ## Log
 
-- 2026-10-26: Done (thread "Lift kernel evaluation depth limit"; design `docs/native-depth-budget-design.md` §8). Asked for by float literals: `Nat::pow(2, 1030)` refused on the budget, binary64 needs `2^1075`.
+- 2026-10-26: Done (thread "Lift kernel evaluation depth limit"; design `docs/kernel/native-depth-budget-design.md` §8). Asked for by float literals: `Nat::pow(2, 1030)` refused on the budget, binary64 needs `2^1075`.
 
   Found: the live chain is not `drive -> step_eval -> drive` but fold classification. `pow(a, k+1) = pow(a, k) * a`, and classifying `mul`'s step probes `ih + pow(a, k)` transparently, which unfolds the inner power and classifies *its* step: `drive_from -> step_elim -> fold_run -> classify_step -> probe_step -> probe_apply -> delta_whnf -> drive`, one level per unit of the exponent. Frames read off `sub rsp` in the release binary: `drive_from` 2120 B (with `step_elim` inlined), `fold_run` 1304 B, `step_eval` 1320 B; `size_of::<Work>()` is 136 (`Elim` 128), so the frames are not big enums but the union of every arm's locals.
 

@@ -24,7 +24,7 @@ import transition;
 // `displacement` past the instruction's end, sign-extended, into a
 // register, as a near jump's target is formed; no memory is read and no
 // flag changes. It is how code reaches the bytes placed after it, a
-// constant table (docs/native-library-exports-design.md §8,
+// constant table (docs/native/native-library-exports-design.md §8,
 // issues/rt-fixed-arrays-and-tables.md). The ModRM's r/m is RBP's code under
 // mod 00, which is the RIP-relative form.
 record LeaRip { destination: Gpr, displacement: BitVec(32) }

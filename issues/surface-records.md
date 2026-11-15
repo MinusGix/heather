@@ -29,7 +29,7 @@ Most of the substrate is already there and already exercised:
 - `Type::Sigma`, `Pair`, `Fst`, `Snd` are v0 formers, and **η for pairs is
   definitional** (`conv.rs:668`), which is what makes `let (a, b) = p`
   transparent and what tier 0's field-offset scheme already leans on.
-- The tier-0 lowering (`docs/inductive-tier0-lowering.md`) already builds a
+- The tier-0 lowering (`docs/inductives/inductive-tier0-lowering.md`) already builds a
   Unit-terminated Σ spine per constructor with field projection as
   `fst(snd^j)`. A record is that scheme with one constructor and named
   accessors.
@@ -49,7 +49,7 @@ Most of the substrate is already there and already exercised:
 3. **Where the level goes.** A record over `A : Ty 0` lives at level 1 as
    soon as it stores a type. State the level rule before writing code —
    non-cumulativity has bitten twice already
-   ([[unit-level-and-vec-preservation]], `docs/unit-empty-level-indexing.md`).
+   ([[unit-level-and-vec-preservation]], `docs/kernel/unit-empty-level-indexing.md`).
 4. [[dependent-field-injectivity]] applies here verbatim: a later field whose
    type mentions an earlier one is the *normal* case for a record, not the
    exotic one.
@@ -59,7 +59,7 @@ Not in scope: instance resolution / typeclass search
 
 ## Log
 
-- 2026-07-27: **LANDED.** docs/surface-records.md (§11 records what
+- 2026-07-27: **LANDED.** docs/language/surface-records.md (§11 records what
   implementing corrected), crates/elab/tests/records.rs — 33 tests, workspace
   at 508. `record Monoid<A> { unit, op, unit_l }` declares, `m.op(x)(y)`
   projects and applies, `Monoid { … }` constructs in any field order, and
@@ -106,7 +106,7 @@ Not in scope: instance resolution / typeclass search
     `Type`-valued field, §3), anonymous `⟨…⟩` literals, record update, and
     instance resolution ([[compile-typeclass-design]], which this unblocks).
 
-- 2026-07-27: **Scheme written: `docs/surface-records.md`**; implementation is
+- 2026-07-27: **Scheme written: `docs/language/surface-records.md`**; implementation is
   the next code round. All four open questions above are answered there, and a
   fifth was found that is larger than two of them.
   - Q1 → **both, because they are different questions.** The *lowering* is the

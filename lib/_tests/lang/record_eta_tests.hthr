@@ -4,7 +4,7 @@ import vector;
 
 // A record is its fields rebuilt, by conversion. A record lowers to a Σ
 // spine — the nominal tag (an `sEq`, irrelevant), the fields, a closing
-// `Unit` (docs/inductive-tier0-lowering.md §3) — and the kernel has η at
+// `Unit` (docs/inductives/inductive-tier0-lowering.md §3) — and the kernel has η at
 // all three (crates/kernel/DESIGN.md), so `R(r.a, r.b) ≡ r` for a neutral
 // `r` with no lemma and no `match`. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).

@@ -15,7 +15,7 @@ searched and checked closed (`Homes::closed`, `region_checked` in
 (`lib/lang/facts/in_bounds.hthr`) is half an interval analysis proved for
 itself; the segments' `known` facts are a third. Each new analysis that
 facts on demand wants (`InBounds`, `Unique`, `Writes`, constants across
-loops) would be another global proof. `docs/native-mathematics-survey.md`
+loops) would be another global proof. `docs/surveys/native-mathematics-survey.md`
 §5; survey rank 5.
 
 ## Scope

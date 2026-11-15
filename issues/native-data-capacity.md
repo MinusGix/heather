@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-28
 ---
 
-Round 8 of `docs/native-real-programs-plan.md` (§3.6, §6). `write-elf`
+Round 8 of `docs/native/native-real-programs-plan.md` (§3.6, §6). `write-elf`
 places a program's whole environment in `DataRegion::io_page()`, 4096 bytes:
 64 word slots, every buffer, and a scratch range as large as the largest
 buffer. So a program's buffers together hold under 3.5 KiB, one buffer under

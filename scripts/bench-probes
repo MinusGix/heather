@@ -9,7 +9,7 @@ library, one at a time, through the `heather` binary the suite runs.
     scripts/bench-probes --save              # record this run's rows in perf/bench/results.tsv
     scripts/bench-probes --list              # what is in the suite, and why
 
-docs/cloud-benchmarks.md is the convention (cloud timings are the reference,
+docs/infrastructure/cloud-benchmarks.md is the convention (cloud timings are the reference,
 what a row means, when a moved counter is the result). perf/bench/cases.tsv
 lists the cases; perf/bench/targets.md says why each is one.
 
@@ -32,7 +32,7 @@ Case kinds (cases.tsv `kind`):
 
 - `only`: `check --cache --only ITEM FILE` over the store. `--only` always
   runs the kernel on the named items and leaves the store as it found it
-  (docs/check-only-design.md §2), so samples repeat exactly. The row is the
+  (docs/infrastructure/check-only-design.md §2), so samples repeat exactly. The row is the
   item's: its marginal cost over a replayed prefix. A generated item the
   module shares (a gendef, an instance) is vouched for here and is charged
   to whichever declaration first used it in a cold run; that is why a cold
@@ -83,7 +83,7 @@ CPU_SECS = int(os.environ.get("HEATHER_BENCH_CPU_SECS", "900"))
 
 # A time regression is a case at least this much slower than its recorded
 # row on the same environment key; the kernel suite's threshold, for its
-# reason (docs/benchmarking.md: a gate that cries wolf gets ignored).
+# reason (docs/infrastructure/benchmarking.md: a gate that cries wolf gets ignored).
 SLOWER = 1.25
 FASTER = 0.8
 
@@ -121,7 +121,7 @@ def cpu_model():
 
 def environment():
     """The env rows. `source` is `cloud` in a Claude Code cloud container
-    (the reference, docs/cloud-benchmarks.md); times compare only when cpu,
+    (the reference, docs/infrastructure/cloud-benchmarks.md); times compare only when cpu,
     nproc, profile and rustc agree, never on the hostname."""
     mem = "unknown"
     try:
@@ -377,7 +377,7 @@ def read_results():
 
 
 def write_results(env, rows):
-    lines = ["# Probe benchmark results — see docs/cloud-benchmarks.md",
+    lines = ["# Probe benchmark results — see docs/infrastructure/cloud-benchmarks.md",
              "# Regenerate with: scripts/bench-probes --save   (a filtered --save replaces only the cases it ran)",
              "# case\tname\t" + "\t".join(f"{s}_s" for s in SECONDS) + "\tspread\t" + "\t".join(COUNTERS)]
     lines += [f"env\t{k}\t{v}" for k, v in env.items()]

@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 `pick({M: Type → Type}, x: M(Nat))` at `t: CoTree<Nat>(E)` says "could not
 infer the implicit argument `M`" (probed 2026-11-02,
-docs/lambda-carrier-instances-design.md §2). So the ITree carrier for
+docs/language/classes/lambda-carrier-instances-design.md §2). So the ITree carrier for
 binding statements, `λ (R: Type) => CoTree<R>(E)`, is neither inferred nor
 accepted as an instance head.
 

@@ -9,7 +9,7 @@ updated: 2026-10-26
 ---
 
 `rewrite(h, e)` along a relation ([[rewrite-setoid-relations]],
-`docs/equation-rewrite-design.md` §9.2) rewrites relation applications and
+`docs/tactics/equation-rewrite-design.md` §9.2) rewrites relation applications and
 implications between them, at either polarity. A `P ↔ Q` goal is refused
 today: `Iff` is a record, so the plan would have to project `e`'s `mp`/`mpr`,
 emit the `→` plan for each direction (each half once forward, once

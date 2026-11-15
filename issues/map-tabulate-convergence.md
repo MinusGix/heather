@@ -15,7 +15,7 @@ schemas on the length, so at a neutral `n` neither reduces, and they are
 structurally different terms: `map` walks the Σ-chain with `fst`/`snd`, while
 `tabulate` builds from an index function.
 
-Found while probing the phase-3 mixed case (`docs/container-proofs.md`), where
+Found while probing the phase-3 mixed case (`docs/language/container-proofs.md`), where
 a fully explicit `@cong_add(…, rest.map(tt), …)` fails for exactly this reason:
 inside a *theorem*'s arm the self-name is `same`, so `rest.map(tt)` elaborates
 to a real `map` over the global `tt`, while the goal holds the `tabulate` that

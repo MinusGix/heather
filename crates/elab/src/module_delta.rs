@@ -66,7 +66,7 @@ pub struct ModuleDelta {
     pub(crate) events: Vec<DeltaEvent>,
     /// One slice per item of the source file, in order: the ranges of
     /// `extension`, `events` and `warnings` that item contributed
-    /// (`docs/declaration-slice-replay-design.md` §3). Empty for a delta
+    /// (`docs/infrastructure/declaration-slice-replay-design.md` §3). Empty for a delta
     /// decoded from an image until the persistent half of that design lands.
     pub(crate) items: Vec<ItemSlice>,
     /// The warnings the module raised, in order, so a replayed slice can
@@ -80,7 +80,7 @@ pub struct ModuleDelta {
 
 /// One item's contribution to a [`ModuleDelta`], as ranges into its flat
 /// vectors, keyed by the item's exact source text
-/// (`docs/declaration-slice-replay-design.md` §3). A mutual measure group is
+/// (`docs/infrastructure/declaration-slice-replay-design.md` §3). A mutual measure group is
 /// one slice at its first member, keyed by every member's text; the other
 /// members' slices are empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,20 +106,20 @@ pub struct SliceReport {
     /// Items elaborated from source.
     pub elaborated: usize,
     /// Items elaborated because `--only` named them
-    /// (`docs/check-only-design.md`); counted in `elaborated` too.
+    /// (`docs/infrastructure/check-only-design.md`); counted in `elaborated` too.
     pub forced: usize,
 }
 
 /// The previous delta a module pass may replay slices from, and whether the
 /// semantic prefix built so far is still exactly the one those slices were
-/// elaborated over (`docs/declaration-slice-replay-design.md` §4).
+/// elaborated over (`docs/infrastructure/declaration-slice-replay-design.md` §4).
 #[derive(Clone)]
 pub(crate) struct SlicePlan {
     pub(crate) previous: Rc<ModuleDelta>,
     pub(crate) exact: bool,
     pub(crate) report: SliceReport,
     /// Item names that must be elaborated from source however exact the
-    /// prefix is (`docs/check-only-design.md` §2); `met` collects the ones
+    /// prefix is (`docs/infrastructure/check-only-design.md` §2); `met` collects the ones
     /// the pass actually saw, so the caller can name the ones it did not.
     pub(crate) force: std::collections::BTreeSet<String>,
     pub(crate) met: std::collections::BTreeSet<String>,
@@ -181,7 +181,7 @@ impl ModuleDelta {
     }
 
     /// Attach the warnings an image stored beside this delta, so its slices
-    /// can re-raise them (`docs/declaration-slice-replay-design.md` §4).
+    /// can re-raise them (`docs/infrastructure/declaration-slice-replay-design.md` §4).
     /// Rejected when a slice's warning range does not fit.
     pub fn with_warnings(mut self, warnings: Vec<crate::diagnostics::Warning>) -> Result<Self, &'static str> {
         let mut at = 0;
@@ -316,7 +316,7 @@ pub(crate) enum DeltaEvent {
     /// payloads were built at, which their free globals count from. The
     /// registry ignores it (a guard copy is compared raw); relocating a
     /// module onto another world needs it
-    /// (`docs/module-interface-cutoff-design.md` §3). `GenWfSlots`'s
+    /// (`docs/infrastructure/module-interface-cutoff-design.md` §3). `GenWfSlots`'s
     /// decoded copy is the exception, scoped at `D#shape`'s own position.
     GenTyCode {
         tag: u32,
@@ -785,7 +785,7 @@ impl Deltas<'_> {
 
 impl Elaborator {
     /// [`Self::check_module_delta`] with the module's *previous* delta to
-    /// replay unchanged items from (`docs/declaration-slice-replay-design.md`
+    /// replay unchanged items from (`docs/infrastructure/declaration-slice-replay-design.md`
     /// §4): an item whose source text matches the previous slice at its
     /// position, while every earlier item reproduced the previous prefix
     /// exactly, is reproduced from the slice — its bindings through the gate,
@@ -805,7 +805,7 @@ impl Elaborator {
     /// [`Self::check_module_delta_from`] with `force`: the named items are
     /// elaborated from source whether or not their slice would replay, so a
     /// probe can time one declaration over a replayed prefix
-    /// (`docs/check-only-design.md`). A name matches an item's declared name
+    /// (`docs/infrastructure/check-only-design.md`). A name matches an item's declared name
     /// (`item_timing_name`), and naming any member of a mutual measure
     /// group elaborates the group. The third result is the set of forced
     /// names the pass met; a caller that named something not in this module
@@ -1198,7 +1198,7 @@ impl Elaborator {
     /// nothing, so the journal holds exactly the module's other items. For a
     /// module whose refusals are its point (`heather check --expectations`),
     /// whose caller judges `errors` and decides whether the delta stands
-    /// for the module (`docs/module-dag-design.md` §11).
+    /// for the module (`docs/infrastructure/module-dag-design.md` §11).
     pub fn check_module_delta_refusing(
         &mut self,
         module: &str,
@@ -1235,7 +1235,7 @@ impl Elaborator {
     /// [`Self::replay_module_delta`] with `replay`, an identity of this exact
     /// replay that its caller vouches for: the stored bytes the delta was
     /// decoded from and the world it is replayed over, module by module
-    /// (`docs/module-dag-design.md` §13). A gate that has seen the identity
+    /// (`docs/infrastructure/module-dag-design.md` §13). A gate that has seen the identity
     /// pass skips the recheck of the whole extension; one whose recheck
     /// passes without opening a sealed proof records it. Everything else a
     /// replay checks (the dependency identity, opened proofs, exports, the
@@ -1304,7 +1304,7 @@ impl DeltasMut<'_> {
     ///
     /// The serial form is one `typing::check_global_ctx_extension` call. The
     /// wide form is the same judgement split the way the deferred gate splits
-    /// a fresh declaration (`docs/parallel-kernel-gate-design.md` §2): each
+    /// a fresh declaration (`docs/kernel/parallel-kernel-gate-design.md` §2): each
     /// binding's *statement* is checked here, in order, and each definition's
     /// *body* is queued as a `check_term` against the frozen prefix it sits
     /// over. The prefix is an O(1) snapshot per binding (`GlobalBindings` is
@@ -1319,7 +1319,7 @@ impl DeltasMut<'_> {
     /// **The gate vouches here exactly as it does at the source gate.** A
     /// stored definition is the binding the cold run's `GateItem::binding`
     /// produced, over the same Ψ prefix, so it asks the oracle the same
-    /// question (`docs/cache-v1-design.md` §3: the name is metadata, not
+    /// question (`docs/infrastructure/cache-v1-design.md` §3: the name is metadata, not
     /// identity) and an `admits` hit skips its statement and body the way it
     /// does for a fresh declaration; a miss is checked and `accepted` at the
     /// same points the source path uses. A theorem is stored without its
@@ -1748,7 +1748,7 @@ mod tests {
 
     /// The recheck of a stored suffix runs its definition bodies on the
     /// kernel worker pool (`recheck_extension`); a module's answer never
-    /// depends on the width (`docs/parallel-kernel-gate-design.md` §5.1), so
+    /// depends on the width (`docs/kernel/parallel-kernel-gate-design.md` §5.1), so
     /// the wide replay accepts what the serial one accepts, refuses what it
     /// refuses, and the kernel is what did the refusing at both widths.
     #[test]

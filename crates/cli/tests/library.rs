@@ -31,7 +31,7 @@ const TESTS_DIR: &str = "lib/_tests";
 /// A module lands here only when someone decides it should stay without a
 /// consumer; the lint's message says to delete it or list it.
 const KEPT_ROOTS: &[(&str, &str)] = &[
-    // docs/native-program-logic-design.md §3 keeps the ELF modules for the
+    // docs/native/native-program-logic-design.md §3 keeps the ELF modules for the
     // native rebuild; nothing has consumed them since B2 (#156) burned the
     // per-function path.
     ("elf64_load", "kept for the native rebuild (native-program-logic-design §3)"),
@@ -222,7 +222,7 @@ fn gate_folders() -> Vec<PathBuf> {
 /// over one semantic cache at width one as `scripts/test` runs every child.
 /// First every module without an image is elaborated in a `heather check` of
 /// its own, four at a time, longest chain first (`--build-jobs`,
-/// `docs/module-dag-design.md` §12), so each module's CPU rail is its own and
+/// `docs/infrastructure/module-dag-design.md` §12), so each module's CPU rail is its own and
 /// the gate's length is the import graph's critical path. Then one `heather
 /// check` per folder ([`gate_folders`]), four side by side, replays its
 /// closure and reports what it holds: its warnings, its matched refusals, and
@@ -254,7 +254,7 @@ fn every_library_module_checks() {
     };
     // Four at a time, one per CPU of a cloud box: each process holds at
     // most one closure of the library, under 2 GB, and four of them stay
-    // far inside the box (`docs/module-dag-design.md` §8).
+    // far inside the box (`docs/infrastructure/module-dag-design.md` §8).
     let mut build = Command::new(env!("CARGO_BIN_EXE_heather"));
     build.arg("check");
     images_flags(&mut build);
@@ -262,7 +262,7 @@ fn every_library_module_checks() {
     // native gates once their images exist (`PREREQUISITES` in
     // `scripts/run-test-targets.mjs`, whose `built` this mirrors), and the
     // step is CPU-bound, so building them first moves that release forward
-    // without lengthening the step (`docs/module-dag-design.md` §12).
+    // without lengthening the step (`docs/infrastructure/module-dag-design.md` §12).
     build.args(["--build-first", "lib/native", "--build-first", "lib/_tests/native"]);
     let out = build.args(["--build-jobs", "4", "--build-only", "lib"]).output().expect("run heather check");
     let built = String::from_utf8_lossy(&out.stderr).into_owned();

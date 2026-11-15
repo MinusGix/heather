@@ -1,4 +1,4 @@
-//! `let` annotations and block expressions (`docs/let-and-blocks-design.md`).
+//! `let` annotations and block expressions (`docs/language/let-and-blocks-design.md`).
 //!
 //! Two decisions share this suite because they share their clients: §3 makes
 //! `let x: T = e;` writable at every `T` by reading the annotation with the
@@ -72,7 +72,7 @@ fn bad(src: &str) -> String {
 
 /// §8 item 1: every `T` that used to fall through `ty_atom` into `expr()`'s
 /// comparison rung. The gap was never about equations
-/// (`docs/let-and-blocks-design.md` §1.1(1)) — a bare declared type name and
+/// (`docs/language/let-and-blocks-design.md` §1.1(1)) — a bare declared type name and
 /// a function type were just as unwritable.
 #[test]
 fn an_annotated_let_takes_any_type() {
@@ -97,7 +97,7 @@ fn the_annotations_that_worked_still_work() {
 }
 
 /// §8 item 3: an equality annotation is *parenthesised* now, and so is a
-/// `<=` one — the shape `docs/comparison-operators.md:100` only ever had as
+/// `<=` one — the shape `docs/language/comparison-operators.md:100` only ever had as
 /// prose.
 #[test]
 fn a_comparison_annotation_is_parenthesised() {
@@ -156,7 +156,7 @@ fn a_type_valued_alias_can_be_used_as_a_type() {
 
 /// §8 item 4(c): the parenthesis escape hatch `no_eq`'s doc comment promised.
 /// Until this round `a = (b = c)` was a parse error, which made the `CHAIN`
-/// diagnostic's own advice false (`docs/let-and-blocks-design.md` §1.1(3)).
+/// diagnostic's own advice false (`docs/language/let-and-blocks-design.md` §1.1(3)).
 #[test]
 fn a_parenthesis_is_a_real_escape_hatch() {
     ok("fn f(b: Nat, c: Nat) -> Type<1> { let x: Type<1> = (b = c) = (b = c); x }");
@@ -558,7 +558,7 @@ fn a_shared_let_chain_stays_shared_under_binders() {
 /// block under a binder of its own, so the body was shifted once per proof
 /// and the chain reached the gate at `k` depths
 /// (`issues/discarded-let-values-nest-binders.md`). Every discarded value
-/// now stays at the block's depth (`docs/let-and-blocks-design.md` §11), so
+/// now stays at the block's depth (`docs/language/let-and-blocks-design.md` §11), so
 /// `dep` is linear in gate queries and in elaboration's substitution work.
 #[test]
 fn a_shared_let_chain_is_checked_once_per_link() {

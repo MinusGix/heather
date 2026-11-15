@@ -12,7 +12,7 @@ Model the kernel's reduction in Heather and prove, against the model, the
 facts the kernel's accelerations rely on, so that an optimisation that today
 is argued in a comment and checked by the differential suites (and, for the
 caches, by the nightly sentinel) can be promoted to proven. Design and
-ladder: `docs/kernel-model-design.md`.
+ladder: `docs/kernel/kernel-model-design.md`.
 
 ## Acceptance (closes once the Lean recheck of both modules has run)
 
@@ -58,11 +58,11 @@ ladder: `docs/kernel-model-design.md`.
   cancels the common prefix under `q` successors per pair. Open: the Lean
   recheck of the new module, and (design §7.4) programs and binary
   powering against unary iteration, and the `WfIh`/`WIh` synchronous heads.
-- 2026-10-25: From `docs/definitional-inversion-survey.md` §3: injectivity
+- 2026-10-25: From `docs/surveys/definitional-inversion-survey.md` §3: injectivity
   of formers and subject reduction are provable without normalisation
   (arXiv:2607.13662), so they are not behind the Gödel limit. If the
   inversions are all that heather-coq's `AlgSound.v` takes from the
   relation, rung 4's strategy changes can be proved sound against the
   declarative rules inside Heather. Owned by
   `definitional-inversion-domain-model`.
-- 2026-11-05: gardener: cites a file it shares with [[bitvec-width-generic-decision]] (`docs/kernel-model-design.md`); [[definitional-inversion-domain-model]] (`docs/definitional-inversion-survey.md`); [[generator-ctors-open-types]] (`lib/kernel_model/kernel_reduction.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[bitvec-width-generic-decision]] (`docs/kernel/kernel-model-design.md`); [[definitional-inversion-domain-model]] (`docs/surveys/definitional-inversion-survey.md`); [[generator-ctors-open-types]] (`lib/kernel_model/kernel_reduction.hthr`).

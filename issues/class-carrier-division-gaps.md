@@ -25,7 +25,7 @@ searched through the sign predicates `PositiveBy`, `NegativeBy`, `NonNegBy`
 
 ## Log
 
-- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §2): the numerals bullet is the largest single cost in the generic analysis files (`K.unit` 353, `.multiplicative.unit` 656, `K.inv(` 489 in lib/std); it moves to [[class-carrier-arithmetic-surface]] together with prefix/infix `-` and linarith reading `e / 2` at a class carrier (refused today, proved at `Rat`). This issue keeps the written-sign-goal and trace-spelling bullets.
+- 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §2): the numerals bullet is the largest single cost in the generic analysis files (`K.unit` 353, `.multiplicative.unit` 656, `K.inv(` 489 in lib/std); it moves to [[class-carrier-arithmetic-surface]] together with prefix/infix `-` and linarith reading `e / 2` at a class carrier (refused today, proved at `Rat`). This issue keeps the written-sign-goal and trace-spelling bullets.
 - 2026-11-08: The numerals bullet is done ([[class-carrier-arithmetic-surface]]):
   `a / 2` at `K` is `Ring::nat_cast<K>(2)`, signed by
   `OrderedRing::positive_nat_cast`. Removed from the list above.

@@ -1,5 +1,5 @@
 // grind over codata observations: a side's head normal form, read once the
-// graph as written proves nothing (docs/grind-design.md §14.4). A module of
+// graph as written proves nothing (docs/tactics/grind-design.md §14.4). A module of
 // its own so that `grind_tests` does not pull in itree/coitree's closure.
 // (It moved here when that scope made every grind call seconds slower; that
 // cost is gone, issues/grind-scope-size-cost.md.)
@@ -13,5 +13,5 @@ theorem reduct_spin<R>(E: Events, r: R, e: CoTree::obs(E, CoTree::spin<R>(E)) = 
 
 // A reduct's field is its spelling, not the local it came from
 // (issues/grind-reduct-fields.md); spelling the local's side meets it
-// (docs/grind-design.md §15.1).
+// (docs/tactics/grind-design.md §15.1).
 theorem reduct_field_spelled<R>(E: Events, t, u: CoTree<R>(E), e: CoTree::obs(E, CTau(t)) = OTau(u)): u = t { by grind() }

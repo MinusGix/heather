@@ -197,7 +197,7 @@ theorem consumer_transport(n: Nat, x, y: BitVec(n)):
     @BitVec::sign_bit(n, @BitVec::ripple_add(n, x, y)) = @BitVec::sign_bit(n, @bitvec::BitVec::add(n, x, y))
 { j(BitVec::ripple_add_eq_add(n, x, y), λ z q => @BitVec::sign_bit(n, @BitVec::ripple_add(n, x, y)) = @BitVec::sign_bit(n, z), refl) }
 
-// `ripple_add` is `add` by definition (docs/bitvec-width-bounded-defaults-design.md).
+// `ripple_add` is `add` by definition (docs/library/bitvec-width-bounded-defaults-design.md).
 theorem ripple_is_add_by_definition(n: Nat, x, y: BitVec(n)):
     @BitVec::ripple_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { refl }
 
@@ -206,7 +206,7 @@ theorem five_is_not_six(): ¬(@BitVec::toNat(3, @BitVec::from_bits(3, [True, Fal
 theorem one_plus_one_does_not_carry(h: @BitVec::carry_add(4, @BitVec::ofNat(4, 1), @BitVec::ofNat(4, 1))): False { h }
 
 // `ofNat` at closed arguments is born one word in the kernel
-// (docs/bitvector-literal-entry-design.md §10.10): at a literal and at a
+// (docs/kernel/bitvector-literal-entry-design.md §10.10): at a literal and at a
 // computed state, a full asymmetric 64-bit value, a width past one word and a
 // numeral past `u64`, each against independently written bits — and the
 // distinctness the word must keep.

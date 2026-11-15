@@ -7,7 +7,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-Slice 1 of [[dependent-match-compiler]] (docs/dependent-match-compiler-design.md §4).
+Slice 1 of [[dependent-match-compiler]] (docs/language/matching/dependent-match-compiler-design.md §4).
 
 Every arm of every `match`/`split`/`if` has `scrutinee = pattern` in scope: named `h` under `match h:`, otherwise anonymous (a reserved `__` name, unspellable in source, listed by `omega`/`linarith`/`split_all`/`rewrite`/`absurd` and goal display). It starts as a **pending** hypothesis: in the arm's `Cx`, not in Γ. The first resolution unwinds to its match (a `MatchEquationWanted` signal carrying the match's identity), which rolls back and re-elaborates as the convoy (`matching::plan_convoy`). A match nobody reads elaborates to today's term.
 

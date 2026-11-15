@@ -1,4 +1,4 @@
-// Probes of loops over `i64` in `runtime fn` (docs/runtime-fn-setups-design.md
+// Probes of loops over `i64` in `runtime fn` (docs/native/runtime-fn-setups-design.md
 // §16.13, round 4; issues/runtime-repr-loops.md). Apart from
 // `runtime_sint_tests` so each module stays inside the library gate's
 // per-module CPU rail. Tests, not library: nothing imports this module.

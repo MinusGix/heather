@@ -1,5 +1,5 @@
 // Probes of the `Numeral` request
-// (docs/host-elaboration-interface-design.md): the numeral a closed `Nat`
+// (docs/metaprogramming/host-elaboration-interface-design.md): the numeral a closed `Nat`
 // term computes to, asked of the host by a tactic or a generator. It is
 // what lets a generator use a library function's answer as a number (a
 // layout's size, a field's offset), where `Whnf` walks the term and is

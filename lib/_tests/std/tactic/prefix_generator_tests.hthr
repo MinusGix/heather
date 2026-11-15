@@ -1,4 +1,4 @@
-// Probes of declaration-prefix generators (docs/value-definitions-design.md
+// Probes of declaration-prefix generators (docs/metaprogramming/value-definitions-design.md
 // §3): a prefixed `fn` or `theorem` is published as written and then read by
 // its generator; a prefixed `def` is handed to its generator, which
 // declares it. The refusals: an unknown prefix, a prefix that is not a

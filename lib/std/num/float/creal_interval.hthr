@@ -1,7 +1,7 @@
 // Interval enclosures of Cauchy reals, and comparisons of reals decided by
 // evaluating them (issues/interval-creal-enclosures.md,
 // issues/interval-creal-reciprocal.md;
-// docs/floating-point-design.md §16, "Enclosures of reals").
+// docs/library/floating-point-design.md §16, "Enclosures of reals").
 //
 // `I.HasReal(x)` is `Interval::Has` read at `CReal` through the embedding:
 // `lo <= x <= hi` with the bounds as constant reals. The operations keep
@@ -53,7 +53,7 @@ import omega;
 
 // Its images of an operation, `CReal::ofRat((a + c).rat())`, are read by
 // `mono` through both edges (`Dyadic::rat_hom`, `CReal::ofRat_hom`;
-// docs/casting-design.md §6.4), so no law here names them.
+// docs/language/casting-design.md §6.4), so no law here names them.
 
 theorem Dyadic::real_le({a, b: Dyadic}, h: a <= b): CReal::ofRat(a.rat()) <= CReal::ofRat(b.rat()) { CReal::ofRat_le(p := a.rat(), q := b.rat(), h := h) }
 

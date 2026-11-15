@@ -1,4 +1,4 @@
-//! The registration seam (docs/meta-def-registration-design.md §8): what a
+//! The registration seam (docs/metaprogramming/meta-def-registration-design.md §8): what a
 //! `meta fn` has to declare before the elaborator will route a use site
 //! through it, and what happens when it declares it badly.
 //!
@@ -351,7 +351,7 @@ fn a_permuted_template_still_computes() {
 // loud use-site failures. Both turn out to be **unreachable from the surface**
 // once registration checks the signature, and that is a finding rather than an
 // omission — the same status as the uncovered-former diagnostic in
-// docs/types-as-expressions.md §2.
+// docs/language/types-as-expressions.md §2.
 //
 // - *Short Π spine*: the payload is checked against the declared code type,
 //   and that type is checked against the slot's, so a registered template's
@@ -366,7 +366,7 @@ fn a_permuted_template_still_computes() {
 // them is tested above.
 //
 // A third status, recorded by the surface indexing round
-// (docs/surface-fin-indexing-design.md §7 item 15) and resolved by the port
+// (docs/language/surface-fin-indexing-design.md §7 item 15) and resolved by the port
 // round: `vec.tabulate` and `vec.nth` have live use sites — `elab_container_ih`
 // and `xs[i]` — and, since `lib/lang/vec_code.hthr` grew their templates, the
 // once-unreachable "a `for vec.nth` template whose payload disagrees" path is

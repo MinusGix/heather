@@ -1,5 +1,5 @@
 //! Acceptance for issues/termination-measures.md
-//! (docs/termination-measures-design.md): `decreases e`, recursion justified
+//! (docs/language/recursion/termination-measures-design.md): `decreases e`, recursion justified
 //! by a `Nat` measure. The lowering is strong induction on a bound for the
 //! measure, spelled at the surface and checked like any other term, so the
 //! analysis is untrusted and the negative controls are the substance: a call
@@ -10,7 +10,7 @@
 //! (`omega`) and the by-hand discharge (`on ?decN`), a lemma-fed decrease
 //! (the parser shape), and a `theorem` recursing by measure. A measure at a
 //! **constructor pattern** has a file of its own,
-//! `omega_measure_reduction.rs` (docs/omega-measure-reduction-design.md).
+//! `omega_measure_reduction.rs` (docs/tactics/omega-measure-reduction-design.md).
 
 use std::sync::OnceLock;
 
@@ -90,7 +90,7 @@ fn any_err(src: &str) -> String {
 /// Euclid. The obligation `nat::Nat::mod(a, Succ(k)) < Succ(k)` is stated at the
 /// *pattern* — the `match b` was convoyed — so `mod_lt` proves it directly.
 /// The `on` stays: nothing here is at a constructor *measure*
-/// (docs/omega-measure-reduction-design.md §6).
+/// (docs/tactics/omega-measure-reduction-design.md §6).
 const GCD: &str = r#"
 fn gcd(a, b: Nat) -> Nat decreases b {
     match b {
@@ -113,7 +113,7 @@ fn gcd_by_hand_obligation_computes_and_steps() {
 /// Two calls, two obligations, both at a **two-argument** measure, and each
 /// site has a constructor in one argument and a variable in the other. Both
 /// `on`s and the `succ_add_le` lemma they needed came out with
-/// docs/omega-measure-reduction-design.md §6: reduced, the obligations are
+/// docs/tactics/omega-measure-reduction-design.md §6: reduced, the obligations are
 /// `a + b < Succ(a) + Succ(b)` over the atoms `xt.len()` and `yt.len()`.
 const MERGE: &str = r#"
 fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
@@ -161,7 +161,7 @@ fn a_callee_postcondition_feeds_the_decrease() {
     // that callee's lemma. `drop_eq(t, rest).len() <= rest.len()` is exactly
     // the obligation after `Succ`/`Succ` reduction. The `on` stays: the
     // measure head is opaque under any reduction
-    // (docs/omega-measure-reduction-design.md §6).
+    // (docs/tactics/omega-measure-reduction-design.md §6).
     ok(r#"
         fn drop_eq(t: Nat, ts: List<Nat>) -> List<Nat> {
             match ts {

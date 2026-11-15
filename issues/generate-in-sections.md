@@ -8,7 +8,7 @@ updated: 2026-11-01
 ---
 
 `generate g(args);` is refused inside a `section` and under `assuming`
-(crates/syntax/src/parser.rs; docs/host-elaboration-interface-design.md
+(crates/syntax/src/parser.rs; docs/metaprogramming/host-elaboration-interface-design.md
 §19): a generator runs at the module's empty context, and nothing yet says
 how its declarations would inherit the head's binders (a section's carrier
 and class dictionaries, an `assuming` telescope). Generic lemma groups are

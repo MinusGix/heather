@@ -18,7 +18,7 @@ the full suite to find out.
 ## What this issue owns
 
 - The convention: cloud timings are the reference, how they are taken, and
-  how the four harnesses relate (`docs/cloud-benchmarks.md`).
+  how the four harnesses relate (`docs/infrastructure/cloud-benchmarks.md`).
 - The probe suite: `scripts/bench-probes`, `perf/bench/cases.tsv`, its
   fixtures, and `perf/bench/results.tsv`.
 - The ranked target list, `perf/bench/targets.md`. Each target names the

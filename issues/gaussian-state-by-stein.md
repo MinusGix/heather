@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` (§10, §13): characterise the centred
+`docs/library/analysis-foundations-design.md` (§10, §13): characterise the centred
 Gaussian state by Stein's identity, which is Gaussian integration by parts,
 instead of by its moments.
 

@@ -9,7 +9,7 @@ updated: 2026-11-08
 ---
 
 Nothing states which calls an effectful function may make, so a spec or a
-pass cannot use "`f` only writes stdout" (`docs/effects-locality-design.md`
+pass cannot use "`f` only writes stdout" (`docs/language/effects-locality-design.md`
 §3 N1, §5.3). The note's appendix probe reads such a fact off the meaning
 by `refl` for one function at a neutral world; this issue makes it a
 predicate with lemmas and a producer.
@@ -25,7 +25,7 @@ predicate with lemmas and a producer.
   where the descriptor operand is a literal, the descriptor) whose `True`
   gives `Io::Only` of the meaning, so a compiled function's footprint costs
   one evaluation (`docs/compilation-vision.md` §2.3, producer 1).
-- Published as a fact beside `Compile(f)` (`docs/facts-on-demand-design.md`),
+- Published as a fact beside `Compile(f)` (`docs/native/facts-on-demand-design.md`),
   with one consumer: a probe that reorders two calls with disjoint
   footprints, or a spec that uses it.
 

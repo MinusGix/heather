@@ -33,7 +33,7 @@ removed.
   exposed a matching gap in `rewrite` that a fresh elaboration hits too.
   `Semiring::mul_range_l`'s left side `c * ∑ k < n, f(k)` is headed by the
   caller's operator *variable* `*`, and §6.2 of
-  docs/equation-rewrite-design.md matched a local-variable head by `==`
+  docs/tactics/equation-rewrite-design.md matched a local-variable head by `==`
   only (keyed conversion was for global heads). The sum's monoid inside it is
   an upcast of the `Semiring` dictionary, which #462 mints once per context
   prefix as an `#open` global. Fresh, the test's theorems share

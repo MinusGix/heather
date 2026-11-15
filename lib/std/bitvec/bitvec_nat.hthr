@@ -164,7 +164,7 @@ theorem BitVec::neg_eq_ofNat(n: Nat, a: BitVec(n)): a.neg() = BitVec::ofNat(Nat:
                 trans(Nat::cong(λ (y: Nat) => y + Nat::pow(2, n), BitVec::zero_toNat(n)), Nat::pow(2, n).add_left_zero()))))))
 }
 
-// The values, modulo `2^n` (P6 of docs/native-mathematics-survey.md).
+// The values, modulo `2^n` (P6 of docs/surveys/native-mathematics-survey.md).
 theorem BitVec::toNat_add_mod(n: Nat, a, b: BitVec(n)): a.add(b).toNat() = (a.toNat() + b.toNat()).mod(Nat::pow(2, n)) {
     trans(@cong(λ (w: BitVec(n)) => w.toNat(), a.add(b), BitVec::ofNat(a.toNat() + b.toNat()), BitVec::add_eq_ofNat(n, a, b)),
         BitVec::toNat_ofNat_mod(n, a.toNat() + b.toNat()))

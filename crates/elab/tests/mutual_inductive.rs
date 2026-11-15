@@ -1,4 +1,4 @@
-//! Acceptance for mutual inductive families (`docs/mutual-inductive-design.md`):
+//! Acceptance for mutual inductive families (`docs/inductives/mutual-inductive-design.md`):
 //! a group of `inductive` declarations lowered to one `IWf` family indexed by
 //! its members, a `match` per member, and a group of `fn`s or `theorem`s
 //! recursing over it as one structural recursion.
@@ -243,7 +243,7 @@ fn a_nested_occurrence_of_a_member_is_refused() {
 #[test]
 fn a_member_in_a_function_fields_domain_is_refused() {
     // A member as the codomain is a function child
-    // (docs/iwf-infinitary-design.md §12, `iwf_infinitary.rs`); in the domain
+    // (docs/kernel/iwf-infinitary-design.md §12, `iwf_infinitary.rs`); in the domain
     // it is not strictly positive.
     let m = elab_err(
         "inductive T { L, N(f: F) }

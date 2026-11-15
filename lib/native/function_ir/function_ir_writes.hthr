@@ -1,5 +1,5 @@
 // FunctionIR's meaning with the file threaded, as a relation
-// (docs/native-one-compiler-design.md §2.6).
+// (docs/native/native-one-compiler-design.md §2.6).
 //
 // The relation the function compiler is proved against
 // (`StructuredRegionHoldsOver`, function_ir) reads a file that never
@@ -731,7 +731,7 @@ theorem program_stores_within_lendless(functions: List<Function>, marks: List<Bo
 // needs lent to write: those it stores into (a written view's buffer among
 // them) and those the functions it calls need. At a call over views the
 // callee's needs are met by the views, each lent to write where the callee
-// needs it so (docs/native-library-exports-design.md §3.1).
+// needs it so (docs/native/native-library-exports-design.md §3.1).
 
 // The views as marks: which are lent to write.
 fn views_marks(views: List<View>) → List<Bool> {

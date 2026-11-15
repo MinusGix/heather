@@ -10,11 +10,11 @@ updated: 2026-09-18
 The calculator showcase parses a `List<PTok>` that someone else produced.
 Nothing in the pipeline starts from text, so `String` — which landed as a
 specification type in [[string-char-spec-types]] — has no consumer, and the
-parser library's deliberate "no string lexer" non-goal (`docs/parser-library.md`)
+parser library's deliberate "no string lexer" non-goal (`docs/library/parser-library.md`)
 has never been tested against an actual character grammar.
 
 Two decisions, taken in discussion 2026-09-18, recorded in
-`docs/sequence-parser-source-design.md`:
+`docs/library/sequence-parser-source-design.md`:
 
 1. **The calculator becomes scannerless**: a `Char` grammar, not a lexer
    feeding the token grammar. A `Number` derivation carries its *digits*, so
@@ -83,7 +83,7 @@ scannerless calculator demonstrates.
 
 ## Log
 
-- 2026-09-18: Rounds 1–3 landed; the design record is `docs/sequence-parser-source-design.md`.
+- 2026-09-18: Rounds 1–3 landed; the design record is `docs/library/sequence-parser-source-design.md`.
 
   - `lib/std/text/char.hthr`: `is_digit`, `is_space`, `code_is`, `digit_val`,
     `digit_of`, and the facts around them — `selected_of_match` (the inversion at
@@ -156,7 +156,7 @@ scannerless calculator demonstrates.
   And one tooling finding that bears on iterating here at all:
   [[check-only-no-stored-image]] — `check --cache --only <item>` refuses on every
   module tried, immediately after the `--cache` run its own message asks for,
-  against a feature `docs/check-only-design.md` records working on these exact
+  against a feature `docs/infrastructure/check-only-design.md` records working on these exact
   targets. Measured consequence: a **theorem-only** edit to this showcase costs
   95 s to recheck unloaded, and a grammar-level edit costs 96 s — the edit's size
   does not matter because the floor is re-elaborating the module. Restoring

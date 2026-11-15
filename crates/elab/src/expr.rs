@@ -127,7 +127,7 @@ pub(crate) struct TypeFormerShape {
 }
 
 /// The one emission chokepoint, for the annotation slots this module fills in
-/// (`docs/annotation-component-respell-design.md` §2.5). Its own trait rather
+/// (`docs/elaborator/annotation-component-respell-design.md` §2.5). Its own trait rather
 /// than a method on the two that need it: a `Refl`'s element type and a
 /// `Lam`'s domain are reached through different services, and one method on
 /// one supertrait is what keeps them one spelling.
@@ -301,7 +301,7 @@ impl<'a> ExprElab<'a> {
             ))),
             TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Code { .. } => Some(err(
                 "`Ctx`/`TyCode`/`Code` are meta-layer types: they belong in a \
-                 `meta fn` signature (docs/in-language-map-design.md §3)",
+                 `meta fn` signature (docs/metaprogramming/in-language-map-design.md §3)",
                 ty.span,
             )),
             // Primitive indexed formation: the element recurses through the
@@ -432,7 +432,7 @@ impl<'a> ExprElab<'a> {
                 format!(
                     "`${name}` cannot splice a type: type codes are layer p and cannot \
                      appear inside layer-c code — bind the type inside the quote instead \
-                     (`fun (A: Type<0>) => …`, docs/in-language-map-design.md §3)"
+                     (`fun (A: Type<0>) => …`, docs/metaprogramming/in-language-map-design.md §3)"
                 ),
                 ty.span,
             )),
@@ -555,8 +555,8 @@ impl<'a> ExprElab<'a> {
             );
         }
         // Quote the spelling the emission chokepoint would emit, not the raw
-        // inline lowering (`docs/complete-post-attribution-design.md` §5, and
-        // `docs/record-projection-reference-design.md` §9.8 for the landed
+        // inline lowering (`docs/elaborator/complete-post-attribution-design.md` §5, and
+        // `docs/elaborator/record-projection-reference-design.md` §9.8 for the landed
         // precedent at `register_ty_code_fn`). The type is lowered against
         // `cx` itself, so the respell sits at depth 0.
         let emitted = elab.emit_ty(cx, elaborated, 0);
@@ -565,7 +565,7 @@ impl<'a> ExprElab<'a> {
             Some(code) => Ok(code),
             None => err(
                 "this type has no code, so it cannot be written where a term is \
-                 expected (docs/surface-universe.md §7)",
+                 expected (docs/language/surface-universe.md §7)",
                 span,
             ),
         }
@@ -1178,7 +1178,7 @@ impl<'a> ExprElab<'a> {
             return Ok(Term::VecItems { level, elem, items: checked.into(), from: 0 });
         }
         // The longest tail that packs is written as one `VecLit`, and only
-        // what precedes it as pairs (docs/bitvector-literal-entry-design.md
+        // what precedes it as pairs (docs/kernel/bitvector-literal-entry-design.md
         // §3: the literal is the chain it spells, so the split is invisible).
         let packed = self.packed_vec_tail(cx, &level, &elem, &checked);
         let (mut acc, spelled) = match packed {

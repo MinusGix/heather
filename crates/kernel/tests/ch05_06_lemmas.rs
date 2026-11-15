@@ -10,7 +10,7 @@
 //! exactly like its other half.* This file is the systematic follow-up.
 //!
 //! The full audit — all 53 lemmas of ch. 05/06, each with its paper location,
-//! its kernel counterpart, and a verdict — is `docs/ch05-06-lemma-audit.md`.
+//! its kernel counterpart, and a verdict — is `docs/kernel/ch05-06-lemma-audit.md`.
 //! Every test below cites the lemma it checks by paper file and line.
 //!
 //! Conventions inherited from the rest of the suite: generated witnesses come
@@ -528,7 +528,7 @@ fn the_generator_oracle_holds_across_seed_streams() {
     }
     // Coverage, not correctness — and the reason it is an assertion rather
     // than a comment: a generator that stops producing the checked spellings
-    // (docs/intro-by-type-design.md) makes every property test in this crate
+    // (docs/elaborator/intro-by-type-design.md) makes every property test in this crate
     // silently vacuous on them, which is exactly how a form gets added and
     // never exercised. `intro_at_nodes` is bumped by the typing rules, so
     // this counts the `@` forms the *checker* met, not the ones the generator

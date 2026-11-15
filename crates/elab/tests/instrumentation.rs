@@ -1,4 +1,4 @@
-//! The instrumentation layer's own tests (`docs/instrumentation-design.md`).
+//! The instrumentation layer's own tests (`docs/infrastructure/instrumentation-design.md`).
 //!
 //! Each one pins a property the layer is only useful if it has: the counters
 //! move, the timers attribute to the phase that spent the time, nesting does
@@ -321,7 +321,7 @@ fn a_timings_dir_leaves_a_table_per_test_thread() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // This file may be its own binary or a module of a family binary
-    // (docs/elab-test-families-design.md); libtest names the tests, and the
+    // (docs/infrastructure/elab-test-families-design.md); libtest names the tests, and the
     // tables are named after the binary, accordingly.
     let (binary, module) = module_path!().split_once("::").unwrap_or((module_path!(), ""));
     let test = |name: &str| if module.is_empty() { name.to_owned() } else { format!("{module}::{name}") };

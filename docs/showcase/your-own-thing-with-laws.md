@@ -5,10 +5,10 @@ class/record ideas with proposed relational notation and proof generation.
 The snippets have not been checked and are not a syntax commitment.
 
 A [checked manual counterpart](mergeable.hthr) now implements the core example.
-See [what implementing it corrected](../manual-mergeable-round.md) for the exact
+See [what implementing it corrected](manual-mergeable-round.md) for the exact
 source-level differences; the illustrative syntax below remains a design sketch.
 
-The [three small experiences](../three-small-transfer-experiences.md) use
+The [three small experiences](three-small-transfer-experiences.md) use
 interfaces someone else defined. Here we write one ourselves.
 
 Suppose your program collects summaries from several sources. A summary might

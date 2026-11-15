@@ -1,5 +1,5 @@
 // Finite sums and products over a monoid modulo its relation
-// (issues/finite-sums-and-products.md; docs/analysis-foundations-design.md §4).
+// (issues/finite-sums-and-products.md; docs/library/analysis-foundations-design.md §4).
 //
 // One fold, the range sum `MonoidRel::range(op, n, f)` = `f(0) ∙ … ∙ f(n-1)`,
 // by recursion on `n` and built at the end, as `Series::sum` is. It is a sum
@@ -194,7 +194,7 @@ theorem MonoidRel::at_other(i, k: Nat, x: A, ne: i ≠ k): MonoidRel::at(op, i, 
 }
 
 // The sum respects its terms pointwise: the evidence a relation `rewrite`
-// crosses the binder of `∑`/`∏` by (docs/equation-rewrite-design.md §10).
+// crosses the binder of `∑`/`∏` by (docs/tactics/equation-rewrite-design.md §10).
 // Outside the section, every parameter in braces: an evidence rule is applied
 // by search, which fills each one from the goal, the dictionary among them.
 // `range_cong`'s bound `k < n` goes unused, as the rewrite has no use for it.

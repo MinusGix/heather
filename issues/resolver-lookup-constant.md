@@ -45,5 +45,5 @@ than fixed).
 
 ## Log
 
-- 2026-11-02: Related, filed 2026-11-02: [[layered-registry-lookups]]. Every registry miss scans one sealed layer per module (names, types, provenance, gendefs); names.rs is 3.5–4.7% of cold samples (docs/data-oriented-survey.md §6). Interning the keys, as this issue proposes, would make that scan cheaper but would not remove it.
-- 2026-11-05: gardener: cites a file it shares with [[bounds-metadata-taxes-one-shot-checking]] (`docs/data-oriented-survey.md`); [[kernel-arena-terms-frozen-prefix]] (`docs/data-oriented-survey.md`).
+- 2026-11-02: Related, filed 2026-11-02: [[layered-registry-lookups]]. Every registry miss scans one sealed layer per module (names, types, provenance, gendefs); names.rs is 3.5–4.7% of cold samples (docs/surveys/data-oriented-survey.md §6). Interning the keys, as this issue proposes, would make that scan cheaper but would not remove it.
+- 2026-11-05: gardener: cites a file it shares with [[bounds-metadata-taxes-one-shot-checking]] (`docs/surveys/data-oriented-survey.md`); [[kernel-arena-terms-frozen-prefix]] (`docs/surveys/data-oriented-survey.md`).

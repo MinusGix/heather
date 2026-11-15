@@ -16,7 +16,7 @@ word goals (probe P1), `ofNat(a) + ofNat(c) = ofNat(a + c)` at an open width
 has no lemma (P3), and `omega` cannot link `toNat(a + b)` to `(toNat a +
 toNat b) mod 2^n` (P6). About 240 `Nat::pow(2, …)` side conditions in native,
 arch and os are `fits` premises threaded to the no-overflow lemmas.
-`docs/native-mathematics-survey.md` §2; survey rank 2.
+`docs/surveys/native-mathematics-survey.md` §2; survey rank 2.
 
 ## Scope
 

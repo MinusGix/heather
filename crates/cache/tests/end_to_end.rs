@@ -1,7 +1,7 @@
 //! The cache against the real elaborator: stability, the interface split, hits
 //! and misses, and the negative controls.
 //!
-//! `docs/cache-v1-design.md` is the design; this file is where its claims are
+//! `docs/infrastructure/cache-v1-design.md` is the design; this file is where its claims are
 //! either true of the shipped code or not. The four groups map onto the four
 //! things a rung-1 cache has to get right:
 //!
@@ -74,7 +74,7 @@ fn run(src: &str) -> Arc<Cache> {
 fn run_with(cache: Arc<Cache>, src: &str) -> Arc<Cache> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     // The prelude is elaborated *inside* `with_prelude`, before any gate can
-    // be installed, so it is always kernel-checked (docs/cache-v1-design.md
+    // be installed, so it is always kernel-checked (docs/infrastructure/cache-v1-design.md
     // §4). Zero the phase counter here so that `stats::kernel_ns()` afterwards
     // means "gate time spent on `src`".
     heather_elab::stats::reset_kernel_ns();
@@ -549,7 +549,7 @@ fn a_single_kernel_file_is_read_as_one_section() {
 /// The negative control: a corrupted cache is rejected rather than half-read.
 ///
 /// **What this does and does not prove.** At rung 1 the trusted base is "the
-/// OS gave us a file nobody tampered with" (`docs/cache-v1-design.md` §6). The
+/// OS gave us a file nobody tampered with" (`docs/infrastructure/cache-v1-design.md` §6). The
 /// checksum catches *accident* — truncation, a bit flip, a half-written file —
 /// and the shape checks catch a mangled line. Neither catches **forgery**:
 /// anyone who can write the file can compute the key of a declaration with a

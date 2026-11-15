@@ -1,5 +1,5 @@
 // Decimal and hex literals rounded into a format
-// (docs/floating-point-design.md §15).
+// (docs/library/floating-point-design.md §15).
 //
 // A literal is `mant · base^exp`: base 10 for a decimal spelling, base 2 for
 // a hex float. `Format::round_scaled` rounds it in a window of the format a

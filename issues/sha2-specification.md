@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-10
 ---
 
-Stage C0 of `docs/native-lexer-crypto-roadmap.md` §4: SHA-2 as a pure
+Stage C0 of `docs/native/native-lexer-crypto-roadmap.md` §4: SHA-2 as a pure
 Heather function, the specification every later stage is proved against.
 
 ## Scope

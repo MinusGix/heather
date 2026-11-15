@@ -231,7 +231,7 @@ fn report(result: Result<(), String>) -> ExitCode {
 
 /// A closed bitvector in a generated certificate: its bits written out,
 /// least significant first, which the elaborator packs into one kernel
-/// vector literal (`Term::VecLit`, docs/bitvector-literal-entry-design.md
+/// vector literal (`Term::VecLit`, docs/kernel/bitvector-literal-entry-design.md
 /// §3) — a word the kernel reads in one step, where `BitVec::ofNat(width, n)`
 /// is a fold it runs a bit at a time.
 fn word_literal(width: u32, n: u64) -> String {
@@ -345,7 +345,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let sources = loader::load_providing(source, &search, &bundled).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
-    // The deferred kernel gate (`docs/parallel-kernel-gate-design.md`). Set
+    // The deferred kernel gate (`docs/kernel/parallel-kernel-gate-design.md`). Set
     // after the prelude, which is milliseconds and is checked serially; every
     // module from here on joins before it is accepted, and the certificate —
     // thousands of independent generated theorems — is the point.
@@ -372,7 +372,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         // Not with a worker pool, though: the collector is an `Rc` this
         // elaborator owns and the profiled checker entry points want, so
         // having one pins the kernel gate to this thread
-        // (`docs/parallel-kernel-gate-design.md` §4). Asking for both used to
+        // (`docs/kernel/parallel-kernel-gate-design.md` §4). Asking for both used to
         // mean silently getting neither — the serial gate, wearing the
         // parallel flag — so the flag wins and the four value-machine columns
         // go empty, out loud.
@@ -394,7 +394,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         .map(|_| heather_elab::stats::scope(heather_elab::stats::ScopeKind::Run, "", ""));
     // `--cache-dir` names both halves of the cache `heather check --cache`
     // keeps under one directory: the semantic image store the session reads,
-    // and the declaration-verdict store (docs/cache-v1-design.md §6) that
+    // and the declaration-verdict store (docs/infrastructure/cache-v1-design.md §6) that
     // vouches for a replayed image's stored definitions. Until 2026-09-17
     // only the first half was wired here, so every build re-kernel-checked
     // all of the bundled proof library's bindings before it looked at the
@@ -406,7 +406,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // generator and the elaborator still run on every build — only the
     // kernel's re-check of a term it already accepted is skipped, and the
     // key is the elaborated term with its dependencies' interfaces
-    // (docs/cache-v1-design.md §5), so any change to what the generator or
+    // (docs/infrastructure/cache-v1-design.md §5), so any change to what the generator or
     // elaborator emits is a new key and a real check, and a changed kernel
     // discards the store.
     let verdicts = cache.as_ref().map(|dir| {
@@ -471,7 +471,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     }
     // A function runs only when it is marked: `runtime fn f` publishes its
     // program and the program's agreement (from its `Compile` instance and
-    // its callees', docs/runtime-fn-setups-design.md §16.9), loops
+    // its callees', docs/native/runtime-fn-setups-design.md §16.9), loops
     // included (§16.11). The Rust reflector stays only for what the default
     // setup does not compile yet, tests through `Bool` helpers; anything
     // else unmarked is refused, naming the marker.
@@ -479,7 +479,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let mut shape = if published("runs_over") {
         // A function that stores into its span publishes its run at every
         // file: the word it answers and the span as it leaves it
-        // (docs/native-library-exports-design.md §7).
+        // (docs/native/native-library-exports-design.md §7).
         verified::runtime_shape(&elab, &prefix, &root_name, &source_name, verified::Spans::Written)?
     } else if published("compile") {
         // One that reads spans publishes its agreement at every file.
@@ -489,13 +489,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         let program = verified::reflect(&elab, &source_name)?;
         if !program.functions.iter().any(|function| function.helped) {
             return Err(format!("`{function}` is not a runtime fn: mark it `runtime fn {function}`, and the functions it calls, with `import runtime;` \
-                (docs/runtime-fn-setups-design.md §16.9)"));
+                (docs/native/runtime-fn-setups-design.md §16.9)"));
         }
         verified::Shape::reflected(&prefix, &program)
     };
     // The program's other functions to export: one program, emitted once,
     // with a label and a `_returns` for each
-    // (docs/native-library-exports-design.md §6.3).
+    // (docs/native/native-library-exports-design.md §6.3).
     if !entries.is_empty() {
         if shape.marks.is_none() && !published("names") {
             return Err(format!("`{function}` publishes no program of named functions: an entry is another function of a `runtime fn`'s program"));

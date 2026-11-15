@@ -44,4 +44,4 @@ logical execution mode or a privileged bypass of the compiler contract.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: Closed as superseded by `docs/runtime-fn-setups-design.md` §9. The decided policy carries over unchanged: explicit opt-in, no automatic fallback, the marker a library generator (`runtime fn f`, a declaration-prefix generator, [[declaration-prefix-generators]]). The open acceptance items (unmarked rejection, `examples/x86-native/mix.hthr` opting in, stale certificates on edit) move to [[runtime-fn-default-setup]].
+- 2026-10-31: 2026-10-31: Closed as superseded by `docs/native/runtime-fn-setups-design.md` §9. The decided policy carries over unchanged: explicit opt-in, no automatic fallback, the marker a library generator (`runtime fn f`, a declaration-prefix generator, [[declaration-prefix-generators]]). The open acceptance items (unmarked rejection, `examples/x86-native/mix.hthr` opting in, stale certificates on edit) move to [[runtime-fn-default-setup]].

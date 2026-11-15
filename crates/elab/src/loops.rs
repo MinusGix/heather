@@ -1,4 +1,4 @@
-//! `for x in xs { body }` in pure code (docs/sequencing-surface-design.md
+//! `for x in xs { body }` in pure code (docs/language/sequencing-surface-design.md
 //! §5.2): the loop's body becomes a **named step** over a fold.
 //!
 //! The parser has already threaded the `let mut` locals the body assigns

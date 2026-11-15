@@ -1,5 +1,5 @@
 //! The surface universe: `Type<n>` in type and term position
-//! (`docs/surface-universe.md` §11). Tracking issue: `issues/surface-universe.md`.
+//! (`docs/language/surface-universe.md` §11). Tracking issue: `issues/surface-universe.md`.
 //!
 //! Nothing here touches the kernel — `Type::Ty(l)` at level `l + 1` and its
 //! code `TmTy(l)` have both been there since v0 (`typing.rs:457-460,756-759`).
@@ -61,8 +61,8 @@ fn a_universe_inhabits_the_next_universe_up() {
 // -- 4-5: the Expr/Ty bridge ----------------------------------------------
 
 // §11.3. A type written where a term is expected, then used: `id_at(Nat, 3)`
-// computes. This is the coercion `docs/surface-polymorphism.md` §5 retired,
-// restored with a customer (docs/surface-universe.md §4).
+// computes. This is the coercion `docs/language/surface-polymorphism.md` §5 retired,
+// restored with a customer (docs/language/surface-universe.md §4).
 #[test]
 fn a_type_argument_passes_and_computes() {
     ok("fn id_at(A: Type, x: A) -> A { x }\nfn three() -> Nat { id_at(Nat, 3) }");
@@ -123,7 +123,7 @@ fn an_at_call_with_a_positional_type_argument_is_still_rejected() {
 
 // -- 8-10: the bundled record ---------------------------------------------
 
-/// The case `docs/surface-records.md` §3 named as waiting on this round: a
+/// The case `docs/language/surface-records.md` §3 named as waiting on this round: a
 /// record whose *first field is a type* and whose later fields are at it. It
 /// is what makes the record land above level 0 for the first time, so the Σ
 /// spine's join stops being vacuous.
@@ -210,7 +210,7 @@ fn a_level_mismatch_is_rejected() {
     );
 }
 
-// A level variable is `UPi`, layer m (docs/surface-universe.md §7). Rejected
+// A level variable is `UPi`, layer m (docs/language/surface-universe.md §7). Rejected
 // at the *parser*, so the message can say why rather than reporting an
 // unbound name.
 #[test]
@@ -251,7 +251,7 @@ fn a_non_type_expression_at_a_universe_is_rejected() {
 // -- the quoted component's spelling --------------------------------------
 //
 // A type written where a term is expected is quoted here (`quote_type_at`),
-// and since `docs/complete-post-attribution-design.md` §5 the quote carries
+// and since `docs/elaborator/complete-post-attribution-design.md` §5 the quote carries
 // the **emitted** spelling — registered sub-lowerings as `#tycode`
 // references — rather than the raw inline lowering. These four vary the axes
 // `docs/testing-generated-terms.md` asks for on that one call: a neutral and
@@ -315,7 +315,7 @@ fn a_false_second_conjunct_is_refused() {
     assert!(!e.is_empty());
 }
 
-// The pin, in the shape `docs/closed-argument-and-parameter-domain-spelling-design.md`
+// The pin, in the shape `docs/elaborator/closed-argument-and-parameter-domain-spelling-design.md`
 // §7 item 7 pins its own quote pair: what the quote *carries*. The component
 // here is an equation whose element type is a registered declaration, so the
 // two spellings are visibly different — the reference the emission chokepoint

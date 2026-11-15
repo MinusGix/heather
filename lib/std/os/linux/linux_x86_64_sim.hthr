@@ -1,4 +1,4 @@
-// The machine meets a tree: `Sim` (docs/native-program-logic-design.md §5;
+// The machine meets a tree: `Sim` (docs/native/native-program-logic-design.md §5;
 // issues/native-linux-spec.md).
 //
 // A trace of a tree over Linux's calls is a claim about the machine: from

@@ -10,7 +10,7 @@ updated: 2026-11-08
 A dot call on a receiver whose type is a type variable finds nothing:
 `c.say(m)` with `c: C` and a constraint `d: Log<C> := infer` in scope is
 "unbound name `say`", although `Log::say<C>(mut self c: C, …)` is declared
-(probe in the appendix of `docs/effects-locality-design.md`, run on
+(probe in the appendix of `docs/language/effects-locality-design.md`, run on
 `a6d30ca`). Member lookup goes by the head of the receiver's type, and a
 variable has no head. So interface-generic effectful code writes
 `c := Log::say(c, m).after` and loses the `mut self` threading that makes
@@ -36,4 +36,4 @@ the `Io` surface read as imperative code.
 
 ## Log
 
-- 2026-11-08: Built: `Elaborator::constrained_member` (dispatch/member.rs) reads owners off the class dictionaries in scope when the receiver's type has no nominal owner; design in docs/receiver-member-resolution-design.md §8; probes lib/_tests/lang/constrained_receiver_tests.hthr.
+- 2026-11-08: Built: `Elaborator::constrained_member` (dispatch/member.rs) reads owners off the class dictionaries in scope when the receiver's type has no nominal owner; design in docs/language/classes/receiver-member-resolution-design.md §8; probes lib/_tests/lang/constrained_receiver_tests.hthr.

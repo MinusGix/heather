@@ -1,4 +1,4 @@
-// The first in-language derived artifact (docs/in-language-map-design.md,
+// The first in-language derived artifact (docs/metaprogramming/in-language-map-design.md,
 // issues/in-language-map.md): the vector `map` template, written at layer m
 // as a `meta fn` and evaluated by the elaborator wherever `.map` elaborates
 // with this file in scope. The Rust `vec::map` schema (crates/elab/src/vec.rs)
@@ -11,7 +11,7 @@
 // function, the length, and the vector, as ordinary applications.
 //
 // The `for vec.map` clause is the registration seam
-// (docs/meta-def-registration-design.md): it, and not this declaration's name,
+// (docs/metaprogramming/meta-def-registration-design.md): it, and not this declaration's name,
 // is what routes `.map` here, and claiming the slot means *having its type* —
 // checked by conversion when the declaration registers. Every payload binder
 // is named because the names are the argument protocol: the use site hands
@@ -69,7 +69,7 @@ meta fn fold_code(g: Ctx) for vec.fold → Code(g |-
 // The third artifact (issues/quotation-stage-artifacts.md), and the first that
 // needed a new *surface* layer to be writable at all: `tabulate` turns an index
 // function into data, so its payload is spelled with `Fin` and its indices
-// (docs/surface-fin-indexing-design.md §9). This is where the Rust
+// (docs/language/surface-fin-indexing-design.md §9). This is where the Rust
 // hand-shifting concentrated — `vec::tabulate` has to shift `B` by `d + 1` in
 // the index function and by `d` in the domain, a distinction "invisible at a
 // closed `B`" and guarded there by its own regression test
@@ -117,9 +117,9 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate → Code(g |-
 // The body is the design doc's §9 payload verbatim. Its `FS(j)` binder was
 // unwritable when this landed — `j` was a reserved atom keyword
 // ([[j-binder-parse-trap]]) — and was spelled `jx` here and in the tests until
-// docs/let-and-blocks-design.md §5.2's rule 1 bought the name back.
+// docs/language/let-and-blocks-design.md §5.2's rule 1 bought the name back.
 //
-// `Fin` has no eliminator of its own (docs/surface-fin-indexing-design.md
+// `Fin` has no eliminator of its own (docs/language/surface-fin-indexing-design.md
 // §1.2), so the shape is forced from the outside in: recurse on the *length*,
 // and the index becomes matchable inside each arm — `Fin(0)` is `Empty`, so the
 // zero arm is the zero-arm `match i { }` (which is `elim_Empty`, and is the

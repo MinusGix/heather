@@ -34,7 +34,7 @@ places that matter most: a `fn … → Type` whose body is `A ∧ (B ∧ …)` i
 read by position only, while a `record` gets fields. Options:
 
 - A destructuring `let`: `let ⟨rbx, ⟨r12, kept⟩⟩ = regs;`. Patterns already
-  accept `⟨…⟩` (`docs/logic-connectives-design.md` §4.1), but only in
+  accept `⟨…⟩` (`docs/library/logic-connectives-design.md` §4.1), but only in
   `match`, so today this is a `match` with one arm and a motive.
 - Flat patterns for right nesting: `⟨a, b, c⟩` against `A ∧ (B ∧ C)`
   (today `⟨a, ⟨b, c⟩⟩`), which is most of what makes the chains long.
@@ -58,4 +58,4 @@ helps with both: it names each fact once, at the point it is taken apart.
 ## Log
 
 - 2026-10-21: The code cited above (crates/elab/tests/fixtures/open_read_close.hthr, examples/x86-native/wc.hthr) was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0); the language ask stands on its own.
-- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §7): probed 2026-11-08, `let ⟨n, a, b⟩ = h;` is still a parse error (`expected let binding name, found LAngle`), while `match h { ⟨n, ⟨a, b⟩⟩ => … }` works. Math libraries: 59 chains of three or more `.left`/`.right`, 60 nested `Exists(…) => match` arms (36 in creal.hthr), 904 `.witness`/`.proof` reads.
+- 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §7): probed 2026-11-08, `let ⟨n, a, b⟩ = h;` is still a parse error (`expected let binding name, found LAngle`), while `match h { ⟨n, ⟨a, b⟩⟩ => … }` works. Math libraries: 59 chains of three or more `.left`/`.right`, 60 nested `Exists(…) => match` arms (36 in creal.hthr), 904 `.witness`/`.proof` reads.

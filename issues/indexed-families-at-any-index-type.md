@@ -11,7 +11,7 @@ An inductive family can be indexed only by `Nat` or by a previously declared,
 unparameterized, unindexed inductive (`index_type` in
 `crates/elab/src/inductive.rs`). That restriction is route 1's and fording's:
 both build the family by recursion on the index type. The `IWf` route does
-not need it; its design note says so (docs/iwf-former-design.md §8.2: "`I`
+not need it; its design note says so (docs/kernel/iwf-former-design.md §8.2: "`I`
 may be any type … parameterized index types are fine. Only inversion (§8.3)
 needs structure on `I`"). The elaborator still applies route 1's check before
 choosing a route.
@@ -38,7 +38,7 @@ Three refusals stand in the way, each a check that predates the `IWf` route:
    (§8.3's tiers 1 and 2).
 2. **Value parameters beside an index.** "`Cover` has both value parameters
    and an index: the two do not combine this round"
-   (docs/surface-value-parameters.md §6). Wanted: value parameters substituted
+   (docs/language/surface-value-parameters.md §6). Wanted: value parameters substituted
    into the payload, the children's family and the index type, as on an
    unindexed declaration.
 3. **Bare-variable results.** When every constructor's result index is a bare

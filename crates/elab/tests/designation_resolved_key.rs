@@ -1,6 +1,6 @@
 //! The designation table's key is a **resolved carrier**, never a spelling
 //! (`issues/designation-key-collides-across-modules.md`, applying
-//! `docs/instance-resolved-key-design.md` §3's rule one table over).
+//! `docs/elaborator/instance-resolved-key-design.md` §3's rule one table over).
 //!
 //! `designation ++ at Box := join` used to key `("++", "Box")`, so two modules
 //! each declaring a `Box` and each designating `++` at their own were one

@@ -10,7 +10,7 @@ updated: 2026-11-09
 
 A constraint binder that names a symbol (`section<K: OrderedField(≈, <, <=,
 +, *)>`) installs it as rung 1 of the operator ladder, which "fires without
-looking at any type" (docs/operators-onto-classes-design.md §4). Inside that
+looking at any type" (docs/language/classes/operators-onto-classes-design.md §4). Inside that
 section, `+`, `<=` and numerals mean `K`'s even when the operands are at
 another carrier:
 
@@ -62,12 +62,12 @@ the surface; this issue only asks that the Rat side not be restated).
   and an operand at a carrier with no designation for the symbol is refused
   naming that carrier, not "the expected type".
 
-Related: [[operation-indexed-classes]]; docs/stdlib-math-awkwardness-survey.md §6.
+Related: [[operation-indexed-classes]]; docs/surveys/stdlib-math-awkwardness-survey.md §6.
 
 ## Log
 
 - 2026-11-09: Rung 1 is carrier-aware (`binder_declines_operands`,
-  crates/elab/src/dispatch/operator.rs; docs/operators-onto-classes-design.md
+  crates/elab/src/dispatch/operator.rs; docs/language/classes/operators-onto-classes-design.md
   §4, amended): a binder's symbol declines operands at a nominal carrier its
   operation's first domain is not at, so rung 2 reads that carrier's
   designation; an operand at `K`, one that does not infer, or numerals alone

@@ -9,7 +9,7 @@ updated: 2026-10-21
 ---
 
 Three small items left from the first `rewrite` round
-(`docs/equation-rewrite-design.md`):
+(`docs/tactics/equation-rewrite-design.md`):
 
 1. **Closing by `refl`.** Lean's `rw` tries `rfl` after rewriting. Here the
    body is mandatory (`rewrite(p, refl)`), because with two arguments the last

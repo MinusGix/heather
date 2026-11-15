@@ -1,5 +1,5 @@
 // Probes of `rt`'s computations over a span they write (`FTm`,
-// lib/native/runtime/rt_file.hthr; docs/native-one-compiler-design.md §2.6,
+// lib/native/runtime/rt_file.hthr; docs/native/native-one-compiler-design.md §2.6,
 // U4 step 4c-1). The reflections are written by hand here (the reflector is
 // step 4c-3): each is lowered by evaluation, the pin closes by conversion at
 // any span, the once-proof `FFun::lower_sound` is instantiated over any

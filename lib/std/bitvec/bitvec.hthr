@@ -7,7 +7,7 @@
 // Arithmetic interpretation is explicit. `toNat` is unsigned and `toInt` is
 // two's-complement signed. `add`, `sub`, and `neg` are ripple-carry: their
 // reduction cost is the width, not the operands' magnitude
-// (`docs/bitvec-width-bounded-defaults-design.md`); the iterated spellings
+// (`docs/library/bitvec-width-bounded-defaults-design.md`); the iterated spellings
 // remain as `iter_add`/`iter_sub`/`iter_neg` for `toNat`-counted reasoning.
 // Construction and arithmetic reduce modulo `2^n`; bitwise operations,
 // slicing, and extension agree pointwise with those interpretations. Shift
@@ -24,7 +24,7 @@ import algebra;
 record BitVec(n: Nat) { bits: [Bool; n] }
 
 // `u8`, `u27`, `u64`: a word of that many bits. A width family
-// (docs/fixed-width-integers-design.md §2): `u64` in type position is
+// (docs/library/fixed-width-integers-design.md §2): `u64` in type position is
 // `u(64)`, expanded on the spot, so a `u64` *is* a `BitVec(64)` — every
 // lemma, designation and lowering here applies to it unchanged. Unsigned is
 // this type's own reading (`<` is `unsigned_lt`, a numeral is `ofNat`), so
@@ -203,7 +203,7 @@ fn BitVec::toNat({n: Nat}, self x: BitVec(n)) → Nat {
 // (`crates/kernel/DESIGN.md`, the acceleration policy). So each of the `n`
 // steps costs one iteration whatever the magnitude — measured flat from `0`
 // to `2^60` and five times cheaper than reading the bits from the top,
-// `docs/bitvector-literal-entry-design.md` §4.3. The dependence is real: if
+// `docs/kernel/bitvector-literal-entry-design.md` §4.3. The dependence is real: if
 // that classification is ever narrowed this definition reverts to costing the
 // magnitude, which is what the top-down spelling was written for in the first
 // place.
@@ -212,7 +212,7 @@ fn BitVec::toNat({n: Nat}, self x: BitVec(n)) → Nat {
 // as `cons(f(x), ih(g(x)))` with `f` and `g` classified folds, and produces
 // the whole word by arithmetic on their windows, flat in the width's steps
 // as well as the magnitude (`crates/kernel/DESIGN.md`, native bitvector
-// values; `docs/bitvector-literal-entry-design.md` §10.10). That depends on
+// values; `docs/kernel/bitvector-literal-entry-design.md` §10.10). That depends on
 // the same two classifications, and on `odd_bit` and `half` being folds of
 // `x` alone; a spelling whose bit read the width would fold bit by bit.
 //
@@ -327,7 +327,7 @@ fn BitVec::iter_neg({n: Nat}, self a: BitVec(n)) → BitVec(n) {
 
 // ---------------------------------------------------------------------------
 // Ripple-carry addition and subtraction, and the canonical operations
-// (docs/bitvec-width-bounded-defaults-design.md). The ripples run the carry
+// (docs/library/bitvec-width-bounded-defaults-design.md). The ripples run the carry
 // and borrow `carry_bits` and `borrow_bits` already use and keep each column's
 // sum bit, so the work is one column per bit of width whatever the operands
 // are. `add`, `sub`, and `neg` *are* those ripples; the iterated forms above
@@ -848,7 +848,7 @@ fn BitVec::eq_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
 // (issues/int-arithmetic-over-nat-primitives.md), so no bridge to
 // `signed_lt_bit` is needed for cost. Keyed at the specification's own head,
 // the instance is the one resolution tries first
-// (docs/reflection-through-decide-instances-design.md §3), so the derived
+// (docs/tactics/reflection-through-decide-instances-design.md §3), so the derived
 // `Nat::Le` decision — which also fits, by unfolding `unsigned_lt` — is never
 // built for these goals.
 //

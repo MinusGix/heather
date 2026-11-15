@@ -10,7 +10,7 @@ blocked-by: [eutt-iteration-and-io-reading, codata-up-to-friends-round-2]
 ---
 
 Tactics for proofs up to taus, once there are targets to prove
-(`docs/effects-capabilities-design.md` §4, decided by Minus 2026-11-03;
+(`docs/language/effects-capabilities-design.md` §4, decided by Minus 2026-11-03;
 Minus: "if there's an annoying part, it can be automated away"). Coq's
 answers are paco and the ITrees `euttG` tactics (`ecofix`, `ebind`,
 `estep`), and Pous's companion for composable up-to techniques.

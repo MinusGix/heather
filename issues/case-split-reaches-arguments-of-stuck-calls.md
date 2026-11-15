@@ -9,7 +9,7 @@ updated: 2026-11-11
 ---
 
 `match h: test` in a proof specialises the positions its goal is *stuck*
-on (`docs/goal-motive-synthesis-design.md` §4.5). A call whose value is
+on (`docs/elaborator/goal-motive-synthesis-design.md` §4.5). A call whose value is
 only an argument of another stuck term is not such a position:
 
 ```

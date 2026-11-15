@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §7.1: Taylor models (a polynomial in a
+`docs/library/analysis-foundations-design.md` §7.1: Taylor models (a polynomial in a
 variable on an interval domain plus an interval remainder) as the uniform
 reading of a certified expansion, and as the next step for the interval
 checker after `Interval` (the order-0 Taylor model).

@@ -8,7 +8,7 @@ created: 2026-11-02
 updated: 2026-11-08
 ---
 
-`docs/interface-definitions-design.md` §8. Outside its module an interface
+`docs/language/interface-definitions-design.md` §8. Outside its module an interface
 definition's body is withheld from the elaborator and from the gate except
 at closed calls, and each gluing is recorded (`heather_kernel::withheld::record`).
 So a client declaration that never glued `f` observed only `f`'s type and
@@ -33,5 +33,5 @@ The §8 probe replays the consumer after the `Zero`-arm edit, and a closed
 ## Log
 
 - 2026-11-02: Filed from the interface-definitions build.
-- 2026-11-05: gardener: cites a file it shares with [[interface-definitions]] (`docs/interface-definitions-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[interface-definitions]] (`docs/language/interface-definitions-design.md`).
 - 2026-11-08: 2026-11-08: the gluing record this issue will read has no drop guard yet; [[kernel-observation-recording-guard]] should land first or with it.

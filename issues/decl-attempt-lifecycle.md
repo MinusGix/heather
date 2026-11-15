@@ -11,7 +11,7 @@ Give the declaration attempt an explicit lifecycle: a scoped API for the attempt
 
 ## Problem
 
-An ordinary declaration's scratch state moves Idle → restartable → elaborating (possibly restarting) → frozen (`on` clauses) → finished, carried by `GoalArena`'s `restart_enabled`, `frozen`, `base`, `written_base`, `requested_base`, `promoted_seen` and by call order (`crates/elab/src/attempt.rs`, `goals.rs` ~84, `lib.rs` `elab_decl_one` ~3739). Survey: `docs/implicit-state-machines-survey.md` §4.
+An ordinary declaration's scratch state moves Idle → restartable → elaborating (possibly restarting) → frozen (`on` clauses) → finished, carried by `GoalArena`'s `restart_enabled`, `frozen`, `base`, `written_base`, `requested_base`, `promoted_seen` and by call order (`crates/elab/src/attempt.rs`, `goals.rs` ~84, `lib.rs` `elab_decl_one` ~3739). Survey: `docs/elaborator/implicit-state-machines-survey.md` §4.
 
 - `DeclAttempt::prepare` and `finish` enumerate the fields to clear, and the lists differ on purpose (`op_fallback_uses` is read after `finish`, `direct_dependencies` before it). A new field must be placed by reading callers.
 - The attempt protocol (`prepare; configure; refresh_delta_psi; …; finish; refresh_delta_psi`) is copied at `check_measure_is_nat`, `group_universe` (`mutual_rec.rs` ~567) and the two measure queries (`measure_context.rs` ~20, ~62).
@@ -32,4 +32,4 @@ An ordinary declaration's scratch state moves Idle → restartable → elaborati
 
 ## Related
 
-Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[goal-slot-state-enum]], [[kernel-checker-mode-enum]].
+Filed together from the implicit-state-machines survey (`docs/elaborator/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[goal-slot-state-enum]], [[kernel-checker-mode-enum]].

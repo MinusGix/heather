@@ -22,7 +22,7 @@ Build on [[proof-position-relational-congruence]]: provide an explicit reverse-s
 ## Log
 
 - 2026-10-21: the `=` case landed with a spelling this issue should agree
-  with or replace (`docs/equation-rewrite-design.md` §1, §3): direction is
+  with or replace (`docs/tactics/equation-rewrite-design.md` §1, §3): direction is
   the written proof, reversed only by an explicit `sym(h)`; occurrences are
   `at := k` / `at := [k, …]`, counted from 1 left to right through the goal
   as written, refused past the last with the count, and refused with several

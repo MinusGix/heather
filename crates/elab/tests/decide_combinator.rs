@@ -1,5 +1,5 @@
 //! The `decide` goal combinator (issues/reflection-through-decide-instances.md,
-//! docs/reflection-through-decide-instances-design.md §4): a closed decided
+//! docs/tactics/reflection-through-decide-instances-design.md §4): a closed decided
 //! goal is proved by `bool::decide_yes(refl)`, with resolution picking the
 //! `Decide` instance and the kernel running its decision. Every generated
 //! term here is checked by the kernel, so the four axes of

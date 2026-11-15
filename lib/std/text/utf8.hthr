@@ -3,7 +3,7 @@
 // a certified refinement of it (`issues/datarepr-separation.md`), so nothing
 // here is the definition of a string: `encode` is a function out of `String`,
 // `decode` is its inverse on the image, and `Utf8` is the byte list that
-// carries a validity witness (docs/string-char-design.md §5).
+// carries a validity witness (docs/library/string-char-design.md §5).
 //
 // The decoder is strict, Rust's `from_utf8` exactly: overlong forms, lone
 // surrogates, values above `0x10FFFF`, stray continuation bytes and truncated
@@ -338,7 +338,7 @@ fn push_char(step: Option<Pair<Char, List<BitVec(8)>>>, tail: Option<String>) �
 // consumes `k` bytes recurses on the tail `k` constructors down, which the
 // course-of-values window admits on any chain-shaped inductive
 // ([[list-course-of-values-recursion]],
-// `docs/list-course-of-values-design.md`). The decoder therefore has no fuel
+// `docs/language/recursion/list-course-of-values-design.md`). The decoder therefore has no fuel
 // parameter and no `decode_at`: the API is the one the specification wants,
 // and the proofs below get the bare recursive call as their induction
 // hypothesis with no arithmetic in between.
@@ -379,7 +379,7 @@ fn decode(bytes: List<BitVec(8)>) → Option<String> {
 // The loop's `Cons` arm at a NAMED class: `decode`'s dispatch spelled again
 // as a declaration that takes the class as a parameter. `decode` cannot call
 // it — the arms recurse, and a pair of declarations would be mutually
-// recursive with all that `docs/mutual-recursion-design.md` asks of one — so
+// recursive with all that `docs/language/recursion/mutual-recursion-design.md` asks of one — so
 // it is stated after `decode` and calls the finished `decode` where the loop
 // called itself. What it is for is a motive: a proof with `decode(Cons(b, rest))`
 // in its hypothesis cases on `class_of(b)` through it.

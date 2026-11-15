@@ -1,4 +1,4 @@
-//! `bv_omega`, word arithmetic lifted to Nat (docs/bv-omega-design.md), and
+//! `bv_omega`, word arithmetic lifted to Nat (docs/tactics/bv-omega-design.md), and
 //! the speller fix it rests on (issues/omega-respells-atoms-without-implicits.md).
 //! The axes of docs/testing-generated-terms.md: literal and open values, an
 //! open width, positions other than a declaration's body, nesting depth, and
@@ -386,7 +386,7 @@ fn lifts_a_deep_word() {
 }
 
 /// Each `bv_omega` proof is checked as a lemma of its own
-/// (`docs/bv-omega-design.md` §7). The sites here are the ones the lifting has
+/// (`docs/tactics/bv-omega-design.md` §7). The sites here are the ones the lifting has
 /// to get right: one site met in several contexts (only the first lifts), a
 /// later proof that reaches an earlier one through a `let`, a lifted proof
 /// beside a written hole, and a branch of a `match` on an equation.
@@ -461,7 +461,7 @@ fn refuses_naming_the_side_condition() {
     assert!(message.contains("found no `toNat` of a word"), "{message}");
 }
 
-/// `omega` names its atom list by a transparent slot (docs/bv-omega-design.md
+/// `omega` names its atom list by a transparent slot (docs/tactics/bv-omega-design.md
 /// §6.1): an empty list, more `omega` calls than the declaration reserved
 /// (one written call, copied into every branch, restarts it), two calls that
 /// share a list, a list inside `bv_omega`'s proof, and a refusal.
@@ -479,7 +479,7 @@ fn names_atom_lists() {
     assert!(message.contains("no contradiction"), "{message}");
 }
 
-/// Calls that need no `omega` (docs/bv-omega-design.md §2–§3): a goal that
+/// Calls that need no `omega` (docs/tactics/bv-omega-design.md §2–§3): a goal that
 /// is a word's fact, as a value or a truncated difference, either way round,
 /// at a literal and an open width; a leaf a fact defines, either way round,
 /// and a cycle of definitions; a bound a fact states, strict and not; a
@@ -578,7 +578,7 @@ fn reconstructs_bounded_combinations() {
         "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t < 1000 { omega }");
 }
 
-/// `split_all` over words (docs/goal-combinators.md): a word local is never
+/// `split_all` over words (docs/tactics/goal-combinators.md): a word local is never
 /// split into its bits, and a comparison is found through the helpers that
 /// spell it, or through a match on another one, with its Nat fact at each
 /// leaf.

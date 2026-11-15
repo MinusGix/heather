@@ -1,4 +1,4 @@
-//! `↑e` and `cast<B>(e)` (docs/casting-design.md §5.2, §14).
+//! `↑e` and `cast<B>(e)` (docs/language/casting-design.md §5.2, §14).
 //!
 //! A cast edge is an instance `Cast<A, B>(map)` of `morphism::Cast`, keyed at
 //! its source `A` and indexed by its map, so the registry holds every edge in
@@ -127,7 +127,7 @@ impl Casts<'_> {
         if self.traits.class(&Self::cast_class_key()).is_none() {
             return err(
                 "`↑` reads the cast edges, which `morphism` declares: `import morphism;` here \
-                 (docs/casting-design.md §14)",
+                 (docs/language/casting-design.md §14)",
                 span,
             );
         }
@@ -188,7 +188,7 @@ impl Casts<'_> {
     }
 
     /// The help a type mismatch carries when the found type embeds in the
-    /// expected one (docs/casting-design.md §5.4): the path, and the fix.
+    /// expected one (docs/language/casting-design.md §5.4): the path, and the fix.
     /// Empty where there is no path, or no edges in scope.
     pub(crate) fn cast_help(&self, cx: &Cx, got: &Type, expected: &Type, span: Span) -> String {
         if self.traits.class(&Self::cast_class_key()).is_none() {

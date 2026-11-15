@@ -15,7 +15,7 @@ say that some valuation satisfies a region's equations. A tree has to
 source's `denote` needs a function: `StructuredRegion::eval(callees, region,
 env) → env`, and for a program, its functions evaluated last first as
 `program_callees` orders them. Found while writing
-`docs/native-effect-source-design.md` (§2.1); it is needed whatever shape
+`docs/native/native-effect-source-design.md` (§2.1); it is needed whatever shape
 the source takes.
 
 ## Scope

@@ -16,7 +16,7 @@ fn use_it(n: Nat) → Nat { down(n) }
 // error: this has type `CoTree<Nat>(none)`, but `Nat` is expected here
 ```
 
-docs/partial-functions-design.md §4.2 promised a named refusal: "`f` is
+docs/language/partial-functions-design.md §4.2 promised a named refusal: "`f` is
 partial: bind it with `<-`, or use `CoTree::get` with a termination proof".
 The mismatch is found late (a kernel-located refusal recorded at a checking
 site, `RecordedSite::Check` in crates/elab/src/lib.rs), so the restatement
@@ -46,5 +46,5 @@ the same module and from an imported one.
   mismatch in `partial_fn_tests.hthr`; the imported case (`Tm::whnf_co`, as a
   call and as a method) in `lib/_tests/kernel_model/kernel_whnf_tests.hthr`,
   which already imports it, rather than growing `partial_fn_tests`' closure
-  by the kernel model. docs/partial-functions-design.md §9 item 11.
+  by the kernel model. docs/language/partial-functions-design.md §9 item 11.
 - 2026-11-06: type-name-display-respelling closed without respelling `Partial` in general display (the named refusal above spells it itself): Partial takes a type and is codata, filed as [[type-name-respelling-type-arguments]].

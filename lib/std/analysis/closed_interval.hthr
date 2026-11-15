@@ -1,7 +1,7 @@
 // Uniformly continuous functions on a closed interval: bounded, with a
 // located image and so (in an order-complete field) a supremum, and the
 // approximate intermediate value theorem (issues/located-sup-consumers.md;
-// docs/sequences-and-completeness.md §5).
+// docs/library/sequences-and-completeness.md §5).
 //
 // The interval is `I = λ x => Within(<=, a, x, b)` with `a <= b`, and `f` is
 // `UnifContOn(I, f)` (real_fn.hthr). Every proof here is one walk: from a

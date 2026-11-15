@@ -172,7 +172,7 @@ fn Checked(level: Nat, source: List<Char>, begin: Cursor<Char>(source)) -> Type 
 
 // What a production body is handed to close its recursion: a parser for
 // `level` at any cursor the measure has already shrunk past `begin`. Said once
-// as a `fn` returning a `Type` (`docs/types-as-expressions.md`) — the four
+// as a `fn` returning a `Type` (`docs/language/types-as-expressions.md`) — the four
 // bodies below differ only in the tier they recur at, and spelled the whole
 // three-line Π each time before.
 fn Recur(level: Nat, source: List<Char>, begin: Cursor<Char>(source)) -> Type {

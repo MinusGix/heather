@@ -1,4 +1,4 @@
-// Asking for a fact, and learning there is none (docs/facts-on-demand-design.md
+// Asking for a fact, and learning there is none (docs/native/facts-on-demand-design.md
 // §4; docs/compilation-vision.md §6.2).
 //
 // A compiler that wants a fact — this read is in bounds, this buffer is not

@@ -1,5 +1,5 @@
 //! `def` and declaration-prefix generators
-//! (docs/value-definitions-design.md). The library's probes
+//! (docs/metaprogramming/value-definitions-design.md). The library's probes
 //! (`lib/_tests/std/core/value_definition_tests.hthr`,
 //! `lib/_tests/std/tactic/prefix_generator_tests.hthr`,
 //! `lib/_tests/std/text/regex/regex_tests.hthr`) pin what Heather can state. These

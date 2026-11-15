@@ -1,7 +1,7 @@
 //! `:= infer` at a proposition goal: computation, then `evidence theorem`
 //! rules, with `lib/std/num/nat.hthr`'s positivity rules as the customer
 //! (`issues/infer-proposition-evidence.md`,
-//! `docs/positivity-evidence-design.md` §6 A): the refusals and their
+//! `docs/library/positivity-evidence-design.md` §6 A): the refusals and their
 //! diagnostics. What resolves is `lib/_tests/std/num/nat_evidence_tests.hthr`,
 //! which the whole-library gate checks (`crates/cli/tests/library.rs`;
 //! docs/test-value-audit.md §3.4).

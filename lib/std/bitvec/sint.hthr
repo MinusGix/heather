@@ -1,5 +1,5 @@
 // Signed fixed-width integers: `i8`, `i27`, `i64`
-// (docs/fixed-width-integers-design.md §3).
+// (docs/library/fixed-width-integers-design.md §3).
 //
 // An `SInt(n)` is a word read in two's complement. It is a type of its own,
 // not a name for `BitVec(n)`, because the operators mean different things on
@@ -208,9 +208,9 @@ theorem SInt::rem_nonpos(k: Nat, a, d: SInt(Succ(k)), negative: a.toInt() < OfNa
 }
 
 // ---------------------------------------------------------------------------
-// Machine representations (docs/datarepr-design.md, value-parameter specs):
+// Machine representations (docs/native/datarepr-design.md, value-parameter specs):
 // a signed integer of a fixed width is held by its bits, `abs` reading them
-// as signed. `runtime fn` (docs/runtime-fn-setups-design.md §16.13) finds
+// as signed. `runtime fn` (docs/native/runtime-fn-setups-design.md §16.13) finds
 // these through the registry and passes an `i64` in the 64-bit word a `u64`
 // takes, its operations read through their definitions on the word.
 datarepr I8 for SInt(8) { R := BitVec(8), abs := BitVec::as_signed, mk SInt := λ b => b }

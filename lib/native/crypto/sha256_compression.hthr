@@ -1,5 +1,5 @@
 // SHA-256's compression as functions of its context (FIPS 180-4 §6.2.2,
-// issues/sha256-context-type.md, docs/layout-design.md §9.5 item 4): the
+// issues/sha256-context-type.md, docs/native/layout-design.md §9.5 item 4): the
 // schedule, the working variables, the sixty-four rounds and the new hash
 // value, each a `mut self` method of `Sha256` (`sha256_context.hthr`)
 // that reads and stores the context's words by name and index. Nothing

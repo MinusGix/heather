@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-The last item of `float-reals` (docs/floating-point-design.md §5.1, §6),
+The last item of `float-reals` (docs/library/floating-point-design.md §5.1, §6),
 split from [[float-reals-next]] when its other three items landed.
 
 Every statement in `lib/std/num/float/float_real.hthr` is at `CReal`, and
@@ -37,7 +37,7 @@ two share their theorems, plus:
 
 ## Log
 
-- 2026-10-31: Done (docs/floating-point-design.md §18).
+- 2026-10-31: Done (docs/library/floating-point-design.md §18).
   - **One relation over `K`.** `Rat::Around(hom, x, P)` (P at every
     rational of an interval around `x`) and `Format::RoundsIn` in
     round_real.hthr, in a section over `K: OrderedField` and

@@ -33,4 +33,4 @@ Related: [[field-defaults-under-locals]].
 
 ## Log
 
-- 2026-10-12: 2026-10-12: Parameter defaults (docs/named-arguments-design.md §9.6) fill an omitted parameter the same way, so a `?hole` beside a call whose omitted default splits presumably meets the same pre-count; not reproduced.
+- 2026-10-12: 2026-10-12: Parameter defaults (docs/language/named-arguments-design.md §9.6) fill an omitted parameter the same way, so a `?hole` beside a call whose omitted default splits presumably meets the same pre-count; not reproduced.

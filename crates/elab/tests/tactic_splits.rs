@@ -1,4 +1,4 @@
-//! Round 3 of `docs/host-elaboration-interface-design.md`: the split requests
+//! Round 3 of `docs/metaprogramming/host-elaboration-interface-design.md`: the split requests
 //! `Cases`, `Constructor` and `Close` that `tactic_split_all.rs`'s `split_all`
 //! is written on, used directly. A checking position (an annotated `let`), a
 //! quoted scrutinee, and the refusals: a scrutinee no `match` splits, a

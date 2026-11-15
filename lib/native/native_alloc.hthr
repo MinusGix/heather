@@ -1,5 +1,5 @@
 // Register allocation for the effectful source's compiler
-// (docs/native-register-allocation-design.md; issues/native-register-allocation.md).
+// (docs/native/native-register-allocation-design.md; issues/native-register-allocation.md).
 //
 // Every word of the environment has a home between statements: its slot,
 // as the memory-resident compiler gave every word, or a register of the

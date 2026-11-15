@@ -1,5 +1,5 @@
 // `When<T, P>`: a `T` that is there exactly when `P` holds
-// (docs/when-design.md). It is a decision of `P` that carries a value on its
+// (docs/language/when-design.md). It is a decision of `P` that carries a value on its
 // yes side: `When<Unit, P>` is a decision of `P`, and nobody supplies a
 // decision procedure for `P` in general, since whoever built the value
 // decided this case. With the proof the value is taken (`w.val()`, the proof found by `known`, or `w.val(holds := h)`); without
@@ -10,7 +10,7 @@
 // as soon as its subject is a constructor, whatever the proofs inside are:
 // none of them compares two proofs. A `When` is meant to be transient (built,
 // then consumed by `match`, `val` or a chain); a specification belongs on the
-// proof-taking function a `When` is made from (docs/when-design.md §3, §7).
+// proof-taking function a `When` is made from (docs/language/when-design.md §3, §7).
 
 import logic; import bool; import option;
 
@@ -52,7 +52,7 @@ fn When::restate<T, P, Q>(self w: When<T, P>, to: Q → P, from: P → Q) → Wh
     }
 }
 
-// Chaining (docs/when-design.md §6): the continuation sees the value and its
+// Chaining (docs/language/when-design.md §6): the continuation sees the value and its
 // condition, and `back` is why an absent `w` makes the result absent, since a
 // `Q` that implies `P` is refuted by `¬P`.
 fn When::and_then<T, U, P, Q>(self w: When<T, P>, k: T → P → When<U, Q>, back: Q → P) → When<U, Q> {
@@ -66,7 +66,7 @@ fn When::and_then<T, U, P, Q>(self w: When<T, P>, k: T → P → When<U, Q>, bac
 // Test, then build: the tested form of a proof-taking function `f`.
 // `When::of(f)` is the term `if h: P { Present(f(h), h) } else { Absent(h) }`,
 // a match on the decision's bit, so compiled code is the compare a programmer
-// would write (docs/decidable-if-expression-design.md).
+// would write (docs/language/decidable-if-expression-design.md).
 fn When::of<P: Decide, T>(f: P → T) → When<T, P> {
     if h: P { Present(f(h), h) } else { Absent(h) }
 }
@@ -179,7 +179,7 @@ theorem When::option_none<T, P>(w: When<T, P>, fails: ¬P): w.option() = None {
 // The test agrees with the proof-taking function, where that function does
 // not look at its proof (`same`: `Vec::at` and checked arithmetic pass
 // `refl`). Without `same` the two sides take `f` at two proofs, and Heather
-// does not identify them in general (docs/when-design.md §7).
+// does not identify them in general (docs/language/when-design.md §7).
 theorem When::of_val<P: Decide, T>(f: P → T, same: (a, b: P) → f(a) = f(b), h: P): When::of<P, T>(f).val(holds := h) = f(h) {
     When::of_cases<P, T>(f, λ w => w.val(holds := h) = f(h),
         λ holds => same(holds, h),

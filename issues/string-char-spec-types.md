@@ -8,7 +8,7 @@ updated: 2026-09-18
 ---
 
 `Char` and `String` as specification types, with literals. Design record:
-`docs/string-char-design.md` (2026-09-18).
+`docs/library/string-char-design.md` (2026-09-18).
 
 Decisions: `Char` is a Unicode scalar value (below `0x110000`, no
 surrogates) as a record over `Nat` with a truncated `scalar` witness;
@@ -49,7 +49,7 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   value-generic `Decide<xs = ys>` bridge, and
   [[generic-congruence-inferred-type-arg-level-mismatch]], which forced
   `cong_tail<A>(p)` at one use site.
-- 2026-09-18: Round 2 chartered 2026-09-18: docs/string-char-design.md §5. Finding on the way: a truncated `Char.valid` cannot refute a decoder (squash eliminates only into squash), so the witness becomes Bool-reflected (`IsTrue(is_scalar(code))`), which also makes `Decide<scalar(code)>` a one-line match.
+- 2026-09-18: Round 2 chartered 2026-09-18: docs/library/string-char-design.md §5. Finding on the way: a truncated `Char.valid` cannot refute a decoder (squash eliminates only into squash), so the witness becomes Bool-reflected (`IsTrue(is_scalar(code))`), which also makes `Decide<scalar(code)>` a one-line match.
 - 2026-09-18: Round 2 landed, theorems 1–6. `lib/std/text/utf8.hthr` — `encode`/`decode`
   with Rust's strict `from_utf8` rejections, the `Utf8` record, `ofString` and
   `Utf8::toString`; `lib/std/text/char.hthr`'s witness is now `IsTrue(is_scalar(code))`
@@ -59,9 +59,9 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   did not have), `option::some_inj`. Theorem 7 (`encode_decode`) did **not**
   close: it needs to invert `decode_at` at an abstract lead byte, and the byte's
   class is computed inside the decoder's body rather than passed to it, so there
-  is no motive to case on — `docs/string-char-design.md` §5.5 records the way
+  is no motive to case on — `docs/library/string-char-design.md` §5.5 records the way
   through. Filed on the way: [[utf8-decode-conversion-blowup]], which forced
   `push_step` to be stated at `emit` rather than at `decode_char`.
 - 2026-09-18: Round 2 landed 2026-09-18: `lib/std/text/utf8.hthr` with theorems 1–6; the strictness theorem is [[utf8-encode-decode-strictness]]; the fuel-shaped decoder is [[list-course-of-values-recursion]]; conversion finding [[utf8-decode-conversion-blowup]].
-- 2026-09-18: Theorem 7 closed 2026-09-18 ([[utf8-encode-decode-strictness]]), and theorem 8 with it: `Utf8` and `String` are mutually inverse presentations. docs/string-char-design.md §5.6.
+- 2026-09-18: Theorem 7 closed 2026-09-18 ([[utf8-encode-decode-strictness]]), and theorem 8 with it: `Utf8` and `String` are mutually inverse presentations. docs/library/string-char-design.md §5.6.
 - 2026-11-05: gardener: cites a file it shares with [[wf-nested-match-motive-synthesis-kernel-refusal]] (`lib/std/text/utf8.hthr`).

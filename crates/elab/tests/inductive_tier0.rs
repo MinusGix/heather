@@ -1,5 +1,5 @@
 //! Acceptance for tier-0 inductives (issues/inductive-compiler.md), against
-//! the checklist of `docs/inductive-tier0-lowering.md` §9.
+//! the checklist of `docs/inductives/inductive-tier0-lowering.md` §9.
 //!
 //! The whole point of the tier: every declaration below is lowered to
 //! sums-of-Σs and then re-checked by the *real kernel*, so a wrong encoding
@@ -233,7 +233,7 @@ fn wrong_constructor_arity_is_rejected() {
 
 // §9.7 — a recursive declaration is *classified*, not silently lowered as if
 // it were tier 0. A direct, uniform occurrence is now tier 1 and lowers onto
-// the `Wf` former (docs/inductive-tier1-wf-lowering.md,
+// the `Wf` former (docs/inductives/inductive-tier1-wf-lowering.md,
 // crates/elab/tests/inductive_tier1.rs); everything else is still a rejection
 // with its own message, and this is where that boundary is pinned.
 #[test]

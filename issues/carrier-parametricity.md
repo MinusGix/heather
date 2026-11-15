@@ -8,7 +8,7 @@ created: 2026-11-08
 updated: 2026-11-08
 ---
 
-Minus (2026-11-08, on `docs/effects-locality-design.md` §5.6): a function
+Minus (2026-11-08, on `docs/language/effects-locality-design.md` §5.6): a function
 written against a small interface (`fn f<C>(c: C, d: Stdout<C> := infer)`)
 should come with a *proof* that it treats its carrier only through the
 interface, obtainable within the language. Today that holds only as a

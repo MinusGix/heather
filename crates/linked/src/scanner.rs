@@ -22,7 +22,7 @@
 //!
 //! A [`Token`] is a kind and a span. What the Rust lexer's tokens also hold
 //! (a numeral's value, a string with its escapes resolved) is a function of
-//! the span, computed apart (`docs/native-lexer-crypto-roadmap.md` §3), and
+//! the span, computed apart (`docs/native/native-lexer-crypto-roadmap.md` §3), and
 //! with it the three refusals that are about a value and not a shape: an
 //! exponent past a machine integer, a `\u{…}` that is not a scalar value,
 //! and an argument-slot index past a machine word. Every other refusal of

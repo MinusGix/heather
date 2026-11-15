@@ -256,7 +256,7 @@ fn cat_x8() → Source { cat_x(7) }
 fn cat_x16() → Source { cat_x(15) }
 fn cat_x60() → Source { cat_x(59) }
 
-// Procedures (docs/native-procedures-design.md §4): a non-tail recursive
+// Procedures (docs/native/native-procedures-design.md §4): a non-tail recursive
 // sum of 0..n, called from two sites. Words: 0 the argument, 1 the
 // parameter, 2 the result, 3 to 5 scratch, 6 the inner call's result, 7 and
 // 8 the outer calls' results, 9 their sum.
@@ -332,7 +332,7 @@ theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().ho
 theorem spreading_homed(): spreading().refusal(low(), spreading().homes()) = [] { refl }
 theorem spreading_exits(): ITree::next(Events::linux(), spreading().tree([], 4)) = Exits(BitVec::ofNat(59)) { refl }
 
-// Two procedures calling each other (docs/native-procedures-are-functions-design.md
+// Two procedures calling each other (docs/native/native-procedures-are-functions-design.md
 // §2.5): `a(n) = b(n - 1) + n` and `b(n) = 2 * a(n - 1) + n`, both 0 at 0,
 // written over the same words. Each keeps its parameter across its call of
 // the other, in its own frame, and each is called through the one contract
@@ -385,7 +385,7 @@ theorem calls_wide_refused(): refused(calls_wide()) = [2, 7, 14, 0, 0] { refl }
 theorem calls_outside_refused(): refused(calls_outside()) = [0, 5, 15, 0, 0] { refl }
 
 // ---------------------------------------------------------------------------
-// Functions that call over views (docs/native-library-exports-design.md §3.1)
+// Functions that call over views (docs/native/native-library-exports-design.md §3.1)
 
 // view_put(buffer, i, v): `v`'s low byte stored at `i` of its buffer,
 // returning the byte then there, or 256 past the end.

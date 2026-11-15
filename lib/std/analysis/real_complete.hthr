@@ -1,5 +1,5 @@
 // `CReal` is Cauchy complete (lib/std/analysis/sequence.hthr's
-// `CauchyComplete`; docs/sequences-and-completeness.md).
+// `CauchyComplete`; docs/library/sequences-and-completeness.md).
 //
 // `CReal::complete` takes sequences at the reals' own rate, `|x_m - x_n| <=
 // 2^-m + 2^-n`. A Cauchy sequence in the generic sense comes with a modulus

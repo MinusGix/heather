@@ -69,4 +69,4 @@ on which part of the language one is in.
   to imperative return, a meaning Heather may need in programming-oriented
   function bodies. The recurring applied-function shape now has the focused
   lint owner [[lint-match-function-application]].
-- 2026-10-31: [[match-motive-sweep]] owns the next census (docs/dependent-match-compiler-design.md §1.2: 180 of 379 sampled written motives redundant under --review).
+- 2026-10-31: [[match-motive-sweep]] owns the next census (docs/language/matching/dependent-match-compiler-design.md §1.2: 180 of 379 sampled written motives redundant under --review).

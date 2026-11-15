@@ -47,4 +47,4 @@ block hands its value to the kernel as before
 
 ## Log
 
-- 2026-10-27: Fixed as described above (design: docs/host-elaboration-interface-design.md §17). Probes in lib/_tests/std/tactic/tactic_tests.hthr; all four positives fail before the fix. On the monotonicity branch, `by mono()` replaces `mono_with([step])` in `Series::decay` and `mono_with([eb])` in `Interval::widen_has`. Projections of a local (`kq.left`) are still not hypotheses of their own.
+- 2026-10-27: Fixed as described above (design: docs/metaprogramming/host-elaboration-interface-design.md §17). Probes in lib/_tests/std/tactic/tactic_tests.hthr; all four positives fail before the fix. On the monotonicity branch, `by mono()` replaces `mono_with([step])` in `Series::decay` and `mono_with([eb])` in `Interval::widen_has`. Projections of a local (`kq.left`) are still not hypotheses of their own.

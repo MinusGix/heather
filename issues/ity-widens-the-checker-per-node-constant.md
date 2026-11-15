@@ -11,10 +11,10 @@ it was never the width of anything, it was 86 constructed temporaries in the
 recursion cycle. Three changes, in `crates/kernel/src/typing.rs` and
 `typing/ity.rs`; the bench gate is clean and the corpus is back inside its
 own spread. Filed by
-stage 1b of `docs/intro-by-type-design.md` as the residue of its own bench
+stage 1b of `docs/elaborator/intro-by-type-design.md` as the residue of its own bench
 gate, per `issues/README.md`'s rule that a regression worth keeping gets an
 issue. Originally filed as: measured, unattacked. Filed by stage 1b of
-`docs/intro-by-type-design.md` as the residue of its own bench gate, per
+`docs/elaborator/intro-by-type-design.md` as the residue of its own bench gate, per
 `issues/README.md`'s rule that a regression worth keeping gets an issue.
 
 ## The number
@@ -106,7 +106,7 @@ faster. That is the shape a fix should preserve: whatever replaces the
 back the inference one.
 
 It is also the reason the number matters less than it looks: stage 2 of
-`docs/intro-by-type-design.md` exists to move the tower's cost *out* of the
+`docs/elaborator/intro-by-type-design.md` exists to move the tower's cost *out* of the
 per-query conversion work, and the files that pay this constant are the ones
 whose declarations are small enough that nothing else is happening.
 
@@ -283,7 +283,7 @@ checker's behaviour is unchanged to the unit, as it was at stage 1b.
 
 **Verdict: closed.** The design is untouched — `ITy` is still the checker's
 currency, `Sel` is still arena-free, and nothing moved in
-`docs/intro-by-type-design.md` §3.2–3.4. What changed is that the *checking*
+`docs/elaborator/intro-by-type-design.md` §3.2–3.4. What changed is that the *checking*
 direction borrows instead of owning, and the one arm with wide temporaries is
 no longer on the recursion cycle.
 

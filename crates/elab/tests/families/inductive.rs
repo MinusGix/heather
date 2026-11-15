@@ -2,7 +2,7 @@
 //! One binary for these files instead of one each, so a Rust edit relinks the
 //! compiler once for all of them; the runner still runs every member in a
 //! process of its own, under its own rails and timing row
-//! (docs/elab-test-families-design.md).
+//! (docs/infrastructure/elab-test-families-design.md).
 
 #[path = "../inductive_tier0.rs"]
 mod inductive_tier0;

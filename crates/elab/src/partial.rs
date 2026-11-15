@@ -1,4 +1,4 @@
-//! `partial fn f(x: A) → B { body }` (docs/partial-functions-design.md §4.2,
+//! `partial fn f(x: A) → B { body }` (docs/language/partial-functions-design.md §4.2,
 //! issues/partial-fn-surface.md): a function that may not return.
 //!
 //! The body is a block over the carrier of `f`'s own calls,
@@ -535,7 +535,7 @@ impl Partial<'_> {
     /// fn`. Partial is read off what the lowering left, which a module image
     /// carries, so an imported function is recognised as a local one is: the
     /// global `f#body`, designated `f::body`. A measure's family
-    /// (`docs/decreases-unfolding-design.md` §11) designates `f::body` too,
+    /// (`docs/language/recursion/decreases-unfolding-design.md` §11) designates `f::body` too,
     /// but always beside `f::rec`, which a partial function never has.
     pub(crate) fn is_partial_fn(&self, cx: &Cx, name: &str) -> bool {
         if cx.names.contains(name) || cx.aliases.iter_inner().any(|alias| alias.name == *name) {
@@ -550,7 +550,7 @@ impl Partial<'_> {
     }
 
     /// The refusal of a call to `f` where something other than a
-    /// computation is expected (docs/partial-functions-design.md §4.2): `f`
+    /// computation is expected (docs/language/partial-functions-design.md §4.2): `f`
     /// is named, with the two ways out. `None` when `f` is not a `partial
     /// fn`, when the call's type is not a `CoTree` or the expected one is (a
     /// mismatch between two computations is the ordinary one), or when either

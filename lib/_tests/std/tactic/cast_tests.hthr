@@ -1,6 +1,6 @@
 // Probes of the cast edges (lib/std/algebra/morphism.hthr, the `…_hom`
 // values beside each target type) as `mono` reads them
-// (lib/std/tactic/cast.hthr; docs/casting-design.md §6.4). Tests, not
+// (lib/std/tactic/cast.hthr; docs/language/casting-design.md §6.4). Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono; import omega; import ring; import linarith;
@@ -127,7 +127,7 @@ theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x +
 
 // A morphism in scope is an edge (issue cast-reading-through-local-morphism):
 // generic code over an ordered field takes its embedding of `Rat` as a
-// section parameter (docs/casting-design.md §5.6), and `mono` reads its
+// section parameter (docs/language/casting-design.md §5.6), and `mono` reads its
 // images through it, and through its composite with `Dyadic::rat_hom`. In
 // the section `+` and `<=` are `K`'s, so the source's are spelled out.
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},

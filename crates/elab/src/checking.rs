@@ -71,7 +71,7 @@ impl Checking<'_> {
     }
 
     /// A proof of `P` given where a condition `∥P∥` is expected
-    /// (docs/strict-conditions-design.md §3): its term, checked at `P`, for
+    /// (docs/language/strict-conditions-design.md §3): its term, checked at `P`, for
     /// the caller to wrap in `squash`; `None` where `e` is to check as
     /// written, because it is already a `∥P∥` or a `squash(…)`.
     ///
@@ -101,7 +101,7 @@ impl Checking<'_> {
 
     /// [`Self::elab_check_hinted`] plus, where the caller has one, the
     /// expected type's implicitness *skeleton*
-    /// (docs/implicit-binders-design.md §6.1). Three caller classes supply
+    /// (docs/language/implicit-binders-design.md §6.1). Three caller classes supply
     /// it: argument checking in `apply_explicit`/`apply_implicit` (the
     /// callee parameter's own skeleton), an annotated `let`, and
     /// record-literal field checking. It is read by exactly two arms — a
@@ -189,24 +189,24 @@ impl Checking<'_> {
             };
         }
         Inference(self).refuse_value_call(cx, e)?;
-        // `name_of(p)` and `registered(T)` (docs/registered-values-design.md).
+        // `name_of(p)` and `registered(T)` (docs/metaprogramming/registered-values-design.md).
         if let Some(rewritten) = Registered(self).registry_rewrite(cx, e)? {
             return self.elab_check_skel_slots_written(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
         }
         // A proof-taking call where a `When` is wanted, or a `match` on one
-        // (docs/when-design.md §4).
+        // (docs/language/when-design.md §4).
         if let Some((bound, tested)) = crate::tested::Tested(self).tested_check(cx, e, expected)? {
             return self.elab_check_skel_slots_written(&bound, &tested, expected, lvl, hint, skel, capture_slots);
         }
         // A corecursive body's two positions, a node and a child
-        // (docs/codata-elaborator-design.md §5.2).
+        // (docs/inductives/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
             && let Some(t) = Codata(self).corec_check(cx, site, e, expected, lvl)?
         {
             return Ok(t);
         }
         // A friend's body over a corecursive definition's free carrier
-        // (docs/codata-elaborator-design.md §5.5).
+        // (docs/inductives/codata-elaborator-design.md §5.5).
         if let Some(mode) = cx.friend.as_ref()
             && let Some(t) = UpTo(self).friend_check(cx, mode, e, expected, lvl)?
         {
@@ -327,7 +327,7 @@ impl Checking<'_> {
         }
         // Checking position, so rung 2 has its second source: a bare symbol
         // resolves at the carrier this type's first domain names
-        // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
+        // (docs/language/classes/bare-symbol-checking-carrier-design.md §3.1). The expected type
         // is already in hand one line above the rewrite, and has been since the
         // operators round — nothing is plumbed from a call site.
         if let Some(rewritten) = NameLookup(self).owner_rewrite(cx, e)? {
@@ -450,7 +450,7 @@ impl Checking<'_> {
                     }
                 }
             }
-            // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
+            // **Rule 2** (docs/language/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
             // re-derive and the parser cannot buy the name back with a
             // lookahead — but the elaborator can, with exactly the guard
@@ -481,14 +481,14 @@ impl Checking<'_> {
             // the property that makes the form useful: a block in a `match`
             // arm under a dependent motive is checked at the arm's type rather
             // than inferred and then converted
-            // (docs/let-and-blocks-design.md §4.4). The hint travels with it,
+            // (docs/language/let-and-blocks-design.md §4.4). The hint travels with it,
             // so a hole in the result of a block in argument position still
             // reports the callee and parameter it belongs to.
             ExprKind::Block(block) => {
                 statements::check_block(self.0, cx, block, expected, lvl, hint, skel, capture_slots)
             }
             // A quote against its `Code(g |- T)` type — checking-only, like
-            // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
+            // the kernel's `BoxTm` (docs/metaprogramming/in-language-map-design.md §5).
             ExprKind::Quote(payload) => Quotation(self).elab_quote(cx, payload, expected, e.span),
             ExprKind::Match {
                 form,
@@ -499,7 +499,7 @@ impl Checking<'_> {
                 generated,
             } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
-                // docs/goal-motive-synthesis-design.md): abstract the
+                // docs/elaborator/goal-motive-synthesis-design.md): abstract the
                 // scrutinee out of the expected type so the motive is
                 // genuinely dependent; the non-dependent motive (expected
                 // under `z`) is what "no occurrence anywhere" falls back to.
@@ -507,7 +507,7 @@ impl Checking<'_> {
                     .elab_infer(cx, scrut)
                     .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
                 // A recursion whose self-calls vary a parameter generalizes it
-                // into the motive (docs/ih-generalization-design.md): the goal
+                // into the motive (docs/tactics/ih-generalization-design.md): the goal
                 // becomes a Π over the varied parameters, the arms are wrapped
                 // in the matching lambdas, and the recursor is applied back to
                 // the parameters. Only here, in checking position — the goal
@@ -652,7 +652,7 @@ impl Checking<'_> {
             }
             // `absurd(p)`: from an equation between distinct constructors,
             // anything — so it needs the expected type
-            // (docs/inductive-tier0-lowering.md §6.1).
+            // (docs/inductives/inductive-tier0-lowering.md §6.1).
             ExprKind::App { .. }
                 if matches!(e.as_named(), Some((n, _, _))
                             if n == "absurd" && !self.shadowed(cx, n)) =>
@@ -679,7 +679,7 @@ impl Checking<'_> {
             // `FZ` / `FS(j)` against an expected `Fin`. Checking-only, like
             // `refl` and a collection literal: `FZ` inhabits `Fin(Succ k)` for
             // *every* `k`, and nothing in the term names one
-            // (docs/surface-fin-indexing-design.md §3.1). Keyed on the
+            // (docs/language/surface-fin-indexing-design.md §3.1). Keyed on the
             // expected type and never on the name, so a user inductive with a
             // constructor called `FZ`/`FS` is untouched — hence the
             // `ctor_here` guard.
@@ -711,7 +711,7 @@ impl Checking<'_> {
                 self.expr_elab().check_unit_form(self.0, cx, expected, lvl, e.span)
             }
             // `decide` — proof by reflection at a decided goal
-            // (docs/reflection-through-decide-instances-design.md §4). Sugar
+            // (docs/tactics/reflection-through-decide-instances-design.md §4). Sugar
             // for `bool::decide_yes(refl)`: resolution picks the `Decide`
             // instance, the kernel runs its decision and judges the `refl`.
             // The name is also `bool::decide`'s, so the shadowing guard is
@@ -753,7 +753,7 @@ impl Checking<'_> {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
             }
             // `by t` runs the tactic `t` against the expected type
-            // (docs/host-elaboration-interface-design.md, `host.rs`).
+            // (docs/metaprogramming/host-elaboration-interface-design.md, `host.rs`).
             ExprKind::App { head, args, .. }
                 if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) =>
             {
@@ -764,7 +764,7 @@ impl Checking<'_> {
             }
             // `rewrite(h, …, e)` rewrites the goal along equations, writing
             // `j`'s motive by abstracting each left side
-            // (docs/equation-rewrite-design.md).
+            // (docs/tactics/equation-rewrite-design.md).
             ExprKind::App {
                 head,
                 args,
@@ -779,7 +779,7 @@ impl Checking<'_> {
                 Rewrites(self).elab_rewrite(cx, args, named, expected, lvl, e.span)
             }
             // `simp_only(r₁, …, rₙ)` normalises the goal by a list of laws and
-            // closes it; `simp_show` reports the result (docs/simp-design.md).
+            // closes it; `simp_show` reports the result (docs/tactics/simp-design.md).
             ExprKind::App {
                 head,
                 args,
@@ -794,7 +794,7 @@ impl Checking<'_> {
                 crate::rewrite::Simps(self).elab_simp(cx, show, args, named, expected, lvl, e.span)
             }
             // `subst(h, e)` eliminates a local variable along `h`, reverting
-            // the locals that depend on it (docs/equation-rewrite-design.md §8).
+            // the locals that depend on it (docs/tactics/equation-rewrite-design.md §8).
             ExprKind::App {
                 head,
                 args,
@@ -809,7 +809,7 @@ impl Checking<'_> {
             }
             // `ring` normalizes both sides of an equation at `Int` or `Nat`
             // by reflection; `ring(h, …)` also combines equations
-            // (docs/ring-normalization-design.md).
+            // (docs/tactics/ring-normalization-design.md).
             ExprKind::Var(name)
                 if name == "ring"
                     && !self.shadowed(cx, name)
@@ -833,8 +833,8 @@ impl Checking<'_> {
                 Ring(self).elab_ring(cx, args, expected, lvl, e.span)
             }
             // `linarith` proves a linear order goal at an ordered field from
-            // the facts, up to its `≈` (docs/linarith-design.md); `nlinarith`
-            // multiplies the facts too (docs/nonlinear-arithmetic-design.md).
+            // the facts, up to its `≈` (docs/tactics/linarith-design.md); `nlinarith`
+            // multiplies the facts too (docs/tactics/nonlinear-arithmetic-design.md).
             ExprKind::Var(name)
                 if matches!(name.as_str(), "linarith" | "nlinarith")
                     && !self.shadowed(cx, name)
@@ -860,7 +860,7 @@ impl Checking<'_> {
             }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules
-            // cannot close (docs/positivity-evidence-design.md §10).
+            // cannot close (docs/library/positivity-evidence-design.md §10).
             ExprKind::Var(name)
                 if name == "positivity"
                     && !self.shadowed(cx, name)
@@ -918,7 +918,7 @@ impl Checking<'_> {
                 }
             }
             // `known`: a hypothesis, a side of a conjunction, then the
-            // arithmetic searches (docs/when-design.md §5).
+            // arithmetic searches (docs/language/when-design.md §5).
             ExprKind::Var(name)
                 if name == crate::tested::KNOWN
                     && !self.shadowed(cx, name)
@@ -960,7 +960,7 @@ impl Checking<'_> {
                 let proof = self.elab_omega(&cx, "omega", expected, lvl, e.span)?;
                 Ok(statements::LetValue::discard_around(self.0, &cx, facts, proof, expected, lvl))
             }
-            // `bv_omega` lifts word arithmetic to Nat (docs/bv-omega-design.md):
+            // `bv_omega` lifts word arithmetic to Nat (docs/tactics/bv-omega-design.md):
             // it writes a proof from the bridge lemmas and `omega`, and this
             // arm checks it at the goal like any other source.
             ExprKind::Var(name)
@@ -999,7 +999,7 @@ impl Checking<'_> {
                 }
                 match checked {
                     // Lifted into a lemma of its own where the declaration
-                    // reserved a slot (docs/bv-omega-design.md §7): the
+                    // reserved a slot (docs/tactics/bv-omega-design.md §7): the
                     // kernel checks it once, in its context, and the body
                     // carries only a reference.
                     Ok(term) => Ok(self
@@ -1049,7 +1049,7 @@ impl Checking<'_> {
                 Some(result) => result,
                 None => Inference(self).elab_overloaded_num_check(cx, e, expected, lvl, e.span),
             },
-            // The two literals of docs/string-char-design.md §3, on the
+            // The two literals of docs/library/string-char-design.md §3, on the
             // numeral's ladder: the spec type's introduction form at `Char` /
             // `String`, and `CharLiteral` / `StringLiteral` at every other
             // carrier.
@@ -1060,10 +1060,10 @@ impl Checking<'_> {
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
             // a readability aid and must be convertible with it
-            // (docs/surface-function-types.md §5.2).
+            // (docs/language/surface-function-types.md §5.2).
             // A type constructor written as a λ abstracting a declaration's
             // declared slot takes the canonical spelling the unifier learns
-            // (docs/lambda-carrier-instances-design.md §7.3).
+            // (docs/language/classes/lambda-carrier-instances-design.md §7.3).
             ExprKind::Lam { binders, body }
                 if let Some(term) = GeneratedDefs(self).check_slot_lambda(cx, binders, body, expected, e.span)? =>
             {
@@ -1074,7 +1074,7 @@ impl Checking<'_> {
                 .check_lambda(self.0, cx, binders, body, expected, lvl, skel, e.span),
             // A universe as the expected type: a *type* has been written where
             // a term is expected, so read it as one and quote it
-            // (docs/surface-universe.md §4).
+            // (docs/language/surface-universe.md §4).
             //
             // `El(«Ty n»)` is that universe too, read off without a whnf: it
             // is what a codomain decoded from a type code arrives as, such as
@@ -1088,7 +1088,7 @@ impl Checking<'_> {
             // A declared type former, partially applied, against an expected
             // function type that ends in a universe: η-expand into the
             // type-valued function the remaining value parameters describe
-            // (docs/record-type-partial-application.md §2). Sits here for the
+            // (docs/language/record-type-partial-application.md §2). Sits here for the
             // same reason the universe arm above does — the reading has to be
             // chosen before the constructor arms see the same name — and
             // declines quietly for every other shape.
@@ -1101,9 +1101,9 @@ impl Checking<'_> {
             }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
-            // tuple is read off it (docs/inductive-tier0-lowering.md §4).
+            // tuple is read off it (docs/inductives/inductive-tier0-lowering.md §4).
             // Unsaturated against an expected `Π`, it η-expands into a function
-            // value (docs/constructor-function-values.md §2).
+            // value (docs/language/constructor-function-values.md §2).
             // The name is read with the expected type as evidence
             // ([`Self::ctor_here_expected`]), so a bare constructor the name
             // layer left ambiguous is settled by the type that is checking it.
@@ -1159,7 +1159,7 @@ impl Checking<'_> {
             // are put in declaration order, so checking mode is the tier-0
             // constructor path — which is what lets the expected type supply
             // the instantiation and no annotation be written
-            // (docs/surface-records.md §6).
+            // (docs/language/surface-records.md §6).
             ExprKind::RecordLit {
                 name,
                 tyargs,
@@ -1293,7 +1293,7 @@ impl Checking<'_> {
                 // The universe arm above matches a *syntactic* `Ty`, but a
                 // universe can hide under `El` of a quoted code — an indexed
                 // family's field components arrive exactly so
-                // (docs/inductive-indexed-lowering.md §4: the branch spine is
+                // (docs/inductives/inductive-indexed-lowering.md §4: the branch spine is
                 // quoted and decoded, so a `Type`-valued field reads back as
                 // `El (TmTy …)`). Reduce before giving up on the
                 // type-position reading; the universe bridge still falls
@@ -1326,11 +1326,11 @@ impl Checking<'_> {
                 // still unsolved consults it — the anti-unification hook and
                 // the general expected-type harvest both live behind this
                 // line (issues/congruence-by-anti-unification.md decision 7;
-                // docs/unifier-completeness-design.md §5). Nothing else reads
+                // docs/elaborator/unifier-completeness-design.md §5). Nothing else reads
                 // the hint, so every other expression elaborates exactly as
                 // before.
                 //
-                // The §5.3 suppression rule (docs/implicit-binders-design.md):
+                // The §5.3 suppression rule (docs/language/implicit-binders-design.md):
                 // a *bare reference* met where the expected type's own
                 // skeleton opens with an implicit binder is passed verbatim —
                 // the parameter asked for the implicit function itself, and
@@ -1371,7 +1371,7 @@ impl Checking<'_> {
                 // cheap variants the issue proposed — leaves only, whnf'd types
                 // only — buy nothing worth the narrowing.
                 // A `When<T, P>` where a `T` is wanted takes its value
-                // (docs/when-design.md §5).
+                // (docs/language/when-design.md §5).
                 if let Some(value) = crate::tested::Tested(self).coerce(cx, e, &t, &got, &head, lvl)? {
                     return Ok(value);
                 }
@@ -1440,7 +1440,7 @@ impl Checking<'_> {
         )
         .map_err(|detail| {
             // Stuck: an arm equation not yet in scope might be the missing
-            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            // fact (docs/language/matching/dependent-match-compiler-design.md §4.3.1).
             Inference(self).want_match_equations(written_cx);
             ElabError::Elab {
                 msg: format!("`omega` got stuck: {detail}"),

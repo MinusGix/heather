@@ -1,5 +1,5 @@
 // Binary floating-point formats and their values
-// (docs/floating-point-design.md §3–§4; roadmap submilestone `float-values`).
+// (docs/library/floating-point-design.md §3–§4; roadmap submilestone `float-values`).
 //
 // A `Format` is data: a precision, an exponent range and a policy for the
 // special values. Every float type is indexed by one, so `Finite(binary32())`

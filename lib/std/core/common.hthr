@@ -1,6 +1,6 @@
 // The common prelude (issues/std-prelude-facade.md): the everyday names of
 // the core modules, which every module later than this one in a run imports
-// implicitly. A facade only (docs/modules-design.md §3.4): each name below is
+// implicitly. A facade only (docs/language/modules-design.md §3.4): each name below is
 // the declaration of the module it comes from, so a module that also imports
 // that module directly sees one declaration, not two. The lists are chosen,
 // not whole modules, so the core's lemma names (`nat`'s and `int`'s

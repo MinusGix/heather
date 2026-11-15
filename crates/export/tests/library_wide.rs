@@ -1,4 +1,4 @@
-//! The whole-library sweep (`docs/export-fragment-design.md` §7): every
+//! The whole-library sweep (`docs/library/export-fragment-design.md` §7): every
 //! module of `lib/std` and its folders, exported, with each refusal counted by cause. Opt-in (`#[ignore]`): it elaborates the
 //! library and spells every proof, which is minutes of release time and
 //! past the suite's rails in a debug build. `scripts/export-recheck --wide`
@@ -29,7 +29,7 @@ const KNOWN: &[&str] = &[
 fn std_library_exports() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
     // Every module, folders included, as `heather check lib/std` takes them
-    // (docs/lib-layout-design.md): the library's stems are unique, so no
+    // (docs/library/lib-layout-design.md): the library's stems are unique, so no
     // nested file is shadowed.
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for p in std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()) {

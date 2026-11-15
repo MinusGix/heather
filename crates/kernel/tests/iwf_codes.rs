@@ -1,5 +1,5 @@
 //! Codes and recursor branches for `DVec` and `IWf`: step 4 of the `IWf`
-//! landing (`docs/iwf-former-design.md` §13; `issues/iwf-former.md`), the
+//! landing (`docs/kernel/iwf-former-design.md` §13; `issues/iwf-former.md`), the
 //! round that lets indexed families land at layer c.
 //!
 //! `TmDVec` and `TmIWf` are the codes of the two formers (the index inside

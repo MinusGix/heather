@@ -1,6 +1,6 @@
 //! Acceptance for a record type's **partial application**, against
 //! `issues/record-type-partial-application.md` and
-//! `docs/record-type-partial-application.md` §4. Two siblings share this
+//! `docs/language/record-type-partial-application.md` §4. Two siblings share this
 //! round's disambiguator, each pointed a different way:
 //! `crates/elab/tests/constructor_values.rs` (η-expand the *constructor* at an
 //! expected Π) and `crates/elab/tests/record_type_values.rs` (read the *type
@@ -169,7 +169,7 @@ fn an_open_element_type_comes_along() {
 
 // **The negative control**: the constructor reading of the very same record, in
 // the same file. `Two(1)` at `Nat -> Two(n, m)` is the constructor with its
-// second *field* abstracted (docs/constructor-function-values.md §2) — the
+// second *field* abstracted (docs/language/constructor-function-values.md §2) — the
 // expected spine does not end in a universe, so this arm declines and the
 // constructor arm below it takes over, exactly as before this round.
 #[test]
@@ -229,7 +229,7 @@ fn rejections() {
     assert!(msg.contains("provides 3 before its `Type`"), "{msg}");
 
     // Non-cumulativity, unchanged: the record lands at level 0 and no lift
-    // carries it to `Type<1>` (docs/surface-universe.md §6).
+    // carries it to `Type<1>` (docs/language/surface-universe.md §6).
     let msg = elab_err(
         r#"
         record Grammar(level: Nat, value: Nat) { at_level: level = level, }

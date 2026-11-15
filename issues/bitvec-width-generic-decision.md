@@ -11,7 +11,7 @@ Prove width-generic `BitVec` claims with a tactic, instead of by hand. The
 claims in view are the open-width laws in `lib/std/bitvec/bitvec.hthr` and,
 later, the rewrite rules of optimisation passes stated at a node's symbolic
 width. The method is the multi-width transducer procedure of Bhat et al.,
-OOPSLA 2026 (`docs/multi-width-bitvector-survey.md` §4, paper at
+OOPSLA 2026 (`docs/surveys/multi-width-bitvector-survey.md` §4, paper at
 `docs/papers/3839511.pdf` §5).
 
 The fragment: add, subtract, multiplication by a literal, the bitwise
@@ -66,11 +66,11 @@ the real entry point.
 - **[[kernel-native-bitvector-values]]** owns the kernel's closed-word
   transducer class. Assumed here: nothing. This procedure is library code
   and proves open claims. The kernel model's planned bit-transducer rung
-  (`docs/kernel-model-design.md`) needs the same transducer notion, so it
+  (`docs/kernel/kernel-model-design.md`) needs the same transducer notion, so it
   should be defined once where both can import it.
 - **[[function-ir-narrow-arithmetic]]** owns the narrow-width lowering
   rules. They are a customer: each rule is a fragment law.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/kernel-model-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/kernel/kernel-model-design.md`).

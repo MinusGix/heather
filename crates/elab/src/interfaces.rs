@@ -1,4 +1,4 @@
-//! Interface definitions (`docs/interface-definitions-design.md`).
+//! Interface definitions (`docs/language/interface-definitions-design.md`).
 //!
 //! An `interface fn` is an ordinary definition inside its own module. Outside
 //! it, the elaborator's semantic worlds withhold its body
@@ -147,7 +147,7 @@ impl InterfaceDefs<'_> {
             lines.push(format!(
                 "`{}` is an interface definition of `{}`, so its body is withheld here at open \
                  arguments: cite {cite}, or declare the proof `unfolding {}` \
-                 (docs/interface-definitions-design.md §4)",
+                 (docs/language/interface-definitions-design.md §4)",
                 info.name, info.module, info.name
             ));
         }
@@ -182,7 +182,7 @@ impl InterfaceDefs<'_> {
                 key.ok_or_else(|| ElabError::Elab {
                     msg: format!(
                         "`unfolding {name}`: `{name}` is not an interface definition, so its \
-                         body is never withheld (docs/interface-definitions-design.md §4)"
+                         body is never withheld (docs/language/interface-definitions-design.md §4)"
                     ),
                     span: decl.span,
                 })
@@ -190,7 +190,7 @@ impl InterfaceDefs<'_> {
             .collect()
     }
 
-    /// The refusals of `docs/interface-definitions-design.md` §1 that need
+    /// The refusals of `docs/language/interface-definitions-design.md` §1 that need
     /// the elaborator: a `def` (the parser lets `interface def` through as
     /// no syntax of its own, so the flag on a value is refused here) and a
     /// function into a universe.
@@ -198,7 +198,7 @@ impl InterfaceDefs<'_> {
         let refuse = |msg: String, span: Span| Err(ElabError::Elab { msg, span });
         if decl.kind != DeclKind::Fn || decl.value || decl.is_meta {
             return refuse(
-                "`interface` marks a `fn` with parameters (docs/interface-definitions-design.md §1)".into(),
+                "`interface` marks a `fn` with parameters (docs/language/interface-definitions-design.md §1)".into(),
                 decl.span,
             );
         }
@@ -206,7 +206,7 @@ impl InterfaceDefs<'_> {
             return refuse(
                 format!(
                     "`{}` has no parameters, so every call of it is closed and computes: \
-                     `interface` would withhold nothing (docs/interface-definitions-design.md §1)",
+                     `interface` would withhold nothing (docs/language/interface-definitions-design.md §1)",
                     decl.name
                 ),
                 decl.span,
@@ -217,7 +217,7 @@ impl InterfaceDefs<'_> {
                 format!(
                     "`{}` returns a type: a client reads a defined proposition's shape (a \
                      projection, a `match`), so withholding its body is a design of its own, \
-                     not this round's (docs/interface-definitions-design.md §1)",
+                     not this round's (docs/language/interface-definitions-design.md §1)",
                     decl.name
                 ),
                 decl.result.span,
@@ -360,7 +360,7 @@ fn theorem(decl: &Decl, name: String, lhs: Expr, rhs: Expr, span: Span) -> Decl 
 
 impl InterfaceDefsMut<'_> {
     /// The unfolding equations of the interface definition `decl`, elaborated
-    /// in its module right after it (docs/interface-definitions-design.md §5):
+    /// in its module right after it (docs/language/interface-definitions-design.md §5):
     ///
     /// - `f_unfold(x̄): f(x̄) = body`, by `refl`, for a function that does not
     ///   call itself (a `decreases` function already has its companion);

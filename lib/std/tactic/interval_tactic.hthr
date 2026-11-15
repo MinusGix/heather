@@ -1,5 +1,5 @@
 // `intervals`: prove an order between rational or real expressions by
-// evaluating their enclosures (docs/floating-point-design.md §16).
+// evaluating their enclosures (docs/library/floating-point-design.md §16).
 //
 // The tactic reads the goal `l < r` or `l <= r` at `Rat` into two
 // `IntervalExpr` trees and returns `IntervalExpr::lt_of_search(…, rfl)` (or

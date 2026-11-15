@@ -1,5 +1,5 @@
 // Probes of `runtime fn` at a function lent a span
-// (docs/native-one-compiler-design.md §2.3, U3c step 3b): a leading
+// (docs/native/native-one-compiler-design.md §2.3, U3c step 3b): a leading
 // `List<BitVec(8)>` parameter followed by a 64-bit word is a span and its
 // length word, `byte_within` on it under that word is the read, and the
 // generator makes the instance the class states at every file. The same two

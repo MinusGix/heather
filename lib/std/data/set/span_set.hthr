@@ -1,6 +1,6 @@
 // Half-open spans of naturals, finite unions of them, and the packing lemma:
 // the sets of addresses a region, a buffer or a footprint occupies
-// (issues/address-interval-sets.md, docs/native-mathematics-survey.md §4).
+// (issues/address-interval-sets.md, docs/surveys/native-mathematics-survey.md §4).
 //
 // - A `Span(base, len)` is `[base, base + len)`. Membership is a Boolean
 //   (`has`), so a closed fact is a verdict `refl` proves and an open one is
@@ -128,7 +128,7 @@ theorem Span::disjoint_within(self s, t, s2, t2: Span, d: s.Disjoint(t), ss: s2.
     λ x h1 h2 => d(x, ss(x, h1), tt(x, h2))
 }
 
-// Found, not cited (docs/facts-on-demand-design.md §3): a premise
+// Found, not cited (docs/native/facts-on-demand-design.md §3): a premise
 // `s.Disjoint(t) := infer` or `s.Within(t) := infer` is the endpoint
 // verdict, by `omega` over the hypotheses in the asker's scope. A closed
 // pair is answered by the verdict evaluating; an open one by `omega`

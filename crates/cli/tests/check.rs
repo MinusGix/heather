@@ -209,7 +209,7 @@ fn usage_errors_exit_two() {
 }
 
 // ---------------------------------------------------------------------------
-// Modules (docs/modules-design.md §3): the loader — search paths, dedup,
+// Modules (docs/language/modules-design.md §3): the loader — search paths, dedup,
 // cycles — and multi-file diagnostics. The *name regime* is tested at the
 // elaborator (crates/elab/tests/modules.rs); what only the CLI can test is
 // the walk over the file system.
@@ -301,7 +301,7 @@ fn an_error_in_an_imported_module_is_reported_against_that_file() {
 }
 
 // ---------------------------------------------------------------------------
-// The declaration cache (docs/cache-v1-design.md). What is pinned here is the
+// The declaration cache (docs/infrastructure/cache-v1-design.md). What is pinned here is the
 // *surface*: the flag, and the shape of the line it prints. The cache's own
 // behaviour is `crates/cache/tests`.
 
@@ -492,7 +492,7 @@ fn a_stale_cache_is_discarded_out_loud() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// -- `heather obligations` (docs/obligation-records-design.md §6) ------------
+// -- `heather obligations` (docs/language/classes/obligation-records-design.md §6) ------------
 
 #[test]
 fn obligations_lists_state_provenance_and_statement() {
@@ -509,7 +509,7 @@ fn obligations_lists_state_provenance_and_statement() {
     assert!(text.contains("inline"), "{text}");
     // The statement is printed in the DESIGNED spelling, which is the point:
     // what the listing prints is what an author can write
-    // (docs/repr-access-spellings-design.md §7).
+    // (docs/native/repr-access-spellings-design.md §7).
     assert!(text.contains("Impl(length, ListTok)::body(l) = length("), "{text}");
     assert!(!text.contains("Impl_ListTok_length"), "{text}");
 }
@@ -618,7 +618,7 @@ fn deny_axioms_is_a_check_policy() {
 
 /// After an edit, the module's unchanged declarations are reproduced from
 /// its previous image and the `(cache)` line says how many
-/// (`docs/declaration-slice-replay-design.md`).
+/// (`docs/infrastructure/declaration-slice-replay-design.md`).
 #[test]
 fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image() {
     let dir = cache_dir("slice-replay");
@@ -654,7 +654,7 @@ fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image()
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// `heather check --only` (`docs/check-only-design.md`): needs `--cache` and a
+/// `heather check --only` (`docs/infrastructure/check-only-design.md`): needs `--cache` and a
 /// previous image; elaborates the named declarations over a replayed
 /// prefix, prints the reserved `(only)` line, labels the timings run row,
 /// leaves the verdict store's counts alone, and names an unknown item.
@@ -679,7 +679,7 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
 
     // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
     // The second run replays and records the whole-replay verdict, so the
-    // baseline is the third: one that already finds it (`docs/module-dag-design.md` §13).
+    // baseline is the third: one that already finds it (`docs/infrastructure/module-dag-design.md` §13).
     assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);

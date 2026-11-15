@@ -11,7 +11,7 @@ Option 3 of the compiled-code shape work ([[native-compiled-code-shape]]'s
 first scope item), approved by Minus 2026-10-28: liveness, an assignment
 proposed by an untrusted heuristic, a checker as the only trusted part,
 correctness proved once, spills as slots, moves and the calling convention
-later. Design: `docs/native-register-allocation-design.md`.
+later. Design: `docs/native/native-register-allocation-design.md`.
 
 ## Scope
 

@@ -21,7 +21,7 @@ here as well as in the elaborator. Measure lifting has the same shape
 [[recursion-outer-match-takes-guard-without-descent]],
 [[recursion-case-split-dependent-ih]], #389's varied branch), this is a
 second scoping semantics that drifts from the elaborator's
-(docs/elaborator-principles-survey.md §6.2).
+(docs/elaborator/elaborator-principles-survey.md §6.2).
 
 ## Proposal (P5 and §6.3)
 
@@ -37,7 +37,7 @@ Design round, two steps:
    Then the match's position is irrelevant, the body recomputes at each
    level, and guard selection, stale lets, varied branches, dependent ihs and
    course of values at depth d stop being questions. Heather has `below` for
-   `Nat` (docs/course-of-values-recursion-design.md); the general one needs
+   `Nat` (docs/language/recursion/course-of-values-recursion-design.md); the general one needs
    one per lowered inductive tier.
 
 [[recursion-meaning-check]] keeps whichever lowering is in place honest
@@ -53,5 +53,5 @@ with the right meaning.
 ## Log
 
 - 2026-11-02: Step 1's renamer exists since #393: `alpha::deshadow` (used by the `decreases` lowering via `measure::deshadowed`). The structural planner does not run over it yet.
-- 2026-11-03: 2026-11-03: Design note docs/recursion-at-the-top-design.md (options A below-at-the-top staged, B binder identities only, C keep patching; A recommended), awaiting Minus's choice. Probes in lib/_tests/std/core/recursion_binder_tests.hthr: the LetCode and MatchCode readings are unreachable today (a meta fn cannot call itself; code types are refused outside meta fn signatures; nested let code is refused), each an expect-error with its reason; an unused `let j = n` in the recursive arm is refused, which A would accept. Slice 1 filed as [[recursion-below-nat-fallback]]. Side find: [[meta-fn-mismatch-reaches-kernel]].
+- 2026-11-03: 2026-11-03: Design note docs/language/recursion/recursion-at-the-top-design.md (options A below-at-the-top staged, B binder identities only, C keep patching; A recommended), awaiting Minus's choice. Probes in lib/_tests/std/core/recursion_binder_tests.hthr: the LetCode and MatchCode readings are unreachable today (a meta fn cannot call itself; code types are refused outside meta fn signatures; nested let code is refused), each an expect-error with its reason; an unused `let j = n` in the recursive arm is refused, which A would accept. Slice 1 filed as [[recursion-below-nat-fallback]]. Side find: [[meta-fn-mismatch-reaches-kernel]].
 - 2026-11-04: 2026-11-04: Minus chose option A (below at the top, staged). The design note's acceptance is met: decided, slice 1 filed as [[recursion-below-nat-fallback]], probes in lib/_tests/std/core/recursion_binder_tests.hthr. Closed; the slices carry the work.

@@ -1,5 +1,5 @@
 // Simulation between interaction trees over different events
-// (docs/itree-simulation-design.md; issues/itree-iter-simulation.md,
+// (docs/itrees/itree-simulation-design.md; issues/itree-iter-simulation.md,
 // milestone `it-library`).
 //
 // A source program meets a spec over other events when every trace the

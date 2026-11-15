@@ -20,7 +20,7 @@ second ambient variable (a parameter the recursion generalizes over, say)
 would be mis-indexed by both routes identically.
 
 To settle: write a depth-2 recursion whose motive mentions a second
-generalized variable (`docs/ih-generalization-design.md`) at a dependent
+generalized variable (`docs/tactics/ih-generalization-design.md`) at a dependent
 motive, on `Nat` and on `List`; it either checks or produces a kernel
 refusal at the convoyed arm. If it refuses, the fix is in the reindexing
 (carry the motive's full context, which `GuardKind::{Nat, Wf}` already

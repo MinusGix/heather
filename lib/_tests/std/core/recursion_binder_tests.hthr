@@ -1,5 +1,5 @@
 // Probes of the recursion planner's name-keyed scope
-// (issues/recursion-on-elaborated-terms.md, docs/recursion-at-the-top-design.md
+// (issues/recursion-on-elaborated-terms.md, docs/language/recursion/recursion-at-the-top-design.md
 // §2): the binding forms the planner does not record (`let code`, `match code`
 // arms) cannot reach a recursion it compiles. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).

@@ -9,7 +9,7 @@
 //! re-checking what the elaborator built.
 //!
 //! `ir_v1.hthr` is `crates/elab/tests/fixtures/ir_v1.hthr`, a frozen copy of `lib/certgen/ir_v1.hthr`, the source
-//! IR that burn B2 retired from the library (docs/native-program-logic-design.md
+//! IR that burn B2 retired from the library (docs/native/native-program-logic-design.md
 //! §3.2), shared with `crates/elab/tests/ir_v1.rs`. It stays the corpus's heavy case so the baseline keeps measuring the
 //! same work: a file of deep proofs over `nat` alone.
 

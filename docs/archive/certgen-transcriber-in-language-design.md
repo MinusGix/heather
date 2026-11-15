@@ -1,7 +1,7 @@
 # Re-homing the certifying generator's transcriber into the language
 
 > **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
-> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> (`docs/native/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
 > the source IR the verified compiler reads. The document stays for its reasoning. The last
 > commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
 > heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
@@ -13,7 +13,7 @@ transcriber* stops being Rust that walks a surface AST and becomes a layer-m
 function that walks **code**. Round pattern as usual: this document first, the
 implementing round against §10's acceptance list.
 
-The predecessor is `docs/in-language-map-design.md` — the **quotation** stage
+The predecessor is `docs/metaprogramming/in-language-map-design.md` — the **quotation** stage
 (`meta fn`, `code { … }`, `$`-splices, the elaborator-held `MetaPrograms` registry,
 the evaluation hook). This round opens the **analysis** stage: the first
 surface use of `elim^Trm`, the kernel's code recursor.
@@ -392,7 +392,7 @@ The hook, extending the map round's:
    superlinear warning): no deep normalization of an encoded value.
    *(2026-08-13: the demand order is unchanged, but the evaluation under it is
    no longer the rewriter — `Reader` forces closures in the kernel's value
-   domain. `docs/analyzer-evaluation-design.md` has the measurement and the
+   domain. `docs/metaprogramming/analyzer-evaluation-design.md` has the measurement and the
    reason; nothing about this step's contract moved.)*
 4. **Read back.** `read_ta` / `read_ir`: the encoded inductive value to Rust's
    `FnIr`. New code, and the only genuinely new *plumbing* the round adds
@@ -429,7 +429,7 @@ The hook, extending the map round's:
 6. **Route.** ~~As the map round routes `map_code`: the name is the contract,
    documented at the dispatch site.~~ **Corrected 2026-08-11 (§9.1):** routing
    by name was retired by the registration seam
-   (`docs/meta-def-registration-design.md` §2 — a template declares a typed
+   (`docs/metaprogramming/meta-def-registration-design.md` §2 — a template declares a typed
    *slot* with a `for` clause, and an unclaimed `meta fn` is never dispatched).
    The transcriber is not slot-shaped (an analyzer has no payload Π spine), so
    its dispatch is the open question §9.1 hands back: a second registration
@@ -441,7 +441,7 @@ The hook, extending the map round's:
 
 §9.1 handed back a question this section had answered wrongly (routing by
 name, retired by the registration seam). The answer the round took, in full in
-`docs/meta-def-registration-design.md`'s §11 extension and in summary here:
+`docs/metaprogramming/meta-def-registration-design.md`'s §11 extension and in summary here:
 
 The seam gains a second kind of slot. An **analyzer slot** keeps everything a
 template slot has — the `for family.name` clause, the closed Rust vocabulary,
@@ -462,7 +462,7 @@ And whole-signature convertibility buys the invoking Rust something the
 template path has to work for: the Π order is *fixed*, not merely constrained,
 so `run_transcriber` applies `(Γ = ·, arity, box marked)` in the slot's
 canonical order and consults the template's signature for nothing but its
-`CtxPi` head. `docs/meta-def-registration-design.md` §3 says the order must be
+`CtxPi` head. `docs/metaprogramming/meta-def-registration-design.md` §3 says the order must be
 enforced somewhere the caller can rely on; this is that, with the enforcement
 one step stronger.
 
@@ -584,7 +584,7 @@ and its surface half is a refutation — §9.1.
 `Code(g ⊢ T)`, and its body must be a quote** (`quote.rs`'s
 `elab_meta_decl_inner`: "a `meta fn` parameter is `Ctx` or `Code(g |- T)` in
 this slice"; "a `meta fn` returns code"). And dispatch is no longer by name:
-the **registration seam** (`docs/meta-def-registration-design.md`, landed after
+the **registration seam** (`docs/metaprogramming/meta-def-registration-design.md`, landed after
 the map round and after this document's reading list) routes a template through
 a typed *slot* claimed by a `for family.name` clause, where a slot's type is a
 code template's payload Π spine — and "a `meta fn` without a `for` clause is
@@ -615,7 +615,7 @@ types elaborated from the surface name (there is no global to reference), and
 brittle piece of Rust than §6 budgeted for.
 
 **What a round has to choose** (this document cannot settle it alone: it
-crosses `docs/meta-def-registration-design.md`, which this round does not own):
+crosses `docs/metaprogramming/meta-def-registration-design.md`, which this round does not own):
 
 - **(A) Widen the meta slice.** Program-layer types as `meta fn` parameters and
   result, and a meta body that may be an ordinary expression (calls, and
@@ -715,7 +715,7 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
   **`ty_*` arms**, **`CodeTy`/`LetBoxTy` inputs** — all four arrive together
   with the first artifact that analyzes *types* (§8 item 2, non-Nat
   embeddings). *[Corrected 2026-08-11 by the signature-reflection round
-  (`docs/fn-signature-reflection-design.md`): the first type-analyzing
+  (`docs/metaprogramming/fn-signature-reflection-design.md`): the first type-analyzing
   artifact needed only a `CodeTy`-typed input plus the `ty_*` arms — which
   were already writable, all 52 names, per §10.1's deviation. Sub-code
   binders and dependent motives did not arrive and were not needed.]*
@@ -729,7 +729,7 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
 - **Fixture fuels and the loopification pass** — unchanged homes
   (`docs/certifying-generator-design.md@4acf2fe` §8 items 1 and 3).
 - **User-declared analyzer slots** — deferred with user-declared slots
-  generally (`docs/meta-def-registration-design.md` §10, first bullet): the
+  generally (`docs/metaprogramming/meta-def-registration-design.md` §10, first bullet): the
   open question is what the contract is when there is no Rust signature to
   check against.
 - **The readback's dependence on the lowering.** `read_ir` is written against
@@ -754,7 +754,7 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
   binary, so `issues/certgen-harness-cost.md` is where a lever would go if the
   analysis stage grows a second artifact.
 - **Ψ-resident meta definitions** — still the map round's deferral
-  (`docs/in-language-map-design.md` §8); nothing here needs meta fns to
+  (`docs/metaprogramming/in-language-map-design.md` §8); nothing here needs meta fns to
   reference each other.
 
 ## 12. Documents this design amends
@@ -777,7 +777,7 @@ edits.
 4. `docs/sketches/surface-v0.md@4acf2fe` §6 — "37 fixed branches" is the paper's count,
    not the kernel's (`rec.rs:208`); and of the two default-arm flavors this
    round adopts only the constant one.
-5. `docs/meta-def-registration-design.md` — binding here, and missed by this
+5. `docs/metaprogramming/meta-def-registration-design.md` — binding here, and missed by this
    document's first draft: it retired routing by name, and its slot vocabulary
    types *code templates* by their payload Π spine, which an analyzer does not
    have. **Amended by this round**: that document now carries a dated §11

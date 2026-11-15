@@ -1,5 +1,5 @@
 //! Which withheld definitions a computation unfolded
-//! (`docs/interface-definitions-design.md` §3, §8).
+//! (`docs/language/interface-definitions-design.md` §3, §8).
 //!
 //! A world's interface boundary ([`crate::term::GlobalCtx::withheld`])
 //! keeps a definition opaque until a call of it is saturated at closed

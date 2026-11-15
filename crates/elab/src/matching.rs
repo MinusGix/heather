@@ -98,7 +98,7 @@ pub(crate) trait ConstantMotiveElab: MatchSpeculationState {
     }
 }
 
-/// The sink of an arm-type probe (docs/dependent-match-compiler-design.md
+/// The sink of an arm-type probe (docs/language/matching/dependent-match-compiler-design.md
 /// §6). The probe lowers the match at a constant marker motive; the first arm
 /// body checked against the marker whose inferred type lives outside the
 /// arm's binders is recorded here, and the probe stops.
@@ -301,7 +301,7 @@ pub(crate) fn infer_match_constant_motive_eq(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
-    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // Match speculation's phase column (`docs/infrastructure/instrumentation-design.md` §5):
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
@@ -431,7 +431,7 @@ pub(crate) fn infer_if_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
-    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // Match speculation's phase column (`docs/infrastructure/instrumentation-design.md` §5):
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
@@ -652,7 +652,7 @@ pub(crate) fn synthesize_motive(
     expected: &Type,
     span: Span,
 ) -> Type {
-    // Match speculation's phase column (`docs/instrumentation-design.md` §5):
+    // Match speculation's phase column (`docs/infrastructure/instrumentation-design.md` §5):
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
@@ -687,7 +687,7 @@ pub(crate) fn synthesize_motive(
 /// over stuck `P`, `Q` is four.
 const BELOW_DEPTH: u32 = 6;
 
-/// The last rung (`docs/goal-motive-synthesis-design.md` §4.5): the goal
+/// The last rung (`docs/elaborator/goal-motive-synthesis-design.md` §4.5): the goal
 /// read below its binders. A goal that is a relation or an `↔` over a call
 /// (`alt(a, b) ≈ Alt(a, b)`) is, reduced, a `Π` or `Σ` whose stuck positions
 /// sit in codomains and components, where §4.3's one layer does not look.
@@ -925,7 +925,7 @@ fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Rewrap) -> Option<Type
         // A child read and the constructor value it reads from are two
         // spellings of one value, so both are abstracted under the one `z`: a
         // goal that names the child and the value together is specialized at
-        // both, never half (`docs/goal-motive-synthesis-design.md` §4.4).
+        // both, never half (`docs/elaborator/goal-motive-synthesis-design.md` §4.4).
         Rewrap::Child(bases) => {
             let mut pats = vec![(scrutinee.clone(), Term::Var(LocalVar(0)))];
             pats.extend(bases.iter().cloned());
@@ -939,7 +939,7 @@ fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Rewrap) -> Option<Type
 }
 
 /// What a goal mentions in place of the scrutinee, rebuilt around `z`
-/// (`docs/goal-motive-synthesis-design.md` §5).
+/// (`docs/elaborator/goal-motive-synthesis-design.md` §5).
 #[derive(Debug)]
 enum Rewrap {
     None,
@@ -949,12 +949,12 @@ enum Rewrap {
     /// A recursive binder of a `Wf` or `W` arm, which is a read out of the
     /// arm's children and not a subterm of the goal's constructor value: each
     /// local the read is built from, rebuilt around `z`. Abstracted together
-    /// with the scrutinee (docs/dependent-match-compiler-design.md §7.1).
+    /// with the scrutinee (docs/language/matching/dependent-match-compiler-design.md §7.1).
     Child(Vec<(Term, Term)>),
 }
 
 /// A `Wf` arm's recursive binder: `nth^l(⟦D⟧; Succ^m(base); cs; ι_t)` over a
-/// children tuple `cs` that is a local (docs/inductive-tier1-wf-lowering.md
+/// children tuple `cs` that is a local (docs/inductives/inductive-tier1-wf-lowering.md
 /// §6.3). Recognized by rebuilding the schema and comparing, so nothing that
 /// merely resembles it is taken apart. Returns the level, the element type,
 /// the length, `cs` and `t`.
@@ -992,7 +992,7 @@ pub(crate) fn child_read(term: &Term) -> Option<(Level, Rc<Type>, Rc<Term>, Rc<T
 /// ι_t)` it is `cs` again by `nth`'s reduction at a `Succ`-headed length and
 /// Σ-η, which is the whole reason a `Wf` child needs no transport: the
 /// children are a tuple, not a function, so no η at a function space is
-/// asked for (contrast tier 2's leaf, docs/inductive-tier2-w-lowering.md
+/// asked for (contrast tier 2's leaf, docs/inductives/inductive-tier2-w-lowering.md
 /// §2.1).
 fn child_rewrap(term: &Term) -> Option<(Term, Term)> {
     let (level, elem, len, cs, t) = child_read(term)?;
@@ -1033,7 +1033,7 @@ fn child_rewrap(term: &Term) -> Option<(Term, Term)> {
 }
 
 /// A `W` arm's plain recursive binder, `t := ⟨f' ⟨⟩, c⟩`
-/// (docs/inductive-tier2-w-lowering.md §7): the children function `f'` and
+/// (docs/inductives/inductive-tier2-w-lowering.md §7): the children function `f'` and
 /// the leaf-predicate proof `c` are locals, and the goal spells the value as
 /// `⟨sup(ℓ; f'), c⟩`. Rebuilt around `z` as `f' := λ(y : P ℓ). fst z` and `c :=
 /// snd z`. At `z := t` the first is `f'` again by Π-η and `Unit`-η (the
@@ -1139,7 +1139,7 @@ fn tier0_field_rewrap(cx: &Cx, scrutinee: &Term, indexed: bool) -> Option<(Term,
         return Some(rewrap);
     }
     // The checked spelling's η-expansion is the same shape with **no**
-    // annotation below the root (`docs/intro-by-type-design.md` §4.2): every
+    // annotation below the root (`docs/elaborator/intro-by-type-design.md` §4.2): every
     // inner `pair@` is a field of the one above it, so it is in checking
     // position. The root replaces `base` wherever the goal mentions it,
     // including as the receiver of a projection, so it must infer — and the

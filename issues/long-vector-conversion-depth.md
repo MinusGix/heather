@@ -50,7 +50,7 @@ path.
 ## Log
 
 - 2026-11-07: fixed by conversion's deferral of comparisons met deep
-  (docs/deep-term-walks-design.md §3.4) rather than a Σ-tail continuation:
+  (docs/kernel/deep-term-walks-design.md §3.4) rather than a Σ-tail continuation:
   the reproduction's two theorems check at 3,000 characters, and the
   kernel twin compares two 20,000-element nodes
   (`a_node_longer_than_any_chain_the_stack_holds_checks`). What is left is

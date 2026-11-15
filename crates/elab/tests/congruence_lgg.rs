@@ -218,7 +218,7 @@ fn expected_not_an_id_leaves_the_old_error() {
 #[test]
 fn the_lgg_trigger_precedes_the_general_harvest() {
     // Since the expected-type harvest became general
-    // (docs/unifier-completeness-design.md §5.2), a shape matching both the
+    // (docs/elaborator/unifier-completeness-design.md §5.2), a shape matching both the
     // flex-`Id` trigger and a would-be first-order reading must still take
     // the LGG: `λz. add(z, 0)` is the congruence, where peeling would have
     // guessed `add(a)` and died at the kernel.
@@ -239,7 +239,7 @@ fn other_implicits_are_untouched() {
 
 // -- inside a `trans` chain -------------------------------------------------
 //
-// docs/congruence-in-inference-position-design.md. A call whose callee has a
+// docs/elaborator/congruence-in-inference-position-design.md. A call whose callee has a
 // **result-only implicit** — one no explicit parameter's domain mentions — is
 // checking-only, so `trans`'s argument is elaborated after its sibling and at
 // the domain the sibling determined. Two thirds of the library's congruence

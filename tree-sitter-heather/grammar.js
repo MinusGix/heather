@@ -106,7 +106,7 @@ module.exports = grammar({
 
     function_declaration: $ => seq(
       // `partial fn`, `partial(E) fn`: a function that may not return
-      // (docs/partial-functions-design.md §4).
+      // (docs/language/partial-functions-design.md §4).
       optional(choice('meta', 'interface', seq('partial', optional(seq('(', field('events', $._head_expression), ')'))))),
       'fn', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
@@ -144,7 +144,7 @@ module.exports = grammar({
     ),
 
     // `varies A`: the parameter a type constructor over the declaration
-    // abstracts (docs/lambda-carrier-instances-design.md §7.1).
+    // abstracts (docs/language/classes/lambda-carrier-instances-design.md §7.1).
     varies_clause: $ => seq('varies', field('parameter', $.identifier)),
 
     class_declaration: $ => seq(
@@ -182,7 +182,7 @@ module.exports = grammar({
     ),
 
     // `def five: Nat = 5;`, `def six = Succ(five);` — a value definition
-    // (docs/value-definitions-design.md §2). The annotation stops at `=`, as
+    // (docs/metaprogramming/value-definitions-design.md §2). The annotation stops at `=`, as
     // a `let`'s does.
     value_declaration: $ => seq(
       'def', field('name', $._qualified_name), optional($.type_parameters),
@@ -191,14 +191,14 @@ module.exports = grammar({
 
     // `runtime fn f(…)`, `regex def is_hex = "…";`, `laid record T { … }` —
     // a declaration under a prefix generator
-    // (docs/value-definitions-design.md §3).
+    // (docs/metaprogramming/value-definitions-design.md §3).
     prefixed_declaration: $ => seq(
       field('generator', $.identifier), optional(field('arguments', $.argument_list)),
       field('declaration', choice($.function_declaration, $.theorem_declaration, $.value_declaration, $.record_declaration)),
     ),
 
     // `generate congruences(Tm);` — a generator's declarations, published
-    // here (docs/host-elaboration-interface-design.md §19).
+    // here (docs/metaprogramming/host-elaboration-interface-design.md §19).
     generate_declaration: $ => seq('generate', field('generator', $._expression), ';'),
 
     assuming_declaration: $ => seq(
@@ -206,7 +206,7 @@ module.exports = grammar({
       field('body', seq('{', repeat($._item), '}')),
     ),
     // `section<A: C>(x: A) { fn … theorem … }` — a head spliced into every
-    // member's (docs/sections-design.md).
+    // member's (docs/language/sections-design.md).
     section_declaration: $ => seq(
       'section', optional($.type_parameters), optional($.requires_clause),
       optional(field('parameters', $.parameter_list)),
@@ -225,13 +225,13 @@ module.exports = grammar({
     requires_clause: $ => seq('requires', commaSep1($.requirement)),
 
     // `decreases e` — a termination measure between the result type and the
-    // body (docs/termination-measures-design.md).
+    // body (docs/language/recursion/termination-measures-design.md).
     // The measure is read with the declaration-type sub-grammar, which is the
     // expression grammar minus the forms that would swallow the body's `{`.
     decreases_clause: $ => seq('decreases', $._declaration_type),
     // `unfolding f, g`: the interface definitions whose bodies this
     // declaration may read at open arguments
-    // (docs/interface-definitions-design.md §4).
+    // (docs/language/interface-definitions-design.md §4).
     unfolding_clause: $ => seq('unfolding', commaSep1($._qualified_name)),
     requirement: $ => choice(
       field('class', $.requirement_class_reference),
@@ -303,13 +303,13 @@ module.exports = grammar({
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
       // A statement body ends in a statement and has no result
-      // (docs/sequencing-surface-design.md §4).
+      // (docs/language/sequencing-surface-design.md §4).
       seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
         choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
           'break', 'continue', seq('return', field('value', $._expression))), '}'),
     ),
     // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
-    // docs/sequencing-surface-design.md §3.1).
+    // docs/language/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
       'let', optional('mut'), choice(field('name', $.identifier), $.destructure_pattern),
       optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
@@ -327,14 +327,14 @@ module.exports = grammar({
       optional(seq('..', field('end', $._head_expression))), field('body', $.block)),
     // `while c decreases m { body }` (§5.3): a recursive function over the
     // locals the body assigns, `m` its measure.
-    // With no `decreases`, a loop of a carrier that iterates (docs/sequencing-surface-design.md §18).
+    // With no `decreases`, a loop of a carrier that iterates (docs/language/sequencing-surface-design.md §18).
     while_statement: $ => seq('while', field('condition', $._head_expression), optional(seq('decreases', field('measure', $._head_expression))), field('body', $.block)),
     // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
     // words, statements only before `;` or `}`.
     exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
     // `e;` discards a computation's result in a block over a carrier.
     expression_statement: $ => seq(field('value', $._expression), ';'),
-    // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
+    // `have x = e;` binds opaquely (docs/language/have-design.md): one name, never a
     // pattern. `have` stays a contextual word, so `have(x)` is still a call.
     have_statement: $ => seq(
       'have', field('name', $.identifier),
@@ -646,7 +646,7 @@ module.exports = grammar({
     quote_expression: $ => seq('code', $.block),
     splice_expression: $ => prec(PREC.PREFIX, seq('$', choice($.identifier, seq('{', $._expression, '}')))),
     // Each step names its relation; the compiler composes mixed `=`, `≈`,
-    // `<=` and `<` steps (docs/calc-order-chains.md).
+    // `<=` and `<` steps (docs/tactics/calc-order-chains.md).
     calc_expression: $ => seq('calc', '{',
       $.calc_first_step, repeat(seq(',', $.calc_next_step)),
       optional(','), '}'),
@@ -663,7 +663,7 @@ module.exports = grammar({
     squash_ind_expression: $ => seq('squash_ind', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     refl_expression: _ => 'refl',
 
-    // `by t` runs the tactic `t` (docs/host-elaboration-interface-design.md §7);
+    // `by t` runs the tactic `t` (docs/metaprogramming/host-elaboration-interface-design.md §7);
     // the compiler reads it only when a name follows, so `by` stays a name.
     by_expression: $ => prec.right(PREC.POSTFIX, seq('by', field('tactic', choice(
       $._qualified_name,

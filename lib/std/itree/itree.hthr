@@ -1,5 +1,5 @@
 // Interaction trees over container events, cut at fuel
-// (docs/interaction-trees-fit.md, docs/itree-core-round.md;
+// (docs/itrees/interaction-trees-fit.md, docs/itrees/itree-core-round.md;
 // issues/interaction-trees-container-model.md, milestone `it-core`).
 //
 // A program that talks to its environment is a tree: it returns (`Ret`),
@@ -104,7 +104,7 @@ fn ITree::translate<R>(E: Events, F: Events, m: EventMap(E, F), t: ITree<R>(E)) 
 // What a tree does next, its silent steps stripped: return, issue a
 // command, or stop at a cut. A finite tree has finitely many `Tau`s in a
 // row, so this is structural; a logic reads a tree one `next` at a time,
-// never a deep bind chain at once (docs/native-program-logic-design.md §4).
+// never a deep bind chain at once (docs/native/native-program-logic-design.md §4).
 inductive Next<R>(E: Events) {
     Exits(r: R),
     Calls(c: E.Cmd, k: E.Resp(c) → ITree<R>(E)),
@@ -132,7 +132,7 @@ inductive Step<A, B> { Continue(a: A), Break(b: B) }
 // `CoTree<_>(E)` and `Partial` have one (`coitree.hthr`); a carrier whose
 // computations all finish (`Option`, `Result`) has none, which is why a
 // `while` with no measure checks only in the first kind
-// (docs/partial-functions-design.md §4.2, docs/sequencing-surface-design.md
+// (docs/language/partial-functions-design.md §4.2, docs/language/sequencing-surface-design.md
 // §6.2). Laws are not fields.
 class Iterate<M: Type → Type> { iter: {A, B: Type} → (A → M(Step<A, B>)) → A → M(B) }
 
@@ -140,7 +140,7 @@ class Iterate<M: Type → Type> { iter: {A, B: Type} → (A → M(Step<A, B>)) �
 // such a carrier: the loop from `init`, then the rest of the block `k` at
 // the state it leaves with. One call, so that `M` is learned from the
 // block's expected type before the step is checked
-// (docs/sequencing-surface-design.md §18).
+// (docs/language/sequencing-surface-design.md §18).
 fn Iterate::loop<A, B>({M: Type → Type}, body: A → M(Step<A, B>), init: A, d: Iterate<M> := infer) → M(B) {
     d.iter(body, init)
 }

@@ -1,7 +1,7 @@
 // A source's statements read against a world, threaded: what a loop-free
 // statement does to the capability `Io` and to the environment, as a plain
 // function, and that its tree reads as that function at every world
-// (docs/effects-capabilities-design.md §8.5; issues/effects-uniqueness-surface.md,
+// (docs/language/effects-capabilities-design.md §8.5; issues/effects-uniqueness-surface.md,
 // slice 4).
 //
 // `Stmt::denote_co` is a tree over Linux's calls. A lowering from effectful
@@ -514,7 +514,7 @@ fn Stmt::then_run(rest: Io → Env → Partial(Mutated<Io, Flow>), m: Mutated<Io
 
 // Every statement as world threading: a loop is `Io::iterate` of its
 // pass, which may go round forever, so the meaning is in `Partial`
-// (docs/effects-capabilities-design.md §4); a procedure call is its tree
+// (docs/language/effects-capabilities-design.md §4); a procedure call is its tree
 // read against the world. A function of the environment and the world, so
 // that the recursion is on the statement.
 fn Stmt::run(self s: Stmt, call: Writers(), perform: PerformsCo()) → Env → Io → Partial(Mutated<Io, Flow>) {

@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §3.8: the first divergent series
+`docs/library/analysis-foundations-design.md` §3.8: the first divergent series
 summed end to end, with no integration. Euler's series
 `E = ∑ (−1)ⁿ n! xⁿ⁺¹` is the formal solution of `x²E' + E = x`, and it has
 the Stieltjes continued fraction `x/(1 + x/(1 + x/(1 + 2x/(1 + 2x/…))))`,

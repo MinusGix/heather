@@ -1,6 +1,6 @@
 // Linux as a capability: effectful code as pure code over a world
-// (docs/effects-capabilities-design.md; issues/effects-uniqueness-surface.md;
-// docs/sequencing-surface-design.md §8).
+// (docs/language/effects-capabilities-design.md; issues/effects-uniqueness-surface.md;
+// docs/language/sequencing-surface-design.md §8).
 //
 // A program that talks to Linux takes an `Io` and updates it: `let r =
 // io.read(fd, n);` on a `let mut io` is an ordinary call of a `mut self`
@@ -17,7 +17,7 @@
 // states it (`Io::sent`: the bytes it wrote to a descriptor). At run time
 // the capability is nothing: a compiled program performs the calls, and the
 // history is only the meaning (`runtime fn` setups lay `Io` out as no
-// words; docs/runtime-fn-setups-design.md §8).
+// words; docs/native/runtime-fn-setups-design.md §8).
 //
 // The tree reading. A tree over Linux's calls (`Source::tree`, a spec) is
 // read against a world: each command is put to the world and answered, as
@@ -26,7 +26,7 @@
 // to a computation in `Partial`, so a loop that never ends reads as one
 // that never returns. A capability program `f` agrees with a tree `t` when
 // the reading is `f` up to silent steps at every world (`Io::Reads(t, f)`,
-// `docs/effects-capabilities-design.md` §4). That is how a compiled
+// `docs/language/effects-capabilities-design.md` §4). That is how a compiled
 // program's tree and the function it was compiled from are tied: the tree's
 // reading at every world is the function, so the tree is what the function
 // does. `Io::reads_bind` is sequencing's case and `Io::reads_iter` the
@@ -159,6 +159,6 @@ theorem Io::against_bind<A, B>(t: ITree<A>(Events::linux()), h: A → ITree<B>(E
 }
 
 // The coinductive reading, `Io::Reads` up to taus and the loop lemma are in
-// `linux_world_co` (docs/effects-capabilities-design.md §4), so the modules
+// `linux_world_co` (docs/language/effects-capabilities-design.md §4), so the modules
 // that only run programs against a world do not load the coinductive
 // library.

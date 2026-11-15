@@ -1,8 +1,8 @@
 // Order meeting `+` and `*`, from a strict order up to the constructive
 // ordered field, as layers of classes over a setoid
 // (issues/constructive-ordered-field-interface.md,
-// issues/ordered-algebra-api.md; docs/constructive-ordered-field-design.md,
-// docs/ordered-algebra-design.md).
+// issues/ordered-algebra-api.md; docs/library/constructive-ordered-field-design.md,
+// docs/library/ordered-algebra-design.md).
 //
 // Nothing here decides anything. Equality is a setoid `≈`, never `=`; the
 // strict order `<` is primitive (at the reals it is positive data, a gap);
@@ -89,7 +89,7 @@ fn Within<A>(le: A → A → Type, a, x, b: A) → Type { le(a, x) ∧ le(x, b) 
 // indices (`≈`'s and `<`'s) into one dictionary.
 //
 // Both relations are indices, and the class presents what they are as
-// relations (docs/strict-order-presentation-design.md): `<` is a
+// relations (docs/library/strict-order-presentation-design.md): `<` is a
 // `Transitive` relation, and `≈` chains with either order, as tagged parents.
 // They are what lets a `calc` inside `section<A: StrictOrder(…)>` step through
 // `<`, `≈` and `≤`. A carrier with those instances registered (`Rat`, `CReal`,

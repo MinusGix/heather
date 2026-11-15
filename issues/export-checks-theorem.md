@@ -8,7 +8,7 @@ created: 2026-10-20
 updated: 2026-10-20
 ---
 
-`docs/export-fragment-design.md` §8 splits the theorem into three lemmas over
+`docs/library/export-fragment-design.md` §8 splits the theorem into three lemmas over
 HX, the export's intermediate language: (1) Heather → HX preserves typing and
 conversion on the fragment, under the eta-long invariant; (2) HX embeds into
 PCUIC (MetaCoq); (3) HX embeds into a model of Lean's kernel (Lean4Lean, or

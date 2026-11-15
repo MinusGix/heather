@@ -1,7 +1,7 @@
 // Probes of a program linked from a function that writes a span and
 // functions that only read (lib/native/runtime/runtime_file.hthr,
 // lib/native/function_ir/function_ir_link.hthr;
-// docs/native-one-compiler-design.md §2.6, U4 step 4c-3b). The loop that
+// docs/native/native-one-compiler-design.md §2.6, U4 step 4c-3b). The loop that
 // raises every byte of its span is an instance of `CompileSpan`, built
 // from its reflection and its own recursor; `raise`, which it calls, and
 // `twice`, which it does not, are `runtime fn`s with the instances the

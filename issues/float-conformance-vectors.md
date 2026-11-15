@@ -14,7 +14,7 @@ against an independent IEEE implementation. A wrong tie rule, overflow
 threshold or zero-sign clause that still satisfies uniqueness and
 monotonicity would pass. The two specification bugs in Coq's primitive
 floats were of exactly this kind (a typo in `leb`, inconsistent zero
-classification; `docs/coq-hardware-floats-survey.md` §3, §5.4).
+classification; `docs/surveys/coq-hardware-floats-survey.md` §3, §5.4).
 
 ## The check
 

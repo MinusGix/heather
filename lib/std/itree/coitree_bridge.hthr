@@ -1,5 +1,5 @@
 // Coinductive trees against the fuelled programs of the finite library
-// (docs/coitree-design.md §8; issues/coitree-program-bridge.md, milestone
+// (docs/itrees/coitree-design.md §8; issues/coitree-program-bridge.md, milestone
 // `it-coinductive`).
 //
 // A coinductive tree is a program through its approximations

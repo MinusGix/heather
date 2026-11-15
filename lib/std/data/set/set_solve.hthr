@@ -1,6 +1,6 @@
 // Membership in set expressions over any carrier with decidable
 // membership, decided by a truth table (issues/finite-set-membership-solver.md,
-// issues/sets-any-carrier.md, docs/native-mathematics-survey.md §1).
+// issues/sets-any-carrier.md, docs/surveys/native-mathematics-survey.md §1).
 //
 // A carrier is a `DecSet<S, A>` (lib/std/data/set/dec_set.hthr): `s.has(x)`
 // is a Boolean, and an operation with an instance there (`SetUnion`,

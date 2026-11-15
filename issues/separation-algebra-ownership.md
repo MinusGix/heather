@@ -14,7 +14,7 @@ predicate to a footprint (dynamic frames) is enough, and
 [[address-interval-sets]] with [[state-location-and-frame-kit]] give it.
 Ownership does: the ownership setup wants "this function holds `xs`
 exclusively" as a resource that composes, splits when a borrow is taken and
-recombines when it ends. `docs/native-mathematics-survey.md` §7; survey
+recombines when it ends. `docs/surveys/native-mathematics-survey.md` §7; survey
 rank 7. File-now, build-with-the-ownership-round.
 
 ## Scope

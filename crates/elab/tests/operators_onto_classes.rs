@@ -1,5 +1,5 @@
 //! Designations and `Monoid(+)` — operators onto classes
-//! (`docs/operators-onto-classes-design.md`, the acceptance list of §10).
+//! (`docs/language/classes/operators-onto-classes-design.md`, the acceptance list of §10).
 //!
 //! The one sentence the whole feature is: an operator symbol is a **name in a
 //! namespace of its own**, and a `designation` is what puts a meaning in it at
@@ -517,7 +517,7 @@ fn slow_acceptance_a_bare_symbol_between_delimiters_is_the_index() {
     ok("theorem d(): Bool::Mon(+).unit = False { refl }");
     // The other is a **checking** position, whose expected type names the
     // carrier the slot is asking for
-    // (docs/bare-symbol-checking-carrier-design.md). `fold`'s `op` parameter is
+    // (docs/language/classes/bare-symbol-checking-carrier-design.md). `fold`'s `op` parameter is
     // `A -> A -> A` with `A := Bool` pinned by `bs`, so the bare `+` resolves
     // at `Bool` — where the table says `or` — and this used to be a refusal.
     ok("theorem c(bs: List<Bool>): fold(+, bs) = fold(Bool::or, bs) { refl }");
@@ -590,7 +590,7 @@ fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
     assert!(e.contains("`Bool`"), "{e}");
     assert!(e.contains("bool::Bool::and"), "{e}");
     // And it names the carrier it tried, rather than saying "this carrier"
-    // and naming none (docs/bare-symbol-checking-carrier-design.md §6(a)):
+    // and naming none (docs/language/classes/bare-symbol-checking-carrier-design.md §6(a)):
     // here rung 2 probed the left operand.
     assert!(e.contains("nothing designates `&&` at `Nat`"), "{e}");
     assert!(e.contains("the carrier of its left operand"), "{e}");
@@ -608,7 +608,7 @@ fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
     // A bare `&&` between delimiters has no operand, but in a **checking**
     // position it has a carrier all the same — the one the slot's own type
     // names — so this resolves at `Bool` and used to be a refusal
-    // (docs/bare-symbol-checking-carrier-design.md). What stays a refusal is
+    // (docs/language/classes/bare-symbol-checking-carrier-design.md). What stays a refusal is
     // the rung that was missing: a carrier the table does not cover, above.
     ok("theorem c(bs: List<Bool>): fold(&&, bs) = fold(Bool::and, bs) { refl }");
 }
@@ -640,7 +640,7 @@ fn slow_acceptance_append_symbol_has_no_fallback_rung() {
 }
 
 // -- the checking-position carrier -----------------------------------------
-// docs/bare-symbol-checking-carrier-design.md §10. A bare symbol has no
+// docs/language/classes/bare-symbol-checking-carrier-design.md §10. A bare symbol has no
 // operand, so rung 2 used to be unreachable for it; in a **checking** position
 // the expected type's first domain is the carrier the slot is asking about,
 // which is the same fact the left operand supplies, arriving from the other

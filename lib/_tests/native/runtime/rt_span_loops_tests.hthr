@@ -1,5 +1,5 @@
 // Probes of a loop over a lent span (`Fun::lower_measured` with kept words,
-// lib/native/runtime/rt_loop.hthr; docs/native-one-compiler-design.md §2.3,
+// lib/native/runtime/rt_loop.hthr; docs/native/native-one-compiler-design.md §2.3,
 // U3c step 2): the two words of the span's home stay where they are through
 // the loop, which is what the function compiler asks of a loop that reads a
 // lent buffer. A function that counts a span's newlines is lowered to such a

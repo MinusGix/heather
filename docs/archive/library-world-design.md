@@ -1,6 +1,6 @@
 # One world for every process that checks the library
 
-Status: superseded by `docs/module-dag-design.md` (2026-10-30): a module is
+Status: superseded by `docs/infrastructure/module-dag-design.md` (2026-10-30): a module is
 checked over its own import closure and keyed by it, so no process needs a
 shared prefix. `--world` is accepted and ignored; `World::folders` survives as
 the gate's folder order. Kept for the history of why the chain existed.
@@ -74,7 +74,7 @@ The world is a function of the tree. Adding a module nothing imports changes
 nothing; a new import edge can change which folder places first, which moves
 every later module's prefix. The exact lane then rebuilds what moved, and the
 stale lanes' early cutoff refuses a reordered world as it refuses any changed
-registry (`docs/module-interface-cutoff-design.md` §3), so such an edit costs
+registry (`docs/infrastructure/module-interface-cutoff-design.md` §3), so such an edit costs
 a rebuild of the moved suffix once. Computing the world reads and parses the
 library's files once per process.
 

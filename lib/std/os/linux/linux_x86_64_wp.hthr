@@ -1,5 +1,5 @@
 // One computed weakest precondition over label code
-// (docs/native-program-logic-design.md §6; issues/native-one-wp.md,
+// (docs/native/native-program-logic-design.md §6; issues/native-one-wp.md,
 // issues/native-loop-rule.md): what the compiler's per-construct lemmas are
 // proved with.
 //
@@ -724,7 +724,7 @@ theorem Callee::returns_of_steps<M, V>(self k: Callee<M, V>, io: LinuxIo<M>, vie
 }
 
 // ---------------------------------------------------------------------------
-// One loop rule (docs/native-program-logic-design.md §6.2)
+// One loop rule (docs/native/native-program-logic-design.md §6.2)
 
 // A pass round the loop made progress: it passed a syscall, which consumed
 // an answer, or it lowered the variant.

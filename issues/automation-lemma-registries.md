@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-11-08
 ---
 
-Round P3 of `docs/compiler-milestones-proposal.md` (§6.2, §7): lemma registries that automation reads, so a
+Round P3 of `docs/native/compiler-milestones-proposal.md` (§6.2, §7): lemma registries that automation reads, so a
 new type gets automation by registering lemmas rather than by editing a
 tactic.
 
@@ -25,7 +25,7 @@ A new ordered carrier gets `mono` and `norm_num` by registering its lemmas, with
 ## Log
 
 - 2026-11-08: 2026-11-08: [[simp-tactic]] wants the same registration for its default lemma set, so this mechanism should not be shaped only around mono and norm_num.
-- 2026-11-08: mechanism and `mono` done (docs/registered-values-design.md).
+- 2026-11-08: mechanism and `mono` done (docs/metaprogramming/registered-values-design.md).
   `name_of(p)` is a checked qualified key; `register def x: T = e;` enters
   `x` in a registry under `T` (a module event: images, cutoff digest, slice
   replay); `registered(T)` lists the import closure's values, and as a

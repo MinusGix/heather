@@ -1,5 +1,5 @@
 // The machine meets a coinductive tree (issues/linux-sim-divergence.md;
-// docs/kernel-coinduction-design.md §6.1).
+// docs/kernel/kernel-coinduction-design.md §6.1).
 //
 // `Sim` (`linux_x86_64_sim`) is partial correctness: a tree cut at every
 // fuel along a run, such as a loop that goes round silently forever, is

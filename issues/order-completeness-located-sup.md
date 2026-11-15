@@ -25,7 +25,7 @@ The unrestricted least-upper-bound principle implies LPO, so it is not a
 capability any constructive carrier has. Record that as a ¬ statement only if
 an LPO-shaped principle is ever named in the library.
 
-docs/sequences-and-completeness.md §2 has the table of notions.
+docs/library/sequences-and-completeness.md §2 has the table of notions.
 
 ## Log
 
@@ -41,4 +41,4 @@ docs/sequences-and-completeness.md §2 has the table of notions.
   (the ray below `c` has supremum `c`, found at `CReal`, refused at `Rat`).
   The consumers moved to [[located-sup-consumers]]; the merged-call kernel
   panic hit on the way is [[merged-call-through-upcast-panics]].
-  docs/sequences-and-completeness.md §4.
+  docs/library/sequences-and-completeness.md §4.

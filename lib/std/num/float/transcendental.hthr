@@ -1,5 +1,5 @@
-// Correctly rounded exp and log at floats (docs/floating-point-design.md §6,
-// submilestone `float-transcendental`; docs/creal-transcendental-round.md).
+// Correctly rounded exp and log at floats (docs/library/floating-point-design.md §6,
+// submilestone `float-transcendental`; docs/library/creal.md).
 //
 // A finite float's value is a rational, so its exp is the series real
 // `CReal::exp_rat` at that value, and its log (at a positive float)

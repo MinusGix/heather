@@ -322,7 +322,7 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   stands unchanged; the running score is that a curated addition costs three to
   four small edits, which is still the number a mechanism has to beat.
 - 2026-08-10: The second curated-lexicon data point landed via [[list-append-symbol]]: `++` costs the same lexer/binding-power/op-symbol/designation edits as predicted, shares additive precedence, and has no fallback. The extension-mechanism question remains unchanged.
-- 2026-10-27: docs/analysis-foundations-design.md (PR #220) asks for the big-operator binder production (`∑ k < n, e`, `∏`) ahead of the rest of the notation work: every analysis layer it orders reads through finite sums, and the library spelling `MonoidRel::range(+, n, λ k => …)` does not scale. Customer: [[finite-sums-and-products]].
+- 2026-10-27: docs/library/analysis-foundations-design.md (PR #220) asks for the big-operator binder production (`∑ k < n, e`, `∏`) ahead of the rest of the notation work: every analysis layer it orders reads through finite sums, and the library spelling `MonoidRel::range(+, n, λ k => …)` does not scale. Customer: [[finite-sums-and-products]].
 - 2026-10-27: [[finite-sums-and-products]] landed the library the `∑` production
   would elaborate to (`MonoidRel::range(+, n, λ k => e)`), and found the one
   thing a parse-time desugaring in the style of `∃` cannot do: a bare
@@ -353,7 +353,7 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
 - 2026-10-27: That edge is closed. An unannotated λ whose binders' domains
   the call already knows (`f: Nat → Nat → A`) now infers like its annotated
   twin once nothing else is left to teach the call, and the body's type fixes
-  the carrier (docs/unifier-completeness-design.md, amendment 2026-10-27).
+  the carrier (docs/elaborator/unifier-completeness-design.md, amendment 2026-10-27).
   `∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))` checks at
   `Rat`, `Nat` and an open semiring with no binder annotations.
 - 2026-11-05: gardener: cites a file it shares with [[integer-operator-symbols]] (`crates/syntax/src/lexer.rs`); [[self-hosted-lexer]] (`crates/syntax/src/lexer.rs`).

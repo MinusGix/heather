@@ -1,5 +1,5 @@
 // Lists in a bump arena: the cells a `runtime fn`'s lists live in at run
-// time, and what they mean (docs/native-heap-arena-design.md §4;
+// time, and what they mean (docs/native/native-heap-arena-design.md §4;
 // issues/native-heap-arena.md, issues/datarepr-separation.md).
 //
 // An arena is a run of bytes, used from the bottom up: it is only ever
@@ -13,7 +13,7 @@
 //
 // So a list is a name and the bytes it is read from (`ArenaRef`), and what
 // it means is read off them (`ArenaRef::abs`). This is the `datarepr`
-// discipline (docs/datarepr-design.md §1): the representation is not the
+// discipline (docs/native/datarepr-design.md §1): the representation is not the
 // spec type, an abstraction function reads the spec value off it, and an
 // invariant (`ArenaRef::inv`) is what every law assumes. Its images are
 // operations, not total functions (FINDING 1, §1.3): consing writes a cell

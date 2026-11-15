@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-Round R2a of `docs/sequencing-surface-design.md` (§2.1, §12): classes whose
+Round R2a of `docs/language/sequencing-surface-design.md` (§2.1, §12): classes whose
 carrier is a type constructor, so `Bind<M>`/`Pure<M>` (and later functors and
 traversals) can be stated. Minus, 2026-10-31, on PR #313: a `Monad` Heather
 cannot express is something to fix in Heather.
@@ -54,4 +54,4 @@ both and computes by `refl`. Refusals name their reason: an ambiguous
 ## Log
 
 - 2026-10-31: 2026-10-31: Decide [[parametric-type-families]] first: if <A> parameters become kernel families, pieces 1-2 here shrink or disappear and this round becomes its first step.
-- 2026-10-31: Landed without a kernel change (docs/higher-kinded-classes-design.md). Piece 2: a bare generic name at a Type → Type position is D#tycode_fn^δ (a λ for tier 2). Piece 1: an applied meta takes the respelled subject's head plus leading arguments, and a type with no code function (Tac) is matched through a computed template; the last argument is the abstracted one, so Result abstracts its error type ([[class-instance-at-lambda-carrier]]). Piece 3: class Bind<M: Type → Type> lowers to record Bind(M: Type → Type); instances at Option and Tac resolve and twice computes by refl at both (lib/_tests/std/core/type_constructor_tests.hthr). Follow-ups: [[class-instance-at-lambda-carrier]], [[tier2-type-code-functions]].
+- 2026-10-31: Landed without a kernel change (docs/language/classes/higher-kinded-classes-design.md). Piece 2: a bare generic name at a Type → Type position is D#tycode_fn^δ (a λ for tier 2). Piece 1: an applied meta takes the respelled subject's head plus leading arguments, and a type with no code function (Tac) is matched through a computed template; the last argument is the abstracted one, so Result abstracts its error type ([[class-instance-at-lambda-carrier]]). Piece 3: class Bind<M: Type → Type> lowers to record Bind(M: Type → Type); instances at Option and Tac resolve and twice computes by refl at both (lib/_tests/std/core/type_constructor_tests.hthr). Follow-ups: [[class-instance-at-lambda-carrier]], [[tier2-type-code-functions]].

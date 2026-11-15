@@ -10,7 +10,7 @@ updated: 2026-10-21
 
 `rewrite(h, e)` finds the equation's left side syntactically (`==` on
 elaborated terms, implicit arguments included) in the goal as written and
-one exposed layer (`docs/equation-rewrite-design.md` §2). It misses:
+one exposed layer (`docs/tactics/equation-rewrite-design.md` §2). It misses:
 
 - an occurrence whose implicit arguments are spelled differently
   (`lib/std/bitvec/bitvec.hthr`'s `ofNat(toNat(x)) = ofNat(0)` site, which needed
@@ -40,7 +40,7 @@ claims a number.
 
 ## Log
 
-- 2026-10-21: done (`docs/equation-rewrite-design.md` §6.2). Occurrences are
+- 2026-10-21: done (`docs/tactics/equation-rewrite-design.md` §6.2). Occurrences are
   the left side plus every subterm under no binder with its global head and
   arity that converts to it (type checked too), capped at 256 candidates,
   abstracted in one pass; `at :=` numbers all spellings together. Measured

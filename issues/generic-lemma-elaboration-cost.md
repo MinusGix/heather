@@ -88,7 +88,7 @@ duplicated text for this cost in the cold gate.
     every leaf's push, order and fact probe. Now the host remembers the
     applications it reified (`Run::readings`), a new `Holes(e, n)` request
     makes a spine of holes in one step, and `mono` reads the edges once per
-    run (docs/host-elaboration-interface-design.md §20). `by mono_with`
+    run (docs/metaprogramming/host-elaboration-interface-design.md §20). `by mono_with`
     reading `map(Dyadic::add(a, c).rat()) <= x + y` through the section's
     morphism: 4.3 s → 0.9 s per lemma; its `CReal` twin through a
     registered edge is ~0.5 s, so the class carrier is now within 2× of a

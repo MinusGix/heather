@@ -1,6 +1,6 @@
 // Lattices: meets and joins as universal properties of an order, modulo the
 // carrier's `≈` (issues/lattice-structure-api.md,
-// docs/lattice-structure-design.md).
+// docs/library/lattice-structure-design.md).
 //
 // One canonical theory, presented by the order. `MeetSemilattice(≈, ≤, ⊓)`
 // says that `x ⊓ y` is a greatest lower bound; commutativity, associativity,

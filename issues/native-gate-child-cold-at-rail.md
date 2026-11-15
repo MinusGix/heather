@@ -21,7 +21,7 @@ Where it goes (cold module totals, `perf/bench/targets.md` T4): the
 The two heaviest declarations reproduce alone ([[native-lemma-kernel-steps]]).
 Several others are cheap alone and costly cold, because the cold gate charges
 the module's shared generated items to their first user
-(`docs/cloud-benchmarks.md` §3).
+(`docs/infrastructure/cloud-benchmarks.md` §3).
 
 The order here was not quite the gate's: the gate sorts folders by the
 world's order, and this run built the prefix in `lib/std/arch`'s child. The

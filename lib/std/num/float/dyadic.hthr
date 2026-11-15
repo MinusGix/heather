@@ -1,5 +1,5 @@
 // Dyadic rationals: an integer times a power of two
-// (docs/floating-point-design.md §3.1; roadmap submilestone `float-values`).
+// (docs/library/floating-point-design.md §3.1; roadmap submilestone `float-values`).
 //
 // A `Dyadic` is `mant · 2^exp` with both parts integers. It is the carrier of
 // every exact value the floating-point library rounds: a finite float's value,
@@ -193,7 +193,7 @@ theorem Dyadic::rat_zero(): Dyadic::rat(0) ≈ 0 { Dyadic::rat_ofInt(0) }
 
 theorem Dyadic::rat_one(): Dyadic::rat(1) ≈ 1 { Dyadic::rat_ofInt(1) }
 
-// The dyadics inside the rationals, as a cast edge (docs/casting-design.md
+// The dyadics inside the rationals, as a cast edge (docs/language/casting-design.md
 // §5.6): `Dyadic`'s order and `≈` are defined through `rat`, so preserving
 // and reflecting them is the identity.
 fn Dyadic::rat_hom() → OrderedRingHom<Dyadic, Rat>(Dyadic::rat,

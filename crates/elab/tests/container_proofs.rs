@@ -1,4 +1,4 @@
-//! Container fields phase 3 (`docs/container-proofs.md`): **proofs** by
+//! Container fields phase 3 (`docs/language/container-proofs.md`): **proofs** by
 //! induction over a container, which phases 1 and 2 rejected with a message.
 //!
 //! Phase 2 made `Rose` programmable; the ih it hands an arm is pointwise, so a
@@ -33,7 +33,7 @@ fn elab_err(src: &str) -> String {
 /// recurses on its second argument. So the node-local step needs no arithmetic
 /// lemma, and the only gap between the two sides is the two vectors of
 /// children results: exactly the gap phase 3 exists to close
-/// (`docs/container-proofs.md` §2).
+/// (`docs/language/container-proofs.md` §2).
 const ROSE: &str = r#"
 fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
 
@@ -98,7 +98,7 @@ fn a_false_theorem_of_the_same_shape_is_rejected() {
 /// The mixed case: a plain recursive child *and* a container in one
 /// constructor. The ih is indexed by `Fin (Succ len)`, so the container's
 /// indices are offset by one, and the tree is **asymmetric** so that an
-/// off-by-one in that offset cannot pass (`docs/container-fields.md` §10.3).
+/// off-by-one in that offset cannot pass (`docs/language/container-fields.md` §10.3).
 #[test]
 fn a_plain_child_and_a_container_prove_together() {
     elab(
@@ -193,7 +193,7 @@ fn rejections() {
              }}
          }}"
     ));
-    assert!(m.contains("docs/container-proofs.md"), "{m}");
+    assert!(m.contains("docs/language/container-proofs.md"), "{m}");
 
     // Where the boundary actually falls: `r = r` is an equation at `Rose`,
     // whose type does *not* mention the scrutinee, so the lifting is built —

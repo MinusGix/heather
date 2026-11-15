@@ -7,7 +7,7 @@ created: 2026-11-02
 updated: 2026-11-02
 ---
 
-Found by the math-classes round (docs/lattice-structure-design.md §4). `Rat::same_trans` wanted to call
+Found by the math-classes round (docs/library/lattice-structure-design.md §4). `Rat::same_trans` wanted to call
 
     OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), q, hxy, hyz)
 

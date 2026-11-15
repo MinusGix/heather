@@ -8,7 +8,7 @@ updated: 2026-10-28
 ---
 
 `nlinarith` finds only the squares that the problem shows, or that a hint
-names (docs/nonlinear-arithmetic-design.md §4). A Positivstellensatz search
+names (docs/tactics/nonlinear-arithmetic-design.md §4). A Positivstellensatz search
 by semidefinite programming finds squares of arbitrary polynomials up to a
 degree. Examples are `(x² − y)² + x²` for `x⁴ − 2x²y + y² + x²`, and
 certificates with many terms that nobody would write by hand. This is Coq's
@@ -38,4 +38,4 @@ long enough that finding it by hand is the work.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/nonlinear-arithmetic-design.md`); [[linarith-simplex-search]] (`docs/nonlinear-arithmetic-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/tactics/nonlinear-arithmetic-design.md`); [[linarith-simplex-search]] (`docs/tactics/nonlinear-arithmetic-design.md`).

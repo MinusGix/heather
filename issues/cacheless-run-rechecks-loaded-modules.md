@@ -17,7 +17,7 @@ elaborated and gated every one of those modules itself a moment earlier.
 ## Why
 
 A module's world is its largest import's finished state with the rest of its
-import closure loaded into it (`docs/module-dag-design.md` §6), and a load is
+import closure loaded into it (`docs/infrastructure/module-dag-design.md` §6), and a load is
 a replay: the delta is moved onto the new world and every binding is judged
 again, by the kernel or by a verdict the gate holds
 (`Elaborator::recheck_extension`). With `--cache` the gate holds the verdicts
@@ -39,7 +39,7 @@ cache directory is named. Every declaration still faces the kernel once in
 the process, which is what the bare `ok` line promises; what the store
 vouches for is that binding met again, identified as `--cache` identifies it
 (the elaborated term with its dependencies' interface hashes,
-`docs/cache-v1-design.md` §5). A moved delta whose relocation went wrong has
+`docs/infrastructure/cache-v1-design.md` §5). A moved delta whose relocation went wrong has
 other hashes, misses, and is checked.
 
 The inspection commands (`axioms` and the rest, `check_inspection_modules`)
@@ -59,4 +59,4 @@ on purpose.
 
 ## Log
 
-- 2026-11-10: Built as described above. `scripts/perf ab --mode bare`, cloud box, width one, three interleaved samples of the showcase, master against the change: wall 22.4 / 21.0 / 19.5 s → 16.0 / 15.2 / 17.3 s (median −23%, the sample sets separate). Counters, exact: `eval_steps` 11,187,860 → 7,093,639, `conv_misses` 149,735 → 96,673, `check_terms` 4,372 → 3,904, `syntax_eq_nodes` 9.50 M → 7.08 M, `cache_hashes` 0 → 4,021. The after column is to the digit what a cold run over an empty cache directory reports, which is the invariant the test holds. So over a third of the evaluator's steps in a bare showcase run were second and later checks of modules the run had already checked. The attribution docs measured with "no `--cache`" (`docs/complete-post-attribution-design.md` and the others that say so) carry that share in their run rows; their per-declaration rows are unaffected, since a replay is charged to the load.
+- 2026-11-10: Built as described above. `scripts/perf ab --mode bare`, cloud box, width one, three interleaved samples of the showcase, master against the change: wall 22.4 / 21.0 / 19.5 s → 16.0 / 15.2 / 17.3 s (median −23%, the sample sets separate). Counters, exact: `eval_steps` 11,187,860 → 7,093,639, `conv_misses` 149,735 → 96,673, `check_terms` 4,372 → 3,904, `syntax_eq_nodes` 9.50 M → 7.08 M, `cache_hashes` 0 → 4,021. The after column is to the digit what a cold run over an empty cache directory reports, which is the invariant the test holds. So over a third of the evaluator's steps in a bare showcase run were second and later checks of modules the run had already checked. The attribution docs measured with "no `--cache`" (`docs/elaborator/complete-post-attribution-design.md` and the others that say so) carry that share in their run rows; their per-declaration rows are unaffected, since a replay is charged to the load.

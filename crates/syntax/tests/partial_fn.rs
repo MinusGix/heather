@@ -1,4 +1,4 @@
-//! Parse-level facts of `partial fn` (docs/partial-functions-design.md §9):
+//! Parse-level facts of `partial fn` (docs/language/partial-functions-design.md §9):
 //! the word is contextual, `partial(E)` carries the events, and the
 //! refusals a whole file's parse owns, which a Heather probe cannot state (a
 //! parse error refuses the file). What a partial function means is probed in

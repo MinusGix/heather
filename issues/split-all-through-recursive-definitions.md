@@ -8,7 +8,7 @@ updated: 2026-11-11
 ---
 
 `split_all` finds the matches blocking a goal by unfolding transparent
-definitions (`docs/goal-combinators.md`). When the definition is structurally
+definitions (`docs/tactics/goal-combinators.md`). When the definition is structurally
 recursive, its unfolding is the kernel's recursor: after the split,
 `wc_l(Cons(byte, rest))` becomes a raw eliminator applied to `rest`, not
 `wc_l(rest)`. A leaf such as `omega` cannot spell that ("could not spell a
@@ -31,5 +31,5 @@ Acceptance: `count_lines_fold`'s Cons case is
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[split-all-revise-hypotheses]] (`docs/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/goal-combinators.md`).
+- 2026-11-05: gardener: cites a file it shares with [[split-all-revise-hypotheses]] (`docs/tactics/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/tactics/goal-combinators.md`).
 - 2026-11-11: The equation-style unfolding exists for `simp_only`: `goal_combinators::recursion_at_constructor` takes the reduct walk's refolded firing (`refold.rs`) to the selected arm, contracts the hypothesis's β-redexes and child reads, and replaces each child by the pattern variable that converts with it, so `simp(Seq(a, b))` reads `seq(simp(a), simp(b))`. `simplify_goal_with(…, recursive: true)` turns it on; `split_all` still calls `simplify_goal` without it, since turning it on there changes the goals library proofs were written against (whole-library re-elaboration). That switch is what is left of this issue.

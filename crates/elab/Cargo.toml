@@ -9,7 +9,7 @@ license.workspace = true
 autobenches = false
 # Integration tests are declared below, not discovered: most of
 # tests/*.rs are members of a family binary that mounts them by path
-# (docs/elab-test-families-design.md), so a file per binary no longer holds.
+# (docs/infrastructure/elab-test-families-design.md), so a file per binary no longer holds.
 # scripts/check-elab-test-families.mjs fails the suite on a file no target
 # builds.
 autotests = false
@@ -32,7 +32,7 @@ heather-syntax = { path = "../syntax" }
 
 # First-party only, and no Criterion: the frontend suite reuses the kernel
 # harness's first-party estimator (issues/dependency-policy.md,
-# docs/frontend-benchmarking.md). Run through `scripts/bench-frontend`
+# docs/infrastructure/frontend-benchmarking.md). Run through `scripts/bench-frontend`
 # (ulimit), never `cargo bench` directly.
 #
 # `heather-cache` is the workspace's own crate (the cache depends on the
@@ -54,7 +54,7 @@ path = "benches/frontend/main.rs"
 harness = false
 
 # One binary per family; the runner still runs each member file in a process
-# of its own (docs/elab-test-families-design.md). The families mount their
+# of its own (docs/infrastructure/elab-test-families-design.md). The families mount their
 # members from tests/*.rs, so every file keeps its path.
 [[test]]
 name = "family_inductive"

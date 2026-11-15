@@ -161,7 +161,7 @@ first. Every member gets every binder, so a member cannot rebind a section's
 name, and a section type parameter or `{}` implicit that a member's head does
 not mention is refused at that member (no call could infer it). Only `fn`,
 `theorem` and nested sections may be inside. Members are conventionally not
-indented. See `docs/sections-design.md`.
+indented. See `docs/language/sections-design.md`.
 
 ## Modules and names
 

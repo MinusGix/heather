@@ -1,5 +1,5 @@
 // Probes of `derive` (`lib/std/tactic/derive.hthr`) and of `generate` itself
-// (`crates/elab/src/host.rs`, docs/host-elaboration-interface-design.md
+// (`crates/elab/src/host.rs`, docs/metaprogramming/host-elaboration-interface-design.md
 // §19): the lemmas `generate congruences(T);` declares, used at their
 // statements, and the declarations a generator is refused for. Tests, not
 // library: nothing imports this module.

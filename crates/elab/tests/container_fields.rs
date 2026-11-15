@@ -1,4 +1,4 @@
-//! Container fields (docs/container-fields.md), phase 1: `Rose` declares,
+//! Container fields (docs/language/container-fields.md), phase 1: `Rose` declares,
 //! constructs, and its arm binds the children as a vector.
 
 use heather_elab::{ElabError, Elaborator};

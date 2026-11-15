@@ -8,7 +8,7 @@ created: 2026-11-02
 updated: 2026-11-11
 ---
 
-Found by [[native-heap-arena]]'s `sort` (docs/native-heap-arena-design.md §3.1).
+Found by [[native-heap-arena]]'s `sort` (docs/native/native-heap-arena-design.md §3.1).
 
 `write-elf` states a program a part at a time and joins the parts with
 `Stmt::emits_then_of`. Since that round the live-out sets are literals

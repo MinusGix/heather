@@ -13,8 +13,8 @@ session: `$44` is `conv_memo_hits`, not `check_terms` (`$42`), and `$50` is
 `eval_drives`, not `eval_steps` (`$48`). Both errors produced plausible numbers.
 
 Worse than the indices: **"queries" is not defined anywhere.**
-`docs/complete-post-attribution-design.md` §10.2 and
-`docs/close-body-family-attribution-design.md` both quote a queries column per
+`docs/elaborator/complete-post-attribution-design.md` §10.2 and
+`docs/elaborator/close-body-family-attribution-design.md` both quote a queries column per
 item; summing `conv_shortcut_hits + conv_memo_hits + conv_misses` on the same
 tree gives a different number (`close_body`: 1 320 910 against the docs'
 2 585 801). One of those is a different sum, a different tree, or a different
@@ -64,7 +64,7 @@ snippet in the docs.
   column.** A `Tc::conv_ty` query has exactly three outcomes, so
   `conv_shortcut_hits + conv_memo_hits + conv_misses` is every query the kernel
   was asked, and that is what the reader means by the word. The attribution docs
-  mean `conv_shortcut_hits` **alone** — `docs/complete-post-attribution-design.md`
+  mean `conv_shortcut_hits` **alone** — `docs/elaborator/complete-post-attribution-design.md`
   §10.1 labels its column that way in the header and is right; the close-body
   chapter's §2 table uses the same column without saying so. Run-wide the two are
   within 1.5 % (memo hits are 5 197 against 14.5 M shortcut hits), which is why
@@ -86,7 +86,7 @@ snippet in the docs.
   misses and the run's 205 997 are both right. The reader's `[item…]` filter is
   that restriction.
 
-  Two properties recorded in `docs/instrumentation-design.md` §4 because they
+  Two properties recorded in `docs/infrastructure/instrumentation-design.md` §4 because they
   would otherwise be re-derived from a table that looks wrong: counts are
   **invariant in the worker count** (width 1 and width 8 report identical run-row
   misses, queries and steps, though a handful of instance declarations shuffle
@@ -99,6 +99,6 @@ snippet in the docs.
   refused rather than resolved by precedence. It now copies the two files it
   needs. That cost this round one furnace job.
 
-  Column definitions now live in the script; `docs/instrumentation-design.md` §4,
+  Column definitions now live in the script; `docs/infrastructure/instrumentation-design.md` §4,
   the two attribution chapters and `CLAUDE.md` point at it rather than restating
   it. Closing.

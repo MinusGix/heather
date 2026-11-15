@@ -53,14 +53,14 @@ fn nat_suite_annotation_free() {
     e.elab_source(NAT_SUITE_IMPLICIT)
         .expect("annotation-free Nat suite must elaborate and kernel-check");
     // prelude's 5 (4 theorems and `CollectionLiteral#tycode_fn`,
-    // docs/per-instantiation-type-codes-design.md §2) + `3·nfields + 1 = 7`
+    // docs/inductives/per-instantiation-type-codes-design.md §2) + `3·nfields + 1 = 7`
     // for that declaration's projections (its spine is dependent;
-    // docs/telescoped-record-projections-design.md §3) + the suite's `fn add`
+    // docs/elaborator/telescoped-record-projections-design.md §3) + the suite's `fn add`
     // and 4 theorems, all landed as Ψ-globals (a `fn` is a *defined* one
     // since issues/simulate-conversion-cost.md).
     // +6: the prelude's binding-statement classes and calls.
     // +3: the prelude's `Mutated` record (a `mut self` method's result,
-    // docs/effects-capabilities-design.md §2).
+    // docs/language/effects-capabilities-design.md §2).
     assert_eq!(e.psi().bindings.len(), 26);
 }
 
@@ -129,7 +129,7 @@ fn too_few_explicit_args_is_an_elab_error() {
 
 // ---------------------------------------------------------------------------
 // The expected-type harvest and its guards
-// (docs/unifier-completeness-design.md §5).
+// (docs/elaborator/unifier-completeness-design.md §5).
 
 #[test]
 fn refl_as_an_argument_is_deferred_and_retried() {

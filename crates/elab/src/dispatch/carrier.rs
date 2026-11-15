@@ -88,7 +88,7 @@ impl Carriers<'_> {
     /// `Le : Π(n: Nat). Π(m: Nat). Ty 0` both answer yes.
     ///
     /// This is the *carrier-owner* half of an instance's canonical name
-    /// (docs/traits-layer1-design.md §4.1, widened 2026-08-17). A carrier like
+    /// (docs/language/classes/traits-layer1-design.md §4.1, widened 2026-08-17). A carrier like
     /// `Le(n, m)` has a perfectly good head — `Le` — but `Le` names a `fn`
     /// rather than an inductive, so [`Self::names_a_type`] refused it and
     /// `Le::Decide` had nothing to attach to. The refusal was about the
@@ -205,7 +205,7 @@ impl Carriers<'_> {
     }
 
     /// A mutual group's family at a member's index constructor
-    /// (docs/mutual-inductive-design.md §2) is that **member's** carrier,
+    /// (docs/inductives/mutual-inductive-design.md §2) is that **member's** carrier,
     /// `Tm` and not `Tm#mutual`: the member is the type the writer named,
     /// declared as an `Inductive` name in the family's module, so its key is
     /// the one `lookup_member` resolves (issues/mutual-family-member-declarations.md).

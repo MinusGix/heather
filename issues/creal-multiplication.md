@@ -26,4 +26,4 @@ controls.
 
 ## Log
 
-- 2026-10-17: Landed (docs/creal-multiplication-round.md): `CReal::bound` (|x_0| rounded up, plus 2), `mul` reading index (l+1)(2n+2) - 1, and one cross-index estimate `mul_close` behind `mul_respects` (Respects2), `mul_comm`, `mul_assoc`, `mul_add_distr`, `mul_one`, `mul_zero`, `ofRat_mul`; Semigroup and Commutative registered. Even commutativity is not termwise, because the index depends on the bounds in order. The inverse moved to [[creal-inverse]].
+- 2026-10-17: Landed (docs/library/creal.md): `CReal::bound` (|x_0| rounded up, plus 2), `mul` reading index (l+1)(2n+2) - 1, and one cross-index estimate `mul_close` behind `mul_respects` (Respects2), `mul_comm`, `mul_assoc`, `mul_add_distr`, `mul_one`, `mul_zero`, `ofRat_mul`; Semigroup and Commutative registered. Even commutativity is not termwise, because the index depends on the bounds in order. The inverse moved to [[creal-inverse]].

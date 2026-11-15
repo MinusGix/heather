@@ -1,5 +1,5 @@
 // Compiling checked reads with facts found on demand
-// (docs/facts-on-demand-design.md §5): which reads keep their check, from
+// (docs/native/facts-on-demand-design.md §5): which reads keep their check, from
 // which producer each dropped one's fact came, the budget as a knob, and a
 // user lemma as a producer. `Compiled::runs` says each result is correct;
 // these say what the compiler made of each program. Tests, not library:

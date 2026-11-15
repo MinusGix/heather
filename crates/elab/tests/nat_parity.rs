@@ -2,7 +2,7 @@
 //! (`issues/nat-parity-and-half.md`).
 //!
 //! These are the library's first declarations whose recursion reads two past
-//! values (`docs/course-of-values-recursion-design.md`), so what is asserted
+//! values (`docs/language/recursion/course-of-values-recursion-design.md`), so what is asserted
 //! here is not only that the lemmas hold but that the *lowering* kept the two
 //! properties the whole section was written for:
 //!
@@ -69,7 +69,7 @@ theorem e(): Nat::half(8) = 4 { refl }");
 /// It is a *success* control rather than a refusal one: the run-program
 /// arithmetic (issues/nat-run-algebra-primitives.md) classifies this fold and
 /// iterates it over the run instead of descending it, so the depth this used
-/// to cost is no longer spent at all (docs/native-depth-budget-design.md §2).
+/// to cost is no longer spent at all (docs/kernel/native-depth-budget-design.md §2).
 #[test]
 fn half_computes_at_a_large_closed_argument() {
     ok("theorem t(): Nat::half(1048576) = 524288 { refl }");

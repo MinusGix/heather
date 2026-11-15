@@ -23,7 +23,7 @@ For a `Wf` arm there is no position to compare. An arm binder is an *alias*
 (tier 0 §5.1) — the kernel has no `let`, so each use is the projection term
 itself — so `GuardKind::Wf` carries the children's **terms** and
 `elab_self_call` matches with `==` after shifting
-(`crates/elab/src/lib.rs`, and `docs/inductive-tier1-wf-lowering.md` §6.4).
+(`crates/elab/src/lib.rs`, and `docs/inductives/inductive-tier1-wf-lowering.md` §6.4).
 
 That preserves the property that matters: the comparison is on what the
 argument *elaborated to*, so a shadowing binder cannot pass itself off as a
@@ -70,7 +70,7 @@ Cross-cutting note: option 3 touches the same structure as
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[nested-inductives-container-fields]] (`docs/inductive-tier1-wf-lowering.md`); [[surface-declaration-generator]] (`docs/inductive-tier1-wf-lowering.md`).
+- 2026-11-05: gardener: cites a file it shares with [[nested-inductives-container-fields]] (`docs/inductives/inductive-tier1-wf-lowering.md`); [[surface-declaration-generator]] (`docs/inductives/inductive-tier1-wf-lowering.md`).
 - 2026-11-07: not retired by recursion at the top on `Wf`
   ([[recursion-at-top-wf]]), which hoists the body's own `match` and keeps
   the guard's child terms as the keys: a self-call on a hoisted binder

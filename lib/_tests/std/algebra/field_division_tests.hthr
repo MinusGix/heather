@@ -1,6 +1,6 @@
 // Probes of `lib/std/algebra/field_division.hthr`: `x⁻¹` and `a / b` inside
 // a section over an ordered field, each divisor's apartness found with
-// nothing written (docs/division-design.md §6). Tests, not library: nothing
+// nothing written (docs/library/division-design.md §6). Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import nat; import int; import relation; import order; import algebra_rel; import semiring;
 import ordered_field; import field_division; import rat; import ring; import linarith;

@@ -16,7 +16,7 @@ relation, so the family is large too. Heather covers neither shape in
 combination:
 
 - `IWf` is finitary: its children are a `DVec` of a computed length.
-- Tier 2 (`docs/inductive-tier2-w-lowering.md`) is infinitary but
+- Tier 2 (`docs/inductives/inductive-tier2-w-lowering.md`) is infinitary but
   unindexed, with at most one recursive function field.
 
 Options, from `docs/heather-coq-port-assessment.md` §4.2:
@@ -37,7 +37,7 @@ Option 2 is the recommended first probe. The customer is
 ## Log
 
 - 2026-10-24: Filed from the heather-coq port assessment.
-- 2026-10-25: Option 2 landed (`docs/iwf-infinitary-design.md`,
+- 2026-10-25: Option 2 landed (`docs/kernel/iwf-infinitary-design.md`,
   `crates/elab/src/iwf_w.rs`). An indexed family with recursive function
   fields `k: (y: A) -> D(e)`, any number of recursive fields per
   constructor, lowers to `Σ(t : W₀). El(ok t m)` with no kernel change;

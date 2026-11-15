@@ -22,7 +22,7 @@ fn source_nested_conditionals_execute() {
             assert!(certificate.contains(claim), "missing {claim}: {}", String::from_utf8_lossy(&result.stderr));
         }
         // A runtime fn's program and agreement are its generator's, from
-        // the `Compile` instances (docs/runtime-fn-setups-design.md §16.9).
+        // the `Compile` instances (docs/native/runtime-fn-setups-design.md §16.9).
         // The three whose tests call the Bool helper `unequal` are not
         // runtime fns yet: they agree through the decision tree the Rust
         // reflector compiles, spelled in source operations, made the source

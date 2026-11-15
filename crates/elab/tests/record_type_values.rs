@@ -1,6 +1,6 @@
 //! Acceptance for record types as `Val -> Type` function values, against the
 //! sketch of `issues/record-types-as-type-valued-functions.md` and
-//! `docs/record-type-values.md` §5. Sibling round:
+//! `docs/language/record-type-values.md` §5. Sibling round:
 //! `crates/elab/tests/constructor_values.rs` — same disambiguator (the expected
 //! type selects the reading), pointed the other way.
 //!
@@ -69,7 +69,7 @@ fn a_record_type_is_a_type_valued_function() {
 // and the proof projects a field off that hypothesis and transports along it.
 //
 // Both halves of that sentence were broken before this round in ways the
-// routing arm alone does not fix (docs/record-type-values.md §4): `d.shape` is
+// routing arm alone does not fix (docs/language/record-type-values.md §4): `d.shape` is
 // a projection off a type that arrived as `El` of a β-redex, and `sym(d.shape)`
 // unifies an implicit endpoint against an `El`-wrapped `Id`.
 #[test]
@@ -159,7 +159,7 @@ fn the_constructor_reading_still_wins_at_the_record() {
         theorem agree(v: Nat): mk(v) = mk_positional(v) { refl }
 
         // unsaturated, η-expanded against an expected Π
-        // (docs/constructor-function-values.md §2)
+        // (docs/language/constructor-function-values.md §2)
         fn mk_fn(v: Nat) -> (v = v) -> Boxed(v) { Boxed }
         theorem eta(v: Nat): mk_fn(v)(refl) = Boxed(refl) { refl }
         "#,
@@ -215,7 +215,7 @@ fn rejections() {
     assert!(msg.contains("infer"), "{msg}");
 
     // A level mismatch is still a level mismatch: `Type<1>` is not where a
-    // level-0 record lands (docs/surface-universe.md §6).
+    // level-0 record lands (docs/language/surface-universe.md §6).
     let msg = elab_err(
         r#"
         record Boxed(v: Nat) { pf: v = v, }

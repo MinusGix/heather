@@ -12,11 +12,11 @@ updated: 2026-11-01
 Nat`) is accepted by the elaborator and rejected by the kernel
 (`NotConvertible`, "that type has no surface spelling"). The deep pattern
 compiles to a nested `match` on the field `c`, and a nested `match` on a
-field has a non-dependent motive (docs/nested-match-patterns-design.md
+field has a non-dependent motive (docs/language/matching/nested-match-patterns-design.md
 §10.2), so `k`'s alias keeps the unrefined type `Resp(c)` while the arm's
 elaboration believes it was refined to `Nat`.
 
-Found while testing tier 2 (`docs/inductive-tier2-w-lowering.md` §12 item
+Found while testing tier 2 (`docs/inductives/inductive-tier2-w-lowering.md` §12 item
 9): an interaction tree's `Vis(Ask, k)` is exactly this shape, so the tree
 library will hit it first. It is not tier-2 specific; tier 0 does the same.
 

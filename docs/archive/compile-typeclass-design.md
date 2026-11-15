@@ -119,7 +119,7 @@ Reading it against the contract:
   as derived artifacts, n-ary argument spines — is exactly
   `issues/generators-in-the-language.md` + `issues/datarepr-separation.md`
   territory, and a level-1 bundled record (`carrier: Type`) is a
-  `Type`-in-`TyKind` round (`docs/surface-records.md` §3 names it). Until
+  `Type`-in-`TyKind` round (`docs/language/surface-records.md` §3 names it). Until
   then, one record per signature is honest monomorphization, consistent
   with the rest of the surface.
 
@@ -171,7 +171,7 @@ then automation of a *value* whose type already exists.
 ## 5. Recorded for the class layer (not v1, each with its prerequisite)
 
 > **Superseded 2026-08-07** by the general traits design
-> (`docs/traits-design.md`, issue `traits`): resolution-from-`main` becomes
+> (`docs/language/classes/traits-design.md`, issue `traits`): resolution-from-`main` becomes
 > "the compiler is one client of the general resolver"; `[Cpu]` indexing is
 > **struck** (Compile certifies function → IR, which is arch-agnostic; arch
 > belongs to the IR→native stage, and class indexing dissolves into ordinary

@@ -49,4 +49,4 @@ to avoid; the general piece is a separating product.
 
 ## Log
 
-- 2026-11-09: 2026-11-09: footprints, their disjointness and the packing of regions are filed as [[address-interval-sets]] (docs/native-mathematics-survey.md §4); build the local views over them.
+- 2026-11-09: 2026-11-09: footprints, their disjointness and the packing of regions are filed as [[address-interval-sets]] (docs/surveys/native-mathematics-survey.md §4); build the local views over them.

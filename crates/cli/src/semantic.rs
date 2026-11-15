@@ -1,7 +1,7 @@
 //! Cache-aware semantic module loading without presentation policy.
 //!
 //! A module is elaborated over its import closure and nothing else, in the
-//! closure's canonical order (`docs/module-dag-design.md`): the session keeps,
+//! closure's canonical order (`docs/infrastructure/module-dag-design.md`): the session keeps,
 //! per module it has finished, that module's identity and canonical world,
 //! builds the next module's world from the worlds of its imports, and keys
 //! its image by its source and its closure's identities alone. So a module
@@ -48,7 +48,7 @@ pub enum CacheNoticeKind {
     PreviousUnusable,
     /// The module was not elaborated: an image of the same source over
     /// another dependency world was moved onto this one, because nothing it
-    /// observed changed (`docs/module-interface-cutoff-design.md`), and
+    /// observed changed (`docs/infrastructure/module-interface-cutoff-design.md`), and
     /// replayed like any image. Only under [`ImageFreshness::AcceptStale`];
     /// also reported when such an image is replayed later.
     Relocated,
@@ -108,23 +108,23 @@ pub struct ModuleOutcome {
     pub warnings: Vec<Warning>,
     pub replayed: bool,
     /// Declarations reproduced from the module's previous image after an
-    /// edit (`docs/declaration-slice-replay-design.md`); zero when the
+    /// edit (`docs/infrastructure/declaration-slice-replay-design.md`); zero when the
     /// module replayed whole or was elaborated from scratch.
     pub replayed_items: usize,
     /// Declarations elaborated because `--only` named them
-    /// (`docs/check-only-design.md`); such a module is not published.
+    /// (`docs/infrastructure/check-only-design.md`); such a module is not published.
     pub forced_items: usize,
     /// Under [`SemanticSession::with_expectations`]: declarations refused as
     /// the module's `expect-error` directives say, the module otherwise
     /// checking. Its errors are then already judged and empty. Zero when the
-    /// caller is still to judge `errors` (`docs/module-dag-design.md` §11).
+    /// caller is still to judge `errors` (`docs/infrastructure/module-dag-design.md` §11).
     pub expected_refusals: usize,
     pub notices: Vec<CacheNotice>,
 }
 
 /// One module of the world under a module, in that world's order: what
 /// relocating a later module needs to know about it
-/// (`docs/module-interface-cutoff-design.md`).
+/// (`docs/infrastructure/module-interface-cutoff-design.md`).
 struct WorldModule {
     name: String,
     /// Its Ψ positions.
@@ -177,7 +177,7 @@ impl WorldHasher for MerkleHasher<'_> {
 const BASE_MODULE: &str = "<base>";
 
 /// The canonical order of a module's closure without the module
-/// (`docs/module-dag-design.md` §2): `order[..spine]` is the canonical
+/// (`docs/infrastructure/module-dag-design.md` §2): `order[..spine]` is the canonical
 /// order of its largest import with that import last, so the world under the
 /// module extends that import's world by `order[spine..]`.
 #[derive(Clone, Default)]
@@ -261,7 +261,7 @@ pub struct SemanticSession {
     /// `HEATHER_RELOCATION_AUDIT`: under [`ImageFreshness::Exact`], every
     /// module elaborated after a miss is also moved from a candidate image
     /// when one passes, and the two are compared, one line per module
-    /// appended here (`docs/module-interface-cutoff-design.md` §5).
+    /// appended here (`docs/infrastructure/module-interface-cutoff-design.md` §5).
     audit: Option<PathBuf>,
     /// `--only`: per module, the declarations to elaborate from source over
     /// a replayed prefix. A module named here is loaded from its previous
@@ -271,14 +271,14 @@ pub struct SemanticSession {
     only_met: BTreeSet<String>,
     /// `--expectations`: a module whose refusals all match its directives is
     /// a module that checked, and is published with them
-    /// (`docs/module-dag-design.md` §11).
+    /// (`docs/infrastructure/module-dag-design.md` §11).
     expectations: bool,
     /// The image the last [`Self::check_in`] replayed, for the module's
     /// [`Finished`].
     hit: Option<Hit>,
     /// The rest of the load, once the caller has said what it is
     /// ([`Self::expect_load`]): what each module still to be checked will
-    /// need of the finished ones (`docs/module-dag-design.md` §8).
+    /// need of the finished ones (`docs/infrastructure/module-dag-design.md` §8).
     load: Option<Load>,
 }
 
@@ -368,7 +368,7 @@ impl SemanticSession {
 
     /// The modules the caller will check, each with its written imports, so
     /// that the session keeps a finished module's world and delta only while
-    /// a module still to come needs them (`docs/module-dag-design.md` §8).
+    /// a module still to come needs them (`docs/infrastructure/module-dag-design.md` §8).
     /// Without it everything finished is kept to the end, which a closure of
     /// the library can afford but a folder of test modules over it cannot
     /// when several such processes run side by side. Imports outside the
@@ -475,7 +475,7 @@ impl SemanticSession {
     }
 
     /// `--only`: per module, the declarations to elaborate from source
-    /// while the rest of the module replays (`docs/check-only-design.md`).
+    /// while the rest of the module replays (`docs/infrastructure/check-only-design.md`).
     pub fn with_only(mut self, only: BTreeMap<String, BTreeSet<String>>) -> Self {
         self.only = only;
         self
@@ -559,7 +559,7 @@ impl SemanticSession {
     }
 
     /// Check or replay the next module, over its import closure alone
-    /// (`docs/module-dag-design.md` §2). Every module it imports must have
+    /// (`docs/infrastructure/module-dag-design.md` §2). Every module it imports must have
     /// been given to the session before it; an import the session has not
     /// seen is left to the elaborator to report. A module whose closure holds
     /// a module that did not check is not checked: there is no world to
@@ -584,7 +584,7 @@ impl SemanticSession {
         // One module scope, so the dump has a per-module row whose total covers
         // the declarations inside it plus the module-level work — parse,
         // imports, decode, replay, publication
-        // (`docs/instrumentation-design.md` §3).
+        // (`docs/infrastructure/instrumentation-design.md` §3).
         let _module = stats::scope(stats::ScopeKind::Module, &module.name, "");
         // The profile is part of the image key, so the lints the module is
         // elaborated under are the ones it is keyed by.
@@ -718,7 +718,7 @@ impl SemanticSession {
     }
 
     /// The canonical order of the closure of a module with these imports
-    /// (`docs/module-dag-design.md` §2), from the finished modules' own.
+    /// (`docs/infrastructure/module-dag-design.md` §2), from the finished modules' own.
     fn canon_of(&self, imports: &[String]) -> Canon {
         canon_over(imports, &|m| &self.done[m].canon.order, &|m| &self.done[m].imports)
     }
@@ -730,7 +730,7 @@ impl SemanticSession {
 
     /// An elaborator configured as `template` over the canonical world
     /// `canon`: the world of its largest import, extended by the rest
-    /// (`docs/module-dag-design.md` §6).
+    /// (`docs/infrastructure/module-dag-design.md` §6).
     fn world_before(&mut self, template: &Elaborator, canon: &Canon) -> Result<Elaborator, String> {
         let image = match canon.spine {
             0 => self.base.as_ref().expect("base").image.clone(),
@@ -817,7 +817,7 @@ impl SemanticSession {
     }
 
     /// Move `name`'s canonical delta into `world`, whose modules are
-    /// `before`, and replay it there (`docs/module-dag-design.md` §4).
+    /// `before`, and replay it there (`docs/infrastructure/module-dag-design.md` §4).
     fn load_into(&mut self, world: &mut Elaborator, name: &str, before: &[String]) -> Result<(), String> {
         let (delta, content) = self.canonical_delta(world, name)?;
         let f = &self.done[name];
@@ -849,7 +849,7 @@ impl SemanticSession {
 
     /// The identity of replaying the stored bytes `content` over the world
     /// whose modules are `world`, in order, after the prelude
-    /// (`docs/module-dag-design.md` §13): this build (which decodes the bytes
+    /// (`docs/infrastructure/module-dag-design.md` §13): this build (which decodes the bytes
     /// and elaborated the prelude), the prelude's length, and each module of
     /// the world by name and interface hash, which together fix every
     /// binding the bytes' positions name.
@@ -865,7 +865,7 @@ impl SemanticSession {
 
     /// The identity of replaying the stored bytes `content`, written over
     /// the world `from`, after moving them into the world `to`
-    /// (`docs/module-dag-design.md` §13): what [`Self::replay_key`] names,
+    /// (`docs/infrastructure/module-dag-design.md` §13): what [`Self::replay_key`] names,
     /// plus the world the bytes' positions were counted in. The move is a
     /// function of the two worlds' orders and binding counts (§4), so these
     /// fix the moved delta and the world it is replayed over, which is all
@@ -1227,7 +1227,7 @@ impl SemanticSession {
         // A source miss with a previous image of this module over the same
         // dependencies: the unchanged declarations are reproduced from its
         // slices and the rest elaborated
-        // (`docs/declaration-slice-replay-design.md` §4). An unusable
+        // (`docs/infrastructure/declaration-slice-replay-design.md` §4). An unusable
         // previous image is reported and the module elaborated as usual.
         // Its decode is a decode: the previous image is the module's own,
         // often the largest in the closure, and the dashboard reads the
@@ -1272,7 +1272,7 @@ impl SemanticSession {
                 // Drained, not printed: where an `omega` invocation's time went
                 // is the dump's `omega_*` columns now, attributed by
                 // declaration rather than by invocation
-                // (`docs/instrumentation-design.md` §4). The per-invocation
+                // (`docs/infrastructure/instrumentation-design.md` §4). The per-invocation
                 // reports stay available through `take_omega_reports`.
                 elab.take_omega_reports();
                 checked
@@ -1320,7 +1320,7 @@ impl SemanticSession {
     }
 
     /// A miss of a module with `expect-error` directives, in a session that
-    /// judges them (`docs/module-dag-design.md` §11): its errors are judged
+    /// judges them (`docs/infrastructure/module-dag-design.md` §11): its errors are judged
     /// here, and it is published with its refusal count when every refusal
     /// is the one its directive names and nothing else failed. A module that
     /// does not meet its directives is an ordinary failure, its raw errors
@@ -1554,7 +1554,7 @@ impl SemanticSession {
     /// it onto this one if nothing it observed differs: the world's
     /// registries and what its identifiers resolve to are unchanged, and
     /// every binding it refers to is found again, by content, in the module
-    /// it came from (`docs/module-interface-cutoff-design.md` §3). The moved
+    /// it came from (`docs/infrastructure/module-interface-cutoff-design.md` §3). The moved
     /// delta is not replayed here.
     #[allow(clippy::too_many_arguments)]
     fn relocation(
@@ -1622,7 +1622,7 @@ impl SemanticSession {
 
     /// The exact lane's audit: compare what the stale lane would have moved
     /// here with what the elaborator just produced, and append the verdict
-    /// (`docs/module-interface-cutoff-design.md` §5). `diverged` names a
+    /// (`docs/infrastructure/module-interface-cutoff-design.md` §5). `diverged` names a
     /// module whose relocation the digests let through and whose
     /// interface the elaboration does not reproduce: the cutoff lied.
     fn audit(&self, module: &str, attempt: Relocation, fresh: &ModuleDelta) {
@@ -1655,7 +1655,7 @@ impl SemanticSession {
     /// The `--only` path for a module with named declarations: the module's
     /// previous image over the current dependency world is the prefix, the
     /// named items elaborate from source, and nothing is published
-    /// (`docs/check-only-design.md` §2). The source-keyed image is not
+    /// (`docs/infrastructure/check-only-design.md` §2). The source-keyed image is not
     /// consulted — a hit would replay the whole module and elaborate nothing.
     fn check_only(
         &mut self,
@@ -1813,7 +1813,7 @@ pub fn written_imports(src: &str) -> Vec<String> {
 }
 
 /// The canonical order of the closure of a module with these imports
-/// (`docs/module-dag-design.md` §2): the largest import's order and that
+/// (`docs/infrastructure/module-dag-design.md` §2): the largest import's order and that
 /// import (the least name on a tie), then the rest of the closure depth
 /// first over the other imports in their sorted order. `order_of` and
 /// `imports_of` give each module below it its own order and its sorted
@@ -1884,7 +1884,7 @@ fn hash_bindings(elab: &Elaborator, psi: &GlobalCtx, range: Range<usize>, merkle
 }
 
 /// The registry digest and name digest of the world under `module`
-/// (`docs/module-interface-cutoff-design.md` §2); `None` when some part
+/// (`docs/infrastructure/module-interface-cutoff-design.md` §2); `None` when some part
 /// of it cannot be hashed, which only ever costs a relocation.
 fn observe_world(world: &[WorldModule], merkle: &[Option<Hash>], elab: &Elaborator, module: &Module) -> Option<WorldView> {
     let mut registry = Sha256::new();
@@ -2021,7 +2021,7 @@ pub enum BuildState {
 }
 
 /// The modules of a load that have no image yet, found without loading
-/// anything (`docs/module-dag-design.md` §12): a module's key is its source,
+/// anything (`docs/infrastructure/module-dag-design.md` §12): a module's key is its source,
 /// its lint profile and the interface hashes of its closure's images, which
 /// their headers record, so the keys can be chained up the import graph by
 /// reading headers. A scheduler checks the ready modules one process each and

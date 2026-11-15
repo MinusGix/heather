@@ -1,5 +1,5 @@
 // Decimal output and input for native tools, written with the builder
-// (docs/native-real-programs-plan.md §3.7, round 9;
+// (docs/native/native-real-programs-plan.md §3.7, round 9;
 // issues/native-decimal-io.md).
 //
 // The ISA model has no multiply, divide or shift, and none is needed. A

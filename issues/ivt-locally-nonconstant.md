@@ -11,7 +11,7 @@ updated: 2026-11-07
 `UnifContOn::ivt` (lib/std/analysis/closed_interval.hthr) finds an exact
 root for a *strictly increasing* uniformly continuous function with
 `f(a) <= 0 <= f(b)`, by a bisection in a `CauchyComplete` field
-(docs/sequences-and-completeness.md §5). The general constructive form
+(docs/library/sequences-and-completeness.md §5). The general constructive form
 (Bridges–Richman) asks less: `f` is *locally non-constant*, meaning every
 `x < y` in `[a, b]` and every `c` have a `z` in `[x, y]` with `f(z)` apart
 from `c`. That covers polynomials that are not constant, which strict

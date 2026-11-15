@@ -39,7 +39,7 @@ fn infer_tac(t: Tac<Nat>) → Tac<Nat> { pick(t) }
 theorem infer_tac_literal(): pick(Tac::Pure(4)) = Tac::Pure(4) { refl }
 // A declaration's declared slot (`inductive Result<A, E> varies A`) is the
 // argument abstracted, so `Result<Nat, Bool>` at `M(Nat)` is
-// `M := λ A => Result<A, Bool>` (docs/lambda-carrier-instances-design.md §7).
+// `M := λ A => Result<A, Bool>` (docs/language/classes/lambda-carrier-instances-design.md §7).
 // Literal, neutral, open, and in a checking position.
 theorem infer_result_slot(): pick(Result::Ok<Nat, Bool>(3)) = Ok(3) { refl }
 fn infer_result_neutral(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick(r) }
@@ -76,7 +76,7 @@ theorem infer_open_proof<A>(x: Option<A>): pick_open(x) = x { refl }
 
 // Piece 3: classes over a type constructor. `Bind` and `Pointed` are the
 // prelude's (the carrier protocol of binding statements,
-// docs/sequencing-surface-design.md §2), with their instances at `Option`
+// docs/language/sequencing-surface-design.md §2), with their instances at `Option`
 // (option.hthr) and `Tac` (tactic.hthr).
 
 fn twice({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {

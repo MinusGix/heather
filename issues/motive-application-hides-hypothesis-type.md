@@ -69,7 +69,7 @@ thinks they mean, but it fixes only the arms a writer thought to annotate.
 ## Log
 
 - 2026-08-17: Filed by the `Int` round. 10 sites, each paying one restatement of the hypothesis's own statement inside `@cong_int`. Ranked #2 of that round's six.
-- 2026-08-17: **Landed** (managed round; docs/argument-type-reduction-design.md).
+- 2026-08-17: **Landed** (managed round; docs/elaborator/argument-type-reduction-design.md).
 
 Route: **whnf at the read site**, not at the binder. `Elaborator::unify_arg_ty` (`crates/elab/src/lib.rs`) wraps both places `apply_implicit` reads an argument's inferred type — the declared-parameter loop and the spilled-argument loop [[curried-tail-type-arg-inference]] added — and reads the type's weak head normal form *only when the syntactic read learned nothing*. So `cong_int(isucc, ih)` and `sym(ih)` both check at a motive-applied hypothesis, and so does anything else that fills implicits from an argument, which is the reason for the general site: the consumer never knows how its implicits were found. It is also the same sentence `solve_from_expected` already applies to the *expected* type twenty lines below — the two sides of the elaborator's evidence now agree.
 

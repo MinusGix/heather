@@ -1,6 +1,6 @@
 // A FunctionIR pass written in Heather and proved once
 // (issues/function-ir-pass-in-heather.md, milestone hih-passes;
-// docs/compiler-milestones-proposal.md §5): constant folding, then
+// docs/native/compiler-milestones-proposal.md §5): constant folding, then
 // dead-node removal, over a leaf's schedule of nodes, given the words live
 // after it.
 //

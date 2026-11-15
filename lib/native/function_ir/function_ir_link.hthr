@@ -1,4 +1,4 @@
-// Linking over the run (docs/native-one-compiler-design.md §2.6, U4 step
+// Linking over the run (docs/native/native-one-compiler-design.md §2.6, U4 step
 // 4c-3b): what `function_ir_eval` proves of a program put together from
 // functions checked one by one (`relabel`, `program_linked_files`), for
 // functions that write.

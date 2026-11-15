@@ -1,5 +1,5 @@
 // A small language of checked buffer reads, the first customer of facts on
-// demand (docs/facts-on-demand-design.md, docs/compilation-vision.md §6.2).
+// demand (docs/native/facts-on-demand-design.md, docs/compilation-vision.md §6.2).
 //
 // A program reads one buffer of `len` words at a list of index expressions
 // over its arguments, and sums what it read. Every read is checked: an index

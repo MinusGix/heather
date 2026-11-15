@@ -1,5 +1,5 @@
 // A `write-elf` tool that calls a `runtime fn`
-// (docs/native-one-compiler-design.md §2.2): the generator's program of the
+// (docs/native/native-one-compiler-design.md §2.2): the generator's program of the
 // function is the tool's program, compiled by the function compiler into
 // the same file as the tool and called. Tests, not library: nothing imports
 // this module; `crates/cli/tests/native_tools.rs` writes `raised_sum` and

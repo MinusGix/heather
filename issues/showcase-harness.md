@@ -182,4 +182,4 @@ order if a reader would rather have the nicer spelling first.
     Not done, deliberately: `calc_text` still has no *cheap* gate, because
     `--only` needs a stored image and this module has none — the same knot, and it
     unties when the image fits.
-- 2026-09-22: 2026-09-22: The knot untied: after docs/app-by-head-type-design.md calc_text checks in 16s at 0.3GiB (debug, width one) and its image publishes, so it moved from the serial showcase_gate in scripts/test to an ordinary cli-tier row of crates/cli/tests/showcase.rs; the cli-slow tier and showcase_gate are deleted (no row left at it). --only works on it (1.4s). Everything this issue asked for is in place. Closing.
+- 2026-09-22: 2026-09-22: The knot untied: after docs/elaborator/app-by-head-type-design.md calc_text checks in 16s at 0.3GiB (debug, width one) and its image publishes, so it moved from the serial showcase_gate in scripts/test to an ordinary cli-tier row of crates/cli/tests/showcase.rs; the cli-slow tier and showcase_gate are deleted (no row left at it). --only works on it (1.4s). Everything this issue asked for is in place. Closing.

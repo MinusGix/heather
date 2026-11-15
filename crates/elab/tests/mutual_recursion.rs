@@ -1,5 +1,5 @@
 //! Acceptance for issues/mutual-recursion-declarations.md
-//! (docs/mutual-recursion-design.md): N adjacent `decreases` declarations that
+//! (docs/language/recursion/mutual-recursion-design.md): N adjacent `decreases` declarations that
 //! call one another are one recursion — a product motive `f#grp`, a shared
 //! `f#grp_rec`, and each member a projection of it — with the group inferred
 //! from adjacency and no keyword written anywhere (§1).
@@ -97,7 +97,7 @@ fn any_err(src: &str) -> String {
 /// `parse_expr`'s call to `parse_factor` on the **same** `ts`, which decreases
 /// nothing and is paid for by §4's declaration-order rank. Every obligation
 /// here is `omega`'s: the list-tail sites needed a lemma by hand until
-/// docs/omega-measure-reduction-design.md §6 took it out.
+/// docs/tactics/omega-measure-reduction-design.md §6 took it out.
 const PARSER: &str = r#"
 fn parse_expr(ts: List<Nat>) -> Nat decreases ts.len() {
     match ts {
@@ -131,7 +131,7 @@ theorem ev7(): ev(7) = 0 { refl }
 }
 
 /// Members of one type that call each other by their bare names
-/// (docs/sections-design.md §6) are the same group their qualified spellings
+/// (docs/language/sections-design.md §6) are the same group their qualified spellings
 /// make: the group is found by base name, and the sibling reading reaches the
 /// recursion inside it.
 #[test]
@@ -162,7 +162,7 @@ theorem pa_two():  parse_atom([7, 8]) = 1 {{ refl }}
 }
 
 /// The companion assertion for the hand discharges
-/// docs/omega-measure-reduction-design.md §6 removed above: what closes the
+/// docs/tactics/omega-measure-reduction-design.md §6 removed above: what closes the
 /// group's list-tail sites is `omega`, so without the closer's modules they
 /// are ordinary unsolved goals again.
 #[test]
@@ -320,7 +320,7 @@ fn q(n: Nat) -> Nat decreases n { match n { Zero => 1, Succ(k) => p(k) } }
     assert!(msg.contains("`q` is declared below"), "{msg}");
     assert!(
         msg.contains("nothing else stands between them")
-            && msg.contains("docs/mutual-recursion-design.md §1"),
+            && msg.contains("docs/language/recursion/mutual-recursion-design.md §1"),
         "{msg}"
     );
 }
@@ -356,7 +356,7 @@ fn m2(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => m1(k) } }
 "#);
     assert!(
         msg.contains("a `decreases` measure may not call `m2`")
-            && msg.contains("docs/mutual-recursion-design.md §2"),
+            && msg.contains("docs/language/recursion/mutual-recursion-design.md §2"),
         "{msg}"
     );
 }
@@ -376,7 +376,7 @@ fn b1(xs: List<Nat>) -> Nat decreases xs.len() {
 "#);
     assert!(
         msg.contains("a mutual group cannot fall back to stating it at the call")
-            && msg.contains("docs/mutual-recursion-design.md §4"),
+            && msg.contains("docs/language/recursion/mutual-recursion-design.md §4"),
         "{msg}"
     );
 }
@@ -394,7 +394,7 @@ theorem cite(k: Nat): ev(Succ(k)) = od(k) { ev_unfold(Succ(k)) }
     assert!(
         msg.contains("no unfolding equation for `ev`")
             && msg.contains("member of a mutual `decreases` group")
-            && msg.contains("docs/mutual-recursion-design.md §6"),
+            && msg.contains("docs/language/recursion/mutual-recursion-design.md §6"),
         "{msg}"
     );
     assert!(

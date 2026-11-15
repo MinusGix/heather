@@ -1,5 +1,5 @@
 //! An instance may be generic over a **value**
-//! (`docs/value-generic-instances-design.md`, `issues/value-generic-instances.md`).
+//! (`docs/language/classes/value-generic-instances-design.md`, `issues/value-generic-instances.md`).
 //!
 //! `instance(n, m: Nat) Dec<Leq(n, m)>` binds two ordinary value parameters in
 //! the head; resolution recovers them by unifying that head against the goal,

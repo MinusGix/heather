@@ -1,5 +1,5 @@
 //! `reprgen` — derived `Impl`s for structural spec fns over repr'd types
-//! (`docs/datarepr-design.md` §3, §5.1 item 5).
+//! (`docs/native/datarepr-design.md` §3, §5.1 item 5).
 //!
 //! The hand-run comes first (the discipline `docs/certgen-*-design.md` calls
 //! hand-run-first): the artifacts below are written by hand in exactly the
@@ -271,7 +271,7 @@ fn transfer(e: &mut Elaborator, op: &str, repr: &str) -> String {
     };
     // Generated text, elaborated as generated text: the emission spells the
     // minted names, which are not the surface
-    // (docs/repr-access-spellings-design.md §6).
+    // (docs/native/repr-access-spellings-design.md §6).
     if let Err(err) = e.elab_generated_source(&em.text) {
         panic!("emission for `{op}` did not check:\n{}\n{}", em.text, err.render(&em.text));
     }
@@ -546,7 +546,7 @@ fn length(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(len
 /// A perturbed — or hand-forced — *emission*, which must not check. Through
 /// the generated entry point, so that the refusal is the mutation's and not the
 /// surface's refusal to spell a generated name
-/// (docs/repr-access-spellings-design.md §6): a control that passes for the
+/// (docs/native/repr-access-spellings-design.md §6): a control that passes for the
 /// wrong reason is worse than no control.
 /// …and refused for the *mutation*, not for the shape of the text it was cut
 /// out of. A perturbation is a string edit on generated source, so a pattern
@@ -779,7 +779,7 @@ fn zeroish(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => Succ(zeroish(k)) }
 }
 
 /// The fragment reads `ExprKind::Match`, and the parser desugars `split` onto
-/// that node (docs/match-equation-split-design.md §6) — so a transfer body
+/// that node (docs/language/matching/match-equation-split-design.md §6) — so a transfer body
 /// written as a `split` is *admitted*, and used to be described back to its
 /// author as a `match` (issues/diagnostics-name-the-written-form.md, the third
 /// instance of that wart and the one in a subsystem neither of its rounds

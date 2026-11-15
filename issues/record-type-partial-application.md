@@ -74,7 +74,7 @@ has to step over.
   term family measured at 27× there. Measure the cold check before and after.
 - 2026-09-19: Landed the language half: a declared type former, partially applied, checks
   against an expected function type whose ultimate codomain is a universe
-  (`docs/record-type-partial-application.md`, `check_type_former_value` in
+  (`docs/language/record-type-partial-application.md`, `check_type_former_value` in
   `crates/elab/src/inductive.rs`, eight tests in
   `crates/elab/tests/record_type_partial_application.rs`). `takes_relation(Grammar)`
   and `Certified(Grammar(level))` both check, so a named-field spec relation no

@@ -24,7 +24,7 @@ instance Group<Int>(add) {
 
 is refused: "overrides `unit_r`, which the canonical `Monoid` at `Int` already
 holds, and the two are not convertible: an override owes agreement
-(`docs/traits-layer1-design.md` §4.5)". The canonical instance holds
+(`docs/language/classes/traits-layer1-design.md` §4.5)". The canonical instance holds
 `λ (x: Int) => refl`; this one holds `add_zero`, an opaque `theorem`. Both prove
 `add(x, OfNat(0)) = x` and neither reduces to the other, because **Heather is
 proof-relevant**: two proofs of one equation are not convertible in general, and

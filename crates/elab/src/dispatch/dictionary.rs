@@ -31,7 +31,7 @@ impl std::ops::Deref for Dictionaries<'_> {
 
 impl Dictionaries<'_> {
     /// The value-slot ladder's **step 2** at a goal the dot sugars are
-    /// building (`docs/operation-indexed-classes-design.md` §5, §5.1): a
+    /// building (`docs/language/classes/operation-indexed-classes-design.md` §5, §5.1): a
     /// binder in scope of the goal's class — or of a descendant, whose
     /// `extends` chain passes the index up unchanged — answers what the index
     /// is. Innermost first, exactly as the resolver's own scope pass.
@@ -90,7 +90,7 @@ impl Dictionaries<'_> {
     }
 
     /// The value arguments of a dot sugar's goal
-    /// (`docs/operation-indexed-classes-design.md` §5.1): empty at an
+    /// (`docs/language/classes/operation-indexed-classes-design.md` §5.1): empty at an
     /// unindexed class (every goal that predates this design), the scope
     /// binder's index at an indexed one, and the value-slot refusal where
     /// scope has no answer. `Ok(None)` is "this candidate cannot be built at
@@ -101,7 +101,7 @@ impl Dictionaries<'_> {
     /// carrier as its record's leading *value* parameter, the way a kinded
     /// carrier is taken ([`ClassesMut::elab_class`](crate::traits::ClassesMut::elab_class)). There the carrier, a type at
     /// the declared universe, is passed as its code and the goal has no type
-    /// arguments (docs/frame-locale-design.md §3).
+    /// arguments (docs/library/frame-locale-design.md §3).
     pub(crate) fn index_vargs(
         &self,
         cx: &Cx,
@@ -167,7 +167,7 @@ impl Dictionaries<'_> {
     }
 
     /// Fill a blocked goal's **index slots** from a dictionary in scope
-    /// (`docs/operation-indexed-classes-design.md` §5, ladder step 2).
+    /// (`docs/language/classes/operation-indexed-classes-design.md` §5, ladder step 2).
     ///
     /// The goal's carrier is itself a scratch-world meta here, so the scope
     /// binder is chosen by class alone — innermost first, the goal's class or
@@ -241,8 +241,8 @@ impl Dictionaries<'_> {
 
     /// Fill a blocked goal's **index slots** from the designation table —
     /// the value-slot ladder's step 3
-    /// (`docs/operation-indexed-classes-design.md` §5, built in
-    /// `docs/operators-onto-classes-design.md` §5).
+    /// (`docs/language/classes/operation-indexed-classes-design.md` §5, built in
+    /// `docs/language/classes/operators-onto-classes-design.md` §5).
     ///
     /// This is what makes `sum_all(ns)` work at a caller who names no
     /// operation: `sum_all`'s constraint was written `<A: Monoid(+)>`, so its
@@ -524,7 +524,7 @@ impl Dictionaries<'_> {
         found.into_iter().next()
     }
 
-    /// The value-slot refusal (`docs/operation-indexed-classes-design.md` §5,
+    /// The value-slot refusal (`docs/language/classes/operation-indexed-classes-design.md` §5,
     /// §11): the slot, the class, and **every registered instance that would
     /// answer**, as data. This is the diagnostic the whole design leans on —
     /// at `Bool` it names both monoids with their indices, which is what makes
@@ -553,7 +553,7 @@ impl Dictionaries<'_> {
         };
         let class = &*class;
         // Both registries key the carrier by its *resolved* declaration
-        // (docs/instance-resolved-key-design.md §3), and the carrier read off
+        // (docs/elaborator/instance-resolved-key-design.md §3), and the carrier read off
         // the lowered type carries that key beside its spelling, so this
         // filter and the designation lookup below use the same string the
         // declarations registered.
@@ -571,7 +571,7 @@ impl Dictionaries<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         // The designations at this carrier, where it has any
-        // (docs/operators-onto-classes-design.md §6, §7). This is §11's polish
+        // (docs/language/classes/operators-onto-classes-design.md §6, §7). This is §11's polish
         // and it is the difference between a refusal reading as principled and
         // as obtuse: a designation cannot *fill* this slot — the dot sugar
         // names no symbol, and choosing among the symbols at a carrier would

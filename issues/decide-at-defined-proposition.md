@@ -14,7 +14,7 @@ goal of `#constraint0` (`Decide<P>`) still mentions an implicit that could not
 be inferred". Unifying the instance head `?P ∧ ?Q` against the goal does not
 δ-unfold `Canonical`, so the type parameters stay unsolved. (A *value*
 parameter does get there by unfolding: `Le(?n, ?m)` against
-`unsigned_lt(64, …)`, docs/reflection-through-decide-instances-design.md §2.)
+`unsigned_lt(64, …)`, docs/tactics/reflection-through-decide-instances-design.md §2.)
 
 Workaround in use: spell the proposition at the `decide_bit` site
 (`Format::canonical`, issues/decide-bit-is-the-comparison.md), and let

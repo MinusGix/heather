@@ -11,7 +11,7 @@ updated: 2026-10-28
 `Prog::call` (`lib/native/native_compile.hthr`) compiles reads, writes,
 `open` and `close`; `StatsPath` and `StatsFd` are still refused (reason 7).
 Split from [[native-compile-other-calls]] when round 7 of
-`docs/native-real-programs-plan.md` landed open/close: no `hih-tools` tool
+`docs/native/native-real-programs-plan.md` landed open/close: no `hih-tools` tool
 needs stat, so it carries no milestone of that line.
 
 ## Scope

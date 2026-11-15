@@ -12,7 +12,7 @@ updated: 2026-11-06
 called every other hint "not used". A hint can be needed without being
 cited: its instance, or its equation as read, puts a term in the graph that
 a cited lemma's near match then draws its binder from, or finds its hole's
-solution among (docs/grind-design.md §13.1, §13.4). The proof cites the
+solution among (docs/tactics/grind-design.md §13.1, §13.4). The proof cites the
 matched lemma, not the hint that supplied the term, so narrowing the call
 to the report's list, which is the report's stated job (§9.4) and the plan
 of [[lemma-selection-and-search]] §3, breaks the proof.
@@ -48,6 +48,6 @@ source of the node `1`, which `lurk_sc(?b) ≡ lurk_two()` needs as `?b`;
 ## Log
 
 - 2026-11-06: Filed and done in one round. `GInfo.by` per node, `Fact.found`
-  per edge and `found_alg` over the explanation path, docs/grind-design.md
+  per edge and `found_alg` over the explanation path, docs/tactics/grind-design.md
   §9.6. The probe reports `not cited, but needed to find it: lurk_one`; the
   library's other reports are unchanged.

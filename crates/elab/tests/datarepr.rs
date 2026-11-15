@@ -1,4 +1,4 @@
-//! The `datarepr` declaration forms (`docs/datarepr-design.md` §1.4, §5.1).
+//! The `datarepr` declaration forms (`docs/native/datarepr-design.md` §1.4, §5.1).
 //!
 //! Every artifact here is a *generated term* in the sense of
 //! `docs/testing-generated-terms.md` — the record type, the spec-recursor

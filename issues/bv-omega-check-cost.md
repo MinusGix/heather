@@ -11,7 +11,7 @@ updated: 2026-10-21
 several times the hand proofs it replaces. It is correct, and too slow for
 the library to switch to. The measurements are in
 [[bitvec-nat-lifting-tactic]]'s log of 2026-09-26, and the emission shape is
-in docs/bv-omega-design.md §2.
+in docs/tactics/bv-omega-design.md §2.
 
 Three costs, in the order the probes point at:
 

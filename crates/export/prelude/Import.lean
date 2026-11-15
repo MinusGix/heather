@@ -1,5 +1,5 @@
 /-
-The kernel route for an export (docs/export-fragment-design.md §5.6): read
+The kernel route for an export (docs/library/export-fragment-design.md §5.6): read
 the hash-consed `.hxk` file `heather_export::print_kernel` writes and add each
 declaration to an environment that imports `Hx`, through the kernel's
 `addDecl` alone. No parser and no elaborator sees an exported term, so what

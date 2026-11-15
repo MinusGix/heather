@@ -1,5 +1,5 @@
 // Probes of `partial fn` and of `while` with no measure
-// (docs/partial-functions-design.md §4, docs/sequencing-surface-design.md
+// (docs/language/partial-functions-design.md §4, docs/language/sequencing-surface-design.md
 // §18, issues/partial-fn-surface.md). A partial function runs at literals by
 // a count and `refl` (tail calls, bound calls, several parameters, an open
 // element type, events). A body whose every self-call is a tail call is a

@@ -25,7 +25,7 @@ The user chose (e) ("a bit weird, but it will work"), with `bit` beside
 Probes for (e) before building (untracked, `probes/dbit/`): a single comparison is `refl`; an `∨`
 by hand-written motives or by `split_all` on the reduced spelling; `split_all` on the
 unreduced dictionary spelling is refused by the kernel, which is why the
-elaborator reduces it. Reasoning: docs/decidable-if-expression-design.md
+elaborator reduces it. Reasoning: docs/language/decidable-if-expression-design.md
 ("Lowering and evidence") and docs/archive/native-programs-read-like-programs-design.md
 §3 S3 part 3.
 

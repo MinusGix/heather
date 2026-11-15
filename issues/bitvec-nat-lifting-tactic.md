@@ -94,7 +94,7 @@ term the kernel checks, so it adds nothing to the trusted base.
   operation, spelling facts at the call. First slice does arithmetic leaves only:
   splitting a `match` stuck on `unsigned_lt_bit` is a follow-up. Step 0 is
   [[omega-respells-atoms-without-implicits]]'s speller fix.
-- 2026-09-26: First slice landed: `bv_omega` (docs/bv-omega-design.md;
+- 2026-09-26: First slice landed: `bv_omega` (docs/tactics/bv-omega-design.md;
   `crates/elab/src/bv_omega.rs`, lemmas in `lib/std/tactic/bitvec_omega.hthr`, tests in
   `crates/elab/tests/bv_omega.rs`). Step 0 closed
   [[omega-respells-atoms-without-implicits]]. The emission shape changed three

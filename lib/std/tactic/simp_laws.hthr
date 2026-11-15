@@ -1,10 +1,10 @@
 // What `simp` (lib/std/tactic/simp.hthr) reads: its sets of laws.
 //
 // A set is a registered value (`register def …: SimpSet = …;`,
-// docs/registered-values-design.md) written in the module that owns the
+// docs/metaprogramming/registered-values-design.md) written in the module that owns the
 // facts, with each law named by `name_of`, so a name is checked where the
 // lemma is in scope and the set's contents are one declaration to read
-// (docs/simp-design.md §3). A set registered as a type's default is used by
+// (docs/tactics/simp-design.md §3). A set registered as a type's default is used by
 // `by simp()` at every goal that has a value of that type, and at no other
 // (§3.1): the laws a call gets are a function of the goal's types, not of
 // what the module happens to import.

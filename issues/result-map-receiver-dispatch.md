@@ -49,7 +49,7 @@ than resolved by arbitrary import order.
 ## Log
 
 - 2026-09-14: Implemented ambiguous-import receiver selection
-  (`docs/imported-receiver-dispatch-design.md`). Candidates are filtered only
+  (`docs/language/classes/imported-receiver-dispatch-design.md`). Candidates are filtered only
   by known distinct outer carriers, with canonical declaration identity;
   same-carrier and unknown/generic candidates retain ambiguity. Existing
   field/local/selected-import/nominal-member routes retain precedence. Bare

@@ -1,5 +1,5 @@
 // Tactics written in Heather, as request trees
-// (docs/host-elaboration-interface-design.md).
+// (docs/metaprogramming/host-elaboration-interface-design.md).
 //
 // A tactic is an ordinary value of type `Tac<A>`: either a result, or a
 // request to the elaborator with a continuation that receives the answer.
@@ -144,7 +144,7 @@ record FieldInfo { name: String, ty: Option<Handle> }
 record CtorInfo { name: String, fields: List<FieldInfo>, ctor: Option<Handle> }
 
 // A `match` with its arms, as `Arms` answers it
-// (docs/runtime-fn-setups-design.md §3.2): the scrutinee, one arm per
+// (docs/native/runtime-fn-setups-design.md §3.2): the scrutinee, one arm per
 // constructor in declaration order, and the arguments the match is applied
 // to (a `match h:` is applied to `refl`, its arms taking the equation). An
 // arm's `body` is a function of the constructor's payload, which `Open`
@@ -181,7 +181,7 @@ record Projected { ty: GlobalRef, fields: List<FieldProj> }
 // each under the one before it; its statement `result` and its `body` live
 // under the last. A parameter is implicit (`{x: T}`) when its flag says so.
 // `AsValue` is a `def`, a value with no parameters
-// (docs/value-definitions-design.md).
+// (docs/metaprogramming/value-definitions-design.md).
 //
 // The same group is what a declaration-prefix generator publishes
 // (`runtime fn f …`, `regex def x = "…";`, value-definitions design §3): it is
@@ -271,7 +271,7 @@ inductive Req {
     // built for `fn g`, its parameters as `λ`s. Refused, with the reason, for
     // a global with no body (a theorem, an axiom). A subterm the body shares
     // is the same handle wherever `View` meets it in one scope, so a reader
-    // can memoise on handles (docs/runtime-fn-setups-design.md §3.2).
+    // can memoise on handles (docs/native/runtime-fn-setups-design.md §3.2).
     Body(g: GlobalRef),
     // The `match` a handle stands for, with its arms (`MatchInfo`); refused
     // for anything else, and for a match this host does not present yet. A
@@ -280,7 +280,7 @@ inductive Req {
     // `Succ` arm under the predecessor and the recursion's result.
     Arms(h: Handle),
     // A term of the type `goal` stands for, found by the search `:= infer`
-    // runs (docs/traits-layer2-design.md, docs/facts-on-demand-design.md):
+    // runs (docs/language/classes/traits-layer2-design.md, docs/native/facts-on-demand-design.md):
     // the locals, the derived table and the instances, and at a proposition
     // computation and the evidence rules, search rules last. Refused, with
     // the search's trace, when nothing answers; a refusal leaves nothing.
@@ -315,10 +315,10 @@ inductive Req {
     // arguments included, with nothing else reduced. Refused where `Body`
     // is (no body, universe-polymorphic), and for a head that is not a
     // global. What a reader that inlines a definition reads instead of the
-    // call (docs/runtime-fn-setups-design.md §16.13).
+    // call (docs/native/runtime-fn-setups-design.md §16.13).
     Unfold(h: Handle),
     // The representation registered for the type `ty` (a `datarepr`,
-    // docs/datarepr-design.md §1.4), as a handle to its assembled value
+    // docs/native/datarepr-design.md §1.4), as a handle to its assembled value
     // (`I64`, whose `I64::abs`, `I64::emb`, … are its members). Refused when
     // the type has none.
     Repr(ty: Handle),
@@ -329,7 +329,7 @@ inductive Req {
     // another module's `interface fn` at an open argument (its body is
     // withheld there, as conversion withholds it), and past a budget.
     // What `grind` reads a term through its definitions by
-    // (docs/grind-design.md §15).
+    // (docs/tactics/grind-design.md §15).
     Spell(e: Expr),
     // `h` with the goal's local `x` abstracted out of it: `λ y => h[y/x]`,
     // a function of `x`'s type. A type is abstracted as its code, so a goal
@@ -353,11 +353,11 @@ inductive Req {
     // an equation or of a designated relation, under any hypotheses. Which
     // laws a goal gets is the tactic's choice (`simp`, a set's lemmas
     // resolved); the walk and the proof are the host's
-    // (docs/simp-design.md §7). Refused with `simp_only`'s report: the
+    // (docs/tactics/simp-design.md §7). Refused with `simp_only`'s report: the
     // route taken and the laws blocked.
     Simp(laws: List<Expr>, goal: Handle),
     // `trivial`, when `laws` pass the checks a set of laws is held to
-    // (docs/simp-design.md §4): no law's own statement loops under the
+    // (docs/tactics/simp-design.md §4): no law's own statement loops under the
     // list, and no law is rewritten by another to a result that does not
     // join. Refused with the law at fault and the route.
     SimpCheck(laws: List<Expr>),
@@ -420,7 +420,7 @@ fn Resp(r: Req) → Type {
 inductive Tac<A> { Pure(a: A), Ask(r: Req, k: Resp(r) → Tac<A>) }
 
 // `Pure(a)` and `Ask(r, k)` as values, through calls. `Tac` is lowered on
-// `W` (docs/inductive-tier2-w-lowering.md), and a constructor written out
+// `W` (docs/inductives/inductive-tier2-w-lowering.md), and a constructor written out
 // spells that encoding's annotations into the term, which the kernel gate
 // checks again at every occurrence: thousands of steps each, multiplied by
 // every arm a wildcard covers. A call is checked once, here, so tactics
@@ -437,7 +437,7 @@ fn Tac::bind<A, B>(self t: Tac<A>, f: A → Tac<B>) → Tac<B> {
     match t { Pure(a) => f(a), Ask(r, k) => Ask(r, λ x => k(x).bind(f)) }
 }
 
-// `Tac` is a carrier of binding statements (docs/sequencing-surface-design.md
+// `Tac` is a carrier of binding statements (docs/language/sequencing-surface-design.md
 // §2.3): `let g <- goal();` is `goal().bind(λ g => …)`.
 instance Bind<Tac> { bind := Tac::bind }
 instance Pointed<Tac> { pure := λ {A} a => pure(a) }

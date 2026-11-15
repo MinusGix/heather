@@ -7,7 +7,7 @@ created: 2026-11-14
 updated: 2026-11-14
 ---
 
-The early cutoff (`docs/module-interface-cutoff-design.md`) moves a module's
+The early cutoff (`docs/infrastructure/module-interface-cutoff-design.md`) moves a module's
 image onto a changed dependency world when the world's registries and the
 names it looked up are unchanged. Each module's registry contribution enters
 that comparison as a digest of its `RegistryPart` projection, which blanks

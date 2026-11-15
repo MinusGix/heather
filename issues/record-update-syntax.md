@@ -17,7 +17,7 @@ Candidates:
 - `{ s with bytes = Succ(s.bytes), inside = True }`, which may collide with
   block syntax at `{`;
 - `s.with(bytes := …, inside := …)`, which reuses named-argument syntax
-  (docs/named-arguments-design.md);
+  (docs/language/named-arguments-design.md);
 - `WcState(..s, bytes := …)`.
 
 Costing (2026-10-02, not built): parser and an elaboration desugar to
@@ -32,4 +32,4 @@ Related: [[native-programs-read-like-programs]], [[surface-records]].
 ## Log
 
 - 2026-10-02: Spelling decided (user, 2026-10-02): s with { f = e }.
-- 2026-10-03: 2026-10-03: Landed as `s with { f = v, … }` (docs/surface-records.md §6.2): postfix, chaining; elaborated as the record literal with every unwritten field `s.f` (a non-local base let-bound once), in checking and inference. Refuses unknown/duplicate fields, a non-record base, an empty update, and a kept field whose type mentions a replaced one (binder-aware). wc_step's arms now name only what they change. The decided expansion spells a copied input as itself, so a kept Bool field splits with the source's.
+- 2026-10-03: 2026-10-03: Landed as `s with { f = v, … }` (docs/language/surface-records.md §6.2): postfix, chaining; elaborated as the record literal with every unwritten field `s.f` (a non-local base let-bound once), in checking and inference. Refuses unknown/duplicate fields, a non-record base, an empty update, and a kept field whose type mentions a replaced one (binder-aware). wc_step's arms now name only what they change. The decided expansion spells a copied input as itself, so a kept Bool field splits with the source's.

@@ -9,7 +9,7 @@ updated: 2026-11-02
 ---
 
 Since the ordered-algebra layers ([[ordered-algebra-api]],
-docs/ordered-algebra-design.md), the product laws `mono` applies inside
+docs/library/ordered-algebra-design.md), the product laws `mono` applies inside
 `section<A: OrderedField(…)>` are `OrderedSemiring`'s (`mul_le_mono_r`, …).
 `apply` fills their dictionary by upcasting the section's own, which builds
 the record literal `OrderedSemiring(#constraint0.rel_refl, …)`, and every

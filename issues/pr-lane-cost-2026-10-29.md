@@ -16,7 +16,7 @@ since recent work was meant to stop rounds running everything.
 
 `--pr` was defined in #151 (2026-10-23) as "every test, over stale images":
 it saves re-elaborating library modules after a compiler edit, not tests.
-Affected-target selection (`--affected`, docs/testing-architecture-design.md
+Affected-target selection (`--affected`, docs/infrastructure/testing-architecture-design.md
 §2.2) was proposed there and left for Minus to decide after the sentinel had
 run a while; it was never built. So nothing that selected tests regressed;
 there was none.

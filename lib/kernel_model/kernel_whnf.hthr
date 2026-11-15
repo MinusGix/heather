@@ -1,4 +1,4 @@
-// Weak-head reduction with no fuel (docs/partial-functions-design.md §5):
+// Weak-head reduction with no fuel (docs/language/partial-functions-design.md §5):
 // the evaluator of `kernel_reduction.hthr` as a `partial fn`. Each recursive
 // reduction is a call, and `CoTree::rec` answers it by reducing again, so
 // there is no fuel and no `None`: a term whose reduction never stops is a
@@ -52,7 +52,7 @@ fn Tm::step_co(t: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::
 
 // Weak-head reduction: a computation that returns the weak-head normal form
 // if reduction stops, and never returns if it does not. A `partial fn`
-// (docs/partial-functions-design.md §4): its type is `Tm → Partial(Tm)`, each
+// (docs/language/partial-functions-design.md §4): its type is `Tm → Partial(Tm)`, each
 // recursive reduction is bound with `<-` or is the result, and the
 // elaborator writes it as `CoTree::rec` of its body `Tm::whnf_co::body`.
 partial fn Tm::whnf_co(t: Tm) → Tm {

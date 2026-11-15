@@ -1,4 +1,4 @@
-// Loops over a written span (docs/native-one-compiler-design.md §2.6, U4
+// Loops over a written span (docs/native/native-one-compiler-design.md §2.6, U4
 // step 4c-2): a computation function that calls itself in tail position
 // (`FTm::Again`) and `decreases` a measure is one FunctionIR `Loop`, the
 // span carried from pass to pass, and its soundness is proved once.

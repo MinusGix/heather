@@ -7,7 +7,7 @@ created: 2026-09-22
 updated: 2026-09-22
 ---
 
-Stage 3 of `docs/intro-by-type-design.md` — the elaborator's **transient
+Stage 3 of `docs/elaborator/intro-by-type-design.md` — the elaborator's **transient
 reduct**: the elaborator still normalizes a matched type to decide a match
 and holds the reduct while it works, even though since stage 2 it no longer
 writes it into the term. On 2026-09-22 the item totals on the curve probes
@@ -15,7 +15,7 @@ still grew ×1.8/×2.6 per combinator layer after stage 2, and that growth
 was stage 3's case.
 
 **Deferred, not dropped** (user, 2026-09-22): after
-`docs/app-by-head-type-design.md` the curve is flat enough that stage 3
+`docs/elaborator/app-by-head-type-design.md` the curve is flat enough that stage 3
 has no measured subject today. The probes' own theorems, `perf ab` raw
 tables, sample 2:
 

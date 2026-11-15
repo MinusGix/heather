@@ -1,6 +1,6 @@
 // Heather's scanner over a source it is lent: one token, found by compiled
 // code that reads the caller's bytes where they lie
-// (docs/native-library-exports-design.md §10, R3; issues/self-lexer-linked.md).
+// (docs/native/native-library-exports-design.md §10, R3; issues/self-lexer-linked.md).
 //
 // `scan_token(source, length, at, previous)` is the longest token of
 // `source` from offset `at`, after a token of kind `previous`: the

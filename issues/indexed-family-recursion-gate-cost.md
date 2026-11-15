@@ -31,7 +31,7 @@ the same family with `k: Tr(n)` (no function field) at 16 constructors is
 
 **Typed syntax**: `Tm(J(Γ, A))` — variables, weakening, λ, application and
 `n − 4` binary operators, indexed by a declared judgment type (one index per
-family today, `docs/inductive-indexed-lowering.md` §8.4), `size` at the
+family today, `docs/inductives/inductive-indexed-lowering.md` §8.4), `size` at the
 rebound judgment, an open and a closed `refl`:
 
 | ctors | `size` total / gate | queries | open `refl` | closed `refl` |
@@ -107,7 +107,7 @@ magnitude.
   so a signature is three global references; not attempted here. Left open
   for that.
 - 2026-10-27: The elaborator-side alternative, done, and closed
-  (`docs/iwf-named-signature-design.md`, with
+  (`docs/inductives/iwf-named-signature-design.md`, with
   [[mutual-group-recursion-gate-cost]]): `n`, `o`, `c` are generated
   definitions, an instance is three references, and a `match`'s ih type a
   fourth. For typed syntax it first had no effect: registration, which runs

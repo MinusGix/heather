@@ -1,5 +1,5 @@
 //! A simplifier's step along a law between statements, `P ↔ Q`
-//! (`docs/simp-design.md` §12, `issues/simp-iff-laws.md`).
+//! (`docs/tactics/simp-design.md` §12, `issues/simp-iff-laws.md`).
 //!
 //! The term walk (`relation.rs`) rewrites terms inside a goal, across term
 //! operations that carry congruence evidence. A statement's contexts are

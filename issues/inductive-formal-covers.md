@@ -9,7 +9,7 @@ updated: 2026-11-09
 
 `lib/std/locale/formal_topology.hthr` presents a frame from any cover relation
 satisfying reflexivity, transitivity, the `≤`-left rule and localisation
-(docs/frame-locale-design.md §6). A particular locale is presented instead by a
+(docs/library/frame-locale-design.md §6). A particular locale is presented instead by a
 small **axiom set**: for each basic open `a: P`, a small type `C(a)` of covers,
 each a family `cov(a, k): I(a, k) → P`. Its cover is the least relation closed
 under reflexivity, `≤`-left and "infinity" (`k: C(a)` and every
@@ -43,4 +43,4 @@ frame it is the join over basic opens `a` with `↓a ⊓ x ≤ y`, a small index
 - 2026-11-09: Filed from frame-and-locale-foundations, whose presentation
   basis is axiomatic.
 - 2026-11-09: Blocked on [[indexed-families-at-any-index-type]]: the cover is a family indexed by the basis `P`, a type parameter, beside value parameters (the axioms and the covered open), and the elaborator refuses all three (index type, value parameters with an index, bare-variable results).
-- 2026-11-09: Done. `Cover<P>(le_p, C, ax, u)` in lib/std/locale/formal_topology.hthr: transitivity (`Cover::trans`), localisation under `Cover::Localised` by a double induction (`meet_l`/`meet_r`), localisation of any axiom set (`Cover::LocalAxiom`, `Cover::local`, `local_localised`), `FormalTopology::inductive`/`inductive_frame`, and the Heyting implication `FormalTopology::imp` with `imp_intro`/`imp_elim` for any formal topology. docs/frame-locale-design.md §6.1.
+- 2026-11-09: Done. `Cover<P>(le_p, C, ax, u)` in lib/std/locale/formal_topology.hthr: transitivity (`Cover::trans`), localisation under `Cover::Localised` by a double induction (`meet_l`/`meet_r`), localisation of any axiom set (`Cover::LocalAxiom`, `Cover::local`, `local_localised`), `FormalTopology::inductive`/`inductive_frame`, and the Heyting implication `FormalTopology::imp` with `imp_intro`/`imp_elim` for any formal topology. docs/library/frame-locale-design.md §6.1.

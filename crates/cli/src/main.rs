@@ -10,7 +10,7 @@
 //! does not check).
 //!
 //! `--cache` opts into the content-addressed declaration cache
-//! (docs/cache-v1-design.md): declarations whose interface-closure hash a
+//! (docs/infrastructure/cache-v1-design.md): declarations whose interface-closure hash a
 //! previous run recorded as kernel-accepted skip the kernel gate. It is opt-in
 //! precisely so that an unflagged `heather check` — the merge gate, and what
 //! `scripts/bench-frontend` drives — keeps meaning exactly what it always
@@ -24,7 +24,7 @@
 //! line counts the refusals it matched.
 //!
 //! The import closure is one elaboration into one shared Ψ
-//! (docs/modules-design.md §3.2): the loader orders the modules, this file
+//! (docs/language/modules-design.md §3.2): the loader orders the modules, this file
 //! feeds them in that order, and each module's diagnostics are rendered
 //! against its *own* source.
 //!
@@ -52,10 +52,11 @@ use heather_cli::{expect, loader, semantic::SemanticSession};
 mod color;
 mod eval;
 mod fmt;
+mod limits;
 mod native;
 
 /// Where the standard library lives when nobody says otherwise
-/// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
+/// (docs/language/modules-design.md §3.2). Defaulted only if it exists, so a run from
 /// a directory without one behaves exactly as it did before modules.
 const DEFAULT_LIB: &str = loader::STDLIB_DIR;
 const DEFAULT_LIB_ROOT: &str = "lib";
@@ -123,19 +124,23 @@ fn choose_kernel_self_checks() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(msg) = limits::choose(&mut args).and_then(|limits| limits.apply()) {
+        eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
+        return ExitCode::from(2);
+    }
     if let Err(msg) = choose_kernel_self_checks() {
         eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
         return ExitCode::from(2);
     }
     choose_lexer();
-    let code = run();
+    let code = run(args);
     report_lexer();
     code
 }
 
-fn run() -> ExitCode {
+fn run(args: Vec<String>) -> ExitCode {
     let stderr_color = color::stderr_enabled();
-    let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {
         Some((cmd, rest)) if cmd == "check" => match parse_check_args(rest) {
             Ok((opts, files)) if !files.is_empty() => check(&opts, &files),
@@ -187,7 +192,10 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\
                      \x20      heather warm-native <file.hthr>... (--cache-dir <dir> [--through <module> | --unbuilt] | --list) [-L <dir>]... [--kernel-workers <n>]\n\
                      \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>]\n\
-                     \x20      heather linked-exports <generated dir> [--check | --rows]";
+                     \x20      heather linked-exports <generated dir> [--check | --rows]\n\
+                     \n\
+                     \x20      Every command also takes --limits <dev | off | memory=<size>,cpu=<seconds>,core=<size>> (or HEATHER_LIMITS):\n\
+                     \x20      resource limits for development runs, off unless asked for (`dev` is memory=8G,cpu=120,core=0).";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -219,11 +227,11 @@ struct Opts {
     /// `--only a,b,mod::c`: elaborate and kernel-check exactly these
     /// declarations over a replayed prefix, publish nothing, and label the
     /// run so its numbers cannot pass for a whole-run's
-    /// (`docs/check-only-design.md`). Needs `--cache`.
+    /// (`docs/infrastructure/check-only-design.md`). Needs `--cache`.
     only: Option<Vec<String>>,
     /// `--timings <path.tsv>` (`-` for stderr), or `HEATHER_TIMINGS` in the
     /// environment: write the attribution table — one row per declaration, per
-    /// module and for the run (`docs/instrumentation-design.md` §4).
+    /// module and for the run (`docs/infrastructure/instrumentation-design.md` §4).
     /// Diagnostic only; it can never change a verdict.
     timings: Option<stats::Dest>,
     /// `--accept-stale-images`: replay semantic module images another build
@@ -233,7 +241,7 @@ struct Opts {
     images: ImageFreshness,
     /// `--kernel-workers N` (or `HEATHER_KERNEL_WORKERS`): check declarations'
     /// proofs on N kernel worker threads, joined before the module is accepted
-    /// (`docs/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
+    /// (`docs/kernel/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
     kernel_workers: Option<usize>,
     /// `--expectations`: read `// expect-error…` directives, so a declaration
     /// they mark must be refused for the reason they name, and is then not
@@ -242,13 +250,13 @@ struct Opts {
     /// `--world <dir>`: accepted and ignored. It loaded the library's shared
     /// modules in one order before each root's own, so that the gate's
     /// processes keyed each module alike; a module is now checked over its
-    /// own closure in every process (`docs/module-dag-design.md`).
+    /// own closure in every process (`docs/infrastructure/module-dag-design.md`).
     #[allow(dead_code)]
     world: Option<PathBuf>,
     /// `--build-jobs N`: before checking, elaborate every module of the load
     /// that has no image yet, each in a `heather check` of its own, up to N
     /// at a time, a module once its closure's images exist and the longest
-    /// chain first (`docs/module-dag-design.md` §12). Each process spends
+    /// chain first (`docs/infrastructure/module-dag-design.md` §12). Each process spends
     /// its own CPU rail on its own module; the check that follows replays.
     build_jobs: Option<usize>,
     /// `--build-only`: stop after `--build-jobs`' builds.
@@ -256,7 +264,7 @@ struct Opts {
     /// `--build-times <file.tsv>`: a row per module `--build-jobs` built,
     /// with when it became ready, started and finished and the import that
     /// readied it, so the chain that set the build step's length can be
-    /// read back (`docs/module-dag-design.md` §12).
+    /// read back (`docs/infrastructure/module-dag-design.md` §12).
     build_times: Option<PathBuf>,
     /// `--build-first <dir>`: among modules ready to build, those below a
     /// named directory and their closures start before the rest, so a
@@ -484,7 +492,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         eprintln!("timings: could not write: {e}");
     }
     // A `--only` run's row is labelled, so `scripts/timings` can refuse to
-    // read its numbers as a whole run's (`docs/check-only-design.md` §3).
+    // read its numbers as a whole run's (`docs/infrastructure/check-only-design.md` §3).
     let run_label = opts.only.as_ref().map(|names| format!("only={}", names.join(","))).unwrap_or_default();
     let run_scope = opts.timings.as_ref().map(|_| stats::scope(stats::ScopeKind::Run, "", &run_label));
     // One cache for the whole run, shared across roots: a declaration two
@@ -510,7 +518,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
         // import, which at prelude sizes costs milliseconds (caching is
-        // docs/modules-design.md §8's round, not this one).
+        // docs/language/modules-design.md §8's round, not this one).
         let mut elab = match Elaborator::with_prelude() {
             Ok(e) => e,
             Err(e) => {
@@ -530,7 +538,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         );
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never
-        // cached (docs/cache-v1-design.md §4).
+        // cached (docs/infrastructure/cache-v1-design.md §4).
         if let Some(c) = &own {
             c.begin_run();
             elab.set_gate(Arc::clone(c) as Arc<dyn heather_elab::gate::KernelGate>);
@@ -563,7 +571,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
         // Every module is checked over its own import closure
-        // (`docs/module-dag-design.md`), so the closure is all a check loads:
+        // (`docs/infrastructure/module-dag-design.md`), so the closure is all a check loads:
         // `--world` no longer changes what a module means or how its image is
         // keyed, and is accepted for the callers that still pass it.
         let loaded = loader::load_many(&root_refs, &search);
@@ -618,7 +626,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
         if report_metrics {
             // The collector pins the kernel gate to this thread
-            // (`docs/parallel-kernel-gate-design.md` §4), so asking for both
+            // (`docs/kernel/parallel-kernel-gate-design.md` §4), so asking for both
             // it and a worker pool silently yields the serial gate. Say which
             // one won rather than leaving the flag looking honoured.
             if elab.kernel_workers() > 1 {
@@ -631,7 +639,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         // In the loader's order, except that a module another process is
         // building is set aside while one whose imports are checked can go
-        // first (`docs/module-dag-design.md` §7): the library gate's
+        // first (`docs/infrastructure/module-dag-design.md` §7): the library gate's
         // children share one store, and without this one waits on another's
         // build lock with modules of its own ready.
         let common_at = modules.iter().position(|m| m.name == heather_elab::COMMON_MODULE);
@@ -641,7 +649,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             .map(|(i, m)| heather_cli::semantic::module_imports(&m.name, &m.src, common_at.is_some_and(|c| c < i)))
             .collect();
         // What each module still to come needs, so a finished module's world
-        // goes once nothing left imports it (`docs/module-dag-design.md` §8).
+        // goes once nothing left imports it (`docs/infrastructure/module-dag-design.md` §8).
         semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));
         let position: std::collections::HashMap<&str, usize> =
             modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
@@ -702,7 +710,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             };
             // Warnings are drained per module, before the next one is checked:
             // a span indexes into the source it came from
-            // (docs/diagnostic-warnings-design.md §3). They do not fail the
+            // (docs/elaborator/diagnostic-warnings-design.md §3). They do not fail the
             // run and they do not touch the `ok` line — a warned file is a
             // checked file (§4).
             let warns = outcome.warnings;
@@ -733,7 +741,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             let shown = display_path(&m.path, path);
             // One source span elaborated for several declarations reports its
             // error once per declaration: a `section` head binder is spliced
-            // into every member (docs/sections-design.md §5.3), a class field's
+            // into every member (docs/language/sections-design.md §5.3), a class field's
             // type into every projection. Identical renderings are shown once,
             // with their count.
             let mut distinct: Vec<(String, usize)> = Vec::new();
@@ -804,7 +812,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         if root_ok && opts.only.is_some() {
             // Reserved wording, like `(cache)`: a `--only` run never reads
-            // as a check of the module (`docs/check-only-design.md` §3).
+            // as a check of the module (`docs/infrastructure/check-only-design.md` §3).
             println!(
                 "{path}: {} (only) — {} declaration{} elaborated for --only, {} replayed{refusals}",
                 color::success("ok", stdout_color),
@@ -821,14 +829,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     let n = c.counts().since(&before);
                     // Modules moved onto a changed world are replays too,
                     // and said so only when there are any
-                    // (`docs/module-interface-cutoff-design.md`).
+                    // (`docs/infrastructure/module-interface-cutoff-design.md`).
                     let relocated = match semantic.relocated() {
                         0 => String::new(),
                         k => format!(" ({k} moved onto a changed dependency world)"),
                     };
                     // A replay a stored verdict vouched for whole asked
                     // nothing about its declarations
-                    // (`docs/module-dag-design.md` §13).
+                    // (`docs/infrastructure/module-dag-design.md` §13).
                     let relocated = match n.replay_hits {
                         0 => relocated,
                         k => format!("{relocated} ({k} vouched for whole)"),
@@ -994,7 +1002,7 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
 
 /// `heather obligations [--json] <file>` — every obligation-bearing field of
 /// every such declaration in the file, with its state, its provenance and the
-/// statement it owes (`docs/obligation-records-design.md` §6).
+/// statement it owes (`docs/language/classes/obligation-records-design.md` §6).
 ///
 /// It **checks the file first**, and prints nothing if the check fails: under
 /// inline-first a listed file is a certified file, so the `state` column never
@@ -1185,7 +1193,7 @@ fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// cannot shadow or conflict with the public `base.hthr`). Module names
 /// remain flat: duplicate names below are still ambiguous.
 /// `--build-jobs`: elaborate the modules of `modules` that have no image,
-/// one `heather check` each, `jobs` at a time (`docs/module-dag-design.md`
+/// one `heather check` each, `jobs` at a time (`docs/infrastructure/module-dag-design.md`
 /// §12). A module is started once every module of its closure has an image,
 /// longest remaining chain first, measured in source bytes. One that fails
 /// is reported with the tail of its output and leaves its dependents

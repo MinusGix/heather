@@ -1,5 +1,5 @@
 // Probes of a loop over a span it writes (`FFun::lower_measured`,
-// lib/native/runtime/rt_file_loop.hthr; docs/native-one-compiler-design.md
+// lib/native/runtime/rt_file_loop.hthr; docs/native/native-one-compiler-design.md
 // §2.6, U4 step 4c-2). A function that adds one to every byte of its span
 // from an index on is lowered to one loop by evaluation, the code is what
 // the function compiler accepts lent one buffer, it runs, and over every

@@ -475,7 +475,7 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     out
 }
 
-/// An `IWf` signature (`docs/iwf-former-design.md` §1.2): `arity` and
+/// An `IWf` signature (`docs/kernel/iwf-former-design.md` §1.2): `arity` and
 /// `out` under `x : S`, `child` under `x, i`. Shared when nothing in it
 /// changed, as [`sub_ty`]/[`sub_tm`] share a node.
 fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig> {
@@ -496,7 +496,7 @@ fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig>
     }
 }
 
-/// An `M` signature (`docs/kernel-coinduction-design.md` §1.1): `shape`
+/// An `M` signature (`docs/kernel/kernel-coinduction-design.md` §1.1): `shape`
 /// under `i`, `pos` under `i, s`, `next` under `i, s, p`. Shared when nothing
 /// in it changed, as [`sub_iwf_sig`].
 fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
@@ -520,7 +520,7 @@ fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
 thread_local! {
     /// Native depth of [`sub_tm`]: past [`crate::term::SPINE_ITERATE_AT`]
     /// a data spine is mapped by [`sub_tm_spine`]'s loop instead of one
-    /// frame per node (docs/deep-term-walks-design.md).
+    /// frame per node (docs/kernel/deep-term-walks-design.md).
     static SUB_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -632,7 +632,7 @@ fn sub_tm_settled<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths, mapped: Term, 
     out
 }
 
-/// A deep data spine mapped by a loop (docs/deep-term-walks-design.md):
+/// A deep data spine mapped by a loop (docs/kernel/deep-term-walks-design.md):
 /// down [`crate::term::spine_child`] while each node needs walking, the
 /// bottom by an ordinary [`sub_tm`] at depth zero, then back up rebuilding
 /// each node around its mapped child ([`map_spine_node`]). Every node gets
@@ -1104,7 +1104,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             pair: sub_tm(pair, m, at),
         },
 
-        // The checked spellings (docs/intro-by-type-design.md): one type
+        // The checked spellings (docs/elaborator/intro-by-type-design.md): one type
         // annotation each and **no binder in it** — `snd_ty` bound one, `T`
         // binds none — so every walker here loses the `dep(0, 0, 1)` its
         // component sibling needs.
@@ -1567,7 +1567,7 @@ impl Mapper for ShiftGlobal {
 /// Rename every free global variable through a caller's map: the rescoping a
 /// module image needs when the Ψ prefix it was elaborated over is replaced by
 /// one in which its referents sit elsewhere
-/// (`docs/module-interface-cutoff-design.md` §3). The map sees and returns a
+/// (`docs/infrastructure/module-interface-cutoff-design.md` §3). The map sees and returns a
 /// free index as counted from the outside of the term, binders crossed
 /// already subtracted; `None` from it marks the result unusable rather than
 /// guessing, and the whole operation returns `None`.
@@ -1680,7 +1680,7 @@ impl GlobalBinding {
 
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
-/// telescope table rather than a term (`docs/lazy-global-offset-design.md`
+/// telescope table rather than a term (`docs/kernel/lazy-global-offset-design.md`
 /// §5); routed through the generic traversal so the 65 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
@@ -1970,7 +1970,7 @@ impl Mapper for InstTop<'_> {
 }
 
 /// Abstraction over a **term**: every occurrence of `pat` becomes the fresh
-/// innermost variable `z` (`docs/goal-motive-synthesis-design.md` §3).
+/// innermost variable `z` (`docs/elaborator/goal-motive-synthesis-design.md` §3).
 ///
 /// The inverse of [`SubstLocal`] at a singleton, and the operation a
 /// dependent motive is: `T.abstract_local(s)` is a type over `Γ, z` whose
@@ -2015,7 +2015,7 @@ struct AbstractLocal<'a> {
     /// The shared-node memo, when nothing is selected: then a node's result
     /// is a function of the node and the depths, and a goal that shares a
     /// subterm is abstracted once per depth, not once per path to it
-    /// (`docs/mengine-survey.md` §4.2). A selection numbers occurrences by
+    /// (`docs/surveys/mengine-survey.md` §4.2). A selection numbers occurrences by
     /// path, so it walks the tree.
     memo: Option<NodeMemo>,
     /// Whether every pattern mentions a variable of `Γ`. An occurrence under
@@ -2444,7 +2444,7 @@ impl Type {
     /// `None` rather than the constant function, because the two answers are
     /// different *facts* and every caller so far wants to try something else
     /// before settling for the constant one
-    /// (`docs/goal-motive-synthesis-design.md` §3.2).
+    /// (`docs/elaborator/goal-motive-synthesis-design.md` §3.2).
     ///
     /// `self` is weakened into `Γ, z` first, so a `pat` occurring under `k`
     /// binders is matched against `pat` weakened by `k + 1` and the variable
@@ -2477,7 +2477,7 @@ impl Type {
     /// The generality is one caller's, and a real one: a constructor field is
     /// reached from a goal that mentions the *value*, so what abstracting the
     /// field does to that value is rebuild it around `z`
-    /// (`docs/goal-motive-synthesis-design.md` §5). The `[pat/z]` instance is
+    /// (`docs/elaborator/goal-motive-synthesis-design.md` §5). The `[pat/z]` instance is
     /// then the original only up to `rep[pat/z] ≡ pat` — for that caller,
     /// Σ/Unit-η — which is why this returns a term to be *checked* and not a
     /// proof of anything.
@@ -3044,7 +3044,7 @@ mod tests {
     }
 }
 
-// -- the quote boundary's rebuild (docs/intro-by-type-design.md §2.3) ------
+// -- the quote boundary's rebuild (docs/elaborator/intro-by-type-design.md §2.3) ------
 
 /// [`crate::typing::spell_checked_in_code`]'s second half: every checked
 /// spelling the eager checker recorded is replaced by its component form,

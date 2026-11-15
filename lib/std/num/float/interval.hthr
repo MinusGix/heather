@@ -1,6 +1,6 @@
 // Interval enclosures over `Dyadic`, and a checker that proves inequalities
 // between rational expressions by evaluating them
-// (issues/dyadic-interval-enclosures.md; docs/coq-hardware-floats-survey.md
+// (issues/dyadic-interval-enclosures.md; docs/surveys/coq-hardware-floats-survey.md
 // §6.1).
 //
 // An `Interval` is a pair of dyadic bounds or the whole line. Its arithmetic
@@ -17,7 +17,7 @@
 // costs nothing at run time.
 //
 // Containment is proved once, over any ordered field `K` holding the bounds
-// through a morphism from `Rat` (`Interval::HasIn`, docs/casting-design.md
+// through a morphism from `Rat` (`Interval::HasIn`, docs/language/casting-design.md
 // §5.6), and read at `Rat` (`Has`, through `Rat::id_hom`) and at `CReal`
 // (`HasReal` in `creal_interval.hthr`, through `CReal::ofRat_hom`). The
 // readings are conversions: each `Rat` and `CReal` containment theorem is
@@ -112,7 +112,7 @@ fn Interval::below_eq(self I, J: Interval) → Bool {
 
 // ---------------------------------------------------------------------------
 // Containment over an ordered field `K`, its bounds read through a morphism
-// from `Rat` (docs/casting-design.md §5.6): `Has` is this at `Rat` and the
+// from `Rat` (docs/language/casting-design.md §5.6): `Has` is this at `Rat` and the
 // identity, `HasReal` at `CReal` and `CReal::ofRat_hom`.
 
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},

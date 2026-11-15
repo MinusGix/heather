@@ -1,5 +1,5 @@
 //! `Pos<A>` binder sugar (`issues/pos-binder-sugar.md`,
-//! `docs/positivity-evidence-design.md` §6 B and §11): a parameter, a
+//! `docs/library/positivity-evidence-design.md` §6 B and §11): a parameter, a
 //! function result or a record field written `Pos<A>` is the carrier `A`
 //! beside a fact `0 < x`, found by `:= infer`'s proposition search.
 //!

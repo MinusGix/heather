@@ -156,7 +156,7 @@ when weighing rung 3/4 against their prerequisite features.
   known shell (including its eventual subject-owned names), not whether the
   three objects are expressible.
 - 2026-08-18: Rung 4's first probe is implemented
-  (`docs/certified-pass-algebra-probe.md`). On `Tree`, a certified mirror is a
+  (`docs/metaprogramming/certified-pass-algebra-probe.md`). On `Tree`, a certified mirror is a
   first-class algebra plus Leaf/Node relational laws, and one generic theorem
   turns those into size preservation for every tree; the wrong Node clause is
   kernel-refused locally. This confirms the proof architecture without new

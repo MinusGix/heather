@@ -1,5 +1,5 @@
 //! Gluing a withheld definition at a saturated closed call
-//! (`docs/interface-definitions-design.md` §3).
+//! (`docs/language/interface-definitions-design.md` §3).
 //!
 //! In a world with an interface boundary ([`crate::term::GlobalCtx::withheld`])
 //! a withheld global evaluates to an *unglued* neutral, as a sealed theorem

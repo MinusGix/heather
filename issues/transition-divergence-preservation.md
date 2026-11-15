@@ -46,7 +46,7 @@ such diagrams does too.
 
 - **[[transition-systems-and-simulations]]** owns `StarDiagram` and its
   composite order. Assumed here: only those.
-- **[[kernel-coinductive-types]]** owns codata (docs/kernel-coinduction-design.md). Assumed here: a corecursive
+- **[[kernel-coinductive-types]]** owns codata (docs/kernel/kernel-coinduction-design.md). Assumed here: a corecursive
   proof of a codata predicate over a state type is accepted.
 - **[[linux-sim-divergence]]** proved the tree-side exact converse
   (`LinuxSimCo`); this is the state-side counterpart.

@@ -1,5 +1,5 @@
 //! **Differential test: the checker against the checker**
-//! (`docs/intro-by-type-design.md` §3.6, and stage 1b's kill criterion).
+//! (`docs/elaborator/intro-by-type-design.md` §3.6, and stage 1b's kill criterion).
 //!
 //! `tests/conv_differential.rs` holds the value machine's *verdict* against
 //! the rewriter's for conversion. Stage 1b moved the same seam one level in:
@@ -584,7 +584,7 @@ fn a_projected_variables_type_is_read_in_its_own_scope() {
 }
 
 /// `app@` spines over a head whose Π needs reduction
-/// (`docs/app-by-head-type-design.md` §3.2): a two-argument function stored
+/// (`docs/elaborator/app-by-head-type-design.md` §3.2): a two-argument function stored
 /// as a record field, `fst@(pair@^{T}(λx. λy. x; 0))` with
 /// `T = El ⌜Σ(g : El ⌜Π(x:Nat). Π(y:Nat). Nat⌝). Nat⌝`, applied twice — the
 /// second node's head type is the *first node's description*, so the chain

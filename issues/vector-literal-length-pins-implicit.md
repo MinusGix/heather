@@ -23,7 +23,7 @@ fn c04(p: BitVec(7)) → BitVec(8) { BitVec::concat(p, BitVec::from_bits([False]
 `BitVec::from_bits({n: Nat}, bits: [Bool; n])`: checking `[a, b, c]` against
 `[Bool; ?n]` could solve `?n := 3` outright — the literal's length is not
 inferred, it is counted. The per-call deferral
-(`docs/unifier-completeness-design.md` §3–§5) treats the literal like any
+(`docs/elaborator/unifier-completeness-design.md` §3–§5) treats the literal like any
 checking-only argument instead.
 
 Found by the 2026-09-24 probe of the remaining `@` sites: ~20 of the 80
@@ -33,4 +33,4 @@ Found by the 2026-09-24 probe of the remaining `@` sites: ~20 of the 80
 
 ## Log
 
-- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.
+- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/elaborator/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.

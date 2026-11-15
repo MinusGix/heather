@@ -1,4 +1,4 @@
-//! Mutual inductive families (`docs/mutual-inductive-design.md`): a group of
+//! Mutual inductive families (`docs/inductives/mutual-inductive-design.md`): a group of
 //! `inductive` declarations that mention one another, lowered to **one**
 //! `IWf`-route family indexed by the sum of the members' indices.
 //!
@@ -146,7 +146,7 @@ enum Occurrence<'a> {
     Child { member: usize, index: Option<&'a Expr> },
     /// The field is `(y: A) -> E(e)`, `A` free of the group: a function
     /// child, lowered on the family's `W` form
-    /// (docs/iwf-infinitary-design.md §1), `e` read under `y`.
+    /// (docs/kernel/iwf-infinitary-design.md §1), `e` read under `y`.
     FnChild { member: usize, index: Option<&'a Expr> },
 }
 
@@ -200,7 +200,7 @@ impl MutualFamily<'_> {
                     format!(
                         "`{}` is `codata` and is mutually recursive with `{group}`: a \
                          mutual group is of `inductive` declarations \
-                         (docs/mutual-inductive-design.md §1)",
+                         (docs/inductives/mutual-inductive-design.md §1)",
                         d.name
                     ),
                     d.span,
@@ -210,7 +210,7 @@ impl MutualFamily<'_> {
                 return err(
                     format!(
                         "`{}` is a `record` but is mutually recursive with `{group}`: a \
-                         recursive declaration is an `inductive` (docs/surface-records.md §2)",
+                         recursive declaration is an `inductive` (docs/language/surface-records.md §2)",
                         d.name
                     ),
                     d.span,
@@ -221,7 +221,7 @@ impl MutualFamily<'_> {
                     format!(
                         "the members of a mutual group declare the same type parameters, \
                          in the same order: `{}` has <{}> and `{}` has <{}> \
-                         (docs/mutual-inductive-design.md §1)",
+                         (docs/inductives/mutual-inductive-design.md §1)",
                         first.name,
                         first.params.join(", "),
                         d.name,
@@ -235,7 +235,7 @@ impl MutualFamily<'_> {
                     format!(
                         "`{}` has a value parameter and is a member of the mutual group \
                          `{group}`: a group is one indexed family, which takes none \
-                         (docs/surface-value-parameters.md §6); state it as an index",
+                         (docs/language/surface-value-parameters.md §6); state it as an index",
                         d.name
                     ),
                     p.span,
@@ -253,14 +253,14 @@ impl MutualFamily<'_> {
                     else {
                         return err(
                             "an indexed member's head is `: (n: I) -> Type`, one index \
-                             (docs/mutual-inductive-design.md §1)",
+                             (docs/inductives/mutual-inductive-design.md §1)",
                             ty.span,
                         );
                     };
                     if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
                         return err(
                             "an index telescope ends in bare `Type`; the family's level is \
-                             computed from the fields (docs/inductive-indexed-lowering.md §2)",
+                             computed from the fields (docs/inductives/inductive-indexed-lowering.md §2)",
                             cod.span,
                         );
                     }
@@ -490,7 +490,7 @@ fn occurrence<'a>(
         let why = match &f.ty.kind {
             TyKind::Fn { .. } => {
                 "a member occurs in a function field only as its codomain, `(y: A) -> E(e)` \
-                 with `A` free of the group (docs/iwf-infinitary-design.md §1)"
+                 with `A` free of the group (docs/kernel/iwf-infinitary-design.md §1)"
             }
             TyKind::Vec { .. } => {
                 "a container field of a member is not lowered on the family's route; \
@@ -501,7 +501,7 @@ fn occurrence<'a>(
         return err(
             format!(
                 "field of `{}` mentions the mutual member `{}` inside another type: {why} \
-                 (docs/mutual-inductive-design.md §1)",
+                 (docs/inductives/mutual-inductive-design.md §1)",
                 c.name, h.decl.name
             ),
             f.ty.span,

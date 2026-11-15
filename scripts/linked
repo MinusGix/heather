@@ -94,8 +94,7 @@ compile() {
   shift 4
   local entries=()
   for entry in "$@"; do entries+=(--entry "$entry"); done
-  ( ulimit -v 8388608 -t 1500 -c 0
-    "$heather" compile-x86 "$module" "$function" --symbol "$symbol" "${entries[@]}" -o "$work/$symbol.s" --cache-dir "$store" > "$work/$symbol.log" 2>&1 ) ||
+  "$heather" compile-x86 "$module" "$function" --limits dev,cpu=1500 --symbol "$symbol" "${entries[@]}" -o "$work/$symbol.s" --cache-dir "$store" > "$work/$symbol.log" 2>&1 ||
     { cat "$work/$symbol.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; return 1; }
   # Published under the key only once whole: a killed run leaves no hit.
   cp "$work/$symbol.s" "$memo/$key.s.partial" && mv "$memo/$key.s.partial" "$memo/$key.s"

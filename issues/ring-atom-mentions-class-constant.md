@@ -55,7 +55,7 @@ h.left;` ascription.
   difference-calculus round (PR #332) names an atom whose spelling does not
   parse by an alias, the route this issue proposed. The `linarith` gap is
   fixed here: ring's reifier compares a dictionary operation through a
-  parent class's record (`same_dictionary_read`, docs/casting-design.md
+  parent class's record (`same_dictionary_read`, docs/language/casting-design.md
   §16), so `AbsLe(z, e).left` reads as `-e <= z`. The `let l: (K.inv(e) <=
   z) = h.left` ascriptions in `real_fn.hthr` and the named half in
   `real_fn_tests.hthr` are gone; probes in `real_fn_tests.hthr`

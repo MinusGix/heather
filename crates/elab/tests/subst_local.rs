@@ -1,6 +1,6 @@
 //! `subst(h, e)`: eliminating a local variable along an equation, reverting
 //! the locals whose types depend on it (`issues/subst-local-equation.md`,
-//! `docs/equation-rewrite-design.md` §8).
+//! `docs/tactics/equation-rewrite-design.md` §8).
 //!
 //! The tactic writes a `J` whose motive generalises the goal over the
 //! variable and a telescope of reverted locals, so the axes of

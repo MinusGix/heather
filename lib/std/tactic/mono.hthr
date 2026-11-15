@@ -29,7 +29,7 @@
 // scope the way a call does), registered beside them as `MonoEntry` values
 // (lib/std/tactic/mono_laws.hthr) with every lemma a checked `name_of`. The
 // tactic reads the entries its client's world has, `registered(MonoEntry)`
-// at the `by` (docs/registered-values-design.md), so a client that does not
+// at the `by` (docs/metaprogramming/registered-values-design.md), so a client that does not
 // import `creal` pays nothing for it, and a new carrier gets `mono` by
 // registering its laws. `mono_with(hs)` takes the facts the leaves need as
 // terms: `by mono_with([s.small(k, hk)])`.
@@ -570,7 +570,7 @@ fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → 
 }
 
 // ---------------------------------------------------------------------------
-// Reading casts (docs/casting-design.md §6.4): a side that is an edge's
+// Reading casts (docs/language/casting-design.md §6.4): a side that is an edge's
 // image of an operation, `(a + c).rat()`, is read as the operation of the
 // images, `a.rat() + c.rat()`, through the edge's law (`lib/std/tactic/
 // cast.hthr`), and an order between two images of one edge is the order of

@@ -15,10 +15,10 @@
 //!   the `n²`-arm decidable equality every opcode table ends up wanting.
 //! - **Intricate** — few constructors, but the lowering does the work:
 //!   mutual groups (one `IWf` over a generated member sum,
-//!   `docs/mutual-inductive-design.md`), a family indexed by a typing
+//!   `docs/inductives/mutual-inductive-design.md`), a family indexed by a typing
 //!   judgment (intrinsically typed terms, `Tm(J(Γ, A))` — one index is all a
 //!   declaration takes today, so the judgment is a declared index type), and
-//!   function-field families (`IWf` on `W`, `docs/iwf-infinitary-design.md`).
+//!   function-field families (`IWf` on `W`, `docs/kernel/iwf-infinitary-design.md`).
 //!   Each sweeps the count the lowering multiplies: members, operator
 //!   constructors, branching constructors.
 //!
@@ -374,7 +374,7 @@ fn mutual_declaration() -> Family {
         // 2026-10-26, cloud box, three runs: 1.49 (1.47-1.50), 96% elab at
         // 16. 2026-10-27: 1.15 (1.11-1.18) once wide sums are balanced, and
         // re-recorded from below with the group's signature named too
-        // (docs/iwf-named-signature-design.md), the sweep moved to 4..32:
+        // (docs/inductives/iwf-named-signature-design.md), the sweep moved to 4..32:
         // 0.84 (0.82-0.86), fixed cost still showing. Met.
         expect_slope: Some((0.49, 1.19)),
         cases: sweep("inductive/mutual-declaration", &[4, 8, 16, 32], mutual_group),
@@ -416,7 +416,7 @@ fn mutual_recursion() -> Family {
         // once and the ih held as a value
         // (issues/mutual-group-recursion-gate-cost.md): 1.63 over 2..8 (about 2.3
         // from 8 to 16 by hand); the m = 8 `refl` checks. Again 2026-10-27,
-        // with the signature named (docs/iwf-named-signature-design.md):
+        // with the signature named (docs/inductives/iwf-named-signature-design.md):
         // 0.95 (0.91-0.99, two runs) over 2..8, fixed cost dominating, so
         // the sweep moved to 4..32 with wide sums balanced as well (#214):
         // 1.28 (1.26-1.30), about 1.5 from 16 to 32 and 1.6 by hand from 80
@@ -433,7 +433,7 @@ fn mutual_recursion() -> Family {
 /// Intrinsically typed λ-terms, `n` constructors, `n − 4` of them binary
 /// operators on the base type:
 /// `Tm(J(Γ, A))`, the judgment a declared index type (one index per family
-/// today, `docs/inductive-indexed-lowering.md` §8.4). Variables, weakening,
+/// today, `docs/inductives/inductive-indexed-lowering.md` §8.4). Variables, weakening,
 /// λ and application, then `n` operators; a `size` by structural recursion
 /// at the rebound judgment; a `refl` unfolding at an open and at a closed
 /// term. Lower bound: linear in the constructors.
@@ -490,7 +490,7 @@ fn typed_syntax() -> Family {
         // constructors the CLI's `size` grows at about the 2.2th power (was
         // ~3.2) and its `refl`s at about the 1.2th. Re-recorded from below
         // 2026-10-27, the signature named and the attempt's annotation cache
-        // keyed by Ψ scope (docs/iwf-named-signature-design.md), each size
+        // keyed by Ψ scope (docs/inductives/iwf-named-signature-design.md), each size
         // ~16x cheaper; over 5..8 the slope was fixed cost and noise, so the
         // sweep moved to 8..64: 0.75 (0.72-0.81). Met.
         expect_slope: Some((0.40, 1.10)),

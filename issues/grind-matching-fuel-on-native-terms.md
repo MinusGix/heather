@@ -25,7 +25,7 @@ more `refl` locals ran out after 2064 requests. With every instance written
 out and no names, the same graph closes without trouble, so the cost is in
 matching and not in closure.
 
-`docs/grind-design.md` §10 already split each lemma's matching into its own
+`docs/tactics/grind-design.md` §10 already split each lemma's matching into its own
 evaluation (`settled`) for this reason, at 29 nodes. The probe says that is
 still not enough at native sizes. The levers, roughly in order:
 
@@ -47,7 +47,7 @@ fuel, and the matching cost per round is stated as a shape in §5.
   table.
 
 ## Log
-- 2026-11-08: Done (docs/grind-design.md §15.2). The fuel went to linear
+- 2026-11-08: Done (docs/tactics/grind-design.md §15.2). The fuel went to linear
   structures (nodes and classes as lists), inlined `let`s recomputed across
   evaluations, whole-graph congruence passes and class tables rebuilt every
   round, and matching through congruent copies. The e-graph's arrays are

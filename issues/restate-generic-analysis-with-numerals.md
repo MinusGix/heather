@@ -15,7 +15,7 @@ them. Only real_fn's bound lemmas were restated in that round
 (`OrderedField::half_pos`: `0 < e → 0 < e / 2`); real_fn, sequence,
 closed_interval, supremum, real_fn_limit and the ordered-field theory still
 spell `K.unit`, `K.multiplicative.unit` and `x + K.inv(y)` (hundreds of
-occurrences, docs/stdlib-math-awkwardness-survey.md §2).
+occurrences, docs/surveys/stdlib-math-awkwardness-survey.md §2).
 
 The survey's §13 asks for this restatement to wait for
 [[generic-theorem-implicit-points]], so each statement is rewritten once,

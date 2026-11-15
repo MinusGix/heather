@@ -1,11 +1,11 @@
 //! Codes and recursor branches for `sEq`/`sEmpty`: the rec.rs round of the
-//! SProp landing (`docs/sprop-design.md` §6, §8 step 5;
+//! SProp landing (`docs/kernel/sprop-design.md` §6, §8 step 5;
 //! `issues/sprop-strict-prop.md`).
 //!
 //! The gate-lift invariant is `wf_codes.rs`'s: the branch bundle must stay
 //! exhaustive over the layer-c syntactic formers, so the formers enter
 //! layer c exactly when their branches exist (seven when they landed, six
-//! since `transp` was removed, `docs/iwf-former-design.md` §13 step 6). The
+//! since `transp` was removed, `docs/kernel/iwf-former-design.md` §13 step 6). The
 //! sharp test is the **identity recursor** round-tripping each new code in a
 //! single β-step — a telescope wrong in either `rec.rs` or `reduce.rs` makes
 //! the re-boxed code ill-typed or unequal. One thing this file pins that

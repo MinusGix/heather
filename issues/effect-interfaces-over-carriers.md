@@ -10,7 +10,7 @@ updated: 2026-11-08
 
 User-defined effects have no surface of their own: `Io` is the one
 capability, hard-wired to Linux's calls, and a function's type cannot say
-which effects it uses (`docs/effects-locality-design.md` §3, N1–N3). The
+which effects it uses (`docs/language/effects-locality-design.md` §3, N1–N3). The
 design note's recommendation (§5.2) is capability passing resolved
 statically: an effect is a class whose members update a carrier
 (`class Log<C> { log: C → Bytes → Mutated<C, True> }`), an operation is a
@@ -44,5 +44,5 @@ the pure, `Io` and buffered handlers working today by `refl`.
 
 ## Log
 
-- 2026-11-08: - 2026-11-08: Minus (on PR #484): restricted APIs should be the default, with Io only at the top and inside the instances, ideally with a guarantee that code isn't touching Io. So this issue's library is the standard set an ordinary program uses (byte sinks/sources per descriptor, file system, args, exit), not a few examples. Restrictions must be classes over an abstract carrier, since Heather has no private fields to hide a record's Io (docs/effects-locality-design.md §5.6).
+- 2026-11-08: - 2026-11-08: Minus (on PR #484): restricted APIs should be the default, with Io only at the top and inside the instances, ideally with a guarantee that code isn't touching Io. So this issue's library is the standard set an ordinary program uses (byte sinks/sources per descriptor, file system, args, exit), not a few examples. Restrictions must be classes over an abstract carrier, since Heather has no private fields to hide a record's Io (docs/language/effects-locality-design.md §5.6).
 - 2026-11-08: [[method-call-on-constrained-carrier]] is built: `c.say(m);` on a constrained carrier variable threads `c` through `Log::say`.

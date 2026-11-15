@@ -10,7 +10,7 @@
 # Usage: scripts/bench [--check | --save] [--quick] [--filter substr] [--list]
 #        scripts/bench --help
 #
-# See docs/benchmarking.md for what the numbers mean and when to re-record.
+# See docs/infrastructure/benchmarking.md for what the numbers mean and when to re-record.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

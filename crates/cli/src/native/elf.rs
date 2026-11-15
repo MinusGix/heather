@@ -36,7 +36,7 @@
 //! A source that calls functions (`Source.functions`, a builder's `program`)
 //! has them compiled into the same file by the function compiler, after the
 //! program's own code (`Prog::links`, native_compile,
-//! docs/native-one-compiler-design.md §2.2): the literal spells each
+//! docs/native/native-one-compiler-design.md §2.2): the literal spells each
 //! function, the homes carry where their values go (`plan_program`'s
 //! heuristic, run once here and checked by the lowering), and the functions'
 //! lowering onto the program is one statement (`<source>_elf_deep`).
@@ -132,7 +132,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     // `--world` is accepted and ignored: every module is checked over its
-    // own closure (`docs/module-dag-design.md`), so the closure is all this
+    // own closure (`docs/infrastructure/module-dag-design.md`), so the closure is all this
     // loads and its images are the ones every other process wrote.
     let _ = &world;
     let sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
@@ -329,7 +329,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // the root in every declaration of the certificate that reads it, which
     // for a part deep in nested loops is past one declaration's fuel
     // (`native_heap_tools`' tac and sort,
-    // docs/native-heap-arena-design.md §3). From a literal parent the
+    // docs/native/native-heap-arena-design.md §3). From a literal parent the
     // kernel checks a part's set in one step down the tree: the joins
     // (`Stmt::emits_then_of` and its siblings) compare it with its spelling
     // over the parent's literal.

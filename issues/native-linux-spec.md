@@ -8,7 +8,7 @@ created: 2026-10-20
 updated: 2026-10-21
 ---
 
-Round S1 of `docs/native-program-logic-design.md` (§4, §5): Linux's events as
+Round S1 of `docs/native/native-program-logic-design.md` (§4, §5): Linux's events as
 a tree container, and the judgment `Sim` against a tree.
 
 ## Scope

@@ -1,11 +1,11 @@
 # Tier-1 inductive lowering: exact-height fording
 
 Status: **not the generator's scheme.** Superseded 2026-07-26 by
-`docs/inductive-tier1-wf-lowering.md`, which lowers *all* of tier 1 —
+`docs/inductives/inductive-tier1-wf-lowering.md`, which lowers *all* of tier 1 —
 `List` and `Bits` included — onto the `Wf` former. This document stays as the
 costed record of a scheme that was designed, prototyped and not taken, and
 its §8 is why: the branching defect it diagnoses is exactly what the former
-set was changed to remove (`docs/branching-inductives-choice.md` §15). Its
+set was changed to remove (`docs/inductives/branching-inductives-choice.md` §15). Its
 prototype `crates/elab/tests/tier1_fording.rs` stays **live** as a kernel
 stress suite, and its `vec` formula survives as `Type::Vec`'s reduction
 semantics.
@@ -27,7 +27,7 @@ a bug produces a checked proof about the wrong type. Same rule therefore —
 this document is the mechanism, and review of it is what catches the bug the
 kernel cannot.
 
-Conventions are tier 0's (`docs/inductive-tier0-lowering.md`): `⟦T⟧` for the
+Conventions are tier 0's (`docs/inductives/inductive-tier0-lowering.md`): `⟦T⟧` for the
 lowering of a surface type, `⌜T⌝` for a code with `El ⌜T⌝ ≡ T`, kernel
 constructor names from `crates/kernel/src/term.rs`, `Γ` the ambient local
 context. Everything in tier 0 §2 (declaration form, parameters

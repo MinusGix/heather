@@ -31,13 +31,13 @@ supremum for every inhabited, bounded-above, upper-located set.
   round decides which hypothesis to name first and states the approximate
   form beside it.
 
-docs/sequences-and-completeness.md §3, §4.
+docs/library/sequences-and-completeness.md §3, §4.
 
 ## Log
 
 - 2026-11-07: Filed from the located-suprema round.
 - 2026-11-07: Done in lib/std/analysis/closed_interval.hthr
-  (docs/sequences-and-completeness.md §5). One walk from `a` towards `b`,
+  (docs/library/sequences-and-completeness.md §5). One walk from `a` towards `b`,
   stepping `δ/2` while cotransitivity says `b - x > δ/2`, replaces the grid
   and its covering lemma; a point before or after a step is split by
   `StrictOrder::le_by_cases`, since the goals are `≤`. `UnifContOn::bounded`,

@@ -1,5 +1,5 @@
 //! Acceptance for indexed families on the **`IWf` route**, end to end
-//! (`docs/iwf-former-design.md` §8; the route was route 2b's fording until
+//! (`docs/kernel/iwf-former-design.md` §8; the route was route 2b's fording until
 //! the 2026-10-22 re-lowering, whose acceptance this file was, and the file
 //! keeps that name and its section numbers from
 //! `docs/archive/inductive-fording-lowering.md`).
@@ -406,7 +406,7 @@ fn conflicting_children_are_rejected() {
     // different instantiations reject rather than the second one being
     // silently coerced into the first. The elaborator reports it, naming
     // both instances, now that a family instance has a surface spelling
-    // (docs/mutual-inductive-design.md §4); it used to reach the kernel.
+    // (docs/inductives/mutual-inductive-design.md §4); it used to reach the kernel.
     let m = elab_err(&format!(
         "{ADD}{TREE}
          inductive Col {{ CA, CB }}

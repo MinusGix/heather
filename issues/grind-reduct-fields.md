@@ -9,7 +9,7 @@ updated: 2026-11-08
 ---
 
 grind reads a fact's side by its head normal form once the graph as
-written proves nothing (docs/grind-design.md §14.4). A constructor reduct's
+written proves nothing (docs/tactics/grind-design.md §14.4). A constructor reduct's
 fields are then the reduct's spelling of them, not the terms the goal or
 the other facts write, so injectivity adds an edge to a node nothing else
 meets:
@@ -40,5 +40,5 @@ Probe: `reduct_field_spelled` (was `reduct_field_unread`) in `lib/_tests/std/tac
 ## Log
 - 2026-11-08: The codata probe closes now (renamed `reduct_field_spelled`):
   when the sides stay apart grind reads the next spelling of each stuck
-  term under them (docs/grind-design.md §15.1), and the spelling meets the
+  term under them (docs/tactics/grind-design.md §15.1), and the spelling meets the
   reduct's field. `Io::pass_tau`'s arms were not retried.

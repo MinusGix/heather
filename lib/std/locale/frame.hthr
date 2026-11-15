@@ -1,5 +1,5 @@
 // Frames and locales, point-free (issues/frame-and-locale-foundations.md,
-// docs/frame-locale-design.md).
+// docs/library/frame-locale-design.md).
 //
 // A frame is a preorder with finite meets and joins of every *small* family,
 // where finite meets distribute over those joins. A locale is a frame read
@@ -21,7 +21,7 @@
 // other direction being a theorem (`FiniteMeets::meet_le_l` and friends).
 //
 // The classes are layered so that every theorem sits at the class whose
-// indices its statement names (`docs/frame-locale-design.md` §3): a client at
+// indices its statement names (`docs/library/frame-locale-design.md` §3): a client at
 // a concrete carrier pins the indices from its own statement, and an index no
 // statement mentions would leave the call unresolvable.
 

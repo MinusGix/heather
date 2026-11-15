@@ -100,7 +100,7 @@ property of Heather.
   behind a name. A call costs a few tenths of a second, mostly the tactic's
   own run; a one-step citation is cheaper.
 - **A chain of rewrites by known laws is `simp_only(l₁, …, lₙ)`**
-  (`docs/simp-design.md` §10), not a `calc` with one law per line or nested
+  (`docs/tactics/simp-design.md` §10), not a `calc` with one law per line or nested
   `rewrite`s: both sides are normalised by the listed laws, along `=` and
   along a designated `≈`, and the goal closes where they meet. The list is
   the whole set, so the proof does not move when a lemma is added elsewhere.
@@ -129,7 +129,7 @@ property of Heather.
   `R(r.a, r.b) = r` is `refl` for a neutral `r`, at an open type
   parameter, a dependent or function-valued field, a receiver headed by a
   call, and in any type that mentions either side: a record lowers to the
-  Σ spine of its tag, fields and `Unit` (`docs/inductive-tier0-lowering.md`
+  Σ spine of its tag, fields and `Unit` (`docs/inductives/inductive-tier0-lowering.md`
   §3), and the kernel has η at all three. A `match r { R(_, _) => refl }`
   lemma, or a `cong_fn` that only rebuilds a record, is a step to delete
   (`lib/_tests/lang/record_eta_tests.hthr`). The same η makes a state
@@ -231,7 +231,7 @@ property of Heather.
 - A recursion that varies another parameter returns a function
   (`(self fuel): (n: Nat) → …`), with the matched parameter first. The
   elaborator generalizes a varied parameter itself
-  (`docs/ih-generalization-design.md`), but not for a self-call under an
+  (`docs/tactics/ih-generalization-design.md`), but not for a self-call under an
   `∃` in a `Type`-valued `fn`; curry that one by hand (`summation.hthr`'s
   `List::RecSum_of`, [[ih-generalization-under-exists]]).
 - A case split on another parameter inside a recursion is fine: the guard
@@ -267,7 +267,7 @@ property of Heather.
   body projects variables (`DerivOn::chain_close`: 0.9M steps for both
   halves) — [[library-gate-module-cold-rail]].
 - **An interface definition is an atom at open arguments outside its
-  module** (`docs/interface-definitions-design.md`): `refl` and lemma
+  module** (`docs/language/interface-definitions-design.md`): `refl` and lemma
   statements that leaned on its body are refused, with a note naming the
   equations. Move a fact across the call with its arm equation,
   `rewrite(f_unfold_Ctor(…), in := h)` (or `sym(…)` for the other
@@ -281,7 +281,7 @@ property of Heather.
   `≈ u`" for any `u`, not "`= step`"; `Eutt::mrec_bind_from` takes
   `Bisim(p, bind(q, k))`, not `p = bind(q, k)`. Through a function of
   trees, follow the drops with `CoTree::after_map`'s exact count
-  (`docs/coitree-design.md` §7.9).
+  (`docs/itrees/coitree-design.md` §7.9).
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.
@@ -290,7 +290,7 @@ property of Heather.
   `match h: test` on the same tests, in the same order.** The goal may
   mention the test only under the function's call, below binders, under a
   defined relation or an `↔` (`Regex::alt_same`): the motive synthesis
-  reads the reduced goal there (`docs/goal-motive-synthesis-design.md`
+  reads the reduced goal there (`docs/elaborator/goal-motive-synthesis-design.md`
   §4.5). No second definition with the tests as parameters. Do not also
   write the test in the statement; take it from `h`. A call that is only
   an argument of another stuck call (`k.leb(f(n))`, `Mem(f(n), xs)`) is

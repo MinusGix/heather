@@ -32,4 +32,4 @@ exactly this feature.
 
 ## Log
 
-- 2026-10-23: Evidence from Arend (docs/arend-survey.md §4): Arend removed its explicit level-declaration syntax (\plevels, \levels) in favour of per-definition implicit level parameters with inference, and a definition (NatTrans) that once needed four explicitly ordered levels needs none. Supports the 90% claim; does not change the layer-m blocker.
+- 2026-10-23: Evidence from Arend (docs/surveys/arend-survey.md §4): Arend removed its explicit level-declaration syntax (\plevels, \levels) in favour of per-definition implicit level parameters with inference, and a definition (NatTrans) that once needed four explicitly ordered levels needs none. Supports the 90% claim; does not change the layer-m blocker.

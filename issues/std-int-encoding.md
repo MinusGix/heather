@@ -241,7 +241,7 @@ sequencing-relevant surprises:
   concretely: the ambient namespace now holds two of everything arithmetic.
 - **Six of the eight cases of `le_trans` are closed by computation**, and the
   order kit as a whole came in at about a third of the arithmetic kit's size. The
-  Prop-first order (`docs/nat-order-design.md`) transfers to a new carrier with no
+  Prop-first order (`docs/library/nat-order-design.md`) transfers to a new carrier with no
   new technique, which is the first evidence that it generalizes rather than
   fitting `Nat`.
 

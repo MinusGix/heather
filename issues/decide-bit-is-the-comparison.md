@@ -19,7 +19,7 @@ Landed as proposed, with one change to step 4:
 2. `instance<P: Decide, Q: Decide> Decide<P → Q>`, bit `!P.bit || Q.bit`,
    reflection `reflects_imp`. An arrow carrier had no canonical name; the
    elaborator now keys a non-dependent arrow by its class (`#Fn@class`,
-   global `Decide::Decide#Fn`; `docs/traits-layer1-design.md` §4.1, amended).
+   global `Decide::Decide#Fn`; `docs/language/classes/traits-layer1-design.md` §4.1, amended).
 3. `decide_intro` / `decide_elim` in `bool`.
 4. `Format::canonical` is `decide_bit<…the four conditions…>()` with the
    proposition **spelled in the body**, not `decide_bit<F.Canonical(…)>()`:
@@ -46,7 +46,7 @@ field (`Finite`'s `ok: F.canonical(mag, bexp).IsTrue()`) has to build its
 `Reflects` by hand: `Format::canonical_reflects` (2026-10-30), and the
 `or_bit(…le_dec…)` bits in `float/literal`'s `Rat::dy_exact`.
 
-Proposal, `docs/bool-guard-reflection-design.md` §3.1:
+Proposal, `docs/language/matching/bool-guard-reflection-design.md` §3.1:
 
 1. `Decide<Nat::Le(n, m)>` with `bit := n.leb(m)`,
    `reflects := Nat::leb_reflects(n, m)` (and the analogous `Int`, `=` bits);

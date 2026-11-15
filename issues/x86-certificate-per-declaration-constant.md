@@ -89,4 +89,4 @@ this workload), [[frontend-large-proof-composition-cost]].
     - **Warm:** nothing is gated. The library, step piece and certificate replay from their images. Module scopes are under a quarter of the run row; the rest sits outside any module scope. That is presumably the producer's own evaluations of the library's bytes and columns (inferred, not bracketed).
     - Leads, not taken: the joins' frontend cost (the tails join first), and bracketing the producer's evaluations on a warm build.
     - Seconds, and the comparison with the old filter `wc`, belong on a local box.
-- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

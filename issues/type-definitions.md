@@ -30,7 +30,7 @@ Two routes, not necessarily exclusive:
    already added `ExprKind::TyLit` and parses a motive body with the type
    grammar ([[motives-as-lambdas]] log, 2026-07-31); `a = b` as a term
    already elaborates through its code `TmId : Ty l`
-   (docs/surface-universe.md §13). Letting `->` into expression position
+   (docs/language/surface-universe.md §13). Letting `->` into expression position
    would make a type-valued `fn` an ordinary `fn` and subsume route 1 —
    but it is a grammar decision with ambiguity surface, and codes cap the
    level ([[surface-universe]]).
@@ -46,7 +46,7 @@ obligation [[compile-typeclass-design]] will want to abbreviate.
 
 ## Log
 
-- 2026-08-01: LANDED, route 2, and the issue closes. Types are expressions: `->` and `(x: A) ->` are admitted in expression position, so a type-valued `fn` is an ordinary `fn` and `Refines` has a name. Full write-up: docs/types-as-expressions.md. No kernel change, no new declaration form; route 1 (a `type` declaration) is now redundant and is dropped rather than deferred.
+- 2026-08-01: LANDED, route 2, and the issue closes. Types are expressions: `->` and `(x: A) ->` are admitted in expression position, so a type-valued `fn` is an ordinary `fn` and `Refines` has a name. Full write-up: docs/language/types-as-expressions.md. No kernel change, no new declaration form; route 1 (a `type` declaration) is now redundant and is dropped rather than deferred.
 
 A1 (code coverage) — GATE PASSED, and more cleanly than expected. Every surface-writable type former has a code: Nat, Ty, El, Pi, Id, Sigma, Unit, Empty, Sum, W, Vec, Fin, Wf are all in `code_of`. The three kernel Type variants without one are UPi (layer m, never writable, [[surface-universe]] §7) and SEq/SEmpty/GlobalTy, which `crates/elab` never constructs at all (grep: zero occurrences). So Pi/Eq/Nat and everything `Refines` needs are covered with nothing left outside. CONSEQUENCE FOR THE BRIEF: the requested 'pin the uncovered-former diagnostic as a test' is IMPOSSIBLE — lib.rs's 'this type has no code' message is unreachable from any source text. It stays as the guard that keeps code_of's partiality from becoming an unwrap, but it has no input and therefore no test. Levels: code_of caps nothing; what caps is that Type<n> is written not inferred and universes are non-cumulative. `Refines` lands at Type<0> exactly (Level::max of zeros), and its quantifiers over Prog/Ir/Val/Nat->Nat all fit. `fn Bad() -> Type { Type }` is the level negative control (Type<0> is a value at level 1).
 
@@ -62,6 +62,6 @@ DIAGNOSTICS VERDICT — mixed, good half is the half that matters. The name surv
 
 Tests: crates/elab/tests/types_as_expressions.rs, 23 new (grammar, neutral AND literal argument, open body, checking position, composition, records through the name at tags 0/1/2, a tier-1 value parameter, six negative controls incl. the level mismatch). Workspace 693 -> 716, all green.
 
-Files: crates/syntax/src/parser.rs, crates/syntax/src/ast.rs, crates/elab/src/inductive.rs, lib/certgen/ir_v1.hthr, crates/elab/tests/types_as_expressions.rs, docs/types-as-expressions.md (new), docs/archive/ir-simulate-design.md, docs/surface-existential-investigation.md.
+Files: crates/syntax/src/parser.rs, crates/syntax/src/ast.rs, crates/elab/src/inductive.rs, lib/certgen/ir_v1.hthr, crates/elab/tests/types_as_expressions.rs, docs/language/types-as-expressions.md (new), docs/archive/ir-simulate-design.md, docs/language/surface-existential-investigation.md.
 
-NOT DONE: abbreviating an INDEXED family's formation through the same road — indexed.rs has its own copy of the constructor check and its own structural reader, neither touched. Untested; assume broken until someone tries it. Filed as the one follow-on in docs/types-as-expressions.md §7.
+NOT DONE: abbreviating an INDEXED family's formation through the same road — indexed.rs has its own copy of the constructor check and its own structural reader, neither touched. Untested; assume broken until someone tries it. Filed as the one follow-on in docs/language/types-as-expressions.md §7.

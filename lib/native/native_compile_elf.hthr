@@ -17,7 +17,7 @@
 // `Stack` of its memory from the entry, its top at RSP
 // (`DataRegion::process_stack_entry`). Compiled calls push their return
 // addresses and their callers' saved words into it
-// (docs/native-procedures-design.md §5), so the stack must be deep enough
+// (docs/native/native-procedures-design.md §5), so the stack must be deep enough
 // for the source's calls: `main`'s frame; per call of `src.depth` a frame, a
 // return address and the registers a callee keeps (seven words more);
 // eighty bytes a function; and a word for the return address of a call

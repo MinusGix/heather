@@ -1,5 +1,5 @@
 //! `decreases e` — termination by a `Nat` measure
-//! (issues/termination-measures.md, docs/termination-measures-design.md).
+//! (issues/termination-measures.md, docs/language/recursion/termination-measures-design.md).
 //!
 //! A declaration `fn f(x̄) -> T decreases e { body }` is elaborated as strong
 //! induction on a bound for the measure, spelled entirely at the **surface**
@@ -14,8 +14,8 @@
 //!
 //! …except that the three layers are **named**, not nested inline:
 //! `f#body` is the `Succ` arm, `f#rec` is the eliminator, and `f` applies it
-//! (`docs/decreases-unfolding-design.md` §2, which amends
-//! `docs/termination-measures-design.md` §1/§5). The lifting is what makes the
+//! (`docs/language/recursion/decreases-unfolding-design.md` §2, which amends
+//! `docs/language/recursion/termination-measures-design.md` §1/§5). The lifting is what makes the
 //! unfolding companions of that document statable; nothing else changes, since
 //! a `fn` is transparent and `f#rec(Succ k, …) ≡ f#body(k, f#rec(k), …)` is
 //! `refl`.
@@ -29,7 +29,7 @@
 //!
 //! The obligation is not spelled at the call: it is **lifted** into a
 //! declaration of its own, `f#obl_N`, over the binders its statement names
-//! (`docs/decreases-unfolding-design.md` §4). `f#body` and both unfolding
+//! (`docs/language/recursion/decreases-unfolding-design.md` §4). `f#body` and both unfolding
 //! companions then reference the same opaque `f#obl_N(…)`, so the three
 //! spellings of a self-call are identical by construction — which is what an
 //! `omega`-defaulted obligation needs, since `omega` reconstructs its
@@ -51,7 +51,7 @@ use crate::{R, err};
 /// The obligations a wrapped body owes, one per recursive call in source
 /// order: the call's span, the hole's name, the obligation rendered for a
 /// diagnostic, and — for a group site the rank rule explains —
-/// `docs/mutual-recursion-design.md` §8's sentence.
+/// `docs/language/recursion/mutual-recursion-design.md` §8's sentence.
 pub(crate) struct Obligations {
     pub(crate) sites: Vec<(Span, String, String, Option<String>)>,
 }
@@ -115,7 +115,7 @@ pub(crate) struct Family {
 
 /// Which `match`es on a computed scrutinee, with a recursive call in an arm
 /// and no written equation, the body rewrite gives the equation
-/// `__dec_meqN : e = pattern` (docs/dependent-match-compiler-design.md §4,
+/// `__dec_meqN : e = pattern` (docs/language/matching/dependent-match-compiler-design.md §4,
 /// §8). A lifted obligation is stated over the telescope this rewrite
 /// writes, not over the elaborator's context, so its arm's equation has to
 /// be a binder there. The equation stays only where an obligation reads
@@ -241,7 +241,7 @@ pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
     // as the guard it states (issues/decreases-measure-record-field-unspelled.md)
     // and `n = Succ(k)` as arithmetic. Any arm equation is a candidate; the
     // trial elaboration decides whether it is used
-    // (docs/dependent-match-compiler-design.md §8).
+    // (docs/language/matching/dependent-match-compiler-design.md §8).
     if let TyKind::Eq(..) = &ty.kind {
         return shares();
     }
@@ -457,7 +457,7 @@ pub(crate) fn rec_name(name: &str) -> String {
 }
 
 /// `f#grp` — a mutual group's product motive, keyed on its first member
-/// (`docs/mutual-recursion-design.md` §3).
+/// (`docs/language/recursion/mutual-recursion-design.md` §3).
 pub(crate) fn grp_name(name: &str) -> String {
     format!("{name}#grp")
 }
@@ -658,7 +658,7 @@ fn solo(decl: &Decl, name: &str, measure: &Expr) -> [Sibling; 1] {
 }
 
 /// `recv(args…)`, or `recv.snd…​.fst(args…)` where the member is reached
-/// through the product motive (`docs/mutual-recursion-design.md` §3).
+/// through the product motive (`docs/language/recursion/mutual-recursion-design.md` §3).
 fn project(recv: Expr, proj: Option<(usize, &'static str)>, args: Vec<Expr>, span: Span) -> Expr {
     let Some((snds, last)) = proj else {
         return app(recv, args, span);
@@ -713,7 +713,7 @@ pub(crate) fn deshadowed(decl: &Decl) -> Decl {
 
 /// Lower `decl`, whose body recurses under `decreases measure`, into the
 /// lifted obligations of §4 and the `f#body` / `f#rec` / `f` family (module
-/// docs, and `docs/decreases-unfolding-design.md` §2). `name` is the
+/// docs, and `docs/language/recursion/decreases-unfolding-design.md` §2). `name` is the
 /// declaration's self-name (the base name, for a member); `omega_available`
 /// says whether an obligation nobody discharges by hand may default to
 /// `omega`; `lift` is cleared to re-lower a declaration whose lifted
@@ -966,7 +966,7 @@ pub(crate) fn lower(
 }
 
 /// One member of a mutual `decreases` group, as the run scan of
-/// `docs/mutual-recursion-design.md` §1 found it.
+/// `docs/language/recursion/mutual-recursion-design.md` §1 found it.
 pub(crate) struct GroupMember<'a> {
     pub(crate) decl: &'a Decl,
     /// The base name the member recurses under, as `Cx.selfref` uses it.
@@ -993,7 +993,7 @@ fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
     )
 }
 
-/// The group-shape guards of `docs/mutual-recursion-design.md` §§2–4, owed
+/// The group-shape guards of `docs/language/recursion/mutual-recursion-design.md` §§2–4, owed
 /// before anything is elaborated — including before the members' measures are
 /// checked, since a measure naming a member is an unbound name at that point
 /// and "unbound" is the wrong thing to say about it.
@@ -1015,7 +1015,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                 format!(
                     "the members of a mutual `decreases` group share one recursion, so \
                      they declare the same type parameters: `{}` has <{}> and `{}` has \
-                     <{}> (docs/mutual-recursion-design.md §3)",
+                     <{}> (docs/language/recursion/mutual-recursion-design.md §3)",
                     first.name,
                     want.join(", "),
                     m.decl.name,
@@ -1033,7 +1033,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                 format!(
                     "a `decreases` measure may not call `{}`: it is a member of this \
                      mutual group, and the group's motive is stated at every member's \
-                     measure (docs/mutual-recursion-design.md §2)",
+                     measure (docs/language/recursion/mutual-recursion-design.md §2)",
                     other.self_name
                 ),
                 m.measure.span,
@@ -1047,7 +1047,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                     "a mutual `decreases` group lifts every obligation into a \
                      declaration of its own, so `{}` cannot discharge one by statement: \
                      name the obligation instead (`on ?decN := …`, \
-                     docs/mutual-recursion-design.md §4)",
+                     docs/language/recursion/mutual-recursion-design.md §4)",
                     m.decl.name
                 ),
                 m.decl.span,
@@ -1058,7 +1058,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
 }
 
 /// Lower a mutual group of N > 1 adjacent `decreases` declarations into the
-/// one recursion of `docs/mutual-recursion-design.md` §3: the lifted
+/// one recursion of `docs/language/recursion/mutual-recursion-design.md` §3: the lifted
 /// obligations, the product motive `f#grp`, one `g#body` per member, the
 /// shared `f#grp_rec`, and each member as a projection of it. Keyed on the
 /// first member's name.
@@ -1142,7 +1142,7 @@ pub(crate) fn lower_group(
             return err(
                 "this recursive call's obligation names a binder the generator cannot \
                  type, and a mutual group cannot fall back to stating it at the call \
-                 (docs/mutual-recursion-design.md §4): annotate the binder, or lift the \
+                 (docs/language/recursion/mutual-recursion-design.md §4): annotate the binder, or lift the \
                  call out of the pattern that introduces it",
                 site,
             );
@@ -1746,7 +1746,7 @@ struct Rewrite<'a> {
     lift: bool,
     /// Every member of the recursion this body may call, in declaration
     /// order, and which of them this body is
-    /// (`docs/mutual-recursion-design.md` §3). One entry for a singleton.
+    /// (`docs/language/recursion/mutual-recursion-design.md` §3). One entry for a singleton.
     members: &'a [Sibling],
     caller: usize,
     next: usize,
@@ -1762,7 +1762,7 @@ struct Rewrite<'a> {
     /// the expression each stands for. A `match` on one states its arms'
     /// equations about the expression, not the name: a lifted `f#obl_N`
     /// quantifies the equation without the `let`, and there the name would
-    /// be an unrelated parameter (docs/dependent-match-compiler-design.md §8).
+    /// be an unrelated parameter (docs/language/matching/dependent-match-compiler-design.md §8).
     scrut_aliases: Vec<(String, Expr)>,
     /// [`AutoEqs`]: which candidates get an equation, and the next
     /// candidate's number.
@@ -1807,7 +1807,7 @@ impl<'a> Rewrite<'a> {
 
     /// `f(ȳ, spill…)` ↦ `ih(ȳ, proof, spill…)`, and for a group member
     /// `j(ȳ, spill…)` ↦ `ih.<proj_j>(ȳ, proof, spill…)`
-    /// (`docs/mutual-recursion-design.md` §3). Arguments were rewritten by
+    /// (`docs/language/recursion/mutual-recursion-design.md` §3). Arguments were rewritten by
     /// the caller already, so a nested self-call is handled inside out.
     fn self_call(&mut self, target: usize, call: &Expr, args: Vec<Expr>, explicit: bool) -> Expr {
         let span = call.span;
@@ -1950,7 +1950,7 @@ impl<'a> Rewrite<'a> {
         let stages = self.stages();
         let refined = stages.last().expect("stage 0 is the measure itself").clone();
         // …and the *argument's* measure refined the same way
-        // (`docs/mutual-recursion-design.md` §4): a sibling call at an
+        // (`docs/language/recursion/mutual-recursion-design.md` §4): a sibling call at an
         // unchanged argument has `at_args` mentioning the scrutinee too, and
         // the unrefined statement is then unprovable. Where `at_args` names no
         // refined variable every stage is the same expression, which is the
@@ -1993,7 +1993,7 @@ impl<'a> Rewrite<'a> {
         // What the obligation is proved by, wherever it is raised: the
         // writer's hole where an `on` names it, `omega` where the closer is
         // available, and the bare hole otherwise (reported with its
-        // statement, `docs/termination-measures-design.md` §2).
+        // statement, `docs/language/recursion/termination-measures-design.md` §2).
         let goal = match &clean {
             Some((c, args, raw)) => of_expr(app(var(if c.strict { "nat::Nat::Lt" } else { "nat::Nat::Le" }, span),
                 vec![args.clone(), raw.clone()], span)),
@@ -2316,7 +2316,7 @@ impl<'a> Rewrite<'a> {
 
     /// [`Self::scrut_ty`] for the scrutinee of a `match` with `arms`: a call
     /// under `When`'s constructors has the type of its test
-    /// (docs/when-design.md §4), as the `match` elaborates it.
+    /// (docs/language/when-design.md §4), as the `match` elaborates it.
     fn match_scrut_ty(&self, e: &Expr, arms: &[Arm]) -> Option<Ty> {
         match crate::tested::tested_marker(e, arms) {
             Some(marked) => self.infer_local(&marked),
@@ -2364,7 +2364,7 @@ impl<'a> Rewrite<'a> {
     }
 
     /// The same staging applied to any expression — the argument's measure as
-    /// well as the caller's (`docs/mutual-recursion-design.md` §4).
+    /// well as the caller's (`docs/language/recursion/mutual-recursion-design.md` §4).
     fn refine(&self, e: &Expr) -> Vec<Expr> {
         let mut stages = vec![e.clone()];
         for (v, pat, _) in &self.refinements {
@@ -2508,7 +2508,7 @@ impl<'a> Rewrite<'a> {
                 };
                 // A call to any member of the recursion — the caller itself
                 // included — is rewritten to the shared induction hypothesis
-                // (`docs/mutual-recursion-design.md` §3); a group has no
+                // (`docs/language/recursion/mutual-recursion-design.md` §3); a group has no
                 // separate self-call route.
                 if self.found_only {
                     let mut named = named;
@@ -2806,7 +2806,7 @@ impl<'a> Rewrite<'a> {
                     format!(
                         "`{n}` is a member of this mutual `decreases` group, so it is \
                          only usable as a saturated call here \
-                         (docs/mutual-recursion-design.md §2)"
+                         (docs/language/recursion/mutual-recursion-design.md §2)"
                     ),
                     span,
                 );
@@ -3122,7 +3122,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                 .collect(),
         },
         // `j` and blocks are not measure shapes, but the companions of
-        // `docs/decreases-unfolding-design.md` §4 push substitutions through
+        // `docs/language/recursion/decreases-unfolding-design.md` §4 push substitutions through
         // obligation *proofs*, which are exactly these two.
         ExprKind::J {
             proof,
@@ -3178,7 +3178,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             }))
         }
         // A record built or updated: a field path assigned in a body is the
-        // second (docs/sequencing-surface-design.md §20).
+        // second (docs/language/sequencing-surface-design.md §20).
         ExprKind::RecordUpdate { base, fields } => ExprKind::RecordUpdate {
             base: Box::new(go(base, bound)),
             fields: fields
@@ -3204,7 +3204,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
 
 // -- the unfolding companions -------------------------------------------------
 //
-// `docs/decreases-unfolding-design.md` §3–§6: a congruence proof over the
+// `docs/language/recursion/decreases-unfolding-design.md` §3–§6: a congruence proof over the
 // body's own structure, with the self-call sites as its leaves, generated
 // twice — once relating the arm to itself under two induction hypotheses
 // (`f#ext`), once relating `f` to its body as written (`f_unfold`).
@@ -4028,7 +4028,7 @@ impl Respell<'_> {
     }
 
     /// A `match` at the anchor whose scrutinee is computed, or which binds its
-    /// equation (docs/dependent-match-compiler-design.md §8). Neither anchor
+    /// equation (docs/language/matching/dependent-match-compiler-design.md §8). Neither anchor
     /// reduces into an arm, because the scrutinee is stuck, so both sides
     /// are spelled out as the match itself at a fresh scrutinee `s`, and the
     /// match is re-matched on `s`:

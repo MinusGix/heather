@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-12
 ---
 
-Stage C1 of `docs/native-lexer-crypto-roadmap.md` §4: SHA-2's compression
+Stage C1 of `docs/native/native-lexer-crypto-roadmap.md` §4: SHA-2's compression
 function as a `runtime fn`, compiled and certified, agreeing with
 [[sha2-specification]]'s low-level form.
 

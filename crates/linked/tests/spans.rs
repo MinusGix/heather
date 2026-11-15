@@ -3,7 +3,7 @@
 //!
 //! `heather_linked::spans::count_newlines` is compiled Heather reading the
 //! caller's bytes through a pointer and a length
-//! (docs/native-library-exports-design.md), `scanner::token` is the
+//! (docs/native/native-library-exports-design.md), `scanner::token` is the
 //! scanner's loop the same way, with calls of compiled code inside it, and
 //! `spans::raise_span` stores into the bytes it is lent (and
 //! `spans::raise_letters`, the same loop as a `mut self` method, exported by

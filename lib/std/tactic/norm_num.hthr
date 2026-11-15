@@ -1,5 +1,5 @@
 // `norm_num`: prove a closed numeric fact by evaluating it
-// (docs/numeral-normalisation-design.md).
+// (docs/tactics/numeral-normalisation-design.md).
 //
 // The goal is `=`, `≈`, `<`, `<=` or `Apart` between two closed numeric
 // expressions, or the negation of one (`≠`, `¬(x < y)`, …), at `Nat`,

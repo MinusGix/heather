@@ -15,8 +15,8 @@ fn` over `Io` cannot hand the bytes it read to a loop like `raise_span`;
 `tr` does that from the builder. U4 step 4c-4 made the layer's theorems
 hold beside functions that write (`Writers::Still` among
 `functions_below`) and left this node out
-(`docs/native-one-compiler-design.md` §3;
-`docs/native-procedures-are-functions-design.md` §2.8 for why it is one
+(`docs/native/native-one-compiler-design.md` §3;
+`docs/native/native-procedures-are-functions-design.md` §2.8 for why it is one
 node and not a merge of the two layers).
 
 ## Scope
@@ -50,7 +50,7 @@ lowering.
 
 ## Log
 
-- 2026-11-12: The node is built (`docs/native-one-compiler-design.md`
+- 2026-11-12: The node is built (`docs/native/native-one-compiler-design.md`
   §2.6, 4c-5). `ETm::Lend(f, cap, buf, args, body)` over a table of lent
   functions (`Lent`, `rt_io.hthr`); its lowering is a region `Call` of
   function `w.sigs.len() + f`, sound under `ETm::LentsAgree` (the

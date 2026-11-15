@@ -1,6 +1,6 @@
 //! INVESTIGATION SCAFFOLDING — `issues/surface-existential.md`, 2026-08-01.
 //! Deliberately uncommitted and NOT wired into CI; see
-//! `docs/surface-existential-investigation.md` §B.
+//! `docs/language/surface-existential-investigation.md` §B.
 //!
 //! The question: can today's kernel, with no new former, express a
 //! **value-indexed existential**

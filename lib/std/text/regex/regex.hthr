@@ -6,7 +6,7 @@
 //
 // declares `is_hex: String → Bool` as the meaning of the parsed term, by
 // definition, and `is_hex::term: Regex` as the term
-// (docs/value-definitions-design.md §4, docs/compilation-vision.md §3.3 and
+// (docs/metaprogramming/value-definitions-design.md §4, docs/compilation-vision.md §3.3 and
 // §6.1: a definitional frontend, so the name and the term's meaning are tied
 // at no cost). The compiler half of the language (a DFA and its soundness
 // once) is later work.

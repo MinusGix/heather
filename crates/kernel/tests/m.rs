@@ -1,5 +1,5 @@
 //! `M`, `corec` and `out`: the kernel round of the coinduction design
-//! (`docs/kernel-coinduction-design.md` §1, §2, §10 step 3;
+//! (`docs/kernel/kernel-coinduction-design.md` §1, §2, §10 step 3;
 //! `issues/kernel-coinductive-types.md`).
 //!
 //! `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` is the indexed negative
@@ -410,7 +410,7 @@ fn the_level_is_the_join_of_the_three() {
 
 #[test]
 fn m_and_its_terms_are_admitted_at_layer_c() {
-    // docs/kernel-m-codes-design.md §0: `TmM` is M's code, so the former and
+    // docs/kernel/kernel-m-codes-design.md §0: `TmM` is M's code, so the former and
     // its terms check at c as at p and m (`tests/m_codes.rs` has the rest).
     let ty = stream_ty();
     for layer in [Layer::Code, Layer::Prog, Layer::Meta] {

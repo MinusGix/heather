@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Which test binaries a round's diff can affect (`scripts/test --pr`;
-// docs/testing-architecture-design.md §2.2). scripts/test builds every test
+// docs/infrastructure/testing-architecture-design.md §2.2). scripts/test builds every test
 // binary first, then hands this file Cargo's JSON manifest; it writes the
 // manifest back with only the affected binaries' artifacts, for
 // run-test-targets.mjs to run as before.

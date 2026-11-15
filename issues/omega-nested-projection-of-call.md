@@ -40,7 +40,7 @@ go away.
   (one field, put as a variable) was stuck too, because the Nat side kept a
   field only on an arithmetic head. omega now reads a field of a field through
   up to eight receivers and, on Nat, a field put as a variable or applied
-  global; design in docs/omega-measure-reduction-design.md §12. Probes:
+  global; design in docs/tactics/omega-measure-reduction-design.md §12. Probes:
   `lib/_tests/std/tactic/omega_tests.hthr`, eight rows that were all stuck before
   (three receivers deep, Int goal and fact, checking position, a field put as
   a stuck call) and three controls (a stuck call is not unfolded, a false

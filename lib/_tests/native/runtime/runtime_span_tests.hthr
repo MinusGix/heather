@@ -1,6 +1,6 @@
 // Probes of `runtime fn` on functions that write a span
 // (lib/native/runtime/runtime.hthr's `runtime_span`;
-// docs/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
+// docs/native/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
 // generator publishes for a store, for calls of functions that write, and
 // for loops (with a callee that only reads, with one that writes, with a
 // store as a statement, an exit inside, two calls of their own, a plain
@@ -206,7 +206,7 @@ theorem copy_first_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pl
 // A `decreases` function's companions (`ext`, `irrel`, the unfold) follow a
 // `mut self` call statement before the loop's own call and a branch under
 // the loop's test, so each of these is a `runtime fn` as it stands
-// (docs/decreases-unfolding-design.md). Before, the first had to make its
+// (docs/language/recursion/decreases-unfolding-design.md). Before, the first had to make its
 // store in its own call's argument and the others decide after the loop.
 
 // A store as a statement before the loop's own call.
