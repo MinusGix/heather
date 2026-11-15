@@ -9,7 +9,7 @@ updated: 2026-10-21
 ---
 
 Owns the follow-ups of `docs/interaction-trees-fit.md` (the 2026-09-24
-investigation of Xia et al., `docs/3371119.pdf`): interaction trees with
+investigation of Xia et al., `docs/papers/3371119.pdf`): interaction trees with
 **container events** (`Cmd : Type<l>`, `Resp : Cmd -> Type<l>`) over trees
 cut off at fuel, with no kernel coinduction. The doc argues this keeps
 everything at one level, needs no `Type`-indexed families, and fits

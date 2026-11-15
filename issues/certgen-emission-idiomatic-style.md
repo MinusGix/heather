@@ -38,7 +38,7 @@ already says them.
 self-call branch), which spelled `{f}_gen_conv({child})({others})`. It was not
 in the survey because the survey read the *emitters*, and this one is inside
 the certificate renderer. What makes it worth recording rather than just
-fixing: `docs/certgen-tier1-source-types-design.md` §§1, 5 had been describing
+fixing: `docs/certgen-tier1-source-types-design.md@4acf2fe` §§1, 5 had been describing
 the idiomatic form since the tier-1 round — `tsum_gen_conv(gf1, VNil)`,
 `f_gen_conv(gf0, VNil)` — while the emitter wrote `tsum_gen_conv(gf1)(VNil)`.
 The doc was simply wrong about the text, and nothing could catch it: the tests

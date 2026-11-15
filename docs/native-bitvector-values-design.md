@@ -574,7 +574,7 @@ recipe (release, `--features value-metrics`, `--kernel-workers 1`,
 `reused_callee --callee leaf --arg 21 --arg 1`), with a fresh before column
 measured on *that* instance in the same session — a copied before table
 misranked two of three mechanisms once already
-(`docs/call-memory-read-spelling-design.md` §1). The chartered families are
+(`docs/call-memory-read-spelling-design.md@4acf2fe` §1). The chartered families are
 **diagnosis, not the bar**: they say whether the mechanism fired.
 **If the bar fails, STOP and report** — do not tune the workload, do not
 widen the cap, do not add a case for the definition that did not classify.

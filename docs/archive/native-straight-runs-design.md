@@ -10,7 +10,7 @@ and the phases listed under "Moved" below).
 
 ## What it replaces
 
-With `Runs` (`docs/native-runs-design.md`) a phase is a `runs_seq` chain:
+With `Runs` (`docs/native-runs-design.md@4acf2fe`) a phase is a `runs_seq` chain:
 one rule per block, store, load or jump, each with its residency
 (`framed_resident` over `cmd_at`), its frame fact (`framed_moved`,
 `Framed(…, set_var(…))`), its landing fact (`cmd_j_*`), and a middle
@@ -83,7 +83,7 @@ The end state is bound (`after`), so the leaf's proof names it rather than
 the stretch's own spelling of it (an `execute_block_normal` over an
 `execute_near_control` over …); `after = state` is there for a fact the
 spelling gives by conversion (`operand_head` reads RSI through it). Binding
-it is the rule `docs/native-runs-design.md` ("Consuming a run") states for
+it is the rule `docs/native-runs-design.md@4acf2fe` ("Consuming a run") states for
 `Runs`. (`_` in argument position is a section, not a hole, so a leaf cannot
 be written as `goal(_)` and inferred.)
 

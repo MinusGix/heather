@@ -174,7 +174,7 @@ This is `elim_Wf`'s rule with the index threaded through. The difference
 from route 2b is the point of the round. **There is no form B.**
 Every constructor computes on open data, including a computed result
 index (`App(n, m, f, a) : Term(S(plus(n, m)))`). §8.4 of
-`docs/inductive-fording-lowering.md`, "a declaration all of whose recursive
+`docs/archive/inductive-fording-lowering.md`, "a declaration all of whose recursive
 constructors are form B admits no induction over open data at all", does
 not arise. Checked in Coq (§11): `size (app n m f a) ≡ S (size f + size a)`
 with `n, m, f, a` all variables, by `reflexivity`.

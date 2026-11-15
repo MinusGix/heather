@@ -4,7 +4,7 @@ Status: **survey**, 2026-10-25. Source: Siddharth Bhat, Léo Stefanesco,
 George Rennie, John Regehr, Tobias Grosser, *Sound and Complete Solving for
 Multi-width Parametric Bitvectors via Principled Reductions*, PACMPL 10
 (OOPSLA2), article 379, October 2026 (<https://doi.org/10.1145/3839511>,
-CC BY 4.0), committed beside this note as `docs/3839511.pdf`. Section,
+CC BY 4.0), committed beside this note as `docs/papers/3839511.pdf`. Section,
 table and lemma numbers below are the paper's. Follow-up is in §8. Read
 against master at `6bce3b3`.
 

@@ -29,9 +29,9 @@ wired together.
 ## Reading
 
 - Niu, Spivak, *Polynomial Functors: A Mathematical Theory of Interaction*
-  (monograph) — `docs/2312.00990.pdf`.
+  (monograph) — `docs/papers/2312.00990.pdf`.
 - Aberlé, *Compositional Program Verification with Polynomial Functors in
-  Dependent Type Theory* (2026) — `docs/2604.01303.pdf`.
+  Dependent Type Theory* (2026) — `docs/papers/2604.01303.pdf`.
 
 ## Acceptance (an investigation)
 

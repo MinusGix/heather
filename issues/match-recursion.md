@@ -6,7 +6,7 @@ created: 2026-07-23
 updated: 2026-09-25
 ---
 
-The strong unification decided in docs/sketches/surface-v1.md §1
+The strong unification decided in docs/archive/surface-v1.md §1
 ([[surface-syntax]]): `match` is the only eliminator form; a structurally
 guarded recursive self-call *is* the induction hypothesis, so a theorem
 proved by induction is just a recursive function — proof mode and function

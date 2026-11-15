@@ -6,7 +6,7 @@
 # `lib/certgen/ir_v1.hthr`, whose conversion workload is memory-*superlinear* (an
 # uncapped release check of a deep-fuel IR theorem once reached ~22 GB), and
 # it deliberately sweeps the forded families towards the fuel cliff of
-# docs/inductive-fording-lowering.md §14.9. Under these limits the bench
+# docs/archive/inductive-fording-lowering.md §14.9. Under these limits the bench
 # process dies alone.
 #
 # A sibling script rather than a `scripts/bench` subcommand: the two suites

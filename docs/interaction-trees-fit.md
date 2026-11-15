@@ -1,7 +1,7 @@
 # Interaction trees against Heather's type theory
 
 Date: 2026-09-24. An investigation, not a design: where Xia et al.'s
-*Interaction Trees* (POPL 2020, `docs/3371119.pdf`) would sit well in
+*Interaction Trees* (POPL 2020, `docs/papers/3371119.pdf`) would sit well in
 Heather, where it would choke the kernel, and where it is odd without
 being wrong. Owner of the eventual decision: `issues/effects-direction.md`.
 The nearest live customer: `issues/linux-syscall-trace-model.md` ("an event
@@ -26,7 +26,7 @@ list over a relation, or an interaction tree").
 - **Most of the value needs no coinduction.** Trees cut off at a given
   amount of fuel, plus the paper's own §7 result (eutt coincides with
   finite-trace equivalence), fit the `converges` / `fuel_monotone` interface
-  `simulate` already exposes (`docs/ir-simulate-design.md` §6). Liveness is
+  `simulate` already exposes (`docs/archive/ir-simulate-design.md` §6). Liveness is
   what that route loses.
 - **If coinduction does come, Heather is better placed than Coq.** The
   kernel has no `fix`/`cofix`: recursion is eliminators, so corecursion
@@ -413,18 +413,18 @@ function-typed inductive fields, the same tier-2 wall as §2.
 
 ## Sources
 
-- Xia et al., *Interaction Trees*, POPL 2020 — `docs/3371119.pdf`.
+- Xia et al., *Interaction Trees*, POPL 2020 — `docs/papers/3371119.pdf`.
 - Frumin, Timany, Birkedal, *Modular Denotational Semantics for Effects
-  with Guarded Interaction Trees*, POPL 2024 — `docs/2307.08514.pdf`; the
+  with Guarded Interaction Trees*, POPL 2024 — `docs/papers/2307.08514.pdf`; the
   guarded-recursion route, and higher-order effects plain ITrees cannot
   express.
 - Chappe et al., *Choice Trees*, POPL 2023 — nondeterminism/concurrency.
 - Chapman, Uustalu, Veltri, *Quotienting the Delay Monad by Weak
   Bisimilarity*, ICTAC 2015 / MSCS — countable choice;
-  `docs/chapman-uustalu-veltri-delay-quotient.pdf`.
+  `docs/papers/chapman-uustalu-veltri-delay-quotient.pdf`.
 - Altenkirch, Danielsson, Kraus, *Partiality, Revisited*, FoSSaCS 2017.
 - Zyuzin, Nanevski, *Contextual Modal Types for Algebraic Effects and
-  Handlers*, ICFP 2021 — `docs/2103.02976.pdf`.
+  Handlers*, ICFP 2021 — `docs/papers/2103.02976.pdf`.
 - Ahrens, Capriotti, Spadotti, *Non-wellfounded Trees in HoTT*, TLCA 2015;
   Avigad, Carneiro, Hudon, *Data Types as Quotients of Polynomial
   Functors*, ITP 2019 — M-types built from approximations with no kernel
@@ -433,6 +433,6 @@ function-typed inductive fields, the same tier-2 wall as §2.
 - Abel, Adelsten, Setzer, *Interactive Programming in Agda — Objects and
   Graphical User Interfaces*, JFP 2017 — container-style IO trees.
 - Fadaei Ayyam, Sammler, *HITrees: Higher-Order Interaction Trees*
-  (2025) — `docs/2510.14558.pdf`; higher-order effects (parallel
+  (2025) — `docs/papers/2510.14558.pdf`; higher-order effects (parallel
   composition, call/cc) that plain ITree events cannot express. Not yet read
   in full.

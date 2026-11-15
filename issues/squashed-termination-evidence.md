@@ -19,7 +19,7 @@ elimination out of `Prop` into `Type`. Heather has neither half: its `Acc` is
 relevant (`docs/acc-via-w.md`), and `squash_ind` eliminates only into a
 squash-headed family ([[sprop-squash]]), so nothing turns `∥…∥` into a
 relevant `Acc`. Baillon, Forster, Kirst, Mahboubi and Pédrot
-(`docs/LIPIcs.FSCD.2026.5.pdf`, §9–10) show that this principle (their
+(`docs/papers/LIPIcs.FSCD.2026.5.pdf`, §9–10) show that this principle (their
 `DAC_{X,N}`, quantifier-free countable choice) is equivalent to `Acc` large
 elimination for finitary relations, and that minimal CIC without that rule
 proves neither. Heather sits in their minimal setting.
@@ -49,7 +49,7 @@ cost, so that a customer can be weighed against it.
 ## The design in the literature
 
 Felicissimo, Leray, Pujet, Tabareau, Tanter and Winterhalter, *Definitional
-Proof Irrelevance Made Accessible* (LICS 2026, `docs/LIPIcs.LICS.2026.41.pdf`):
+Proof Irrelevance Made Accessible* (LICS 2026, `docs/papers/LIPIcs.LICS.2026.41.pdf`):
 
 - `Acc` lives in the irrelevant sort and eliminates into relevant types
   (rule Acc-el).
@@ -123,4 +123,4 @@ The propositional β is where the design meets Heather's equality.
 - 2026-10-26: Filed from reading the FSCD 2026 and LICS 2026 papers (both
   PDFs added to `docs/`). Records the gap, the literature's design and where
   it meets Heather's relevant `Id`. No round scheduled.
-- 2026-11-05: gardener: cites a file it shares with [[implicit-logical-assumptions]] (`docs/LIPIcs.LICS.2026.41.pdf`); [[lean-translation-fragment]] (`docs/axiom-provenance-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[implicit-logical-assumptions]] (`docs/papers/LIPIcs.LICS.2026.41.pdf`); [[lean-translation-fragment]] (`docs/axiom-provenance-design.md`).

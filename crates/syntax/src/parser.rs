@@ -6686,7 +6686,7 @@ impl Parser {
     }
 
     /// `match code e as T { branch(x, …) => …, _ => … }`
-    /// (docs/certgen-transcriber-in-language-design.md §3). `start` is the
+    /// (docs/archive/certgen-transcriber-in-language-design.md §3). `start` is the
     /// `match` keyword's span; the `code` keyword is still unconsumed.
     ///
     /// The motive is a **type**, not a lambda: a `match code` motive is

@@ -106,7 +106,7 @@ model, profile flag, kernel extension, or raised resource limit was added.
   Physical structured-producer selection explicitly declines for now; composing
   its execution certificates and reconciling multiple physical results remain
   open here and in [[function-ir-x86-join-placement]].
-- 2026-09-20: Architecture review at 4db435c recommends this as the first implementation checkpoint: nested pure source conditionals through recursive structured lowering before adding buffer loops. docs/native-compiler-architecture-review.md records the findings; [[native-shared-lowering-milestone]] owns the end-to-end two-client acceptance criterion. No backend changes were made in the review.
+- 2026-09-20: Architecture review at 4db435c recommends this as the first implementation checkpoint: nested pure source conditionals through recursive structured lowering before adding buffer loops. docs/native-compiler-architecture-review.md@4acf2fe records the findings; [[native-shared-lowering-milestone]] owns the end-to-end two-client acceptance criterion. No backend changes were made in the review.
 - 2026-09-20: First implementation slice: added elaborated-source reflection of nested
   unsigned Boolean matches into the existing StructuredRegion, with payload
   binder depth handled by the shared arithmetic reflector. Added recursive

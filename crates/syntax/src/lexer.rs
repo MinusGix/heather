@@ -1099,7 +1099,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             continue;
         }
         // numerals: decimal, or `0x`/`0o`/`0b` radix forms, with `_`
-        // separators between digits (docs/radix-numerals-design.md). The
+        // separators between digits (docs/archive/radix-numerals-design.md). The
         // token carries only the value: a radix form is a *spelling* of the
         // same numeral, and everything downstream (carrier choice, the
         // emitted kernel term) is decided by the value alone.

@@ -33,17 +33,17 @@ so a round can read the argument instead of re-making it.
    compiled artifact carries a proof that it agrees with the function. Which
    artifact runs, how it was found, how it was searched for, how artifacts
    are cached: all policy, none of it able to threaten soundness
-   (`docs/compile-typeclass-design.md`, the principle stated once at the top).
+   (`docs/archive/compile-typeclass-design.md`, the principle stated once at the top).
 3. **Untrusted search over checked witnesses.** Producers (reflectors,
    compilers, optimizers, analyses) may be heuristic, incomplete and
    aggressive, because each output is kernel-checked. A producer that cannot
    handle something declines; it never miscompiles
-   (`docs/certifying-generator-design.md`; `in-language-certificate-emission`,
+   (`docs/certifying-generator-design.md@4acf2fe`; `in-language-certificate-emission`,
    "compilation to good code is search, and untrusted search over checked
    witnesses is what lets the search be aggressive").
 4. **Prove the generator, not the copies.** Where a producer is stable, its
    correctness is one theorem quantified over its inputs, and each output is
-   an instance of it (`docs/sketches/surface-v3.md` §1: "`equiv` quantifies
+   an instance of it (`docs/archive/surface-v3.md` §1: "`equiv` quantifies
    over `ctx`, so every specialized emission is certified by the one
    theorem"). Experimental producers start certifying (a checked proof per
    output) and move into the verified theorem as they stabilise: a
@@ -60,19 +60,19 @@ so a round can read the argument instead of re-making it.
    kernel never learns the words (`issues/ownership-discipline-over-code.md`).
 8. **Code is boxed and intensional.** Instances and analyses are keyed on
    syntax: refactoring a function re-runs what was derived from it
-   (`docs/compile-typeclass-design.md` §1).
+   (`docs/archive/compile-typeclass-design.md` §1).
 9. **Opt-in.** A function runs only if someone asked: a `Compile` instance,
    written by hand or by a marker such as `runtime fn`
    (`issues/runtime-compile-opt-in.md`, Minus 2026-10-31).
 10. **Smart instances, dumb resolution.** Context-specific compilation is an
     instance that consumes a context descriptor, never a resolver that picks
     different instances by context. Context facts can be proofs, so
-    "optimization guards become propositions" (`docs/sketches/surface-v3.md`
+    "optimization guards become propositions" (`docs/archive/surface-v3.md`
     §1).
 11. **The total object language makes specialization tractable.** Partial
     evaluation by structural recursion over code terminates, and stuckness is
     syntactic; context-specific compilation is certified partial evaluation at
-    instance level (`docs/sketches/surface-v3.md` §3).
+    instance level (`docs/archive/surface-v3.md` §3).
 12. **The Right Way first.** Design is argued on semantics and principle,
     then cost (Minus, 2026-10-22).
 
@@ -509,7 +509,7 @@ decides.
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |
 | certified passes | probe passed | `docs/certified-pass-algebra-probe.md`, `function-ir-pass-in-heather` |
 | representations | v1 built | `docs/datarepr-design.md` |
-| specialization (`CallCtx`) | sketched | `docs/sketches/surface-v3.md` §1, §3 |
+| specialization (`CallCtx`) | sketched | `docs/archive/surface-v3.md` §1, §3 |
 | contracts across calls | direction issue | `issues/proof-carrying-function-analysis.md` |
 | foreign code as an instance | surveyed, not scheduled | `docs/foreign-binaries-survey.md`, `issues/foreign-binary-contracts.md` |
 

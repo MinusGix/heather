@@ -7,7 +7,7 @@ code". Round pattern as usual: this document first, the implementation against
 §7's acceptance list.
 
 Context it builds on, and does not restate: the transcriber round
-(`docs/certgen-transcriber-in-language-design.md`) moved the *body* half of the
+(`docs/archive/certgen-transcriber-in-language-design.md`) moved the *body* half of the
 fragment definition into `lib/certgen/certgen_code.hthr`, leaving the signature half in
 Rust (`certgen.rs`'s `marked_body`, where peeling the Lam spine doubles as the
 `Nat → … → Nat` check — its §5 table files that under "a fact about the
@@ -218,7 +218,7 @@ their existing wording.
   design.
 - **Readback and emission**: unchanged homes (transcriber design §5's table).
 
-*Widened 2026-08-12* (`docs/certgen-non-nat-embeddings-design.md` §5): the
+*Widened 2026-08-12* (`docs/certgen-non-nat-embeddings-design.md@4acf2fe` §5): the
 signature rule is still whole in `lib/certgen/certgen_code.hthr`, but `SigOut` is no
 longer its own accumulator — the walk runs on an `SA` state type and the
 verdict is `SigYes(arity, res)`, where `res = 0` is a `Nat` result and

@@ -558,7 +558,7 @@ leaves and pick up 4's forms as they land. Rounds 6–9 each need only 1 and 5.
   front end, and it lands on round 5's builder. Building it first would put
   a language design round in front of every tool.
 - **`stat`, and `wc`'s width rule from file sizes.** The old `wc` matched GNU's
-  column width by stat-ing operands (`docs/native-wc-command-design.md`
+  column width by stat-ing operands (`docs/archive/native-wc-command-design.md`
   §2). The suite can pin `wc`'s format to the cases that need no stat (one
   count, or stdin), or the round can add stat then.
 - **Liveness** (a tool that must never hang). The fuel-cut trees state

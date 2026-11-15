@@ -622,7 +622,7 @@ impl IndexedFamilies<'_> {
         let (ity, ilvl) = self.index_type_at(cx, &ind, &lowered, &vargs, span)?;
         let idx_t = self.elab_check(cx, idx, &ity, &ilvl)?;
         // Route 2b's families are Σ+`sEq`, not `El` of an eliminator
-        // (docs/inductive-fording-lowering.md §6); the classifier decided which
+        // (docs/archive/inductive-fording-lowering.md §6); the classifier decided which
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
             return IwfFamily(self)

@@ -4,7 +4,7 @@
 //! The forcing function for `issues/inductive-compiler.md` tier 1 and item 2
 //! of `issues/stress-proof-suite.md`: before a generator emits recursive
 //! inductives, the encoding is built by hand at the kernel level and checked
-//! by the real kernel, so the scheme in `docs/inductive-tier1-lowering.md`
+//! by the real kernel, so the scheme in `docs/archive/inductive-tier1-lowering.md`
 //! is validated against the checker rather than against intuition. The
 //! section numbers here are that document's.
 //!

@@ -22,7 +22,7 @@ Do the Default→Inhabited step whenever the library next grows; the Nonempty st
 
 - 2026-08-16: Scope note (2026-08-16): trivial-hypothesis auto-discharge does NOT ride this ladder after all — the mechanism chosen on [[true-prop-trivial-hypotheses]] is per-binder default argument values (home: [[named-arguments]]), because the licensing property is binder intent, not type inhabitedness. This ladder stays motivated by its own customers.
 - 2026-10-26: Squash has landed ([[sprop-squash]]), so `Nonempty<A> := ∥A∥` is no longer
-  blocked. Two facts from Baillon et al., FSCD 2026 (`docs/LIPIcs.FSCD.2026.5.pdf`)
+  blocked. Two facts from Baillon et al., FSCD 2026 (`docs/papers/LIPIcs.FSCD.2026.5.pdf`)
   bound the ladder. The missing arrow `Nonempty<A> → Inhabited<A>` for every `A`
   is full choice (their Fact 7). Its specific, axiom-free form for a countable
   carrier with a decidable predicate (MathComp's `choiceType`) is constructive

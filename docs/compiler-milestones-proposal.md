@@ -97,7 +97,7 @@ limits of the shape they are written in.
 lists, records, tactics and lemmas cannot be used to state or prove what a
 tool does, because the tool is code that generates code. `cat_implements`
 had to reason about the tree directly. A program written as a Heather
-function (as the burned `wc.hthr` was, `docs/native-programs-read-like-programs-design.md`)
+function (as the burned `wc.hthr` was, `docs/archive/native-programs-read-like-programs-design.md`)
 could be proved with `split_all` and `bv_omega`, one line per fact.
 
 **Composition hurts in the same way across areas.** `lib/std/tactic` has
@@ -234,7 +234,7 @@ plan:
   so `rewrite` steps see the loop's one-step behaviour.
 - A `for` body that only updates locals is a step function on the state
   tuple, and is exposed as one (`count_words::step`). That is exactly the
-  shape `docs/native-programs-read-like-programs-design.md` §1.1 proved
+  shape `docs/archive/native-programs-read-like-programs-design.md` §1.1 proved
   with one line per fact.
 
 Negative controls: a `:=` to a non-`mut` local, a `break` outside a loop, a
@@ -449,7 +449,7 @@ proofs are not modular, each with the workaround the rounds found:
 - A proof whose state λ holds many lets makes every later let dearer, and
   nothing says which let (`let-fanout-diagnostic`).
 - The `wc` proof of 2026-10 needed `split_all; all_goals { bv_omega }` per
-  field and a hand copy of the step (`docs/native-programs-read-like-programs-design.md`
+  field and a hand copy of the step (`docs/archive/native-programs-read-like-programs-design.md`
   §1); `cat_implements` reasons about the `Source` tree statement by
   statement.
 

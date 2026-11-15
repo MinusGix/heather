@@ -1,5 +1,5 @@
 //! A library's canonical world (`heather check --world <dir>`,
-//! `docs/library-world-design.md`).
+//! `docs/archive/library-world-design.md`).
 //!
 //! A module's image is keyed by every module loaded before it in its process,
 //! in order: Ψ positions are absolute, and an inductive's nominal tag is the

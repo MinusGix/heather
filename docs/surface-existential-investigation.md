@@ -381,7 +381,7 @@ observation (nothing re-proves when route 2 eventually lands).
 
 ## F. What the consumers would look like under route 1
 
-### F.1 `converges` (`docs/ir-simulate-design.md` §6)
+### F.1 `converges` (`docs/archive/ir-simulate-design.md` §6)
 
 ```heather
 record Converges(p: Prog, env: Val, ir: Ir, vs: Val) {

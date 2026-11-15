@@ -6,7 +6,7 @@
 
 Status: **design, 2026-10-03; nothing built.** Anchor issue:
 `issues/native-wc-as-a-command.md`. It follows the author-ergonomics round
-(`docs/native-programs-read-like-programs-design.md`), which named it as the
+(`docs/archive/native-programs-read-like-programs-design.md`), which named it as the
 next item on the program line. The trace model's general questions stay with
 `issues/linux-syscall-trace-model.md`. This round adds three events to it and
 assumes only that each event carries its response and that a claim
@@ -563,7 +563,7 @@ estimate, a cold build is still cheaper than today's.
 - **After C1** (the model), check the library's cold time per new module
   with `--timings` and compare with §9.3. A module far above its analogue is
   the signal to split its loop records (the `map_byte` lesson,
-  `docs/native-tr-design.md` §8).
+  `docs/archive/native-tr-design.md` §8).
 - **After C4**, take one cold and one warm `build-x86` of the full `wc` with
   `--timings`, attributed with `scripts/timings`, and log it on
   `issues/x86-certificate-per-declaration-constant.md`. Seconds belong on

@@ -204,5 +204,5 @@ when weighing rung 3/4 against their prerequisite features.
   computes on both sides; omitting the Succ shift is refused. General
   instruction-chain fusion is deliberately declined because landed IR v1
   stores no output arity on multi-output binders (recorded in
-  `docs/ir-simulate-design.md` §13 note 10). This is now optimizer evidence,
+  `docs/archive/ir-simulate-design.md` §13 note 10). This is now optimizer evidence,
   not only pass-architecture evidence; generation remains a separate choice.

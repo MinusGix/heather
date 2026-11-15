@@ -247,7 +247,7 @@ impl Literals<'_> {
     /// the carrier's own construction rather than a dictionary projection:
     /// `ofNat(8, 10)` for `'\n'` or `10` at a byte, so the frontend, `split_all`
     /// and instance search all see the spelling the carrier's library uses
-    /// (docs/native-programs-read-like-programs-design.md §3, S3). The
+    /// (docs/archive/native-programs-read-like-programs-design.md §3, S3). The
     /// projection unfolds only as far as the field's body: the first reduct
     /// headed by another definition (`BitVec::ofNat`), with each argument
     /// that computes to a natural literal computed (`c.toNat()` of a closed

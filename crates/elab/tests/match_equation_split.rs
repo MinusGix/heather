@@ -82,7 +82,7 @@ fn empty_ctx() -> LocalCtx {
 
 // -- §5/§6: the `split` statement ------------------------------------------
 
-/// The sketch's own example (`docs/sketches/surface-v1.md` §2), and axis 1's
+/// The sketch's own example (`docs/archive/surface-v1.md` §2), and axis 1's
 /// literal half: the split-defined `add` must *compute*, not merely check.
 #[test]
 fn a_split_defines_a_recursive_function_and_it_computes() {

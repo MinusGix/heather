@@ -6,7 +6,7 @@ created: 2026-08-01
 updated: 2026-08-01
 ---
 
-Every ordering statement in lib/certgen/ir_v1.hthr is spelled `leb(n)(m) = True` — boolean reflection worn on the sleeve, curried because `leb` recurses on both arguments and nested match patterns don't exist yet ([[nested-match-patterns]]). `fuel_monotone`'s stated interface (docs/ir-simulate-design.md §6 says `n <= m`) reads as an implementation detail instead.
+Every ordering statement in lib/certgen/ir_v1.hthr is spelled `leb(n)(m) = True` — boolean reflection worn on the sleeve, curried because `leb` recurses on both arguments and nested match patterns don't exist yet ([[nested-match-patterns]]). `fuel_monotone`'s stated interface (docs/archive/ir-simulate-design.md §6 says `n <= m`) reads as an implementation detail instead.
 
 Three separable pieces; this issue owns the first:
 

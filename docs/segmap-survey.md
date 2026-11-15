@@ -3,7 +3,7 @@
 Status: **survey**, 2026-10-25. Source: François Pottier, *Fast thinnings via
 segment maps* (preprint for the Journal of Functional Programming, 2026,
 <https://cambium.inria.fr/~fpottier/publis/fpottier-segmap.pdf>), committed
-beside this note as `docs/fpottier-segmap.pdf`. Section and figure numbers
+beside this note as `docs/papers/fpottier-segmap.pdf`. Section and figure numbers
 below are the paper's. Follow-up is in §7. Read against master at `e36a275`.
 
 The paper is about one data structure, so, like the definitional-inversion

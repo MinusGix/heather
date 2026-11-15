@@ -4,7 +4,7 @@ Status: **survey**, 2026-10-25. Source: Érik Martin-Dorel, Guillaume
 Melquiond, Pierre Roux, *Enabling Floating-Point Arithmetic in the Coq Proof
 Assistant*, Journal of Automated Reasoning 67(33), 2023
 (<https://inria.hal.science/hal-04114233>, CC BY 4.0), committed beside this
-note as `docs/hal-04114233.pdf`. Section numbers below are the paper's.
+note as `docs/papers/hal-04114233.pdf`. Section numbers below are the paper's.
 Follow-up is in §8. Read against master at `9470549`.
 
 The paper reports on Coq's *primitive floats*: an abstract kernel type

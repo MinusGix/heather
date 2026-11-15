@@ -35,7 +35,7 @@ The standalone module closure reproduces the theorem's 15.6 M steps:
 
 The unchanged `call_trace_append` control is 2.858 s kernel / 1,782,181
 steps / 850 misses. The updated baseline's 10,041 misses agrees with the
-post-narrowing row in `docs/x86-scaling-rail-out-of-fuel-design.md`; the
+post-narrowing row in `docs/archive/x86-scaling-rail-out-of-fuel-design.md`; the
 original issue table predates that projection-boundary change.
 
 **Conversion attribution.** The baseline sampler charges 19.228 s to this

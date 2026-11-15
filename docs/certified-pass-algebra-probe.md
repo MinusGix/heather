@@ -195,5 +195,5 @@ splicing its terminal `Ret` requires lifting references through intermediate
 multi-output binders. IR v1's `LetMatch`, `LetLoop`, and `LetCall` nodes do not
 store their output arity, even though the original design assigns one to each
 node. The pass therefore declines those shapes rather than guessing a slot
-count. `docs/ir-simulate-design.md` §13 note 10 records that implementation
+count. `docs/archive/ir-simulate-design.md` §13 note 10 records that implementation
 boundary.

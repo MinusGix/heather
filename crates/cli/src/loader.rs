@@ -39,7 +39,7 @@ impl Module {
     /// profile is part of the module's image key, so a profile taken from the
     /// root gave `nat` one image when `lib/std/num` was checked and another
     /// when `lib/native` was, and neither process could use the other's
-    /// (`docs/library-world-design.md` §1).
+    /// (`docs/archive/library-world-design.md` §1).
     pub fn lint_profile(&self) -> LintProfile {
         let Ok(stdlib) = Path::new(STDLIB_DIR).canonicalize() else {
             return LintProfile::Default;

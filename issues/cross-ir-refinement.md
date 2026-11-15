@@ -6,7 +6,7 @@ created: 2026-08-01
 updated: 2026-08-01
 ---
 
-The full version of docs/ir-simulate-design.md §6's stress test, deferred out of the items 3–4 round (see [[ir-simulate-design]] 2026-07-31): the landed three-link chain relates one IR reached through zero, one and two `LetCall` wrappers, which is the honest small version. Relating two *semantically different* IRs — the theta-loop `add` to a recursive-`Apply` `add` — is a round of its own because it wants an env-independence lemma (the two IRs walk different environments, so the invariant cannot be transported slot-by-slot as `add_loop_runs` does).
+The full version of docs/archive/ir-simulate-design.md §6's stress test, deferred out of the items 3–4 round (see [[ir-simulate-design]] 2026-07-31): the landed three-link chain relates one IR reached through zero, one and two `LetCall` wrappers, which is the honest small version. Relating two *semantically different* IRs — the theta-loop `add` to a recursive-`Apply` `add` — is a round of its own because it wants an env-independence lemma (the two IRs walk different environments, so the invariant cannot be transported slot-by-slot as `add_loop_runs` does).
 
 Why it matters: this is the shape every real `translate`/optimization-pass certificate has ([[compile-typeclass-design]] versioning story) — two structurally unrelated programs, one refinement. The wrapper chain exercised composition; this exercises the part composition cannot reach.
 

@@ -210,7 +210,7 @@ fn a_global_binder_after_a_local_is_refused() {
 #[test]
 fn an_ordinary_global_is_in_scope_inside_a_meta_fn() {
     // It was not, until the analyzer round
-    // (docs/certgen-transcriber-in-language-design.md §9.1): the obstacle was
+    // (docs/archive/certgen-transcriber-in-language-design.md §9.1): the obstacle was
     // never the layer — a layer-c global is referenceable from layer m and
     // from layer-c code alike (`i' ≤ i`) — but the index arithmetic, since a
     // `meta fn`'s own Ψ-extending binders sit above Ψ. With that offset
@@ -260,7 +260,7 @@ fn goals_are_refused_in_a_meta_fn() {
 fn a_meta_fn_may_return_ordinary_data() {
     // A *template* returns code; an **analyzer** returns a value, and it has
     // to: its `match code` motive must be context-free, which `Code(g |- T)`
-    // is not (docs/certgen-transcriber-in-language-design.md §9.1).
+    // is not (docs/archive/certgen-transcriber-in-language-design.md §9.1).
     elab("meta fn f(g: Ctx) -> Nat { 0 }");
 }
 
@@ -272,7 +272,7 @@ fn modal_types_outside_a_meta_fn_are_refused() {
 
 // -- `match code`: the analysis surface -------------------------------------
 //
-// docs/certgen-transcriber-in-language-design.md §3. The elimination itself is
+// docs/archive/certgen-transcriber-in-language-design.md §3. The elimination itself is
 // exercised by the transcriber's own suite (certgen.rs); these are the slice's
 // mechanics and its diagnostics.
 

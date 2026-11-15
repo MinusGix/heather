@@ -108,7 +108,7 @@ Neighbouring mechanisms:
   (`docs/named-arguments-design.md` §9.6): a tactic default runs at the call
   over the caller's hypotheses.
 - **Record-field defaults** landed (`h: 0 < v := trivial` or `:= omega`,
-  `docs/automatic-author-surface-design.md` §2.3). They only run where the
+  `docs/automatic-author-surface-design.md@4acf2fe` §2.3). They only run where the
   construction has no local bindings; under a local, `P(Succ(k))` is refused
   and asks for `h` by name (`issues/field-defaults-under-locals.md`).
 - **Solver binders in function types** do not parse

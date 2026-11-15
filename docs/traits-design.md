@@ -7,7 +7,7 @@ of it (and should tighten, not restate, what they take). Tracking issue:
 `issues/traits.md`.
 
 Adjacent decisions live where they are owned: the `Compile` certificate shape
-in `docs/compile-typeclass-design.md` (v1 landed; its §5 "class layer" is
+in `docs/archive/compile-typeclass-design.md` (v1 landed; its §5 "class layer" is
 superseded by this design — see §10 here), records in
 `docs/surface-records.md`, the meta-layer facts in
 `docs/in-language-map-design.md`, resolution's eventual in-language home in
@@ -368,7 +368,7 @@ keying) are all subsumed by this design.
 - **Both instance forms** (block and literal) are kept — two spellings of
   one thing has cost; revisit if one atrophies.
 - `CallCtx` descriptor shape stays owned by
-  `docs/compile-typeclass-design.md` §8.
+  `docs/archive/compile-typeclass-design.md` §8.
 
 Added at the closing pass (2026-08-07), scope items more than questions:
 

@@ -828,7 +828,7 @@ fn BitVec::unsigned_le_bit({n: Nat}, self a, b: BitVec(n)) → Bool { !b.unsigne
 
 // Equality as a bit: every pair of bits agrees. Structural over the width,
 // so a closed comparison costs the width and never the operands' magnitude
-// (docs/native-programs-read-like-programs-design.md §3, S3).
+// (docs/archive/native-programs-read-like-programs-design.md §3, S3).
 fn BitVec::eq_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
     match n {
         Zero => True,
@@ -1286,7 +1286,7 @@ fn BitVec::eq_dec({n: Nat}, self x, y: BitVec(n)) → x = y ∨ x ≠ y {
 // function (issues/deceq-instance-member-ambiguity.md).
 instance(n: Nat) DecEq<BitVec(n)> { eq_dec := BitVec::eq_dec }
 
-// `eq_bit` is equality (S3 of docs/native-programs-read-like-programs-design.md).
+// `eq_bit` is equality (S3 of docs/archive/native-programs-read-like-programs-design.md).
 theorem BitVec::bool_eq_self(a: Bool): BitVec::bool_eq(a, a) = True { match a { False => refl, True => refl } }
 
 theorem BitVec::bool_eq_true(a: Bool): (b: Bool) → BitVec::bool_eq(a, b) = True → a = b {
@@ -1358,7 +1358,7 @@ instance(n: Nat, a, b: BitVec(n)) Decide<a = b> {
     reflects := And(λ e => BitVec::eq_of_eq_bit(n, a, b, e), λ e => BitVec::ne_of_eq_bit(n, a, b, e)),
 }
 
-// What a step writes about bytes (docs/native-programs-read-like-programs-design.md
+// What a step writes about bytes (docs/archive/native-programs-read-like-programs-design.md
 // §3, S3): `b < 32` and `'\t' <= b` are the unsigned orders, as Lean reads
 // `<` at a bit vector; a numeral at a word is its `ofNat` (a character at a
 // byte is, too: lib/std/bitvec/byte.hthr).

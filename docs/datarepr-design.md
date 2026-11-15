@@ -301,7 +301,7 @@ instances can hold today, `lib/std/algebra/algebra.hthr`):
 2. **A name for a parameterized instantiation.** `List<Tok>` is not a
    nameable thing today — this is the *exact* boundary certgen declines at
    ("a monomorphized lowering has no name to spell `embed_T` with",
-   `docs/certgen-tier1-source-types-design.md`). The `datarepr` form is
+   `docs/certgen-tier1-source-types-design.md@4acf2fe`). The `datarepr` form is
    itself the minting site: `datarepr ListTok for List<Tok>` introduces the
    monomorph's name, its recursor specialization, and the embed the
    generator asks for. No separate `type` alias feature is required for v1

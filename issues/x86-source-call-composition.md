@@ -34,7 +34,7 @@ reordered arguments and values live across calls.
 
 ## Implementation
 
-`docs/x86-64-call-composition.md` records the supported fragment and proof
+`docs/x86-64-call-composition.md@4acf2fe` records the supported fragment and proof
 boundary. The selector uses four preserved temporary registers plus two input
 registers. It accepts at most four expanded calls and 64 expression nodes,
 within the existing 128-instruction trace bound. This entry-only caller does

@@ -569,7 +569,7 @@ generalized, two call sites shortened.
 ## 11. Extension, 2026-08-11: **analyzer slots**
 
 *Landed by the fragment-transcriber round
-(`docs/certgen-transcriber-in-language-design.md`); recorded here because the
+(`docs/archive/certgen-transcriber-in-language-design.md`); recorded here because the
 seam is this document's, not that one's.*
 
 This document's slots are **template** slots: a `meta fn` returning

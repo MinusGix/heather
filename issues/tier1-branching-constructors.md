@@ -13,7 +13,7 @@ lists) and provably does not extend to a constructor with two or more
 recursive fields. That includes `Node(Tree, Tree)` and therefore the IR
 expression knot, so this decision gates [[ir-simulate-design]].
 
-Full argument: `docs/inductive-tier1-lowering.md` §8.1. In brief:
+Full argument: `docs/archive/inductive-tier1-lowering.md` §8.1. In brief:
 
 - Exact height *is* computable for a branching constructor (`S (max h_l
   h_r)`), so the issue's original plan was right about the measure.

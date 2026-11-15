@@ -1,5 +1,5 @@
 // A character literal at a byte is its code (`'\n'` is `ofNat(8, 10)`), so a
-// program writes `b = '\n'` (docs/native-programs-read-like-programs-design.md
+// program writes `b = '\n'` (docs/archive/native-programs-read-like-programs-design.md
 // §3, S3). A module of its own so `bitvec` does not import `char`.
 //
 // The byte classes are the C locale's `<ctype.h>` sets, which is what a byte

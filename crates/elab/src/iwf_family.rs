@@ -1,7 +1,7 @@
 //! Indexed families on the `IWf` route: the declaration lowered onto the
 //! kernel's finitary indexed fixed point (`docs/iwf-former-design.md` §8).
 //!
-//! This replaced route 2b's fording (`docs/inductive-fording-lowering.md`,
+//! This replaced route 2b's fording (`docs/archive/inductive-fording-lowering.md`,
 //! superseded): a child's index is **stored** in the label rather than
 //! recomputed from the child, so `match` needs no `transp` and β fires on
 //! open data, and the fording fragment's F1–F3 are gone. A `match` at a

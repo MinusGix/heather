@@ -27,7 +27,7 @@ repetition is not there** — and that is the round's finding, because it moves
 the fix from a memo table to a different evaluator.
 
 Instrumented on the constructor-fields workload (the acceptance workload of
-`docs/certgen-ctor-fields-design.md` §8), debug, one thread, counting every
+`docs/certgen-ctor-fields-design.md@4acf2fe` §8), debug, one thread, counting every
 `Reader::whnf` call and every `reduce::step_term_delta` it spent. Numbers are
 in the issue's log; the shapes:
 

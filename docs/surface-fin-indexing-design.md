@@ -405,7 +405,7 @@ for; §7 tests exactly that.
 
 ### 5.3 A superseded sketch decision, recorded
 
-`docs/sketches/surface-v1.md:79-81` made `xs[i]` "sugar for `xs.get(i, ?_)` —
+`docs/archive/surface-v1.md:79-81` made `xs[i]` "sugar for `xs.get(i, ?_)` —
 an implicit proof parameter … becomes an anonymous goal at the call site", and
 `issues/goal-holes.md:25` still points at it. That sketch was written against a
 `List` with a separate length; in the length-indexed world `i : Fin(n)` **is**

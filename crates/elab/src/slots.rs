@@ -250,7 +250,7 @@ static SLOTS: &[SlotSpec] = &[
 ];
 
 /// An **analyzer** slot: a `meta fn` that consumes code and returns a *value*
-/// (docs/certgen-transcriber-in-language-design.md §9.1, and
+/// (docs/archive/certgen-transcriber-in-language-design.md §9.1, and
 /// docs/meta-def-registration-design.md's dated extension section).
 ///
 /// The difference from a template slot is what "having the slot's type" can

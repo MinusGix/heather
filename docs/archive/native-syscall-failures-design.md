@@ -7,8 +7,8 @@
 Status: **landed 2026-09-27.** The probes' results are in §10; the amendments
 made while building are in §9 and override the sections above them. Owner:
 `issues/linux-syscall-trace-model.md` (decisions logged there 2026-09-27).
-Builds on `docs/native-read-until-eof-design.md` (the program and its claim)
-and `docs/native-first-program-design.md` §4 (the basic trace).
+Builds on `docs/native-read-until-eof-design.md@4acf2fe` (the program and its claim)
+and `docs/archive/native-first-program-design.md` §4 (the basic trace).
 
 ## 1. What changes, and why now
 

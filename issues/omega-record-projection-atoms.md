@@ -17,7 +17,7 @@ theorem v5(w: Nat, s: WcState, sp: Bool, h: wc_next(sp, False, s).bytes = w): w 
                                                                             -- could not spell
 ```
 
-Found writing `examples/x86-native/wc.hthr`'s fold proofs (docs/native-wc-design.md
+Found writing `examples/x86-native/wc.hthr`'s fold proofs (docs/archive/native-wc-design.md
 §6, V5). The facts are about states (`s.words`, `step_fold(…).bytes`), so every
 arithmetic step needed a helper theorem over plain `Nat`s (`add_grown`,
 `words_grown`, `joins_word`, `starts_word`, `from_zero`), applied with the

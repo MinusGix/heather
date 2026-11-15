@@ -18,7 +18,7 @@ type Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat) =
     -> eval(n, p1)(env, i1) = Out(vs) -> eval(b(n), p2)(env, i2) = Out(vs)
 ```
 
-(doc §13 note 7 records the gap; `docs/ir-simulate-design.md` §6 wants the
+(doc §13 note 7 records the gap; `docs/archive/ir-simulate-design.md` §6 wants the
 name, since `converges`/`refines` are the interface clients see.)
 
 Two routes, not necessarily exclusive:
@@ -62,6 +62,6 @@ DIAGNOSTICS VERDICT — mixed, good half is the half that matters. The name surv
 
 Tests: crates/elab/tests/types_as_expressions.rs, 23 new (grammar, neutral AND literal argument, open body, checking position, composition, records through the name at tags 0/1/2, a tier-1 value parameter, six negative controls incl. the level mismatch). Workspace 693 -> 716, all green.
 
-Files: crates/syntax/src/parser.rs, crates/syntax/src/ast.rs, crates/elab/src/inductive.rs, lib/certgen/ir_v1.hthr, crates/elab/tests/types_as_expressions.rs, docs/types-as-expressions.md (new), docs/ir-simulate-design.md, docs/surface-existential-investigation.md.
+Files: crates/syntax/src/parser.rs, crates/syntax/src/ast.rs, crates/elab/src/inductive.rs, lib/certgen/ir_v1.hthr, crates/elab/tests/types_as_expressions.rs, docs/types-as-expressions.md (new), docs/archive/ir-simulate-design.md, docs/surface-existential-investigation.md.
 
 NOT DONE: abbreviating an INDEXED family's formation through the same road — indexed.rs has its own copy of the constructor check and its own structural reader, neither touched. Untested; assume broken until someone tries it. Filed as the one follow-on in docs/types-as-expressions.md §7.

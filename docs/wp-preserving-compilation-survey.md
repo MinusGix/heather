@@ -3,7 +3,7 @@
 Status: **survey**, 2026-10-28. Source: Carmine Abate, Kleio Liotati,
 František Farka, Sebastian Ertel, *Preserving Separation Logic
 Specifications through Compilation*, arXiv:2610.37244v1 [cs.PL], 27 October
-2026 (CC BY 4.0), committed beside this note as `docs/2610.37244v1.pdf`.
+2026 (CC BY 4.0), committed beside this note as `docs/papers/2610.37244v1.pdf`.
 Section, lemma and theorem numbers below are the paper's. The Rocq
 development is mentioned but has no public link in v1. Read against master
 at `0db0151`. Follow-up is in §8.

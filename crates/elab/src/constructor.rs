@@ -768,7 +768,7 @@ impl Constructors<'_> {
                 // r)`'s `l : Tree<A>(n)` is `Σ(s : ⟦Skel<A>⟧). sEq(…)` with the
                 // parameters already lowered into it, so re-indexing that type
                 // is exactly the type `Node` builds
-                // (docs/inductive-fording-lowering.md §14.7).
+                // (docs/archive/inductive-fording-lowering.md §14.7).
                 //
                 // Deliberately not the general case: a parameter that occurs
                 // only *under* a field's type constructor (`xs: [A; n]`) still
@@ -799,7 +799,7 @@ impl Constructors<'_> {
         }
         let (ty, lvl) = if ind.skel.is_some() && args.len() == ind.ctors[i].fields.len() {
             // Route 2b: the index is the constructor's *written* result index
-            // at the arguments it was given (docs/inductive-fording-lowering.md
+            // at the arguments it was given (docs/archive/inductive-fording-lowering.md
             // §2), which is the whole widening.
             let ity = IndexedFamilies(self).index_type_at(cx, ind, &targs, &[], span)?;
             let (idx, _, _) = IwfFamily(self).iwf_ctor_index(cx, ind, i, args, ity)?;
@@ -981,7 +981,7 @@ impl Constructors<'_> {
 
     /// A constructor of an **indexed** family whose type-parameter
     /// instantiation is determined by a *child* argument
-    /// (`docs/inductive-fording-lowering.md` §14.7, and route 1's same gap).
+    /// (`docs/archive/inductive-fording-lowering.md` §14.7, and route 1's same gap).
     ///
     /// The child's inferred type is the family at the child's own index, and
     /// both routes keep the family in a form that can be re-applied at another
@@ -1115,7 +1115,7 @@ impl Constructors<'_> {
             // arguments it was given, exactly as in `infer_ctor`. This is the
             // second escape the "cannot infer the type argument" message names,
             // and the only one a nullary constructor like `Leaf<Nat>` has
-            // (`docs/inductive-fording-lowering.md` §14.7).
+            // (`docs/archive/inductive-fording-lowering.md` §14.7).
             if ind.index.is_some() {
                 if args.len() != ind.ctors[i].fields.len() {
                     return err(

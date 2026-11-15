@@ -16,7 +16,7 @@ work: something materialises `BitVec(width)` (a 64-deep Σ chain) at every case
 step.
 
 Measured 2026-09-25 while making composed certificates scale
-(`docs/native-first-program-design.md` §10.1), with `probes/dec/lookup*.hthr`
+(`docs/archive/native-first-program-design.md` §10.1), with `probes/dec/lookup*.hthr`
 (untracked). A valuation `λ width id => match id { Zero => …, Succ(id_1) => … }`
 looked up at id 51 costs 67 710 steps, at id 200 costs 262 006, and at id 0
 costs 65. Replacing the arms with neutral `values(width, 0)` changes nothing.
