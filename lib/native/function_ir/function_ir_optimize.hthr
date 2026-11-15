@@ -364,6 +364,348 @@ fn Function::find_worded_past(self function: Function, callees: List<Function>) 
     function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(), function.top()).sites.past_test()))
 }
 
+// ---------------------------------------------------------------------------
+// Four byte stores as one store of a word (step 5's store half)
+
+// A word stored a byte at a time, the bytes its shifts right narrowed, at
+// an index and the next three: what four `MOV [base], r8` write, one
+// `MOV [base], r32` of the word's low half (swapped, for the bytes from the
+// highest) writes. Two moves, as for the word load. The first puts after
+// the fourth store a load of four bytes at the first one's index, with the
+// half and its swap before it (`Function::find_stores`): the inlining
+// stage's `Sites::Put`. The second is a replay that holds the four stores
+// back past the pure nodes between them and pays them as one store in the
+// place of that load (`Step::Holding`, `Paid::Together`), with the
+// derivations its premises read: the low byte each stores (rules 40, 41),
+// that the four are the word's bytes in order (42, or 43 unswapped), and
+// that the indexes are in a row as numbers (from each one's test against
+// the span's length, rules 20, 27, 28 and 24). The run of leaves it
+// replays is a flat one (`Plan::Flat`), cut again so that the wide store
+// is last in its leaf with the swap and the half before it, which is what
+// the lowering asks (`function_ir_lower_calls`, `Lowered::wide_store_at`).
+// The sweep then takes the shifts, the narrowings and the tests of the
+// three indexes no access reads any more.
+
+// The nodes of a run by the word each writes. A bit's constant written
+// after its comparison shares the comparison's id and is left out.
+fn nodes_made(nodes: List<Node>, made: NatMap<Node>) → NatMap<Node> {
+    match nodes {
+        Nil => made,
+        Cons(node, rest) => nodes_made(rest, match node {
+            Const(w, _, _) => match w.same(1) { True => made, False => nat_map_set(made, node_output(node).id, node) },
+            _ => nat_map_set(made, node_output(node).id, node),
+        }),
+    }
+}
+
+// A word compared below a length, with the comparison's bit written as set
+// after it: the bit and the length.
+record IndexTested { bit: Nat, length: Nat }
+
+fn bit_set_next(nodes: List<Node>, c: Nat) → Bool {
+    match nodes { Nil => False, Cons(node, _) => match node { Const(w, o, v) => (w.same(1) && o.same(c)) && v.same(1), _ => False } }
+}
+
+fn nodes_tested(nodes: List<Node>, found: NatMap<IndexTested>) → NatMap<IndexTested> {
+    match nodes {
+        Nil => found,
+        Cons(node, rest) => nodes_tested(rest, match node {
+            UnsignedLessThan(w, c, l, r) => match w.same(64) && bit_set_next(rest, c) { True => nat_map_set(found, l, IndexTested(c, r)), False => found },
+            _ => found,
+        }),
+    }
+}
+
+// A byte store where the run has it, and its buffer.
+record StoreAt { at: Nat, buffer: Nat, stored: Stored }
+
+fn stores_at(nodes: List<Node>, at: Nat) → List<StoreAt> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match node {
+            BufferStore(o, f, i, v) => Cons(StoreAt(at, f, Stored(o, i, v)), stores_at(rest, Succ(at))),
+            _ => stores_at(rest, Succ(at)),
+        },
+    }
+}
+
+// What a byte stored is: the low byte of `word` shifted right by `shift`,
+// and the derivations that say so.
+record StoredByte { word: Nat, shift: Nat, why: List<Late> }
+
+fn Node::widened_byte(self node: Node) → Option<Nat> {
+    match node { Resize(from, to, _, b) => (from.same(8) && to.same(64)).then(Some(b)), _ => None }
+}
+
+fn Node::narrowed_byte(self node: Node) → Option<Nat> {
+    match node { Resize(from, to, _, a) => (from.same(64) && to.same(8)).then(Some(a)), _ => None }
+}
+
+record Shifted { word: Nat, by: Nat }
+
+fn Node::shifted_right(self node: Node) → Option<Shifted> {
+    match node { LogicalShiftRight(w, _, a, c) => w.same(64).then(Some(Shifted(a, c))), _ => None }
+}
+
+fn byte_of(made: NatMap<Node>, x: Nat) → Option<StoredByte> {
+    nat_map_get(made, x).and_then(λ n => n.widened_byte()).and_then(λ b =>
+        nat_map_get(made, b).and_then(λ n => n.narrowed_byte()).and_then(λ a =>
+            shared(Know(40, [x, b, a]), λ low => match nat_map_get(made, a).and_then(λ n => n.shifted_right()) {
+                None => Some(StoredByte(a, 0, [low])),
+                Some(s) => Some(StoredByte(s.word, s.by, [low, Know(41, [x, a, s.word, s.by, 0])])),
+            })))
+}
+
+// The constant `id` adds to `base`, where it is `base` and the constant `k`.
+fn added(made: NatMap<Node>, base, id, k: Nat) → Option<Nat> {
+    nat_map_get(made, id).and_then(λ n => match n {
+        Add(w, _, l, r) => (w.same(64) && l.same(base)).then(nat_map_get(made, r).and_then(λ m => match m {
+            Const(v, _, value) => (v.same(64) && value.same(k)).then(Some(r)),
+            _ => None,
+        })),
+        _ => None,
+    })
+}
+
+fn tested_below(tested: NatMap<IndexTested>, id, length: Nat) → Option<Nat> {
+    nat_map_get(tested, id).and_then(λ t => t.length.same(length).then(Some(t.bit)))
+}
+
+// Four stores found: where the first and the fourth are in the run, the
+// buffer, the word, whether its bytes are stored from the highest, the
+// stores, and the derivations of every premise but the split (which reads
+// the half and its swap).
+record StoreGroup { at: Nat, last: Nat, buffer: Nat, word: Nat, swapped: Bool, first: Stored, second: Stored, third: Stored, fourth: Stored, why: List<Late> }
+
+// That the indexes `i0` and `i_k = i0 + k` are in a row as numbers, from
+// the tests of the first three against the length: each order below the
+// length, then the next sum's two orders from it.
+fn row_why(i0, len, c0, c1, c2, i1, i2, i3, k1, k2, k3: Nat) → List<Late> {
+    [Know(20, [c0, i0, len]),
+     Know(27, [i1, i0, k1, 1, 1, len, 0]), Know(28, [i1, i0, k1, 1, 1, len, 0]), Know(20, [c1, i1, len]), Know(24, [i0, 1, i1, 0, 1, len, 0, 2, 0]),
+     Know(27, [i2, i0, k2, 2, 2, len, 0]), Know(28, [i2, i0, k2, 2, 2, len, 0]), Know(20, [c2, i2, len]), Know(24, [i0, 2, i2, 0, 1, len, 0, 3, 0]),
+     Know(27, [i3, i0, k3, 3, 3, len, 0]), Know(28, [i3, i0, k3, 3, 3, len, 0])]
+}
+
+// The shifts of the four bytes, from the highest or from the lowest.
+fn shifts_swapped(b0, b1, b2, b3: StoredByte) → Bool { ((b0.shift.same(24) && b1.shift.same(16)) && b2.shift.same(8)) && b3.shift.same(0) }
+fn shifts_plain(b0, b1, b2, b3: StoredByte) → Bool { ((b0.shift.same(0) && b1.shift.same(8)) && b2.shift.same(16)) && b3.shift.same(24) }
+
+// Nothing but pure nodes and byte stores.
+fn nodes_quiet_but_stores(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => (node.pure() || match node { BufferStore(_, _, _, _) => True, _ => False }) && nodes_quiet_but_stores(rest) }
+}
+
+fn four_of(nodes: List<Node>, made: NatMap<Node>, tested: NatMap<IndexTested>, a, b, c, d: StoreAt) → Option<StoreGroup> {
+    shared(a.stored.index, λ i0 => match ((a.buffer.same(b.buffer) && a.buffer.same(c.buffer)) && a.buffer.same(d.buffer)) &&
+        nodes_quiet_but_stores(nodes.take(d.at).drop(a.at)) {
+        False => None,
+        True => added(made, i0, b.stored.index, 1).and_then(λ k1 => added(made, i0, c.stored.index, 2).and_then(λ k2 =>
+            added(made, i0, d.stored.index, 3).and_then(λ k3 => nat_map_get(tested, i0).and_then(λ t0 =>
+                tested_below(tested, b.stored.index, t0.length).and_then(λ c1 => tested_below(tested, c.stored.index, t0.length).and_then(λ c2 =>
+                    byte_of(made, a.stored.value).and_then(λ b0 => byte_of(made, b.stored.value).and_then(λ b1 =>
+                        byte_of(made, c.stored.value).and_then(λ b2 => byte_of(made, d.stored.value).and_then(λ b3 =>
+                            shared(shifts_swapped(b0, b1, b2, b3), λ swapped =>
+                                (((b0.word.same(b1.word) && b0.word.same(b2.word)) && b0.word.same(b3.word)) && (swapped || shifts_plain(b0, b1, b2, b3))).then(
+                                    Some(StoreGroup(a.at, d.at, a.buffer, b0.word, swapped, a.stored, b.stored, c.stored, d.stored,
+                                        b0.why ++ (b1.why ++ (b2.why ++ (b3.why ++
+                                            row_why(i0, t0.length, t0.bit, c1, c2, b.stored.index, c.stored.index, d.stored.index, k1, k2, k3)))))))))))))))))),
+    })
+}
+
+// The first four stores in a row of a run that are one word's.
+fn groups_in(nodes: List<Node>, made: NatMap<Node>, tested: NatMap<IndexTested>, stores: List<StoreAt>) → Option<StoreGroup> {
+    match stores {
+        Nil => None,
+        Cons(a, rest) => match rest {
+            Nil => None,
+            Cons(b, more) => match more {
+                Nil => None,
+                Cons(c, further) => match further {
+                    Nil => None,
+                    Cons(d, _) => match four_of(nodes, made, tested, a, b, c, d) { Some(group) => Some(group), None => groups_in(nodes, made, tested, rest) },
+                },
+            },
+        },
+    }
+}
+
+fn group_in(nodes: List<Node>) → Option<StoreGroup> { groups_in(nodes, nodes_made(nodes, NatMap::empty()), nodes_tested(nodes, NatMap::empty()), stores_at(nodes, 0)) }
+
+// The sizes of a flat region's leaves, in order.
+fn StructuredRegion::leaf_sizes(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => [body.nodes.len()],
+        Compose(prefix, continuation) => prefix.leaf_sizes() ++ continuation.leaf_sizes(),
+        _ => [],
+    }
+}
+
+// The leaf a position of a run is in: the sizes of the leaves before it,
+// where it starts and ends, and the sizes after it.
+record LeafCut { before: List<Nat>, start: Nat, end: Nat, after: List<Nat> }
+
+fn cut_at(sizes: List<Nat>, at, start: Nat) → LeafCut {
+    match sizes {
+        Nil => LeafCut([], start, start, []),
+        Cons(size, rest) => match Succ(at).leb(start + size) {
+            True => LeafCut([], start, start + size, rest),
+            False => shared(cut_at(rest, at, start + size), λ later => LeafCut(Cons(size, later.before), later.start, later.end, later.after)),
+        },
+    }
+}
+
+// Where the stores go, the leaves to put after the fourth: the word's low
+// half, its swap where the bytes are from the highest, and the load of
+// four bytes at the first store's index. Ids from `by`.
+fn StoreGroup::put(self group: StoreGroup, by: Nat) → List<Node> {
+    match group.swapped {
+        True => [Resize(64, 32, by, group.word), ByteSwap(32, Succ(by), by), WideLoad(4, Succ(Succ(by)), group.buffer, group.first.index)],
+        False => [Resize(64, 32, by, group.word), WideLoad(4, Succ(by), group.buffer, group.first.index)],
+    }
+}
+
+// The sites putting `leaves` after the `n`th leaf of a flat region.
+record Putting { sites: Sites, left: Option<Nat> }
+
+fn StructuredRegion::putting(self region: StructuredRegion, n, room: Nat, leaves: List<List<Node>>) → Putting {
+    match region {
+        Dataflow(_) => match n { Zero => Putting(Put(room, leaves), None), Succ(m) => Putting(Stay, Some(m)) },
+        Compose(prefix, continuation) => shared(prefix.putting(n, room, leaves), λ a => match a.left {
+            None => Putting(Both(a.sites, Stay), None),
+            Some(m) => shared(continuation.putting(m, room, leaves), λ b => Putting(Both(Stay, b.sites), b.left)),
+        }),
+        _ => Putting(Stay, Some(n)),
+    }
+}
+
+// In the region's shape, as `inline_region` gives ids from `by`: where a
+// flat run holds four stores of a word, the half, swap and load after the
+// fourth.
+fn StructuredRegion::stores_put(self region: StructuredRegion, by: Nat) → Worded {
+    match region {
+        Dataflow(_) => Worded(Stay, by),
+        Sequence(_, continuation) => shared(continuation.stores_put(by), λ c => Worded(Then(c.sites), c.bound)),
+        Compose(prefix, continuation) => match Compose(prefix, continuation).flat().and_then(λ nodes => group_in(nodes)) {
+            Some(group) => shared(group.put(by), λ leaf => shared(cut_at(Compose(prefix, continuation).leaf_sizes(), group.last, 0), λ cut =>
+                Worded(Compose(prefix, continuation).putting(cut.before.len(), leaf.len(), [leaf]).sites, by + leaf.len()))),
+            None => shared(prefix.stores_put(by), λ a =>
+                shared(continuation.stores_put(a.bound), λ c => Worded(Both(a.sites, c.sites), c.bound))),
+        },
+        Conditional(_, _, _, _, when_true, when_false) => shared(when_true.stores_put(by), λ a =>
+            shared(when_false.stores_put(a.bound), λ c => Worded(Arms(a.sites, c.sites), c.bound))),
+        Call(_, _, _) => Worded(Stay, by),
+        Loop(_, _, _, _, body, _, _, _, _) => shared(body.stores_put(by), λ b => Worded(Body(b.sites), b.bound)),
+        Lend(_, _, _, _) => Worded(Stay, by),
+    }
+}
+
+// The function with the word's half, swap and load put after four byte
+// stores of its bytes, for the replay that pays them as one store
+// (`find_paid`). Nothing reads the load until then, and the sweep takes it
+// back where no replay does.
+fn Function::find_stores(self function: Function, callees: List<Function>) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.stores_put(function.top()).sites))
+}
+
+fn Function::find_stores_past(self function: Function, callees: List<Function>) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.stores_put(function.top()).sites.past_test()))
+}
+
+// After the fourth store: the load put at the first one's index, the first
+// node past the stores that is not pure, and the half (and swap) of the
+// word before it.
+record Paying { load: Nat, loaded: Nat, half: Nat, value: Nat }
+
+fn half_of(nodes: List<Node>, word: Nat) → Option<Nat> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match node {
+            Resize(from, to, o, s) => match (from.same(64) && to.same(32)) && s.same(word) { True => Some(o), False => half_of(rest, word) },
+            _ => half_of(rest, word),
+        },
+    }
+}
+
+fn swap_of(nodes: List<Node>, half: Nat) → Option<Nat> {
+    match nodes {
+        Nil => None,
+        Cons(node, rest) => match node {
+            ByteSwap(w, o, s) => match w.same(32) && s.same(half) { True => Some(o), False => swap_of(rest, half) },
+            _ => swap_of(rest, half),
+        },
+    }
+}
+
+fn first_unpure(nodes: List<Node>, at: Nat) → Option<Nat> {
+    match nodes { Nil => None, Cons(node, rest) => match node.pure() { True => first_unpure(rest, Succ(at)), False => Some(at) } }
+}
+
+fn StoreGroup::paying(self group: StoreGroup, nodes: List<Node>) → Option<Paying> {
+    shared(nodes.drop(Succ(group.last)), λ after => first_unpure(after, Succ(group.last)).and_then(λ load => match nodes.drop(load) {
+        Nil => None,
+        Cons(node, _) => match node {
+            WideLoad(bytes, q, f, i) => ((bytes.same(4) && f.same(group.buffer)) && i.same(group.first.index)).then(
+                shared(nodes.take(load).drop(Succ(group.last)), λ between => half_of(between, group.word).and_then(λ half => match group.swapped {
+                    True => swap_of(between, half).map(λ value => Paying(load, q, half, value)),
+                    False => Some(Paying(load, q, half, half)),
+                }))),
+            _ => None,
+        },
+    }))
+}
+
+fn StoreGroup::split(self group: StoreGroup, paying: Paying) → Late {
+    match group.swapped {
+        True => Know(42, [paying.value, paying.half, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
+        False => Know(43, [paying.value, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
+    }
+}
+
+// A store held, a pure node passed.
+fn lates_of(nodes: List<Node>) → List<Late> { nodes.map(λ (node: Node) => match node.stores() { True => Wait, False => Pass }) }
+
+// The plan of a flat run: kept up to the first store, then the stores
+// held to the load and paid as one store in its place; cut again into the
+// leaves before, one from the first store's leaf through the wide store,
+// the rest of the load's leaf, and the leaves after.
+fn flat_paid(region: StructuredRegion, nodes: List<Node>) → Option<Plan> {
+    group_in(nodes).and_then(λ group => group.paying(nodes).and_then(λ paying =>
+        shared(region.leaf_sizes(), λ sizes => shared(cut_at(sizes, group.at, 0), λ first => shared(cut_at(sizes, paying.load, 0), λ last =>
+            Some(Flat(List::replicate(Keep, group.at) ++ [Holding(lates_of(nodes.take(paying.load).drop(group.at)) ++ (group.why ++ [group.split(paying)]),
+                Together(Four(group.buffer, paying.loaded, paying.value, group.first, group.second, group.third, group.fourth)))],
+                first.before ++ (Cons((paying.load + 1) - (first.start + 4), Cons(last.end - Succ(paying.load), last.after))))))))))
+}
+
+// A plan that keeps and learns every node, with a flat run that holds four
+// stores of a word and the load put after them paid as one store.
+record PaidPlan { plan: Plan, found: Bool }
+
+fn StructuredRegion::stores_paid(self region: StructuredRegion) → PaidPlan {
+    match region {
+        Dataflow(_) => PaidPlan(Nodes([]), False),
+        Sequence(_, continuation) => shared(continuation.stores_paid(), λ c => PaidPlan(Then([], c.plan), c.found)),
+        Compose(prefix, continuation) => match Compose(prefix, continuation).flat().and_then(λ nodes => flat_paid(Compose(prefix, continuation), nodes)) {
+            Some(plan) => PaidPlan(plan, True),
+            None => shared(prefix.stores_paid(), λ a => shared(continuation.stores_paid(), λ c => PaidPlan(Both(a.plan, c.plan), a.found || c.found))),
+        },
+        Conditional(_, _, _, _, when_true, when_false) => shared(when_true.stores_paid(), λ a =>
+            shared(when_false.stores_paid(), λ c => PaidPlan(Arms(a.plan, c.plan), a.found || c.found))),
+        Call(_, _, _) => PaidPlan(Same, False),
+        Loop(_, _, _, _, body, _, _, _, _) => shared(body.stores_paid(), λ b => PaidPlan(Body(b.plan), b.found)),
+        Lend(_, _, _, _) => PaidPlan(Same, False),
+    }
+}
+
+// The four stores paid as one, where `find_stores` put their load.
+fn Function::find_paid(self function: Function) → Option<Found> {
+    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan), False => None })
+}
+
+fn Function::find_paid_past(self function: Function) → Option<Found> {
+    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan.plain_kept()), False => None })
+}
+
 // Whether the lowering takes a function with the planner's placement, as
 // the program's function `k` under its counts of lent buffers. The
 // compiler asks this of what the searches made before it keeps it: the
