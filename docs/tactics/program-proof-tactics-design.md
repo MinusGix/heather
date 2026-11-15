@@ -170,7 +170,7 @@ real proofs, not only new probes.
 
 ## 5. Not proposed
 
-- A weakest-precondition tactic for these pure functions. `native-program-logic-design.md`'s
+- A weakest-precondition tactic for these pure functions. `docs/native/native-program-logic-design.md`'s
   `Wp` is about machine code; for Heather functions, the function is its own
   semantics, and the branch equations plus induction are the program logic.
 - Hiding the generated equations. They stay nameable, so a proof can still

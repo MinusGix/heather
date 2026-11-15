@@ -139,10 +139,38 @@ kernel then rejects (issues/split-all-nested-scrutinee-kernel-reject.md):
   equations that led to it (`` `split_all` leaves the goal `0 = 1` in the case
   `unsigned_lt_bit(ofNat(0), ofNat(0)) = False` ``). Other leaves check
   themselves as they always do.
+- **A failing leaf names its case.** A leaf that fails (`bv_omega`
+  stuck) has the case it failed in added to its error, each test as the
+  source would write it: `` in the `split_all` case `lo <= x`, `hi < x`,
+  `hi < lo` ``. A comparison taken false reads as its converse, and a
+  literal operand as its value.
 
-What it does not do yet: split a hypothesis, or revise one already in
-context when a split substitutes into it (only binders introduced after the
-split are simplified, so state such a premise as a binder of the goal); and
+Programs call programs, and take preconditions that are calls
+(docs/tactics/program-proof-tactics-design.md §3 A):
+
+- **A call nested in a call** (`clamp(clamp(x, lo, hi), lo, hi)`,
+  `max(max(a, b), c)`) is split inside out. The inner call's test is found
+  first, in the outer call's argument, and the split abstracts the inner
+  call wherever it is spelled; the outer call is never unfolded around it
+  (unfolded, its comparison reached the bit-level fold, with the inner call
+  still standing inside). Once the inner call is a value, the outer call
+  meets its own tests, possibly one an earlier split already decided
+  (`x < lo` again, at `x`). That test is split again, and **the case that
+  contradicts the earlier one is closed** by `absurd(trans(sym(h0), h1))`,
+  so every leaf still sees only cases some run reaches.
+- **A premise that is a call with tests** (`is_digit(c) = True → …`) is
+  split before it is introduced: the split abstracts the whole `Π`, and each
+  case introduces the premise at what that case makes of it. A case where
+  it reads `False = True` is closed, as a refuted case equation is.
+- **A hypothesis that is a call with tests** (`h: is_digit(c) = True`) is
+  reverted into the goal at the root, before any case is taken, and is then
+  split as a premise. Only equations the user wrote are reverted, and only
+  when a split can take them apart; the original stays in context
+  unchanged.
+
+What it does not do yet: revise a hypothesis that a split substitutes into
+when the hypothesis has no test of its own to split (only the root reverts,
+and only what it can split); and
 unfold a recursive definition to a spelling a leaf can read. Unfolding
 `wc_l(Cons(byte, rest))` leaves the raw recursor where `wc_l(rest)` was,
 which `omega` cannot spell (issues/split-all-through-recursive-definitions.md).
