@@ -24,6 +24,9 @@ import rt_io;
 import rt_io_lower;
 import rt_io_loop;
 import linux_world_while;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
 
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
@@ -96,4 +99,9 @@ fn echo_bridge(io: Io, buf: List<BitVec(8)>) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::echo_all(io, buf), echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io))
 {
     Io::while_agrees(ec, eb, ek, ece, efe, erest, eworld, evals, echo_agrees(), Mutated(io, Mutated(buf, BitVec::ofNat(1))))
+}
+
+// The reflector reads the surface method into the program written above.
+theorem echo_reflected(): True {
+    by reflects_io_loop_as(["Io::echo_all"], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
 }

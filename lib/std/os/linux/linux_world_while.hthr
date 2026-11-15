@@ -25,6 +25,11 @@ import linux_world_co;
 // ---------------------------------------------------------------------------
 // The surface loop
 
+// A pair of a loop's state, as a function: what the reflector writes a
+// state of fresh locals with (`rt_io_reflect_loop`), then reduces to the
+// constructor.
+fn Io::state<A, B>(a: A, b: B) → Mutated<A, B> { Mutated(a, b) }
+
 // A pass of `while c { body }` as the parser writes it, at the state it is
 // in: `t` the test, `s2` the state the body leaves.
 fn Io::guard<S>(t: Bool, s: S, s2: S) → Partial(Step<S, S>) {

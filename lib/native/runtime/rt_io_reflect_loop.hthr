@@ -1,0 +1,473 @@
+// The effectful reflector's loops: a function over `Io` whose body has
+// `while` loops with no measure, read from its elaborated body as an
+// `ELoop` (docs/native/io-programs-design.md §2.1;
+// docs/language/effects-capabilities-design.md §8.6).
+//
+// A `while c { body }` with no measure is, after the parser, one call
+// `Iterate::then(init, step, k)` (sequencing design §18): `init` the
+// locals the loop threads, the world among them, as nested `Mutated`
+// records (`Mutated(io, Mutated(buf, n))`); `step` a `λ` over that state
+// that tests `c` and, when it holds, runs the body and continues at the
+// new state; `k` the rest of the block at the state the loop leaves. The
+// reflector reads:
+//
+// - the calls that bring the world to `init`'s, and its components, as the
+//   computation before the loop (`Seq`); each component is a variable of
+//   its own, which the loop rebinds;
+// - `step` and `k` at a state of fresh locals, one per component and one
+//   for the world (`assume`), so that a read of a component is the local,
+//   a variable of the loop's environment, and the world is the local the
+//   body's calls start from;
+// - the test, a pure `Tm`; the `True` arm, a straight computation over the
+//   world, as the pass, and the state it continues at as `rebind`; the
+//   `False` arm must leave the state as it is;
+// - `k` at the same state as the rest, which may hold loops of its own.
+//
+// Untrusted like every producer: the bridge (`Io::while_agrees`,
+// linux_world_while) and the pins its premises reduce to are what a
+// program's theorem rests on, and a wrong reflection fails them.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import linux_world;
+import linux_world_while;
+import rt;
+import rt_io;
+import rt_io_loop;
+import rt_reflect;
+import rt_io_reflect;
+
+// An effectful function with loops: its parameters after the world, the
+// code it answers, and the program.
+record LoopFun { params: List<Ty>, result: Ty, prog: ELoop }
+
+record LoopNames { io: IoNames, then: Nat, ret: Nat, state: Nat, itself: Nat }
+
+// A term as itself, one step on: how the reflector gets a handle to a
+// local it assumed (`next_spelling` of `rt_loop_itself(x)` is `x`).
+fn rt_loop_itself<A>(a: A) → A { a }
+
+// What the walk carries besides the reflection state: the world's calls so
+// far, the computation since the last loop (newest first), and the local
+// the next fresh local is assumed under.
+record LoopWalk { st: RSt, segs: List<ESeg>, io: IoKnown, under: LocalRef }
+
+fn rt_loop_ok<A>(what: String, c: Checked<A>) → Tac<A> { rt_accepted(what, c) }
+
+// The components of a state `Mutated(world, rest)`: how many locals `rest`
+// nests, read off the state's type (`Mutated<A, Mutated<B, C>>` is three).
+fn rt_state_count(fuel: Nat, mutated: Nat, ty: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => rt_refuse("a loop's state nests deeper than the reflector's fuel"),
+        Succ(f) => view(ty).bind(λ v => match v {
+            HGlobal(g, _, args) => match g.id.same(mutated) {
+                True => match args.nth(1) {
+                    Some(rest) => rt_state_count(f, mutated, rest).bind(λ n => pure(Succ(n))),
+                    None => rt_refuse("a loop's state record without its parts"),
+                },
+                False => pure(1),
+            },
+            _ => pure(1),
+        }),
+    }
+}
+
+// A state's components, `n` of them, from the nested records holding them.
+fn rt_state_parts(fuel: Nat, mutated: Nat, n: Nat, h: Handle) → Tac<List<Handle>> {
+    match n {
+        Zero => pure([]),
+        Succ(m) => match m {
+            Zero => pure([h]),
+            Succ(_) => match fuel {
+                Zero => rt_refuse("a loop's state nests deeper than the reflector's fuel"),
+                Succ(f) => view(h).bind(λ v => match v {
+                    HCtor(ty, _, _, fields) => match ty.id.same(mutated) {
+                        True => match fields {
+                            Cons(a, more) => match more {
+                                Cons(rest, _) => rt_state_parts(f, mutated, m, rest).bind(λ ps => pure(Cons(a, ps))),
+                                Nil => rt_refuse("a loop's state record without its rest"),
+                            },
+                            Nil => rt_refuse("a loop's state record without its parts"),
+                        },
+                        False => rt_refuse("a loop's state that is not its locals written out"),
+                    },
+                    _ => rt_refuse("a loop's state that is not its locals written out"),
+                }),
+            },
+        },
+    }
+}
+
+// The world and the components of a state written out, `Mutated(w, rest)`.
+fn rt_state_split(fuel: Nat, mutated: Nat, n: Nat, h: Handle) → Tac<Pair<Handle, List<Handle>>> {
+    view(h).bind(λ v => match v {
+        HCtor(ty, _, _, fields) => match ty.id.same(mutated) {
+            True => match fields {
+                Cons(w, more) => match more {
+                    Cons(rest, _) => rt_state_parts(fuel, mutated, n, rest).bind(λ ps => pure(Pair(w, ps))),
+                    Nil => rt_refuse("a loop's state record without its locals"),
+                },
+                Nil => rt_refuse("a loop's state record without its world"),
+            },
+            False => rt_refuse("a loop's state that is not `Mutated(io, locals)`"),
+        },
+        _ => rt_refuse("a loop's state that is not `Mutated(io, locals)` written out"),
+    })
+}
+
+// The calls that bring the world to `w`, as `Invoke`s after the walk's.
+fn rt_loop_calls(fuel: Nat, k: Known, w: LoopWalk, world: Handle) → Tac<LoopWalk> {
+    let calls <- rt_world_calls(fuel, w.io, world);
+    let walked <- rt_io_calls(fuel, k, IoWalk(w.st, w.segs, w.io), calls);
+    pure(LoopWalk(walked.st, walked.segs, walked.io, w.under))
+}
+
+// The walk's pure lets moved into its computation.
+fn LoopWalk::settle(self w: LoopWalk) → LoopWalk {
+    LoopWalk(RSt(w.st.depth, [], w.st.memo, w.st.handles, w.st.locals, w.st.funs), ESeg::lets(w.st.lets) ++ w.segs, w.io, w.under)
+}
+
+fn rt_has(ls: List<Nat>, l: Nat) → Bool { match ls { Nil => False, Cons(x, rest) => x.same(l).or(rt_has(rest, l)) } }
+
+// Each component reflected as a variable of its own: a word that is
+// already a variable from before (`base`) or another component's is
+// copied by a `Let`; a buffer is not copied (no `Let` holds one), so it
+// stays where it is and two components may not share one.
+fn rt_loop_components(fuel: Nat, k: Known, w: LoopWalk, base: Nat, parts: List<Handle>, taken: List<Nat>) → Tac<Pair<LoopWalk, List<Nat>>> {
+    match parts {
+        Nil => pure(Pair(w, [])),
+        Cons(p, rest) => {
+            let kw = k.at_world(w.io);
+            let r <- rt_go(fuel, kw, w.st, p, True);
+            let t <- kw.ty_of(p);
+            let l = RSt::level(r.snd);
+            let fresh = Succ(l).leb(base).not().and(rt_has(taken, l).not());
+            let placed: Tac<Pair<RSt, Nat>> = match fresh {
+                True => pure(Pair(r.fst, l)),
+                False => match t {
+                    Bytes(_) => match rt_has(taken, l) {
+                        True => rt_refuse("two locals a loop threads hold one buffer"),
+                        False => pure(Pair(r.fst, l)),
+                    },
+                    _ => pure(Pair(r.fst.bind(Var(r.fst.index(l))), r.fst.depth)),
+                },
+            };
+            let pl <- placed;
+            let next <- rt_loop_components(fuel, k, LoopWalk(pl.fst, w.segs, w.io, w.under), base, rest, Cons(pl.snd, taken));
+            pure(Pair(next.fst, Cons(pl.snd, next.snd)))
+        },
+    }
+}
+
+// One fresh local per component, at its type, each under the last.
+fn rt_loop_locals(under: LocalRef, tys: List<Handle>) → Tac<List<LocalInfo>> {
+    match tys {
+        Nil => pure([]),
+        Cons(t, rest) => {
+            let x <- assume(Hd(t), "local", Some(under)).bind(λ c => rt_loop_ok("a loop local", c));
+            let xs <- rt_loop_locals(x.ref, rest);
+            pure(Cons(x, xs))
+        },
+    }
+}
+
+fn rt_last_ref(under: LocalRef, xs: List<LocalInfo>) → LocalRef { match xs.rev() { Nil => under, Cons(x, _) => x.ref } }
+
+fn rt_bind_locals(st: RSt, xs: List<LocalInfo>, ls: List<Nat>) → RSt {
+    match xs {
+        Nil => st,
+        Cons(x, rest) => match ls { Nil => st, Cons(l, more) => rt_bind_locals(st.with_local(x.ref.id, l), rest, more) },
+    }
+}
+
+fn rt_state_cons(names: LoopNames, a: Expr, b: Expr) → Tac<Handle> {
+    let h <- next_spelling(App(App(App(App(Global(GlobalRef(names.state)), Blank), Blank), a), b)).bind(λ c => rt_loop_ok("a loop's state", c));
+    whnf(h).bind(λ c => rt_loop_ok("a loop's state", c))
+}
+
+// What the state's `value` is, written out of fresh locals: the one local,
+// or the locals nested as the loop nests them, each record a constructor
+// (so a read of a part is the part's local, `rt_field_of_value`).
+fn rt_state_value(names: LoopNames, xs: List<LocalInfo>) → Tac<Handle> {
+    match xs {
+        Nil => rt_refuse("a loop that threads no local"),
+        Cons(x, rest) => match rest {
+            Nil => next_spelling(App(App(Global(GlobalRef(names.itself)), Blank), Local(x.ref))).bind(λ c => rt_loop_ok("a loop local", c)),
+            Cons(_, _) => rt_state_value(names, rest).bind(λ r => rt_state_cons(names, Local(x.ref), Hd(r))),
+        },
+    }
+}
+
+// A loop's state opened as the local `z`, and read through fresh locals:
+// `z.after` is the world the calls start from, `z.value` the locals,
+// each a variable at its level. The reflection state and what it knows.
+record Opened2 { k: Known, st: RSt, io: IoKnown, under: LocalRef, body: Handle, state: LocalRef }
+
+fn rt_open_state(k: Known, names: LoopNames, st: RSt, methods: List<Nat>, h: Handle, tys: List<Handle>, levels: List<Nat>) → Tac<Opened2> {
+    let o <- open(h, "state").bind(λ c => rt_loop_ok("a loop's state", c));
+    let xs <- rt_loop_locals(o.local.ref, tys);
+    let value <- rt_state_value(names, xs);
+    pure(Opened2(k.naming(Cons(FieldWhole(o.local.ref.id, "value", value), k.named)), rt_bind_locals(st, xs, levels),
+        IoKnown(o.local.ref.id, methods, []), rt_last_ref(o.local.ref, xs), o.body, o.local.ref))
+}
+
+fn rt_types(parts: List<Handle>) → Tac<List<Handle>> {
+    match parts {
+        Nil => pure([]),
+        Cons(p, rest) => infer(Hd(p)).bind(λ c => rt_loop_ok("a local's type", c)).bind(λ t => rt_types(rest).bind(λ ts => pure(Cons(t, ts)))),
+    }
+}
+
+fn rt_state_count_of(fuel: Nat, mutated: Nat, sv: Head) → Tac<Nat> {
+    match sv {
+        HGlobal(_, _, args) => match args.nth(1) { Some(rest) => rt_state_count(fuel, mutated, rest), None => rt_refuse("a loop's state without its locals") },
+        _ => rt_refuse("a loop's state that is not `Mutated(io, locals)`"),
+    }
+}
+
+fn rt_spell(e: Expr) → Tac<Handle> { next_spelling(e).bind(λ c => rt_loop_ok("a loop's step at its state", c)) }
+
+
+// The arm of a `Bool` match for `True` or `False`, by its constructor.
+fn rt_bool_arm(m: MatchInfo, which: String) → Tac<Handle> {
+    match m.arms.find(λ a => Known::str_same(a.ctor, which)) {
+        Some(a) => rt_arm_body(m, a),
+        None => rt_refuse("a loop's test without its `" ++ which ++ "` arm"),
+    }
+}
+
+// `ret(x)`: the result of a pass or of the program, in `Partial`.
+fn rt_returned(names: LoopNames, h: Handle) → Tac<Handle> {
+    view(h).bind(λ v => match v {
+        HGlobal(g, _, args) => match g.id.same(names.ret) {
+            True => match args.rev() { Cons(x, _) => pure(x), Nil => rt_refuse("`Pointed::ret` without its value") },
+            False => rt_refuse("a loop's pass that does not end in `Continue` of its state"),
+        },
+        _ => rt_refuse("a loop's pass that does not end in `Continue` of its state"),
+    })
+}
+
+fn rt_step_payload(h: Handle, which: String) → Tac<Handle> {
+    view(h).bind(λ v => match v {
+        HCtor(_, _, name, fields) => match Known::str_same(rt_base_name(name), which) {
+            True => match fields.rev() { Cons(x, _) => pure(x), Nil => rt_refuse("`" ++ which ++ "` without its state") },
+            False => rt_refuse("a loop's arm ends in `" ++ name ++ "`, not `" ++ which ++ "`"),
+        },
+        _ => rt_refuse("a loop's arm that does not end in `" ++ which ++ "` of its state"),
+    })
+}
+
+// Where each of the loop's `d` variables is at the end of a pass of depth
+// `e`: a component at its new value's level, any other at its own.
+fn rt_rebind(d: Nat, e: Nat, olds: List<Nat>, news: List<Nat>) → List<Nat> {
+    List::range(d).map(λ i => {
+        let level = d - Succ(i);
+        match rt_assoc(olds.zip(news), level) { Some(l) => e - Succ(l), None => e - Succ(level) }
+    })
+}
+
+// A pass's new components, each a variable (no copy: the pass ends here).
+fn rt_loop_comps_after(fuel: Nat, k: Known, w: LoopWalk, parts: List<Handle>) → Tac<Pair<LoopWalk, List<Nat>>> {
+    match parts {
+        Nil => pure(Pair(w, [])),
+        Cons(p, rest) => {
+            let r <- rt_go(fuel, k.at_world(w.io), w.st, p, True);
+            let next <- rt_loop_comps_after(fuel, k, LoopWalk(r.fst, w.segs, w.io, w.under), rest);
+            pure(Pair(next.fst, Cons(RSt::level(r.snd), next.snd)))
+        },
+    }
+}
+
+// The end: `Mutated(world, value)`.
+fn rt_io_done(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, h: Handle) → Tac<Pair<ELoop, Ty>> {
+    let s <- rt_state_split(fuel, names.io.mutated, 1, h);
+    let w1 <- rt_loop_calls(fuel, k, w, s.fst);
+    match s.snd {
+        Cons(value, _) => {
+            let r <- rt_go(fuel, k.at_world(w1.io), w1.st, value, False);
+            let t <- k.at_world(w1.io).ty_of(value);
+            pure(Pair(ELoop::Done(ESeg::close(ESeg::lets(r.fst.lets) ++ w1.segs, ETm::Pure(r.snd))), t))
+        },
+        Nil => rt_refuse("`Mutated` without its value"),
+    }
+}
+
+// `Iterate::then(init, step, kont)`.
+fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle, step: Handle, kont: Handle,
+    rest_of: Known → LoopWalk → Handle → Tac<Pair<ELoop, Ty>>) → Tac<Pair<ELoop, Ty>> {
+    let mutated = names.io.mutated;
+    let sty <- infer(Hd(init)).bind(λ c => rt_loop_ok("a loop's state's type", c));
+    let sv <- view(sty);
+    let n <- rt_state_count_of(fuel, mutated, sv);
+    let s <- rt_state_split(fuel, mutated, n, init);
+    // Before the loop: the calls to its world, then each component.
+    let w1 <- rt_loop_calls(fuel, k, w, s.fst);
+    let base = w1.st.depth;
+    let comps <- rt_loop_components(fuel, k, w1, base, s.snd, []);
+    let before = comps.fst.settle();
+    let d = before.st.depth;
+    let pre = ESeg::close(before.segs, ETm::Pure(Lit(Word(64), 0)));
+    // The step at a state of fresh locals.
+    let tys <- rt_types(s.snd);
+    let base_st = RSt(d, [], [], before.st.handles, before.st.locals, before.st.funs);
+    let os <- rt_open_state(k, names, base_st, w.io.methods, step, tys, comps.snd);
+    let m <- arms(os.body).bind(λ c => rt_loop_ok("a loop's test", c));
+    let rc <- rt_go(fuel, os.k.at_world(os.io), os.st, m.scrut, False);
+    let cond = RSt::wrap(rc.fst.lets, rc.snd);
+    let yes <- rt_bool_arm(m, "True");
+    let no <- rt_bool_arm(m, "False");
+    let next <- rt_returned(names, yes).bind(λ x => rt_step_payload(x, "Continue"));
+    let ns <- rt_state_split(fuel, mutated, n, next);
+    let pw <- rt_loop_calls(fuel, os.k, LoopWalk(RSt(d, [], [], os.st.handles, os.st.locals, rc.fst.funs), [], os.io, os.under), ns.fst);
+    let pc <- rt_loop_comps_after(fuel, os.k, pw, ns.snd);
+    let pass_walk = pc.fst.settle();
+    let pass = ESeg::close(pass_walk.segs, ETm::Pure(Lit(Word(64), 0)));
+    let rebind = rt_rebind(d, pass_walk.st.depth, comps.snd, pc.snd);
+    // The exit leaves the state as it is.
+    let out <- rt_returned(names, no).bind(λ x => rt_step_payload(x, "Break"));
+    let same <- defeq(Hd(out), Local(os.state));
+    let _ <- match same { True => pure(0), False => rt_refuse("a loop's exit that does not leave its state as it is") };
+    // The rest of the block, at the state the loop leaves.
+    let ok <- rt_open_state(k, names, RSt(d, [], [], before.st.handles, before.st.locals, pw.st.funs), w.io.methods, kont, tys, comps.snd);
+    let rest <- rest_of(ok.k, LoopWalk(ok.st, [], ok.io, ok.under), ok.body);
+    pure(Pair(ELoop::Seq(pre, ELoop::While(cond, pass, rebind, rest.fst)), rest.snd))
+}
+
+// The program from `t` on: the computation since the last loop is in `w`.
+fn rt_io_eloop(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, t: Handle) → Tac<Pair<ELoop, Ty>> {
+    match fuel {
+        Zero => rt_refuse("more loops than the reflector's fuel"),
+        Succ(f) => view(t).bind(λ v => match v {
+            HGlobal(g, _, args) => match g.id.same(names.then) {
+                True => match args {
+                    Cons(init, a1) => match a1 {
+                        Cons(step, a2) => match a2 {
+                            Cons(kont, _) => rt_io_while(f, k, names, w, init, step, kont, λ k2 w2 h2 => rt_io_eloop(f, k2, names, w2, h2)),
+                            Nil => rt_refuse("a loop without the rest of its block"),
+                        },
+                        Nil => rt_refuse("a loop without its step"),
+                    },
+                    Nil => rt_refuse("a loop without its state"),
+                },
+                False => match g.id.same(names.ret) {
+                    True => match args.rev() {
+                        Cons(x, _) => rt_io_done(f, k, names, w, x),
+                        Nil => rt_refuse("`Pointed::ret` without its value"),
+                    },
+                    False => rt_refuse("an effectful body ends in `Mutated(io, value)`, `ret` of it, or a `while`"),
+                },
+            },
+            HCtor(_, _, _, _) => rt_io_done(f, k, names, w, t),
+            HMatch(_) => rt_refuse("an effectful body that branches over its world is not reflected yet (design §8.4)"),
+            _ => rt_refuse("an effectful body ends in `Mutated(io, value)`, `ret` of it, or a `while`"),
+        }),
+    }
+}
+
+// An effectful function with loops: its first parameter the world, the
+// rest data.
+fn rt_io_reflect_loop_fun(fuel: Nat, k: Known, names: LoopNames, g: Nat) → Tac<LoopFun> {
+    let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
+    let bv <- view(b);
+    match bv {
+        HLam(dom) => {
+            let dh <- rt_io_head(dom);
+            match dh.map(λ d => d.same(names.io.io)).unwrap_or(False) {
+                False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
+                True => {
+                    let o <- open(b, "io").bind(λ c => rt_accepted("its world", c));
+                    let io = IoKnown(o.local.ref.id, names.io.methods, []);
+                    let p <- rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body);
+                    let under = match p.fst.fst.locals { Cons(x, _) => LocalRef(x.fst), Nil => o.local.ref };
+                    let prog <- rt_io_eloop(fuel, k, names, LoopWalk(p.fst.fst, [], io, under), p.snd);
+                    pure(LoopFun(p.fst.snd, prog.snd, prog.fst))
+                },
+            }
+        },
+        _ => rt_refuse("an effectful function takes its world `io: Io` first"),
+    }
+}
+
+fn rt_loop_names() → Tac<LoopNames> {
+    let ms <- rt_globals(rt_io_method_names());
+    let io <- rt_global("Io");
+    let mu <- rt_global("Mutated");
+    let then <- rt_global("Iterate::then");
+    let ret <- rt_global("Pointed::ret");
+    let state <- rt_global("Io::state");
+    let itself <- rt_global("rt_loop_itself");
+    pure(LoopNames(IoNames(io, mu, ms), then, ret, state, itself))
+}
+
+fn rt_loop_funs(k: Known, names: LoopNames, gs: List<Nat>) → Tac<List<LoopFun>> {
+    match gs {
+        Nil => pure([]),
+        Cons(g, rest) => rt_io_reflect_loop_fun(4096, k, names, g).bind(λ f => rt_loop_funs(k, names, rest).bind(λ fs => pure(Cons(f, fs)))),
+    }
+}
+
+fn rt_io_reflect_loop(efuns: List<String>, funs: List<String>, recs: List<String>) → Tac<List<LoopFun>> {
+    let k <- rt_known(funs, recs);
+    let es <- rt_globals(efuns);
+    let names <- rt_loop_names();
+    rt_loop_funs(k, names, es)
+}
+
+// ---------------------------------------------------------------------------
+// Equality and rendering, for the check and its failures.
+
+fn ELoop::same(self p: ELoop) → ELoop → Bool {
+    match p {
+        Done(t) => λ q => match q { Done(u) => t.same(u), _ => False },
+        Seq(t, rest) => λ q => match q { Seq(u, rest2) => t.same(u).and(rest.same(rest2)), _ => False },
+        While(c, body, rebind, rest) => λ q => match q {
+            While(c2, body2, rebind2, rest2) => c.same(c2).and(body.same(body2)).and(Tm::nats_same(rebind, rebind2)).and(rest.same(rest2)),
+            _ => False,
+        },
+    }
+}
+
+fn ELoop::show(self p: ELoop) → String {
+    match p {
+        Done(t) => "Done(" ++ t.show() ++ ")",
+        Seq(t, rest) => "Seq(" ++ t.show() ++ ", " ++ rest.show() ++ ")",
+        While(c, body, rebind, rest) => "While(" ++ c.show() ++ ", " ++ body.show() ++ ", [" ++ rt_nats(rebind) ++ "], " ++ rest.show() ++ ")",
+    }
+}
+
+fn LoopFun::same(self f: LoopFun, g: LoopFun) → Bool {
+    Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.prog.same(g.prog))
+}
+
+fn LoopFun::show(self f: LoopFun) → String {
+    "LoopFun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.prog.show() ++ ")"
+}
+
+fn rt_loop_compare(got: List<LoopFun>, expected: List<LoopFun>) → Tac<Expr> {
+    match got {
+        Nil => match expected {
+            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))),
+            Cons(_, _) => rt_refuse("fewer functions reflected than expected"),
+        },
+        Cons(g, rest) => match expected {
+            Nil => rt_refuse("more functions reflected than expected"),
+            Cons(e, more) => match g.same(e) {
+                True => rt_loop_compare(rest, more),
+                False => rt_refuse("the reflection differs:\n  got      " ++ g.show() ++ "\n  expected " ++ e.show()),
+            },
+        },
+    }
+}
+
+// The check `lib/_tests` runs: the reflection of the effectful functions
+// `efuns`, loops and all, is `expected`, function by function.
+fn reflects_io_loop_as(efuns: List<String>, funs: List<String>, recs: List<String>, expected: List<LoopFun>) → Tac<Expr> {
+    rt_io_reflect_loop(efuns, funs, recs).bind(λ got => rt_loop_compare(got, expected))
+}
