@@ -415,7 +415,10 @@ In order:
 4. **`runtime fn main(mut io: Io, args: Args) → BitVec(64)`** publishing a
    `Source` that `write-elf` compiles as it compiles a builder tool today.
    This needs byte and string literals in programs and implicit compiler
-   imports for program files.
+   imports for program files. *Designed (2026-11-15, proposed):*
+   `docs/native/io-programs-design.md`, the reflector's loops, the bridge
+   from the surface `while` to `ELoop::sem`, the generator's program group
+   and `write-elf` by path.
 5. **The customers.** `cat FILE…`, `wc` and `head -n` are rewritten as
    `runtime fn`s over `Io`, pass the same GNU tests, and their builder
    versions are deleted.
