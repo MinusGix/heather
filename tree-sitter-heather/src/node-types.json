@@ -2928,10 +2928,30 @@
     "fields": {
       "body": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "call": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "cases": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "match_body",
             "named": true
           }
         ]
@@ -7136,6 +7156,10 @@
   },
   {
     "type": "in",
+    "named": false
+  },
+  {
+    "type": "induct",
     "named": false
   },
   {

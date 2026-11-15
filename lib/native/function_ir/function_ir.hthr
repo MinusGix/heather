@@ -12,6 +12,7 @@
 import bitvec;
 import bitvec_bytes;
 import bitvec_resize;
+import bitvec_rotate;
 import bool;
 import list;
 import list_window;
@@ -89,7 +90,7 @@ inductive Node {
     // the buffer's end reads zero, as `BufferLoad`'s does (`buffer_word`).
     // Total and defined by bytes, so a rewrite between byte loads and one
     // wide load needs no premise: whether the bytes are inside is the
-    // lowering's to know (docs/optimizer-design.md, step 5).
+    // lowering's to know (docs/native/optimizer-design.md, step 5).
     WideLoad(bytes: Nat, output: Nat, buffer: Nat, index: Nat),
     // The `8 * bytes`-bit word `value` stored from `index`, least significant
     // byte first, each byte where the buffer has one and nothing past its
@@ -99,6 +100,11 @@ inductive Node {
     // The bytes of a `width`-bit word reversed (`BitVec::swap_bytes`); the
     // lowering takes `width` 32.
     ByteSwap(width: Nat, output: Nat, source: Nat),
+    // `value` rotated right by the immediate `amount` (`BitVec::rotr`,
+    // defined as the shift pair `value >> amount | value << (width -
+    // amount)`, so the node and the pair it replaces mean the same by
+    // unfolding: `rotate_right_of_shifts`); the lowering takes `width` 32.
+    RotateRight(width: Nat, output: Nat, value: Nat, amount: Nat),
 }
 
 record Region {
@@ -130,6 +136,7 @@ fn node_output(node: Node) → Port {
         WideLoad(bytes, output, _, _) => Port(output, 8 * bytes),
         WideStore(bytes, output, _, _, _) => Port(output, 8 * bytes),
         ByteSwap(width, output, _) => Port(output, width),
+        RotateRight(width, output, _, _) => Port(output, width),
     }
 }
 
@@ -401,6 +408,8 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
              HasAvailableDirectoryPort(directory, value, 8 * bytes, index)),
         ByteSwap(width, output, source) =>
             UnaryImmediateNodeIndexed(directory, index, width, output, source),
+        RotateRight(width, output, value, _) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, value),
     }
 }
 
@@ -717,6 +726,76 @@ theorem buffer_word_four(buffers: Buffers(), buffer, start: Nat):
 // A byte as a word, zero-extended, as a load leaves it in a register.
 fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
 
+// The `count` bytes of buffer `buffer` from byte `start` as one word, the
+// first the most significant: what shifts and ors make of byte loads read
+// in big-endian order. Past eight bytes the first are shifted out, as
+// they are in code that joins them so.
+fn buffer_join(buffers: Buffers(), buffer, start, count: Nat) → BitVec(64) {
+    match count {
+        Zero => BitVec::zero(),
+        Succ(n) => buffer_join(buffers, buffer, start, n).shift_left(8).bor(byte_word(buffer_byte(buffers, buffer, start + n))),
+    }
+}
+
+// One byte joined is the word a `BufferLoad` reads.
+theorem buffer_join_one(buffers: Buffers(), buffer, start: Nat): buffer_join(buffers, buffer, start, 1) = byte_word(buffer_byte(buffers, buffer, start)) {
+    BitVec::bor_zero_l(64, byte_word(buffer_byte(buffers, buffer, start)))
+}
+
+// Joined bytes split anywhere: the first `n` shifted past the `m` after
+// them. Nothing is asked of the counts, since a byte shifted out on one
+// side is shifted out on the other.
+theorem buffer_join_split(buffers: Buffers(), buffer, start, n, m: Nat):
+    buffer_join(buffers, buffer, start, n + m) =
+        buffer_join(buffers, buffer, start, n).shift_left(8 * m).bor(buffer_join(buffers, buffer, start + n, m)) {
+    match m {
+        Zero => sym(BitVec::bor_zero_r(64, buffer_join(buffers, buffer, start, n))),
+        Succ(k, ih) => {
+            let a = buffer_join(buffers, buffer, start, n);
+            let b = buffer_join(buffers, buffer, start + n, k);
+            let c = byte_word(buffer_byte(buffers, buffer, start + (n + k)));
+            let step: (a.shift_left(8 * k).bor(b).shift_left(8) = a.shift_left(8 * k + 8).bor(b.shift_left(8))) =
+                trans(a.shift_left(8 * k).shift_left_bor(b, 8), cong_fn(λ (z: BitVec(64)) => z.bor(b.shift_left(8)), sym(a.shift_left_add(8 * k, 8))));
+            trans(cong_fn(λ (z: BitVec(64)) => z.shift_left(8).bor(c), ih),
+                trans(cong_fn(λ (z: BitVec(64)) => z.bor(c), step),
+                    trans(BitVec::bor_assoc(64, a.shift_left(8 * k + 8), b.shift_left(8), c),
+                        cong_fn(λ (i: Nat) => a.shift_left(8 * k + 8).bor(b.shift_left(8).bor(byte_word(buffer_byte(buffers, buffer, i)))),
+                            sym(Nat::add_assoc(start, n, k))))))
+        },
+    }
+}
+
+// Four bytes joined are the four as one load reads them, swapped and
+// widened: the identity a word load in place of four byte loads rests on.
+theorem buffer_join_four(buffers: Buffers(), buffer, start: Nat):
+    buffer_join(buffers, buffer, start, 4) = BitVec::ofNat(buffer_word(buffers, buffer, start, 4).swap_bytes().toNat()) {
+    let b0 = buffer_byte(buffers, buffer, start);
+    let b1 = buffer_byte(buffers, buffer, start + 1);
+    let b2 = buffer_byte(buffers, buffer, start + 2);
+    let b3 = buffer_byte(buffers, buffer, start + 3);
+    let c0 = byte_word(b0);
+    let c1 = byte_word(b1);
+    let c2 = byte_word(b2);
+    let c3 = byte_word(b3);
+    let first: (BitVec::zero(n := 64).shift_left(8).bor(c0) = c0) = BitVec::bor_zero_l(64, c0);
+    let second: (c0.shift_left(8).bor(c1).shift_left(8) = c0.shift_left(16).bor(c1.shift_left(8))) =
+        trans(c0.shift_left(8).shift_left_bor(c1, 8), cong_fn(λ (z: BitVec(64)) => z.bor(c1.shift_left(8)), sym(c0.shift_left_add(8, 8))));
+    let third: (c0.shift_left(16).bor(c1.shift_left(8)).bor(c2).shift_left(8) = c0.shift_left(24).bor(c1.shift_left(16)).bor(c2.shift_left(8))) =
+        trans(c0.shift_left(16).bor(c1.shift_left(8)).shift_left_bor(c2, 8), cong_fn(λ (z: BitVec(64)) => z.bor(c2.shift_left(8)),
+            trans(c0.shift_left(16).shift_left_bor(c1.shift_left(8), 8),
+                trans(cong_fn(λ (p: BitVec(64)) => p.bor(c1.shift_left(8).shift_left(8)), sym(c0.shift_left_add(16, 8))),
+                    cong_fn(λ (q: BitVec(64)) => c0.shift_left(24).bor(q), sym(c1.shift_left_add(8, 8)))))));
+    let joined: (buffer_join(buffers, buffer, start, 4) = c0.shift_left(24).bor(c1.shift_left(16)).bor(c2.shift_left(8)).bor(c3)) =
+        trans(cong_fn(λ (z: BitVec(64)) => z.shift_left(8).bor(c1).shift_left(8).bor(c2).shift_left(8).bor(c3), first),
+            trans(cong_fn(λ (z: BitVec(64)) => z.bor(c2).shift_left(8).bor(c3), second), cong_fn(λ (z: BitVec(64)) => z.bor(c3), third)));
+    let word: (buffer_word(buffers, buffer, start, 4) = BitVec::of_bytes_le([b0, b1, b2, b3])) =
+        trans(buffer_word_four(buffers, buffer, start), sym(BitVec::of_bytes_le_four(b0, b1, b2, b3)));
+    trans(joined, trans(BitVec::be_join_32_swap(b0, b1, b2, b3),
+        trans(cong_fn(λ (w: BitVec(32)) => w.byte_swap(4).zero_extend(32), sym(word)),
+            trans(cong_fn(λ (w: BitVec(32)) => w.zero_extend(32), sym(BitVec::swap_bytes_32(buffer_word(buffers, buffer, start, 4)))),
+                sym(BitVec::ofNat_toNat_zero_extend(32, 32, buffer_word(buffers, buffer, start, 4).swap_bytes()))))))
+}
+
 // Entry `index` of a constant table, zero past its end (where validity
 // leaves no index).
 fn table_entry(entries: List<Nat>, index: Nat) → Nat {
@@ -781,7 +860,27 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
         WideStore(_, _, _, _, _) => True,
         ByteSwap(width, output, source) =>
             values(width, output) = values(width, source).swap_bytes(),
+        RotateRight(width, output, value, amount) =>
+            values(width, output) = values(width, value).rotr(amount),
     }
+}
+
+// The shift pair a rotation is spelled as, three nodes, means the rotation
+// (`BitVec::rotr` is the pair, so it is the OR's equation unfolded): what a
+// rule of the optimizer rewriting the pair into one `RotateRight` cites,
+// premises in the order the nodes are written (the right shift, the left
+// shift by what is left of the width, the OR of the two in that order).
+theorem rotate_right_of_shifts(values: Valuation(), width, output, value, amount, right, left: Nat,
+    shifted_right: NodeHolds(values, LogicalShiftRight(width, right, value, amount)),
+    shifted_left: NodeHolds(values, ShiftLeft(width, left, value, width - amount)),
+    joined: NodeHolds(values, BitOr(width, output, right, left))):
+    NodeHolds(values, RotateRight(width, output, value, amount))
+{
+    let pair: (values(width, right).bor(values(width, left)) =
+            values(width, value).shift_right(amount).bor(values(width, value).shift_left(width - amount))) =
+        trans(cong_fn(λ (x: BitVec(width)) => x.bor(values(width, left)), shifted_right),
+            cong_fn(λ (y: BitVec(width)) => values(width, value).shift_right(amount).bor(y), shifted_left));
+    trans(joined, pair)
 }
 
 // (A recursive call takes positional arguments only, so each recursive

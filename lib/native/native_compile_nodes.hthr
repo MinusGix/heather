@@ -122,6 +122,7 @@ theorem Node::run_other(self node: Node, values: Valuation(), buffers: Buffers()
         BitXor(width, output, left, right) => λ ne => BitXor(width, output, left, right).step_other(values, w, id, ne),
         ShiftLeft(width, output, value, amount) => λ ne => ShiftLeft(width, output, value, amount).step_other(values, w, id, ne),
         LogicalShiftRight(width, output, value, amount) => λ ne => LogicalShiftRight(width, output, value, amount).step_other(values, w, id, ne),
+        RotateRight(width, output, value, amount) => λ ne => RotateRight(width, output, value, amount).step_other(values, w, id, ne),
         ArithmeticShiftRight(width, output, value, amount) => λ ne => ArithmeticShiftRight(width, output, value, amount).step_other(values, w, id, ne),
         UnsignedLessThan(width, output, left, right) => λ ne => UnsignedLessThan(width, output, left, right).step_other(values, w, id, ne),
         SignedLessThan(width, output, left, right) => λ ne => SignedLessThan(width, output, left, right).step_other(values, w, id, ne),
@@ -215,6 +216,7 @@ theorem Node::run_wide(self node: Node, values, other: Valuation(), same: (x: Na
         WideLoad(_, _, _, _) => λ never => false_elim(never),
         WideStore(_, _, _, _, _) => λ never => false_elim(never),
         ByteSwap(_, _, _) => λ never => false_elim(never),
+        RotateRight(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -261,6 +263,7 @@ theorem Node::run_word(self node: Node, values: Valuation(), buffers: Buffers(),
         WideLoad(_, _, _, _) => λ never => false_elim(never),
         WideStore(_, _, _, _, _) => λ never => false_elim(never),
         ByteSwap(_, _, _) => λ never => false_elim(never),
+        RotateRight(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -337,6 +340,8 @@ theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
             Valuation::set_here(values, spare, ShiftLeft(width, spare, value, amount).value(values), width)),
         LogicalShiftRight(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
             Valuation::set_here(values, spare, LogicalShiftRight(width, spare, value, amount).value(values), width)),
+        RotateRight(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, RotateRight(width, spare, value, amount).value(values), width)),
         ArithmeticShiftRight(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
             Valuation::set_here(values, spare, ArithmeticShiftRight(width, spare, value, amount).value(values), width)),
         UnsignedLessThan(width, _, left, right) => cong_fn(λ (x: BitVec(1)) => x.toNat(),
@@ -376,6 +381,7 @@ theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Nod
         BitXor(_, _, _, _) => refl,
         ShiftLeft(_, _, _, _) => refl,
         LogicalShiftRight(_, _, _, _) => refl,
+        RotateRight(_, _, _, _) => refl,
         ArithmeticShiftRight(_, _, _, _) => refl,
         UnsignedLessThan(_, _, _, _) => refl,
         SignedLessThan(_, _, _, _) => refl,

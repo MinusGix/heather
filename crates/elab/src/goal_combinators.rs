@@ -1097,7 +1097,7 @@ fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -
 
 /// `t` with every β-redex `(λ x. b)(a)` contracted, under binders too, and
 /// nothing else reduced.
-fn beta_below(t: &Term) -> Term {
+pub(crate) fn beta_below(t: &Term) -> Term {
     match t {
         Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
             let fun = beta_below(fun);

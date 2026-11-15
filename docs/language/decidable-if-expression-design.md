@@ -81,7 +81,10 @@ hygienic name; a `Bool` or mixed condition reads `decide_true` as it reads
 the scrutinee, so `if h: b` still gives `h: b.IsTrue()`.
 
 A branch that never names `h` binds none, so a function whose branches do
-not use the evidence is a plain convoyed match on the bit. A proof that
+not use the evidence is a plain convoyed match on the bit. An enclosing
+block's `on` discharge (`on ?dec1 := …(n, h)`) counts as naming it: that
+goal is raised inside the branch, so both branches bind `h` when one names
+it (`Parser::names_in_enclosing_ons`, a read-ahead over the tokens). A proof that
 cases the same test (`if h: P { refl } else { … }`) abstracts that bit in
 the unfolded function: motive synthesis abstracts the scrutinee as written
 beside its stuck spelling (`matching::with_scrutinee`), since the convoy's

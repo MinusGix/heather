@@ -350,8 +350,14 @@ module.exports = grammar({
       'split', optional(seq(field('equation', $.identifier), ':')),
       field('value', $._expression), optional(seq('as', field('motive', $._expression))), ';',
     ),
-    goal_combinators: $ => seq(
-      'split_all', ';', 'all_goals', field('body', $.block),
+    goal_combinators: $ => choice(
+      seq('split_all', ';', 'all_goals', field('body', $.block)),
+      // Functional induction (docs/tactics/functional-induction-design.md):
+      // one block for every case, or an arm per case.
+      seq('induct', field('call', $._expression), choice(
+        seq(';', 'all_goals', field('body', $.block)),
+        field('cases', $.match_body),
+      )),
     ),
     on_statement: $ => seq(
       'on', choice(seq('decreasing', $.identifier), $.goal_reference, seq('_', ':', $._expression), $._pattern),

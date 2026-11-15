@@ -76,8 +76,11 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 
 // What an effectful body's reflection knows of its world: the capability's
 // local, the word-level methods that call Linux, and the calls made so far,
-// in order.
-record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
+// in order; the functions of the program a computation may lend a buffer
+// to (`ETm::Lend`), the table's order, and the calls of them made so far,
+// each with the variables its `Lend` bound the bytes it left (`after`) and
+// its word (`value`) to.
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes>, lends: List<Nat>, lent: List<CallRes> }
 
 // What the body of a function over a span it writes knows of that span
 // (`rt_file_reflect`, docs/native/native-one-compiler-design.md §2.6): the span
@@ -605,7 +608,9 @@ fn rt_field_of_value(k: Known, r: Handle, name: String) → Tac<Option<Handle>> 
             Some(_) => pure(None),
             None => k.is_repr_typed(r).bind(λ held => match held {
                 True => pure(None),
-                False => as_type(Global(ty)).bind(λ ct => match ct {
+                // The value's own type, so a type with parameters
+                // (`Mutated<A, B>`, a loop's state) has its constructor.
+                False => infer(Hd(r)).bind(λ ct => match ct {
                     Refused(_) => pure(None),
                     Accepted(t) => ctors(t).bind(λ cc => match cc {
                         Refused(_) => pure(None),
@@ -849,6 +854,25 @@ fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
     rt_named_record(k, r).bind(λ x => pure(x.and_then(λ id => Known::named_at(k.named, id, rt_base_name(name)))))
 }
 
+// A record that is a field of a local whose fields name terms (a loop's
+// state, `z.value`, rt_io_reflect_loop): the term, which is the record
+// written out, so a read of its field is the field's term.
+fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> {
+    match k.named {
+        Nil => pure(r),
+        Cons(_, _) => rt_field_read(r).bind(λ read => match read {
+            None => pure(r),
+            Some(p) => view(p.fst).bind(λ bv => match bv {
+                HLocal(x, xs) => match xs {
+                    Nil => pure(Known::named_at(k.named, x.id, rt_base_name(p.snd)).unwrap_or(r)),
+                    Cons(_, _) => pure(r),
+                },
+                _ => pure(r),
+            }),
+        }),
+    }
+}
+
 fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
@@ -866,7 +890,7 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
                 pure(kept.finish(h, operand, rr.snd))
             }),
         },
-        None => rt_field_of_value(k, r, name).bind(λ value => match value {
+        None => rt_settle_named(k, r).bind(λ r2 => rt_field_of_value(k, r2, name)).bind(λ value => match value {
             Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
             None => rt_field_at(f, k, st, h, operand, r, name, step),
         }),
@@ -978,6 +1002,10 @@ fn IoKnown::is_method(self io: IoKnown, g: GlobalRef) → Bool {
     match Known::index(io.methods, g.id, 0) { Some(_) => True, None => False }
 }
 
+fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
+    match Known::index(io.lends, g.id, 0) { Some(_) => True, None => False }
+}
+
 // The calls a world has been through, the first first: the parameter has
 // been through none, and `m(w, …).after` through `w`'s and then `m`.
 fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
@@ -990,6 +1018,13 @@ fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
+                    // The world of a loop's state (`z.after`, where the
+                    // world is the state `z`, rt_io_reflect_loop): where
+                    // the pass's chain starts.
+                    HLocal(x, _) => match x.id.same(io.world) {
+                        True => pure([]),
+                        False => rt_refuse("a world read out of a record that is not the loop's state"),
+                    },
                     HGlobal(g, cname, args) => match io.is_method(g) {
                         True => match args {
                             Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => pure(cs ++ [c])),
@@ -1064,6 +1099,16 @@ fn rt_file_answer_in(cs: List<CallRes>, g: Nat, r: Handle) → Tac<Option<CallRe
     }
 }
 
+// The call of a lent function `r` names among those made so far: the same
+// handle, or a copy of one (the elaborator repeats a call wherever its
+// record is read).
+fn rt_lent_answer(io: IoKnown, r: Handle) → Tac<Option<CallRes>> {
+    match rt_call_by_handle(io.lent, r.id) {
+        Some(a) => pure(Some(a)),
+        None => view(r).bind(λ v => match v { HGlobal(g, _, _) => rt_file_answer_in(io.lent, g.id, r), _ => pure(None) }),
+    }
+}
+
 fn rt_file_answer(fk: FileKnown, r: Handle) → Tac<Option<CallRes>> {
     match rt_call_by_handle(fk.calls, r.id) {
         Some(a) => pure(Some(a)),
@@ -1100,8 +1145,28 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
                 }),
             },
             False => view(r).bind(λ rv => match rv {
+                // A field of a lent function's answer: a variable its `Lend`
+                // bound, once the call is made (`rt_lend_calls`).
+                HGlobal(g, gname, _) => match io.is_lent(g) {
+                    True => rt_lent_answer(io, r).bind(λ found => match found {
+                        Some(a) => match rt_answer_field(a.fields, rt_base_name(name)) {
+                            Some(l) => pure(st.finish(h, operand, Var(l))),
+                            None => rt_refuse("`" ++ name ++ "` is not a field of `" ++ gname ++ "`'s answer: its bytes `after` and its word `value`"),
+                        },
+                        None => rt_refuse("an answer of `" ++ gname ++ "` read where the call is not made: a lent function is called where a call on Linux, a loop's pass or the end needs its answer"),
+                    }),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
                 HLocal(x, _) => match x.id.same(io.world) {
-                    True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    // A loop's state holds the world and the locals; a read
+                    // of one of its locals names a term (`k.named`).
+                    True => match Known::named_at(k.named, x.id, rt_base_name(name)) {
+                        Some(_) => match Known::str_same(name, "after") {
+                            True => rt_refuse("the world after a loop's pass used as a value: it is threaded on to the next call, never runtime data"),
+                            False => rt_field(f, k, st, h, operand, r, name, step),
+                        },
+                        None => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    },
                     False => rt_field(f, k, st, h, operand, r, name, step),
                 },
                 HField(c, inner, _) => match Known::str_same(inner, "value") {

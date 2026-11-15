@@ -1,0 +1,265 @@
+// Tidying (docs/native/optimizer-design.md §3.1, §3.2): copies read through and
+// nodes nothing reads dropped, as two plans for the replayer
+// (`function_ir_replay.hthr`) and the searchers that find them.
+//
+// Inlining leaves a callee's parameters as moves of the call's arguments
+// (`Function::inlined`). The lowering names a buffer by two of a scope's
+// values, its address and its length, and accepts a load where an arm
+// compared the index with that very length (`File::bounded`), so a body
+// that compares with a copy of it is refused. `copy_plan` has every node,
+// call and loop read what a copy copies (`Step::Swap`, `Plan::Args`,
+// `Plan::Inputs`), and `dead_plan` then drops the moves, and whatever else
+// nothing reads.
+//
+// Nothing here is trusted: the replayer checks each swap against the facts
+// it has learned, and the lowering refuses a body that reads an id no node
+// writes. `tidy_stage` is the replayer twice, so its theorem is the
+// replayer's.
+//
+// The searchers are run by an evaluator that shares a function's argument
+// and not a pattern's variables, so a recursive result that is read twice
+// is bound with `shared`.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import function_ir_stage;
+import function_ir_replay;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import option;
+import pair;
+
+// ---------------------------------------------------------------------------
+// Copies read through
+
+// A copy a sweep has passed: at `width`, the id written is `source`.
+record Copy { width: Nat, source: Nat }
+
+// The copies so far, by the id written, and the sums, differences and
+// shifts of words so far as they read through those, by the first id each
+// reads.
+record Copies { by: NatMap<List<Copy>>, made: NatMap<List<Node>> }
+
+fn Copies::none() → Copies { Copies(NatMap::empty(), NatMap::empty()) }
+
+fn copies_find(found: List<Copy>, width, id: Nat) → Nat {
+    match found { Nil => id, Cons(copy, rest) => match copy.width.same(width) { True => copy.source, False => copies_find(rest, width, id) } }
+}
+
+// What to read where `id` is read at `width`: what it copies, or itself.
+fn Copies::read(self copies: Copies, width, id: Nat) → Nat {
+    match nat_map_get(copies.by, id) { None => id, Some(found) => copies_find(found, width, id) }
+}
+
+fn Copies::read_all(self copies: Copies, ids: List<Nat>) → List<Nat> { ids.map(λ (id: Nat) => copies.read(64, id)) }
+
+fn Copies::learn(self copies: Copies, node: Node) → Copies {
+    match node {
+        Move(w, o, s) => Copies(nat_map_set(copies.by, o, Cons(Copy(w, copies.read(w, s)), match nat_map_get(copies.by, o) { None => [], Some(found) => found })),
+            copies.made),
+        _ => copies,
+    }
+}
+
+fn swap_one(old, a: Nat) → Step { match old.same(a) { True => Keep, False => Swap(a, 0) } }
+fn swap_two(left, right, a, b: Nat) → Step { match left.same(a) && right.same(b) { True => Keep, False => Swap(a, b) } }
+
+// The step that has a node read through the copies.
+fn Node::read_through(self node: Node, copies: Copies) → Step {
+    match node {
+        Const(_, _, _) => Keep,
+        Move(w, _, s) => swap_one(s, copies.read(w, s)),
+        Add(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        Sub(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        BitAnd(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        BitOr(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        BitXor(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        ShiftLeft(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        LogicalShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        RotateRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        ArithmeticShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        UnsignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        SignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        Equal(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
+        BufferLoad(_, _, i) => swap_one(i, copies.read(64, i)),
+        BufferStore(_, _, i, v) => swap_two(i, v, copies.read(64, i), copies.read(64, v)),
+        Resize(from, _, _, s) => swap_one(s, copies.read(from, s)),
+        SignResize(from, _, _, s) => swap_one(s, copies.read(from, s)),
+        TableRead(_, _, n, i, _) => swap_one(i, copies.read(n, i)),
+        WideLoad(_, _, _, i) => swap_one(i, copies.read(64, i)),
+        WideStore(n, _, _, i, v) => swap_two(i, v, copies.read(64, i), copies.read(8 * n, v)),
+        ByteSwap(w, _, s) => swap_one(s, copies.read(w, s)),
+    }
+}
+
+// A node whose repeat is written as a move of the first (`Step::Again`): a
+// sum, a difference or a shift of words, as it reads through the copies,
+// and the ids it then reads. Not a comparison, which the lowering reads a
+// bound from where it stands, nor a constant, which costs less written
+// again than kept in a register.
+record Shape { node: Node, a: Nat, b: Nat }
+
+fn Node::shape(self node: Node, copies: Copies) → Option<Shape> {
+    match node {
+        Add(w, o, l, r) => w.same(64).then(shared(copies.read(w, l), λ a => shared(copies.read(w, r), λ b => Some(Shape(Add(w, o, a, b), a, b))))),
+        Sub(w, o, l, r) => w.same(64).then(shared(copies.read(w, l), λ a => shared(copies.read(w, r), λ b => Some(Shape(Sub(w, o, a, b), a, b))))),
+        ShiftLeft(w, o, v, n) => w.same(64).then(shared(copies.read(w, v), λ a => Some(Shape(ShiftLeft(w, o, a, n), a, 0)))),
+        LogicalShiftRight(w, o, v, n) => w.same(64).then(shared(copies.read(w, v), λ a => Some(Shape(LogicalShiftRight(w, o, a, n), a, 0)))),
+        _ => None,
+    }
+}
+
+// The id an earlier node of the same computation wrote.
+fn nodes_computed(known: List<Node>, node: Node) → Option<Nat> {
+    match known {
+        Nil => None,
+        Cons(first, rest) => match first.at(0).same(node.at(0)) { True => Some(node_output(first).id), False => nodes_computed(rest, node) },
+    }
+}
+
+fn Copies::made_from(self copies: Copies, id: Nat) → List<Node> { match nat_map_get(copies.made, id) { None => [], Some(known) => known } }
+
+fn Copies::computed(self copies: Copies, shape: Shape) → Option<Nat> { nodes_computed(copies.made_from(shape.a), shape.node) }
+
+fn Copies::noting(self copies: Copies, shape: Shape) → Copies {
+    Copies(copies.by, nat_map_set(copies.made, shape.a, Cons(shape.node, copies.made_from(shape.a))))
+}
+
+record CopyStep { step: Step, copies: Copies }
+
+// A node's step and the copies after it: a repeat is a copy of the first.
+fn Copies::pass(self copies: Copies, node: Node) → CopyStep {
+    match node.shape(copies) {
+        None => CopyStep(node.read_through(copies), copies.learn(node)),
+        Some(shape) => match copies.computed(shape) {
+            None => CopyStep(node.read_through(copies), copies.noting(shape)),
+            Some(at) => CopyStep(Again(at, shape.a, shape.b), copies.learn(shape.node.as_move(at))),
+        },
+    }
+}
+
+record CopySteps { steps: List<Step>, copies: Copies }
+
+fn copy_steps(nodes: List<Node>, copies: Copies) → CopySteps {
+    match nodes {
+        Nil => CopySteps(Nil, copies),
+        Cons(node, rest) => shared(copies.pass(node), λ here => shared(copy_steps(rest, here.copies), λ later =>
+            CopySteps(Cons(here.step, later.steps), later.copies))),
+    }
+}
+
+record CopyPlan { plan: Plan, copies: Copies }
+
+// A plan that has every node, call and loop read through the copies before
+// it, and a sum, a difference or a shift computed before be a move of the
+// first, as the replayer learns them: an arm from what was known before
+// the conditional, a loop's body from nothing.
+fn StructuredRegion::copy_plan(self region: StructuredRegion, copies: Copies) → CopyPlan {
+    match region {
+        Dataflow(body) => shared(copy_steps(body.nodes, copies), λ r => CopyPlan(Nodes(r.steps), r.copies)),
+        Sequence(prefix, continuation) => shared(copy_steps(prefix.nodes, copies), λ r =>
+            shared(continuation.copy_plan(r.copies), λ c => CopyPlan(Then(r.steps, c.plan), c.copies))),
+        Compose(prefix, continuation) => shared(prefix.copy_plan(copies), λ a =>
+            shared(continuation.copy_plan(a.copies), λ c => CopyPlan(Both(a.plan, c.plan), c.copies))),
+        Conditional(_, _, _, _, when_true, when_false) => CopyPlan(Arms(when_true.copy_plan(copies).plan, when_false.copy_plan(copies).plan), copies),
+        Call(_, arguments, _) => CopyPlan(Args(copies.read_all(arguments)), copies),
+        Loop(inputs, _, _, _, body, _, _, _, _) => CopyPlan(Inputs(copies.read_all(inputs), body.copy_plan(Copies::none()).plan), copies),
+        Lend(_, _, _, _) => CopyPlan(Same, copies),
+    }
+}
+
+fn Function::copy_plan(self function: Function) → Plan { function.body.copy_plan(Copies::none()).plan }
+
+// ---------------------------------------------------------------------------
+// Nodes nothing reads
+
+// The ids read after a point.
+record Live { by: NatMap<Bool> }
+
+fn Live::none() → Live { Live(NatMap::empty()) }
+fn Live::has(self live: Live, id: Nat) → Bool { match nat_map_get(live.by, id) { None => False, Some(_) => True } }
+fn Live::add(self live: Live, id: Nat) → Live { Live(nat_map_set(live.by, id, True)) }
+fn Live::add_all(self live: Live, ids: List<Nat>) → Live { match ids { Nil => live, Cons(id, rest) => live.add(id).add_all(rest) } }
+fn Live::add_ports(self live: Live, ports: Ports) → Live { live.add_all(ports.entries.map(λ (port: Port) => port.id)) }
+
+fn live_either(a, b: NatMap<Bool>) → NatMap<Bool> {
+    match a {
+        MEmpty => b,
+        MNode(here, even, odd) => match b {
+            MEmpty => a,
+            MNode(there, other_even, other_odd) => MNode(match here { None => there, Some(_) => here }, live_either(even, other_even), live_either(odd, other_odd)),
+        },
+    }
+}
+
+// What is read after a point on either of two paths from it.
+fn Live::either(self live: Live, other: Live) → Live { Live(live_either(live.by, other.by)) }
+
+record DeadSteps { steps: List<Step>, live: Live }
+
+// A bit's constant: what a decided comparison's bit is written as after it
+// (docs/native/optimizer-design.md §5.1). It says something of the node that
+// writes the bit, so it is kept, and so is that node.
+fn Node::says(self node: Node) → Bool { match node { Const(width, _, _) => width.same(1), _ => False } }
+
+// From the last node back: a node is dropped where it is no store, says
+// nothing of another, and nothing after it reads what it writes.
+fn dead_steps(nodes: List<Node>, live: Live) → DeadSteps {
+    match nodes {
+        Nil => DeadSteps(Nil, live),
+        Cons(node, rest) => shared(dead_steps(rest, live), λ later => match node.says() {
+            True => DeadSteps(Cons(Keep, later.steps), later.live.add(node_output(node).id)),
+            False => match node.stores() || later.live.has(node_output(node).id) {
+                True => DeadSteps(Cons(Keep, later.steps), later.live.add_all(node.reads())),
+                False => DeadSteps(Cons(Drop, later.steps), later.live),
+            },
+        }),
+    }
+}
+
+record DeadPlan { plan: Plan, live: Live }
+
+// A plan that drops every such node, and what the region reads. An arm is
+// swept with what is read after the conditional, whatever the other arm
+// reads: under a test at a function's entry the two arms write the same
+// ids, and what one arm reads of them the other may not. A loop's body is
+// swept with what is read after the loop counted as read after a pass:
+// more is kept than need be, never less.
+fn StructuredRegion::dead_plan(self region: StructuredRegion, live: Live) → DeadPlan {
+    match region {
+        Dataflow(body) => shared(dead_steps(body.nodes, live.add_ports(body.outputs)), λ r => DeadPlan(Nodes(r.steps), r.live.add_ports(body.inputs))),
+        Sequence(prefix, continuation) => shared(continuation.dead_plan(live), λ c =>
+            shared(dead_steps(prefix.nodes, c.live.add_ports(prefix.outputs)), λ r => DeadPlan(Then(r.steps, c.plan), r.live.add_ports(prefix.inputs)))),
+        Compose(prefix, continuation) => shared(continuation.dead_plan(live), λ c =>
+            shared(prefix.dead_plan(c.live), λ a => DeadPlan(Both(a.plan, c.plan), a.live))),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => shared(live.add_ports(outputs), λ after =>
+            shared(when_true.dead_plan(after), λ a => shared(when_false.dead_plan(after), λ b =>
+                DeadPlan(Arms(a.plan, b.plan), a.live.either(b.live).add(condition).add_ports(inputs).add_ports(arguments))))),
+        Call(_, arguments, _) => DeadPlan(Same, live.add_all(arguments)),
+        Loop(inputs, bound, _, _, body, exit, next, _, _) => shared(body.dead_plan(live.add_all(Cons(exit, next))), λ b =>
+            DeadPlan(Body(b.plan), b.live.add_all(Cons(bound, inputs)))),
+        Lend(views, _, arguments, _) => DeadPlan(Same, live.add_all(nodes_mentions(views_nodes(views))).add_all(views_homes(views) ++ arguments)),
+    }
+}
+
+fn Function::dead_plan(self function: Function) → Plan { function.body.dead_plan(Live::none().add(function.result)).plan }
+
+// ---------------------------------------------------------------------------
+// The stage
+
+// Copies read through, then what nothing reads dropped: the replayer
+// twice.
+fn tidy_stage(table: List<Rule>) → Stage<Pair<Plan, Plan>> { replay_stage(table).then(replay_stage(table)) }
+
+// The two plans for a function: the second is found in what the first
+// leaves.
+fn Function::tidy_plan(self function: Function, table: List<Rule>) → Option<Pair<Plan, Plan>> {
+    shared(function.copy_plan(), λ copies =>
+        replay_function(table, function, copies).map(λ copied => Pair(copies, copied.dead_plan())))
+}

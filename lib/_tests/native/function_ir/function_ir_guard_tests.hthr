@@ -1,0 +1,52 @@
+// Probes of the test at a function's entry
+// (lib/native/function_ir/function_ir_guard.hthr, docs/native/optimizer-design.md
+// §5.1): the function made, the stage's statement about a program, and
+// what is refused. Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_guard;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn nodes(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), ns, Ports([]))) }
+
+// The byte at i of a span, or zero: the span's home is 0, its length 1, i is 2.
+fn byte_or_zero() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, 1)
+}
+
+// Whether the length is below 16, at ids the function has none of.
+fn short() → Guard { Guard(6, [Const(64, 6, 16), UnsignedLessThan(64, 7, 1, 6)], 7) }
+
+// The function under the test: its body in both arms.
+theorem guarded_made(): guard_function(byte_or_zero(), short()) = Some(Function([0, 1, 2],
+    Compose(nodes([Const(64, 6, 16), UnsignedLessThan(64, 7, 1, 6)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(5, 64)]), byte_or_zero().body, byte_or_zero().body)), 5, 1)) { refl }
+
+// As a stage over a program of that one function, and what the stage owes:
+// the program made does whatever the program did.
+theorem guarded_run(): guard_stage().run([byte_or_zero()], [short()]) = Some([byte_or_zero().guarded(short())]) { refl }
+
+theorem guarded_keeps(f: Nat): ProgramRewrites([byte_or_zero()], [byte_or_zero().guarded(short())], f) {
+    guard_stage().run_rewrites([byte_or_zero()], [short()], [byte_or_zero().guarded(short())], guarded_run(), f)
+}
+
+// A bound some id of the function is not below is refused: the test's
+// nodes could then write a value the body reads.
+theorem low_bound(): guard_function(byte_or_zero(), Guard(5, [Const(64, 6, 16), UnsignedLessThan(64, 7, 1, 6)], 7)) = None { refl }
+
+// So is a test node writing an id below the bound,
+theorem writes_below(): guard_function(byte_or_zero(), Guard(6, [Const(64, 2, 16), UnsignedLessThan(64, 7, 1, 2)], 7)) = None { refl }
+
+// a test that stores,
+theorem test_stores(): guard_function(byte_or_zero(), Guard(6, [BufferStore(6, 0, 2, 2), UnsignedLessThan(64, 7, 1, 2)], 7)) = None { refl }
+
+// and a test node that reads what it writes.
+theorem reads_itself(): guard_function(byte_or_zero(), Guard(6, [Add(64, 6, 6, 1), UnsignedLessThan(64, 7, 1, 6)], 7)) = None { refl }
