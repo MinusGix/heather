@@ -9,7 +9,7 @@ from the data-representation discussion. They are reused, not downloaded twice.
 
 1. Brian Huffman and Ondřej Kunčar, *Lifting and Transfer: A Modular Design for
    Quotients in Isabelle/HOL* (CPP 2013).
-   [Local PDF](lifting-transfer-huffman-kuncar-cpp2013.pdf) ·
+   [Local PDF](papers/lifting-transfer-huffman-kuncar-cpp2013.pdf) ·
    [Author-hosted source](https://www21.in.tum.de/~kuncar/documents/huffman-kuncar-cpp2013.pdf).
    Read for the separation between relational theorem transfer and operation
    construction, and for a common treatment of quotients and subtypes. Inspect
@@ -18,7 +18,7 @@ from the data-representation discussion. They are reused, not downloaded twice.
 
 2. Matthieu Sozeau, *A New Look at Generalized Rewriting in Type Theory*
    (Journal of Formalized Reasoning 2(1), 2009; published online 2010).
-   [Local author preprint](generalized-rewriting-sozeau-2009.pdf) ·
+   [Local author preprint](papers/generalized-rewriting-sozeau-2009.pdf) ·
    [Author-hosted source](https://sozeau.gitlabpages.inria.fr/www/research/publications/A_New_Look_at_Generalized_Rewriting_in_Type_Theory.pdf) ·
    [Publication](https://doi.org/10.6092/issn.1972-5787/1574).
    Read for compositional compatibility proofs, higher-order rewriting,
@@ -27,7 +27,7 @@ from the data-representation discussion. They are reused, not downloaded twice.
 
 3. Jean-Philippe Bernardy, Patrik Jansson, and Ross Paterson, *Proofs for Free:
    Parametricity for Dependent Types* (JFP 22(2), 2012).
-   [Local PDF](proofs-for-free-bernardy-jansson-paterson-2012.pdf) ·
+   [Local PDF](papers/proofs-for-free-bernardy-jansson-paterson-2012.pdf) ·
    [Author-hosted source](https://www.staff.city.ac.uk/~ross/papers/proofs.pdf) ·
    [Publication](https://doi.org/10.1017/S0956796812000056).
    Read for relational translations that produce proofs from terms in pure
@@ -40,9 +40,9 @@ The latter two PDFs were downloaded from the listed author-hosted sources on
 
 ## Adjacent references already in docs
 
-- [CoqEAL / Refinements for Free](coqeal-refinements-for-free-cpp2013.pdf).
-- [Lammich / Automatic Data Refinement](autoref-lammich-itp2013.pdf).
-- [Fiat / ADT synthesis](fiat-adt-synthesis-popl2015.pdf).
+- [CoqEAL / Refinements for Free](papers/coqeal-refinements-for-free-cpp2013.pdf).
+- [Lammich / Automatic Data Refinement](papers/autoref-lammich-itp2013.pdf).
+- [Fiat / ADT synthesis](papers/fiat-adt-synthesis-popl2015.pdf).
 
 These were collected by [datarepr-separation](../issues/datarepr-separation.md).
 Consult them when connecting semantic transfer certificates to implementation

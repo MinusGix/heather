@@ -5,8 +5,8 @@
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **decisions taken 2026-09-30 (§6); probe V2 §4.1; slices N, A, B, C, D landed 2026-09-30 (§4.2, §3.1).** Owner: `issues/native-tr.md`.
-Builds on `docs/native-wc-design.md` (the state process, §4.8; the write loop
-at an offset, §5.2), `docs/native-syscall-failures-design.md` (failure paths
+Builds on `docs/archive/native-wc-design.md` (the state process, §4.8; the write loop
+at an offset, §5.2), `docs/archive/native-syscall-failures-design.md` (failure paths
 and histories) and `docs/fetched-step-determinism-design.md` (claims universal
 over runs).
 

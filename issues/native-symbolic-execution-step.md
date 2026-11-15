@@ -28,7 +28,7 @@ The kernel still checks every emitted term; nothing is trusted.
 
 ## Log
 
-- 2026-10-10: **Landed in-language, not as a `meta fn`: a computed obligation and one theorem** (`lib/elf64_straight.hthr`, `docs/native-straight-runs-design.md`). Closes the issue.
+- 2026-10-10: **Landed in-language, not as a `meta fn`: a computed obligation and one theorem** (`lib/elf64_straight.hthr`, `docs/archive/native-straight-runs-design.md`). Closes the issue.
 
     - `Straight(file, page, origin, goal, labels, l, n)(vars, state)` reads the `n` items ending at label `l` and states what running them comes to: a block's, load's or store's state is the item's own result, a store sets its slot in `vars`, a JCC is a pair of implications on its condition (the side a precondition rules out is `absurd`; the other is the branch left as a goal), a taken JCC or JMP ends at a leaf. `straight_runs` proves `goal(state)` from it for any `goal` with `StepsBack`; `cmd_straight` is it for the command's program.
     - `x86_64_asm` has `Load(WordLoad)` and `Store(WordStore)` items so the computation can read them; wc's bytes are unchanged (same sha256 as master).

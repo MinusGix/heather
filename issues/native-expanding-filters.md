@@ -7,7 +7,7 @@ created: 2026-10-01
 updated: 2026-10-21
 ---
 
-The stream filter (docs/native-stream-filter-design.md §1) emits at most one
+The stream filter (docs/archive/native-stream-filter-design.md §1) emits at most one
 byte per input byte, written in place behind the read cursor in the one RW
 page. A filter whose output can be longer than its input does not fit:
 

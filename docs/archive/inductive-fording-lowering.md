@@ -248,7 +248,7 @@ tier 0's sum-of-Σs.
 
 This is the single most consequential sentence in the document, and it
 corrects a reading the 2b acceptance prototype invites. That prototype's
-skeleton is `docs/inductive-tier1-lowering.md`'s exact-height encoding
+skeleton is `docs/archive/inductive-tier1-lowering.md`'s exact-height encoding
 `Σ(h : Nat). El (spine h)` — a scheme that was **retired as a generator
 path** on 2026-07-26 (`…tier1-wf-lowering.md` §9: linear declarations fold
 into `Wf`, and the height machinery is used by no lowering). So the
@@ -744,7 +744,7 @@ index needs no relaxation, only the right term.
 
 - **`absurd`/`inj` surface forms on a forded family**: "no-confusion on a
   forded family is not generated; the skeleton's own `absurd`/`inj` are
-  (docs/inductive-fording-lowering.md §11)." Same status as route 1 §7 —
+  (docs/archive/inductive-fording-lowering.md §11)." Same status as route 1 §7 —
   nothing has needed them.
 - **Multi-index**: route 1 §8.4's message, unchanged.
 - **A forded family as a written type argument** (`f<Term(3)>`): route 1's

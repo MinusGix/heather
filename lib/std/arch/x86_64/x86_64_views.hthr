@@ -81,6 +81,8 @@ theorem Loan::view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack
     Loan<M>(fetch, data, stack, top, views.spans(spans)) {
     let at = λ (v: Nat) (k: Nat) => views.byte_at(spans, v, k);
     let within: ((v: Nat) → (k: Nat) → k < views.size(v) → views.start(v) + k < spans.size(views.of(v))) = λ v k short => omega(short, viewed.inside(v));
+    let reach: ((v: Nat) → (k: Nat) → (n: Nat) → k + n <= views.size(v) → views.start(v) + k + n <= spans.size(views.of(v))) =
+        λ v k n fits => omega(fits, viewed.inside(v));
     let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
     Loan(
         room := loan.room,
@@ -94,41 +96,59 @@ theorem Loan::view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack
         under := λ memory k below word v j short =>
             j(sym(at(v, j)), λ a _ => data.read(stack.writes.store(memory, next_rip(stack.low, k), word_bytes(word)), a) = data.read(memory, a),
                 loan.under(memory, k, below, word, views.of(v), views.start(v) + j, within(v, j, short))),
-        writable := λ memory v k written short =>
-            j(sym(at(v, k)), λ a _ => stack.writes.writable(memory, a, 1),
-                loan.writable(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short))),
-        stored := λ memory v k written short byte =>
-            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, [byte]), a) = Some(byte),
-                loan.stored(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte)),
-        apart := λ memory v k written short byte u i other_short other => {
-            let in_v: (k < views.size(v)) = short;
+        writable := λ memory v k written short bytes fits =>
+            j(sym(at(v, k)), λ a _ => stack.writes.writable(memory, a, bytes.len()),
+                loan.writable(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), bytes,
+                    reach(v, k, bytes.len(), fits))),
+        stored := λ memory v k written short bytes fits t inside => {
+            let assoc: (views.start(v) + (k + t) = views.start(v) + k + t) = omega();
+            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, bytes), views.spans(spans).byte(v, k + t)) = bytes.nth(t),
+                j(sym(at(v, k + t)), λ c _ => data.read(stack.writes.store(memory, spans.byte(views.of(v), views.start(v) + k), bytes), c) = bytes.nth(t),
+                    j(sym(assoc), λ n _ => data.read(stack.writes.store(memory, spans.byte(views.of(v), views.start(v) + k), bytes),
+                            spans.byte(views.of(v), n)) = bytes.nth(t),
+                        loan.stored(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), bytes,
+                            reach(v, k, bytes.len(), fits), t, inside))))
+        },
+        apart := λ memory v k written short bytes fits u i other_short other => {
             let in_u: (i < views.size(u)) = other_short;
-            let differ: ((views.of(v) ≠ views.of(u)) ∨ (views.start(v) + k ≠ views.start(u) + i)) = match v.eq_dec(u) {
-                Inl(same) => Inr(match other {
-                    Inl(not_same) => false_elim(not_same(same)),
-                    Inr(not_at) => j(same, λ w _ => views.start(v) + k ≠ views.start(w) + i, λ eq => not_at(omega(eq))),
-                }),
+            let differ: ((views.of(v) ≠ views.of(u)) ∨
+                    ((views.start(u) + i < views.start(v) + k) ∨ (views.start(v) + k + bytes.len() <= views.start(u) + i))) = match v.eq_dec(u) {
+                Inl(same) => {
+                    let same_start: (views.start(v) = views.start(u)) = cong_fn<Nat, Nat>(λ w => views.start(w), same);
+                    Inr(match other {
+                        Inl(not_same) => false_elim(not_same(same)),
+                        Inr(outside) => match outside {
+                            Inl(below) => Inl(omega(below, same_start)),
+                            Inr(above) => Inr(omega(above, same_start)),
+                        },
+                    })
+                },
                 Inr(not_same) => match viewed.alone(v, u, written, not_same) {
                     Inl(spans_differ) => Inl(spans_differ),
                     Inr(lie_apart) => Inr(match lie_apart {
-                        Inl(before) => λ eq => omega(eq, before, in_v),
-                        Inr(after) => λ eq => omega(eq, after, in_u),
+                        Inl(before) => {
+                            let fits_v: (k + bytes.len() <= views.size(v)) = fits;
+                            Inr(omega(before, fits_v))
+                        },
+                        Inr(after) => Inl(omega(after, in_u)),
                     }),
                 },
             };
-            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, [byte]), views.spans(spans).byte(u, i)) =
+            j(sym(at(v, k)), λ a _ => data.read(stack.writes.store(memory, a, bytes), views.spans(spans).byte(u, i)) =
                     data.read(memory, views.spans(spans).byte(u, i)),
-                j(sym(at(u, i)), λ c _ => data.read(stack.writes.store(memory, spans.byte(views.of(v), views.start(v) + k), [byte]), c) = data.read(memory, c),
-                    loan.apart(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, views.of(u),
-                        views.start(u) + i, within(u, i, other_short), differ)))
+                j(sym(at(u, i)), λ c _ => data.read(stack.writes.store(memory, spans.byte(views.of(v), views.start(v) + k), bytes), c) = data.read(memory, c),
+                    loan.apart(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), bytes,
+                        reach(v, k, bytes.len(), fits), views.of(u), views.start(u) + i, within(u, i, other_short), differ)))
         },
-        keeps := λ memory v k written short byte j_ below =>
-            j(sym(at(v, k)), λ a _ => read_word(data, stack.writes.store(memory, a, [byte]), next_rip(stack.low, j_)) =
+        keeps := λ memory v k written short bytes fits j_ below =>
+            j(sym(at(v, k)), λ a _ => read_word(data, stack.writes.store(memory, a, bytes), next_rip(stack.low, j_)) =
                     read_word(data, memory, next_rip(stack.low, j_)),
-                loan.keeps(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, j_, below)),
-        keeps_code := λ memory v k written short byte bytes origin resident =>
-            j(sym(at(v, k)), λ a _ => CodeResident(fetch, stack.writes.store(memory, a, [byte]), bytes, origin),
-                loan.keeps_code(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), byte, bytes, origin, resident)),
+                loan.keeps(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), bytes,
+                    reach(v, k, bytes.len(), fits), j_, below)),
+        keeps_code := λ memory v k written short bytes fits code origin resident =>
+            j(sym(at(v, k)), λ a _ => CodeResident(fetch, stack.writes.store(memory, a, bytes), code, origin),
+                loan.keeps_code(memory, views.of(v), views.start(v) + k, viewed.allowed(v, written), within(v, k, short), bytes,
+                    reach(v, k, bytes.len(), fits), code, origin, resident)),
     )
 }
 
@@ -146,10 +166,12 @@ theorem Stack::wrote_in_view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
                 let v = put.witness;
                 let k = put.proof.witness;
                 let inside: (k < views.size(v)) = put.proof.proof.left.right;
+                let bytes = put.proof.proof.right.witness;
+                let fits: (k + bytes.len() <= views.size(v)) = put.proof.proof.right.proof.left;
                 Inr(Exists(views.of(v), Exists(views.start(v) + k,
                     ⟨⟨viewed.allowed(v, put.proof.proof.left.left), omega(inside, viewed.inside(v))⟩,
-                     Exists(put.proof.proof.right.witness,
-                        j(views.byte_at(spans, v, k), λ a _ => n = stack.writes.store(m, a, [put.proof.proof.right.witness]), put.proof.proof.right.proof))⟩)))
+                     Exists(bytes, ⟨omega(fits, viewed.inside(v)),
+                        j(views.byte_at(spans, v, k), λ a _ => n = stack.writes.store(m, a, bytes), put.proof.proof.right.proof.right)⟩)⟩)))
             },
         }, before, after, wrote)
 }
@@ -171,18 +193,21 @@ theorem Loan::view_outside<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
                 let k = put.proof.witness;
                 let written = put.proof.proof.left.left;
                 let inside: (k < views.size(v)) = put.proof.proof.left.right;
-                let differ: ((views.of(v) ≠ c) ∨ (views.start(v) + k ≠ t)) = match views.of(v).eq_dec(c) {
-                    Inl(same) => Inr(match outside(v, written, same) {
-                        Inl(below) => λ eq => omega(eq, below),
-                        Inr(above) => λ eq => omega(eq, above, inside),
-                    }),
-                    Inr(other) => Inl(other),
-                };
-                j(sym(put.proof.proof.right.proof), λ x _ => data.read(x, spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+                let bytes = put.proof.proof.right.witness;
+                let fits: (k + bytes.len() <= views.size(v)) = put.proof.proof.right.proof.left;
+                let differ: ((views.of(v) ≠ c) ∨ ((t < views.start(v) + k) ∨ (views.start(v) + k + bytes.len() <= t))) =
+                    match views.of(v).eq_dec(c) {
+                        Inl(same) => Inr(match outside(v, written, same) {
+                            Inl(below) => Inl(omega(below)),
+                            Inr(above) => Inr(omega(above, fits)),
+                        }),
+                        Inr(other) => Inl(other),
+                    };
+                j(sym(put.proof.proof.right.proof.right), λ x _ => data.read(x, spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
                     j(sym(views.byte_at(spans, v, k)),
-                        λ a _ => data.read(stack.writes.store(m, a, [put.proof.proof.right.witness]), spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
+                        λ a _ => data.read(stack.writes.store(m, a, bytes), spans.byte(c, t)) = data.read(before, spans.byte(c, t)),
                         trans(loan.apart(m, views.of(v), views.start(v) + k, viewed.allowed(v, written), omega(inside, viewed.inside(v)),
-                            put.proof.proof.right.witness, c, t, short, differ), held)))
+                            bytes, omega(fits, viewed.inside(v)), c, t, short, differ), held)))
             },
         }, before, after, refl, wrote)
 }
@@ -242,6 +267,29 @@ theorem readable_put_window<M>(data: ByteReadAccess<M>, before, after: M, a: Bit
      }⟩
 }
 
+// Bytes stored into a span from byte `k`: it reads its bytes with theirs
+// written over from `k` (one byte is `Loan::put_reads`).
+theorem Loan::store_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, inside: k < spans.size(b),
+    bytes: List<BitVec(8)>, fits: k + bytes.len() <= spans.size(b), xs: List<BitVec(8)>, whole: xs.len() = spans.size(b),
+    reads: Readable(data, memory, spans.at(b), xs)):
+    Readable(data, stack.writes.store(memory, spans.byte(b, k), bytes), spans.at(b), xs.put_window(k, bytes)) {
+    let after = stack.writes.store(memory, spans.byte(b, k), bytes);
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(spans.at(b), k).toNat() = spans.at(b).toNat() + k) =
+        BitVec::offset_toNat(64, spans.at(b), k, omega(loan.canonical(b), inside, wide));
+    let now: Readable(data, after, next_rip(spans.at(b), k), bytes) =
+        ⟨omega(value, loan.canonical(b), fits),
+         λ t short => trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ y => data.read(after, y), rip_compose(spans.at(b), k, t)),
+            loan.stored(memory, b, k, written, inside, bytes, fits, t, short))⟩;
+    readable_put_window(data, memory, after, spans.at(b), xs, bytes, k, omega(fits, whole), reads, now,
+        λ t short out => loan.apart(memory, b, k, written, inside, bytes, fits, b, t, j(whole, λ n _ => t < n, short),
+            Inr(match out {
+                Inl(below) => Inl(below),
+                Inr(past) => Inr(omega(past)),
+            })))
+}
+
 // A span no view to write is of reads what it did.
 theorem Loan::view_unwritten_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
     {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
@@ -289,25 +337,26 @@ theorem Loan::onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack
             j(here(b, i, short), λ a _ => data.read(stack.writes.store(memory, next_rip(stack.low, k), word_bytes(word)), next_rip(a, i)) =
                     data.read(memory, next_rip(a, i)),
                 loan.under(memory, k, below, word, b, i, within(b, i, short))),
-        writable := λ memory b k marked short =>
-            j(here(b, k, short), λ a _ => stack.writes.writable(memory, next_rip(a, k), 1),
-                loan.writable(memory, b, k, written(b, marked), within(b, k, short))),
-        stored := λ memory b k marked short byte =>
-            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), [byte]), next_rip(a, k)) = Some(byte),
-                loan.stored(memory, b, k, written(b, marked), within(b, k, short), byte)),
-        apart := λ memory b k marked short byte c i other_short differ =>
-            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), [byte]), other.byte(c, i)) =
+        writable := λ memory b k marked short bytes fits =>
+            j(here(b, k, short), λ a _ => stack.writes.writable(memory, next_rip(a, k), bytes.len()),
+                loan.writable(memory, b, k, written(b, marked), within(b, k, short), bytes, omega(fits, size(b)))),
+        stored := λ memory b k marked short bytes fits t inside =>
+            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), bytes), next_rip(a, k + t)) = bytes.nth(t),
+                loan.stored(memory, b, k, written(b, marked), within(b, k, short), bytes, omega(fits, size(b)), t, inside)),
+        apart := λ memory b k marked short bytes fits c i other_short differ =>
+            j(here(b, k, short), λ a _ => data.read(stack.writes.store(memory, next_rip(a, k), bytes), other.byte(c, i)) =
                     data.read(memory, other.byte(c, i)),
                 j(here(c, i, other_short),
-                    λ e _ => data.read(stack.writes.store(memory, spans.byte(b, k), [byte]), next_rip(e, i)) = data.read(memory, next_rip(e, i)),
-                    loan.apart(memory, b, k, written(b, marked), within(b, k, short), byte, c, i, within(c, i, other_short), differ))),
-        keeps := λ memory b k marked short byte i below =>
-            j(here(b, k, short), λ a _ => read_word(data, stack.writes.store(memory, next_rip(a, k), [byte]), next_rip(stack.low, i)) =
+                    λ e _ => data.read(stack.writes.store(memory, spans.byte(b, k), bytes), next_rip(e, i)) = data.read(memory, next_rip(e, i)),
+                    loan.apart(memory, b, k, written(b, marked), within(b, k, short), bytes, omega(fits, size(b)), c, i,
+                        within(c, i, other_short), differ))),
+        keeps := λ memory b k marked short bytes fits i below =>
+            j(here(b, k, short), λ a _ => read_word(data, stack.writes.store(memory, next_rip(a, k), bytes), next_rip(stack.low, i)) =
                     read_word(data, memory, next_rip(stack.low, i)),
-                loan.keeps(memory, b, k, written(b, marked), within(b, k, short), byte, i, below)),
-        keeps_code := λ memory b k marked short byte bytes origin resident =>
-            j(here(b, k, short), λ a _ => CodeResident(fetch, stack.writes.store(memory, next_rip(a, k), [byte]), bytes, origin),
-                loan.keeps_code(memory, b, k, written(b, marked), within(b, k, short), byte, bytes, origin, resident)),
+                loan.keeps(memory, b, k, written(b, marked), within(b, k, short), bytes, omega(fits, size(b)), i, below)),
+        keeps_code := λ memory b k marked short bytes fits code origin resident =>
+            j(here(b, k, short), λ a _ => CodeResident(fetch, stack.writes.store(memory, next_rip(a, k), bytes), code, origin),
+                loan.keeps_code(memory, b, k, written(b, marked), within(b, k, short), bytes, omega(fits, size(b)), code, origin, resident)),
     )
 }
 
@@ -323,11 +372,12 @@ theorem Stack::wrote_in_onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
                 let b = put.witness;
                 let k = put.proof.witness;
                 let inside: (k < other.size(b)) = put.proof.proof.left.right;
+                let bytes = put.proof.proof.right.witness;
+                let fits: (k + bytes.len() <= other.size(b)) = put.proof.proof.right.proof.left;
                 Inr(Exists(b, Exists(k,
                     ⟨⟨written(b, put.proof.proof.left.left), omega(inside, size(b))⟩,
-                     Exists(put.proof.proof.right.witness,
-                        j(at(b, omega(inside)), λ a _ => n = stack.writes.store(m, next_rip(a, k), [put.proof.proof.right.witness]),
-                            put.proof.proof.right.proof))⟩)))
+                     Exists(bytes, ⟨omega(fits, size(b)),
+                        j(at(b, omega(inside)), λ a _ => n = stack.writes.store(m, next_rip(a, k), bytes), put.proof.proof.right.proof.right)⟩)⟩)))
             },
         }, before, after, wrote)
 }

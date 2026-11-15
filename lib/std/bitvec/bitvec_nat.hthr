@@ -382,7 +382,7 @@ theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
 }
 
 // The modular image of a Nat at a width: `value` increments from zero. It is
-// how typed machine certificates carry a Nat (docs/native-bounded-loops-design.md
+// how typed machine certificates carry a Nat (docs/archive/native-bounded-loops-design.md
 // §9a): every equality about it is unconditional, and a bound is needed only
 // to read the word back as the Nat (`toNat_word_of_nat`).
 fn word_of_nat(n: Nat, value: Nat) → BitVec(n) { BitVec::zero().iterate_increment(value) }

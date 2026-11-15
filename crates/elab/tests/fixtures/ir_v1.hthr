@@ -1,5 +1,5 @@
 // FunctionIR v1 and `simulate` — the load-bearing spec object of certifying
-// compilation, written in Heather. Design: docs/ir-simulate-design.md;
+// compilation, written in Heather. Design: docs/archive/ir-simulate-design.md;
 // tracking issue: issues/ir-simulate-design.md. This is the first real
 // Heather library file in the repo; deviations of this implementation from
 // the design sketch are recorded in the doc's §13 (implementation notes).
@@ -1207,7 +1207,7 @@ theorem add_equiv_through_calls(a: Nat, b: Nat):
 }
 
 // ---------------------------------------------------------------------------
-// `Compile` v1 (docs/compile-typeclass-design.md): the certificate is an
+// `Compile` v1 (docs/archive/compile-typeclass-design.md): the certificate is an
 // ordinary record value. Per-signature and monomorphic — the value parameter
 // couples the instance to its spec function, `prog`/`entry` are the IR
 // production, and `cert` exports convergence to the embedded spec result in

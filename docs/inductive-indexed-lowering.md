@@ -27,7 +27,7 @@ scheme), written before any code per the tier discipline: a lowering bug
 produces a checked theorem about a type the user did not write, the kernel
 cannot catch that, and review of this document is what does. The order of
 work is the tiers': this document → hand prototype against the real kernel →
-generator (`docs/inductive-tier1-lowering.md` and
+generator (`docs/archive/inductive-tier1-lowering.md` and
 `docs/inductive-tier1-wf-lowering.md` are the precedents).
 
 Conventions are tier 0's (`docs/inductive-tier0-lowering.md`): `⟦T⟧` for the
@@ -35,7 +35,7 @@ lowering of a surface type, `⌜T⌝` for a code with `El ⌜T⌝ ≡ T`, kernel
 from `crates/kernel/src/term.rs`, `Γ` the ambient context. Tier 0 §2
 (monomorphized parameters, positivity posture) and §3.3 (the nominal tag)
 carry over unchanged. The scheme below is
-`docs/inductive-tier1-lowering.md`'s `D_ex` with one substitution — **the
+`docs/archive/inductive-tier1-lowering.md`'s `D_ex` with one substitution — **the
 user's index where the synthetic height was** — and the differences from
 that document are the content here; where a rule is unchanged it is cited,
 not restated.
@@ -129,7 +129,7 @@ substitution:
 
 - **pattern-variable fields are deleted** — they are not stored (§4.1);
 - **recursive fields become `El rec`** — the recursion variable's code,
-  spliced directly (the tier-1 rule, `docs/inductive-tier1-lowering.md` §2
+  spliced directly (the tier-1 rule, `docs/archive/inductive-tier1-lowering.md` §2
   fact 2);
 - **occurrences of a pattern variable in remaining field types become the
   `elim_Nat` binder** `m`.
@@ -148,7 +148,7 @@ famD = elim_Nat^{1+l}( _. Ty l
 
 with `l = ⊔` of the field levels as in tier 0, the `elim_Nat` inlined at
 each use (no kernel `def`; same cost note as
-`docs/inductive-tier1-lowering.md` §7). An empty class is `⌜Empty⁰⌝` — that
+`docs/archive/inductive-tier1-lowering.md` §7). An empty class is `⌜Empty⁰⌝` — that
 is `Fin`'s `famFin 0`, and it is a *correct* branch, not a degenerate one:
 it is what makes `Fin(0)` uninhabited definitionally.
 
@@ -189,7 +189,7 @@ stored (non-pattern) arguments, with each recursive argument's value passed
 Why this typechecks with everything open: the result index is
 constructor-headed by condition 1, so `famD (S e_n)` **unfolds whatever
 `e_n` is** — the same "`Succ`-headed whatever the child is" argument as
-`docs/inductive-tier1-lowering.md` §3.2, except the head is now supplied by
+`docs/archive/inductive-tier1-lowering.md` §3.2, except the head is now supplied by
 the declaration instead of computed by the constructor. No coercion, no
 transport, and β under `match` fires on fully open data for the same
 reason.
@@ -204,7 +204,7 @@ the result index and then drops them from the term.
 `⟦Node⟧ = Σ(#tag). Σ(_ : El rec). Σ(_ : El rec). Unit⁰`. There is no
 height to compute, no `max`, no `D_below`, no comparison to get stuck on an
 open child — the failure that killed exact-height fording for branching
-(`docs/inductive-tier1-lowering.md` §8.1) was that the *measure* was
+(`docs/archive/inductive-tier1-lowering.md` §8.1) was that the *measure* was
 computed from the children; here the index is **given by the user**, both
 children sit at the same pattern variable, and `node l r` is in constructor
 form with `l`, `r` open. A height-indexed balanced tree is therefore in
@@ -248,7 +248,7 @@ in the `Wf` lowering §6.4, matching elaborated arguments against the
 recursive projections.
 
 Two composition points carry the hazard, and they are the ones
-`docs/inductive-tier1-lowering.md` §4 names, minus one:
+`docs/archive/inductive-tier1-lowering.md` §4 names, minus one:
 
 - **Arm obligation vs arm body**: the arm is written for `M[S m, ⟦c(…)⟧]`
   and owed `M[S m, v]`; convertible by `Case` β and Σ-η, with `Unit` η
@@ -294,18 +294,18 @@ The index does a share of the work for free, and the rest is tier 0's.
 - **Across index classes there is nothing to prove.** `Id(⟦D⟧(?); Nil; Cons …)`
   is only stateable at a common index, and `0` and `S e` head-collide — the
   *type* rejects the equation. Where tier-1 fording needed `zero_pred` and a
-  `J` (`docs/inductive-tier1-lowering.md` §5.1), here disjointness across
+  `J` (`docs/archive/inductive-tier1-lowering.md` §5.1), here disjointness across
   classes is vacuous. The prototype pins this as a negative (the equation
   fails to state), not as a lemma.
 - **Within a class** (`FZ` vs `FS`, both at `S m`): inside the branch the
   type is a tier-0 sum, so tier 0 §6.1 applies verbatim — tag predicate by
   large elimination over the family (`elim_Nat` motive `Π(v). Ty 0`, the
-  `is_c` shape of `docs/inductive-tier1-lowering.md` §5.2 with the height
+  `is_c` shape of `docs/archive/inductive-tier1-lowering.md` §5.2 with the height
   read replaced by the index argument), then `J` with `case = ⟨⟩`.
 - **Injectivity per stored field**: tier 0 §6.2's total-projection trick,
   per class, with the recursive field's projection returning
   `⟦D⟧(m)` — no repackaging (no pair to rebuild), so the tier-1 wrinkle of
-  `docs/inductive-tier1-lowering.md` §5.3 disappears. The dependent-field
+  `docs/archive/inductive-tier1-lowering.md` §5.3 disappears. The dependent-field
   side condition is tier 0's, unchanged.
 - **Index injectivity** (`Cons` at `S m` forces the tail at `m`) is not a
   lemma at all: it is the branch's typing. `issues/dependent-field-injectivity`
@@ -322,14 +322,14 @@ stored); equality of the *indices* is the corresponding fact and lives at
 
 - **Computed result index** (`plus(m,k)`, `max(h_l,h_r)`): not
   constructor-headed, so not *this* scheme — but **generated**, by fording
-  over an irrelevant `sEq` (`docs/inductive-fording-lowering.md`; landed
+  over an irrelevant `sEq` (`docs/archive/inductive-fording-lowering.md`; landed
   2026-08-04). The declaration is not rejected: the classifier routes it to
   route 2b, and what the user loses is definitional `match` β at that
   constructor (§8.4 there), not the declaration.
 - **Deep pattern** (`Even : … Succ(Succ(n))`): likewise **generated** by
   route 2b, with no special case at all — `μ(ess p) = S (S (μ p))` — rather
   than needing the simultaneous-recursion `(D_ex, D_below)` device this
-  document expected (`docs/inductive-fording-lowering.md` §3.4).
+  document expected (`docs/archive/inductive-fording-lowering.md` §3.4).
 - **Non-linear pattern**: single index, so unwritable until §8.4; the check
   exists from day one anyway.
 - **Recursive field at a non-pattern index** (`xs: Vec<A>(0)` under
@@ -501,7 +501,7 @@ rather than remembered.
    **Status 2026-08-04:** the pass this item feared has landed for route 2b
    only — `issues/generated-term-defs.md` routed the *forded* generator's
    artifacts through Ψ definitions and re-keyed `forded_of` by name
-   (`docs/inductive-fording-lowering.md` §14.1). Route 1's devices were
+   (`docs/archive/inductive-fording-lowering.md` §14.1). Route 1's devices were
    deliberately **not** routed, so `indexed_of` is unbroken and unchanged, and
    this item stands as written. Whichever round does route 1 re-keys it the
    same way, and `forded.rs`'s `mod fingerprint` is the shape of the negative
@@ -533,7 +533,7 @@ rather than remembered.
    and convert), not a better message.
 3. **Term size.** The whole family `elim_Nat` is inlined at every type
    occurrence and re-instantiated several times per eliminator — the tier-1
-   cost note (`docs/inductive-tier1-lowering.md` §7), amplified, because
+   cost note (`docs/archive/inductive-tier1-lowering.md` §7), amplified, because
    indexed types appear *in other types*. Acceptable now; a kernel `def`
    is the eventual fix, and [[frontend-benchmarks]] is where "acceptable"
    gets a number. **Amplified at declared indices (2026-08-03):** a `Wf`
@@ -548,7 +548,7 @@ rather than remembered.
    1's family is a whole `elim_Nat`/`elim_Wf` **at a motive in `Type`** — the
    thing to name is a type-valued function, and `GlobalBinding::Ty` has no
    body. The route-2b round hit the same wall from the other side and recorded
-   it as `docs/inductive-fording-lowering.md` §14.11: naming a *type* needs a
+   it as `docs/archive/inductive-fording-lowering.md` §14.11: naming a *type* needs a
    code definition (`D#code : Trm_c(· ⊢ Type_l)` with `El (D#code^δ)`), which
    is a scheme change and would break the structural readers of item 1. Route
    1's shrink is that round's, not a follow-on to this one.

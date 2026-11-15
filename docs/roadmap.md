@@ -219,13 +219,13 @@ and above all a way to track allocations.
 - The native x86-64 path works end to end: reflect to FunctionIR, select and
   lay out in Rust, emit a certificate as Heather source, and check it in the
   kernel. It produces static ELF executables whose runs are stated against a
-  Linux trace model (`docs/native-compiler-architecture-review.md`,
-  `docs/native-architecture-review.md`). `wc` as a command and stream filters
-  (`tr`) are the clients (`docs/native-wc-command-design.md`,
-  `docs/native-stream-filter-design.md`).
+  Linux trace model (`docs/native-compiler-architecture-review.md@4acf2fe`,
+  `docs/archive/native-architecture-review.md`). `wc` as a command and stream filters
+  (`tr`) are the clients (`docs/archive/native-wc-command-design.md`,
+  `docs/archive/native-stream-filter-design.md`).
 - Layout and jump computation moved from Rust into Heather in 2026-10,
   proved by evaluation. Programs are stated over Runs, Straight and
-  stretches (`docs/native-runs-design.md`, `docs/native-straight-runs-design.md`).
+  stretches (`docs/native-runs-design.md@4acf2fe`, `docs/archive/native-straight-runs-design.md`).
   The last list layouts are parked as uniformity work
   ([list-layouts-onto-labels](../issues/list-layouts-onto-labels.md)).
 - Still in Rust: reflection, instruction selection, register placement, the
@@ -293,7 +293,7 @@ few general-purpose ones are worth real design.
 **Where it stands.** Certifying tactics exist for Presburger arithmetic
 (`omega`, with CutSat), bit-vectors (`bv_omega`), commutative rings (`ring`),
 case splitting (`split_all`), positivity, `decide`, relational congruence
-(`rel_cong`), and `calc` chains (`docs/certifying-arithmetic-automation-design.md`,
+(`rel_cong`), and `calc` chains (`docs/certifying-arithmetic-automation-design.md@4acf2fe`,
 `docs/ring-normalization-design.md`, `docs/relational-context-round.md`).
 Tactics are also written in Heather, as request trees `Tac<A>` the
 elaborator answers through one host interface

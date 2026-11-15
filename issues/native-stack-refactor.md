@@ -15,7 +15,7 @@ test, the chunk induction, histories, stored-byte lemmas and register
 frames. Claims take 24 to 54 parameters, and a program author passes five
 theorem names whose types nothing checks up front.
 
-`docs/native-architecture-review.md` is the survey and the plan: R0
+`docs/archive/native-architecture-review.md` is the survey and the plan: R0
 (mechanical cleanup), R1 (relocatable read head and failure tail), R2
 (bundled parameters), R3 (one read-until-EOF driver over a body contract),
 R4 (one layout description shared with the producer), R5 (uniform piece

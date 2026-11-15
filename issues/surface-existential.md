@@ -33,7 +33,7 @@ The workaround in use, and it is a good one for its consumer: the
 **computed-bound** form. `converges` becomes `eval(bound(args), p)(env, ir) =
 Out(vs)`, and `refines` carries a fuel map instead of an existential
 (`refines_trans` is then composition of the maps). Recorded as note 7 of
-`docs/ir-simulate-design.md`. The ∃-form is the image of the bounded form
+`docs/archive/ir-simulate-design.md`. The ∃-form is the image of the bounded form
 under the ∃-closure, so nothing there has to be re-proved when this lands.
 
 Two candidate routes, neither costed:

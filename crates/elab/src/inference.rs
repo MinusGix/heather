@@ -575,7 +575,7 @@ impl Inference<'_> {
             }
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
-            // (docs/certgen-transcriber-in-language-design.md §3).
+            // (docs/archive/certgen-transcriber-in-language-design.md §3).
             ExprKind::MatchCode {
                 scrut,
                 motive,
@@ -1380,7 +1380,7 @@ impl Inference<'_> {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
-                // Route 2b's forded family (docs/inductive-fording-lowering.md
+                // Route 2b's forded family (docs/archive/inductive-fording-lowering.md
                 // §12.1): the same two-binder motive rule as route 1's, over
                 // the Σ+`sEq` form instead of the eliminator's.
                 if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, &scrut_ty) {

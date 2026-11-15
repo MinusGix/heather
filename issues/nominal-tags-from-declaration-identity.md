@@ -16,7 +16,7 @@ before it, not only on what it imports:
 - The same module checked by two processes with different prefixes is two
   elaborations with different kernel terms. That is why the library gate's
   folders could not share images until they all loaded one canonical
-  prefix (`docs/library-world-design.md`), and why that world still makes a
+  prefix (`docs/archive/library-world-design.md`), and why that world still makes a
   process replay shared modules it does not need: loading only its own
   closure would move the tags.
 - An inductive added upstream moves every later tag, so everything after it
@@ -47,7 +47,7 @@ remaps.
 
 ## What it assumes from elsewhere
 
-- **`docs/library-world-design.md`** §4: this is the first of the two
+- **`docs/archive/library-world-design.md`** §4: this is the first of the two
   changes that would let a process load only its closure; the second is
   the early cutoff observing only what the closure contributes.
 

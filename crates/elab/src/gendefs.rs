@@ -6,7 +6,7 @@
 //! rather than inlined (`lib.rs`'s header). The *generator's own* artifacts
 //! were not: route 2b's index measure `μ` was once a whole `elim_Wf` written
 //! out afresh in the family type, several times per eliminator arm
-//! (`docs/inductive-fording-lowering.md` §14.2 and §14.9, superseded by the
+//! (`docs/archive/inductive-fording-lowering.md` §14.2 and §14.9, superseded by the
 //! `IWf` route), and this module began as the fix; the type codes, record
 //! projections and spine codes below followed.
 //!

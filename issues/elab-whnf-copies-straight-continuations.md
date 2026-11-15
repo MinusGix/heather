@@ -8,7 +8,7 @@ updated: 2026-10-21
 ---
 
 `Straight(…)(vars, state)` (`lib/elf64_straight.hthr`,
-`docs/native-straight-runs-design.md`) is the first workload to show the
+`docs/archive/native-straight-runs-design.md`) is the first workload to show the
 residual [[elaborator-whnf-probes-on-computing-types]] named and left: a
 former *with* sub-structure, reached only after computation, is spelled by
 the substitution reducer (`reduce::whnf_type_delta`) after the value probe

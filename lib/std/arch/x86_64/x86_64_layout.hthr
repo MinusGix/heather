@@ -1,4 +1,4 @@
-// Code laid out as pieces (docs/native-architecture-review.md R4): a list of
+// Code laid out as pieces (docs/archive/native-architecture-review.md R4): a list of
 // pieces in order, the last one apart, and the lengths the pieces before it
 // are measured by. Where piece `i` starts is the sum of those lengths, left
 // to right from the layout's start, so a generated piece's length stays the

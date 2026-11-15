@@ -2,14 +2,14 @@
 
 Status: built (§9, §11, §12), measured (§10).
 Issues: `issues/module-dag-build.md`, `issues/nominal-tags-from-declaration-identity.md`.
-Supersedes `docs/library-world-design.md` §2 (the world).
+Supersedes `docs/archive/library-world-design.md` §2 (the world).
 
 ## 1. Why the gate is a chain
 
 The library gate (`crates/cli/tests/library.rs`) runs three `heather check`
 children at a time over one image store, and still keeps only about 1.6 CPUs
 busy (`issues/library-gate-warmup-runs-alone.md`). Each child loads the
-library's world (`docs/library-world-design.md`) up to the last shared module
+library's world (`docs/archive/library-world-design.md`) up to the last shared module
 its folder needs, and a module's image is keyed by every module before it in
 that world. So a module can be built only after every module in front of it
 has been, by some child, and the children spend their time waiting on one
@@ -170,7 +170,7 @@ snapshot extended by the modules of `canon(M)` after `canon(B)`, each loaded
 by §4, and then `M` itself. So a process that loads a closure of `n` modules
 replays about `n` images plus the sum of those remainders, which over the
 library is 166 in all; a folder's closure today replays nearly twice its
-size (`docs/library-world-design.md` §3).
+size (`docs/archive/library-world-design.md` §3).
 
 Each of those loads judges every binding of the image again, by the kernel
 or by a verdict the gate holds (§4). A command given no cache directory
@@ -325,16 +325,28 @@ and its dependents are checked over what did check. A module that misses its
 directives is an ordinary failure and has no image.
 
 A refusal is the elaborator's verdict, which no kernel recheck can
-reproduce, so such an image is replayed only
+reproduce, so such an image is replayed whole only
 
 - by a session that judges directives: a plain `heather check` of the same
   module elaborates it and fails, as before;
-- when this build wrote it: the stale lanes elaborate it again, since an
-  older compiler's refusal says nothing about this one's;
+- when this build wrote it, by elaborating every declaration: an older
+  compiler's refusal says nothing about this one's, and neither does a
+  refusal over another world.
 
-and it is never moved to another world (the early cutoff) or sliced from
-(the declaration-slice replay), both of which would assert the refusal
-carries over.
+What such an image does carry anywhere is its accepted declarations, which
+the kernel can recheck like any other image's. The delta keeps one slice per
+item of the source, a refused item's being a slice of nothing, and a slice
+of nothing is reproduced only for an item that cannot be refused (an import,
+a later member of a mutual group): any other is elaborated. So on the stale lanes
+a miss looks for an image of the same source that moves onto this world, as
+the early cutoff does (`docs/module-interface-cutoff-design.md` §3), replays
+the accepted declarations from it as slices, and elaborates each refused
+declaration again (`Elaborator::check_module_delta_refusing_from`). Every
+refusal counted is then this build's verdict over this world. The image
+published is marked as holding moved declarations, so the exact lane
+elaborates the module whole, and a later stale pass moves and judges again.
+A plain session that slices from an image of refusals elaborates the refused
+declaration for the same reason, and fails on it.
 
 ## 12. Building ahead
 

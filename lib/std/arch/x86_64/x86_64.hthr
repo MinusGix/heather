@@ -211,7 +211,7 @@ inductive Instruction {
     SetEqual(destination: LowByteGpr),
     TestRR(left: Gpr, right: Gpr),
     // ADD of an immediate the processor sign-extends to 64 bits
-    // (docs/structured-lowering-code-size-design.md §4).
+    // (docs/archive/structured-lowering-code-size-design.md §4).
     AddRI8(destination: Gpr, immediate: BitVec(8)),
     AddRI32(destination: Gpr, immediate: BitVec(32)),
     // SHL, SHR or SAR by one: every flag but AF defined

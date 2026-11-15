@@ -38,7 +38,7 @@ seventeenfold and `mono`'s decoded image by about a third. It is advice for
 tactic authors, not a fix.
 
 The world amplifies it. A check over `--world lib` loads the world's order
-up to the last shared module its folder needs (`docs/library-world-design.md`
+up to the last shared module its folder needs (`docs/archive/library-world-design.md`
 §2), and `tactic` and `mono` sit early in that order, so folders that import
 neither (`lib/std/arch`, `lib/std/os`) decode them too: on 2026-10-27 every
 measured gate folder's peak was about the same, and adding `mono` (#222 and

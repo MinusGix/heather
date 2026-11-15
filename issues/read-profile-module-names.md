@@ -6,7 +6,7 @@ created: 2026-09-29
 updated: 2026-09-29
 ---
 
-Since `wc -l` moved onto elf64_read_state (docs/native-wc-design.md §9), the
+Since `wc -l` moved onto elf64_read_state (docs/archive/native-wc-design.md §9), the
 process that gave `lib/elf64_read_loop.hthr` its name is gone: what remains is
 the read profile's pieces (blocks, `EofJumps`, the read trace, the chunk's
 entry, `ReadEofComputes`). Likewise `lib/elf64_read_print.hthr` now holds

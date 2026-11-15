@@ -8,7 +8,7 @@ updated: 2026-08-13
 
 Promoted out of [[certgen-harness-cost]]'s log on 2026-08-13, because it stopped
 being a floor and became a blocker: it is the reason
-`docs/certgen-ctor-fields-design.md` defers constructor fields.
+`docs/certgen-ctor-fields-design.md@4acf2fe` defers constructor fields.
 
 > **Fixed 2026-08-13** — `docs/analyzer-evaluation-design.md`; see the log.
 > Read the attribution below as the *hypothesis the round tested*, not as the
@@ -51,7 +51,7 @@ unshared reduction of `match`es on `Pre` and `TA`, both `Wf`-lowered.
    `Ir`; the `VOut` narrowing already showed what splitting a payload out of it
    buys at elaboration time, and this is the evaluation-time half of the same
    move. Worth measuring after (1), not before.
-3. **Re-probe the fields stage.** `docs/certgen-ctor-fields-design.md` §§2–7 is
+3. **Re-probe the fields stage.** `docs/certgen-ctor-fields-design.md@4acf2fe` §§2–7 is
    designed, implemented and reverted; §9 says what to re-check first.
 
 **Trigger.** Any fragment feature whose fixtures generate slower than the

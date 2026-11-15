@@ -14,7 +14,7 @@ Status: implemented, 2026-10-22 (`crates/elab/src/codata.rs`,
 An indexed inductive states each constructor's index as a **result
 annotation** (`VCons(…) : Vec<A>(Succ(n))`), and the lowering stores or
 computes the equation between that index and the family's
-(`docs/inductive-indexed-lowering.md`, `docs/inductive-fording-lowering.md`).
+(`docs/inductive-indexed-lowering.md`, `docs/archive/inductive-fording-lowering.md`).
 For codata that form is the wrong one, for the reason that makes codata
 codata: **there is no η**. The indices codata most wants are trees, and an
 equation `Id(Stream, SCons(h, a), s)` holds only when `s` is that constructor

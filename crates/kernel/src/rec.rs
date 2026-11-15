@@ -362,7 +362,7 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 65] {
 /// recursive-call locals under it. Everything else about a telescope (which
 /// globals, at which contexts) is the kernel's business, because a branch term
 /// that mentions them cannot be written at the surface anyway
-/// (docs/certgen-transcriber-in-language-design.md §3).
+/// (docs/archive/certgen-transcriber-in-language-design.md §3).
 pub struct BranchShape {
     pub name: &'static str,
     /// Universe binders the telescope pushes, innermost-last.

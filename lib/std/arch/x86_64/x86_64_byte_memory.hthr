@@ -337,26 +337,31 @@ theorem DataRegion::store_apart(self r: DataRegion, m: X86Memory(r.profile), i, 
         j(sym(rip_compose(r.low, l, t)), λ y _ => r.profile.read(r.profile.store(m, next_rip(r.low, i + s), bytes), y) = r.profile.read(m, y), flat))
 }
 
-// One byte of a span inside the region: writable, read back once stored,
-// and stored without moving code.
-theorem DataRegion::byte_writable(self r: DataRegion, m: X86Memory(r.profile), i, s: Nat, fits: i + s < r.size):
-    r.profile.at(m).Allows(Perm::writes, next_rip(next_rip(r.low, i), s), 1) {
-    j(sym(rip_compose(r.low, i, s)), λ a _ => r.profile.at(m).Allows(Perm::writes, a, 1), r.allows(Perm::writes, refl, m, i + s, 1, omega(fits)))
+// Bytes from byte `s` of a span inside the region: writable, read back once
+// stored, and stored without moving code.
+theorem DataRegion::span_writable(self r: DataRegion, m: X86Memory(r.profile), i, s, n: Nat, fits: i + s + n <= r.size):
+    r.profile.at(m).Allows(Perm::writes, next_rip(next_rip(r.low, i), s), n) {
+    j(sym(rip_compose(r.low, i, s)), λ a _ => r.profile.at(m).Allows(Perm::writes, a, n), r.allows(Perm::writes, refl, m, i + s, n, fits))
 }
 
-theorem DataRegion::byte_stored(self r: DataRegion, m: X86Memory(r.profile), i, s: Nat, byte: BitVec(8), fits: i + s < r.size):
-    r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, i), s), [byte]), next_rip(next_rip(r.low, i), s)) = Some(byte) {
-    let one: (i + s + 1 <= r.size) = omega(fits);
-    j(sym(rip_compose(r.low, i, s)), λ a _ => r.profile.read(r.profile.store(m, a, [byte]), a) = Some(byte),
-        r.read_stored(m, i + s, [byte], one, 0, byte, refl))
+theorem DataRegion::span_stored(self r: DataRegion, m: X86Memory(r.profile), i, s: Nat, bytes: List<BitVec(8)>, fits: i + s + bytes.len() <= r.size,
+    t: Nat, short: t < bytes.len()):
+    r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, i), s), bytes), next_rip(next_rip(r.low, i), s + t)) = bytes.nth(t) {
+    let present = bytes.nth_present(t, short);
+    let flat = r.read_stored(m, i + s, bytes, fits, t, present.witness, present.proof);
+    let here: (r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, i), s), bytes), next_rip(next_rip(next_rip(r.low, i), s), t)) =
+            Some(present.witness)) =
+        j(sym(rip_compose(r.low, i, s)), λ a _ => r.profile.read(r.profile.store(m, a, bytes), next_rip(a, t)) = Some(present.witness), flat);
+    trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ y => r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, i), s), bytes), y),
+            sym(rip_compose(next_rip(r.low, i), s, t))),
+        trans(here, sym(present.proof)))
 }
 
-theorem DataRegion::byte_keeps_code(self r: DataRegion, m: X86Memory(r.profile), i, s: Nat, byte: BitVec(8), fits: i + s < r.size,
-    bytes: List<BitVec(8)>, at: BitVec(64), resident: CodeResident(r.profile.fetch(), m, bytes, at)):
-    CodeResident(r.profile.fetch(), r.profile.store(m, next_rip(next_rip(r.low, i), s), [byte]), bytes, at) {
-    let one: (i + s + 1 <= r.size) = omega(fits);
-    j(sym(rip_compose(r.low, i, s)), λ a _ => CodeResident(r.profile.fetch(), r.profile.store(m, a, [byte]), bytes, at),
-        r.profile.store_keeps_code(m, next_rip(r.low, i + s), [byte], r.not_executed(m, i + s, 1, one), bytes, at, resident))
+theorem DataRegion::span_keeps_code(self r: DataRegion, m: X86Memory(r.profile), i, s: Nat, bytes: List<BitVec(8)>,
+    fits: i + s + bytes.len() <= r.size, code: List<BitVec(8)>, at: BitVec(64), resident: CodeResident(r.profile.fetch(), m, code, at)):
+    CodeResident(r.profile.fetch(), r.profile.store(m, next_rip(next_rip(r.low, i), s), bytes), code, at) {
+    j(sym(rip_compose(r.low, i, s)), λ a _ => CodeResident(r.profile.fetch(), r.profile.store(m, a, bytes), code, at),
+        r.profile.store_keeps_code(m, next_rip(r.low, i + s), bytes, r.not_executed(m, i + s, bytes.len(), fits), code, at, resident))
 }
 
 // Spans inside the region are lent under its stack (`DataRegion::stack`)
@@ -388,61 +393,55 @@ theorem DataRegion::loan(self r: DataRegion, top: Nat, spans: Spans, offset: Nat
                     r.profile.read(m, next_rip(a, j)),
                 r.store_apart(m, k, 0, word_bytes(word), offset(b), j, fits, omega(inside, here.right.right), Inl(order)))
         },
-        writable := λ m b k written inside => {
+        writable := λ m b k written inside bytes fits => {
             let here = placed(b, omega(inside));
-            j(sym(here.left), λ a _ => r.profile.at(m).Allows(Perm::writes, next_rip(a, k), 1),
-                r.byte_writable(m, offset(b), k, omega(inside, here.right.right)))
+            j(sym(here.left), λ a _ => r.profile.at(m).Allows(Perm::writes, next_rip(a, k), bytes.len()),
+                r.span_writable(m, offset(b), k, bytes.len(), omega(fits, here.right.right)))
         },
-        stored := λ m b k written inside byte => {
+        stored := λ m b k written inside bytes fits t short => {
             let here = placed(b, omega(inside));
-            j(sym(here.left), λ a _ => r.profile.read(r.profile.store(m, next_rip(a, k), [byte]), next_rip(a, k)) = Some(byte),
-                r.byte_stored(m, offset(b), k, byte, omega(inside, here.right.right)))
+            j(sym(here.left), λ a _ => r.profile.read(r.profile.store(m, next_rip(a, k), bytes), next_rip(a, k + t)) = bytes.nth(t),
+                r.span_stored(m, offset(b), k, bytes, omega(fits, here.right.right), t, short))
         },
-        apart := λ m b k written inside byte c j short other => {
+        apart := λ m b k written inside bytes fits c j short other => {
             let here = placed(b, omega(inside));
             let there = placed(c, omega(short));
-            let one: (offset(b) + k + 1 <= r.size) = omega(inside, here.right.right);
-            let order: ((offset(b) + k + 1 <= offset(c) + j) ∨ (offset(c) + j + 1 <= offset(b) + k)) = match b.eq_dec(c) {
-                Inl(same) => match other {
-                    Inl(differs) => false_elim(differs(same)),
-                    Inr(differs) => {
-                        let same_offset: (offset(b) = offset(c)) = cong_fn<Nat, Nat>(λ n => offset(n), same);
-                        match k.lt_or_ge(j) {
-                            Inl(lt) => Inl(omega(lt, same_offset)),
-                            Inr(ge) => match j.lt_or_ge(k) {
-                                Inl(lt) => Inr(omega(lt, same_offset)),
-                                Inr(le) => {
-                                    let equal: (k = j) = omega(ge, le);
-                                    false_elim(differs(equal))
-                                },
-                            },
-                        }
-                    },
+            let span: (offset(b) + k + bytes.len() <= r.size) = omega(fits, here.right.right);
+            let order: ((offset(b) + k + bytes.len() <= offset(c) + j) ∨ (offset(c) + j + 1 <= offset(b) + k)) = match b.eq_dec(c) {
+                Inl(same) => {
+                    let same_offset: (offset(b) = offset(c)) = cong_fn<Nat, Nat>(λ n => offset(n), same);
+                    match other {
+                        Inl(differs) => false_elim(differs(same)),
+                        Inr(outside) => match outside {
+                            Inl(below) => Inr(omega(below, same_offset)),
+                            Inr(above) => Inl(omega(above, same_offset)),
+                        },
+                    }
                 },
                 Inr(differs) => match apart(b, c, written, differs, omega(inside), omega(short)) {
-                    Inl(below) => Inl(omega(below, inside)),
+                    Inl(below) => Inl(omega(below, fits)),
                     Inr(above) => Inr(omega(above, short)),
                 },
             };
-            j(sym(here.left), λ a _ => r.profile.read(r.profile.store(m, next_rip(a, k), [byte]), next_rip(spans.at(c), j)) =
+            j(sym(here.left), λ a _ => r.profile.read(r.profile.store(m, next_rip(a, k), bytes), next_rip(spans.at(c), j)) =
                     r.profile.read(m, next_rip(spans.at(c), j)),
-                j(sym(there.left), λ y _ => r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, offset(b)), k), [byte]), next_rip(y, j)) =
+                j(sym(there.left), λ y _ => r.profile.read(r.profile.store(m, next_rip(next_rip(r.low, offset(b)), k), bytes), next_rip(y, j)) =
                         r.profile.read(m, next_rip(y, j)),
-                    r.store_apart(m, offset(b), k, [byte], offset(c), j, one, omega(short, there.right.right), order)))
+                    r.store_apart(m, offset(b), k, bytes, offset(c), j, span, omega(short, there.right.right), order)))
         },
-        keeps := λ m b k written inside byte j below => {
+        keeps := λ m b k written inside bytes fits j below => {
             let here = placed(b, omega(inside));
-            let one: (offset(b) + k + 1 <= r.size) = omega(inside, here.right.right);
-            j(sym(here.left), λ a _ => read_word(r.profile.data(), r.profile.store(m, next_rip(a, k), [byte]), next_rip(r.low, j)) =
+            let span: (offset(b) + k + bytes.len() <= r.size) = omega(fits, here.right.right);
+            j(sym(here.left), λ a _ => read_word(r.profile.data(), r.profile.store(m, next_rip(a, k), bytes), next_rip(r.low, j)) =
                     read_word(r.profile.data(), m, next_rip(r.low, j)),
-                read_word_agree(r.profile.data(), r.profile.store(m, next_rip(next_rip(r.low, offset(b)), k), [byte]), m, next_rip(r.low, j),
-                    λ t within => r.store_apart(m, offset(b), k, [byte], j, t, one, omega(within, below, room),
+                read_word_agree(r.profile.data(), r.profile.store(m, next_rip(next_rip(r.low, offset(b)), k), bytes), m, next_rip(r.low, j),
+                    λ t within => r.store_apart(m, offset(b), k, bytes, j, t, span, omega(within, below, room),
                         Inr(omega(within, below, here.right.left)))))
         },
-        keeps_code := λ m b k written inside byte bytes at resident => {
+        keeps_code := λ m b k written inside bytes fits code at resident => {
             let here = placed(b, omega(inside));
-            j(sym(here.left), λ a _ => CodeResident(r.profile.fetch(), r.profile.store(m, next_rip(a, k), [byte]), bytes, at),
-                r.byte_keeps_code(m, offset(b), k, byte, omega(inside, here.right.right), bytes, at, resident))
+            j(sym(here.left), λ a _ => CodeResident(r.profile.fetch(), r.profile.store(m, next_rip(a, k), bytes), code, at),
+                r.span_keeps_code(m, offset(b), k, bytes, omega(fits, here.right.right), code, at, resident))
         },
     )
 }

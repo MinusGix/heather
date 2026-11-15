@@ -24,7 +24,7 @@ generator. Datarepr owns what runs; nothing here does.
 compilation: a `Compile` instance couples IR production with an `equiv`
 theorem that the IR simulates to the same result as the kerneltime
 function, and custom passes, context-specific specialization
-(`docs/sketches/surface-v3.md` §1), and eventual CPU-model refinement all
+(`docs/archive/surface-v3.md` §1), and eventual CPU-model refinement all
 prove against `simulate`. Constraints already settled elsewhere and
 inherited here:
 

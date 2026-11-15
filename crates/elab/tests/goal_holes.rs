@@ -144,7 +144,7 @@ fn a_hole_survives_calcs_cloned_spine() {
 
 #[test]
 fn let_binds_a_hole_through_its_annotation() {
-    // The hole-programming pattern of docs/sketches/surface-v3.md §2: bind a
+    // The hole-programming pattern of docs/archive/surface-v3.md §2: bind a
     // goal to a name, use it as an ordinary value. The annotation is what puts
     // the right-hand side in checking position.
     accept(
@@ -272,7 +272,7 @@ fn every_undischarged_goal_is_listed_at_once() {
 
 #[test]
 fn an_anonymous_argument_hole_is_named_after_the_parameter() {
-    // "Proof-parameter names are API" (docs/sketches/surface-v2.md §2): the
+    // "Proof-parameter names are API" (docs/archive/surface-v2.md §2): the
     // default name comes from the callee's parameter, collisions get ordinals,
     // and the listing says which call site each came from.
     let r = reject(
@@ -365,7 +365,7 @@ fn anonymous_holes_get_checker_assigned_names() {
 
 #[test]
 fn one_statement_discharge_fills_every_matching_goal() {
-    // docs/sketches/surface-v2.md §2: the common pattern is one proof feeding
+    // docs/archive/surface-v2.md §2: the common pattern is one proof feeding
     // several sites, so `on _: P := e` discharges *all* goals stating `P` —
     // name-free and order-free.
     accept(

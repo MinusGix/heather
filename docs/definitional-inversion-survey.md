@@ -3,7 +3,7 @@
 Status: **survey**, 2026-10-25. Source: Carneiro, Coquand, Frabetti Mathieu,
 Lennon-Bertrand, Melliès and Weirich, *Definitional Inversion, Without
 Normalisation*, arXiv:2607.13662v1 (15 Jul 2026), committed beside this note
-as `docs/2607.13662v1.pdf`. Section and page numbers below are the paper's.
+as `docs/papers/2607.13662v1.pdf`. Section and page numbers below are the paper's.
 Follow-up is in §7.
 
 The paper is about metatheory, not about a prover, so unlike the Arend

@@ -27,7 +27,7 @@ is split where the goal matches on it (below). A match arm's own binders
 match.
 
 Then, at each leaf, the goal is taken apart until nothing finite is left
-(docs/automatic-author-surface-design.md §2.1):
+(docs/automatic-author-surface-design.md@4acf2fe §2.1):
 
 - **a binder** — a goal `(x: A) → B`, or a definition that unfolds to one
   such as `LoopFolds(region)` — is introduced, and split at once when `A` is

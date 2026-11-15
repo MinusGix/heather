@@ -6,7 +6,7 @@ created: 2026-07-24
 updated: 2026-08-05
 ---
 
-The third `on` head form from docs/sketches/surface-v1.md §2, decided there
+The third `on` head form from docs/archive/surface-v1.md §2, decided there
 but not implemented by [[goal-holes]] (which landed `on ?name` and
 `on _: P`). It was tracked inside that issue; this is the standalone home
 now that it is closed.

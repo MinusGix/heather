@@ -1,6 +1,6 @@
 //! Acceptance for indexed families at a **declared** index type, on the `IWf`
 //! route (`docs/iwf-former-design.md` §8). The file was route 2b's form A at
-//! a declared index (`docs/inductive-fording-lowering.md` §8.2, superseded),
+//! a declared index (`docs/archive/inductive-fording-lowering.md` §8.2, superseded),
 //! and keeps its tests: on `IWf` every arm is typed at its constructor's own
 //! output index, so what fording split into form A (inversion) and form B
 //! (a `transp`, stalling on open data) is one scheme, and every former form-B

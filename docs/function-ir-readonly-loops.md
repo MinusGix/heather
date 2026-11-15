@@ -147,7 +147,7 @@ certified over its own valuation and used at one that carries `{n}_source` =
 `helper(args)`, and `{n}_link` checks the helper's body against the machine
 code once. Checking a chain costs what its links cost; before, each level's
 checks evaluated the whole chain beneath it
-(`docs/native-first-program-design.md` §10.1).
+(`docs/archive/native-first-program-design.md` §10.1).
 
 Results from a nonrecursive two-constructor family with one common scalar type
 parameter and one field per constructor use two ordinary result ports: payload,
@@ -159,7 +159,7 @@ source renderer currently accepts one result from each composed prefix.
 The unused Nat cursor has no machine port but remains universally quantified in
 the source certificate. A consumed Nat is carried as a 64-bit word, its
 modular image `word_of_nat(64, n)`, so `count_body` reflects too
-(`docs/native-bounded-loops-design.md` §9a). The search certificate checks the
+(`docs/archive/native-bounded-loops-design.md` §9a). The search certificate checks the
 whole body against its actual source definition, including helper meaning;
 stale helpers, swapped constructors, and changed payloads are rejected.
 
@@ -177,7 +177,7 @@ shared nodes and decline avoidable register pressure; it does not invent
 spills or edge-copy reconciliation. Signed comparisons below 64 bits still
 decline: they need a signed normalization rule. Zero-extended placements
 support widths 0–64 for constants, copies, bitwise AND/OR/XOR, unsigned
-comparisons and (since 2026-09-30, `docs/native-tr-design.md` §4.1) add and
+comparisons and (since 2026-09-30, `docs/archive/native-tr-design.md` §4.1) add and
 subtract, which are the word's operation masked to the width in a scratch
 register (`BitVec::add_zero_extend_mask`).
 Constants are reduced modulo their logical width before materialization;
@@ -273,5 +273,5 @@ signed/reversed bounds tests, swapped address operands, incorrect bytes, stale
 branch displacements, and unsupported branch spans. This is one bounds/read transition. Budget selection,
 carried-state updates, backward edges, outcome encoding, and bounded induction
 remain under `native-bounded-loop-certificates`. Their design is
-`docs/native-bounded-loops-design.md`, and `lib/native/function_ir/function_ir_loop_trace.hthr`
+`docs/archive/native-bounded-loops-design.md`, and `lib/native/function_ir/function_ir_loop_trace.hthr`
 holds the bounded induction (`loop_trace`) over the `AccessLoop` code form.

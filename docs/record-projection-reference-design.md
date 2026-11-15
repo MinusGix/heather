@@ -134,7 +134,7 @@ and the ones below it that this round names:
 | `dead_frame_byte` | 1 | 0.236 | 0.231 | 0.05 | 4 |
 | `byte_offset` | 167 | 0.236 | 0.173 | 0.20 | 501 |
 
-The comparable column in `docs/call-memory-read-spelling-design.md` §1 was
+The comparable column in `docs/call-memory-read-spelling-design.md@4acf2fe` §1 was
 49.06 s / 39.10 s on a cold cache before that round landed; this one is
 47.48 s / 37.13 s warm after it. The families moved as that document predicted
 (`read_literal` 4.724 → 0.962) and the certificate's total did not, because the

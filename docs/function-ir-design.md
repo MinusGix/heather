@@ -10,7 +10,7 @@ questions under real use.
 
 Related boundaries are owned by:
 
-- `docs/compile-typeclass-design.md`: source function to FunctionIR
+- `docs/archive/compile-typeclass-design.md`: source function to FunctionIR
   certificates;
 - `docs/datarepr-design.md`: abstract values and runtime representations;
 - `docs/x86-64-execution-boundary.md`: bytes, decoding, and typed x86
@@ -21,7 +21,7 @@ Related boundaries are owned by:
 The current `Ir` remains useful bootstrap evidence. Its exact shape is not a
 constraint on this design.
 
-The [2026-09-20 native architecture review](native-compiler-architecture-review.md)
+The [2026-09-20 native architecture review](https://github.com/MinusGix/heather/blob/4acf2fe/docs/native-compiler-architecture-review.md)
 compares these interfaces with the prototype native profiles and records
 their subsequent removal. It defines an ordered shared-lowering issue sequence,
 not newly implemented FunctionIR capabilities.

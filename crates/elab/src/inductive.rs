@@ -1209,7 +1209,7 @@ impl InductivesMut<'_> {
             }
         };
         // Which indexed fragment this declaration is in
-        // (`docs/inductive-fording-lowering.md` §3): route 1, route 2b, or
+        // (`docs/archive/inductive-fording-lowering.md` §3): route 1, route 2b, or
         // neither. Computed once, before the per-constructor walk, because
         // routing is **per declaration** — a declaration with one non-route-1
         // constructor fords whole (§3, and §10's rejected route 3).
@@ -1279,7 +1279,7 @@ impl InductivesMut<'_> {
             // — tier 1, lowered onto `Wf` — or a rejection, never a silent
             // lowering. An indexed declaration classifies by its own rules —
             // route 1's (docs/inductive-indexed-lowering.md §3) or route 2b's
-            // (docs/inductive-fording-lowering.md §3.2) — and `route` already
+            // (docs/archive/inductive-fording-lowering.md §3.2) — and `route` already
             // decided which, for the declaration as a whole.
             let (res, res_expr, kind, rec_at, child_index) = match &route {
                 None if !co_index.is_empty() => {
@@ -3622,7 +3622,7 @@ impl Elaborator {
         if ind.index.is_some() {
             // An indexed constructor reads the *family form* of the expected
             // type, not its whnf (docs/inductive-indexed-lowering.md §5;
-            // docs/inductive-fording-lowering.md §6.3 for route 2b's).
+            // docs/archive/inductive-fording-lowering.md §6.3 for route 2b's).
             if ind.skel.is_some() {
                 return IwfFamily(self).build_iwf_ctor(cx, ind, i, args, expected, expected_lvl, span);
             }
@@ -5099,7 +5099,7 @@ fn parse_result_index<'a>(
             format!(
                 "`{}`'s result index `{v}` is not constructor-headed: a bare-variable \
                  index means the constructor targets *every* index, which is the general \
-                 (fording) case — docs/inductive-fording-lowering.md",
+                 (fording) case — docs/archive/inductive-fording-lowering.md",
                 c.name
             ),
             idx.span,
@@ -5107,7 +5107,7 @@ fn parse_result_index<'a>(
         _ => err(
             format!(
                 "`{}`'s result index is computed, not constructor-headed: a computed \
-                 index fords over `sEq` (docs/inductive-fording-lowering.md)",
+                 index fords over `sEq` (docs/archive/inductive-fording-lowering.md)",
                 c.name
             ),
             idx.span,
@@ -5467,7 +5467,7 @@ fn classify_fields_indexed(
 }
 
 /// Which indexed fragment a declaration is in
-/// (`docs/inductive-fording-lowering.md` §3). One value per declaration, not
+/// (`docs/archive/inductive-fording-lowering.md` §3). One value per declaration, not
 /// per constructor: route 3 (fording one branch of a route-1 family) was
 /// measured to fail on 2026-07-28, so a declaration with one non-route-1
 /// constructor fords **whole**.
@@ -7393,7 +7393,7 @@ fn match_targs(
 
 /// May a field read off this receiver take the *reference*
 /// (`docs/per-instantiation-type-codes-design.md` §13.6, and
-/// `docs/x86-scaling-rail-out-of-fuel-design.md` §2.5, which narrowed it)?
+/// `docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5, which narrowed it)?
 ///
 /// Two conditions, and the second is the one the x86 scaling rail added.
 ///

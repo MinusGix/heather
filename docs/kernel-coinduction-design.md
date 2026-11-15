@@ -530,8 +530,8 @@ relation over an abstract interface). No kernel rule needed a change.
   corecursion, the shape chosen here).
 - Danielsson and Altenkirch, *Subtyping, declaratively* (MPC 2010), for
   mixed induction–coinduction as νμ nesting.
-- Xia et al., *Interaction Trees* (`docs/3371119.pdf`), Frumin et al.,
-  *Guarded Interaction Trees* (`docs/2307.08514.pdf`), and the fit study
+- Xia et al., *Interaction Trees* (`docs/papers/3371119.pdf`), Frumin et al.,
+  *Guarded Interaction Trees* (`docs/papers/2307.08514.pdf`), and the fit study
   `docs/interaction-trees-fit.md` §3.
 - Gratzer and Birkedal, *A Stratified Approach to Löb Induction*, FSCD 2022;
   Bahr, Grathwohl and Møgelberg, *The clocks are ticking*, LICS 2017.

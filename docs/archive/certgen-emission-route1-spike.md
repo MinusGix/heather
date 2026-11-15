@@ -79,7 +79,7 @@ indexed by a generic layer `i`, and layer `m` is "MLTT extended with …"
 `a_meta_body_may_match_a_wf_lowered_ir`: this needs **no new surface**. A
 `meta fn` may already take an ordinary program-layer parameter and `match` it
 — the analyzer round widened the slice that far
-(`docs/certgen-transcriber-in-language-design.md` §9.1 option A, landed) — and
+(`docs/archive/certgen-transcriber-in-language-design.md` §9.1 option A, landed) — and
 the whole declaration is kernel-checked at `Layer::Meta`, so the test passing
 *is* an `elim_Wf` over `Ir` typed at layer m with all eight arms.
 
@@ -128,7 +128,7 @@ naming a global too, not only the type).
   ambient meta-level Γ is discarded wholesale and a `Var` of it is
   `UnboundLocalVar`, not merely ill-layered. That is the implementation of the
   formation rule above, where Γ appears in the conclusion and *not* in the
-  premise for `T` — and it is why `docs/certgen-transcriber-in-language-design.md`
+  premise for `T` — and it is why `docs/archive/certgen-transcriber-in-language-design.md`
   §5's "unstatable" is a shape fact rather than a spelling problem. Paired
   with its own control: the same statement with the local replaced by a closed
   term is a well-formed code type.
@@ -215,7 +215,7 @@ The issue names two: "ordinary match/recursion in a meta body
 | the issue said | actually |
 | --- | --- |
 | ordinary **match** in a meta body | **already exists.** Landed with the analyzer round; verified here over a Wf-lowered `Ir` at layer m. Nothing to build. |
-| ordinary **recursion** in a meta body | **missing, and it is not `meta-body-statement-loop`.** That issue is about annotated `let` in a meta body — a different, smaller gap. The real one is **Ψ-resident meta definitions** (`docs/in-language-map-design.md` §8, and `docs/certgen-transcriber-in-language-design.md` §11's last-but-one bullet): a `meta fn` cannot name itself or another. `issues/meta-body-statement-loop.md` should not be cited as route 1's prerequisite; the Ψ-resident-meta-defs deferral should. |
+| ordinary **recursion** in a meta body | **missing, and it is not `meta-body-statement-loop`.** That issue is about annotated `let` in a meta body — a different, smaller gap. The real one is **Ψ-resident meta definitions** (`docs/in-language-map-design.md` §8, and `docs/archive/certgen-transcriber-in-language-design.md` §11's last-but-one bullet): a `meta fn` cannot name itself or another. `issues/meta-body-statement-loop.md` should not be cited as route 1's prerequisite; the Ψ-resident-meta-defs deferral should. |
 | staged elaboration order | **confirmed missing**, and it is the load-bearing one — see below. |
 | *(unnamed)* | **the fold's dependent statement** (§4). Not a surface gap; a calculus gap, and it is route 3's. |
 
@@ -251,7 +251,7 @@ keep.
 ## 6. Seams the staged order can reuse
 
 - **Analyzer slots** (`docs/meta-def-registration-design.md` §11, summarized in
-  `docs/certgen-transcriber-in-language-design.md` §6.1). The contract is
+  `docs/archive/certgen-transcriber-in-language-design.md` §6.1). The contract is
   whole-signature convertibility against an expected signature *written in
   Heather* and elaborated in the declaring file's scope, so a
   `certgen.emit_certificate` slot costs one vocabulary entry and one expected
@@ -259,7 +259,7 @@ keep.
   (rather than merely constrained) is what lets the caller build the spine,
   and a staged emitter needs exactly that: the caller supplies the staged
   globals in a canonical order.
-- **The evaluation hook** (`docs/certgen-transcriber-in-language-design.md`
+- **The evaluation hook** (`docs/archive/certgen-transcriber-in-language-design.md`
   §6, `crates/elab/src/certgen.rs`). All five steps carry over unchanged in
   kind: apply a Π spine, **spine-directed** δ-transparent WHNF (only what is
   inspected is reduced — the memory discipline CLAUDE.md's superlinear warning

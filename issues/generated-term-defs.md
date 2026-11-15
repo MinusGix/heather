@@ -6,7 +6,7 @@ created: 2026-08-04
 updated: 2026-08-04
 ---
 
-The kernel has had bodied globals with layer-indexed transparency since [[simulate-conversion-cost]] (2026-07-31), and user `fn`s are Ψ-referenced — but the *generator's own artifacts* are still anonymous terms inlined at every occurrence: `μ` (in the family type, twice per Σ projection, several times per arm), the tag predicates, the child projections, the per-arm eliminator instantiations. `docs/inductive-fording-lowering.md` §14.2 and §14.9 both name "a kernel `def`" as the fix; this issue is that slug.
+The kernel has had bodied globals with layer-indexed transparency since [[simulate-conversion-cost]] (2026-07-31), and user `fn`s are Ψ-referenced — but the *generator's own artifacts* are still anonymous terms inlined at every occurrence: `μ` (in the family type, twice per Σ projection, several times per arm), the tag predicates, the child projections, the per-arm eliminator instantiations. `docs/archive/inductive-fording-lowering.md` §14.2 and §14.9 both name "a kernel `def`" as the fix; this issue is that slug.
 
 ## What it owes
 

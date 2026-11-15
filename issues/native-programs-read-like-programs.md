@@ -10,7 +10,7 @@ Round anchor. A native program should read like a program in another
 language, with proofs only as long as their ideas. Today
 `examples/x86-native/wc.hthr` has 320 lines: about 25 are program, about 30
 spec, and the rest hand proof and plumbing. The round is scoped in
-docs/native-programs-read-like-programs-design.md.
+docs/archive/native-programs-read-like-programs-design.md.
 
 In scope (2026-10-02, user agreed):
 - byte tests as words a reader knows ([[byte-vocabulary-for-native-programs]]);

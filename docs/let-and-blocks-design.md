@@ -242,7 +242,7 @@ whole blast radius of §3):
 - `crates/syntax/src/parser.rs:1907` — `let p: n = n = refl;`, in
   `let_binds_with_and_without_an_annotation` (`:1903-1921`).
 - `crates/elab/tests/goal_holes.rs:146` — `let strong: add(n, 0) = n = ?g;`,
-  the hole-programming pattern of `docs/sketches/surface-v3.md` §2.
+  the hole-programming pattern of `docs/archive/surface-v3.md` §2.
 - `lib/certgen/ir_v1.hthr:972`, `:975`, `:994`, `:997` — four `let e1`/`let e2`
   `fuel_monotone` steps inside `letcall_conv` and `letmatch_conv`.
 

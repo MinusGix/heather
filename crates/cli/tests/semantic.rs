@@ -268,6 +268,47 @@ fn a_client_moves_over_a_changed_theorem_it_does_not_use() {
     assert_eq!(edit("cutoff-unused", &before, &after, CLIENT).relocated, 1);
 }
 
+/// A module's registry digest does not depend on which world first asked for
+/// it (`issues/registry-digest-taken-in-observer-coordinates.md`). `shape`
+/// declares a record and stands after `wide` in `client`'s world (`wide` has
+/// the larger closure, so its world is the spine), not where its own world
+/// puts it. The first session meets `shape` only under
+/// `client`; the second, after an edit to `origin`, meets it first under
+/// `near`, where it stands in its own place. Both take the same digest, and
+/// `client` is moved.
+#[test]
+fn a_registry_digest_is_the_same_whichever_world_asks_first() {
+    let root = temp("cutoff-digest-coordinates");
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    let write = |name: &str, src: &str| std::fs::write(root.join(name), src).unwrap();
+    write("origin.hthr", ORIGIN);
+    write("shape.hthr", "import origin;\nrecord Shape { side: Nat }\nfn round() -> Shape { Shape { side: origin::value() } }\n");
+    let wide: String =
+        (0..12).map(|i| format!("fn wide{i}() -> Nat {{ origin::value() }}\ntheorem wide{i}_is(): wide{i}() = 7 {{ refl }}\n")).collect();
+    write("pad.hthr", "import origin;\nfn pad() -> Nat { origin::value() }\n");
+    write("wide.hthr", &format!("import origin;\nimport pad;\n{wide}"));
+    write(
+        "client.hthr",
+        "import wide;\nimport shape;\nfn side(s: shape::Shape) -> Nat { s.side }\nfn flat() -> Nat { side(shape::round()) }\ntheorem flat_is(): flat() = wide::wide0() { refl }\n",
+    );
+    write("near.hthr", "import shape;\nfn again() -> shape::Shape { shape::round() }\n");
+    write("top.hthr", "import near;\nimport client;\n");
+    let first = pass(&root.join("client.hthr"), Some(&cache), ImageFreshness::AcceptStale, None);
+    assert_eq!(first.relocated, 0);
+    write("origin.hthr", &format!("theorem unrelated(n: Nat): n = n {{ refl }}\n{ORIGIN}"));
+    let moved = pass(&root.join("top.hthr"), Some(&cache), ImageFreshness::AcceptStale, None);
+    let order: Vec<&str> = moved.modules.iter().map(|m| m.0.as_str()).collect();
+    let at = |name: &str| order.iter().position(|m| *m == name).unwrap_or_else(|| panic!("{name} in {order:?}"));
+    assert!(at("near") < at("client"), "{order:?}");
+    let client = &moved.modules[at("client")];
+    assert!(client.1, "the client was elaborated again: {:?}", client.2);
+    assert_eq!(client.2, [CacheNoticeKind::Relocated]);
+    let fresh = pass(&root.join("top.hthr"), None, ImageFreshness::Exact, None);
+    assert!(moved.psi == fresh.psi, "the stale lane's world differs from a fresh elaboration");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Negative controls: each edit below is something the client observed, and
 /// the client is elaborated again, never moved.
 #[test]
@@ -588,6 +629,110 @@ fn a_stale_image_of_refusals_is_elaborated_again() {
     assert!(out.errors.is_empty());
     assert_eq!(out.expected_refusals, 1);
     let _ = std::fs::remove_dir_all(cache);
+}
+
+const JUDGED: &str = "import origin;\nfn before() -> Nat { origin::value() }\n\n// expect-error: unbound name\nfn bad() -> Nat { origin::nope() }\n\ntheorem after(): before() = 7 { refl }\n";
+
+/// One judging pass over `root/judged.hthr` and its import: the client's
+/// outcome, the session's relocation count and the Ψ it left.
+fn judging(root: &std::path::Path, cache: Option<&std::path::Path>, freshness: ImageFreshness) -> (heather_cli::semantic::ModuleOutcome, usize, heather_kernel::term::GlobalCtx) {
+    // The library is on the path for a client that imports `bool`.
+    let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
+    let modules = heather_cli::loader::load(&root.join("judged.hthr"), &[lib]).unwrap_or_else(|e| panic!("{}", e.msg));
+    let mut e = Elaborator::with_prelude().unwrap();
+    let mut session = SemanticSession::new(cache.map(|c| c.to_path_buf())).with_freshness(freshness).with_expectations();
+    let mut last = None;
+    for module in &modules {
+        last = Some(session.check(&mut e, module, LintProfile::Default));
+    }
+    (last.expect("a module"), session.relocated(), e.psi().clone())
+}
+
+/// A module with directives over an edited dependency
+/// (`issues/expected-refusal-modules-never-moved.md`): `before` writes
+/// `judged.hthr` over `ORIGIN` and checks it, `after` rewrites `origin.hthr`.
+fn judged_edit(tag: &str, after: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = temp(tag);
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    std::fs::write(root.join("origin.hthr"), ORIGIN).unwrap();
+    std::fs::write(root.join("judged.hthr"), JUDGED).unwrap();
+    let (first, relocated, _) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+    assert!(first.errors.is_empty(), "{tag}: {:?}", first.errors);
+    assert_eq!((first.expected_refusals, first.replayed_items, relocated), (1, 0, 0), "{tag}");
+    std::fs::write(root.join("origin.hthr"), after).unwrap();
+    (root, cache)
+}
+
+/// The stale lane moves the accepted declarations of a module with
+/// directives over an edit it did not observe, and elaborates the refused
+/// one again: the refusal it reports is this build's, over this world. The
+/// image it leaves says it holds moved declarations, so a later stale pass
+/// does the same again and the exact lane elaborates the module whole.
+#[test]
+fn a_module_with_directives_moves_what_it_accepted_and_judges_its_refusals_again() {
+    let (root, cache) = judged_edit("refusing-moves", &format!("theorem unrelated(n: Nat): n = n {{ refl }}\n{ORIGIN}"));
+    let (fresh, _, fresh_psi) = judging(&root, Some(&root.join("fresh")), ImageFreshness::Exact);
+    assert_eq!((fresh.expected_refusals, fresh.replayed_items), (1, 0));
+    for again in [false, true] {
+        let (moved, relocated, psi) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+        assert!(moved.errors.is_empty(), "{again}: {:?}", moved.errors);
+        assert!(!moved.replayed, "{again}: an image of refusals replayed whole");
+        // The import, `before` and `after` replay; `bad` is elaborated.
+        assert_eq!((moved.expected_refusals, moved.replayed_items), (1, 3), "{again}");
+        assert!(moved.notices.iter().any(|n| n.kind == CacheNoticeKind::Relocated), "{again}");
+        assert!(relocated >= 1, "{again}");
+        assert!(psi == fresh_psi, "{again}: the stale lane's world differs from a fresh elaboration");
+    }
+    let (exact, relocated, psi) = judging(&root, Some(&cache), ImageFreshness::Exact);
+    assert_eq!((exact.replayed, exact.expected_refusals, exact.replayed_items, relocated), (false, 1, 0, 0));
+    assert!(psi == fresh_psi);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// What a refusal says can draw on a note an earlier declaration's
+/// elaboration left in the pass: why `tally` has no branch equation. A
+/// declaration reproduced from a moved image leaves no note, the refusal
+/// reads as a plain unbound name, and the directive would be missed. The
+/// module is then elaborated whole and judged on that.
+#[test]
+fn a_refusal_that_reads_differently_over_moved_declarations_is_judged_on_a_whole_elaboration() {
+    let noted = "import origin;\nimport bool;\nfn tally(b: Bool, n: Nat) -> Nat { if b { origin::value() } else { match n { Zero => 0, Succ(m) => tally(b, m) } } }\n\n// expect-error: no branch equation `tally::True`\ntheorem tally_true(n: Nat): tally(True, n) = 7 { tally::True(True, n) }\n";
+    let root = temp("refusing-noted");
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    std::fs::write(root.join("origin.hthr"), ORIGIN).unwrap();
+    std::fs::write(root.join("judged.hthr"), noted).unwrap();
+    let (first, _, _) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
+    assert_eq!(first.expected_refusals, 1);
+    std::fs::write(root.join("origin.hthr"), format!("theorem unrelated(n: Nat): n = n {{ refl }}\n{ORIGIN}")).unwrap();
+    let (out, relocated, psi) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!((out.expected_refusals, out.replayed_items, relocated), (1, 0, 0));
+    let (_, _, fresh_psi) = judging(&root, Some(&root.join("fresh")), ImageFreshness::Exact);
+    assert!(psi == fresh_psi, "the world after the second elaboration differs from a fresh one");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Negative controls. An edit the accepted declarations observed moves
+/// nothing, and what they now fail with is reported. An edit that gives the
+/// refused declaration its missing name moves nothing either, and the
+/// declaration is accepted: no refusal is counted for a directive the
+/// module no longer meets.
+#[test]
+fn a_module_with_directives_is_elaborated_again_when_it_observed_the_edit() {
+    let (root, cache) = judged_edit("refusing-observed", &ORIGIN.replace("{ 7 }", "{ 8 }"));
+    let (out, relocated, _) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+    assert_eq!((out.replayed_items, relocated), (0, 0));
+    assert_eq!(out.errors.len(), 2, "{:?}", out.errors);
+    let _ = std::fs::remove_dir_all(root);
+
+    let (root, cache) = judged_edit("refusing-met", &format!("{ORIGIN}fn nope() -> Nat {{ 0 }}\n"));
+    let (out, relocated, _) = judging(&root, Some(&cache), ImageFreshness::AcceptStale);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!((out.expected_refusals, out.replayed_items, relocated), (0, 0, 0));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Refusals that do not meet their directives leave no image: the module

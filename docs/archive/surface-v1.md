@@ -1,6 +1,6 @@
 # Surface syntax sketches, round 1
 
-Revisions after review of round 0 (docs/sketches/surface-v0.md). Decisions
+Revisions after review of round 0 (docs/sketches/surface-v0.md@4acf2fe). Decisions
 taken this round are marked ✔; still-open choices ❓. The big movements:
 real operator/method syntax everywhere; match/induction/rec unified via
 recursive theorems; `where` replaced by in-block `on` discharge; implicit

@@ -2,7 +2,7 @@
 
 Status: **survey**, 2026-10-23. Source: Part, Isaev and Sinchuk, *Theorem
 prover Arend*, arXiv:2610.27264v2 (21 Oct 2026), committed beside this note as
-`docs/2610.27264v2.pdf`. Page numbers below are the paper's. Follow-up issues
+`docs/papers/2610.27264v2.pdf`. Page numbers below are the paper's. Follow-up issues
 are listed in §8.
 
 Arend is JetBrains Research's prover for univalent and constructive

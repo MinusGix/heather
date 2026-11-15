@@ -11,11 +11,11 @@ executable and runs.** Amendments from probing and building are folded into
 certificate states that write.**
 **Superseded in part 2026-09-27:** the single read is now a loop to the end
 of file, and the read-once profile is gone
-(`docs/native-read-until-eof-design.md`). §3 (fetched execution), §4 (the
+(`docs/native-read-until-eof-design.md@4acf2fe`). §3 (fetched execution), §4 (the
 trace) and §10's formatter still stand as written. §5's code, the claims in
 §2 and §10, and the `read_loop_*` theorem names describe the read-once program.
 Addresses here are as designed: the RW page moved from `0x401000` to
-`0x410000` on 2026-09-29 (`docs/native-wc-design.md` §5.1).
+`0x410000` on 2026-09-29 (`docs/archive/native-wc-design.md` §5.1).
 Owner: `issues/native-first-program.md`. Follow-up owner for the syscall
 model's proper form: `issues/linux-syscall-trace-model.md`.
 
@@ -23,14 +23,14 @@ model's proper form: `issues/linux-syscall-trace-model.md`.
 
 Every native certificate so far covers either a fragment or a closed program:
 
-- `build-x86` (`docs/x86-64-static-elf.md`) writes a standalone ELF, but its
+- `build-x86` (`docs/x86-64-static-elf.md@4acf2fe`) writes a standalone ELF, but its
   two inputs are baked in with `--arg`. The process claim is a fetched
   straight-line trace ending in `LinuxExitRequest`, and exit is the only
   syscall it models.
-- The call profile (`docs/x86-64-calls.md`, `lib/std/os/linux/elf64_calls.hthr`) adds a
+- The call profile (`docs/x86-64-calls.md@4acf2fe`, `lib/std/os/linux/elf64_calls.hthr`) adds a
   zero-filled RW page at `0x401000` and fetched CALL/RET. Its traces are still
   flat instruction lists (`FetchedCallTrace`).
-- The bounded-loop certificates (`docs/native-bounded-loops-design.md`) state
+- The bounded-loop certificates (`docs/archive/native-bounded-loops-design.md`) state
   a loop's exit against a named source function (`count_occurrences`,
   `first_match`). Their execution relation, `ExecuteAccess`, is **structural**:
   it follows the `AccessCode` tree, and bytes and layout sit beside it in
@@ -245,7 +245,7 @@ application template.
   read-until-EOF program needs a loop whose body is a syscall, which is the
   trace issue's second step.
 - **Linux itself.** Loading, the entry state, and syscall delivery stay
-  environment assumptions, stated in `docs/x86-64-static-elf.md`'s terms.
+  environment assumptions, stated in `docs/x86-64-static-elf.md@4acf2fe`'s terms.
 
 ## 7. Verification items — results (2026-09-24)
 
@@ -436,7 +436,7 @@ width-dependent case cost was subsequently removed: the bit-transducer
 classifier declines an unrelated neutral step before walking its result
 type. Ordinary nested lookup now pays a constant cost per successor,
 independent of result width; balanced generator dispatch remains in place
-([valuation-lookup-case-step-cost](../issues/valuation-lookup-case-step-cost.md)). One link still
+([valuation-lookup-case-step-cost](../../issues/valuation-lookup-case-step-cost.md)). One link still
 unfolded a whole helper. Nested helpers (`raise` → `times256` → `double`)
 share their result port, and only the innermost body was kept for it, so the
 `raise` crossing had no meaning over its child and compared all 40 doublings

@@ -12,7 +12,7 @@ pull reflection API the fn-reflection round pre-cut. Round pattern as usual:
 this document first, the implementation against §8's acceptance list.
 
 Context it builds on and does not restate: the transcriber round
-(`docs/certgen-transcriber-in-language-design.md` — the marker convention,
+(`docs/archive/certgen-transcriber-in-language-design.md` — the marker convention,
 the analyzer-slot harness, `lib/certgen/certgen_code.hthr`), the signature-reflection
 round (`docs/fn-signature-reflection-design.md` — `Elaborator::fn_type_code`,
 the interface/implementation seam this round was expected to fill from the

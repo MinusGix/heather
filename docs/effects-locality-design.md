@@ -275,7 +275,7 @@ effects: a function given only `stdout` cannot open files.
 An effect is an `Events` signature; a program is a tree over a sum of
 signatures; a handler is `interp`, mapping each event of one signature to a
 tree over another, and `interp` is a monad morphism, so handler reasoning
-is local (Xia et al., "Interaction Trees", POPL 2020, `docs/3371119.pdf`).
+is local (Xia et al., "Interaction Trees", POPL 2020, `docs/papers/3371119.pdf`).
 Heather has the pieces: `Events::sum`, `run_state` and `run_state_bind`, a
 coinductive `CoTree` with `Eutt`.
 

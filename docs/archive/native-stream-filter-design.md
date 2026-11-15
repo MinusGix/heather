@@ -7,7 +7,7 @@
 Status: **landed 2026-10-01** (F0–F5 in one round; §10 lists how it was
 built). Anchor issue:
 `issues/native-loop-emitting-stores.md` (step 2 of the line agreed in
-`docs/automatic-author-surface-design.md`; step 3 is
+`docs/automatic-author-surface-design.md@4acf2fe`; step 3 is
 `issues/native-one-program-logic.md`).
 
 ## 1. What this round does
@@ -219,13 +219,13 @@ RSI, RDX, RDI, RAX and RBX; Linux clobbers RCX and R11; R9 and R10 advance.
 ### 4.2 Proof structure
 
 - The per-byte loop is modelled on `elf64_read_map`'s `map_byte` /
-  `map_loop` / `map_chunk`, which `docs/native-tr-design.md` §8 says cost
+  `map_loop` / `map_chunk`, which `docs/archive/native-tr-design.md` §8 says cost
   minutes until each sub-step was `have`-bound into a record of its own.
   Keep that discipline from the first draft: `FilterLoaded`,
   `FilterStepped`, `FilterStored` and `FilterAdvanced` are records, and
   `filter_byte` chains them. (Since 2026-10-20 the loop is a program on
   frame-free stretches, the step by hand between them:
-  `docs/native-straight-runs-design.md`, "The libraries' stretches".)
+  `docs/archive/native-straight-runs-design.md`, "The libraries' stretches".)
 - **Nat fields fit.** The step piece's contract needs each Nat field of the
   next state below 2^64. With init at zero and `advances`, each count after
   `k` bytes is at most `k`. The library proves `counts_bounded` once, by

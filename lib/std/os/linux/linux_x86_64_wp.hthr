@@ -40,7 +40,7 @@
 // a smaller variant, or leaves meeting the rest of the tree.
 //
 // What the type computes is the items' structure only, as `Straight`'s did
-// (docs/native-straight-runs-design.md): values, places and answers are
+// (docs/archive/native-straight-runs-design.md): values, places and answers are
 // named by the caller; a jump's target is the label's offset, which
 // `wp_reach`, checked by evaluation, says it lands on.
 import linux_calls;

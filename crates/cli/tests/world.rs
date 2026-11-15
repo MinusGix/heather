@@ -2,7 +2,7 @@
 //! process loads (`docs/module-dag-design.md`): it is checked over its own
 //! import closure, keyed by that closure, under its own lint profile.
 //! `--world`, which made the prefixes equal instead
-//! (`docs/library-world-design.md`), is accepted and changes nothing.
+//! (`docs/archive/library-world-design.md`), is accepted and changes nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
