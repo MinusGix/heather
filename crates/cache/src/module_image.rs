@@ -67,7 +67,7 @@ impl SemanticsIdentity {
 
     /// The identity an image carries when it was not elaborated but
     /// **relocated** by this build from an image of the same source over
-    /// another dependency world (`docs/module-interface-cutoff-design.md`).
+    /// another dependency world (`docs/infrastructure/module-interface-cutoff-design.md`).
     /// It is not [`Self::current`], so [`ImageFreshness::Exact`] never
     /// replays one: the exact lane keeps elaborating every module it
     /// misses, and stays the reference the relocation is compared against.
@@ -146,7 +146,7 @@ impl ModuleCacheKey {
 
 /// The identity of a module's source alone — name, text, lint profile — with
 /// no dependency world: what finds a relocation candidate, an image of the
-/// same text over another world (`docs/module-interface-cutoff-design.md`
+/// same text over another world (`docs/infrastructure/module-interface-cutoff-design.md`
 /// §2). Never a cache key: what the candidate is accepted on is its world
 /// record, checked against the world it is moved onto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl SourceKey {
 
 /// What an image records about the dependency world it was elaborated over,
 /// so it can be moved onto another world that differs only in what the
-/// module never observed (`docs/module-interface-cutoff-design.md` §2).
+/// module never observed (`docs/infrastructure/module-interface-cutoff-design.md` §2).
 /// Advisory: a wrong record can make a relocation fail its replay or be
 /// refused, and the relocated delta is kernel-rechecked like any image.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -316,16 +316,16 @@ pub struct LoadedModule {
     /// without changing the loader/storage boundary.
     pub interface_hash: [u8; 32],
     /// What the image recorded about its dependency world, when its writer
-    /// could say (`docs/module-interface-cutoff-design.md` §2).
+    /// could say (`docs/infrastructure/module-interface-cutoff-design.md` §2).
     pub world: Option<WorldRecord>,
     /// Declarations the module's `expect-error` directives say are refused,
     /// and its writer saw refused that way; zero for a module that checked
     /// whole. The delta holds the module's other items
-    /// (`docs/module-dag-design.md` §11).
+    /// (`docs/infrastructure/module-dag-design.md` §11).
     pub refusals: usize,
     /// The SHA-256 of the semantic bytes `delta` was decoded from: with the
     /// world it is replayed over, what a whole-replay verdict is keyed by
-    /// (`docs/module-dag-design.md` §13).
+    /// (`docs/infrastructure/module-dag-design.md` §13).
     pub content: [u8; 32],
 }
 
@@ -533,7 +533,7 @@ impl ModuleImageCache {
     /// The pointer to the newest image published for `module` over
     /// `dependencies`, whatever its source: what an edited module replays
     /// its unchanged declarations from
-    /// (`docs/declaration-slice-replay-design.md` §4). One small file per
+    /// (`docs/infrastructure/declaration-slice-replay-design.md` §4). One small file per
     /// (module, dependency world), holding the image's cache key.
     fn latest_path(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> PathBuf {
         self.dir.join(format!("{}.latest", self.world_key(module, dependencies)))
@@ -556,7 +556,7 @@ impl ModuleImageCache {
 
     /// The pointer to the newest image published for a module's exact source
     /// over any dependency world: a relocation candidate
-    /// (`docs/module-interface-cutoff-design.md` §2). Like `.latest`, one
+    /// (`docs/infrastructure/module-interface-cutoff-design.md` §2). Like `.latest`, one
     /// small file holding a cache key; unlike it, never a pin.
     fn source_path(&self, source: SourceKey) -> PathBuf {
         self.dir.join(format!("{}.src", hex(&source.0)))
@@ -865,7 +865,7 @@ impl ModuleImageCache {
 
     /// The interface hash an image for `key` records, read from its header
     /// alone: what a planner chains the keys of the modules above it from,
-    /// without decoding anything (`docs/module-dag-design.md` §12). `None`
+    /// without decoding anything (`docs/infrastructure/module-dag-design.md` §12). `None`
     /// when there is no image this freshness would load, or it records
     /// refusals of another build (which no session replays), or its semantic
     /// section is of an encoding this build does not decode. Otherwise
@@ -895,7 +895,7 @@ impl ModuleImageCache {
     /// Whether another process is building `key` now: no image yet, and its
     /// build lock is held. A scheduler sets such a module aside and checks
     /// another whose imports it has, rather than wait
-    /// (`docs/module-dag-design.md` §7). Advisory, like the lock: `false`
+    /// (`docs/infrastructure/module-dag-design.md` §7). Advisory, like the lock: `false`
     /// when it cannot tell.
     pub fn being_built(&self, key: ModuleCacheKey) -> bool {
         if self.path(key).exists() {
@@ -932,7 +932,7 @@ impl ModuleImageCache {
 
     /// [`Self::publish_as`] with the module's world record and source key,
     /// so a later run over another world can find the image by its source and
-    /// move it (`docs/module-interface-cutoff-design.md` §2). The source
+    /// move it (`docs/infrastructure/module-interface-cutoff-design.md` §2). The source
     /// pointer is written only with a record: an image without one cannot be
     /// moved.
     pub fn publish_world(

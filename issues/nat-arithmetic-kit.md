@@ -69,7 +69,7 @@ sections at the end, all after the order kit because all of them read it:
   it: `mul(n, Succ j)` is `add(mul(n, j), n)`, so its step compares two sums and
   is exactly `add_le_mono` of the IH and the hypothesis.
 - **`min`/`max`** — plain structural recursions mentioning no decider, which is
-  the prediction `docs/nat-order-design.md` §6 made and it held exactly. Both
+  the prediction `docs/library/nat-order-design.md` §6 made and it held exactly. Both
   descend on both arguments and so are curried for `Le`'s and `sub`'s reason
   ([[ih-generalization]]); both reduce, so `max(2, 5) = 5` is `refl`. Beyond the
   four bounds, the kit got the two *universal* properties (`max_le`, `le_min`)
@@ -100,6 +100,6 @@ composite and closed values above, inside and below the band.
 type is `Le(n, m)` at open arguments prints the raw `El(app(app(u55…)))` code,
 because the display reader added by [[goal-display-decodes]] unfolds until the
 `El` wrapper disappears and at open arguments it never does. Filed as
-[[le-diagnostics-print-raw-el]]; it is the residue `docs/nat-order-design.md`
+[[le-diagnostics-print-raw-el]]; it is the residue `docs/library/nat-order-design.md`
 §6 predicted, now that every propositional relation in the library is a
 `fn … -> Type`.

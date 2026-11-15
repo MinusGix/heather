@@ -1,4 +1,4 @@
-//! The tested call (docs/when-design.md §4): a call of a proof-taking
+//! The tested call (docs/language/when-design.md §4): a call of a proof-taking
 //! function where a `When<T, P>` is wanted leaves its condition out and
 //! tests it.
 //!
@@ -269,7 +269,7 @@ impl Tested<'_> {
         }
         let Some(mut found) = self.condition_of(cx, call) else { return Ok(None) };
         // A condition whose proofs are interchangeable is `∥P∥`
-        // (docs/strict-conditions-design.md §3): `P` is what is decided, and
+        // (docs/language/strict-conditions-design.md §3): `P` is what is decided, and
         // its proof is accepted at the squash, wrapped.
         if let Type::Squash { level, ty } = &found.condition {
             let (level, ty) = (level.clone(), (**ty).clone());
@@ -309,7 +309,7 @@ impl Tested<'_> {
                 format!(
                     "a `When` is wanted here, so this call of `{}` tests its condition `{}`, which has no decision \
                      (`Decide<{shown}>`) here: give `{} := …` and take the value, or call a function whose own work \
-                     decides it and returns a `When` (docs/when-design.md §3)",
+                     decides it and returns a `When` (docs/language/when-design.md §3)",
                     found.callee, shown, found.name
                 ),
                 span,
@@ -336,7 +336,7 @@ impl Tested<'_> {
     }
 
     /// A `match` on `When`'s constructors whose arms leave the proofs out
-    /// (docs/when-design.md §5): `Present(x)` binds its proof as
+    /// (docs/language/when-design.md §5): `Present(x)` binds its proof as
     /// `__when_holds_N`, and the `_` arm beside it (an `if let`'s `else`) is
     /// `Absent`, binding the refutation as `__when_fails_N`, with `N` the
     /// scrutinee's place. The names are
@@ -460,7 +460,7 @@ impl Tested<'_> {
 }
 
 /// The `known` search's name: a hypothesis in scope, or a side of one that
-/// is a conjunction, then `omega`, then `bv_omega` (docs/when-design.md §5).
+/// is a conjunction, then `omega`, then `bv_omega` (docs/language/when-design.md §5).
 /// The default of `When::val`'s condition.
 pub(crate) const KNOWN: &str = "known";
 
@@ -553,7 +553,7 @@ fn propagates(e: &Expr) -> bool {
 const TAIL: &str = "\0when-tail";
 
 impl Tested<'_> {
-    /// `K[w?]` where a `When<U, Q>` is wanted (docs/when-design.md §6):
+    /// `K[w?]` where a `When<U, Q>` is wanted (docs/language/when-design.md §6):
     ///
     /// ```text
     /// When::and_then(w, λ v __when_holds_N => K[v], λ q => known)
@@ -607,7 +607,7 @@ impl Tested<'_> {
 const COERCED: &str = "__when_coerced";
 
 impl Tested<'_> {
-    /// A `When<T, P>` where a `T` is wanted (docs/when-design.md §5, stage
+    /// A `When<T, P>` where a `T` is wanted (docs/language/when-design.md §5, stage
     /// 5): the value, with `P` found by `known`. Reached only from the
     /// checking fallback after inference, and only when the inferred type is
     /// `When`, the expected one is not, and its `T` is the expected type;

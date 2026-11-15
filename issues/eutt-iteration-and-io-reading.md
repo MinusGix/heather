@@ -8,7 +8,7 @@ created: 2026-11-03
 updated: 2026-11-03
 ---
 
-The library half of `docs/effects-capabilities-design.md` §4 (decided by
+The library half of `docs/language/effects-capabilities-design.md` §4 (decided by
 Minus 2026-11-03): loops over a world mean `Io → Partial<Mutated<Io, R>>`,
 and a tree agrees with a capability program up to taus.
 
@@ -51,7 +51,7 @@ suffices, and a probe reads a fuel-free loop tree at a scripted world to a
 
 ## Log
 
-- 2026-11-03: 2026-11-03: DONE, every lemma proved by direct corecursion; nothing waits on [[codata-up-to-friends-round-2]]. `docs/coitree-design.md` §7.9 has the shape of each proof.
+- 2026-11-03: 2026-11-03: DONE, every lemma proved by direct corecursion; nothing waits on [[codata-up-to-friends-round-2]]. `docs/itrees/coitree-design.md` §7.9 has the shape of each proof.
   - `coitree.hthr`: `iter_from` (the loop resumed inside a pass), `Obs::iter`, `iter_next`, `iter_at`, and the unfolding `CoTree::iter_unfold` as a `Bisim` (`iter(body, a)` is `bind(body(a), Continue(a2) ↦ CTau(iter(a2)) | Break(b) ↦ CRet(b))` step for step).
   - `coitree_eutt.hthr`: `AfterIs` and `CoTree::after_map` (any function of trees that is a function of observations and keeps silent steps follows the drops with an exact count; `iter_from`, `mrec`, `against_co` are instances by `refl`), `Eutt::iter_from_cong`/`iter_cong`, `Eutt::iter_unfold` (tau dropped, `iter_again`).
   - `coitree_rec.hthr`: `Returns::eutt`, `Eutt::mrec_cong`/`rec_cong` (via the `MrecStep` classification of a command), `Eutt::mrec_call`, and `Eutt::mrec_bind` (running a bind is running its halves in sequence) generalised over `Bisim(p, bind(q, k))` so `bind_assoc` lands in the hypothesis.

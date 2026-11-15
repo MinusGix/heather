@@ -14,7 +14,7 @@ companions, a value holding a proof) gives two calls that do not convert.
 PR #607 worked around it by lifting found proofs out of `decreases` bodies
 (`measure::lift_found`) and by defining `Vec::at` as the total read.
 
-Design and status: `docs/strict-conditions-design.md`. The condition's type
+Design and status: `docs/language/strict-conditions-design.md`. The condition's type
 is `∥P∥`; the kernel's squash irrelevance already makes the arguments
 convertible at an opaque head (no kernel change), and the elaborator
 accepts a proof of `P` (a search, a tactic, or an inferred proof) where

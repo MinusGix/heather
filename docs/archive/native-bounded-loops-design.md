@@ -1,7 +1,7 @@
 # Native bounded-loop certificates — design
 
 > **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
-> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> per-function certificate path (`docs/native/native-program-logic-design.md` §3.2); `compile-x86`
 > compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
 > The document stays for its reasoning. The last commit with the code is `82521eab`.
 
@@ -11,7 +11,7 @@ Status: **design agreed 2026-09-24; probes done (§8); slices A0, A, B and C lan
 
 ## 1. What exists, and what this adds
 
-The source/IR contract (`docs/function-ir-readonly-loops.md`,
+The source/IR contract (`docs/native/function-ir-readonly-loops.md`,
 `lib/native/function_ir/function_ir_loop.hthr`) fixes the meaning: one evaluator `loop_run`, a
 five-parameter wrapper reflected with its step function, and
 `LoopReadable` defined from the evaluator's own outcome. The 09-20 rounds

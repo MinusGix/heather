@@ -9,7 +9,7 @@ updated: 2026-10-10
 `h: P := infer` at a goal that is not a class consults only the derived
 table and the locals (`crates/elab/src/resolve.rs` step 1), so
 `0 < Succ(k)`, `0 < 5`, `0 < n + 1` and `0 < a * b` all fail even when the
-facts that prove them are in scope (probes: `docs/positivity-evidence-design.md` §3).
+facts that prove them are in scope (probes: `docs/library/positivity-evidence-design.md` §3).
 
 Round 1 of [[positivity-evidence]]. Add two sources after the locals:
 
@@ -46,4 +46,4 @@ uses the prefix spelling.
 ## Log
 
 - 2026-10-10: Filed from the positivity design; Minus chose rules in `infer`.
-- 2026-10-10: Landed (docs/positivity-evidence-design.md §9). Computation proposes `trivial` under COMPUTE_FUEL; rules are `evidence theorem`s (every parameter `{…}` or `:= infer`), keyed by the conclusion's relation with argument heads as a prefilter, tried through the instance resolver's `build_candidate`, terminating by Paterson's condition on the checked statement, and persisted as `DeltaEvent::Evidence` (image magic bumped). `nat.hthr` registers `Nat::mul_pos`, `Nat::add_pos_l`, `Nat::add_pos_r`. Failed proposition goals now print instantiated (`Lt(0, 0)`), spelled rather than decoded; infix notation in them stays [[diagnostic-operator-resugaring]]'s. Tests: crates/elab/tests/lib_std_evidence.rs.
+- 2026-10-10: Landed (docs/library/positivity-evidence-design.md §9). Computation proposes `trivial` under COMPUTE_FUEL; rules are `evidence theorem`s (every parameter `{…}` or `:= infer`), keyed by the conclusion's relation with argument heads as a prefilter, tried through the instance resolver's `build_candidate`, terminating by Paterson's condition on the checked statement, and persisted as `DeltaEvent::Evidence` (image magic bumped). `nat.hthr` registers `Nat::mul_pos`, `Nat::add_pos_l`, `Nat::add_pos_r`. Failed proposition goals now print instantiated (`Lt(0, 0)`), spelled rather than decoded; infix notation in them stays [[diagnostic-operator-resugaring]]'s. Tests: crates/elab/tests/lib_std_evidence.rs.

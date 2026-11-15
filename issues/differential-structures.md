@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Axis 1 of `docs/analysis-foundations-design.md` (§3.1): one interface for
+Axis 1 of `docs/library/analysis-foundations-design.md` (§3.1): one interface for
 "a map with its derivative", so the chain rule and its relatives are laws
 stated once and every instance (jets, Hurwitz series, `C¹` on `CReal`,
 Lipschitz with interval derivatives, programs, ML models) inhabits them.

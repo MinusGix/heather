@@ -18,7 +18,7 @@ theorem self_sub(e: Nat): bitvec_nat::word_of_nat(64, e).sub(bitvec_nat::word_of
 
 The same goal over a variable word (`a.sub(a).toNat() = 0`) checks.
 `word_of_nat(n, v)` is `BitVec::zero().iterate_increment(v)`. The guess to
-verify first is that `bv_omega`'s definition walk (docs/bv-omega-design.md §2,
+verify first is that `bv_omega`'s definition walk (docs/tactics/bv-omega-design.md §2,
 "a definition") steps into `iterate_increment`, a recursion on an open count,
 and never reaches a leaf. A recursive definition should be a leaf, or at least
 bounded. Found 2026-09-27 while probing [[linux-syscall-trace-model]]'s failure

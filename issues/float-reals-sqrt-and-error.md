@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-The first part of `float-reals` (docs/floating-point-design.md §6, §17).
+The first part of `float-reals` (docs/library/floating-point-design.md §6, §17).
 [[float-sqrt]] stated the root's value theorem at every rational in `√x`'s
 cell and left two things for the reals: that the real `√x` itself is
 rounded, and the standard model `|r - √x| ≤ u·√x`, which needs `√x` as a

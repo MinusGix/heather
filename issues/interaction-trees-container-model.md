@@ -8,7 +8,7 @@ created: 2026-09-24
 updated: 2026-10-21
 ---
 
-Owns the follow-ups of `docs/interaction-trees-fit.md` (the 2026-09-24
+Owns the follow-ups of `docs/itrees/interaction-trees-fit.md` (the 2026-09-24
 investigation of Xia et al., `docs/papers/3371119.pdf`): interaction trees with
 **container events** (`Cmd : Type<l>`, `Resp : Cmd -> Type<l>`) over trees
 cut off at fuel, with no kernel coinduction. The doc argues this keeps
@@ -75,7 +75,7 @@ on a customer that needs liveness or concurrency.
     (doc §6.2) reopen Q1. Nothing the finitary route needs is lost for
     deterministic trees.
 - 2026-10-21: Q2, first half (`it-core`): `lib/std/itree/itree.hthr`, written up in
-  `docs/itree-core-round.md`. Events, sums and container morphisms; the tree
+  `docs/itrees/itree-core-round.md`. Events, sums and container morphisms; the tree
   with a `Cut` leaf; `bind`, `map`, `translate`, `iter` and `mrec` (fuel as an
   argument), `interp` (structural, no fuel). The fit doc's claim checks: the
   Fig. 5 laws with a constructor on the left are `refl`. The laws through
@@ -89,7 +89,7 @@ on a customer that needs liveness or concurrency.
   `converges`/`fuel_monotone`; and Q3, the state handler.
 - 2026-10-21: Q2, second half, and Q3 (`it-refinement`):
   `lib/std/itree/itree_trace.hthr` and `lib/std/itree/itree_state.hthr`, written up in
-  `docs/itree-refinement-round.md`. Traces end in a prefix, a pending call or
+  `docs/itrees/itree-refinement-round.md`. Traces end in a prefix, a pending call or
   a return; `IsTrace` (Fig. 20) is computed from the tree, and a `Cut`
   produces only the empty prefix. A program is a family over fuel:
   `Below`/`Grows` order it, `fuel_monotone` and `Converges` are `simulate`'s

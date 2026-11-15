@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-11-11
 ---
 
-Round 5 of `docs/native-real-programs-plan.md` (§3.3) asked for pure helpers
+Round 5 of `docs/native/native-real-programs-plan.md` (§3.3) asked for pure helpers
 written as ordinary Heather word functions, inlined into a tool as their
 reflected FunctionIR regions (the `compile-x86` reflector,
 `crates/elab/src/function_ir_source.rs`) with the reflector's certificate
@@ -37,7 +37,7 @@ loops (decimal formatting, [[native-decimal-io]]) need it most.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/native/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
 - 2026-10-31: Done on branch claude/project-thread-xhabhy, as calls rather than inlined regions: `heather reflect <file> <fn> -o <m>.hthr` writes a word function's FunctionIR program and `<fn>_native_agrees` (program_eval of it is the function) as a checked module; a tool names that program (`program(fs, …)`, the source's `functions`) and calls it from a pure statement (`call(k, args, r)`, a FunctionIR `Call`). The meaning is direct: `raised_status_runs` (lib/_tests/native/native_build_tests.hthr) reads a tool's exit status as `raise_letter`'s value for any byte, through `raise_letter_native_agrees` (lib/native/native_tool_words_program.hthr). Inlining would need a renaming theorem over FunctionIR evaluation whose narrow-width views make it long (a call's result is `word_value` at every width, a move's is the source's view), so calls compile as procedures instead: the compiler refuses a call region and write-elf refuses a tool with a program until [[native-compiled-procedures]] lands; inlining, if wanted, is a pass proved once on top.
-- 2026-10-31: 2026-10-31: `docs/runtime-fn-setups-design.md` §10: kept as the near-term stepping stone (through the Rust reflector). Its builder-facing form survives R5: in [[runtime-fn-default-setup]] the helper form takes a function with a `Compile` instance (from a `runtime fn` or by hand) instead of a function the Rust reflector reads.
+- 2026-10-31: 2026-10-31: `docs/native/runtime-fn-setups-design.md` §10: kept as the near-term stepping stone (through the Rust reflector). Its builder-facing form survives R5: in [[runtime-fn-default-setup]] the helper form takes a function with a `Compile` instance (from a `runtime fn` or by hand) instead of a function the Rust reflector reads.
 - 2026-11-11: Closed in effect by the one-compiler round U2 ([[native-one-compiler]]): a tool that calls a function of its program compiles now, the function emitted after the program's code and called by the System V convention; `raised_status` compiles (`raised_status_compiles`) and tr through `raise_letter` runs beside GNU's.

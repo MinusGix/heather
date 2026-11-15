@@ -1,4 +1,4 @@
-// SHA-256's context as a record laid over its span (docs/layout-design.md
+// SHA-256's context as a record laid over its span (docs/native/layout-design.md
 // §6.2 and §9.5, issues/sha256-context-type.md): a `Sha256`, with the hash
 // value, the working variables, the message schedule and the count, each
 // word stored with its most significant byte first. `sha256_block` and

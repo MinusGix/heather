@@ -10,7 +10,7 @@ updated: 2026-11-07
 
 A relation `rewrite` through a context `C → D` reads the result's relation
 `S` off the evidence rules about `PreservesRelation` that match the context
-(`docs/equation-rewrite-design.md` §11.4, from
+(`docs/tactics/equation-rewrite-design.md` §11.4, from
 [[rewrite-setoid-heterogeneous]]). Left out:
 
 - **Hypotheses in scope**: a local `p: PreservesRelation(R, S, f)` names `S`
@@ -25,7 +25,7 @@ A relation `rewrite` through a context `C → D` reads the result's relation
 
 ## Resolution (2026-11-07)
 
-All three, `docs/equation-rewrite-design.md` §11.6. Candidates for `S` are
+All three, `docs/tactics/equation-rewrite-design.md` §11.6. Candidates for `S` are
 hypotheses in scope (`PreservesRelation(R', S, f)` as written, `f` converting
 to the context), then rules, then the rewrite's own `R` when the target is
 its carrier, then `RelId<D>` when nothing named one. A change by `RelId`

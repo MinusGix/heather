@@ -106,7 +106,7 @@ theorem literal_left_of_append(): [1] ++ [2] = [1, 2] { refl }
 // Deep patterns and nested matches below a `Cons`: the tail binder is a read
 // out of the arm's children tuple, not a subterm of the goal's `Cons(x, rest)`,
 // so the motive rebuilds the tuple around the inner scrutinee
-// (docs/dependent-match-compiler-design.md §7.1). At an open element type.
+// (docs/language/matching/dependent-match-compiler-design.md §7.1). At an open element type.
 fn deep_mk<A>(a: A) → List<A> { [a, a, a] }
 
 // The equation `h` is the clause's whole equation at the leaf, with nothing

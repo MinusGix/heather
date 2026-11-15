@@ -14,7 +14,7 @@ tooling, the layout or the library itself should be designed for? His worry
 is that we have drifted into testing for its own sake, because every language
 PR gets tests even when what they check is a theorem.
 
-`docs/testing-architecture-design.md` (#151) and early cutoff (#157) asked
+`docs/infrastructure/testing-architecture-design.md` (#151) and early cutoff (#157) asked
 what the suite *costs*. This note asks what it *buys*, and builds on their
 numbers rather than re-measuring.
 
@@ -153,7 +153,7 @@ What the wrapper costs:
 - The program can't be imported, run with `--only`, timed with `--timings`,
   or exported.
 - It links into a test binary. The families
-  (`docs/elab-test-families-design.md`) contain that cost, but they don't
+  (`docs/infrastructure/elab-test-families-design.md`) contain that cost, but they don't
   remove it.
 
 **Verdict.** Keep the content and change the form: a `.hthr` corpus checked
@@ -277,7 +277,7 @@ helper (§4.4).
 
 - **Kernel tests** (`crates/kernel/tests`) are property and differential
   tests that cite the lemma of DeLaM ch. 05/06 they check
-  (`ch05_06_lemmas.rs`, `docs/ch05-06-lemma-audit.md`). The kernel can't
+  (`ch05_06_lemmas.rs`, `docs/kernel/ch05-06-lemma-audit.md`). The kernel can't
   vouch for itself, so Rust is the right home. Their long-term replacement is
   theorems about the kernel model in Heather (`hih-kernel-model`, #155), not
   fewer tests.
@@ -299,7 +299,7 @@ cold `heather check lib` in one process at width one takes about the whole
 300 CPU-s rail, so the gate runs one `heather check` per folder of `lib/std`
 and `lib/` (three at a time, one image store, single-flight builds); the
 largest folder cold is under half the rail, and a warm run replays in
-seconds. `elf64_load` stays: `docs/native-program-logic-design.md` §3 keeps
+seconds. `elf64_load` stays: `docs/native/native-program-logic-design.md` §3 keeps
 it for the native rebuild, so it is listed as a kept root with that reason.
 
 The proposal as written:
@@ -436,7 +436,7 @@ end up there. If not, it goes in `lib/_tests`:
 
 - **Layout.** `lib/_tests` mirrors `lib/`, for example
   `lib/_tests/std/num/float/arith_tests.hthr`. Module names are stems and
-  the loader searches every folder below `-L` (`docs/lib-layout-design.md`),
+  the loader searches every folder below `-L` (`docs/library/lib-layout-design.md`),
   so test modules take a distinct stem (`_tests` suffix) rather than their
   subject's name.
 - **Content.** Probes at specific values (§3.4's computation examples), the

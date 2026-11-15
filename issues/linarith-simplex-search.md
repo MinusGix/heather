@@ -9,10 +9,10 @@ updated: 2026-10-28
 ---
 
 `linarith` finds its multipliers by Fourier–Motzkin elimination and gives up
-past 2048 rows (docs/linarith-design.md §3). The elimination is doubly
+past 2048 rows (docs/tactics/linarith-design.md §3). The elimination is doubly
 exponential in the worst case. `nlinarith` grows the input from `k` rows to
 `k + k(k+1)/2` and adds monomials, so the row bound is the first limit it
-will meet (docs/nonlinear-arithmetic-design.md §6).
+will meet (docs/tactics/nonlinear-arithmetic-design.md §6).
 
 Exact simplex over ℚ finds the same Farkas multipliers: rows scaled to `Z`,
 Bland's rule against cycling, and `λ` read off the final tableau. It is
@@ -35,4 +35,4 @@ No customer yet. The first `nlinarith` refusal at the row bound is one.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/nonlinear-arithmetic-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/tactics/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/tactics/nonlinear-arithmetic-design.md`).

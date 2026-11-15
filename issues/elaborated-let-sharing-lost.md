@@ -9,9 +9,9 @@ updated: 2026-11-10
 ---
 
 Found building the `rt` reflector (`lib/native/runtime/rt_reflect.hthr`,
-V5 of `docs/runtime-fn-setups-design.md` §12). The design assumed a block's
+V5 of `docs/native/runtime-fn-setups-design.md` §12). The design assumed a block's
 `let` is an alias whose value is one shared subterm in the kernel term
-(`docs/let-and-blocks-design.md` §4.4), so the host could hand out one
+(`docs/language/let-and-blocks-design.md` §4.4), so the host could hand out one
 handle per shared subterm and a reflector memoise on handles. The host now
 does exactly that (`Run::issue_shared` in `crates/elab/src/host.rs`, keyed on
 the subterm's address), but a probe of `Body(f)` for

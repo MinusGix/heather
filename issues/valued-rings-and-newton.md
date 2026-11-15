@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-11-06
 ---
 
-Axis 2 of `docs/analysis-foundations-design.md` (§3.2): smallness as a
+Axis 2 of `docs/library/analysis-foundations-design.md` (§3.2): smallness as a
 dominance relation `≼` with axioms (no totality, leading monomials as data),
 convergence for it, and Newton's lemma proved once as a contraction with a
 rate.
@@ -42,4 +42,4 @@ Scope:
 
 ## Log
 
-- 2026-11-06: 2026-11-06: The contraction mapping theorem over a Cauchy-complete ordered field landed (`Contraction::fixed_point`, `fixed_unique` in lib/std/analysis/sequence.hthr; docs/sequences-and-completeness.md). It is stated for a contraction of the whole field. The local form that Newton's lemma needs is a contraction on a domain closed under limits. Its rate (`cⁿ·D/(1-c)` past step n, `Contraction::close`) is already explicit.
+- 2026-11-06: 2026-11-06: The contraction mapping theorem over a Cauchy-complete ordered field landed (`Contraction::fixed_point`, `fixed_unique` in lib/std/analysis/sequence.hthr; docs/library/sequences-and-completeness.md). It is stated for a contraction of the whole field. The local form that Newton's lemma needs is a contraction on a domain closed under limits. Its rate (`cⁿ·D/(1-c)` past step n, `Contraction::close`) is already explicit.

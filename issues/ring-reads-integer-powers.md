@@ -17,7 +17,7 @@ theorem t(b: Rat): b ^ 2 ≈ b * b { ring }            // refused
 theorem t(b: Rat): 0 < b ^ 2 + 1 { nlinarith }        // refused
 ```
 
-The division round (docs/division-design.md) added a sign rule
+The division round (docs/library/division-design.md) added a sign rule
 `Rat::nonneg_sq` so a divisor `b ^ 2 + 1` is found, but the tactics still
 miss it. Wanted: at a literal `OfNat(k)` exponent, read `x ^ OfNat(k)` as
 `x.npow(k)`, i.e. `x` multiplied `k` times (`pow_ofNat` is `refl`,

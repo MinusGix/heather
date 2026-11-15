@@ -13,7 +13,7 @@ does not have yet at the point it decides.
 
 The pattern compiler must decide whether a bare identifier in a sub-pattern is a
 nullary constructor or a fresh binder — the parser cannot
-(`docs/nested-match-patterns-design.md` §3.5). It decides with
+(`docs/language/matching/nested-match-patterns-design.md` §3.5). It decides with
 `patterns.rs:is_ctor_name`, which consults the **global** constructor table with
 no type evidence at all. So an ambiguous name answers `false`, and a
 constructor becomes a binder:
@@ -36,7 +36,7 @@ nobody wrote, several steps downstream of the misreading.
 ## Why this is the bad kind of wrong
 
 It is a **silent reinterpretation**, which is the one thing
-`docs/modules-design.md` §8's second invariant exists to forbid: adding a second
+`docs/language/modules-design.md` §8's second invariant exists to forbid: adding a second
 visible `Stuck` does not make the file an error, it makes it mean something
 else. Every other member of the resolution family is honest about this — the
 outer arm name goes through `arm_ctor_index` (the scrutinee's type, so

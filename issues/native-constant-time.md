@@ -13,7 +13,7 @@ Minus (2026-10-30), after BearSSL's *Constant-Time Crypto* and
 should be something Heather can prove and require. Not scheduled; kept for
 secure code, beside [[native-secret-erasure]].
 
-Design and survey: `docs/constant-time-survey.md`. In short, constant-time
+Design and survey: `docs/surveys/constant-time-survey.md`. In short, constant-time
 is non-interference on a leakage trace (control flow, memory addresses,
 operands of variable-time instructions), stated relative to a
 **leakage contract** that names which instructions are variable-time on
@@ -37,7 +37,7 @@ constant-time come later and separately.
 
 ## What it assumes from elsewhere
 
-- **[[native-secret-erasure]]** / `docs/zeroization-survey.md` shares the
+- **[[native-secret-erasure]]** / `docs/surveys/zeroization-survey.md` shares the
   label machinery: the checker's labels discharge erasure's source
   obligation on kept words (survey §8).
 - **[[native-procedure-contracts]]**: a procedure callable from
@@ -50,8 +50,8 @@ constant-time come later and separately.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[native-compiled-code-shape]] (`docs/zeroization-survey.md`); [[ownership-discipline-over-code]] (`docs/constant-time-survey.md`).
-- 2026-11-10: Scheduled under `hih-crypto` by `docs/native-lexer-crypto-roadmap.md` §4.
+- 2026-11-05: gardener: cites a file it shares with [[native-compiled-code-shape]] (`docs/surveys/zeroization-survey.md`); [[ownership-discipline-over-code]] (`docs/surveys/constant-time-survey.md`).
+- 2026-11-10: Scheduled under `hih-crypto` by `docs/native/native-lexer-crypto-roadmap.md` §4.
   The note asks for step 1 (the leakage transformer over the machine's `Step`
   and the statement of the property) **before** the second primitive is
   compiled, not after: every instruction form added for cryptography

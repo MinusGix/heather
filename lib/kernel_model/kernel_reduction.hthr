@@ -1,6 +1,6 @@
 // A reference model of the kernel's weak-head reduction, and the
 // substitution property its fold classifier relies on
-// (docs/kernel-model-design.md, milestone `hih-kernel-model`).
+// (docs/kernel/kernel-model-design.md, milestone `hih-kernel-model`).
 //
 // The kernel classifies a `Nat` fold's step by evaluating it on fresh
 // neutral probe variables (crates/kernel/src/eval/probe.rs) and iterates

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // crates/elab's integration tests are grouped into family binaries that
-// mount their member files by path (docs/elab-test-families-design.md), and
+// mount their member files by path (docs/infrastructure/elab-test-families-design.md), and
 // the package sets `autotests = false`, so Cargo no longer notices a test
 // file nobody declared: it would silently never compile. This script is the
 // check that replaces the discovery (§D5), run in scripts/test's preamble:
@@ -177,7 +177,7 @@ function main() {
   }
   const problems = lint();
   if (problems.length) {
-    console.error(`elab test families (${relative(process.cwd(), join(ROOT, CRATE, "Cargo.toml"))}, docs/elab-test-families-design.md):`);
+    console.error(`elab test families (${relative(process.cwd(), join(ROOT, CRATE, "Cargo.toml"))}, docs/infrastructure/elab-test-families-design.md):`);
     for (const p of problems) console.error(`  ${p}`);
     process.exit(1);
   }

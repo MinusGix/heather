@@ -24,7 +24,7 @@ heather-syntax = { path = "../syntax" }
 # one module (`src/lib.rs`, where the certificate that justifies calling
 # them safely is named). Everything else is still refused.
 # How fast the linked code runs against Rust references, and what it costs
-# to compile (docs/native-benchmarking.md). Run through
+# to compile (docs/native/native-benchmarking.md). Run through
 # `scripts/bench-native` (both profiles, the caps), never `cargo bench`.
 [[bench]]
 name = "native"

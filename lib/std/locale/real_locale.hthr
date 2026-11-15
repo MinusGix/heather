@@ -1,5 +1,5 @@
 // The real line as a locale (issues/localic-real-numbers.md,
-// docs/localic-reals-design.md).
+// docs/library/localic-reals-design.md).
 //
 // The line is presented, not built from points: a basis of intervals with
 // rational ends, two covering axioms, and the cover they generate (`Cover`,

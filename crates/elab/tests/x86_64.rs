@@ -57,7 +57,7 @@ fn elaborated() -> Elaborator {
     if report_metrics {
         e.enable_value_metrics();
     }
-    // One dump, from the one registry (`docs/instrumentation-design.md` §4).
+    // One dump, from the one registry (`docs/infrastructure/instrumentation-design.md` §4).
     if report_phases {
         e.enable_item_timings();
     }

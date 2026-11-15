@@ -16,7 +16,7 @@
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
 //! codata  := "codata" name tyvars? vparams? "{" ctors? "}"
 //!                                     -- a coinductive declaration
-//!                                     (docs/codata-elaborator-design.md)
+//!                                     (docs/inductives/codata-elaborator-design.md)
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
 //! rfield  := name ":" type            -- a record field is always named
 //! class   := "class" name tyvars? ("extends" cref ("as" name)? ("," cref ("as" name)?)*)?
@@ -25,17 +25,17 @@
 //! inst    := "instance" tyvars? vparams? cref
 //!            ("requires" ibind ("," ibind)*)?
 //!                                     -- vparams: the instance's VALUE binders
-//!                                     (docs/value-generic-instances-design.md)
+//!                                     (docs/language/classes/value-generic-instances-design.md)
 //! impl    := "impl" name "for" name "{" dclause ("," dclause)* ","? "}"
 //!                                     -- one entry of the cost basis (§1.2)
 //! drepr   := "datarepr" name "for" type
 //!            ( ":=" expr ";"? | "{" dclause ("," dclause)* ","? "}" )
 //!                                     -- a certified runtime representation
-//!                                     (docs/datarepr-design.md §1.4)
+//!                                     (docs/native/datarepr-design.md §1.4)
 //! dclause := "mk"? name ":=" expr     -- `mk C := …` is C's image
 //! desig   := "designation" "prefix"? tyvars? OP "at" type ":=" expr
 //!                                     -- what a symbol means at a carrier
-//!                                     (docs/operators-onto-classes-design.md)
+//!                                     (docs/language/classes/operators-onto-classes-design.md)
 //! decl    := ("fn"|"theorem") name tyvars? ("requires" ibind ("," ibind)*)?
 //!            "(" param* ")" …          -- param := … (":=" ("infer" | expr))?
 //!            "{" (decl* | ifield ("," ifield)* ","?) "}"
@@ -100,10 +100,10 @@
 //! `split` is the one statement head that sits where a *result expression*
 //! could start, so it cannot be bought back by lookahead (nothing fixed
 //! follows it) and is instead rejected as a binding name, like `match`/`fun`/
-//! `if`/`Type` — rule 3 of docs/let-and-blocks-design.md §5.2. A block that splits
+//! `if`/`Type` — rule 3 of docs/language/let-and-blocks-design.md §5.2. A block that splits
 //! has no result expression: the arms are the result, and the `on Ctor(…)`
 //! heads after it are those arms rather than goal discharges
-//! (docs/match-equation-split-design.md §5). Both `split` and `match` take the
+//! (docs/language/matching/match-equation-split-design.md §5). Both `split` and `match` take the
 //! optional `h :` equation binder (§3), which is exact on two tokens because
 //! `:` never continues an expression.
 
@@ -118,10 +118,10 @@ pub struct ParseError {
 
 /// A class reference *as a type*. Unindexed it is the ordinary applied name;
 /// indexed it is the applied spelling a value-parameterized record already has
-/// (`docs/surface-value-parameters.md` §3) — `Monoid<A>(op)` reaching the
+/// (`docs/language/surface-value-parameters.md` §3) — `Monoid<A>(op)` reaching the
 /// elaborator as [`TyKind::OfExpr`], the same road `Converges(p, env, …)`
 /// travels. There is no second encoding, which is
-/// `docs/operation-indexed-classes-design.md` §2.1 in one function.
+/// `docs/language/classes/operation-indexed-classes-design.md` §2.1 in one function.
 pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty {
     if index.is_empty() {
         return Ty { kind: TyKind::Named { name, args }, span };
@@ -149,7 +149,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
     let mut p = Parser::over(toks);
     let mut items = Vec::new();
-    // Imports come first, all of them (docs/modules-design.md §3.1). The
+    // Imports come first, all of them (docs/language/modules-design.md §3.1). The
     // position rule is enforced here rather than in the elaborator because it
     // is what lets a tool read a file's import DAG without parsing bodies.
     let mut seen_decl = false;
@@ -221,12 +221,12 @@ struct Parser {
     /// Ordinary function/lambda bodies admit propagation; signatures do not.
     propagation_depth: usize,
     /// The expression being parsed heads a block statement, so an `if` there
-    /// may omit its `else` (docs/sequencing-surface-design.md §4). Taken by
+    /// may omit its `else` (docs/language/sequencing-surface-design.md §4). Taken by
     /// the `if` it reaches first, so nothing nested inherits it.
     elseless_if: bool,
     /// `mut x: T` and `mut self x: T` parameters of the parameter list just
     /// read, by name, with whether each is the receiver
-    /// (docs/sequencing-surface-design.md §8.2). Taken by [`Parser::decl`].
+    /// (docs/language/sequencing-surface-design.md §8.2). Taken by [`Parser::decl`].
     mut_params: Vec<(String, bool)>,
     /// The `mut` parameters the next block opened is the body of: it binds
     /// each as a `let mut` local, and a `mut self` one is returned beside the
@@ -237,7 +237,7 @@ struct Parser {
     /// body is the method's own ([`Parser::receiver_end`]).
     own_method: Option<String>,
     /// The next block opened is the body of a `while` with no measure
-    /// (docs/sequencing-surface-design.md §18): its binds stay as markers
+    /// (docs/language/sequencing-surface-design.md §18): its binds stay as markers
     /// until the loop is lowered, because they run inside the loop's step,
     /// after the locals it threads are known. Taken by the first
     /// [`Parser::block_body`].
@@ -249,7 +249,7 @@ struct Parser {
     mutables: Vec<String>,
     /// Parsing a `for` header, where `a..b` is a range (§5.2).
     range_header: bool,
-    /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
+    /// Suppress the record literal `D { … }` (docs/language/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
     /// one: `match m { … }` would otherwise read `m { … }` as a literal. Rust
@@ -259,14 +259,14 @@ struct Parser {
     /// really is wanted in scrutinee position is parenthesised.
     no_record_lit: bool,
     /// Suppress the whole **comparison level** — `a = b`, `a <= b`, `a < b` —
-    /// as an *expression* (docs/surface-universe.md §13).
+    /// as an *expression* (docs/language/surface-universe.md §13).
     ///
     /// `=` is loosest-binding and non-associative, which is right everywhere
     /// except the contexts that use it as punctuation: a `calc` step
     /// (`e0 = e1 := p`) reads its endpoints with `=` as the separator,
     /// [`Parser::ty_atom`] must not re-consume the `=` it is about to inspect,
     /// and an annotated `let`'s type must stop before the binder `=`
-    /// (docs/let-and-blocks-design.md §3). Same shape as `no_record_lit`: set
+    /// (docs/language/let-and-blocks-design.md §3). Same shape as `no_record_lit`: set
     /// in the punctuation contexts, and **lifted inside any bracket**, so the
     /// escape hatch is a parenthesis — `let p: (a = b) = pf;`, `a = (b = c)`.
     no_eq: bool,
@@ -321,7 +321,7 @@ struct Parser {
     /// recover they re-enter each other and a failing `A<A<A<…<Nat` re-parses
     /// every prefix at every depth. That is **exponential**: measured at 4× per
     /// two levels, 7 ms at depth 10 and 4.7 s at depth 20.
-    /// `docs/surface-polymorphism.md` §1 called backtracking "free here", and
+    /// `docs/language/surface-polymorphism.md` §1 called backtracking "free here", and
     /// it was — but only because the *type* side failed hard and cut the
     /// recursion. Making that side recover (the `Lt` round) removed the cut.
     ///
@@ -371,7 +371,7 @@ impl CalcRel {
 }
 
 /// `trans(p, q, a := …, b := …, c := …)` — one `calc` step
-/// (docs/named-arguments-design.md). Separate from [`named_call`] because the
+/// (docs/language/named-arguments-design.md). Separate from [`named_call`] because the
 /// endpoints are named rather than positional; see `calc_expr` for why.
 fn trans_call(args: Vec<Expr>, named: Vec<(&str, Expr)>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::Var("trans".to_string()), span };
@@ -397,7 +397,7 @@ fn trans_call(args: Vec<Expr>, named: Vec<(&str, Expr)>, span: Span) -> Expr {
 }
 
 /// The owner half of a `<owner>::<member>` path, rendered as it is *printed*
-/// (docs/repr-access-spellings-design.md §4): `Impl(add, BinNat)`. Only an
+/// (docs/native/repr-access-spellings-design.md §4): `Impl(add, BinNat)`. Only an
 /// application of a name to names qualifies, which is v1's one applied owner
 /// and is what keeps the rendering total — there is no expression printer
 /// here and none is wanted.
@@ -422,12 +422,12 @@ fn render_owner(e: &Expr) -> Option<String> {
 }
 
 /// `a + b` as an application of the **symbol**
-/// (docs/operators-onto-classes-design.md §4). The symbol is a name in a
+/// (docs/language/classes/operators-onto-classes-design.md §4). The symbol is a name in a
 /// namespace of its own, so an operator expression is the ordinary
 /// [`ExprKind::App`] it has always been — only its head survives as what was
 /// written instead of as what it used to desugar to.
 /// A braced block that ends in a statement: the body of a statement form
-/// (docs/sequencing-surface-design.md §4).
+/// (docs/language/sequencing-surface-design.md §4).
 fn is_statement_body(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Block(b) if matches!(&b.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
         || crate::imperative::ends_in_method_call(b))
@@ -512,7 +512,7 @@ pub fn operator_form(sym: &str, fixity: OpFixity) -> Option<OperatorForm> {
 }
 
 /// The carrier of `Pos<A>` written as a binder's type: the sugar
-/// (docs/positivity-evidence-design.md §6 B) is recognised by name, as
+/// (docs/library/positivity-evidence-design.md §6 B) is recognised by name, as
 /// `Squash<A>` is, so `Pos` with one type argument is reserved there.
 pub fn pos_carrier(ty: &Ty) -> Option<&Ty> {
     match &ty.kind {
@@ -533,7 +533,7 @@ pub fn positivity_ty(name: &str, span: Span) -> Ty {
 /// `positivity`, with a failure that says how to prove it by hand
 /// (`on ?pos := …;`). Reserved like omega's own `__` branch markers.
 /// The prelude record a `mut self` method returns: its receiver after the
-/// call, and the call's value (docs/sequencing-surface-design.md §8.2).
+/// call, and the call's value (docs/language/sequencing-surface-design.md §8.2).
 pub const MUTATED_RECORD: &str = "Mutated";
 
 pub const POS_RESULT: &str = "__pos_result";
@@ -543,7 +543,7 @@ pub const POS_RESULT: &str = "__pos_result";
 /// rules; no omega), over the constructing scope.
 pub const POS_SEARCH: &str = "__pos_search";
 
-/// The call head `by t` parses to (docs/host-elaboration-interface-design.md
+/// The call head `by t` parses to (docs/metaprogramming/host-elaboration-interface-design.md
 /// §7): the elaborator runs `t` as a tactic against the expected type. Not a
 /// name a user can write, like [`POS_SEARCH`].
 pub const BY_TACTIC: &str = "__by";
@@ -597,12 +597,12 @@ fn connective(name: &str, lhs: Expr, rhs: Expr, span: Span) -> Expr {
 /// the thing *is* a type: a bare name becomes `TyKind::Named` whether or not a
 /// type by that name exists, and everything unrecognised becomes
 /// `TyKind::OfExpr`, a *decoded* type the elaborator checks sits at a universe
-/// (docs/surface-universe.md §4).
+/// (docs/language/surface-universe.md §4).
 fn expr_as_ty(e: &Expr) -> Ty {
     let span = e.span;
     let kind = match &e.kind {
         // `a = b` is an *expression* former, so it arrives already built; a
-        // type position simply names it (docs/surface-universe.md §13).
+        // type position simply names it (docs/language/surface-universe.md §13).
         ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
         // A type that was written in type syntax in the first place — a
         // function type, or a motive body. Unwrap rather than re-wrap, so
@@ -615,7 +615,7 @@ fn expr_as_ty(e: &Expr) -> Ty {
         ExprKind::Var(s) => TyKind::Named { name: s.clone(), args: vec![] },
         // `Fin(n)` — the kernel's `Type::Fin`, claimed by *name* exactly as
         // `Nat` is, and so reserved in type position
-        // (docs/surface-fin-indexing-design.md §2.2). It arrives here as an
+        // (docs/language/surface-fin-indexing-design.md §2.2). It arrives here as an
         // ordinary application because `ty_atom`'s `D<A>` rule declines a `(`
         // and the fall-through parses an expression. Any other arity falls
         // through to `OfExpr`, where the elaborator's own `Fin` arm says what
@@ -623,7 +623,7 @@ fn expr_as_ty(e: &Expr) -> Ty {
         // `named.is_empty()` because this arm reads the arity off `args`
         // alone: `Fin(1, n := 2)` has one positional argument and would
         // otherwise be read as `Fin(1)` with the name silently dropped
-        // (docs/named-arguments-design.md §8.2).
+        // (docs/language/named-arguments-design.md §8.2).
         ExprKind::App { head, args, named, explicit: false, .. }
             if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
                 && args.len() == 1
@@ -821,7 +821,7 @@ impl Parser {
     fn ident(&mut self, what: &str) -> R<(String, Span)> {
         let (s, sp) = self.qual_ident(what)?;
         // A qualified name is a *reference*; nothing is ever declared or bound
-        // under one (docs/modules-design.md §4). Caught here so the message
+        // under one (docs/language/modules-design.md §4). Caught here so the message
         // names the rule rather than surfacing as an elaborator mystery three
         // phases later.
         if s.contains("::") {
@@ -840,7 +840,7 @@ impl Parser {
     /// a module-qualified global (`nat::Nat::le_add`) or a type-qualified
     /// constructor (`Option::None`). Which one it is needs the name tables,
     /// so the parser keeps the two halves in one string and the elaborator
-    /// splits it (docs/modules-design.md §4).
+    /// splits it (docs/language/modules-design.md §4).
     fn qual_ident(&mut self, what: &str) -> R<(String, Span)> {
         match self.peek() {
             TokKind::Ident(s) => {
@@ -854,7 +854,7 @@ impl Parser {
 
     /// [`Self::ident`] at a **binding** position: the same read, plus rule 3.
     ///
-    /// **Rule 3** (docs/let-and-blocks-design.md §5.2): a keyword-headed form
+    /// **Rule 3** (docs/language/let-and-blocks-design.md §5.2): a keyword-headed form
     /// that is neither saturated by a fixed token (rule 1's `j`, `calc`,
     /// `code`) nor nullary (rule 2's `refl`) is a true keyword, and a binder by
     /// its name is rejected *at the binding site* with a message naming the
@@ -880,7 +880,7 @@ impl Parser {
                        `Type<0>` — silently, all the way to the kernel",
             "split" => "`split` is the case-split statement keyword, so a use of it at \
                         the head of a block's result would parse as `split e;` \
-                        (docs/match-equation-split-design.md §5)",
+                        (docs/language/matching/match-equation-split-design.md §5)",
             "if" => "`if` is the decidable-branching keyword, so a use of it would parse \
                      as `if P { … } else { … }`",
             _ => return Ok((name, span)),
@@ -967,7 +967,7 @@ impl Parser {
     }
 
     /// `fn f(…) → Pos<A>` — the result half of the `Pos<A>` binder sugar
-    /// (docs/positivity-evidence-design.md §6 B). The function returns an
+    /// (docs/library/positivity-evidence-design.md §6 B). The function returns an
     /// `A`, and the declaration after it is the fact, owned by the function:
     ///
     /// ```text
@@ -997,7 +997,7 @@ impl Parser {
         if d.kind != DeclKind::Fn || d.is_meta {
             return refuse(format!(
                 "`Pos<A>` as a result is a function's: `fn f(…) → Pos<A>` returns an `A` \
-                 and declares `f::pos` (docs/positivity-evidence-design.md §6 B). A \
+                 and declares `f::pos` (docs/library/positivity-evidence-design.md §6 B). A \
                  {} states `0 < …` instead",
                 if d.is_meta { "`meta fn`" } else { "theorem" }
             ));
@@ -1091,7 +1091,7 @@ impl Parser {
     }
 
     /// `section<A: C>(x: A, …) { fn … theorem … }` — a head written once for
-    /// a run of declarations (docs/sections-design.md §5). Surface-only, like
+    /// a run of declarations (docs/language/sections-design.md §5). Surface-only, like
     /// `assuming`: the head is pushed for the group's extent and
     /// [`Parser::splice_sections`] prepends it to each member's own head as
     /// the member is read, so the elaborator sees ordinary declarations.
@@ -1107,7 +1107,7 @@ impl Parser {
             return Err(ParseError {
                 msg: "a section's head is what it writes once for its members: give it \
                       type parameters `section<A> { … }`, parameters `section(x: A) { … }`, \
-                      or both (docs/sections-design.md §5.1)"
+                      or both (docs/language/sections-design.md §5.1)"
                     .into(),
                 span: head,
             });
@@ -1149,7 +1149,7 @@ impl Parser {
                         msg: format!(
                             "{what} cannot be in a section: a section's head is spliced into \
                              the head of each `fn` and `theorem` in it, and nothing else has \
-                             a head to splice into (docs/sections-design.md §5.2)"
+                             a head to splice into (docs/language/sections-design.md §5.2)"
                         ),
                         span,
                     })
@@ -1169,7 +1169,7 @@ impl Parser {
                         return Err(ParseError {
                             msg: "a `generate` cannot be in a section yet: its generator runs at \
                                   the module's empty context, and running it under the section's \
-                                  head is open (docs/host-elaboration-interface-design.md §19)"
+                                  head is open (docs/metaprogramming/host-elaboration-interface-design.md §19)"
                                 .into(),
                             span: g.span,
                         })
@@ -1178,7 +1178,7 @@ impl Parser {
                         return Err(ParseError {
                             msg: "a prefixed declaration cannot be in a section yet: its \
                                   generator runs at the module's empty context, as a \
-                                  `generate` does (docs/value-definitions-design.md §3)"
+                                  `generate` does (docs/metaprogramming/value-definitions-design.md §3)"
                                 .into(),
                             span: *span,
                         })
@@ -1223,7 +1223,7 @@ impl Parser {
     }
 
     /// Prepend the enclosing sections' heads to a declaration's own
-    /// (docs/sections-design.md §5.2), outermost first: type parameters before
+    /// (docs/language/sections-design.md §5.2), outermost first: type parameters before
     /// the member's, solver parameters before its solver parameters (the first
     /// `leading` of `params`), written parameters before its written ones. The
     /// result is the head the member would have if written out by hand.
@@ -1309,7 +1309,7 @@ impl Parser {
                     "`{member}` does not determine the section's `{n}`: nothing in its head \
                      mentions it, so no call could infer it. Move `{member}` out of the \
                      section, or mention `{n}` in its parameters or result \
-                     (docs/sections-design.md §4.1)"
+                     (docs/language/sections-design.md §4.1)"
                 ),
                 span: member_span,
             });
@@ -1479,7 +1479,7 @@ impl Parser {
             return Ok(Item::Impl(self.impl_decl()?));
         }
         // `generate g(args);` runs a generator and publishes what it builds
-        // (docs/host-elaboration-interface-design.md §19). Contextual like
+        // (docs/metaprogramming/host-elaboration-interface-design.md §19). Contextual like
         // `by`: only when a name follows.
         if self.at_kw("generate") && matches!(self.nth(1), TokKind::Ident(_)) {
             let start = self.bump().span;
@@ -1490,7 +1490,7 @@ impl Parser {
         // `given` section variables and `context` constraint bundles are the
         // two other ways round 2 sketched of writing a constraint ONCE for many
         // declarations. Neither is decided (issues/requires-placement-syntax.md;
-        // `section` heads are docs/sections-design.md), and both are words a
+        // `section` heads are docs/language/sections-design.md), and both are words a
         // reader who met `<A: Monoid>` will reach for, so they are refused by
         // name rather than by "expected `fn`".
         if self.at_kw("given") || self.at_kw("context") {
@@ -1506,7 +1506,7 @@ impl Parser {
         }
         // `runtime fn f(…)`, `runtime(owned) fn f(…)`, `regex def x = "…";` —
         // a declaration under a prefix generator
-        // (docs/value-definitions-design.md §3). A name before a declaration
+        // (docs/metaprogramming/value-definitions-design.md §3). A name before a declaration
         // keyword, or a name applied, is not otherwise an item, so this reads
         // nothing that used to parse. The modifier keywords are matched first.
         // `laid record T { … }`: a `record` takes a prefix too (§3.5).
@@ -1524,7 +1524,7 @@ impl Parser {
     }
 
     /// `partial fn f(…) → B { … }` or `partial(E) fn …` ([`Decl::partial`],
-    /// docs/partial-functions-design.md §4). Contextual: `partial` is a word
+    /// docs/language/partial-functions-design.md §4). Contextual: `partial` is a word
     /// only before `fn` or `(`, at an item's head.
     fn partial_decl(&mut self) -> R<Decl> {
         let start = self.bump().span;
@@ -1582,7 +1582,7 @@ impl Parser {
             let w = w.clone();
             return self.err(&format!(
                 "a generator prefixes a `fn`, a `theorem`, a `def` or a `record`, not \
-                 {} `{w}` (docs/value-definitions-design.md §3)",
+                 {} `{w}` (docs/metaprogramming/value-definitions-design.md §3)",
                 if w == "inductive" || w == "instance" { "an" } else { "a" }
             ));
         }
@@ -1607,7 +1607,7 @@ impl Parser {
             return Err(ParseError {
                 msg: format!(
                     "a generator prefixes a `fn`, a `theorem` or a `def`, not {what} \
-                     (docs/value-definitions-design.md §3)"
+                     (docs/metaprogramming/value-definitions-design.md §3)"
                 ),
                 span: start.join(decl.span),
             });
@@ -1617,7 +1617,7 @@ impl Parser {
     }
 
     /// `class C<A> extends P<A>, Q<A> { f: T, … }`
-    /// (docs/traits-layer1-design.md §1). The body is a `record`'s field list,
+    /// (docs/language/classes/traits-layer1-design.md §1). The body is a `record`'s field list,
     /// verbatim — a class *is* a parameterized record, and the parse says so.
     fn class_decl(&mut self) -> R<ClassDecl> {
         let start = self.peek_span();
@@ -1626,7 +1626,7 @@ impl Parser {
         let (params, kinds) = self.class_tyvar_list()?;
         // `class Monoid<A>(op: A -> A -> A)` — the index list, in the position
         // and with the grammar a `record` head already has
-        // (docs/operation-indexed-classes-design.md §2.1: there is no second
+        // (docs/language/classes/operation-indexed-classes-design.md §2.1: there is no second
         // class form, only a per-class choice about the parameter list).
         let valparams = self.valparam_list(true, false)?;
         let mut extends = Vec::new();
@@ -1720,7 +1720,7 @@ impl Parser {
         }
         let mut end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
         // `Monoid<A>(op)` — the index arguments
-        // (docs/operation-indexed-classes-design.md §3). An index is an
+        // (docs/language/classes/operation-indexed-classes-design.md §3). An index is an
         // ordinary expression here; which shapes an *instance head* admits is
         // the elaborator's spellability rule (§3.1), stated where the key is
         // computed rather than in the grammar.
@@ -1760,7 +1760,7 @@ impl Parser {
     }
 
     /// `designation<A> ++ at List<A> := append`
-    /// (docs/operators-onto-classes-design.md §3.1).
+    /// (docs/language/classes/operators-onto-classes-design.md §3.1).
     ///
     /// Contextual exactly as `class` and `instance` are, and for a stronger
     /// reason than either: the token after the keyword is an *operator*, which
@@ -1801,7 +1801,7 @@ impl Parser {
                  `designation prefix - at Int := neg`, `designation postfix ⁻¹ at Rat := \
                  Rat::inv`). A designation for an ordinary name \
                  is not a form — that is a default instance wearing a smaller hat \
-                 (docs/operation-indexed-classes-design.md §9.2)",
+                 (docs/language/classes/operation-indexed-classes-design.md §9.2)",
             );
         };
         let symbol = sym.to_string();
@@ -1823,7 +1823,7 @@ impl Parser {
     }
 
     /// `datarepr N for S { R := …, mk Cons := …, … }` and
-    /// `datarepr N for S := repr::naive();` (docs/datarepr-design.md §1.4).
+    /// `datarepr N for S := repr::naive();` (docs/native/datarepr-design.md §1.4).
     ///
     /// Contextual like every keyword here. The two bodies are told apart by
     /// one token after the spec type, as an instance's two bodies are.
@@ -1897,7 +1897,7 @@ impl Parser {
     }
 
     /// `impl f for Rp { body := …, refines := … }`
-    /// (docs/datarepr-design.md §1.2).
+    /// (docs/native/datarepr-design.md §1.2).
     fn impl_decl(&mut self) -> R<ImplDecl> {
         let start = self.peek_span();
         self.bump(); // `impl`
@@ -1933,17 +1933,17 @@ impl Parser {
     }
 
     /// `instance<A, B> C<T> requires m: D<A> { … }`
-    /// (docs/traits-layer1-design.md §1, §4).
+    /// (docs/language/classes/traits-layer1-design.md §1, §4).
     fn instance_decl(&mut self) -> R<InstanceDecl> {
         let start = self.peek_span();
         self.bump(); // `instance`
         let (tyvars, constraints) = self.typaram_list()?;
         // `instance(n, m: Nat) Decide<Le(n, m)>` — the **value binders**
-        // (docs/value-generic-instances-design.md §2). A parameter list rather
+        // (docs/language/classes/value-generic-instances-design.md §2). A parameter list rather
         // than a trailing `forall`, because `(` after `instance` begins nothing
         // else: the head is a class reference and a class reference starts with
         // an identifier. That is the parse constraint `requires n: Nat` fails
-        // (docs/surface-value-parameters.md §1) and this position does not.
+        // (docs/language/surface-value-parameters.md §1) and this position does not.
         //
         // Marked implicit here, at the one place both spellings of an instance
         // pass through: a use site never writes them, since resolution recovers
@@ -1964,7 +1964,7 @@ impl Parser {
         let mut requires = constraints;
         requires.extend(self.requires_list()?);
         let open = self.expect(&TokKind::LBrace, "`{` (the instance body)")?;
-        // One token decides the body form (docs/traits-layer1-design.md §1):
+        // One token decides the body form (docs/language/classes/traits-layer1-design.md §1):
         // a member is a declaration, a literal field is an assignment, and one
         // brace never holds both.
         let is_block =
@@ -1976,7 +1976,7 @@ impl Parser {
                     return self.err(
                         "an instance body is either a block of `fn`/`theorem` members or a \
                          list of `field := expr`, never both \
-                         (docs/traits-layer1-design.md §1)",
+                         (docs/language/classes/traits-layer1-design.md §1)",
                     );
                 }
                 members.push(self.decl()?);
@@ -2007,7 +2007,7 @@ impl Parser {
     }
 
     /// `requires ma: Monoid<A>, Monoid<B>`, or nothing — the class
-    /// spelling of a **solver parameter** (docs/traits-layer2-design.md §1).
+    /// spelling of a **solver parameter** (docs/language/classes/traits-layer2-design.md §1).
     /// No parentheses, because the list is not an argument list; every binder
     /// desugars to a leading implicit parameter with `Solver::Infer`, which is
     /// the one representation both spellings and both declaration forms share.
@@ -2035,7 +2035,7 @@ impl Parser {
             // `p: T := infer`. The restriction is also what keeps the list
             // parseable in front of a parameter list — `Mag<A> (x: A)` would
             // otherwise read as a value-parameter application
-            // (docs/surface-value-parameters.md §1).
+            // (docs/language/surface-value-parameters.md §1).
             let cref = self.class_ref("the class a `requires` binder is of")?;
             let ty = class_ty(cref.name, cref.args, cref.index, cref.span);
             let span = psp.join(ty.span);
@@ -2185,11 +2185,11 @@ impl Parser {
             end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
         }
         // `<A: Monoid(op)>` — the index slot's NAME referent
-        // (docs/operation-indexed-classes-design.md §4.1): the index is linked
+        // (docs/language/classes/operation-indexed-classes-design.md §4.1): the index is linked
         // to an explicit parameter of this same declaration, forward reference
         // allowed. An empty slot is the absence of this list, and
         // `<A: Monoid(+)>` is the SYMBOL referent, the designation the binder
-        // names (docs/operators-onto-classes-design.md §5).
+        // names (docs/language/classes/operators-onto-classes-design.md §5).
         let mut index = Vec::new();
         if matches!(self.peek(), TokKind::LParen) {
             self.bump();
@@ -2230,7 +2230,7 @@ impl Parser {
     }
 
     /// `import nat;` or `import option::{Option, map};`
-    /// (docs/modules-design.md §3.1). Single-segment module names only: there
+    /// (docs/language/modules-design.md §3.1). Single-segment module names only: there
     /// is no `std::nat` in v1, and no glob form — plain `import m;` already
     /// brings all of `m` into scope unqualified, so a glob would be a second
     /// spelling of it.
@@ -2257,7 +2257,7 @@ impl Parser {
                 if matches!(self.peek(), TokKind::Star) {
                     return self.err(
                         "there is no glob import: `import m;` already brings all of \
-                         `m` into scope unqualified (docs/modules-design.md §3.1)",
+                         `m` into scope unqualified (docs/language/modules-design.md §3.1)",
                     );
                 }
                 listed.push(if reexport { self.qual_ident("a name in the export list")? }
@@ -2278,7 +2278,7 @@ impl Parser {
 
     /// A field written `x: Pos<A>`, expanded: `x: A`, then `x_pos: 0 < x`,
     /// filled at a construction that leaves it out by the search `:= infer`
-    /// runs, over the constructing scope (docs/positivity-evidence-design.md
+    /// runs, over the constructing scope (docs/library/positivity-evidence-design.md
     /// §6 B). Any other field comes back as it was. A record's and a
     /// constructor's field expand alike; only the record also gets a rule.
     fn pos_field(&self, f: FieldDecl) -> R<Vec<FieldDecl>> {
@@ -2312,7 +2312,7 @@ impl Parser {
 
     /// `record D<p, …>(v: T, …) { f: T, … }` — desugared here into the
     /// one-constructor `InductiveDecl` the tier-0 generator already handles
-    /// (docs/surface-records.md §2.1), with the constructor named after the
+    /// (docs/language/surface-records.md §2.1), with the constructor named after the
     /// record. What makes it a distinct *surface* form is the checks the flag
     /// earns downstream, not a distinct lowering.
     ///
@@ -2388,7 +2388,7 @@ impl Parser {
                 });
             }
             // `den: Pos<A>` — the field half of the binder sugar
-            // (docs/positivity-evidence-design.md §6 B), with a rule about
+            // (docs/library/positivity-evidence-design.md §6 B), with a rule about
             // the projection declared after the record.
             if pos_carrier(&f.ty).is_some() {
                 let fname = f.name.clone().unwrap_or_default();
@@ -2407,7 +2407,7 @@ impl Parser {
         let span = start.join(end);
         // The rule below finds the record's parameters by unifying its type,
         // and a parameter no field mentions leaves nothing to unify: `R(3)`
-        // and `R(5)` lower to one type (docs/surface-value-parameters.md §6).
+        // and `R(5)` lower to one type (docs/language/surface-value-parameters.md §6).
         // Read off the tokens, conservatively: any mention counts, the
         // field's own name included.
         if let Some((_, _, fspan)) = facts.first() {
@@ -2530,7 +2530,7 @@ impl Parser {
     }
 
     /// `(p: T, …)` after a declaration name (and after its `<…>`), or nothing —
-    /// the **value** parameter list (docs/surface-value-parameters.md §1).
+    /// the **value** parameter list (docs/language/surface-value-parameters.md §1).
     ///
     /// The position is free and unambiguous: before this grammar existed, a `(`
     /// here was `parse error: expected `{``, and `fn`/`theorem` share no
@@ -2643,7 +2643,7 @@ impl Parser {
     }
 
     /// `varies A` after a declaration's parameter lists, or nothing
-    /// (docs/lambda-carrier-instances-design.md §7.1). `varies` is contextual:
+    /// (docs/language/classes/lambda-carrier-instances-design.md §7.1). `varies` is contextual:
     /// it is read only here, so it stays an ordinary identifier everywhere else.
     fn varies_clause(&mut self) -> R<Option<(String, Span)>> {
         if !self.at_kw("varies") {
@@ -2677,18 +2677,18 @@ impl Parser {
         let start = self.peek_span();
         // `codata` shares the whole grammar: the constructors are written the
         // same way, and what they mean is the elaborator's
-        // (docs/codata-elaborator-design.md §1).
+        // (docs/inductives/codata-elaborator-design.md §1).
         let is_codata = self.at_kw("codata");
         self.bump(); // `inductive` / `codata`
         let (name, _) = self.ident("inductive name")?;
         let params = self.tyvar_list()?;
         // Parsed, then rejected by the elaborator: value parameters are a
-        // `record` form this round (docs/surface-value-parameters.md §6), and a
+        // `record` form this round (docs/language/surface-value-parameters.md §6), and a
         // named rejection beats `expected `{`, found LParen`.
         let valparams = self.valparam_list(false, false)?;
         let varies = self.varies_clause()?;
         // `: (n: Nat) -> Type` — an index telescope
-        // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
+        // (docs/inductives/inductive-indexed-lowering.md §2). Parsed with the ordinary
         // type grammar; its shape is the elaborator's to validate.
         let index = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
@@ -2777,7 +2777,7 @@ impl Parser {
 
     /// `(x: A, {n: Nat}, self s: S, h: P := infer, …)` — a declaration's
     /// value-parameter list, appended to `params` (its solver parameters, which
-    /// lead). A section head reads the same list (docs/sections-design.md §5).
+    /// lead). A section head reads the same list (docs/language/sections-design.md §5).
     fn param_list(&mut self, mut params: Vec<Param>) -> R<Vec<Param>> {
         self.expect(&TokKind::LParen, "`(`")?;
         while !matches!(self.peek(), TokKind::RParen) {
@@ -2807,7 +2807,7 @@ impl Parser {
                 // names it, so a record method reads the Rust way; there is no
                 // third reading, which is what keeps a parameter merely named
                 // `self` from silently not being the subject.
-                // `mut x: T`, `mut self x: T` (docs/sequencing-surface-design.md
+                // `mut x: T`, `mut self x: T` (docs/language/sequencing-surface-design.md
                 // §8.2): the body may reassign `x`, and a `mut self`
                 // receiver comes back out beside the result. Contextual: a
                 // parameter named `mut` is still `mut: T`.
@@ -2886,9 +2886,9 @@ impl Parser {
             let ty = self.ty()?;
             let mut span = names[0].1.join(ty.span);
             // `hx: P := infer` — a solver default
-            // (docs/traits-layer2-design.md §1) — or, with any other
+            // (docs/language/classes/traits-layer2-design.md §1) — or, with any other
             // expression after the `:=`, a parameter default
-            // (docs/named-arguments-design.md §9.1). Unambiguous here: nothing
+            // (docs/language/named-arguments-design.md §9.1). Unambiguous here: nothing
             // else follows a parameter's type with `:=`. `infer` stays the
             // solver keyword, so it is not a default naming something else.
             let mut solver = None;
@@ -2918,7 +2918,7 @@ impl Parser {
                             "an implicit parameter is already filled by unification: \
                              a default is another filling discipline, and a parameter \
                              has one. Drop the braces: a defaulted parameter has no \
-                             positional slot either (docs/named-arguments-design.md §9.2)"
+                             positional slot either (docs/language/named-arguments-design.md §9.2)"
                                 .into()
                         },
                         span: eq.join(filled),
@@ -2941,10 +2941,10 @@ impl Parser {
             }
             // A solver parameter has no positional slot: it is implicit, and
             // `@f(…)` is how it is passed by hand (§1). A defaulted one is
-            // the same (docs/named-arguments-design.md §9.2).
+            // the same (docs/language/named-arguments-design.md §9.2).
             let implicit = implicit || solver.is_some() || default.is_some();
             // `x: Pos<A>` — binder sugar, not a type
-            // (docs/positivity-evidence-design.md §6 B): the parameter is an
+            // (docs/library/positivity-evidence-design.md §6 B): the parameter is an
             // `A`, followed by `x_pos: 0 < x := infer`. Nothing is wrapped, so
             // a caller passes a plain `A` and the search finds its positivity;
             // `x_pos := …` names it by hand.
@@ -2984,7 +2984,7 @@ impl Parser {
     fn decl(&mut self) -> R<Decl> {
         let propagation_start = self.propagation_count;
         let start = self.peek_span();
-        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
+        // `meta fn` — a layer-m declaration (docs/metaprogramming/in-language-map-design.md
         // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
         // definitions never reach Ψ, so `meta theorem` has no meaning.
         let is_meta = self.eat_kw("meta");
@@ -3001,11 +3001,11 @@ impl Parser {
         {
             return self.err(
                 "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
-                 (docs/positivity-evidence-design.md §6 A)",
+                 (docs/library/positivity-evidence-design.md §6 A)",
             );
         }
         // `interface fn` — an interface definition
-        // (docs/interface-definitions-design.md §1). Contextual: only the word
+        // (docs/language/interface-definitions-design.md §1). Contextual: only the word
         // directly before a declaration keyword is the modifier.
         let is_interface = !is_meta
             && !is_evidence
@@ -3021,11 +3021,11 @@ impl Parser {
             return self.err(
                 "`interface` marks a `fn`: a theorem is already opaque to its clients, and a \
                  `def` or `axiom` has no arguments a call could leave open \
-                 (docs/interface-definitions-design.md §1)",
+                 (docs/language/interface-definitions-design.md §1)",
             );
         }
         // `def name: T = e;` — a value definition
-        // (docs/value-definitions-design.md §2). Contextual like every
+        // (docs/metaprogramming/value-definitions-design.md §2). Contextual like every
         // keyword here: only `def` followed by a name, at an item's head.
         if self.at_kw("def") && matches!(self.nth(1), TokKind::Ident(_)) {
             if is_meta {
@@ -3061,15 +3061,15 @@ impl Parser {
                 span: name_span,
             });
         }
-        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
+        // `fn map<A, B>(…)` — type parameters (docs/language/surface-polymorphism.md
         // §1). Unambiguous here: a declaration's name is always followed by
         // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
         // annotates the universe the parameter ranges over
-        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
+        // (docs/language/surface-universe.md §2); `<A: Monoid>` constrains what it
         // carries — one production, shared with the `instance` head.
         let (tyvars, constraints) = self.typaram_list()?;
         // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
-        // parameters, the class spelling (docs/traits-layer2-design.md §1).
+        // parameters, the class spelling (docs/language/classes/traits-layer2-design.md §1).
         // They are moved to the front of the parameter list, because they are
         // what the later parameters' types mention; the same production the
         // `instance` head uses, and the same desugaring. Inline constraints are
@@ -3082,7 +3082,7 @@ impl Parser {
         let params = self.param_list(requires)?;
         let mut_params = std::mem::take(&mut self.mut_params);
         // `for vec.map` — the elaboration slot this template fills
-        // (docs/meta-def-registration-design.md §2.1). The parse point is
+        // (docs/metaprogramming/meta-def-registration-design.md §2.1). The parse point is
         // unambiguous: what follows a parameter list is `->` or `:`, never an
         // identifier, so the contextual keyword cannot be read as anything
         // else. The path's *vocabulary* is the elaborator's, so an unknown
@@ -3115,10 +3115,10 @@ impl Parser {
         }
         // The declaration's body block follows immediately, so a `{` here
         // opens it, not a record literal in the last endpoint of a
-        // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
+        // `theorem t: a = D { … }` (docs/language/surface-records.md §6.1).
         let mut result = self.with_record_lit(true, |p| p.ty())?;
         // A `mut self` method returns its receiver beside its result
-        // (docs/sequencing-surface-design.md §8.2): `fn Io::read(mut self io:
+        // (docs/language/sequencing-surface-design.md §8.2): `fn Io::read(mut self io:
         // Io, …) → R` has kernel type `Io → … → Mutated<Io, R>`.
         let mut_self = mut_params.iter().find(|(_, s)| *s).map(|(n, _)| n.clone());
         if !mut_params.is_empty() && kind != DeclKind::Fn {
@@ -3143,7 +3143,7 @@ impl Parser {
             None
         };
         // `unfolding f, g` — see through these interface definitions in this
-        // declaration (docs/interface-definitions-design.md §4). Contextual,
+        // declaration (docs/language/interface-definitions-design.md §4). Contextual,
         // like `decreases`.
         let mut unfolding = Vec::new();
         if self.eat_kw("unfolding") {
@@ -3215,7 +3215,7 @@ impl Parser {
         Ok(Decl { kind, is_meta, is_evidence, is_interface, partial: None, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
     }
 
-    /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
+    /// `def name<A>: T = e;`, `def name = e;` (docs/metaprogramming/value-definitions-design.md
     /// §2). A value is a [`DeclKind::Fn`] with no written parameters and the
     /// [`Decl::value`] flag; its body is the block `{ e }`. Without `: T` the
     /// result is [`TyKind::TypeOf`] the value. Type parameters and inline
@@ -3450,7 +3450,7 @@ impl Parser {
     /// [`Self::block_statements`] already read it), its `on`s, and the `}`.
     fn block_tail(&mut self, open: Span, stmts: Vec<Stmt>, parsed: Option<Expr>) -> R<Block> {
         // A statement body ends in a statement and has no result
-        // (docs/sequencing-surface-design.md §4): `{ x := e }`, or `{}`.
+        // (docs/language/sequencing-surface-design.md §4): `{ x := e }`, or `{}`.
         if parsed.is_none()
             && matches!(self.peek(), TokKind::RBrace)
             && stmts.last().is_none_or(is_imperative_statement)
@@ -3560,7 +3560,7 @@ impl Parser {
         }
         // `split e;` — the statement-position case split. It *is* the block's
         // result, so the statement list ends here and the `on Ctor(…)` arms
-        // that follow are its arms (docs/match-equation-split-design.md §5).
+        // that follow are its arms (docs/language/matching/match-equation-split-design.md §5).
         let (result, ons) = if self.at_kw("split") {
             self.split_result()?
         } else {
@@ -3591,7 +3591,7 @@ impl Parser {
 
     /// `split (h :)? e; on C(x⃗) := b; …` — parsed here and **desugared here**,
     /// onto the very `ExprKind::Match` a hand-written case analysis builds
-    /// (docs/match-equation-split-design.md §6). Nothing downstream learns that
+    /// (docs/language/matching/match-equation-split-design.md §6). Nothing downstream learns that
     /// `split` exists, which is what makes "it lowers to the same elimination"
     /// a tautology rather than an obligation.
     ///
@@ -3656,7 +3656,7 @@ impl Parser {
     ///
     /// The annotation is read with [`Parser::no_eq`] set, so the binder `=` is
     /// never eaten by the comparison rung and `let x: T = e;` is writable at
-    /// **every** `T` (docs/let-and-blocks-design.md §3). An annotation that is
+    /// **every** `T` (docs/language/let-and-blocks-design.md §3). An annotation that is
     /// itself an equation is parenthesised — `let p: (a = b) = pf;` — which is
     /// the escape hatch `no_eq`'s doc comment promises and `atom`'s `(` arm
     /// now delivers. Every other relation is unambiguous there and reads bare:
@@ -3667,7 +3667,7 @@ impl Parser {
         }
         let start = self.bump().span; // `let`
         // `let { unit := u, op } = m;` — record destructuring
-        // (docs/named-patterns-by-field-design.md §2). Unambiguous against
+        // (docs/language/matching/named-patterns-by-field-design.md §2). Unambiguous against
         // `let x = …`: a binding name cannot start with `{`.
         if matches!(self.peek(), TokKind::LBrace) {
             self.bump();
@@ -3723,7 +3723,7 @@ impl Parser {
         } else {
             None
         };
-        // `let x <- e;` — a binding statement (docs/sequencing-surface-design.md
+        // `let x <- e;` — a binding statement (docs/language/sequencing-surface-design.md
         // §3.1): the nested bind at the `let`'s right side, `let x = (<- e);`.
         if self.eat_bind_arrow() {
             let expr = self.expr()?;
@@ -3766,7 +3766,7 @@ impl Parser {
     }
 
     /// A block's statements, up to its result. `let`/`have` statements, and
-    /// expression statements `e;` (docs/sequencing-surface-design.md §3.1,
+    /// expression statements `e;` (docs/language/sequencing-surface-design.md §3.1,
     /// §4): an expression followed by `;` discards its result in the
     /// block's carrier, so it is the binding statement `let _ <- e;` at a
     /// private name. An expression followed by anything else is the block's
@@ -3775,7 +3775,7 @@ impl Parser {
     /// meaning. The forms the result position reads by its first token
     /// (`split`, `split_all`, a sequent header, `on`, `}`) end the loop
     /// unparsed.
-    /// `for x in e { body }` (docs/sequencing-surface-design.md §5.2): the
+    /// `for x in e { body }` (docs/language/sequencing-surface-design.md §5.2): the
     /// marker `\0for(e, λ x => body)` at a private name, for
     /// [`crate::imperative`] to thread the `let mut` locals the body assigns
     /// and the elaborator to lift into a named step over a fold.
@@ -3818,7 +3818,7 @@ impl Parser {
         self.loop_stmt(start, iter, x, xspan, "for")
     }
 
-    /// `while c decreases m { body }` (docs/sequencing-surface-design.md
+    /// `while c decreases m { body }` (docs/language/sequencing-surface-design.md
     /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
     /// m)` and a private binder, so [`crate::imperative`] threads its state
     /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
@@ -3989,7 +3989,7 @@ impl Parser {
                     return Err(ParseError {
                         msg: "only a place is assigned: a local, `x := e`, a field path of one, \
                               `x.f := e`, or an element of one, `x.f[i] := e` \
-                              (docs/sequencing-surface-design.md §20, §21)".into(),
+                              (docs/language/sequencing-surface-design.md §20, §21)".into(),
                         span: expr.span,
                     });
                 }
@@ -4056,7 +4056,7 @@ impl Parser {
     }
 
     /// A block statement starts here: `let`, or `have` followed by a name.
-    /// `have` is contextual the way `let code x` is (docs/have-design.md §2):
+    /// `have` is contextual the way `let code x` is (docs/language/have-design.md §2):
     /// `have x` was never an expression, so a value named `have` keeps
     /// working everywhere, the head of a block's result included.
     fn at_stmt(&self) -> bool {
@@ -4064,7 +4064,7 @@ impl Parser {
     }
 
     /// `have x = e;` / `have x: T = e;` — [`Self::let_stmt`]'s single-name
-    /// form, binding opaquely (docs/have-design.md). The annotation is read
+    /// form, binding opaquely (docs/language/have-design.md). The annotation is read
     /// under `no_eq` for the same reason as a `let`'s.
     fn have_stmt(&mut self) -> R<Stmt> {
         let start = self.bump().span; // `have`
@@ -4111,7 +4111,7 @@ impl Parser {
             }
             // `on _: P := …` is a discharge by statement; `on _ := …` is a
             // **default arm** of the enclosing `split`
-            // (docs/nested-match-patterns-design.md §8). One token apart, and
+            // (docs/language/matching/nested-match-patterns-design.md §8). One token apart, and
             // the token is already read here.
             _ if self.at_kw("_") && matches!(self.nth(1), TokKind::Colon) => {
                 self.bump();
@@ -4124,7 +4124,7 @@ impl Parser {
             }
             // `on Ctor(x, y) := …` — a `split` arm. An identifier head was a
             // parse error before this, so the form is strictly additive
-            // (docs/match-equation-split-design.md §5).
+            // (docs/language/matching/match-equation-split-design.md §5).
             TokKind::Ident(_) => {
                 let (ctor, cspan) = self.qual_ident("constructor name in an `on` arm")?;
                 let binders = self.pat_args(&ctor, cspan)?;
@@ -4154,7 +4154,7 @@ impl Parser {
 
     /// Types, arrow-aware. `->` is right-associative, and a *binder-headed*
     /// group `(x: A) -> B` makes it dependent
-    /// (docs/surface-function-types.md §3.1).
+    /// (docs/language/surface-function-types.md §3.1).
     ///
     /// The arrow check has to live above [`Self::ty_atom`] rather than inside
     /// it: `ty_atom`'s `D<A>` case returns early, so folding the arrow into it
@@ -4172,7 +4172,7 @@ impl Parser {
             return self.iff_after_fn_type(curry(binders, cod, false, span));
         }
         // `{x: A} -> B` — an *implicit* binder
-        // (docs/implicit-binders-design.md §8). The same three-token
+        // (docs/language/implicit-binders-design.md §8). The same three-token
         // lookahead the old diagnostic used: type position has no other
         // brace form, so `{ Ident :` is unambiguous. One binder per brace
         // group, mirroring the paren rule; inside the braces the type parses
@@ -4260,7 +4260,7 @@ impl Parser {
     /// [`Self::atom`] so the two spellings cannot drift, and tried *before*
     /// the applied-inductive rule, which parses its arguments with
     /// [`Self::ty`] and would reject the numeral in `Type<0>`
-    /// (docs/surface-universe.md §3).
+    /// (docs/language/surface-universe.md §3).
     fn univ(&mut self) -> R<Option<(u64, Span)>> {
         if !self.at_kw("Type") {
             return Ok(None);
@@ -4342,7 +4342,7 @@ impl Parser {
             }
             self.pos = save;
         }
-        // The modal slice (docs/in-language-map-design.md §3): `Ctx`,
+        // The modal slice (docs/metaprogramming/in-language-map-design.md §3): `Ctx`,
         // `TyCode(g)`, `Code(g |- T)`, and `$a` for a `TyCode` binder used as
         // a type. Keyword-shaped, so they are tried before the general rules;
         // a user type named `Ctx`/`TyCode`/`Code` was possible before and is
@@ -4372,7 +4372,7 @@ impl Parser {
             let (name, nsp) = self.ident("name after `$` in type position")?;
             return Ok(Ty { kind: TyKind::Splice { name }, span: start.join(nsp) });
         }
-        // `[T; n]` — a length-indexed vector (docs/container-fields.md §2.1).
+        // `[T; n]` — a length-indexed vector (docs/language/container-fields.md §2.1).
         // A leading `[` in type position is also the list literal that opens
         // an equality's left endpoint — `[1] ++ [2] = [1, 2]` is a statement
         // — so the vector reading is speculative, like `D<A, B>` below: the
@@ -4453,7 +4453,7 @@ impl Parser {
             // with explicit type arguments opening an equality type —
             // `theorem t(): id<Nat>(3) = 3`. `(` is the discriminator for the
             // same reason `->` is in `group_is_type`: an applied type is
-            // never called (docs/surface-polymorphism.md §1).
+            // never called (docs/language/surface-polymorphism.md §1).
             //
             // A connective follows for the same reason and gets the same
             // answer: `Or<P, Q> ∧ R` is a *type* built by the connective
@@ -4481,12 +4481,12 @@ impl Parser {
     /// the [`ExprKind::OpSymbol`] that was **written**. It used to be the head
     /// `Var("add")` that `+` desugared to, on a fixed name table here; that
     /// table is now the last rung of the elaborator's symbol resolution
-    /// (docs/operators-onto-classes-design.md §4), so `+` can mean a different
+    /// (docs/language/classes/operators-onto-classes-design.md §4), so `+` can mean a different
     /// operation at a different carrier without the parse depending on
     /// anything — which is `issues/notation-extensibility.md`'s standing
     /// boundary, *parsing is context-free; only resolution consults scope*.
     ///
-    /// **Function types are expressions** (`docs/types-as-expressions.md`): a
+    /// **Function types are expressions** (`docs/language/types-as-expressions.md`): a
     /// leading binder group `(x: A) -> …` and a trailing `->` both hand off to
     /// [`Self::ty`] and come back as an [`ExprKind::TyLit`]. Neither spelling
     /// was previously a parse — `->` after an expression was always an error,
@@ -4495,7 +4495,7 @@ impl Parser {
     /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
     /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
-        // `<- e` — a nested bind (docs/sequencing-surface-design.md §3.2): at
+        // `<- e` — a nested bind (docs/language/sequencing-surface-design.md §3.2): at
         // the head of an expression, so `f(<- e, y)`, `(<- e)` and
         // `match <- e { … }` all read it. It takes the whole expression after
         // it. The enclosing block or λ lowers it when it closes
@@ -4848,7 +4848,7 @@ impl Parser {
     ///   calls `leb` by name (issues/comparison-operators.md);
     /// - `a < b`, whose fallback `lt` has no lib target yet — it stays here so
     ///   `<` cannot chain either, and so the speculative type-argument parse
-    ///   keeps its documented fallback (docs/surface-polymorphism.md §1).
+    ///   keeps its documented fallback (docs/language/surface-polymorphism.md §1).
     ///
     /// The two relational rungs emit their symbol like the arithmetic ones do;
     /// the library designates neither, so both are the fallback name and
@@ -4861,7 +4861,7 @@ impl Parser {
     /// happens to raise next — so a trailing `<=`/`=`/`==` gets a targeted
     /// message instead. A trailing `=` was exempt while an annotated `let`'s
     /// binder could land exactly there; the annotation position now suppresses
-    /// this whole rung (docs/let-and-blocks-design.md §3), so a `=` after a
+    /// this whole rung (docs/language/let-and-blocks-design.md §3), so a `=` after a
     /// completed comparison is *always* a chain and can say so.
     fn comparison(&mut self, lhs: Expr) -> R<Expr> {
         let out = match self.peek() {
@@ -5219,7 +5219,7 @@ impl Parser {
     /// The first element used to be the *name* the operator desugared to
     /// (`add`, `mul`), which made `+` mean one global everywhere. It is now the
     /// symbol as written, and what it means is resolution's business
-    /// (docs/operators-onto-classes-design.md §2.1) — the fixed name survives
+    /// (docs/language/classes/operators-onto-classes-design.md §2.1) — the fixed name survives
     /// as that resolver's last rung, so nothing that parsed before this change
     /// elaborates differently.
     /// `&&` and `||` sit *below* `+`/`*` and *above* the comparison rung —
@@ -5316,7 +5316,7 @@ impl Parser {
 
     /// A **designation reference** in argument-initial position — `Monoid(+)`,
     /// `Semiring(+, *)`, `A::CommMonoid(+)`
-    /// (docs/operation-indexed-classes-design.md §7, decided there).
+    /// (docs/language/classes/operation-indexed-classes-design.md §7, decided there).
     ///
     /// An infix operator token can never *begin* an expression, so directly
     /// after `(` or `,` it has exactly one reading and this needs no
@@ -5372,7 +5372,7 @@ impl Parser {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
             TokKind::Tilde => "~",
-            // A cast, at `-`'s precedence (docs/casting-design.md §5.2):
+            // A cast, at `-`'s precedence (docs/language/casting-design.md §5.2):
             // `↑n - 1` subtracts at the target, `↑(n - 1)` casts the
             // difference.
             TokKind::UpArrow => "↑",
@@ -5386,7 +5386,7 @@ impl Parser {
     }
 
     /// `∑ k < n, e` and `∏ k < n, e` — the big-operator binder
-    /// (issues/notation-extensibility.md; docs/analysis-foundations-design.md
+    /// (issues/notation-extensibility.md; docs/library/analysis-foundations-design.md
     /// §4). A **synonym**, as `∀` is: it desugars to the range sum
     /// `MonoidRel::range(+, n, λ (k: Nat) => e)` (`*` for `∏`) of
     /// std/big_operator, so a sum is that call and every law about range sums
@@ -5444,7 +5444,7 @@ impl Parser {
         })
     }
 
-    /// `base ^ exponent` (docs/inverse-power-notation-design.md §2): above
+    /// `base ^ exponent` (docs/library/inverse-power-notation-design.md §2): above
     /// every infix rung and above the prefix operators, below postfix forms
     /// (`x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, `x.f ^ 2` is `(x.f) ^ 2`). Right-associative,
     /// and the exponent is a whole [`Self::prefix`], so `a ^ b ^ c` is
@@ -5464,7 +5464,7 @@ impl Parser {
     /// `.f(args)` / `.f<T, …>(args)`, a record literal `D { … }`, and zero or
     /// more applications `(args)` — so the head of a call can be any
     /// expression: `g(a)(b)`, `(λ x => x)(3)`
-    /// (docs/surface-function-types.md §1.3).
+    /// (docs/language/surface-function-types.md §1.3).
     ///
     /// `.f` is **not** desugared here any more. It used to become
     /// `f(args…, receiver)` — a call to a global with the receiver last;
@@ -5474,7 +5474,7 @@ impl Parser {
     /// `m.op(x)` must be `(m.op)(x)`, and choosing between the two needs the
     /// receiver's *type*. So the parser emits [`ExprKind::Dot`] and the
     /// elaborator decides, keeping the old desugaring as the fallback
-    /// (docs/surface-records.md §4.2).
+    /// (docs/language/surface-records.md §4.2).
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.atom()?;
         if let Some((args, end)) = self.try_tyargs() {
@@ -5516,7 +5516,7 @@ impl Parser {
                     e.span = e.span.join(end);
                 }
                 // `x⁻¹` — the postfix inverse, binding as tightly as `.f`
-                // (docs/inverse-power-notation-design.md §2).
+                // (docs/library/inverse-power-notation-design.md §2).
                 TokKind::SupInverse => {
                     let end = self.bump().span;
                     let span = e.span.join(end);
@@ -5569,7 +5569,7 @@ impl Parser {
                     };
                 }
                 // `Impl(add, BinNat)::refines` — a member of an *applied*
-                // owner's namespace (docs/repr-access-spellings-design.md §4).
+                // owner's namespace (docs/native/repr-access-spellings-design.md §4).
                 // An unapplied owner never reaches here: `A::b` is one lexer
                 // token, so the standalone `::` only appears after something
                 // the lexer could not join, and that was a parse error in
@@ -5610,7 +5610,7 @@ impl Parser {
                         span,
                     };
                 }
-                // `xs[i]` — indexing (docs/surface-fin-indexing-design.md §5.1).
+                // `xs[i]` — indexing (docs/language/surface-fin-indexing-design.md §5.1).
                 // A pure extension: `[` opens a type (`[T; n]`) or a vector
                 // literal only in *prefix* position, and it is in the follow
                 // set of no expression production (statements end with `;`,
@@ -5634,7 +5634,7 @@ impl Parser {
     }
 
     /// `< T, … >` after an expression — explicit type application
-    /// (docs/surface-polymorphism.md §1). `<` is *also* the `lt` operator
+    /// (docs/language/surface-polymorphism.md §1). `<` is *also* the `lt` operator
     /// ([`Self::comparison`]), so this is **speculative**: save the position, try, and
     /// restore on any failure. Backtracking is free (the parser is a token
     /// vector plus an index) and total, so unlike a lookahead heuristic it
@@ -5683,7 +5683,7 @@ impl Parser {
     /// are not.
     ///
     /// This is the whole of the **one-directional whitespace rule**
-    /// (docs/type-argument-disambiguation.md): a `<` with space before it
+    /// (docs/language/type-argument-disambiguation.md): a `<` with space before it
     /// never opens a type-argument list. One-directional is the load-bearing
     /// word — a *tight* `<` is not thereby a bracket, it is merely still
     /// speculated as one, so `a<b` remains a comparison by falling back
@@ -5832,7 +5832,7 @@ impl Parser {
         if self.at_kw("if") {
             return self.if_expr();
         }
-        // **Rule 1** (docs/let-and-blocks-design.md §5.2): a keyword-headed
+        // **Rule 1** (docs/language/let-and-blocks-design.md §5.2): a keyword-headed
         // form that is always introduced by a fixed token is recognized only
         // when that token follows, so the name is bought back everywhere else.
         // Exact, not heuristic: `calc_expr` and `j_expr` *require* the same
@@ -5874,7 +5874,7 @@ impl Parser {
         if matches!(self.peek(), TokKind::Lambda) || self.at_kw("fun") {
             return self.lambda();
         }
-        // `code { e }` — a quotation (docs/in-language-map-design.md §3).
+        // `code { e }` — a quotation (docs/metaprogramming/in-language-map-design.md §3).
         // Before the general `Ident` case; the `{` lookahead is what keeps a
         // plain variable named `code` working everywhere else.
         //
@@ -5905,7 +5905,7 @@ impl Parser {
             // letbox hoisting and with `box-synthesis-gap`'s meta-ANF
             // invariant in ways nobody has established. A wrong answer here is
             // a silently mis-hoisted splice, so it is filed rather than
-            // guessed (docs/let-and-blocks-design.md §7.2).
+            // guessed (docs/language/let-and-blocks-design.md §7.2).
             if matches!(body.kind, ExprKind::Block(_)) {
                 return Err(ParseError {
                     msg: "a quote payload is one expression, not a block: `let` inside \
@@ -5938,7 +5938,7 @@ impl Parser {
         // positionally). Stays an atom-level *named* form rather than a
         // prefix on any application: `@` suppresses implicit-argument
         // insertion, which is name-directed, so on a non-name there is
-        // nothing to suppress (docs/surface-function-types.md §1.3).
+        // nothing to suppress (docs/language/surface-function-types.md §1.3).
         if matches!(self.peek(), TokKind::At) {
             let at = self.bump().span;
             let (name, nsp) = self.qual_ident("call head after `@`")?;
@@ -6010,7 +6010,7 @@ impl Parser {
             });
         }
         // `{ let x = e; … result }` — a block in expression position
-        // (docs/let-and-blocks-design.md §4). **Prefix** `{` only: the record
+        // (docs/language/let-and-blocks-design.md §4). **Prefix** `{` only: the record
         // literal is postfix on a name head (`postfix`), and a `{` where a
         // statement is expected is reached by `block()`/`match_expr` directly,
         // so this is a pure extension — a prefix `{` was "expected an
@@ -6053,7 +6053,7 @@ impl Parser {
             }
             // One atom each, exactly as a numeral is one: the lexer has
             // already decided the payload, so there is no grammar here beyond
-            // "a literal is an expression" (docs/string-char-design.md §3).
+            // "a literal is an expression" (docs/library/string-char-design.md §3).
             TokKind::Char(c) => {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Char(c), span: sp })
@@ -6123,7 +6123,7 @@ impl Parser {
                     });
                 }
                 // `{x}` / `{x: A}` — an implicit lambda binder
-                // (docs/implicit-binders-design.md §8). One binder per brace
+                // (docs/language/implicit-binders-design.md §8). One binder per brace
                 // group, mirroring the paren rule; the annotation is optional
                 // exactly as for a bare binder (checking position supplies
                 // the domain from the expected Π).
@@ -6152,7 +6152,7 @@ impl Parser {
             return self.err("a lambda needs at least one binder");
         }
         self.expect(&TokKind::FatArrow, "`=>` (a lambda's body follows `=>`)")?;
-        // A motive body is a *type* (docs/surface-universe.md §13), and may be
+        // A motive body is a *type* (docs/language/surface-universe.md §13), and may be
         // a function type; nothing else in expression position may be.
         let body = if std::mem::take(&mut self.motive_body) {
             let ty = self.ty()?;
@@ -6181,7 +6181,7 @@ impl Parser {
     /// here. The `(` is already consumed.
     ///
     /// Positional arguments first, then **named** ones, `x := e`
-    /// (docs/named-arguments-design.md §3.3). An argument is named iff the
+    /// (docs/language/named-arguments-design.md §3.3). An argument is named iff the
     /// next two tokens are `IDENT` `:=`, which is two tokens of fixed
     /// lookahead with no speculation and no backtracking: `:=` occurs in no
     /// expression position anywhere in this grammar (§2.2), so `f(x := e)` was
@@ -6220,7 +6220,7 @@ impl Parser {
                     // `A::CommMonoid(+)` — a designation reference, which is
                     // what an operator token in argument-initial position
                     // always is
-                    // (docs/operation-indexed-classes-design.md §7).
+                    // (docs/language/classes/operation-indexed-classes-design.md §7).
                     match p.op_symbol_arg() {
                         Some(e) => args.push(e),
                         None => args.push(p.expr()?),
@@ -6244,7 +6244,7 @@ impl Parser {
 
     /// `{ f: e, … }` after the record name, which the caller has consumed.
     /// Field order is free — it is normalized against the declaration in the
-    /// elaborator (docs/surface-records.md §6), which is also where an unknown
+    /// elaborator (docs/language/surface-records.md §6), which is also where an unknown
     /// or missing field is reported, since only it knows the declaration.
     fn record_lit(&mut self, name: String, tyargs: Vec<Ty>, head: Span) -> R<Expr> {
         self.expect(&TokKind::LBrace, "`{` (record literal)")?;
@@ -6319,13 +6319,13 @@ impl Parser {
         }
         // The scrutinee and the motive are both immediately followed by the
         // arm block, so a `{` here closes the `match` rather than opening a
-        // record literal (docs/surface-records.md §6.1).
+        // record literal (docs/language/surface-records.md §6.1).
         let eqbind = self.eq_binder()?;
         let scrut = self.with_record_lit(true, |p| p.expr())?;
         let motive = if self.eat_kw("as") {
             // The retired spelling `as z -> T`, diagnosed rather than parsed:
             // `->` is the type arrow and nothing else now
-            // (docs/surface-universe.md §13).
+            // (docs/language/surface-universe.md §13).
             if matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::Arrow) {
                 return self.err(
                     "a motive is a lambda: write `as \u{3bb} z => T` (or `as fun z => T`) \
@@ -6640,7 +6640,7 @@ impl Parser {
             // `_ =>` is the default arm. It parses here rather than needing a
             // token of its own because `_` already lexes as an identifier
             // (`on _: P` reads it that way), so the form steals nothing
-            // (docs/nested-match-patterns-design.md §2).
+            // (docs/language/matching/nested-match-patterns-design.md §2).
             let default = ctor == "_";
             self.expect(&TokKind::FatArrow, "`=>`")?;
             let body = self.expr()?;
@@ -6715,7 +6715,7 @@ impl Parser {
     }
 
     /// The parenthesized argument list of a pattern — positional fields or
-    /// `field := pattern` (docs/named-patterns-by-field-design.md §3).
+    /// `field := pattern` (docs/language/matching/named-patterns-by-field-design.md §3).
     /// Absent parentheses mean no fields, which is the nullary-constructor
     /// spelling `Zero => …`.
     ///
@@ -6749,7 +6749,7 @@ impl Parser {
     }
 
     /// One field position: a binder, or a **deep pattern**
-    /// (docs/nested-match-patterns-design.md §3.1).
+    /// (docs/language/matching/nested-match-patterns-design.md §3.1).
     ///
     /// A bare identifier is read as [`Pat::Var`] unconditionally — whether it
     /// is really a nullary constructor is a question about the constructor
@@ -6797,12 +6797,12 @@ impl Parser {
     }
 
     /// The optional `h :` prefix of a `match` scrutinee or a `split`
-    /// (docs/match-equation-split-design.md §3.1). Recognized on two tokens,
+    /// (docs/language/matching/match-equation-split-design.md §3.1). Recognized on two tokens,
     /// which is exact: `:` never *continues* an expression in this grammar
     /// (every `Colon` is a binder annotation, a record-literal field after
     /// `{`, or a declaration header), and `::` is its own token, so
     /// `match A::b { … }` is untouched. Same shape as `code {`'s rule-1
-    /// lookahead (docs/let-and-blocks-design.md §5.2).
+    /// lookahead (docs/language/let-and-blocks-design.md §5.2).
     fn eq_binder(&mut self) -> R<Option<String>> {
         if matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::Colon) {
             let (name, _) = self.binder_ident("the equation binder")?;
@@ -6812,7 +6812,7 @@ impl Parser {
         Ok(None)
     }
 
-    /// The residue rule 1 leaves standing (docs/let-and-blocks-design.md §5.3):
+    /// The residue rule 1 leaves standing (docs/language/let-and-blocks-design.md §5.3):
     /// after the lookahead, a binder named `j` is an ordinary name at every use
     /// *except* `j(x)` — a local of function type applied to arguments, which
     /// still enters this form and fails its arity check. Loud, and inside a
@@ -6923,7 +6923,7 @@ impl Parser {
         // reuse the previous right endpoint (`= e_{i+1} := p_{i+1}`).
         // Endpoints are read with the comparison rung suppressed: here `=`,
         // `≈`, `<=` and `<` are step separators, not the comparison types
-        // (docs/surface-universe.md §13).
+        // (docs/language/surface-universe.md §13).
         let mut terms = vec![self.with_eq(true, |p| p.expr())?];
         let mut proofs = Vec::new();
         let mut rels = vec![self.calc_relation()?];
@@ -7013,7 +7013,7 @@ impl Parser {
         let mut acc = proofs[m - 1].clone();
         for i in (0..m - 1).rev() {
             // The endpoints are pinned **by name**, not by a fully explicit
-            // `@trans` (docs/named-arguments-design.md; the issue calls this
+            // `@trans` (docs/language/named-arguments-design.md; the issue calls this
             // desugaring out as having been fragile twice). `@` forced every
             // value implicit positionally, so the emitted call depended on how
             // many implicits `trans` has and in what order — a property of a
@@ -7126,7 +7126,7 @@ mod tests {
 
     // Successors of the two implicit-binder diagnostics (retired
     // 2026-08-06): `{x: A} -> B` and `λ {x: A} => e` are parses now
-    // (docs/implicit-binders-design.md §8), with the mark on the node.
+    // (docs/language/implicit-binders-design.md §8), with the mark on the node.
     #[test]
     fn implicit_function_type_binders_parse() {
         let f = parse_file("fn f(g: {n: Nat} -> Nat -> Nat) -> Nat { 0 }").unwrap();
@@ -7189,7 +7189,7 @@ mod tests {
 
     /// Named arguments land in their own list, so the grammar's
     /// positional-then-named rule is a property of the AST rather than a rule
-    /// every reader has to re-check (docs/named-arguments-design.md §8.1).
+    /// every reader has to re-check (docs/language/named-arguments-design.md §8.1).
     #[test]
     fn a_named_argument_parses_into_its_own_list() {
         let f = parse_file("fn f(n: Nat) -> Nat { g(a, x := b, y := c) }").unwrap();
@@ -7249,7 +7249,7 @@ mod tests {
     /// The head of an application, as a string — a name or an operator
     /// **symbol**. The symbol is what the parser now emits for `+`/`*`/`<=`,
     /// and what it *means* is the resolver's
-    /// (docs/operators-onto-classes-design.md §2.1): the fixed names these
+    /// (docs/language/classes/operators-onto-classes-design.md §2.1): the fixed names these
     /// tests used to assert survive as that resolver's last rung, which is
     /// where the assertion on them moved (`crates/elab/tests/operators.rs`,
     /// the growth-invariant pins).
@@ -7485,7 +7485,7 @@ mod tests {
 
     /// `^` sits above `*` and above prefix `-`, is right-associative, and
     /// takes a whole prefix expression as its exponent; `⁻¹` binds as tightly
-    /// as `.f` (docs/inverse-power-notation-design.md §2).
+    /// as `.f` (docs/library/inverse-power-notation-design.md §2).
     #[test]
     fn power_and_inverse_precedence() {
         for (src, want) in [
@@ -7539,7 +7539,7 @@ mod tests {
     }
 
     /// `↑` binds as tightly as the other prefixes: `↑n - 1` casts `n`, and
-    /// the subtraction happens at the target (docs/casting-design.md §14).
+    /// the subtraction happens at the target (docs/language/casting-design.md §14).
     #[test]
     fn a_cast_is_a_prefix_symbol_binding_tighter_than_infix() {
         let k = body("↑n - 1");
@@ -8302,7 +8302,7 @@ mod tests {
 
     // `.f` is no longer desugared here: the parser emits `Dot` and the
     // elaborator decides between a record projection and the method call,
-    // since only it knows the receiver's type (docs/surface-records.md §4.2).
+    // since only it knows the receiver's type (docs/language/surface-records.md §4.2).
     // What that desugaring *becomes* is pinned in the elaborator's tests; what
     // is pinned here is that the shape survives parsing intact.
     #[test]
@@ -8392,7 +8392,7 @@ mod tests {
         assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["y", "x"]);
     }
 
-    // The `match m { … }` ambiguity (docs/surface-records.md §6.1): a `{`
+    // The `match m { … }` ambiguity (docs/language/surface-records.md §6.1): a `{`
     // after the scrutinee closes the `match`, and parenthesising is the escape
     // hatch for a literal that really is the scrutinee.
     #[test]
@@ -8668,7 +8668,7 @@ mod tests {
         assert!(ty.is_none());
         // `let p: (n = n) = refl;` — the annotation is read with the
         // comparison rung suppressed, so an equation is parenthesised and the
-        // binder `=` is the parser's (docs/let-and-blocks-design.md §3).
+        // binder `=` is the parser's (docs/language/let-and-blocks-design.md §3).
         let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[1] else { panic!("plain let") };
         assert_eq!(name, "p");
         assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Eq(..))));
@@ -8688,7 +8688,7 @@ mod tests {
 
     /// The negative control for the annotation's `no_eq`: it is scoped to the
     /// annotation, so a `let`'s *value* may still be an equation
-    /// (docs/let-and-blocks-design.md §8 item 4(b) — the `surface-universe`
+    /// (docs/language/let-and-blocks-design.md §8 item 4(b) — the `surface-universe`
     /// counterexample that killed the last-`=`-scan option).
     #[test]
     fn a_let_value_may_still_be_an_equation() {
@@ -8736,7 +8736,7 @@ mod tests {
 
     /// The parenthesis escape hatch `no_eq`'s doc comment promised and did not
     /// have: with it, the `CHAIN` message's advice is true
-    /// (docs/let-and-blocks-design.md §1.1(3)).
+    /// (docs/language/let-and-blocks-design.md §1.1(3)).
     #[test]
     fn a_parenthesis_reopens_the_comparison_rung() {
         assert!(parse_file("theorem t(): a = (b = c) { refl }").is_ok());
@@ -8745,7 +8745,7 @@ mod tests {
 
     /// A trailing `=` after a completed comparison is now always a chain: the
     /// annotation position no longer needs the exemption
-    /// (docs/let-and-blocks-design.md §3.1).
+    /// (docs/language/let-and-blocks-design.md §3.1).
     #[test]
     fn comparisons_still_do_not_chain() {
         for src in [
@@ -8759,7 +8759,7 @@ mod tests {
     }
 
     /// The block expression's disambiguation is **positional**
-    /// (docs/let-and-blocks-design.md §4.1): a prefix `{` is a block, a
+    /// (docs/language/let-and-blocks-design.md §4.1): a prefix `{` is a block, a
     /// postfix `{` on a name head is still a record literal, and a `{` where a
     /// statement is expected is still a declaration body or an arm list. Three
     /// collision checks, not one.
@@ -8829,7 +8829,7 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(n) if n == "let"));
     }
 
-    // -- the quotation slice (docs/in-language-map-design.md §3) ------------
+    // -- the quotation slice (docs/metaprogramming/in-language-map-design.md §3) ------------
 
     #[test]
     fn meta_fn_with_modal_signature() {
@@ -8852,7 +8852,7 @@ mod tests {
         assert!(matches!(&d.body.result.kind, ExprKind::Quote(_)));
     }
 
-    /// The registration clause (docs/meta-def-registration-design.md §2.1).
+    /// The registration clause (docs/metaprogramming/meta-def-registration-design.md §2.1).
     /// The parser only shapes the path; whether `vec.map` names a slot is the
     /// elaborator's question, where the vocabulary can be listed.
     #[test]
@@ -8898,7 +8898,7 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Splice(_)));
     }
 
-    // -- the equation binder and `split` (docs/match-equation-split-design.md)
+    // -- the equation binder and `split` (docs/language/matching/match-equation-split-design.md)
 
     /// §3.1: the `h :` prefix is exact on two tokens, and it steals nothing.
     #[test]
@@ -8997,7 +8997,7 @@ mod tests {
     /// **Rule 1** at the two forms that qualify, on the pattern
     /// `code_is_still_an_ordinary_name` set: the lookahead is what buys the
     /// name back, and the form is untouched because the same token was already
-    /// required one line later (docs/let-and-blocks-design.md §5.2).
+    /// required one line later (docs/language/let-and-blocks-design.md §5.2).
     #[test]
     fn j_and_calc_are_still_ordinary_names() {
         // `j` as an ordinary name at a use — the reported bug
@@ -9349,7 +9349,7 @@ mod tests {
     }
 
     /// The **one-directional whitespace rule**
-    /// (`docs/type-argument-disambiguation.md`): a `<` with a space before it
+    /// (`docs/language/type-argument-disambiguation.md`): a `<` with a space before it
     /// never opens type arguments, and a tight one is still only *speculated*
     /// as opening them.
     ///

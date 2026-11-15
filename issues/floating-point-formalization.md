@@ -38,7 +38,7 @@ of the area.
 
 ## Log
 
-- 2026-10-20: design proposal in `docs/floating-point-design.md`, after
+- 2026-10-20: design proposal in `docs/library/floating-point-design.md`, after
   reading flean. It answers questions 1–3 provisionally (dyadic values
   embedded in `Rat`; formats as data indexing `Float(F)`; one `encode`/`decode`
   pair over `BitVec`) and lists nine open questions for Minus (§9) and an
@@ -84,7 +84,7 @@ of the area.
   binary long division `Nat::ldiv`, which `round_rat` uses too. Design §14.
   Square root is [[float-sqrt]] (its statement needs the reals or a cut form
   of `RoundsTo`); binary32 literals wait on [[kernel-wide-run-comparison]].
-- 2026-10-25: 2026-10-25: surveyed Coq's hardware floats (Martin-Dorel, Melquiond, Roux, JAR 2023) in `docs/coq-hardware-floats-survey.md`. Conclusion: no primitive floats in the kernel (they are definition-shape cases plus specification axioms, §2); Heather's executable-plus-relation design is the paper's spec stack without the axioms (§3). Native-lane machine assumptions for the round that first lowers a float op are in §4 (MXCSR as step input, SSE2 only, NaN platform policy, compiler identities at Float(F)). Filed [[float-error-sharper-model]], [[float-conformance-vectors]], [[float-literal-entry]], [[dyadic-interval-enclosures]].
+- 2026-10-25: 2026-10-25: surveyed Coq's hardware floats (Martin-Dorel, Melquiond, Roux, JAR 2023) in `docs/surveys/coq-hardware-floats-survey.md`. Conclusion: no primitive floats in the kernel (they are definition-shape cases plus specification axioms, §2); Heather's executable-plus-relation design is the paper's spec stack without the axioms (§3). Native-lane machine assumptions for the round that first lowers a float op are in §4 (MXCSR as step input, SSE2 only, NaN platform policy, compiler identities at Float(F)). Filed [[float-error-sharper-model]], [[float-conformance-vectors]], [[float-literal-entry]], [[dyadic-interval-enclosures]].
 - 2026-10-26: 2026-10-26: interval enclosures over Dyadic and the Expr inequality checker landed, design §16; [[dyadic-interval-enclosures]] closed.
 - 2026-10-31: square root ([[float-sqrt]], closed): `Finite::sqrt`/`Float::sqrt`
   with the value theorem stated at every rational in `√x`'s cell (no second

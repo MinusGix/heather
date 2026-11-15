@@ -11,7 +11,7 @@ updated: 2026-10-27
 A small layer grammar (linear, pointwise activation, compose, fork,
 residual) over [[ml-tensor-shapes]], with a forward semantics and a reverse
 mode defined once as a transformation over the grammar
-(`docs/wick-survey.md` §3.5). Per-layer work is only the primitive rules.
+(`docs/surveys/wick-survey.md` §3.5). Per-layer work is only the primitive rules.
 
 Correctness is the pairing identity `⟪backward dy, δ⟫ = ⟪dy, df δ⟫` with
 `df` pinned to a real derivative, which Wick never managed generally (its
@@ -33,4 +33,4 @@ values. Longer term this is a compiler pass and belongs with `hih-passes`.
 
 ## Log
 
-- 2026-10-27: The formal derivative and dual-number evaluation of polynomial programs are in [[formal-power-series]] (docs/analysis-foundations-design.md §5); reverse mode as an instance of a reverse differential structure is [[differential-structures]] (§3.1).
+- 2026-10-27: The formal derivative and dual-number evaluation of polynomial programs are in [[formal-power-series]] (docs/library/analysis-foundations-design.md §5); reverse mode as an instance of a reverse differential structure is [[differential-structures]] (§3.1).

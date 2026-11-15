@@ -1,5 +1,5 @@
 //! `datarepr` — runtime representations of spec inductives, linked by
-//! certified refinement (`docs/datarepr-design.md`, `issues/datarepr-separation.md`).
+//! certified refinement (`docs/native/datarepr-design.md`, `issues/datarepr-separation.md`).
 //!
 //! Nothing here reaches the kernel on its own, and nothing here is trusted.
 //! A `datarepr` builds *surface source* — a spec-recursor specialization, the
@@ -175,7 +175,7 @@ fn hole_error<T>(obs: &[Obligation], h: &Hole) -> R<T> {
         format!(
             "`{}` of `{}` is not proved{label}: a `?` clause reports its obligation and \
              fails — write the proof here \
-             (docs/obligation-records-design.md §1.2)\n  `{}` owes:\n    {}",
+             (docs/language/classes/obligation-records-design.md §1.2)\n  `{}` owes:\n    {}",
             h.field, h.owner, h.path, stmt
         ),
         h.span,
@@ -189,7 +189,7 @@ fn hole_on_data_field(clause: &str) -> String {
     format!(
         "`?` at clause `{clause}`, which is not an obligation: only the theorem clauses \
          may be `?`, because the data clauses are what their statements are computed \
-         from (docs/obligation-records-design.md §1.1)"
+         from (docs/language/classes/obligation-records-design.md §1.1)"
     )
 }
 
@@ -358,7 +358,7 @@ impl DataRepr<'_> {
             return err(
                 format!(
                     "`{spell}` is an indexed or value-parameterized declaration: v1 reprs are \
-                     over plain inductives (docs/datarepr-design.md §5.1)"
+                     over plain inductives (docs/native/datarepr-design.md §5.1)"
                 ),
                 span,
             );
@@ -392,7 +392,7 @@ impl DataRepr<'_> {
                         format!(
                             "`{}`'s field {i} has a type this round cannot spell: a v1 repr's \
                              non-recursive fields are left at their spec types \
-                             (docs/datarepr-design.md §1.1)",
+                             (docs/native/datarepr-design.md §1.1)",
                             c.name
                         ),
                         span,
@@ -448,7 +448,7 @@ impl DataRepr<'_> {
                 format!(
                     "`{spell}`: a repr's spec type applied to arguments is a declaration with value \
                      parameters only (`record SInt(n: Nat)`); type arguments are written `D<T>`, and \
-                     indexed families are not represented (docs/datarepr-design.md §5.1)"
+                     indexed families are not represented (docs/native/datarepr-design.md §5.1)"
                 ),
                 span,
             );
@@ -478,7 +478,7 @@ impl DataRepr<'_> {
                         format!(
                             "`{}`'s field {i} has a type this round cannot spell: a v1 repr's \
                              non-recursive fields are left at their spec types \
-                             (docs/datarepr-design.md §1.1)",
+                             (docs/native/datarepr-design.md §1.1)",
                             c.name
                         ),
                         span,
@@ -542,7 +542,7 @@ impl DataReprMut<'_> {
             return err(
                 format!(
                     "`{}` already has a repr, `{}`: v1 is one repr per spec type \
-                     (docs/datarepr-design.md §5.3 defers multi-repr)",
+                     (docs/native/datarepr-design.md §5.3 defers multi-repr)",
                     prev.written, prev.global
                 ),
                 d.span,
@@ -551,7 +551,7 @@ impl DataReprMut<'_> {
         if self.representations.has_name(&d.name) {
             return err(format!("duplicate repr name `{}`", d.name), d.span);
         }
-        // The designed access spellings (`docs/repr-access-spellings-design.md`
+        // The designed access spellings (`docs/native/repr-access-spellings-design.md`
         // §5), registered before anything is generated: a `?` in a clause
         // reports statements, and those are printed through the same table.
         let ctors: Vec<String> = spec.ctors.iter().map(|c| c.name.clone()).collect();
@@ -613,7 +613,7 @@ impl DataRepr<'_> {
                             "`{}` is not a repr generator this round knows: v1 has \
                              `repr::naive()` only, and the auto-pick meta-program \
                              (`repr::inductive_repr()`) is v2+ \
-                             (docs/datarepr-design.md §5.1 item 2, §5.2)",
+                             (docs/native/datarepr-design.md §5.1 item 2, §5.2)",
                             spell_expr(e).unwrap_or_else(|| "this expression".into())
                         ),
                         e.span,
@@ -748,7 +748,7 @@ impl DataRepr<'_> {
         // retired the `Zero = Zero` pun — and an omitted `fold` is the fold
         // *through* `abs`, synthesized in `generate`. Omission means "take the
         // default" and nothing else; a `?` still reports and fails (design
-        // docs/obligation-records-design.md §1.2).
+        // docs/language/classes/obligation-records-design.md §1.2).
         let inv = take("inv", &mut by_name).unwrap_or_else(|| {
             inv_trivial = true;
             format!("\u{3bb} r => True")
@@ -763,7 +763,7 @@ impl DataRepr<'_> {
                 format!(
                     "`datarepr {}` is missing {}: a repr's correctness basis is \
                      `R`, `abs` and one `mk` per constructor \
-                     (docs/datarepr-design.md §1.1); `inv` and `fold` default \
+                     (docs/native/datarepr-design.md §1.1); `inv` and `fold` default \
                      when omitted",
                     d.name,
                     missing.join(", ")
@@ -812,7 +812,7 @@ impl DataReprMut<'_> {
     /// named in the message rather than shown.
     fn elab_generated(&mut self, src: &str, what: &str, span: Span, sp: &Splices) -> R<()> {
         // Generated mode: inside it the minted names *are* the surface, which
-        // is what the emission spells (`docs/repr-access-spellings-design.md`
+        // is what the emission spells (`docs/native/repr-access-spellings-design.md`
         // §6). A mode and not a property of the text, so that a generator that
         // one day writes designed paths needs no change here.
         self.generated_mode(|me| DataReprMut(me).elab_generated_at(src, what, span, sp))
@@ -1012,7 +1012,7 @@ fn is_naive_call(e: &Expr) -> bool {
     match &e.kind {
         // `named.is_empty()` too: `repr::naive(x := 1)` has no *positional*
         // arguments and would otherwise read as `repr::naive()`
-        // (docs/named-arguments-design.md §8.2).
+        // (docs/language/named-arguments-design.md §8.2).
         ExprKind::App {
             head, args, named, ..
         } => args.is_empty() && named.is_empty() && is_naive_call(head),
@@ -2201,7 +2201,7 @@ pub(crate) fn subst_expr(e: &Expr, m: &HashMap<&str, String>) -> Expr {
 
 /// §1.2's statement schema at one `(operation, repr)` pair, as spelled source.
 ///
-/// One computation, two consumers, per `docs/obligation-records-design.md` §2.1
+/// One computation, two consumers, per `docs/language/classes/obligation-records-design.md` §2.1
 /// (FINDING A): `elab_impl` declares the obligations from it and the transfer
 /// generator's phase 3 states the derived ones from it, and before the
 /// extraction each had its own copy of the same paragraph. Everything is a
@@ -2388,7 +2388,7 @@ impl DataReprMut<'_> {
             return err(
                 format!(
                     "`{}` is polymorphic: an `Impl` at a v1 repr is over a monomorphic \
-                     operation (docs/datarepr-design.md §5.1)",
+                     operation (docs/native/datarepr-design.md §5.1)",
                     d.op
                 ),
                 d.span,
@@ -2449,7 +2449,7 @@ impl DataReprMut<'_> {
                     return err(
                         "`via_derived` takes one argument: the proof that this \
                          implementation and the derived one have the same image under \
-                         `abs` (docs/obligation-records-design.md §4.3)"
+                         `abs` (docs/language/classes/obligation-records-design.md §4.3)"
                             .to_string(),
                         cl.expr.span,
                     );
@@ -2509,7 +2509,7 @@ impl DataReprMut<'_> {
                     "`impl {} for {}` returns `{s}`, so it also needs a `refines_inv`, and \
                      `via_derived` cannot fill it: `inv(body(x̄))` does not follow from an \
                      abs-image equation — that is what a non-injective `abs` costs \
-                     (docs/obligation-records-design.md §4.3). Write it, or prove carrier \
+                     (docs/language/classes/obligation-records-design.md §4.3). Write it, or prove carrier \
                      equality instead",
                     d.op, d.repr
                 )
@@ -2695,7 +2695,7 @@ impl DataReprMut<'_> {
             return err(
                 format!(
                     "`{}` is not a route this round knows: an `impl` body is `derive()` \
-                     (docs/obligation-records-design.md §4.3), and everything else is \
+                     (docs/language/classes/obligation-records-design.md §4.3), and everything else is \
                      written as clauses",
                     spell_expr(e).unwrap_or_else(|| "this expression".into())
                 ),

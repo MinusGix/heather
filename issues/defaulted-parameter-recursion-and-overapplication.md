@@ -25,7 +25,7 @@ cannot give that parameter in two places a library wants to.
    though none of them names the new parameter.
 
 Found 2026-11-11 giving FunctionIR's meaning and evaluator their buffers
-(docs/native-one-compiler-design.md §2.3): `eval_nodes`,
+(docs/native/native-one-compiler-design.md §2.3): `eval_nodes`,
 `StructuredRegion::eval`, `NodesHold`, `Function::Computes`.
 
 ## Wanted

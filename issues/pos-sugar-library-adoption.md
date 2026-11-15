@@ -18,7 +18,7 @@ division lemmas (`div_mul_parts`, `div_div`, `mod_mul_mod`,
 `ten_pow` (`lib/elf64_format_width.hthr`) becomes `→ Pos<Nat>` with
 `on ?pos := ten_pow_positive(i);`, replacing `ten_pow_pos` with
 `ten_pow::pos`, which is the call-site case (c) of
-docs/positivity-evidence-design.md §2 turning into a rule.
+docs/library/positivity-evidence-design.md §2 turning into a rule.
 
 Cost: each migrated signature changes its callers' positional arity (the fact
 moves from a positional slot to a searched one), so every call site that
@@ -37,9 +37,9 @@ suite.
 ## Log
 
 - 2026-10-13: everything above but `elf64_command` adopted
-  (docs/positivity-evidence-design.md §12 says what each call site became).
+  (docs/library/positivity-evidence-design.md §12 says what each call site became).
   `elf64_read_filter`'s binders are `0 < bytes.len()`, which bind no
   variable, so the sugar does not apply. Left open for `elf64_command`'s
   `n: Nat, nonzero: 0 < n` binders, held back while the native triples work
   rewrites that file; migrate them once it lands.
-- 2026-11-05: gardener: cites a file it shares with [[native-proven-formatting-api]] (`lib/elf64_format_width.hthr`); [[positive-refinement-type]] (`docs/positivity-evidence-design.md`); [[positivity-evidence]] (`docs/positivity-evidence-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[native-proven-formatting-api]] (`lib/elf64_format_width.hthr`); [[positive-refinement-type]] (`docs/library/positivity-evidence-design.md`); [[positivity-evidence]] (`docs/library/positivity-evidence-design.md`).

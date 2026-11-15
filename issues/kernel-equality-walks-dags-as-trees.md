@@ -13,7 +13,7 @@ itself is cheap. Two DAGs that are equal but were built separately are not:
 the derived `Term::eq` walks them as trees, so the comparison costs the
 number of paths, 2^k for a let chain.
 
-Found by the `stmt` probe of `docs/mengine-survey.md` §4.2 once
+Found by the `stmt` probe of `docs/surveys/mengine-survey.md` §4.2 once
 [[kernel-typing-memo-on-node-identity]] made the gate's *queries* linear.
 `theorem stmt(v0: Nat): { let v1 = g(g(v0, v0), 0); …; vk } = { … same … } { refl }`
 elaborates the two sides separately, and `refl`'s check compares them.

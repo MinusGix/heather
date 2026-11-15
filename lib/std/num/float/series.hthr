@@ -1,6 +1,6 @@
 // Series with a geometric tail, their limits as Cauchy reals, and interval
 // enclosures of those limits (issues/interval-elementary-functions.md;
-// docs/floating-point-design.md §16, "Series").
+// docs/library/floating-point-design.md §16, "Series").
 //
 // A `Series` is given by its first term and the ratio of each term to the
 // next, with a point from which every ratio is at most 1/2 in size. From

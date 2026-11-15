@@ -15,7 +15,7 @@ nothing", #387 added "or a solution was rejected" plus 8 reducts, and
 progress, but not always". The kernel's own conversion is δ-lazy
 (crates/kernel/DESIGN.md: same head → compare spines; otherwise unfold to
 δ-heads and compare again). The unifier is learn-only conversion with metas
-and does not follow that order (docs/elaborator-principles-survey.md §3.2).
+and does not follow that order (docs/elaborator/elaborator-principles-survey.md §3.2).
 
 ## Proposal (P3)
 

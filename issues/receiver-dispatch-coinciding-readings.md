@@ -17,7 +17,7 @@ lemma that fills it.
 
 ## The rule as it stands
 
-`docs/traits-receiver-dispatch-design.md` §4 rule 2: an ordinary type-owned
+`docs/language/classes/traits-receiver-dispatch-design.md` §4 rule 2: an ordinary type-owned
 member and a class member at one carrier are an error naming both, because
 preferring either would let a library addition silently reinterpret a call.
 `crates/elab/src/dispatch/member.rs:135` builds the `other` reading (a
@@ -43,7 +43,7 @@ are the case that matters and reduce to a name comparison.
 Why this keeps the invariant: no reading is *preferred*. When the two coincide
 there is one meaning; when a later instance or a local dictionary fills the
 field differently, the call becomes an error — growth introduces errors, never
-reinterpretations (`docs/modules-design.md` §4). Rule 4 (scope beats registry)
+reinterpretations (`docs/language/modules-design.md` §4). Rule 4 (scope beats registry)
 is what makes the local-dictionary case a real difference and not a
 false positive: the test reads the dictionary dispatch actually resolved.
 
@@ -79,7 +79,7 @@ beside its kit, is [[package-order-independence]]; this fix does not wait on it.
   record spine entry → the other reading's global, applied to exactly the
   instance's binders. On coincidence dispatch returns `Ok(None)` and the other
   reading runs, so the term is the direct global (tests compare bindings).
-  Deviations, all folded into `docs/traits-receiver-dispatch-design.md` §4 rule 2:
+  Deviations, all folded into `docs/language/classes/traits-receiver-dispatch-design.md` §4 rule 2:
   (1) an added parameter-table condition — the same global with `self` not first
   is a different call; (2) generic instances coincide only in the one-equation
   shape (type binders only, `g` taking them as leading implicits, subject domain

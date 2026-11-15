@@ -17,7 +17,7 @@ Filed from the packed vector literal round ([[packed-vector-literal-term]], [[ke
 Two levers, not exclusive:
 
 1. **Library**: now that a byte literal costs one evaluator step, pass constant opcode bytes as byte literals (`from_bits(8, [...])`, which the elaborator packs) instead of `ofNat(opcode)`. Unit probe from this round: `canonical_bytes(MovRR …)` went 1,454 → 1,633 steps when only the *expected* side was packed, because the encoder's `ofNat(opcode)` no longer met it at the spine; with both sides packed it should fall well below the original. Measure with `scripts/bench-probes --filter cert/` and a `--only` probe per instruction kind.
-2. **Kernel**: `ofNat` at a closed width and a closed numeral reaching a `BitRun` directly. The replay arm (`docs/patches/bitvector-nat-state-arm.patch`, `docs/bitvector-literal-entry-design.md` §10.7) is correct but was +1.0 % on the reused_callee workload because it replays the step per bit. It has not been measured on the certificate workload, where `ofNat` is a larger share; re-measure it there before building anything new. A constant-time route needs the step's two Nat functions (`odd_bit`, `half`) evaluated as arithmetic rather than replayed, which §10.7 says the probe representation cannot do by substitution.
+2. **Kernel**: `ofNat` at a closed width and a closed numeral reaching a `BitRun` directly. The replay arm (`docs/patches/bitvector-nat-state-arm.patch`, `docs/kernel/bitvector-literal-entry-design.md` §10.7) is correct but was +1.0 % on the reused_callee workload because it replays the step per bit. It has not been measured on the certificate workload, where `ofNat` is a larger share; re-measure it there before building anything new. A constant-time route needs the step's two Nat functions (`odd_bit`, `half`) evaluated as arithmetic rather than replayed, which §10.7 says the probe representation cannot do by substitution.
 
 ## Done when
 
@@ -31,7 +31,7 @@ reads their trees and bases out of the probe as closed data, and at a
 closed `x` produces the word by arithmetic (`Output::NatState`,
 `Transducer::run_nat`; a functional-graph walk of each window instead of the
 tree's powers). No definition is named; library code keeps writing
-`ofNat(n, k)`. `docs/bitvector-literal-entry-design.md` §10.10 has the
+`ofNat(n, k)`. `docs/kernel/bitvector-literal-entry-design.md` §10.10 has the
 adequacy argument and the numbers; `crates/kernel/DESIGN.md` the paragraph.
 
 `cert/yes-pieces` (cloud, interleaved pairs): 488,749 → 327,015 steps,

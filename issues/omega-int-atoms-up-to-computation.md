@@ -43,4 +43,4 @@ No real Int proof has met this yet; it is the Nat fix's symmetric half.
   elaborated from `int::Int` lazily, once a pair passes the syntactic gates.
   The one-liner checks; a closed atom on each side of zero reflects as its
   constant; both controls stay two atoms (`omega_atoms_computation.rs`). Design
-  note: docs/omega-measure-reduction-design.md §5.
+  note: docs/tactics/omega-measure-reduction-design.md §5.

@@ -33,4 +33,4 @@ fire only when a flex/rigid pair would otherwise fail.
 ## Log
 
 - 2026-09-24: 2026-09-24: A second shape of the same gap, from the namespace round's sweep: a plain `BitVec::cons_bit_cong(n, refl, ih)` fails wherever the goal has to unfold before it shows `xs.cons_bit(a)` (`decrement_increment_step`'s `True` arm). The library now spells those sites with named implicits (`a := …, xs := …`). They are acceptance for this slice.
-- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.
+- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/elaborator/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.

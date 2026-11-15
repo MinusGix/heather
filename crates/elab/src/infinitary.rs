@@ -1,5 +1,5 @@
 //! Tier 2: an inductive with a recursive **function** field, lowered on the
-//! `W` former (docs/inductive-tier2-w-lowering.md). The section numbers below
+//! `W` former (docs/inductives/inductive-tier2-w-lowering.md). The section numbers below
 //! are that document's.
 //!
 //! ```text
@@ -299,7 +299,7 @@ impl Infinitary<'_> {
                     return err(
                         format!(
                             "the domain of `{}`'s recursive function field has no code, so `{}` \
-                             cannot index its children by it (docs/inductive-tier2-w-lowering.md §1)",
+                             cannot index its children by it (docs/inductives/inductive-tier2-w-lowering.md §1)",
                             ctor.name, ind.name
                         ),
                         span,
@@ -311,7 +311,7 @@ impl Infinitary<'_> {
                             format!(
                                 "the recursive function fields of `{first}` and `{}` have domains \
                                  at different universe levels; tier 2 needs one level for all of \
-                                 them (docs/inductive-tier2-w-lowering.md §1)",
+                                 them (docs/inductives/inductive-tier2-w-lowering.md §1)",
                                 ctor.name
                             ),
                             span,
@@ -382,7 +382,7 @@ impl Infinitary<'_> {
             return err(
                 format!(
                     "a field type of `{}` has no code, which the leaf predicate of a type with a \
-                     recursive function field needs (docs/inductive-tier2-w-lowering.md §5)",
+                     recursive function field needs (docs/inductives/inductive-tier2-w-lowering.md §5)",
                     ind.name
                 ),
                 span,

@@ -8,7 +8,7 @@ updated: 2026-10-21
 milestone: [hih-program-logic]
 ---
 
-Burn B1 of `docs/native-program-logic-design.md` (§3.1): delete the
+Burn B1 of `docs/native/native-program-logic-design.md` (§3.1): delete the
 hand-proved process stack (`wc`, `wc -l`, `tr` and the filters, the command),
 which the rebuild does not reuse.
 

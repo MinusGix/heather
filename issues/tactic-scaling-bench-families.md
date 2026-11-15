@@ -9,10 +9,10 @@ updated: 2026-10-26
 ---
 
 The frontend bench (`crates/elab/benches/frontend`,
-`docs/frontend-benchmarking.md`) has no tactic family and no let fan-out
+`docs/infrastructure/frontend-benchmarking.md`) has no tactic family and no let fan-out
 family. Shapes with known linear lower bounds are therefore unguarded:
 nothing records that one `rewrite` on a let-shared goal is 2^k
-(`docs/mengine-survey.md` §4.2), and nothing would notice if the planned
+(`docs/surveys/mengine-survey.md` §4.2), and nothing would notice if the planned
 relational rewriting ([[rewrite-setoid-relations]]) inherited a quadratic.
 
 mengine's benchmark suite (`benchmarks/` in
@@ -60,7 +60,7 @@ themselves, checked by `refl`), which isolate the gate's share.
 
 ## Log
 
-- 2026-10-26: LANDED: seven families in `crates/elab/benches/frontend/fixtures/rewriting.rs`, run by `scripts/bench-frontend --filter rewrite/` and `--filter let/`. Each family's doc comment and its row in `docs/frontend-benchmarking.md` states its lower bound (all linear); the bands record today's slope. Slope rows are in `baseline.tsv`; case and split rows wait for a `--save` on the recording machine (the bands come from a 4-core cloud box, and its times would sit under the baseline's other `env`). Release, cloud box, one run's min times and its probe-run phase split at the largest size; slope as the mean of four runs (range):
+- 2026-10-26: LANDED: seven families in `crates/elab/benches/frontend/fixtures/rewriting.rs`, run by `scripts/bench-frontend --filter rewrite/` and `--filter let/`. Each family's doc comment and its row in `docs/infrastructure/frontend-benchmarking.md` states its lower bound (all linear); the bands record today's slope. Slope rows are in `baseline.tsv`; case and split rows wait for a `--save` on the recording machine (the bands come from a 4-core cloud box, and its times would sit under the baseline's other `env`). Release, cloud box, one run's min times and its probe-run phase split at the largest size; slope as the mean of four runs (range):
 
     | family | sizes | largest | elab / kernel at largest | slope (range) |
     |---|---|---|---|---|

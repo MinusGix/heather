@@ -10,7 +10,7 @@ updated: 2026-11-09
 A class may declare its carrier at a universe, `class Frame<A: Type<1>>`: the
 carrier becomes the record's leading value parameter, as a kinded carrier
 (`Bind<M: Type → Type>`) does, and dot sugar, resolution and the `T::C(…)`
-spelling handle it (docs/frame-locale-design.md §3). A `record` cannot:
+spelling handle it (docs/library/frame-locale-design.md §3). A `record` cannot:
 `record FrameHom<A: Type<1>, B: Type<1>>(…)` is a parse error ("expected `>`
 to close the type parameters"), because a record's type parameters are plain
 `Type<0>` names.

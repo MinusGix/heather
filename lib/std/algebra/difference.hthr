@@ -1,6 +1,6 @@
 // The difference calculus: the exact discrete calculus of sequences
 // `Nat → A` (issues/finite-difference-calculus.md;
-// docs/analysis-foundations-design.md §4, layer A′).
+// docs/library/analysis-foundations-design.md §4, layer A′).
 //
 // The forward difference `Δf(k) = f(k+1) - f(k)` (`GroupRel::delta`) is to
 // a sequence what the derivative is to a function, and its laws are the

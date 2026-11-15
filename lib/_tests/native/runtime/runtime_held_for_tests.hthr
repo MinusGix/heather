@@ -1,5 +1,5 @@
 // Probes for `for i in a..b` and `v[i]` in a function of a laid record
-// (docs/sequencing-surface-design.md §21): a range over words is a counted
+// (docs/language/sequencing-surface-design.md §21): a range over words is a counted
 // recursion with its test in scope, and where the loop's state is the
 // receiver of a `mut self` method that recursion is a `mut self` method
 // of the receiver's type, `T::f_loop`, which the `runtime` generator

@@ -1,5 +1,5 @@
 // Compiling a checked-reads program with the facts found on demand
-// (docs/facts-on-demand-design.md §5).
+// (docs/native/facts-on-demand-design.md §5).
 //
 // `generate compile_reads(p, "name", budget);` publishes `fn name() →
 // Compiled(p)`: each of `p`'s reads with a proof that it is in bounds where
@@ -84,7 +84,7 @@ fn whnf_all(hs: List<Handle>) → Tac<List<Expr>> {
 // The statement `InBounds(len, bounds, ix)`, its arguments in head normal
 // form: the producers are keyed by their arguments' heads, which a read
 // written as `prog_read(p, 2)` does not show until it is reduced
-// (docs/facts-on-demand-design.md §5).
+// (docs/native/facts-on-demand-design.md §5).
 fn in_bounds_goal(gs: ReadGlobals, len, bounds, ix: Expr) → Tac<Checked<Handle>> {
     as_type(apps_of(gs.in_bounds, [len, bounds, ix])).bind(λ c => match c {
         Refused(why) => pure(Refused(why)),

@@ -22,7 +22,7 @@ hierarchy, and goals saying a relation is false.
 
 - `lib/std/data/set/dec_set.hthr`: `DecSet<S, A> { has, empty, has_empty }`
   and one class per operation, indexed by the membership and the operation
-  (docs/operation-indexed-classes-design.md): `SetUnion`, `SetInter`,
+  (docs/language/classes/operation-indexed-classes-design.md): `SetUnion`, `SetInter`,
   `SetMinus` (a binary operation whose membership is "or", "and", "and
   not"), `SetInsert` (`has_here`, `has_other`: `Cons` is one), `SetFilter`,
   and `SetReflects<S, A>(has, P)` for a proposition membership decides

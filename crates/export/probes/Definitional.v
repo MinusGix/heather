@@ -1,5 +1,5 @@
 (* Which of Heather's definitional rules Rocq/Coq's kernel has, over
-   prelude/Hx.v (docs/export-fragment-design.md §3). The `Fail` lines are the
+   prelude/Hx.v (docs/library/export-fragment-design.md §3). The `Fail` lines are the
    rules it lacks. *)
 Require Import Hx.
 

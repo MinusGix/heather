@@ -1,4 +1,4 @@
-//! Acceptance for **indexed** `codata` (`docs/codata-indexed-design.md`,
+//! Acceptance for **indexed** `codata` (`docs/inductives/codata-indexed-design.md`,
 //! `issues/codata-indexed.md`): the index binders are in scope in the field
 //! types, a child writes its own index, and the lowering is the kernel's
 //! indexed `M`. On the four axes of `docs/testing-generated-terms.md`:
@@ -245,7 +245,7 @@ fn self_call_at_the_wrong_index_is_refused() {
 #[test]
 fn result_annotations_are_refused() {
     let msg = elab_err("codata Tg : (n: Nat) -> Type { TZ : Tg(0) }");
-    assert!(msg.contains("read by observation") && msg.contains("docs/codata-indexed-design.md §1"), "{msg}");
+    assert!(msg.contains("read by observation") && msg.contains("docs/inductives/codata-indexed-design.md §1"), "{msg}");
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn goals_spell_indexed_codata_by_name() {
     assert!(msg.contains("b : SBisim(s, tl(s))"), "{msg}");
 }
 
-// -- corecursion up to friends on indexed codata (docs/codata-elaborator-design.md §5.6) --
+// -- corecursion up to friends on indexed codata (docs/inductives/codata-elaborator-design.md §5.6) --
 
 // `sb_trans` reads one layer of each relation and calls itself on their
 // children, so it is a friend of a bisimilarity proof: a self-call under it

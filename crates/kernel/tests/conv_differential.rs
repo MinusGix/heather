@@ -1,5 +1,5 @@
 //! **Differential test: conversion against conversion**
-//! (docs/nbe-conversion-design.md §13 stage 2b, and that stage's kill
+//! (docs/kernel/nbe-conversion-design.md §13 stage 2b, and that stage's kill
 //! criterion).
 //!
 //! `tests/eval_differential.rs` holds the value machine's *weak head normal

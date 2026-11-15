@@ -1,5 +1,5 @@
 //! Acceptance for issues/decreases-unfolding-equations.md
-//! (docs/decreases-unfolding-design.md): the generated unfolding equation
+//! (docs/language/recursion/decreases-unfolding-design.md): the generated unfolding equation
 //! `f_unfold(x̄): f(x̄) = body`, and the two lifted helpers it is proved
 //! through. The whole point is the customer proof — a theorem *about* a
 //! `decreases`-defined function at an **open** argument, which is refused
@@ -346,7 +346,7 @@ fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
 fn a_match_on_a_computed_scrutinee_is_walked_through_its_own_eliminator() {
     // `merge`'s `match nat::Nat::le_dec(x, y)` reduces neither anchor, so the
     // walk spells both sides of the match out at a fresh scrutinee and
-    // re-matches on it (docs/dependent-match-compiler-design.md §8). It was
+    // re-matches on it (docs/language/matching/dependent-match-compiler-design.md §8). It was
     // this file's negative control until then. The customer is the
     // `Cons`/`Cons` case at open lists, whose right-hand side is the
     // computed match with the self-calls as written.
@@ -383,7 +383,7 @@ fn cd_loop(s: CdState) -> CdState decreases s.m {
 
 #[test]
 fn a_match_with_an_equation_binding_is_walked_and_its_obligation_takes_the_equation() {
-    // The `while … decreases` shape (docs/sequencing-surface-design.md §7.3):
+    // The `while … decreases` shape (docs/language/sequencing-surface-design.md §7.3):
     // the obligation is `omega`'s and reads the arm's equation, so the lifted
     // `cd_loop#obl_1` quantifies it, stated about `Nat::leb(s.m, 0)` and not
     // about the `__dec_scrut_N` name the body binds it to; and the walk goes
@@ -458,7 +458,7 @@ fn a_recursive_call_in_a_scrutinee_is_refused_but_the_function_still_checks() {
 fn a_plain_match_on_a_computed_scrutinee_gets_its_equation_where_an_obligation_reads_it() {
     // No `h:` written: `half`'s obligation `n - 2 < n` needs the guard, so
     // the lowering binds the arm's equation for the lifted obligation alone
-    // (docs/dependent-match-compiler-design.md §4, §13), and the companions
+    // (docs/language/matching/dependent-match-compiler-design.md §4, §13), and the companions
     // walk the convoy it leaves in `half#body`. The unfolding equation states
     // the match as written.
     ok(r#"

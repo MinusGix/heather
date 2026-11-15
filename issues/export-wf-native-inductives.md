@@ -11,7 +11,7 @@ updated: 2026-10-21
 Lean cannot declare Heather's `Wf` former: the children `Vec(Wf; n[a])` are
 not a syntactically positive occurrence, and checked declarations have no
 positivity bypass (`crates/export/probes/WfPositivity.lean`). Neither generic
-encoding works (`docs/export-fragment-design.md` §5.1). The realisation that
+encoding works (`docs/library/export-fragment-design.md` §5.1). The realisation that
 does work is per declaration: one native Lean inductive per lowered `Wf`
 instance, with one constructor per summand of the shape, holding its payload
 and its children as fields. `sup_f` maps to a case on the tag, and `elim_Wf`
@@ -27,7 +27,7 @@ The round:
 
 1. Take the correspondence between a `Wf(S; n)` and its declaration from the
    elaborator's inductive table (the tier-1 lowering,
-   `docs/inductive-tier1-wf-lowering.md`), not by matching spellings. The
+   `docs/inductives/inductive-tier1-wf-lowering.md`), not by matching spellings. The
    `elim_Wf` annotations spell `S` and `n` unfolded, so the exporter needs
    the table to recognise them.
 2. Print the native inductive, `supf` and `elimWf` per declaration,

@@ -59,7 +59,7 @@ fn bad(extra: &str) -> String {
 // ---------------------------------------------------------------------------
 // 1. `min`/`max` reduce at closed arguments. This is the issue's acceptance
 //    verbatim, and it is what a `theorem`-spelled or decider-driven pick would
-//    have cost (`docs/nat-order-design.md` §2's `le_dec` note).
+//    have cost (`docs/library/nat-order-design.md` §2's `le_dec` note).
 
 #[test]
 fn min_and_max_reduce_at_closed_arguments() {
@@ -208,7 +208,7 @@ theorem d(m, n: Nat): m - n <= m { m.sub_le(n) }");
 
 /// `sub_add_cancel`'s hypothesis is load-bearing: without a comparison there is
 /// nothing to supply it with, and `trivial` does not stand in for one (the
-/// order is a relation, not a `= True` equation — `docs/nat-order-design.md`
+/// order is a relation, not a `= True` equation — `docs/library/nat-order-design.md`
 /// §3). The second line is why the hypothesis exists at all: truncation loses
 /// the difference outright, so the unconditional statement is *false*.
 #[test]
@@ -347,7 +347,7 @@ fn positivity_needs_its_base_hypothesis() {
     bad("theorem t(n: Nat): 1 <= Nat::pow(0, n) { Nat::one_le_pow(0, n, trivial) }");
     let e = bad("theorem t(): 1 <= Nat::pow(0, 3) { trivial }");
     // `False` rather than the kernel's `Empty`: the display spells the surface
-    // name (docs/surface-type-display-design.md).
+    // name (docs/elaborator/surface-type-display-design.md).
     assert!(e.contains("False"), "expected the refuted comparison to be falsity, got: {e}");
     ok("theorem why(): Nat::pow(0, 3) = 0 { refl }");
 }

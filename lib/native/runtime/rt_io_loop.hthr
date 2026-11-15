@@ -1,5 +1,5 @@
 // Loops over the world in effectful `rt`, lowered to a `Source`'s `Repeat`,
-// and their soundness proved once (docs/effects-capabilities-design.md §8.6;
+// and their soundness proved once (docs/language/effects-capabilities-design.md §8.6;
 // issues/effects-uniqueness-surface.md, slice 5).
 //
 // A program (`ELoop`) is a chain of loop-free computations (`ETm`, `rt_io`)
@@ -7,7 +7,7 @@
 // whose state is the whole environment: each pass runs `body`, a
 // computation, and rebinds every variable to one of the end context's
 // (`rebind`), as the surface's `while` threads the locals its body assigns
-// and keeps the rest (docs/sequencing-surface-design.md §18). It may go
+// and keeps the rest (docs/language/sequencing-surface-design.md §18). It may go
 // round forever, so a program's meaning is in `Partial`: the loop is
 // `if cond { do body while cond }`, `Io::iterate` of a total pass that runs
 // the body and then tests the condition again.

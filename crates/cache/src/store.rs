@@ -1,4 +1,4 @@
-//! The on-disk cache file (`docs/cache-v1-design.md` §8).
+//! The on-disk cache file (`docs/infrastructure/cache-v1-design.md` §8).
 //!
 //! One tab-separated text file per store, inspectable with `cat` and `grep`,
 //! because the first question anyone asks of a cache is "what does it think it
@@ -45,7 +45,7 @@ use crate::sha256::{hex, unhex};
 /// only a changed kernel, and the hashing scheme is ours, not the kernel's.
 ///
 /// `2`: the structural hash walker replaced the rendering-and-rewrite path
-/// (`docs/cache-v1-design.md` §12). Every key moved, so every v1 entry is a
+/// (`docs/infrastructure/cache-v1-design.md` §12). Every key moved, so every v1 entry is a
 /// lie about a declaration it no longer describes. The two would in fact never
 /// collide — the domain strings bumped with them — but a silently unmatchable
 /// entry is a cache that quietly does nothing, and the version line makes it

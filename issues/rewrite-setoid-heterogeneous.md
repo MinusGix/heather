@@ -9,7 +9,7 @@ updated: 2026-11-03
 ---
 
 `rewrite(h, e)` along `R` at carrier `C` ([[rewrite-setoid-relations]],
-`docs/equation-rewrite-design.md` §9.3) gives every changed node the relation
+`docs/tactics/equation-rewrite-design.md` §9.3) gives every changed node the relation
 `R`, so a context that maps `C` elsewhere (`x.abs()` stays in `Rat`, but
 `x.floor() : Int`, `size: A → Nat`) is refused: no evidence of either shape
 can be stated about it.
@@ -29,7 +29,7 @@ different relations.
 ## Log
 
 - 2026-11-03: done for unary and pointwise contexts
-  (`docs/equation-rewrite-design.md` §11.4). The result's relation `S` is read
+  (`docs/tactics/equation-rewrite-design.md` §11.4). The result's relation `S` is read
   off the evidence rules about `PreservesRelation` whose function matches the
   context; each candidate's statement is resolved in turn, the first missing
   one is the obligation, and the node carries `S` (and its carrier) up to its

@@ -48,4 +48,4 @@ directory/list spine.
 ## Log
 
 - 2026-09-06: Datum (2026-09-06): after the kernel round on [[function-ir-x86-proof-scaling]], the generated x86 module's FRONTEND time is 1.5 s / 6.1 s / 20.3 s at 5 / 20 / 50 nodes (kernel 7.0 / 24.8 / 46.6 s), i.e. superlinear where the kernel is now ~linear; the boundary items (artifact, refines, protected) carry 11.8 s of frontend at 50 nodes. This is the next wall for the 100-node rail.
-- 2026-10-31: 2026-10-31: Round P5 of docs/compiler-milestones-proposal.md (§6), milestone lang-proof-modularity, with [[let-fanout-diagnostic]]. Its done-when adds that 'split into stage theorems' retires from docs/proof-patterns.md.
+- 2026-10-31: 2026-10-31: Round P5 of docs/native/compiler-milestones-proposal.md (§6), milestone lang-proof-modularity, with [[let-fanout-diagnostic]]. Its done-when adds that 'split into stage theorems' retires from docs/proof-patterns.md.

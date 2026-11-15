@@ -23,7 +23,7 @@ The arm's expected type is `Some(row.snd) = Some(v)`; the proof given has
 the unreduced call on its left. The elaborator's check of the arm let the
 two meet, so in the arm it treats the scrutinee and the pattern as equal
 somewhere the kernel does not. Seen at three library proofs after the
-§4.5 rung (`docs/goal-motive-synthesis-design.md`): `Bisim::after`,
+§4.5 rung (`docs/elaborator/goal-motive-synthesis-design.md`): `Bisim::after`,
 `List::assoc_get_present`, `StructuredRegion::loop_settles`.
 
 Not unsound: the kernel refuses. The cost is the diagnostic. A kernel

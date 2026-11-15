@@ -32,6 +32,6 @@ meta-layer integration, recursion, dependent contexts and search remain there.
 
 - 2026-09-05: Started the authorized bounded generator round. Source-level
   prototype, explicit driver, and acceptance tests are in place; validation is
-  in progress. See `docs/relational-generator-round.md` for the prototype boundary.
+  in progress. See `docs/showcase/relational-generator-round.md` for the prototype boundary.
 - 2026-09-04: Focused Furnace suite: 13 passed. Corrected expression emission to reconstruct supported AST nodes rather than slice grouping parentheses from parser spans. Full-suite and standalone-driver verification are in progress.
 - 2026-09-04: LANDED: bounded source-level generator, explicit driver, and saved independently checked source. Thirteen focused tests pass; final plain Furnace suite: 2,328 passed, 0 failed, 5 ignored. All four driver modes returned expected exit codes, blocked modes emitted no source, and the saved module passed ordinary heather check. The broader boxed-code/meta-layer implementation remains with setoid-auto-lifting.

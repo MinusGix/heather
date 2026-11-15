@@ -2,7 +2,7 @@
 //!
 //! This module owns `map`, `fold`, `head`, `tail`, `cons`, indexing, and the
 //! container-recursion spellings that tabulate an induction hypothesis
-//! (`docs/container-fields.md` §4.2, `docs/container-proofs.md` §5).
+//! (`docs/language/container-fields.md` §4.2, `docs/language/container-proofs.md` §5).
 //!
 //! Each is an `elim_Nat` on the *length*, with a motive that is a Π over the
 //! vector — the only shape that works, because `Vec` reduces on its length and
@@ -270,7 +270,7 @@ pub(crate) fn fold(
 ///
 /// This is the one that turns an *index function* into data, and the induction
 /// hypothesis a `Wf` arm receives is exactly such a function
-/// (`docs/container-fields.md` §4.2) — which is why the self-call over a
+/// (`docs/language/container-fields.md` §4.2) — which is why the self-call over a
 /// container elaborates to this and to nothing else.
 ///
 /// `B` must not depend on the index, which is the phase-2 restriction on the
@@ -380,7 +380,7 @@ pub(crate) fn tabulate(bl: &Level, b_ty: &Type, len: &Rc<Term>, f: Rc<Term>) -> 
     )
 }
 
-// -- `tab_cong` and its pieces (docs/container-proofs.md §4) ----------------
+// -- `tab_cong` and its pieces (docs/language/container-proofs.md §4) ----------------
 //
 // The phase-3 schema needs four type formers repeated at half a dozen depths,
 // and its motive quantifies over *three* arguments, so the pieces are written
@@ -510,7 +510,7 @@ fn m_from_f(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>) -> Type {
 /// `tab_cong^l(A; k; f; g; h) : Id^l(Vec(A; k); tabulate(k; f); tabulate(k; g))`
 /// for `f, g : Π(i : Fin k). A` and `h : Π(i : Fin k). Id^l(A; f i; g i)`.
 ///
-/// **The phase-3 schema** (`docs/container-proofs.md` §4): pointwise equality
+/// **The phase-3 schema** (`docs/language/container-proofs.md` §4): pointwise equality
 /// of two index functions gives equality of the vectors they tabulate to. It is
 /// what a self-call over a container proves when the motive is an equation, and
 /// the reason phase 3 needs no `All` predicate and no new kernel machinery.

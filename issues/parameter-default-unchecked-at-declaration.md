@@ -9,7 +9,7 @@ updated: 2026-10-23
 ---
 
 A default is elaborated only at a call that leaves it out
-(docs/named-arguments-design.md §9.4), so a default no call uses is never
+(docs/language/named-arguments-design.md §9.4), so a default no call uses is never
 checked by anyone:
 
 ```heather
@@ -34,7 +34,7 @@ default that only typechecks at some instantiations should be legal at all
 
 ## Resolution (2026-10-23)
 
-docs/named-arguments-design.md §9.7. A default is checked at its
+docs/language/named-arguments-design.md §9.7. A default is checked at its
 declaration as far as the declaration decides it
 (`Elaborator::check_default_at_declaration`):
 

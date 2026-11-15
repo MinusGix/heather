@@ -44,7 +44,7 @@ which recommends exactly the form that panics.
 
 Hit in lib/std/analysis/supremum.hthr (`OrderComplete::below_located`
 binds `bound_at`'s result with `let` to avoid it;
-docs/sequences-and-completeness.md §4).
+docs/library/sequences-and-completeness.md §4).
 
 ## Log
 

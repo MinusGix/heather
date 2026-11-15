@@ -1,6 +1,6 @@
 // Signs over the ordered-algebra classes: positive, negative and
 // nonnegative, carried through `+`, negation and `*` by evidence rules, each
-// stated at the weakest class whose laws prove it (docs/division-design.md
+// stated at the weakest class whose laws prove it (docs/library/division-design.md
 // §6, issues/sign-rules-at-weakest-class.md).
 //
 // A sign goal is answered by search wherever a class carrier is in scope: in
@@ -10,11 +10,11 @@
 // over `OrderedAddMonoid`, `LocatedAddMonoid`, `OrderedAddGroup`,
 // `OrderedSemiring` and `OrderedRing`; used at a stronger class, a rule's
 // dictionary premise is an upcast, which the resolver mints once per context
-// prefix (docs/traits-layer2-design.md §8.1).
+// prefix (docs/language/classes/traits-layer2-design.md §8.1).
 //
 // The sign predicates are generic in the relation, like `ApartBy`, so a
 // rule's premise is smaller than its conclusion (Paterson's condition,
-// docs/traits-layer2-design.md §6); a sign goal written with `<` itself has
+// docs/language/classes/traits-layer2-design.md §6); a sign goal written with `<` itself has
 // a local relation for a head and no rule can be keyed on it, so a defaulted
 // premise asks for `PositiveBy(<, <=, K.unit, e)`. Both relations are
 // arguments so that a nonnegative premise mentions nothing its positive

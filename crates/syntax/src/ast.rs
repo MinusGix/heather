@@ -38,7 +38,7 @@ pub struct File {
     pub items: Vec<Item>,
     /// The `<…>` list of each `section` head, as (the head's span, its first
     /// type parameter's, its last's). The parser splices those parameters
-    /// into every member (docs/sections-design.md §5.2), so no item's span
+    /// into every member (docs/language/sections-design.md §5.2), so no item's span
     /// holds the list they were written in; `roles` locates it from here.
     pub section_typarams: Vec<(Span, Span, Span)>,
 }
@@ -48,36 +48,36 @@ pub enum Item {
     Decl(Decl),
     Inductive(InductiveDecl),
     /// `class C<A> extends P<A> { f: T, … }` — a parameterized record plus a
-    /// class-registry entry (docs/traits-layer1-design.md §2).
+    /// class-registry entry (docs/language/classes/traits-layer1-design.md §2).
     Class(ClassDecl),
     /// `instance C<T> { … }` — a namespace of ordinary declarations plus an
-    /// assembled record value (docs/traits-layer1-design.md §4).
+    /// assembled record value (docs/language/classes/traits-layer1-design.md §4).
     Instance(InstanceDecl),
     /// `designation + at Nat := add` — what an operator symbol means at a
-    /// carrier (docs/operators-onto-classes-design.md §3).
+    /// carrier (docs/language/classes/operators-onto-classes-design.md §3).
     Designation(DesignationDecl),
     /// `datarepr N for S { … }` / `datarepr N for S := repr::naive();` — a
     /// runtime representation of a spec inductive, linked by certified
-    /// refinement (docs/datarepr-design.md §1.4).
+    /// refinement (docs/native/datarepr-design.md §1.4).
     Datarepr(DatareprDecl),
     /// `impl f for Rp { body := …, refines := … }` — one entry of the
     /// **cost basis**, the open per-operation registry (§1.2).
     Impl(ImplDecl),
     /// `import nat;` / `import option::{Option, map};`
-    /// (docs/modules-design.md §3.1). Allowed only before the first
+    /// (docs/language/modules-design.md §3.1). Allowed only before the first
     /// declaration, so the import DAG is readable without elaborating
     /// anything.
     Import(ImportItem),
     /// `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
-    /// **prefix generator** (docs/value-definitions-design.md §3).
+    /// **prefix generator** (docs/metaprogramming/value-definitions-design.md §3).
     Prefixed(PrefixedItem),
     /// `laid record T { … }`, `laid(be) record T { … }` — a `record` under a
-    /// prefix generator (docs/value-definitions-design.md §3.5).
+    /// prefix generator (docs/metaprogramming/value-definitions-design.md §3.5).
     PrefixedRecord(PrefixedRecordItem),
     /// `generate g(args);` — run the Heather generator `g(args)`, a
     /// `tactic::Tac<List<tactic::Decl>>`, and publish the declarations it
     /// builds in this module, every one of them or none
-    /// (docs/host-elaboration-interface-design.md §19).
+    /// (docs/metaprogramming/host-elaboration-interface-design.md §19).
     Generate(GenerateItem),
 }
 
@@ -85,7 +85,7 @@ pub enum Item {
 /// ([`Item::Prefixed`]). `generator` is `P` or `P(args)` as written; the
 /// elaborator appends what the declaration hands it (the declared name, and
 /// for a `def` its value), runs it as `generate` runs its generator, and
-/// publishes the group (docs/value-definitions-design.md §3).
+/// publishes the group (docs/metaprogramming/value-definitions-design.md §3).
 ///
 /// A prefixed `fn` or `theorem` is **consumed**: it is published as written
 /// first, and the generator reads it by name. A prefixed `def` is
@@ -118,7 +118,7 @@ pub struct GenerateItem {
 }
 
 /// `designation<A> ++ at List<A> := append`
-/// (docs/operators-onto-classes-design.md §3.1).
+/// (docs/language/classes/operators-onto-classes-design.md §3.1).
 ///
 /// Shaped like `instance` on purpose: the generic binder list is in
 /// `instance<A> Monoid<List<A>>(append)`'s position and does the same job — it
@@ -150,7 +150,7 @@ pub struct DesignationDecl {
 pub enum OpFixity {
     Prefix,
     Infix,
-    /// `x⁻¹`, the only postfix symbol (docs/inverse-power-notation-design.md
+    /// `x⁻¹`, the only postfix symbol (docs/library/inverse-power-notation-design.md
     /// §2), declared `designation postfix ⁻¹ at Rat := Rat::inv`.
     Postfix,
 }
@@ -168,7 +168,7 @@ impl OpFixity {
 /// One `import` item. The listed names are a *standing disambiguation*, not a
 /// different mode: `import m::{…}` imports all of `m` exactly as `import m;`
 /// does, and additionally says which `m` the listed names mean when something
-/// else in scope declares them too (docs/modules-design.md §4).
+/// else in scope declares them too (docs/language/modules-design.md §4).
 #[derive(Debug, Clone)]
 pub struct ImportItem {
     /// Explicit selected reexport (`export m::{x};`); ordinary imports stay private.
@@ -225,7 +225,7 @@ impl Item {
 }
 
 /// `datarepr VecList for List<Tok> { R := VecT, … }`
-/// (docs/datarepr-design.md §1.4).
+/// (docs/native/datarepr-design.md §1.4).
 ///
 /// A dedicated form rather than an `instance`, for a structural reason: the
 /// record's field list is computed from the spec inductive's constructor list,
@@ -253,7 +253,7 @@ pub enum DatareprBody {
 }
 
 /// `impl length for VecList { body := …, refines := … }`
-/// (docs/datarepr-design.md §1.2). The operation is an *index*, so the
+/// (docs/native/datarepr-design.md §1.2). The operation is an *index*, so the
 /// registry is open by construction — there is no closed field list to amend.
 #[derive(Debug, Clone)]
 pub struct ImplDecl {
@@ -265,7 +265,7 @@ pub struct ImplDecl {
     /// clause shapes are the same `f := e` (with `mk` simply never set here),
     /// and the `:= <route>` form is the same one token of lookahead —
     /// `impl length for ListTok := derive();`
-    /// (docs/obligation-records-design.md §4.1, §4.3).
+    /// (docs/language/classes/obligation-records-design.md §4.1, §4.3).
     pub body: DatareprBody,
     pub span: Span,
 }
@@ -285,7 +285,7 @@ pub struct DatareprField {
 }
 
 /// `class C<A, …> extends P<A>, Q<A> { f: T, … }`
-/// (docs/traits-layer1-design.md §2). The lowering is a `record`'s: the
+/// (docs/language/classes/traits-layer1-design.md §2). The lowering is a `record`'s: the
 /// elaborator concatenates the ancestors' fields in front of `fields` and
 /// hands the result to the tier-0 generator. What the keyword buys is the
 /// registry entry and the `extends` discipline, not a second encoding.
@@ -302,7 +302,7 @@ pub struct ClassDecl {
     /// the angle brackets.
     pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the class's **value indices**
-    /// (docs/operation-indexed-classes-design.md §3). The same
+    /// (docs/language/classes/operation-indexed-classes-design.md §3). The same
     /// [`InductiveDecl::valparams`] a `record` head takes, and lowered by the
     /// same path: what the keyword adds is that the index joins the registry
     /// key and the constraint binder's desugaring. Empty for an unindexed
@@ -316,13 +316,13 @@ pub struct ClassDecl {
 /// `Monoid<A>` in an `extends` list or an `instance` head — a class applied to
 /// its arguments. Angle brackets and no `for`: the carrier is a *parameter*,
 /// and privileging one of several would break at `Coe<A, B>`
-/// (docs/traits-design.md §3).
+/// (docs/language/classes/traits-design.md §3).
 #[derive(Debug, Clone)]
 pub struct ClassRef {
     pub name: String,
     pub args: Vec<Ty>,
     /// `Monoid<A>(op)` — the **index arguments**
-    /// (docs/operation-indexed-classes-design.md §3, §4.1). Empty at an
+    /// (docs/language/classes/operation-indexed-classes-design.md §3, §4.1). Empty at an
     /// unindexed class, and empty at an indexed one whose slot is left for the
     /// binder desugaring to fill (§4.1's EMPTY referent).
     pub index: Vec<Expr>,
@@ -335,7 +335,7 @@ pub struct ClassRef {
 }
 
 /// `instance<A, B> C<T> requires m: D<A> { … }`
-/// (docs/traits-layer1-design.md §4).
+/// (docs/language/classes/traits-layer1-design.md §4).
 #[derive(Debug, Clone)]
 pub struct InstanceDecl {
     /// `instance<A, B> …` — the generic instance's type parameters. They
@@ -343,7 +343,7 @@ pub struct InstanceDecl {
     /// value, exactly as a `fn`'s do.
     pub tyvars: Vec<TyParam>,
     /// `instance(n, m: Nat) Decide<Le(n, m)>` — the instance's **value
-    /// binders** (docs/value-generic-instances-design.md §2). Written after the
+    /// binders** (docs/language/classes/value-generic-instances-design.md §2). Written after the
     /// type parameters and in the same production a `record` head takes, they
     /// are what lets an instance be generic over a *value* rather than only
     /// over a type or fixed at one index.
@@ -356,7 +356,7 @@ pub struct InstanceDecl {
     pub valparams: Vec<Param>,
     pub class: ClassRef,
     /// `requires ma: Monoid<A>, …` — **solver parameters**
-    /// (docs/traits-layer2-design.md §1): implicit at every use site and
+    /// (docs/language/classes/traits-layer2-design.md §1): implicit at every use site and
     /// filled by resolution, passed by hand only under `@`. Layer 1 had them
     /// as ordinary explicit parameters; layer 2 is what changed the use site.
     pub requires: Vec<Param>,
@@ -364,7 +364,7 @@ pub struct InstanceDecl {
     pub span: Span,
 }
 
-/// The two spellings of an instance body (docs/traits-design.md §3), told
+/// The two spellings of an instance body (docs/language/classes/traits-design.md §3), told
 /// apart by one token: a body that starts with `fn`/`theorem`/`meta` is a
 /// block, anything else is a literal. There is no mixed form.
 #[derive(Debug, Clone)]
@@ -387,7 +387,7 @@ pub struct InstanceField {
 }
 
 /// `inductive D<p, …> { c(f: T, …), … }` — a datatype declaration. Tier 0
-/// (non-recursive) compiles to sums-of-Σs; see docs/inductive-tier0-lowering.md.
+/// (non-recursive) compiles to sums-of-Σs; see docs/inductives/inductive-tier0-lowering.md.
 /// Type parameters are monomorphized: `D<Nat>` and `D<Bool>` are unrelated
 /// kernel types.
 #[derive(Debug, Clone)]
@@ -396,7 +396,7 @@ pub struct InductiveDecl {
     /// Type-parameter names, in order.
     pub params: Vec<String>,
     /// `record R(p: Prog, env: Val)` — **value** parameters, in order, written
-    /// after the type parameters (docs/surface-value-parameters.md §1). A value
+    /// after the type parameters (docs/language/surface-value-parameters.md §1). A value
     /// parameter is a *term* the use site supplies, substituted into the field
     /// types at lowering exactly as a type parameter's instantiation is; it is
     /// what makes a record usable as a **predicate** over the values it is
@@ -408,23 +408,23 @@ pub struct InductiveDecl {
     pub valparams: Vec<Param>,
     /// `inductive Result<A, E> varies A { … }` — the parameter a type
     /// constructor over this declaration abstracts, when it is not the last
-    /// one (docs/lambda-carrier-instances-design.md §7.1). The name as
+    /// one (docs/language/classes/lambda-carrier-instances-design.md §7.1). The name as
     /// written and its span; `None` for the default slot.
     pub varies: Option<(String, Span)>,
     pub ctors: Vec<CtorDecl>,
     /// Written `record D<…> { f: T, … }` — one constructor, named after the
-    /// declaration, every field named (docs/surface-records.md §2). The
+    /// declaration, every field named (docs/language/surface-records.md §2). The
     /// *lowering* is the ordinary tier-0 one; this flag is what earns the
     /// extra surface checks (non-recursive, distinct field names) and the
     /// accessor table.
     pub is_record: bool,
     /// Written `codata D<…> { … }` — a **coinductive** declaration
-    /// (docs/codata-elaborator-design.md): the same constructor grammar,
+    /// (docs/inductives/codata-elaborator-design.md): the same constructor grammar,
     /// lowered onto the kernel's negative `M` former instead of an inductive
     /// one, so a value may be infinitely deep and is observed only by `match`.
     pub is_codata: bool,
     /// `inductive Vec<A> : (n: Nat) -> Type { … }` — the index telescope of an
-    /// indexed family (docs/inductive-indexed-lowering.md §2). Parsed as an
+    /// indexed family (docs/inductives/inductive-indexed-lowering.md §2). Parsed as an
     /// ordinary [`TyKind::Fn`] and validated by the elaborator: this round it
     /// must be one `Nat` binder into bare `Type`. `None` for every unindexed
     /// declaration, whose grammar is unchanged.
@@ -438,7 +438,7 @@ pub struct CtorDecl {
     pub fields: Vec<FieldDecl>,
     /// `Nil : Vec<A>(0)` — the result annotation of an indexed declaration's
     /// constructor, as the expression `D<params>(pattern)`
-    /// (docs/inductive-indexed-lowering.md §2). Mandatory when the declaration
+    /// (docs/inductives/inductive-indexed-lowering.md §2). Mandatory when the declaration
     /// has an index telescope, an error when it does not; the elaborator
     /// decomposes and validates it.
     pub result: Option<Expr>,
@@ -453,7 +453,7 @@ pub struct FieldDecl {
     pub name: Option<String>,
     pub ty: Ty,
     /// `name: T := e` — what fills the field when a construction leaves it
-    /// out (docs/named-arguments-design.md §9): checked at the field's type
+    /// out (docs/language/named-arguments-design.md §9): checked at the field's type
     /// as the construction instantiates it, in the declaration's scope.
     pub default: Option<Box<Expr>>,
     pub span: Span,
@@ -473,25 +473,25 @@ pub struct PartialSpec {
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub kind: DeclKind,
-    /// `meta fn` — a layer-m declaration (docs/in-language-map-design.md §3).
+    /// `meta fn` — a layer-m declaration (docs/metaprogramming/in-language-map-design.md §3).
     /// Its parameters may be `Ctx`/`TyCode`/`Code` binders, its body is
     /// quotation, and it is registered elaborator-side rather than in Ψ.
     /// Only `fn` may carry it; `meta theorem` is rejected in the parser.
     pub is_meta: bool,
     /// `evidence theorem` — an **evidence rule**: a theorem `:= infer` may
     /// apply to a proposition goal, backchaining through its own `:= infer`
-    /// premises (docs/positivity-evidence-design.md §6 A). Only a theorem may
+    /// premises (docs/library/positivity-evidence-design.md §6 A). Only a theorem may
     /// carry it, and the elaborator refuses one with a parameter search could
     /// not fill.
     pub is_evidence: bool,
     /// `interface fn` — an **interface definition**
-    /// (docs/interface-definitions-design.md): outside its module, a proof
+    /// (docs/language/interface-definitions-design.md): outside its module, a proof
     /// reaches its body only through its generated equations, its lemmas or
     /// an `unfold f;`, while a call at closed arguments still computes. Only
     /// a `fn` may carry it.
     pub is_interface: bool,
     /// `partial fn f(x: A) → B` — a function that may not return
-    /// (docs/partial-functions-design.md §4): it has type `A → Partial(B)`,
+    /// (docs/language/partial-functions-design.md §4): it has type `A → Partial(B)`,
     /// and its body is a block over the carrier of its own calls, each
     /// self-call bound with `<-` or in tail position. `partial(E) fn` gives
     /// the computation the events `E`, and the type `A → CoTree<B>(E)`.
@@ -499,14 +499,14 @@ pub struct Decl {
     /// may carry it.
     pub partial: Option<PartialSpec>,
     /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
-    /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
+    /// docs/metaprogramming/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
     /// written parameters, so it is elaborated, gated, imaged and unfolded
     /// exactly as a nullary `fn` is; the flag is what a use site reads to
     /// refuse `name()` (a value is used as `name`), and what diagnostics and
     /// the module image keep.
     pub value: bool,
     /// `meta fn map_code(g: Ctx) for vec.map -> …` — the elaboration **slot**
-    /// this template fills (docs/meta-def-registration-design.md §2.1). A
+    /// this template fills (docs/metaprogramming/meta-def-registration-design.md §2.1). A
     /// `meta fn` without one is registered but never dispatched: the clause,
     /// not the declaration's name, is what routes a use site. Only a `meta fn`
     /// may carry it.
@@ -514,8 +514,8 @@ pub struct Decl {
     pub name: String,
     /// `fn map<A, B>(…)` — type parameters, in order. Each becomes a
     /// **leading implicit parameter at `Type<n>`**, usable as a type inside
-    /// this declaration and nowhere else (docs/surface-polymorphism.md §2,
-    /// docs/surface-universe.md §2). Unlike an `InductiveDecl`'s parameters
+    /// this declaration and nowhere else (docs/language/surface-polymorphism.md §2,
+    /// docs/language/surface-universe.md §2). Unlike an `InductiveDecl`'s parameters
     /// these are not monomorphized: they are real kernel binders, and a use of
     /// one is `El A`.
     pub tyvars: Vec<TyParam>,
@@ -523,12 +523,12 @@ pub struct Decl {
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
     /// `decreases e` — a `Nat` measure justifying recursion the structural
-    /// checker declines (docs/termination-measures-design.md). The body is
+    /// checker declines (docs/language/recursion/termination-measures-design.md). The body is
     /// then elaborated as strong induction on a bound for `e`, and every
     /// recursive call owes `e[args] < e`, a goal hole named `decN`.
     pub decreases: Option<Expr>,
     /// `unfolding f, g` — interface definitions whose bodies this
-    /// declaration may see through (docs/interface-definitions-design.md
+    /// declaration may see through (docs/language/interface-definitions-design.md
     /// §4). Declaration-wide: the kernel gate checks a declaration as one
     /// term, so the boundary can only move per declaration.
     pub unfolding: Vec<String>,
@@ -551,7 +551,7 @@ pub struct SlotPath {
 ///
 /// The level is the *universe the parameter ranges over*, defaulting to 0 —
 /// `<A>` is `<A: Type<0>>`, which is what every declaration written before
-/// docs/surface-universe.md meant. It is a numeral for the same reason
+/// docs/language/surface-universe.md meant. It is a numeral for the same reason
 /// [`TyKind::Univ`]'s is: a level variable is `UPi`, layer m
 /// (issues/implicit-level-polymorphism.md is the deferred alternative, where
 /// an unannotated `<A>` would instead be generic in its level).
@@ -581,13 +581,13 @@ pub enum Stmt {
     /// right-hand side in *checking* position, so `let p: a = b = ?g;` is how
     /// a hole gets bound to a name.
     ///
-    /// `opaque` is `have x = e;` (docs/have-design.md): the rest of the block
+    /// `opaque` is `have x = e;` (docs/language/have-design.md): the rest of the block
     /// sees `x : T` and not its value, and elaboration binds it by a β-redex
     /// instead of an alias. One variant, not two, so that every walker that
     /// only cares what a statement binds treats the two alike.
     Let { name: String, ty: Option<Ty>, expr: Expr, span: Span, opaque: bool },
     /// `let { unit := u, op } = m;` — record destructuring
-    /// (docs/named-patterns-by-field-design.md §2). Each right-hand binder is
+    /// (docs/language/matching/named-patterns-by-field-design.md §2). Each right-hand binder is
     /// aliased to the selected projection, so this remains sugar over
     /// [`ExprKind::Dot`]. Partial patterns and `_` are allowed. No annotation:
     /// the receiver must infer, since it is what names the fields.
@@ -624,7 +624,7 @@ pub enum OnTarget {
     /// By statement: discharges *every* goal whose statement is `P`.
     Stmt(Ty),
     /// `on Ctor(x, y) := e;` — a **`split` arm**, not a goal discharge
-    /// (docs/match-equation-split-design.md §5). Told apart from the two above
+    /// (docs/language/matching/match-equation-split-design.md §5). Told apart from the two above
     /// by one token: a discharge head is `?name` or `_`, an arm head is an
     /// ordinary identifier, which was a parse error before this existed.
     ///
@@ -656,13 +656,13 @@ pub struct Param {
     /// be called `p`; `self: T` names it `self` as well, for record methods.
     /// See issues/method-receiver-position.md.
     pub is_self: bool,
-    /// A **solver default** (docs/traits-layer2-design.md §1): the argument is
+    /// A **solver default** (docs/language/classes/traits-layer2-design.md §1): the argument is
     /// produced by a solver run in the caller's context when the caller omits
     /// it. Written `hx: P := infer`, or as a `requires` binder — the two
     /// spellings desugar here, and a solver parameter is always `implicit`
     /// (it has no positional slot; `@f(…)` is how one is passed by hand).
     pub solver: Option<Solver>,
-    /// A **parameter default** (docs/named-arguments-design.md §9): written
+    /// A **parameter default** (docs/language/named-arguments-design.md §9): written
     /// `b: T := e` with any expression but `infer`. Like a solver parameter
     /// it has no positional slot and is always `implicit`; a call that leaves
     /// it out gets `e` checked at the parameter's instantiated type, with
@@ -702,7 +702,7 @@ pub enum ParamOrigin {
 }
 
 /// The solvers a parameter default may name. One this round
-/// (docs/traits-design.md §8 enumerates the others, layer 3's).
+/// (docs/language/classes/traits-design.md §8 enumerates the others, layer 3's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Solver {
     /// Search the caller's scope, then the instance registry, for a value of
@@ -724,7 +724,7 @@ pub enum TyKind {
     Nat,
     Eq(Box<Expr>, Box<Expr>),
     /// `Type<n>`, and `Type` for `Type<0>` — the kernel's `Type::Ty(n)`, a
-    /// type at level `n + 1` (docs/surface-universe.md §2).
+    /// type at level `n + 1` (docs/language/surface-universe.md §2).
     ///
     /// The level is a **numeral**, never a name or an expression: quantifying
     /// over a level is `UPi`, which is layer m by construction
@@ -734,7 +734,7 @@ pub enum TyKind {
     /// An arbitrary expression in type position, decoded: `m.carrier`,
     /// `f(x)`. Elaborated by inferring the expression and requiring its type
     /// to be a universe, then wrapping in `El` — the dual of the `Expr`/`Ty`
-    /// bridge (docs/surface-universe.md §4), and what makes a **bundled**
+    /// bridge (docs/language/surface-universe.md §4), and what makes a **bundled**
     /// record's carrier usable as a type.
     ///
     /// Only reached as `ty_atom`'s last resort, so a bare name is still
@@ -746,13 +746,13 @@ pub enum TyKind {
     Named { name: String, args: Vec<Ty> },
     /// `[T; n]` — a length-indexed vector, the kernel's `Type::Vec`. A
     /// *primitive* indexed type, not a user declaration: there is no fording
-    /// and no encoding (docs/container-fields.md §2.1). The length is an
+    /// and no encoding (docs/language/container-fields.md §2.1). The length is an
     /// expression checked at `Nat`.
     Vec { elem: Box<Ty>, len: Box<Expr> },
     /// `Fin(n)` — the kernel's `Type::Fin`, the type of indices below `n`. A
     /// *primitive* indexed type for the same reason [`TyKind::Vec`] is: a
     /// kernel former rather than a user declaration, so it gets a node rather
-    /// than an encoding (docs/surface-fin-indexing-design.md §2.1). The length
+    /// than an encoding (docs/language/surface-fin-indexing-design.md §2.1). The length
     /// is an expression checked at `Nat`.
     ///
     /// No parser rule of its own: `Fin(n)` reaches this through `expr_as_ty`,
@@ -764,17 +764,17 @@ pub enum TyKind {
     /// `(x: A) -> B` (dependent) or `A -> B` (`binder: None`).
     /// Right-associative; one binder per parenthesis group, so `(x: A) (y: B)
     /// -> C` is written `(x: A) -> (y: B) -> C`
-    /// (docs/surface-function-types.md §1.1).
+    /// (docs/language/surface-function-types.md §1.1).
     ///
     /// `implicit` marks a `{x: A} -> B` binder. The flag never reaches the
     /// kernel — `Type::Pi` has no slot for it — it is read off the surface
     /// type into the elaborator's positional implicitness *skeleton*
-    /// (docs/implicit-binders-design.md §2), which governs insertion at uses
+    /// (docs/language/implicit-binders-design.md §2), which governs insertion at uses
     /// and is erased at the kernel boundary
     /// (issues/implicit-binders-in-function-types.md).
     Fn { binder: Option<String>, implicit: bool, dom: Box<Ty>, cod: Box<Ty> },
     /// `Ctx` — the kind of a context binder in a `meta fn` signature
-    /// (docs/in-language-map-design.md §3). Layer m only; a diagnostic
+    /// (docs/metaprogramming/in-language-map-design.md §3). Layer m only; a diagnostic
     /// anywhere else.
     Ctx,
     /// `TyCode(g)` — code of a type in context `g`, the kernel's
@@ -788,7 +788,7 @@ pub enum TyKind {
     /// quote payload (a `GlobalTy` reference after elaboration).
     Splice { name: String },
     /// The type of an expression, inferred: the result type of `def x = e;`
-    /// written without one (docs/value-definitions-design.md §2.2). Only
+    /// written without one (docs/metaprogramming/value-definitions-design.md §2.2). Only
     /// the parser makes it; there is no surface spelling.
     TypeOf(Box<Expr>),
 }
@@ -804,7 +804,7 @@ pub struct RecordLitField {
 }
 
 /// One **named argument** at a call site: `xs := ys`
-/// (docs/named-arguments-design.md §3). The span covers the whole
+/// (docs/language/named-arguments-design.md §3). The span covers the whole
 /// `name := expr`; `name_span` covers the identifier alone, so a refusal
 /// about the *name* points at the name and not at its value.
 ///
@@ -828,7 +828,7 @@ pub struct NamedArg {
 /// binder is only usable in checking position, where the expected Π supplies
 /// the domain. `implicit` marks the brace spelling; like [`TyKind::Fn`]'s
 /// flag it is surface-only — the emitted `Term::Lam` is byte-identical to
-/// the explicit spelling's (docs/implicit-binders-design.md §7.2).
+/// the explicit spelling's (docs/language/implicit-binders-design.md §7.2).
 #[derive(Debug, Clone)]
 pub struct LamBinder {
     pub name: String,
@@ -839,7 +839,7 @@ pub struct LamBinder {
 
 /// One field position of a `match` arm: a binder, or a **deep pattern** —
 /// a constructor applied to more patterns
-/// (docs/nested-match-patterns-design.md §3.1).
+/// (docs/language/matching/nested-match-patterns-design.md §3.1).
 ///
 /// A deep pattern never survives elaboration's preprocessing: the pattern
 /// matrix compiles it into a nested single-level `match` on a generated
@@ -908,10 +908,10 @@ pub struct Arm {
     /// sentinel is deliberate: a default arm is expanded away before any
     /// lowering runs, so if one ever leaked it dies at "`_` is not a
     /// constructor of `X`" rather than silently
-    /// (docs/nested-match-patterns-design.md §3.1).
+    /// (docs/language/matching/nested-match-patterns-design.md §3.1).
     pub ctor: String,
     /// `_ => body` — expands to the constructors with no arm of their own
-    /// (docs/nested-match-patterns-design.md §4). Binds nothing, appears last,
+    /// (docs/language/matching/nested-match-patterns-design.md §4). Binds nothing, appears last,
     /// at most once.
     pub default: bool,
     pub binders: Vec<Pat>,
@@ -946,7 +946,7 @@ impl Expr {
     }
 
     /// The call's **named** arguments, or `&[]` for anything that is not a
-    /// call (docs/named-arguments-design.md §8.2).
+    /// call (docs/language/named-arguments-design.md §8.2).
     ///
     /// Every consumer of [`Self::as_named`] hands the positional slice to a
     /// name-keyed special form — a builtin arm, a fragment recognizer — and
@@ -964,7 +964,7 @@ impl Expr {
 
 /// Which surface spelling built an [`ExprKind::Match`]: the expression form,
 /// or the statement-position `split e; on C(…) := …;`
-/// (docs/match-equation-split-design.md §6).
+/// (docs/language/matching/match-equation-split-design.md §6).
 ///
 /// Both spellings build one node and one elimination — that is §6's whole
 /// point, and it stays true because this is consulted **only** where a
@@ -1003,7 +1003,7 @@ pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
     /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`
-    /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
+    /// (docs/language/classes/operators-onto-classes-design.md §4). A name in a namespace of
     /// its own: `a + b` is this node *applied*
     /// (`App { head: OpSymbol { symbol: "+", fixity: Infix }, … }`) and a lone symbol between delimiters
     /// — `Monoid(+)`, `A::CommMonoid(+)` — is it unapplied, which is the
@@ -1019,7 +1019,7 @@ pub enum ExprKind {
     /// `Type<n>` where a *term* is expected — the code `TmTy(n) : Ty (n+1)`.
     /// A universe is a type, so it is spellable in both positions; this is the
     /// expression one, and it infers rather than needing the `Expr`/`Ty`
-    /// bridge (docs/surface-universe.md §4).
+    /// bridge (docs/language/surface-universe.md §4).
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(Numeral),
@@ -1030,12 +1030,12 @@ pub enum ExprKind {
     /// infers that type, and in checking position it is checked against it.
     SuffixedNum { value: Numeral, suffix: String },
     /// A numeral with a point or an exponent: `1.5`, `1e-3`, `0x1.8p3`
-    /// (docs/floating-point-design.md §15). At `Decimal`/`HexFloat` it is the
+    /// (docs/library/floating-point-design.md §15). At `Decimal`/`HexFloat` it is the
     /// record of its parts; at another carrier it resolves `DecimalLiteral`
     /// or `HexLiteral` the way a numeral resolves `Numeral`.
     Scaled(ScaledLit),
     /// `'x'` — a character literal, carrying the scalar value the lexer read
-    /// (docs/string-char-design.md §3). At `Char` it elaborates to
+    /// (docs/library/string-char-design.md §3). At `Char` it elaborates to
     /// `char::ofNat(code, decide)`; at another carrier it resolves
     /// `CharLiteral` the way a numeral resolves `Numeral`.
     Char(char),
@@ -1054,13 +1054,13 @@ pub enum ExprKind {
     /// `f(a, b, …)`, `@f(a, b, …)`, or an application of any expression —
     /// `g(a)(b)`, `(λ x => x)(3)`. Kept **n-ary rather than curried** so that
     /// implicit-argument insertion, which needs the whole argument list at
-    /// once, keeps working unchanged (docs/surface-function-types.md §2.2).
+    /// once, keeps working unchanged (docs/language/surface-function-types.md §2.2).
     ///
     /// `explicit` (the `@` prefix) suppresses implicit-argument insertion, so
     /// every parameter — including `{}`-implicits — must be given positionally.
     /// It is only ever set on a `Var` head: implicit insertion is
     /// name-directed, so there is nothing for `@` to suppress elsewhere.
-    /// `named` holds the `x := e` arguments (docs/named-arguments-design.md).
+    /// `named` holds the `x := e` arguments (docs/language/named-arguments-design.md).
     /// A **separate list**, not an optional name per element of `args`, and
     /// that is load-bearing three times over: it makes the grammar's
     /// positional-then-named rule (§4.2) *unrepresentable* otherwise, so no
@@ -1089,7 +1089,7 @@ pub enum ExprKind {
         goal_oriented: bool,
     },
     /// `f<A, B>` — explicit type application, filling a declaration's leading
-    /// type parameters positionally (docs/surface-polymorphism.md §1). Kept
+    /// type parameters positionally (docs/language/surface-polymorphism.md §1). Kept
     /// **separate** from `App` rather than a field on it: every existing
     /// construction site of `App` stays untouched, and a type argument is a
     /// `Ty`, not an `Expr`, so it could not share the argument list anyway.
@@ -1108,7 +1108,7 @@ pub enum ExprKind {
     /// `a = b` — the identity type, as an **expression**. A type is an
     /// expression whose type is a universe, so with `Type<n>` writable there
     /// is no reason for the equality former to live only in `TyKind`
-    /// (docs/surface-universe.md §13). This is what lets a motive be an
+    /// (docs/language/surface-universe.md §13). This is what lets a motive be an
     /// ordinary [`ExprKind::Lam`]: `λ z => acc + z = n`.
     ///
     /// Non-associative and loosest-binding, and **suppressed** in the two
@@ -1123,7 +1123,7 @@ pub enum ExprKind {
     ///    body is a type by construction — `motive_lam` in the elaborator reads
     ///    it back out.
     /// 2. A **function type in expression position** — `Parser::expr`'s arrow
-    ///    fall-through (`docs/types-as-expressions.md`). `(x: A) -> B` and
+    ///    fall-through (`docs/language/types-as-expressions.md`). `(x: A) -> B` and
     ///    `A -> B` are expressions whose type is a universe, which is what
     ///    makes a type-valued `fn` an ordinary `fn`.
     ///
@@ -1161,7 +1161,7 @@ pub enum ExprKind {
     /// Also the node a `split e; on C(x⃗) := b;` block desugars to — `split` is
     /// a *statement-position spelling* of this expression and not a second
     /// elimination mechanism, so the parser builds one of these and nothing
-    /// downstream can tell (docs/match-equation-split-design.md §6).
+    /// downstream can tell (docs/language/matching/match-equation-split-design.md §6).
     Match {
         /// Which spelling this node was written as
         /// (issues/diagnostics-name-the-written-form.md). Read by
@@ -1175,12 +1175,12 @@ pub enum ExprKind {
         /// and not a variant of behaviour.
         form: MatchForm,
         /// Whether the **pattern compiler** built this node rather than a
-        /// writer (`docs/nested-match-patterns-design.md` §3.3): a level that
+        /// writer (`docs/language/matching/nested-match-patterns-design.md` §3.3): a level that
         /// stands for a pattern *column*, with machine binders and possibly a
         /// `_` arm the compiler itself supplied.
         ///
         /// Read by **diagnostics only**, and for one reason
-        /// (`docs/diagnostic-warnings-design.md` §7.1): a warning about an
+        /// (`docs/elaborator/diagnostic-warnings-design.md` §7.1): a warning about an
         /// unreachable arm is a statement about what somebody *wrote*, and a
         /// generated level's arms were written by us. Reachability for the
         /// written arms is complete without it — one compilation's census
@@ -1190,7 +1190,7 @@ pub enum ExprKind {
         scrut: Box<Expr>,
         /// `match h : e { … }` — the convoy, written by the elaborator: the
         /// motive gains `Id(S, e, z) ->` and each arm gains a binder
-        /// `h : e = pat` (docs/match-equation-split-design.md §3). Direction is
+        /// `h : e = pat` (docs/language/matching/match-equation-split-design.md §3). Direction is
         /// **scrutinee = pattern**, which is the direction the one live
         /// consumer wants (§3.2). Refused on an indexed family, where it would
         /// be heterogeneous (§4).
@@ -1198,7 +1198,7 @@ pub enum ExprKind {
         /// Explicit dependent motive, as a **lambda**: `as λ z => T`. A motive
         /// is a function from the scrutinee to a type, so with `Type<n>`
         /// writable it can simply *be* one, and the surface keeps a single
-        /// binder form (docs/surface-universe.md §13). Retired with this: the
+        /// binder form (docs/language/surface-universe.md §13). Retired with this: the
         /// bespoke `as z -> T`, which overloaded `->`.
         motive: Option<Box<Expr>>,
         arms: Vec<Arm>,
@@ -1221,7 +1221,7 @@ pub enum ExprKind {
     MatchCode { scrut: Box<Expr>, motive: Box<Ty>, arms: Vec<Arm> },
     /// `p.f` (`args: None`), `p.f(a, b)` (`args: Some`), or
     /// `p.f<T, …>(a, b)` (`tyargs` non-empty)
-    /// (docs/surface-records.md §4).
+    /// (docs/language/surface-records.md §4).
     ///
     /// **Resolved in the elaborator, not here.** Until records existed, `.`
     /// was a parser desugaring — `p.f(a)` became `f(a, p)`, a call to a
@@ -1238,14 +1238,14 @@ pub enum ExprKind {
         named: Vec<NamedArg>,
     },
     /// `xs[i]` — indexing a vector at a `Fin` index
-    /// (docs/surface-fin-indexing-design.md §5). A **postfix** form, produced
+    /// (docs/language/surface-fin-indexing-design.md §5). A **postfix** form, produced
     /// in `postfix`'s loop beside `Dot` and the call `(`, so `[1,2,3][0]` and
     /// `xs[i].foo` chain in the order written. Both prefix readings of `[` —
     /// `[T; n]` in type position, a collection literal in expression position —
     /// are unaffected: `[` is disambiguated by position, never by lookahead.
     Index { recv: Box<Expr>, idx: Box<Expr> },
     /// `D { f: e, … }` or `D<T, …> { f: e, … }` — a record literal
-    /// (docs/surface-records.md §6). Fields may be written in any order; they
+    /// (docs/language/surface-records.md §6). Fields may be written in any order; they
     /// are permuted into declaration order in front of the ordinary tier-0
     /// constructor path, which is what actually elaborates.
     RecordLit { name: String, tyargs: Vec<Ty>, fields: Vec<RecordLitField> },
@@ -1257,7 +1257,7 @@ pub enum ExprKind {
     /// one.
     RecordUpdate { base: Box<Expr>, fields: Vec<RecordLitField> },
     /// `{ let x = e; … result }` — a **block in expression position**
-    /// (docs/let-and-blocks-design.md §4).
+    /// (docs/language/let-and-blocks-design.md §4).
     ///
     /// Disambiguated from the record literal `D { … }` **by position, never by
     /// lookahead**, exactly as [`ExprKind::Index`]'s `[` is: a record literal
@@ -1277,7 +1277,7 @@ pub enum ExprKind {
     /// (issues/nested-goal-discharge.md). When that issue lands, the field is
     /// already here and only the elaborator changes.
     Block(Box<crate::ast::Block>),
-    /// `code { e }` — a quotation (docs/in-language-map-design.md §3).
+    /// `code { e }` — a quotation (docs/metaprogramming/in-language-map-design.md §3).
     /// Checking-only, mirroring the kernel's `BoxTm` (`NotInferable` by
     /// design): the expected `Code(g |- T)` supplies the payload's context
     /// and type. Splices inside hoist letboxes at this boundary.
@@ -1294,7 +1294,7 @@ pub enum ExprKind {
         proof: Box<Expr>,
         /// The motive as a **two-binder lambda**: `λ y q => T`, over the
         /// endpoint and the path. Same move as [`ExprKind::Match`]'s
-        /// (docs/surface-universe.md §13); retires `(y, q) -> T`.
+        /// (docs/language/surface-universe.md §13); retires `(y, q) -> T`.
         motive: Box<Expr>,
         case: Box<Expr>,
     },

@@ -1,4 +1,4 @@
-# Probe benchmark results — see docs/cloud-benchmarks.md
+# Probe benchmark results — see docs/infrastructure/cloud-benchmarks.md
 # Regenerate with: scripts/bench-probes --save   (a filtered --save replaces only the cases it ran)
 # case	name	time_s	cpu_s	total_s	kernel_s	elab_s	merkle_s	image_s	spread	eval_steps	queries	conv_misses	local_subst_nodes	shift_global_nodes	check_terms
 env	source	cloud

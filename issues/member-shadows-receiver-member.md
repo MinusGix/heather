@@ -18,8 +18,8 @@ Inside `fn T::m`, a receiver call `x.m()` at a receiver whose type is not
 `T` should resolve to the receiver's member without consulting the
 declaration under construction — the declared member cannot apply to a
 receiver of another type, so there is nothing ambiguous. Likely one check in
-the receiver-dispatch route (`docs/traits-receiver-dispatch-design.md`,
-`docs/imported-receiver-dispatch-design.md`); remove the two delegations when
+the receiver-dispatch route (`docs/language/classes/traits-receiver-dispatch-design.md`,
+`docs/language/classes/imported-receiver-dispatch-design.md`); remove the two delegations when
 it lands.
 
 - 2026-09-22: Landed the carrier check in nominal member dispatch. The

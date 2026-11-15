@@ -74,7 +74,7 @@ unfold opaque theorem proofs later.
   or class parameters, let scoped axioms discharge them as a fallback, and
   attach provenance to the caller where that choice is made.
 
-- 2026-08-24: Landed complete (`docs/axiom-provenance-design.md`): explicit
+- 2026-08-24: Landed complete (`docs/kernel/axiom-provenance-design.md`): explicit
   bodiless `axiom` declarations; body-time dependency capture at the
   `PendingDecl`/commit boundary; deterministic shortest transitive paths keyed
   by resolved module identity; instance and generated-declaration propagation

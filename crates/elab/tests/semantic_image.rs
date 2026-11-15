@@ -1,6 +1,6 @@
 //! Stage 1 of semantic module images: the explicit in-memory committed-state
 //! boundary. Persistent images and imported-binding rechecks are later stages
-//! of `docs/semantic-module-images-design.md`.
+//! of `docs/infrastructure/semantic-module-images-design.md`.
 
 use heather_elab::{Elaborator, ModuleDependencyIdentity, ModuleReplayError};
 

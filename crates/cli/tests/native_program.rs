@@ -2,7 +2,7 @@
 //! the functions it calls, compiled by `lower_program` and certified by
 //! `compiled_returns`, linked against C references and run. The call
 //! examples the per-function path built as executables before burn B2 are
-//! here too (docs/native-program-logic-design.md §3.2).
+//! here too (docs/native/native-program-logic-design.md §3.2).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::process::Command;
 
@@ -122,7 +122,7 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 "#),
 ];
 
-// Shifts by constants (docs/runtime-fn-setups-design.md §16.13, round 3):
+// Shifts by constants (docs/native/runtime-fn-setups-design.md §16.13, round 3):
 // one-bit SHL/SHR/SAR chains, a count of 64 or more legalized (zero, or
 // SAR by 63), and an `i64`'s arithmetic shift. C's shifts by the width or
 // more are undefined, so the references spell the legalized result.
@@ -180,7 +180,7 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 
 const CALLS: &[&str] = &["CallTo("];
 // A loop is a `runtime fn`'s: its program and agreement are its generator's,
-// from the `Compile` instances (docs/runtime-fn-setups-design.md §16.11),
+// from the `Compile` instances (docs/native/runtime-fn-setups-design.md §16.11),
 // with nothing proved per loop in the certificate.
 const LOOPED: &[&str] = &["::agrees(", "::program"];
 

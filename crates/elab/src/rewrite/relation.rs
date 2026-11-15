@@ -1,5 +1,5 @@
 //! `rewrite(h, e)` along a relation: setoid rewriting, built bottom-up
-//! (`docs/equation-rewrite-design.md` §9, `issues/rewrite-setoid-relations.md`).
+//! (`docs/tactics/equation-rewrite-design.md` §9, `issues/rewrite-setoid-relations.md`).
 //!
 //! `h : R(a, b)` for a homogeneous relation `R` other than `=`. Each node of
 //! the goal is rewritten once, children first: an occurrence of `a` becomes
@@ -8,7 +8,7 @@
 //! `PreservesRelation` over one), and an unchanged node gets nothing. Results
 //! are kept per node, so a goal that shares a subterm rewrites it once and the
 //! proof shares that node's step: the work and the term are linear in the goal
-//! as a DAG, not as a tree (mengine's rewriter, `docs/mengine-survey.md` §4.3).
+//! as a DAG, not as a tree (mengine's rewriter, `docs/surveys/mengine-survey.md` §4.3).
 //!
 //! The goal is a relation application `S(l, r)`, or an implication between
 //! goals. A side's step composes with `S` by `Transitive` (or `Trans` when

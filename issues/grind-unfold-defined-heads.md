@@ -34,7 +34,7 @@ hand proof is four `trans` steps over `branch_false`,
 So the steps that are missing are the ones the hand chain gets free: `trans`
 checks its middle term up to conversion.
 
-The side reducts of §14.4 (`docs/grind-design.md`) read a side's head normal
+The side reducts of §14.4 (`docs/tactics/grind-design.md`) read a side's head normal
 form, and only when it is a constructor value. That is too far for this
 case: the whnf of `loop_finish(…)(…)` runs past `branch(…).eval(…)` into
 `eval`'s match. What would close it is reading a stuck side **one δ step at
@@ -63,7 +63,7 @@ control shows that an `interface fn` head is not unfolded.
   lemmas given by name runs out of fuel before this question is reached.
 
 ## Log
-- 2026-11-08: Done (docs/grind-design.md §15.1). A `Spell` host request
+- 2026-11-08: Done (docs/tactics/grind-design.md §15.1). A `Spell` host request
   returns a term's next spelling (head definition unfolded, head reduced
   until a call or a local is at the head again), through the interface
   boundary as conversion sees it. grind spells the stuck terms under the

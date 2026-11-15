@@ -15,7 +15,7 @@ Notes for one area sit beside it and load when a session works there:
   `-c 0`: a process killed at the rail otherwise writes a core of its full size.
   - **To probe one declaration**: `--cache --only <item> --timings f.tsv`
     elaborates and gates just it over a replayed prefix
-    (`docs/check-only-design.md`; the run is labelled and `scripts/timings`
+    (`docs/infrastructure/check-only-design.md`; the run is labelled and `scripts/timings`
     refuses to diff it against a whole run).
   - **A run killed at the rail still leaves its attribution**: a `--timings`
     table is appended as scopes close, and `<stem>.open.tsv` beside it names
@@ -45,12 +45,12 @@ Notes for one area sit beside it and load when a session works there:
 | A change to the kernel's traversals or bounds memo | `scripts/test --long` (own target dir) as a sweep, not a gate |
 
 The header of `scripts/test` says exactly what each lane runs and skips; why
-the lanes are cut this way is `docs/testing-architecture-design.md`.
+the lanes are cut this way is `docs/infrastructure/testing-architecture-design.md`.
 
 - **`--fast` and `--pr` replay semantic images an earlier compiler build
   wrote** instead of re-elaborating unchanged library modules (a module
   whose dependency changed in a way it did not observe has its image moved,
-  `docs/module-interface-cutoff-design.md`). Plain
+  `docs/infrastructure/module-interface-cutoff-design.md`). Plain
   `scripts/test` is the exact image policy, which re-elaborates every library
   module after a compiler edit; it is the nightly master sentinel's lane, so
   run it yourself only for the two rows above that name it.
@@ -154,7 +154,7 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
 - **Tactics build `Tac` values through calls**: `pure(a)`, `ask(r)`,
   `ask_then(r, k)`, never `Pure(…)`/`Ask(…)` as a value (patterns are
   free). A written tier-2 constructor re-spells `Tac`'s `W` encoding for the
-  kernel at every occurrence and every wildcard copy (docs/grind-design.md
+  kernel at every occurrence and every wildcard copy (docs/tactics/grind-design.md
   §14.6, issues/tier2-constructor-value-cost.md).
 - **Syntax is shared through the kernel's `Rc`**: `use heather_kernel::rc::Rc;`
   (`crate::rc::Rc` inside the kernel), never `std::sync::Arc` under an alias.
@@ -175,7 +175,8 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
   The issue files are the only tracked state: there is no committed index.
   `scripts/issue index` prints the one-line-per-issue overview to stdout and
   `scripts/issue list` the table; never commit an `INDEX.md`.
-- **Docs: `docs/README.md` is the map.** A doc whose code is deleted or
+- **Docs: `docs/README.md` is the map**; a new doc goes in its area's
+  folder there, and a later round extends its subject's doc. A doc whose code is deleted or
   replaced leaves in the same change: deleted if nothing live cites it (its
   mentions become `docs/<name>.md@<rev>`), moved to `docs/archive/` if code
   still cites its sections. Papers go in `docs/papers/` with a row in its

@@ -1,5 +1,5 @@
 //! `linarith`: linear arithmetic at an ordered field, read at the field's
-//! setoid equality (`docs/linarith-design.md`,
+//! setoid equality (`docs/tactics/linarith-design.md`,
 //! `issues/linarith-ordered-fields.md`).
 //!
 //! The tactic is an untrusted searcher in front of
@@ -287,7 +287,7 @@ fn is_conjunction(elab: &Elaborator, ty: &Type) -> bool {
 /// `ty` itself when it is a conjunction, or the first unfolding of its
 /// head that is one (`AbsLe(z, e)` is `Within(<=, -e, z, e)`, which is
 /// `-e <= z ∧ z <= e`), unless `ty` already reads as a relation
-/// (docs/linarith-design.md §9).
+/// (docs/tactics/linarith-design.md §9).
 fn conjunction_of(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
     let contracted = crate::spelling::beta_head_ty(ty);
     let ty = contracted.as_ref().unwrap_or(ty);
@@ -550,7 +550,7 @@ struct Use {
     extra: Option<usize>,
 }
 
-/// A part `nlinarith` adds (docs/nonlinear-arithmetic-design.md §4): the
+/// A part `nlinarith` adds (docs/tactics/nonlinear-arithmetic-design.md §4): the
 /// product of two rows' differences, or a square, as the certificate writes
 /// it, the proof that it is on the right side of zero, and its form.
 struct Extra {
@@ -994,7 +994,7 @@ impl Problem<'_> {
         Ok(format!("({})", parts.join(" + ")))
     }
 
-    /// `nlinarith`'s parts (docs/nonlinear-arithmetic-design.md §4.2): the
+    /// `nlinarith`'s parts (docs/tactics/nonlinear-arithmetic-design.md §4.2): the
     /// product of every pair of the rows it multiplies — the goal's assumed
     /// negation, the written facts, and in the second pass the context's —
     /// each row with itself included; and a square for each base the terms
@@ -1242,7 +1242,7 @@ struct Integral<'a> {
     /// `t`, which `ring` proves from the equation (`(y * z).den.int() =
     /// q * r` makes `(a * e) * (y * z).den.int()` the monomial `a·e·q·r`).
     defs: Vec<(bool, usize, Linear, String)>,
-    /// `nlinarith` (docs/nonlinear-arithmetic-design.md §4.4): the orders it
+    /// `nlinarith` (docs/tactics/nonlinear-arithmetic-design.md §4.4): the orders it
     /// multiplies pairwise, and how the certificate reads the goal back from
     /// a refutation, the source around `λ __nlin_g => …`.
     nonlinear: bool,
@@ -1576,7 +1576,7 @@ impl std::ops::Deref for Linarith<'_> {
 impl Linarith<'_> {
     /// `linarith` and `linarith(h₁, …, hₖ)` in checking position; with
     /// `nonlinear`, `nlinarith`, which multiplies the facts too
-    /// (docs/nonlinear-arithmetic-design.md §4).
+    /// (docs/tactics/nonlinear-arithmetic-design.md §4).
     pub(crate) fn elab_linarith(&self, cx: &Cx, hyps: &[Expr], goal: &Type, lvl: &Level, span: Span, nonlinear: bool) -> R<Term> {
         let err = |msg: String| ElabError::Elab { msg, span };
         let tactic = if nonlinear { "nlinarith" } else { "linarith" };
@@ -1585,7 +1585,7 @@ impl Linarith<'_> {
         }
         // A conjunction goal, or a definition that unfolds to one
         // (`AbsLe(z, e)`), is proved side by side, each side by the same
-        // call (docs/linarith-design.md §9).
+        // call (docs/tactics/linarith-design.md §9).
         if let Some(conj) = conjunction_of(self, cx, goal, span) {
             return self.linarith_conjunction(cx, hyps, goal, &conj, lvl, span, nonlinear);
         }
@@ -1774,7 +1774,7 @@ impl Linarith<'_> {
         }
         let Some((source, cited)) = found else {
             // Stuck: an arm equation not yet in scope might be the missing
-            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            // fact (docs/language/matching/dependent-match-compiler-design.md §4.3.1).
             Inference(self).want_match_equations(cx);
             // An order that unfolds to one at `Int` (`Rat::Le` is a
             // cross-multiplication) may follow there with products as

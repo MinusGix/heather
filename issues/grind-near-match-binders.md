@@ -9,7 +9,7 @@ updated: 2026-11-02
 ---
 
 grind matches a lemma's argument up to a definitional step (a near match,
-`docs/grind-design.md` §13): the left item is compared with the node by
+`docs/tactics/grind-design.md` §13): the left item is compared with the node by
 `Defeq`, its one free binder drawn from the graph's terms. A near match
 whose item leaves two or more binders free is skipped, so
 `f(Cons(x, ys))` does not meet `f([a] ++ xs)` (both `x` and `ys` free),
@@ -27,7 +27,7 @@ f(Cons(x, ys)) = g(ys), a: A, xs: List<A>): f(List::append([a], xs)) = g(xs)
 
 ## Resolution
 
-- 2026-11-02: Closed by the first option (docs/grind-design.md §13.4). A
+- 2026-11-02: Closed by the first option (docs/tactics/grind-design.md §13.4). A
   near match with free binders asks `Defeq` with a hole per binder (`Holes`
   at the lemma's proof, so each has its binder's type over the arguments
   before it), looks each solution up among the graph's nodes (whole terms,

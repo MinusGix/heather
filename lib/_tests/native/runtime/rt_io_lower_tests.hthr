@@ -1,5 +1,5 @@
 // Probes of effectful `rt` lowered to a `Source` (`rt_io_lower`,
-// `native_source_io`; docs/effects-capabilities-design.md §8.5): a `mut self`
+// `native_source_io`; docs/language/effects-capabilities-design.md §8.5): a `mut self`
 // method over `Io`, its computation, the statements it lowers to, those
 // statements run against a scripted world, and the soundness theorem
 // instantiated so that the lowered program's tree reads as the surface

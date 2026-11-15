@@ -9,7 +9,7 @@ updated: 2026-10-27
 ---
 
 Left by [[mutual-group-recursion-gate-cost]] once the signature was named
-(`docs/iwf-named-signature-design.md` §4). Filed first as the comb: a
+(`docs/inductives/iwf-named-signature-design.md` §4). Filed first as the comb: a
 family's shape was a right-nested sum, so a structural recursion's step was
 a case tree Θ(k) deep, its convoy motives named the label as an `inr` chain
 that deep, and each arm evaluated the named index functions down the chain.

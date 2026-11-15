@@ -8,7 +8,7 @@ updated: 2026-09-06
 ---
 
 Found by the [[omega-measure-at-constructor-pattern]] design pass
-(2026-09-06, docs/omega-measure-reduction-design.md §1.1). `elab_measure_decl`
+(2026-09-06, docs/tactics/omega-measure-reduction-design.md §1.1). `elab_measure_decl`
 (`crates/elab/src/lib.rs`) lowers a `decreases` declaration with `lift = true`
 first, one theorem `f#obl_N` per call site; when the checker refuses one it
 re-lowers with `lift = false`, obligations back at the calls, and the writer
@@ -30,4 +30,4 @@ they wrote, or the next round in `elab_measure_decl`.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[omega-guard-reads-nat-match]] (`docs/omega-measure-reduction-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[omega-guard-reads-nat-match]] (`docs/tactics/omega-measure-reduction-design.md`).

@@ -93,7 +93,7 @@ impl SemanticOracle {
     /// ([`crate::readback::verify`]).
     pub(crate) fn whnf_type(&self, gamma: &LocalCtx, ty: &Type) -> Result<Type, OutOfFuel> {
         // The elaborator's own head-shape probes are a phase of elaboration
-        // and not of the gate (`docs/instrumentation-design.md` §5): nothing
+        // and not of the gate (`docs/infrastructure/instrumentation-design.md` §5): nothing
         // inside a `stats::time_kernel` bracket reaches here, so this column
         // is drawn from the elaborate side of the split and `kernel_ns` keeps
         // its meaning.
@@ -166,7 +166,7 @@ impl SemanticOracle {
                 // A constructor with fields: read its top layer off the
                 // value, as `whnf_type` reads a former's. A reduct through a
                 // family's transports (`J` along a stored-children equation,
-                // docs/iwf-infinitary-design.md §7) is a constructor whose
+                // docs/kernel/iwf-infinitary-design.md §7) is a constructor whose
                 // fields the reducer would reach only by copying those
                 // transports' motives at every step
                 // (issues/elab-whnf-family-transport-cost.md).
@@ -211,7 +211,7 @@ impl SemanticOracle {
     /// [`Self::whnf_term`] under the stuck-spelling budget, for a *speculative*
     /// probe: one that reads the reduct's head to decide whether reduction
     /// bought anything and abandons it otherwise
-    /// (docs/omega-measure-reduction-design.md §2). Nothing here may pay the
+    /// (docs/tactics/omega-measure-reduction-design.md §2). Nothing here may pay the
     /// oracle's full fuel for an answer it may discard.
     pub(crate) fn whnf_term_bounded(
         &self,
@@ -379,7 +379,7 @@ fn term_head_may_compute(t: &Term) -> bool {
 
 /// Every reduct walk the elaborator takes, by what it looks for, with its
 /// budget: the most head reducts it reads before it gives up
-/// (docs/elaborator-principles-survey.md §5). Each budget was set by its
+/// (docs/elaborator/elaborator-principles-survey.md §5). Each budget was set by its
 /// first customer, and a step is a δ step on a definition of any size or a
 /// single β step alike, so the numbers say how far each search was willing
 /// to go, not how much work it does. They are kept here, in one table, to be
@@ -393,7 +393,7 @@ pub(crate) enum Unfold {
     Proposition,
     /// A goal headed by a definition no evidence rule is about, reaching one
     /// some rule is about: `PowOk(x, -1)` unfolds to `x.Apart(0)` in a
-    /// handful (docs/inverse-power-notation-design.md §4).
+    /// handful (docs/library/inverse-power-notation-design.md §4).
     RuleGoal,
     /// A definition unfolded looking for the edge image it names
     /// (`ring`'s `Reifier::wrapped_image`).

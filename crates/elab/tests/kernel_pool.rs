@@ -1,4 +1,4 @@
-//! The deferred kernel gate (`docs/parallel-kernel-gate-design.md`,
+//! The deferred kernel gate (`docs/kernel/parallel-kernel-gate-design.md`,
 //! `issues/parallel-kernel-gate.md`).
 //!
 //! Each test pins one half of the contract: a module whose proofs are checked
@@ -74,7 +74,7 @@ fn four_workers_accept_independent_theorems() {
 /// And not only the verdict: a failing module's *diagnostics* and *bindings*
 /// are the serial gate's, because the parallel pass that committed `broken`
 /// before checking it is discarded whole and replayed serially
-/// (`docs/parallel-kernel-gate-design.md` §5.1).
+/// (`docs/kernel/parallel-kernel-gate-design.md` §5.1).
 #[test]
 fn a_late_failure_rejects_the_module_before_anything_is_published() {
     let mut elab = with_workers(4);
@@ -240,7 +240,7 @@ impl KernelGate for Recorder {
 /// passes, and a failing module records exactly the verdicts the serial gate
 /// records — no more, because a discarded parallel pass vouches for nothing at
 /// all, and no fewer, because the serial replay is what the cache sees
-/// (`docs/parallel-kernel-gate-design.md` §5.1).
+/// (`docs/kernel/parallel-kernel-gate-design.md` §5.1).
 #[test]
 fn a_failing_module_records_exactly_the_serial_gate_s_verdicts() {
     let recorder = Arc::new(Recorder::default());
@@ -368,7 +368,7 @@ fn a_good_module_vouches_for_everything_in_order() {
 
 /// Attribution survives the trip off-thread: a worker's `check_term` time and
 /// the kernel counters it moved are folded back into the declaration's own row
-/// at join time (`docs/parallel-kernel-gate-design.md` §7), so `--timings`
+/// at join time (`docs/kernel/parallel-kernel-gate-design.md` §7), so `--timings`
 /// still reads `kernel_gate_ns` per item.
 #[test]
 fn a_worker_s_time_folds_back_into_its_declaration_s_row() {
@@ -405,7 +405,7 @@ fn a_worker_s_time_folds_back_into_its_declaration_s_row() {
     // The enclosing rows stay wall-shaped at every width: a worker's CPU goes
     // to the declaration that spent it, and what the module row is charged for
     // the deferral is the wall this thread really spent blocked at the join
-    // (`docs/parallel-kernel-gate-design.md` §7). So the exclusive rule —
+    // (`docs/kernel/parallel-kernel-gate-design.md` §7). So the exclusive rule —
     // no row claiming more phase time than it took — holds at eight workers
     // exactly as it holds at one, which is what `--timings` consumers read.
     let module_row = rows.iter().find(|r| r.kind == ScopeKind::Module).expect("a module row");

@@ -73,15 +73,15 @@ fn a_body_hole_is_discharged_by_name() {
         "#,
     );
     // 5 prelude (4 theorems and `CollectionLiteral#tycode_fn`,
-    // `docs/per-instantiation-type-codes-design.md` §2) + `3·nfields + 1 = 7`
+    // `docs/inductives/per-instantiation-type-codes-design.md` §2) + `3·nfields + 1 = 7`
     // for its two-field dependent spine's projections
-    // (docs/telescoped-record-projections-design.md §3, which turned §13.6's
+    // (docs/elaborator/telescoped-record-projections-design.md §3, which turned §13.6's
     // decline into the device's fourth cell) + 3 preamble (`add` included: a
     // `fn` is a *defined* Ψ-global since issues/simulate-conversion-cost.md)
     // + this one; goals never leak into the real Ψ.
     // +6: the prelude's binding-statement classes and calls.
     // +3: the prelude's `Mutated` record (a `mut self` method's result,
-    // docs/effects-capabilities-design.md §2).
+    // docs/language/effects-capabilities-design.md §2).
     assert_eq!(e.psi().bindings.len(), 25);
 }
 
@@ -243,7 +243,7 @@ fn an_undischarged_goal_is_listed() {
     assert_eq!(goals[0].name, "step");
     // The listing carries the statement and the context the discharge may use
     // — including the arm's `k`, which is the non-obvious part.
-    // Rendered as surface (docs/surface-type-display-design.md), so an
+    // Rendered as surface (docs/elaborator/surface-type-display-design.md), so an
     // equality goal reads the way it was written rather than as
     // `Id[l](A; lhs; rhs)`.
     assert_eq!(goals[0].statement, "add(Succ(k), 0) = Succ(k)");
@@ -329,7 +329,7 @@ fn a_type_value_goal_is_decoded_for_the_listing() {
 
 /// Exhausting the display reader no longer means printing raw: the **speller**
 /// takes over and prints the code as the call it is
-/// (docs/surface-type-display-design.md §3, which states this consequence).
+/// (docs/elaborator/surface-type-display-design.md §3, which states this consequence).
 /// The refusal-rather-than-guess control moved to the speller's own tests in
 /// `crates/elab/src/display.rs`, since a type it cannot spell is not writable
 /// in the surface language.
@@ -409,7 +409,7 @@ fn a_statement_discharge_matches_up_to_conversion() {
     );
 }
 
-// -- deferred arguments (docs/unifier-completeness-design.md §4-5) ----------
+// -- deferred arguments (docs/elaborator/unifier-completeness-design.md §4-5) ----------
 //
 // A hole is checking-only, and an implicit-taking callee used to *infer* its
 // explicit arguments — so `sym(?p)` was refused and the MVP restriction sent

@@ -9,7 +9,7 @@ updated: 2026-11-09
 ---
 
 omega splits `a.max(b)` and `a.min(b)` at Nat and Int since
-[[omega-reads-min-max]] (docs/omega-measure-reduction-design.md §20), so a
+[[omega-reads-min-max]] (docs/tactics/omega-measure-reduction-design.md §20), so a
 `le_max_l`/`le_max_r`/`max_le`/`le_min`/`min_le_*` chain whose only job is
 to feed an index or bound to the next step is now one `omega`.
 sequence.hthr's `Converges::le`, `unique`, `add` and `squeeze` were dropped

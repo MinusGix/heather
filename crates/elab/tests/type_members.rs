@@ -109,7 +109,7 @@ fn a_members_base_name_is_not_ambient() {
 #[test]
 fn a_member_of_a_type_that_does_not_exist_is_rejected_at_the_declaration() {
     // The owner rule admits a type *former* as well as a type as of 2026-08-17
-    // (`docs/decide-class-design.md` §2.3), so the message names both. An
+    // (`docs/language/classes/decide-class-design.md` §2.3), so the message names both. An
     // undeclared name is neither, and is refused on the path it always was.
     let e = bad("fn Frobnicate::x(n: Nat) -> Nat { n }");
     assert!(e.contains("not a type"), "{e}");
@@ -279,7 +279,7 @@ fn two_modules_attaching_the_same_member_are_ambiguous() {
 
 // -- 4: receivers that do not infer on their own --------------------------
 //
-// docs/receiver-member-resolution-design.md §1. `R::mk()` and `Nil` are not
+// docs/language/classes/receiver-member-resolution-design.md §1. `R::mk()` and `Nil` are not
 // inferable alone — their implicit is solved by the use — yet the head names
 // the owner. The owner only picks the qualified name; the desugared call,
 // with the expected type in hand, decides whether it typechecks.
@@ -446,7 +446,7 @@ fn a_receiver_headed_by_a_local_still_falls_back_to_the_bare_name() {
 
 // -- 5: ambient readings that cannot take the receiver --------------------
 //
-// docs/receiver-member-resolution-design.md §2. An ambient reading is dropped
+// docs/language/classes/receiver-member-resolution-design.md §2. An ambient reading is dropped
 // only when it provably cannot typecheck at this receiver; anything less is
 // still the ambiguity of
 // `an_ambient_name_and_a_member_at_the_same_receiver_are_ambiguous`.

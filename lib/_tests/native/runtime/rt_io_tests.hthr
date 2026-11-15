@@ -1,5 +1,5 @@
 // Probes of effectful `rt` (`rt_io`, `rt_io_reflect`;
-// docs/effects-capabilities-design.md §8): a `mut self` method over `Io`, its
+// docs/language/effects-capabilities-design.md §8): a `mut self` method over `Io`, its
 // computation written as `ETm`, checked against the reflector's output from
 // the real elaborated body (`reflects_io_as`), and the pin `meaning = f` by
 // `refl` at a neutral world and neutral operands, the equation a `runtime fn`

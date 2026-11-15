@@ -1,4 +1,4 @@
-//! Rounds 1 and 2 of `docs/host-elaboration-interface-design.md`: `by t` runs
+//! Rounds 1 and 2 of `docs/metaprogramming/host-elaboration-interface-design.md`: `by t` runs
 //! a Heather tactic (`lib/std/tactic/tactic.hthr`'s `Tac<Expr>`) or a registered Rust
 //! one against the goal, and checks what it returns. Round 2 adds binders
 //! (`Open`, `Lam`), `Infer` and `Resolve`, quoting of hypotheses into `Expr`
@@ -285,7 +285,7 @@ fn long_runs() {
     // request, a chain the final `Pure`'s `J` forces whole. Each link used to
     // cost a native re-entry, so this failed past about 2000 requests
     // (issues/grind-unrelated-lemma-fuel.md); the machine now forces a
-    // variable head on its own loop (docs/native-depth-budget-design.md §9).
+    // variable head on its own loop (docs/kernel/native-depth-budget-design.md §9).
     check(
         "fn spin(k: Nat) → tactic::Tac<tactic::Expr> {
              match k { Zero => assumption(), Succ(j) => defeq(NatLit(0), NatLit(0)).bind(λ g => spin(j)) }

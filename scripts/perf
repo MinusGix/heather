@@ -84,7 +84,7 @@ def showcase(name):
 # through `compile-x86` with these arguments instead of `check`; everything
 # else about the entry (modes, cache, `--timings`, the report) is the same.
 # Until burn B2 this was `build-x86` on `reused_callee.hthr`'s per-function
-# certificate (docs/native-program-logic-design.md §3.2).
+# certificate (docs/native/native-program-logic-design.md §3.2).
 X86_CERTIFICATE = ("examples/x86-native/levels.hthr", [])
 COMPILE_X86 = {
     X86_CERTIFICATE[0]: ["program"],
@@ -154,7 +154,7 @@ def sh(*cmd, default=""):
 
 def guess_source():
     # A Claude Code cloud container: the reference environment since
-    # 2026-10-29 (docs/cloud-benchmarks.md). Its hostname is not stable.
+    # 2026-10-29 (docs/infrastructure/cloud-benchmarks.md). Its hostname is not stable.
     if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
         return "cloud"
     if str(ROOT).startswith("/work"):
@@ -297,7 +297,7 @@ def suite_decls(d: Path, run: str, lane: dict):
             continue
         exe, thread, _n = parts
         # A family binary's thread is `<member file>::<test>`; the member is
-        # the target the runner labelled (docs/elab-test-families-design.md).
+        # the target the runner labelled (docs/infrastructure/elab-test-families-design.md).
         if exe.startswith("family_") and "::" in thread:
             exe, thread = thread.split("::", 1)
         label = labels.get(exe, exe)

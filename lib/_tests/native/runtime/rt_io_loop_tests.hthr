@@ -1,5 +1,5 @@
 // Probes of effectful `rt` programs with loops lowered to a `Source`
-// (`rt_io_loop`, `native_source_io`; docs/effects-capabilities-design.md
+// (`rt_io_loop`, `native_source_io`; docs/language/effects-capabilities-design.md
 // §8.6): a loop that echoes stdin to stdout until the end of the input, the
 // statements it lowers to, those statements and its meaning run against a
 // scripted world (each to the same end as the surface `while` it models),

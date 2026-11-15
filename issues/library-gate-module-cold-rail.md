@@ -15,7 +15,7 @@ same way. Every rerun passed.
 
 The gate's build step (`crates/cli/tests/library.rs`) checks each module
 in a `heather check` of its own, so each module has its own 300 s rail
-(`docs/module-dag-design.md` §12). A folder's check then only replays, so it
+(`docs/infrastructure/module-dag-design.md` §12). A folder's check then only replays, so it
 is cheap (`lib/_tests/std/num` replays in about 15 s once its closure is
 built). But if one module of the closure is killed in the build step, every
 module after it is left unbuilt. The folder check then elaborates all of

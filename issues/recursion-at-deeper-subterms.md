@@ -84,7 +84,7 @@ What it needs:
    missing.
 2. **Σ in the emitted term.** Available — the branching-inductives round put
    Σ-tuple children in the kernel already ([[wf-former]],
-   `docs/branching-inductives-choice.md`), so this is a new *use*, not a new
+   `docs/inductives/branching-inductives-choice.md`), so this is a new *use*, not a new
    former.
 3. **Guard changes**: `GuardKind::Nat` records one `pred_pos`/`ih_pos` pair;
    it would record the chain of nested predecessors and which projection each
@@ -158,7 +158,7 @@ missing base arm when that is the actual problem.
 
 ## Log
 
-- 2026-08-17: LANDED (docs/course-of-values-recursion-design.md). Tupling was the right transformation and the issue's costing of it held: one `elim_Nat` carrying the last `d` values as a right-nested Σ, the body unchanged, a self-call at depth `j` becoming a projection. `half`, `fib`, `Even`/`Odd` check as written and `half(7) = 3` is `refl`.
+- 2026-08-17: LANDED (docs/language/recursion/course-of-values-recursion-design.md). Tupling was the right transformation and the issue's costing of it held: one `elim_Nat` carrying the last `d` values as a right-nested Σ, the body unchanged, a self-call at depth `j` becoming a projection. `half`, `fib`, `Even`/`Odd` check as written and `half(7) = 3` is `refl`.
 
 TWO PREDICTIONS OF THIS ISSUE WERE WRONG, IN OPPOSITE DIRECTIONS.
 

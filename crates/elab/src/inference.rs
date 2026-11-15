@@ -189,7 +189,7 @@ impl Inference<'_> {
 
     /// `x()` where `x` is a `def`: a value is used as `x`, so the empty call
     /// is refused rather than read as the value
-    /// (docs/value-definitions-design.md §2.3). A call with arguments applies
+    /// (docs/metaprogramming/value-definitions-design.md §2.3). A call with arguments applies
     /// a function-typed value and is not this.
     pub(crate) fn refuse_value_call(&self, cx: &Cx, e: &Expr) -> R<()> {
         let ExprKind::App { head, args, named, .. } = &e.kind else { return Ok(()) };
@@ -217,7 +217,7 @@ impl Inference<'_> {
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         self.refuse_value_call(cx, e)?;
         // A `match` on `When`'s constructors whose scrutinee is a
-        // proof-taking call (docs/when-design.md §4).
+        // proof-taking call (docs/language/when-design.md §4).
         if let Some((bound, tested)) = crate::tested::Tested(self).tested_match(cx, e)? {
             return self.elab_infer_uncached(&bound, &tested, expected);
         }
@@ -241,7 +241,7 @@ impl Inference<'_> {
                 format!(
                     "this call to `{name}` is not guarded: a corecursive call must be a child of the \
                      constructor the definition returns — `C(…, {name}(…), …)` or \
-                     `C(…, λ y => {name}(…), …)` (docs/codata-elaborator-design.md §5)"
+                     `C(…, λ y => {name}(…), …)` (docs/inductives/codata-elaborator-design.md §5)"
                 ),
                 e.span,
             );
@@ -444,7 +444,7 @@ impl Inference<'_> {
         let _depth = expr::ExprDepthGuard::enter(&self.scope.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
-        // (docs/operators-onto-classes-design.md §4).
+        // (docs/language/classes/operators-onto-classes-design.md §4).
         //
         // `None`, deliberately, and not this function's `expected`: that one is
         // the expected type of a *call's result*, reached only from
@@ -452,7 +452,7 @@ impl Inference<'_> {
         // at the top of `elab_check_skel` has already run. A symbol arrives
         // here unrewritten exactly when the position is genuinely inference,
         // which is the whole of what "a bare symbol has no carrier" still means
-        // (docs/bare-symbol-checking-carrier-design.md §5).
+        // (docs/language/classes/bare-symbol-checking-carrier-design.md §5).
         if let Some(rewritten) = Operators(self).op_rewrite(cx, e, None)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
@@ -511,7 +511,7 @@ impl Inference<'_> {
             return err(format!("`{}` needs an expected relation goal; annotate this proof position", e.as_named().unwrap().0), e.span);
         }
         // `rewrite(h, …, in := hyp)` transports a hypothesis: its type is
-        // what it proves (docs/equation-rewrite-design.md §7). In checking
+        // what it proves (docs/tactics/equation-rewrite-design.md §7). In checking
         // position it arrives here through the inference fallback.
         if let ExprKind::App {
             head,
@@ -554,7 +554,7 @@ impl Inference<'_> {
                 .expect("classified as an ExprElab inference form"),
             // `{ let x = e; … result }` — the block's statements extend a
             // clone of `cx`, and its result is inferred there
-            // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
+            // (docs/language/let-and-blocks-design.md §4.4). Inference-transparent:
             // the block contributes no term of its own, because a `let` is an
             // alias.
             ExprKind::Char(c) => Literals(self).elab_char_infer(cx, *c, e),
@@ -582,7 +582,7 @@ impl Inference<'_> {
                 arms,
             } => Quotation(self).elab_match_code(cx, scrut, motive, arms, e.span),
             // `FZ` cannot infer: it inhabits `Fin(Succ k)` for every `k`
-            // (docs/surface-fin-indexing-design.md §3.1). Said only where the
+            // (docs/language/surface-fin-indexing-design.md §3.1). Said only where the
             // name is neither shadowed nor some declaration's constructor.
             ExprKind::Var(name)
                 if name == "FZ"
@@ -609,7 +609,7 @@ impl Inference<'_> {
             // A bare reference to a polymorphic declaration, met in
             // *checking* position, is the zero-explicit-argument case of
             // expected-type-directed instantiation
-            // (docs/unifier-completeness-design.md §5.3): `app1(id, n)` at
+            // (docs/elaborator/unifier-completeness-design.md §5.3): `app1(id, n)` at
             // `app1(f: Nat -> Nat, n: Nat)` dies as a bare kernel
             // `LevelMismatch` without it, because the polymorphic value's
             // leading `Π (A : Ty 0)` fails the Π–Π `dom_level` comparison
@@ -625,7 +625,7 @@ impl Inference<'_> {
             // nobody wrote. Passing verbatim is exactly the pre-insertion
             // behavior, and the kernel judges it as before. This is the
             // erased-type approximation of the skeleton suppression rule
-            // (docs/implicit-binders-design.md §5.3), which refines it once
+            // (docs/language/implicit-binders-design.md §5.3), which refines it once
             // implicitness travels with the type.
             ExprKind::Var(name) => {
                 // Which bare-reference route (if either) is live: the global
@@ -670,7 +670,7 @@ impl Inference<'_> {
                             e.span,
                         );
                     }
-                    // The value analog (docs/implicit-binders-design.md
+                    // The value analog (docs/language/implicit-binders-design.md
                     // §5.2): a bare local/alias whose *skeleton* opens with
                     // an implicit prefix takes the same route, with the
                     // parameter table synthesized from the skeleton. The
@@ -703,11 +703,11 @@ impl Inference<'_> {
                 self.resolve(cx, name, e.span)
             }
             // `xs[i]` — infers, since the element type comes off the receiver
-            // (docs/surface-fin-indexing-design.md §5.2).
+            // (docs/language/surface-fin-indexing-design.md §5.2).
             // An index that is not a `Fin` (a word, `v[i + 1]` with `i: u64`)
             // is the receiver's own `at` method, `v.at(i)`, whose proof that
             // `i` is inside is found where it is written
-            // (docs/sequencing-surface-design.md §21).
+            // (docs/language/sequencing-surface-design.md §21).
             ExprKind::Index { recv, idx } => match index_by_method(self.0, cx, idx) {
                 true => {
                     let call = Expr {
@@ -764,7 +764,7 @@ impl Inference<'_> {
             // A record literal in inference position: the fields are permuted
             // into declaration order and the instantiation is recovered from
             // them, exactly as for any constructor application
-            // (docs/inductive-tier0-lowering.md §2).
+            // (docs/inductives/inductive-tier0-lowering.md §2).
             ExprKind::RecordLit {
                 name,
                 tyargs,
@@ -787,7 +787,7 @@ impl Inference<'_> {
             }
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
-            // from (docs/surface-function-types.md §5.2).
+            // from (docs/language/surface-function-types.md §5.2).
             ExprKind::Lam { binders, body } => self.expr_elab().infer_lambda(
                 self.0,
                 cx,
@@ -796,7 +796,7 @@ impl Inference<'_> {
                 expr::LambdaInferenceMode::Ordinary,
             ),
             // `f<T, …>` — explicit type application, with or without a call
-            // after it (docs/surface-polymorphism.md §1).
+            // after it (docs/language/surface-polymorphism.md §1).
             ExprKind::TyApp { head, args } => {
                 // A fully instantiated type such as `And<P, Q>` also has a
                 // code in inference position (`let result = P ∧ Q`). A
@@ -822,11 +822,11 @@ impl Inference<'_> {
                 // `f<A, B>` with nothing after it, where the parameters that
                 // follow the type arguments start with a **solver** parameter:
                 // the bare-reference route of
-                // docs/unifier-completeness-design.md §5.3, one step along.
+                // docs/elaborator/unifier-completeness-design.md §5.3, one step along.
                 // This is what makes an instance's assembled value work at
                 // layer 2 — `op<A, B>` is the member with its `requires`
                 // binders still to fill, and filling them is resolution's job
-                // (docs/traits-layer2-design.md §9.3).
+                // (docs/language/classes/traits-layer2-design.md §9.3).
                 //
                 // Deliberately narrow: only a leading prefix that *contains a
                 // solver parameter* takes it.
@@ -902,7 +902,7 @@ impl Inference<'_> {
                 // instantiation. Not a Π-typed head, so it cannot go down the
                 // application path at all; the type arguments *are* the
                 // instantiation, which is what `infer_ctor` otherwise has to
-                // guess (docs/surface-polymorphism.md §10.3).
+                // guess (docs/language/surface-polymorphism.md §10.3).
                 if let ExprKind::Var(cn) = &callee.kind
                     && let Some((ind, ci)) = Constructors(self).ctor_here(cx, cn)
                 {
@@ -994,7 +994,7 @@ impl Inference<'_> {
             // A constructor applied in the curried spelling — `Cons(1)(xs)`.
             // Re-associated into one saturated application, which is what lets
             // it infer: the head alone (`Cons(1)`) has no inferable type, but
-            // the whole spine does (docs/constructor-function-values.md §3).
+            // the whole spine does (docs/language/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && Constructors(self).ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = Constructors(self).ctor_spine(cx, e).expect("just checked");
                 Constructors(self).lint_manual_list_construction(cx, e, &ind, i);
@@ -1017,7 +1017,7 @@ impl Inference<'_> {
             } if e.as_named().is_none() => {
                 application::refuse_named(
                     "a call whose head is an expression",
-                    "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/named-arguments-design.md §7)",
+                    "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/language/named-arguments-design.md §7)",
                     named,
                 )?;
                 if *explicit {
@@ -1049,7 +1049,7 @@ impl Inference<'_> {
             } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
                 let name = &name.to_string();
-                // Named arguments (docs/named-arguments-design.md §8.2). Only
+                // Named arguments (docs/language/named-arguments-design.md §8.2). Only
                 // four of this arm's paths have a parameter table — a
                 // constructor, a value head, a global, and the self-call — and
                 // everything else in it is a *builtin*: an elaborator form
@@ -1076,7 +1076,7 @@ impl Inference<'_> {
                     }
                 }
                 // `Nat::Monoid(add)` — a class at a type, at its index
-                // (docs/operation-indexed-classes-design.md §5.1). Before the
+                // (docs/language/classes/operation-indexed-classes-design.md §5.1). Before the
                 // ordinary application path, because an indexed class's
                 // qualified name is not a callable global: `Bool::Monoid#or`
                 // is, and this is what names it.
@@ -1096,7 +1096,7 @@ impl Inference<'_> {
                 // `Fin(n)` where a *term* is expected: the type's code,
                 // `TmFin n : Ty 0` — which is what makes
                 // `fn Idx(n: Nat) -> Type { Fin(n) }` an ordinary `fn`
-                // (docs/surface-fin-indexing-design.md §2.3). Guarded by
+                // (docs/language/surface-fin-indexing-design.md §2.3). Guarded by
                 // shadowing, so a local binder or a global still wins *in
                 // expression position*, as for `map`/`head`/`cons`; type
                 // position is unguarded, and that asymmetry is deliberate.
@@ -1127,7 +1127,7 @@ impl Inference<'_> {
                     );
                 }
                 // `xs.map(f)` / `xs.fold(z, f)` — the vector eliminators
-                // (docs/container-fields.md §4.2). These are Rust rather than
+                // (docs/language/container-fields.md §4.2). These are Rust rather than
                 // declarations, so they have no `self` to write and take the
                 // default subject position: the receiver arrives *first*, as
                 // `map(xs, f)` and `fold(xs, z, f)`, which is also how the
@@ -1148,7 +1148,7 @@ impl Inference<'_> {
                 // `head(v)` / `tail(v)` / `cons(h, t)` — the vector at a
                 // successor length *is* a `Σ` (`Vec` computes on its length),
                 // so these are its projections and pairing, annotated from
-                // the receiver's element type (docs/in-language-map-design.md
+                // the receiver's element type (docs/metaprogramming/in-language-map-design.md
                 // — the payload of the first in-language artifact is what
                 // wanted spellings for them).
                 if (name == "head" || name == "tail") && !self.shadowed(cx, name) {
@@ -1171,7 +1171,7 @@ impl Inference<'_> {
                     return vec::elab_cons(self.0, cx, h, t, e.span);
                 }
                 // `xs.cong(self)` — the phase-3 lifting
-                // (docs/container-proofs.md §6). Recognized by its *self-name*
+                // (docs/language/container-proofs.md §6). Recognized by its *self-name*
                 // argument rather than by the name `cong`, so a user-defined
                 // `cong` theorem still resolves for the ordinary `p.cong(f)`:
                 // the self-name is not a value, so it can never be an argument
@@ -1245,7 +1245,7 @@ impl Inference<'_> {
                 }
                 // A *value* head — a local, or an alias. With a skeleton it
                 // applies with skeleton-directed insertion
-                // (docs/implicit-binders-design.md §5.1): same machinery as
+                // (docs/language/implicit-binders-design.md §5.1): same machinery as
                 // a named global, with the parameter table synthesized from
                 // the skeleton and `param_offset = 0` (a value has no
                 // consumed type-argument prefix). `@f(…)` clears the whole
@@ -1379,7 +1379,7 @@ impl Inference<'_> {
             } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
-                // (docs/inductive-indexed-lowering.md §6.1).
+                // (docs/inductives/inductive-indexed-lowering.md §6.1).
                 // Route 2b's forded family (docs/archive/inductive-fording-lowering.md
                 // §12.1): the same two-binder motive rule as route 1's, over
                 // the Σ+`sEq` form instead of the eliminator's.
@@ -1406,7 +1406,7 @@ impl Inference<'_> {
                     // the preprocessing too — otherwise a `_` arm reaches it
                     // as an unknown constructor. The motive here binds *two*
                     // things (index, then value), so non-dependence is a shift
-                    // by two (docs/nested-match-patterns-design.md §5.1).
+                    // by two (docs/language/matching/nested-match-patterns-design.md §5.1).
                     let indep = motive2 == result.shift_local(2);
                     let prepared = Patterns(self).prepare_arms(
                         cx, *form, *generated, arms, &scrut_t, &scrut_ty, &scrut_lvl, &result,
@@ -1481,7 +1481,7 @@ impl Inference<'_> {
                 // `match h : e as \u{3bb} z => M { … }`: the equation decorates the
                 // *user's* motive rather than replacing it, and the result type
                 // is unchanged — the convoy is type-transparent
-                // (docs/match-equation-split-design.md \u{a7}3.3).
+                // (docs/language/matching/match-equation-split-design.md \u{a7}3.3).
                 if let Some(h) = eqbind {
                     let t = self.elab_convoy(
                         cx, *form, *generated, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
@@ -1657,12 +1657,12 @@ impl Inference<'_> {
                 e.span,
             ),
             // Checking-only, mirroring the kernel: `BoxTm` is `NotInferable`
-            // by design (docs/in-language-map-design.md §5). And a quote is
+            // by design (docs/metaprogramming/in-language-map-design.md §5). And a quote is
             // only meaningful at layer m, so outside a `meta fn` the pointer
             // is to the declaration form, not to an annotation.
             ExprKind::Quote(_) => err(
                 "a `code { … }` quote needs an expected `Code(g |- T)` type, inside \
-                 a `meta fn` (docs/in-language-map-design.md §3)",
+                 a `meta fn` (docs/metaprogramming/in-language-map-design.md §3)",
                 e.span,
             ),
             ExprKind::Splice(inner) => Quotation(self).elab_splice(cx, inner, e.span),
@@ -1736,7 +1736,7 @@ impl Inference<'_> {
     }
 
     /// `match h : e { … }` — the convoy, written for the user
-    /// (docs/match-equation-split-design.md §3.3).
+    /// (docs/language/matching/match-equation-split-design.md §3.3).
     ///
     /// Three mechanical steps over the *unconvoyed* elaboration, and nothing
     /// below [`Routes::elab_match`] learns that any of them happened:
@@ -1771,7 +1771,7 @@ impl Inference<'_> {
         // An indexed family's arms live at *different* indices, so `e = z`
         // would relate two values at two types. The index packed with the
         // value is one type, `Σ(j: I). F(j)`, and that equation is the one
-        // bound (docs/dependent-match-compiler-design.md §9).
+        // bound (docs/language/matching/dependent-match-compiler-design.md §9).
         if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, scrut_ty) {
             let family = PackedFamily {
                 ity: fam.ity.clone(),

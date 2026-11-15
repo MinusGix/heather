@@ -32,7 +32,7 @@ A function runs only when it is marked: `runtime fn f` (with `import
 runtime;` and the modules its generator reads, `runtime-generator-imports`)
 publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
 calls, each from its `Compile` instance, and `f::agrees`, that the program
-evaluates to `f` ([design §16.9](../../docs/runtime-fn-setups-design.md)).
+evaluates to `f` ([design §16.9](../../docs/native/runtime-fn-setups-design.md)).
 `compile-x86` compiles a marked function through those: its certificate's
 `_agrees` is `f::agrees`, and nothing about the program is proved by the
 compiler. Loops are runtime fns too (design §16.11). An unmarked function
@@ -198,7 +198,7 @@ Before the verified lowering, each function got a certificate generated for
 its own instructions (structured, call and composition certificates over
 `lib/certgen/ir_v1.hthr`), and `build-x86` wrote a static ELF executable
 for a fixed fragment with a callee summary per call. Both were deleted in B2
-(docs/native-program-logic-design.md §3.2). The last commit with them, their
+(docs/native/native-program-logic-design.md §3.2). The last commit with them, their
 recipes and this section's old text is `82521ea`. A direct executable comes
 back on the verified path, as the compiled program inside a proved process
 image (`issues/native-first-compiled-program.md`).
@@ -207,7 +207,7 @@ image (`issues/native-first-compiled-program.md`).
 
 The programs that read stdin (`wc -l`, `wc` as a command, `tr`, `tr -s`,
 `tr -d`) were proved by hand, a process library per program shape, and were
-deleted in B1 (docs/native-program-logic-design.md §3.1). The last commit
+deleted in B1 (docs/native/native-program-logic-design.md §3.1). The last commit
 with them, their build recipe and this section's old text is `189659d` (tag
 `native-v0`). They come back as programs of an effectful source whose meaning
 is an interaction tree, compiled by a compiler proved correct once

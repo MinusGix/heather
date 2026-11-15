@@ -1,5 +1,5 @@
 // Probes of `runtime fn` loops (lib/native/runtime/runtime.hthr,
-// docs/runtime-fn-setups-design.md §16.11): a recursion on a fuel and a
+// docs/native/runtime-fn-setups-design.md §16.11): a recursion on a fuel and a
 // `decreases` recursion on a word's `toNat`, with no proof written for them
 // here, and the loops a runtime fn refuses. Split from runtime_tests so that
 // each module checks cold under the library gate's rail. Tests, not library:
@@ -40,7 +40,7 @@ runtime fn halve(n: BitVec(64), d: Nat) → BitVec(64) decreases d {
 }
 
 // ---------------------------------------------------------------------------
-// Loops (docs/runtime-fn-setups-design.md §16.11): a recursion on a fuel and
+// Loops (docs/native/runtime-fn-setups-design.md §16.11): a recursion on a fuel and
 // a `decreases` recursion on a word's `toNat` lower to loops, their
 // instances resting on their equations (`refl` per word for a fuel; the
 // generated `f::ext` and `f::irrel` for a measure), and link as any callee.

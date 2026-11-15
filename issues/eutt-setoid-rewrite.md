@@ -9,10 +9,10 @@ updated: 2026-11-03
 ---
 
 Rewriting along `Eutt`: `rewrite(h, e)` with `h : Eutt(t, u)`
-([[rewrite-setoid-relations]], `docs/equation-rewrite-design.md` §9) inside
+([[rewrite-setoid-relations]], `docs/tactics/equation-rewrite-design.md` §9) inside
 a goal `Eutt(…)`, including under a `bind` continuation's binder
 ([[rewrite-setoid-under-binders]], closed). Effectful-loop proofs
-(`docs/effects-capabilities-design.md` §4, decided by Minus 2026-11-03) are
+(`docs/language/effects-capabilities-design.md` §4, decided by Minus 2026-11-03) are
 chains of the monad laws and tau laws under binds; today each is a hand
 `Eutt::trans` tower.
 
@@ -38,7 +38,7 @@ that has none.
 
 ## Log
 
-- 2026-11-03: done (`docs/equation-rewrite-design.md` §11). `Eutt` goals
+- 2026-11-03: done (`docs/tactics/equation-rewrite-design.md` §11). `Eutt` goals
   read as relation applications (an indexed codata family whose last two
   indices are the sides); `Eutt::Rel<R>(E)` names the relation, with an
   `Equivalence` instance (instance indices may now be a global applied to the

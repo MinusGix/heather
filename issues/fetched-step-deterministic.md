@@ -34,7 +34,7 @@ separate from the failure paths ([[linux-syscall-trace-model]]).
 ## Log
 
 - 2026-09-27: First proof boundary landed in the working tree (see
-  `docs/fetched-step-determinism-design.md`). Canonical ordinary bytes have a
+  `docs/native/fetched-step-determinism-design.md`). Canonical ordinary bytes have a
   unique decoded instruction; equal-length successful fetches from one memory
   and RIP return equal bytes. `Execute` outcomes for the same decoded
   instruction agree on all state components except TEST's undefined AF.
@@ -62,4 +62,4 @@ separate from the failure paths ([[linux-syscall-trace-model]]).
   the same theorem given equal lengths. All are kernel-checked. The
   cross-family selector and the near length argument remain open. Full suite:
   3023 passed, 0 failed, 5 ignored.
-- 2026-09-28: Closed (docs/fetched-step-determinism-design.md §5–7). A prefix decoder over every step form (x86_64_step_forms) makes two fetches at one address one form whatever their lengths, which settles both the near-branch length premise and cross-family selection. Steps respect defined state; no step runs at SYSCALL. linux_x86_64_determinism: LinuxRun (a run as it happened), SameResponses, linux_runs_determine / linux_runs_every, and claim_is_run so the statement is not vacuous. Each read-loop build now writes {prefix}_runs_every at the file: every run with the history's answers made exactly the claimed events. Residue: partial runs (no divergence or stop between syscalls) go to [[linux-syscall-trace-model]].
+- 2026-09-28: Closed (docs/native/fetched-step-determinism-design.md §5–7). A prefix decoder over every step form (x86_64_step_forms) makes two fetches at one address one form whatever their lengths, which settles both the near-branch length premise and cross-family selection. Steps respect defined state; no step runs at SYSCALL. linux_x86_64_determinism: LinuxRun (a run as it happened), SameResponses, linux_runs_determine / linux_runs_every, and claim_is_run so the statement is not vacuous. Each read-loop build now writes {prefix}_runs_every at the file: every run with the history's answers made exactly the claimed events. Residue: partial runs (no divergence or stop between syscalls) go to [[linux-syscall-trace-model]].

@@ -37,7 +37,7 @@ when the intervals landed, so this round was kept out of it.
 ## Log
 
 - 2026-10-27: LANDED: `lib/std/num/float/creal_interval.hthr` (design
-  `docs/floating-point-design.md` §16, "Enclosures of reals").
+  `docs/library/floating-point-design.md` §16, "Enclosures of reals").
   `Interval::HasReal` is containment at `CReal` through `CReal::ofRat`;
   constants, `neg`, `add`, `sub`, `mul` (corner search and the direct
   positive path) and `pow` keep it. The product's sign split on a real

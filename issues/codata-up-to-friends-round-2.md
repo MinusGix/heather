@@ -9,18 +9,18 @@ milestone: [nh-effects]
 ---
 
 Corecursion up to friends landed for unindexed codata and monomorphic
-friends (`docs/codata-elaborator-design.md` §5.5): the carrier is the free
+friends (`docs/inductives/codata-elaborator-design.md` §5.5): the carrier is the free
 algebra of the friends over seeds and existing trees, a `Wf` tree, and each
 friend's body is re-elaborated over it. The issue's three customers need
 more than that:
 
-- **Up-to proofs for `Bisim`/`Eutt`** (`docs/coitree-design.md` §7.6): a
+- **Up-to proofs for `Bisim`/`Eutt`** (`docs/itrees/coitree-design.md` §7.6): a
   self-call under `trans`. Indexed codata: the free carrier becomes a family
   over the index (`Wf` → `IWf`, or a seed-style equation per node), and a
   friend's codata arguments sit at *different* indices from its result
   (`trans(r₁ : Bisim(a, b), r₂ : Bisim(b, c)) : Bisim(a, c)`), so the node's
   shape must carry the intermediate index `b`.
-- **A direct coinductive `rec`** (`docs/partial-functions-design.md`):
+- **A direct coinductive `rec`** (`docs/language/partial-functions-design.md`):
   the non-tail call sits under `bind(t : CoTree<R>(E), h : R → CoTree<S>(E))`.
   `t` is of another instance than the result (the free carrier becomes
   multi-sorted: a node of `C_R` may hold children of `C_S`), `h` is a
@@ -46,7 +46,7 @@ Smaller gaps, each refused with its reason today:
   node, as a leaf).
 
 ## What it assumes from elsewhere
-- **`docs/codata-elaborator-design.md` §5.5** owns the round-1 carrier and
+- **`docs/inductives/codata-elaborator-design.md` §5.5** owns the round-1 carrier and
   friend mode. Assumed here: only that the step is structural recursion on
   the free carrier and friend nodes read their arguments' nodes from `ih`.
 
@@ -55,12 +55,12 @@ Smaller gaps, each refused with its reason today:
 - 2026-11-03: The up-to proofs for `Eutt` (up to `trans` and up to `bind`) are now wanted
   by `nh-effects`: [[eutt-iteration-and-io-reading]] states its loop lemmas
   first and logs which proofs wait here, and [[eutt-tactics]] builds its
-  coinduction tactic on them (`docs/effects-capabilities-design.md` §4).
-- 2026-11-03: 2026-11-03: [[eutt-iteration-and-io-reading]] closed with every lemma proved by direct corecursion (iter_cong, mrec_cong, mrec_bind, reads_bind, the loop lemma reads_iter): where a self-call would sit under trans, the hypothesis is generalised to the relation the step lands in (docs/coitree-design.md §7.9, docs/proof-patterns.md §4). nh-effects no longer waits on up-to Eutt; eutt-tactics still wants it for an ecofix-style tactic.
+  coinduction tactic on them (`docs/language/effects-capabilities-design.md` §4).
+- 2026-11-03: 2026-11-03: [[eutt-iteration-and-io-reading]] closed with every lemma proved by direct corecursion (iter_cong, mrec_cong, mrec_bind, reads_bind, the loop lemma reads_iter): where a self-call would sit under trans, the hypothesis is generalised to the relation the step lands in (docs/itrees/coitree-design.md §7.9, docs/proof-patterns.md §4). nh-effects no longer waits on up-to Eutt; eutt-tactics still wants it for an ecofix-style tactic.
 
 ## Log
 
-### 2026-11-03: round 2 landed (docs/codata-elaborator-design.md §5.6)
+### 2026-11-03: round 2 landed (docs/inductives/codata-elaborator-design.md §5.6)
 
 The free carrier is an ordinary `W` over seeds, trees, pending nodes and
 friend labels, with an `ok` predicate that every node sits at the index its
@@ -98,4 +98,4 @@ Left (each refused with its reason):
   its data arguments; the call writes them.
 
 Found on the way, not a friends gap: [[corec-match-on-index-term]].
-- 2026-11-05: gardener: cites a file it shares with [[coitree-rec-program-bridge]] (`docs/coitree-design.md`); [[kernel-coinductive-types]] (`docs/codata-elaborator-design.md`); [[partial-functions-coinductive]] (`docs/coitree-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[coitree-rec-program-bridge]] (`docs/itrees/coitree-design.md`); [[kernel-coinductive-types]] (`docs/inductives/codata-elaborator-design.md`); [[partial-functions-coinductive]] (`docs/itrees/coitree-design.md`).

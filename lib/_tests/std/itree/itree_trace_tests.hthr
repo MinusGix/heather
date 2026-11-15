@@ -1,5 +1,5 @@
 // Probes of `lib/std/itree/itree_trace.hthr` and `itree_state.hthr`
-// (`docs/itree-refinement-round.md`): traces in checking position, cuts,
+// (`docs/itrees/itree-refinement-round.md`): traces in checking position, cuts,
 // threading a state at a literal and an open start, and programs that grow
 // with fuel. Tests, not library: nothing outside lib/_tests imports this
 // module (docs/test-value-audit.md §4.5). Moved from

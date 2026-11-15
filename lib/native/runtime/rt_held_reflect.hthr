@@ -2,7 +2,7 @@
 // `T` laid over bytes (`laid record T`, lib/std/machine/laid.hthr) to
 // `Mutated<T, R>`, read from its elaborated body as the `FFun` of the
 // function over the span that holds the record
-// (docs/layout-design.md §9.2, §9.5 round 3).
+// (docs/native/layout-design.md §9.2, §9.5 round 3).
 //
 // The source is the kernel type a `mut self` method on the record has,
 // `fn T::m(mut self t: T, x: u64, …) → R`, or the same function written

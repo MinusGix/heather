@@ -1,9 +1,9 @@
 //! `Wf`, `sup_f`, `elim_Wf`: phase 2 of the landing
-//! (`docs/wf-former-design.md` §§1.3–5, `issues/wf-former.md`).
+//! (`docs/kernel/wf-former-design.md` §§1.3–5, `issues/wf-former.md`).
 //!
 //! The working example is the type the whole decision was about —
 //! `Tree { Leaf, Node(Tree, Tree) }`, the smallest declaration the finitary
-//! encodings provably cannot reach (`docs/branching-inductives-choice.md`
+//! encodings provably cannot reach (`docs/inductives/branching-inductives-choice.md`
 //! §1) — built here as
 //!
 //! ```text
@@ -531,7 +531,7 @@ fn sigma_eta_bridges_the_constructor_form() {
 #[test]
 fn layer_c_accepts_wf_and_its_constructors() {
     // Phase 2 gated these out of layer c; phase 3's codes and branches let
-    // them in (docs/wf-former-design.md §6, tests/wf_codes.rs).
+    // them in (docs/kernel/wf-former-design.md §6, tests/wf_codes.rs).
     let g = nil_ctx();
     check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &tree(), &c(0), FUEL)
         .expect("layer c accepts Wf since phase 3");
@@ -758,7 +758,7 @@ fn mirror_mirror(leaf_arm: Term) -> Term {
 
 #[test]
 fn mirror_mirror_by_induction() {
-    // THE acceptance test (docs/wf-former-design.md §9). Compare with
+    // THE acceptance test (docs/kernel/wf-former-design.md §9). Compare with
     // `crates/elab/tests/branching_route_a.rs`, where the same theorem needs
     // a funext application in *every* arm, and the finished proof is not
     // convertible with `refl` at closed data.
@@ -800,7 +800,7 @@ fn the_kernel_gate_rejects_a_wrong_arm() {
 /// binary and carrying a *type* payload. The shape mentions `Ty 0`, so it
 /// lives at level **1**, which is what every polymorphic container does.
 ///
-/// Before `docs/unit-empty-level-indexing.md`, **`Leaf` could not be built at
+/// Before `docs/kernel/unit-empty-level-indexing.md`, **`Leaf` could not be built at
 /// all**: its children tuple has type `Vec^1(PTree; 0)`, that reduced to
 /// `Unit` at level 0 rather than `Unit^1`, and `⟨⟩ : Vec^1(PTree;0) @ 1` was
 /// a `LevelMismatch`. Monomorphic trees never noticed, because a sum of

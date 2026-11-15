@@ -140,7 +140,7 @@ length** and carrying no introduction/elimination forms of its own — every
 length 0) is inherited through the reduction from `Σ`/`Unit`. The length is
 a *term* at the same depth as the element, with no binder anywhere, which is
 what lets a tuple's arity be computed from a datatype's tag. They are
-phase-1 of the `Wf` former (`docs/wf-former-design.md`).
+phase-1 of the `Wf` former (`docs/kernel/wf-former-design.md`).
 
 `Wf^l(x:S). n` (2026-07-25) is the finitary branching fixed point: shapes
 `S`, arity a `Nat` **term** with the shape free, children a
@@ -189,7 +189,7 @@ term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
 verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
 it cannot drift.
 
-`DVec^l(k; i. F)` (2026-10-17, `docs/iwf-former-design.md` §13 step 2) is
+`DVec^l(k; i. F)` (2026-10-17, `docs/kernel/iwf-former-design.md` §13 step 2) is
 `Vec` with a per-position element type, the children substrate of `IWf`:
 `DVec(0; i. F) ⇝ Unit^l`, `DVec(S k; i. F) ⇝ Σ(_ : F[inl ⟨⟩/i]).
 DVec(k; j. F[inr j/i])`, the injections annotated by `Fin(S k)`'s reduct so
@@ -213,7 +213,7 @@ step 4, 2026-10-22), with branches `ty_dvec`/`tm_dvec`; until then it was
 admitted at layers p and m only, as `Vec` was before its phase 3.
 
 `IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` (2026-10-20,
-`docs/iwf-former-design.md` §13 step 3) is `Wf` with an index: `sup_i(a;
+`docs/kernel/iwf-former-design.md` §13 step 3) is `Wf` with an index: `sup_i(a;
 cs)` is at its output index `o[a/x]`, its children a `DVec^{l ⊔ li}(n[a];
 k. IWf(…)(c[a, k]))`, and nothing else is stored, so there is no equation,
 no `transp` and no irrelevance arm. The family level is `l ⊔ li`.
@@ -249,7 +249,7 @@ MinusGix/heather-coq#24). Its code is `TmIWf`, the index inside it as in
 `DVec`, `IWf`, `sup_i` and `elim_IWf` are code.
 
 `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` (2026-10-21,
-`docs/kernel-coinduction-design.md` §10 step 3) is the indexed
+`docs/kernel/kernel-coinduction-design.md` §10 step 3) is the indexed
 **coinductive** former, in Petersson–Synek form: a node at index `j` has a
 shape `s : S[j]` and, for each position `p : P[j, s]`, a child at the
 computed index `o[j, s, p]`. Nothing is stored and the family level is
@@ -280,7 +280,7 @@ yet** and is admitted at layers p and m only. Its metatheory
 
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
-(`docs/sprop-design.md`; the sort itself dissolved into per-former
+(`docs/kernel/sprop-design.md`; the sort itself dissolved into per-former
 irrelevance arms, design doc §1). Since 2026-10-22 it has **no
 eliminator**: it is a type inhabited exactly when its endpoints convert,
 with one proof up to conversion, and its whole content is one conversion
@@ -293,7 +293,7 @@ convertible endpoints replaced by its payload) and an endpoint-keyed
 congruence that skipped the proofs. Route 2b's fording was its only
 producer; `IWf` replaced fording, and `transp`, the strip, its value
 eliminator and its code-recursor branch were removed
-(`docs/iwf-former-design.md` §7, §13 step 6; `tests/seq.rs` keeps what
+(`docs/kernel/iwf-former-design.md` §7, §13 step 6; `tests/seq.rs` keeps what
 stays). Re-adding it at strict motives only is additive and needs no strip.
 The codes landed same-day (`TmSEq`/`TmSEmpty`, decoding as
 `El (sEq^l(s;t;u)) ⇝ sEq^l(El s; t; u)` and `El (sEmpty^l) ⇝ sEmpty^l`),
@@ -309,7 +309,7 @@ anywhere (no β, neutral congruence skips the scrutinees) and the same
 layer gate.
 
 One invariant carries both equality observers over codes (2026-08-03, the
-ch. 07 FT pass, `docs/metatheory-ch07-extensions.md` §20.6): **endpoints
+ch. 07 FT pass, `docs/kernel/metatheory-ch07-extensions.md` §20.6): **endpoints
 are checked by conversion, and conversion at `□` is syntactic `==` modulo
 level equivalence.** `Id` at `Ty l` (propositional) and `sEq(Ty l)`
 (definitional, irrelevant) both observe exactly what that comparison
@@ -345,7 +345,7 @@ Three choices carry the design:
   what makes δ layer-preserving: unfolding `u` at any layer `j ≥ i` can only
   produce a term that was already legal at `j`. Codata needs nothing more:
   `M`, `corec` and `out` are admitted at c, with `TmM` their code
-  (`docs/kernel-m-codes-design.md`).
+  (`docs/kernel/kernel-m-codes-design.md`).
 
 Conversion is **δ-lazy**: weak-head-reduce without δ first, and when both
 sides stop at the same defined head, compare their spines before unfolding
@@ -437,7 +437,7 @@ The class is a fact about the algebra as a function on runs — the
 substitution property of reduction is the adequacy argument: a probe value
 with no case split on the probe variables was reached by a reduction that
 holds at every instantiation (proved for ch. 06's reduction on a λ + `Nat`
-fragment, `docs/kernel-model-design.md`; that iterating an affine or
+fragment, `docs/kernel/kernel-model-design.md`; that iterating an affine or
 synchronous class over a run is convertible with the unary fold is proved
 there too, with pairs and runs in the fragment, §7) — so `mul` of two runs is one multiplication,
 `sub`/`leb`/`min`/`max` cancel run against run however they are spelled,
@@ -468,7 +468,7 @@ once, a glued call keeps its glue (it is the unfolding's memo that is
 rewritten), and reading a sealed proof's memo is noted as forcing it is.
 A first fold over a chain nothing has forced is still a step a link.
 
-**Numerals of any size** (2026-09-26, `docs/wide-numerals-design.md`).
+**Numerals of any size** (2026-09-26, `docs/language/wide-numerals-design.md`).
 `Term::NatLit` is a compact spelling of `Succ^n(Zero)` whose one-step view
 is `Succ(NatLit(n - 1))`; it carries a `heather_numeral::Numeral`, an
 arbitrary-precision natural, rather than a `u64`. Evaluation builds a
@@ -485,12 +485,12 @@ it is `is_zero`, `pred`, `limbs`, its order, and the limb arithmetic
 `value/program.rs` does over `limbs` (`issues/dependency-policy.md`).
 
 **Native bitvector values** (`issues/kernel-native-bitvector-values.md`,
-`docs/native-bitvector-values-design.md`). The second representation change
+`docs/kernel/native-bitvector-values-design.md`). The second representation change
 of the runs kind. A `Vec^l(T; n)` whose element type `T` has exactly two
 canonical inhabitants with proof-irrelevant payloads — which is what a
 tier-0 two-constructor nullary inductive lowers to; a payload is `Unit`,
 an `sEq` at one closed literal on both sides (the nominal tag,
-`docs/inductive-tier0-lowering.md` §3.3), or a Σ of those — has canonical values
+`docs/inductives/inductive-tier0-lowering.md` §3.3), or a Σ of those — has canonical values
 that are right-nested Σ-pairs of injections, one pair node and one injection
 per bit. `Val::BitRun` holds a closed prefix of such a chain as a machine
 word: an element type, a width, `u64` bits, and a tail, standing for the
@@ -524,7 +524,7 @@ peeled argument is a `Vec` in a unit-like Σ-context and the class carries the
 projection path to it.
 
 A fold whose one argument is a `Nat` is the same machine with an infinite
-state (`docs/bitvector-literal-entry-design.md` §10.10). `bitvec::ofNat`
+state (`docs/kernel/bitvector-literal-entry-design.md` §10.10). `bitvec::ofNat`
 recurses on the width carrying `x`, and its step is `cons(f(x), ih(g(x)))`;
 there is nothing to tabulate, so the class instead reads `f` and `g` off the
 probe value as **data**: each is the state variable under a spine of
@@ -561,7 +561,7 @@ criterion — an element type with a payload of its own, an open width, a chain
 that stops being a Σ — is compared exactly as it is today.
 
 **A vector literal is a term** (`Term::VecLit`,
-`issues/packed-vector-literal-term.md`, `docs/bitvector-literal-entry-design.md`
+`issues/packed-vector-literal-term.md`, `docs/kernel/bitvector-literal-entry-design.md`
 §3, §6). `VecLit{ℓ, elem, zero, one, w, bits}` is a closed prefix of a `Vec`
 all of whose elements are one of two given terms, and it is `NatLit` one
 former over: notation for the right-nested Σ-chain `⟨e(b₀), ⟨e(b₁), … ⟨⟩⟩⟩`
@@ -615,7 +615,7 @@ over one builds only a 64-element constructor spine (`LONG_SPINE`) with the
 fold over the node behind it, so the term the gate sees stays shallow too.
 Comparing two long vectors *by value* unfolds them into chains; conversion
 walks those at constant native depth by deferring the comparisons it meets
-deep (docs/deep-term-walks-design.md), in time still quadratic in the length
+deep (docs/kernel/deep-term-walks-design.md), in time still quadratic in the length
 (`issues/vec-items-window-bounds.md`).
 
 **A deep data value is walked by a loop, not a frame per level.** Data is
@@ -632,12 +632,12 @@ a conjunction stops at its first failure, so it changes the cost). A speculative
 drops them when it fails; a `true` recorded while premises are queued is
 memoized provisionally and taken back with them (conversion), and a refused
 check that queued anything forgets the typing memos. Below the threshold every walk is its old code.
-Design and what still recurses: docs/deep-term-walks-design.md.
+Design and what still recurses: docs/kernel/deep-term-walks-design.md.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see
-`docs/metatheory-ch07-extensions.md` §11.
+`docs/kernel/metatheory-ch07-extensions.md` §11.
 
 **Every type has exactly one level, and this is load-bearing** (2026-07-25,
 phase 4). Not tidiness: DeLaM ch. 04 §Non-cumulativity turns on it, because
@@ -661,7 +661,7 @@ Making `Unit`/`Empty` level-polymorphic fixes that in one line and is
 The favoured repair is level-*indexed* `Unit^l`/`Empty^l`, turning
 `ty_unit`/`ty_empty` into copies of `ty_ty`. Open, with measurements and
 three costed candidates: `issues/unit-level-and-vec-preservation.md`;
-LR consequences in `docs/metatheory-ch07-extensions.md` §10.3.
+LR consequences in `docs/kernel/metatheory-ch07-extensions.md` §10.3.
 
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the
@@ -727,7 +727,7 @@ paper too).
   named value referenced where it was made had paid that, quadratic in the
   context, per reference. Both are strategies, deciding the same judgement.
 - **Its reduction engine is an environment machine over a value domain**
-  (`src/value.rs`, `src/eval.rs`; `docs/nbe-conversion-design.md`), not a
+  (`src/value.rs`, `src/eval.rs`; `docs/kernel/nbe-conversion-design.md`), not a
   term rewriter — adopted 2026-07-31 to kill the exponential of
   `issues/whnf-sharing-term-growth.md`, where an eliminator's β materialized
   a physical copy of its branch bundle and nesting multiplied the copies.
@@ -743,7 +743,7 @@ paper too).
   differential oracle (`conv::oracle` — the same comparison arms
   instantiated at the rewriter, run against the machine verdict for verdict
   over `tests/conv_differential.rs` and `tests/eval_differential.rs`), the
-  adequacy statement (`docs/ch05-06-lemma-audit.md`, ch. 06), and the fact
+  adequacy statement (`docs/kernel/ch05-06-lemma-audit.md`, ch. 06), and the fact
   that the declarative system did not move at all.
 - **The Dom boundary.** The comparison arms never name a weak head normal
   form: they reach their inputs through the `conv::dom::Dom` accessor trait
@@ -836,7 +836,7 @@ paper too).
   performed at all: the machine evaluates the body *as stored*, under a
   global-index offset carried by the closure's environment, so a definition
   is read rather than copied however many gate calls unfold it
-  (`docs/lazy-global-offset-design.md`, `issues/refl-theorem-step-cost.md`).
+  (`docs/kernel/lazy-global-offset-design.md`, `issues/refl-theorem-step-cost.md`).
   The offset is always at cutoff 0 because a closure body under a global
   binder is built with its offset already spent, which is also what keeps
   the eager things — a `box`'s payload, a `ctx`, a recursor table, the
@@ -864,7 +864,7 @@ paper too).
   as **invariants, never as a cost model**: a budget that answers must agree
   with the answer full budget gives.
 - **A depth budget beside the fuel**, on the same policy
-  (`reduce::NATIVE_DEPTH_LIMIT`, docs/native-depth-budget-design.md). "Its
+  (`reduce::NATIVE_DEPTH_LIMIT`, docs/kernel/native-depth-budget-design.md). "Its
   depth is the syntax's" is true of a term and false of a *value* that nests
   scrutinees: forcing the head bit of an iterated increment re-enters
   `Eval::drive` once per unit of the count, from shallow syntax, and the fuel
@@ -943,7 +943,7 @@ paper too).
   type closures at 40 bytes: four words of closure and the memo word.
 - **A selection's term is a closure, one per node** (2026-11-10,
   `issues/projection-description-quadratic.md`). A description of a Σ's
-  second component (`Sel::Snd(a)`, `docs/intro-by-type-design.md` §3.2)
+  second component (`Sel::Snd(a)`, `docs/elaborator/intro-by-type-design.md` §3.2)
   holds the term the codomain is instantiated at, and every query that reads
   the description evaluates the chain again. Evaluating `a` eagerly made the
   type of a record's `k`-th field `k²` eliminations per query: the terms are
@@ -1022,7 +1022,7 @@ paper too).
   iff `t ≡ t'` as syntax, the same equality the code recursors dispatch on.
   This coincidence is what makes intensional code observation consistent
   with a propositional equality over code types (the ch. 07 argument in
-  `docs/metatheory-ch07-extensions.md` §6); relaxing *either* half — a
+  `docs/kernel/metatheory-ch07-extensions.md` §6); relaxing *either* half — a
   conversion that identifies β-convertible code, or an `Id` rule that
   bypasses endpoint conversion — breaks it. Treat both as invariants.
 - **Conversion presupposes well-typed inputs.** The algorithm is only
@@ -1324,7 +1324,7 @@ throughout; no `unsafe` (enforced workspace-wide).
 
 **Who calls `check_term`, and on which thread.** The elaborator may now
 defer a declaration's proof obligation to a pool of worker threads and join
-them before the module is accepted (`docs/parallel-kernel-gate-design.md`).
+them before the module is accepted (`docs/kernel/parallel-kernel-gate-design.md`).
 **The kernel gains no judgement from this and no new rule**: `check_term` is
 the same function with the same arguments, run against a Ψ that is immutable
 for the duration of the call. What is new is only the caller's schedule.
@@ -1351,7 +1351,7 @@ counter delta, and `check_terms`, one bump per call of the `check_term` entry
 points), which remain inert by the rule immediately below. The elaborator's
 serial replay may reuse a verdict this process's kernel already gave for a
 structurally identical (Ψ prefix, binding) pair rather than ask again
-(`docs/parallel-kernel-gate-design.md` §5.2); that is a caller's bookkeeping
+(`docs/kernel/parallel-kernel-gate-design.md` §5.2); that is a caller's bookkeeping
 about its own calls, and the kernel is neither consulted nor changed by it.
 The same schedule is applied to a stored module's recheck: `⊢_L Ψ, Ψ'` is
 exposed both whole (`check_global_ctx_extension`) and as its per-binding
@@ -1371,4 +1371,4 @@ thread-local totals on drop, because the fuel decrement is the hottest line in
 the kernel and must not grow a thread-local access. Anything that *formats* a
 term — the conversion-miss table and its excerpts — stays behind the
 `value-metrics` feature, where it always was. See
-`docs/instrumentation-design.md`.
+`docs/infrastructure/instrumentation-design.md`.

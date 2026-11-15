@@ -45,7 +45,7 @@ same question for `≈`.
   `add_le_lt_mono`, `add_nonneg`, `OrderedField::mul_pos_of_pos`,
   `neg_of_mul_neg`, `pos_of_mul_pos_nonneg`, `mul_le_mono_l/r`,
   `mul_nonneg`, `mul_le_mul`. The concrete carriers keep their own tables
-  (`docs/monotonicity-tactic-design.md` §7). Probes:
+  (`docs/tactics/monotonicity-tactic-design.md` §7). Probes:
   `lib/_tests/std/tactic/mono_tests.hthr`, `tactic_tests.hthr`.
   The image of `mono` grew enough to put a gate folder that loads it past the
   6 GiB rail; reshaping `mono_same`/`mono_closed` brought it below its size

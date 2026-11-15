@@ -22,7 +22,7 @@ for the image cache's sake). See `docs/test-value-audit.md` §3.3, §4.2, §4.3.
    `heather_cli::loader` in place of the hand-ordered `MODULES` lists. The
    prefix key becomes the root set. A library edit then stops relinking every
    binary that `include_str!`s the file
-   (`docs/testing-architecture-design.md` §2.2). The sentinel's exact lane
+   (`docs/infrastructure/testing-architecture-design.md` §2.2). The sentinel's exact lane
    should see one run of it, since it touches image keys.
 2. A `.hthr` corpus, `tests/hthr/<area>/*.hthr`, checked by one runner. Every
    declaration must check unless a directive above it says

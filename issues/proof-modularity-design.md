@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-Round P1 of `docs/compiler-milestones-proposal.md` (§6, §7): the design round for `lang-proof-modularity`.
+Round P1 of `docs/native/compiler-milestones-proposal.md` (§6, §7): the design round for `lang-proof-modularity`.
 Minus asked on 2026-10-31 that proving a specific property should not
 need thinking about lots of code, and that automation be modular for
 reasoning and for cost.

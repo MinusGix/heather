@@ -55,7 +55,7 @@ only join ids walk.
 - 2026-11-10: A compression function is the first body where this cost decides the
   design: sixty-four (or eighty) rounds unrolled mention ids in the
   thousands, and the scan pays the sum of them in unary. The roadmap
-  (`docs/native-lexer-crypto-roadmap.md` §5) therefore compiles the round as
+  (`docs/native/native-lexer-crypto-roadmap.md` §5) therefore compiles the round as
   a loop body over an array state first ([[rt-fixed-arrays-and-tables]],
   [[sha2-compress-native]]) and treats the unrolled form as waiting on this
   issue.

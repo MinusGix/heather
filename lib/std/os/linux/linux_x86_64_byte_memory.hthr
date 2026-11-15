@@ -1,12 +1,12 @@
 // Linux's process memory as the byte model, and a buffer seen through it
-// (issues/memory-model-machine-instances.md; docs/byte-memory-design.md §6):
+// (issues/memory-model-machine-instances.md; docs/native/byte-memory-design.md §6):
 // the `LinuxIo` record of an `X86Profile`, and a `View` for `Wp`
-// (docs/native-program-logic-design.md §6.1, the third view) over a buffer
+// (docs/native/native-program-logic-design.md §6.1, the third view) over a buffer
 // that lives in a data region.
 //
 // The view's knowledge is a buffer's cells, `Nat → BitVec(8)`, of the
 // buffer `DataRegion::buffer` makes of them: `Memory::buffer`'s shape, the
-// one S3's buffer state edges thread (docs/native-effect-source-design.md
+// one S3's buffer state edges thread (docs/native/native-effect-source-design.md
 // §6). `Holds(v, m)` says the region's cells are the buffer's, index by
 // index, and so the region's `get_span` is the buffer's
 // (`DataRegion::holds_span`). A load reads the buffer at the index the

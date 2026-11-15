@@ -1,5 +1,5 @@
 //! `match` on an `IWf`-route family at a **specific** index
-//! (`docs/iwf-former-design.md` §8.3): tier 1, inversion at a
+//! (`docs/kernel/iwf-former-design.md` §8.3): tier 1, inversion at a
 //! constructor-headed index, and tier 2, abstraction of a computed one.
 //!
 //! The families here are `IWf`-route because a child sits at a non-variable

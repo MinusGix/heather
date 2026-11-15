@@ -1,4 +1,4 @@
-// Probes of a lending (x86_64_lending; docs/native-one-compiler-design.md
+// Probes of a lending (x86_64_lending; docs/native/native-one-compiler-design.md
 // §2.6): two spans of a data region lent above an offset `top`, the first
 // to write and the second to read, by `DataRegion::loan`, and what the
 // laws give a borrower and its caller, for one byte stored and for four

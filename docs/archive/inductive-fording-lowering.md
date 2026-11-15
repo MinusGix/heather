@@ -2,7 +2,7 @@
 
 > **Superseded 2026-10-22.** The declarations this document lowered by
 > fording are lowered onto the kernel's `IWf` former instead
-> (`docs/iwf-former-design.md` §8, `crates/elab/src/iwf_family.rs`), which
+> (`docs/kernel/iwf-former-design.md` §8, `crates/elab/src/iwf_family.rs`), which
 > stores each child's index, so F1–F3 are gone and form B's residue holds by
 > `refl`. `forded.rs`, its prototypes and the kernel's `transp` were deleted
 > (§13 step 6 there). This document is the historical record of the scheme
@@ -38,7 +38,7 @@ index type's tag predicates and its child projections are registered once at
 declaration time as bodied Ψ globals under machine names — the `#skel`
 convention of §14.6 — and referenced everywhere instead of being written out
 at every occurrence. δ-unfolding recovers the old terms exactly, so nothing
-changed meaning; what changed is size, by 4–7× (`docs/frontend-benchmarking.md`
+changed meaning; what changed is size, by 4–7× (`docs/infrastructure/frontend-benchmarking.md`
 carries the before/after). Three §14 items close with it: the fingerprint is
 re-keyed by **name** (§14.1), `μ`'s inlining is retired (§14.2), and §14.9's
 fuel cliff is gone — its deliberate negative is now a positive test. Two new
@@ -51,26 +51,26 @@ The design round below is unchanged text: it is the design for the general
 *acceptance* prototype landed 2026-07-29
 (`crates/elab/tests/indexed_route_2b.rs`, 9 tests) and whose generator this
 document specifies. The order of work is the tiers'
-(`docs/inductive-tier1-wf-lowering.md`, `docs/inductive-indexed-lowering.md`
+(`docs/inductives/inductive-tier1-wf-lowering.md`, `docs/inductives/inductive-indexed-lowering.md`
 are the precedents): this document → a hand prototype against the real
 kernel for the corners the 2b acceptance did not reach (§13.1) → the
 generator (§13.2). The hazard class is the tiers': a lowering bug does not
 produce a rejection, it produces a **checked theorem about a type the user
 did not write**, and review of this document is what catches it.
 
-This document is a **sibling of `docs/inductive-indexed-lowering.md`**, not a
+This document is a **sibling of `docs/inductives/inductive-indexed-lowering.md`**, not a
 replacement. That document owns the fragment where the family is defined by
 recursion *on the index* (constructor-headed result indices, recursive
 fields at pattern variables); this one owns its complement, which that
 document's §8.1 currently rejects with messages naming this route. §3 states
 exactly where the boundary moves and what stays rejected.
 
-Conventions are tier 0's (`docs/inductive-tier0-lowering.md`): `⟦T⟧` for the
+Conventions are tier 0's (`docs/inductives/inductive-tier0-lowering.md`): `⟦T⟧` for the
 lowering of a surface type, `⌜T⌝` for a code with `El ⌜T⌝ ≡ T`, kernel names
 from `crates/kernel/src/term.rs`, `Γ` the ambient context. `I` is the index
 type and `li` its level; `l` is the skeleton's level; `l''` a motive's.
-Everything about `sEq`/`srefl`/`transp` is `docs/sprop-design.md` (§2–§5),
-and the strip's head-only limit is `docs/metatheory-ch07-extensions.md`
+Everything about `sEq`/`srefl`/`transp` is `docs/kernel/sprop-design.md` (§2–§5),
+and the strip's head-only limit is `docs/kernel/metatheory-ch07-extensions.md`
 §22 — both are cited, never restated.
 
 ---
@@ -115,7 +115,7 @@ Field roles, which §3 turns into a predicate and §4–§8 consume:
 - a **child-index field** is a field named as the index of exactly one
   child (`n` and `m` above). It is **not stored** (§4.2) — the same
   "pattern-variable fields are index, not payload" decision as
-  `docs/inductive-indexed-lowering.md` §4.1, reached here by a different
+  `docs/inductives/inductive-indexed-lowering.md` §4.1, reached here by a different
   argument (§5);
 - every other field is **payload**, stored in the skeleton, and may be of
   index type (`Rep(n: Nat, x: A) : Vec<A>(n)` — `n` indexes no child, so it
@@ -147,13 +147,13 @@ has an index telescope?
 Routing is **per declaration, not per constructor**: route 3 (fording one
 branch of a route-1 family) was expected to fail on 2026-07-28 and does —
 the recursion's code exists only at the predecessor index and an `Id` does
-not relocate it, which is `docs/branching-inductives-choice.md` §10's
+not relocate it, which is `docs/inductives/branching-inductives-choice.md` §10's
 rejected code-tables encoding wearing a different hat. A declaration with
 one non-route-1 constructor fords **whole**.
 
 ### 3.1 Route-1 eligibility (restated, unchanged)
 
-`docs/inductive-indexed-lowering.md` §3: every constructor's result index is
+`docs/inductives/inductive-indexed-lowering.md` §3: every constructor's result index is
 a depth-one linear constructor-headed pattern over its own fields, every
 child sits at a pattern variable that is a *recursive* argument of the index
 constructor, every field type has a code. Unchanged by this round —
@@ -189,9 +189,9 @@ the rest are today's text with its destination corrected.
 | case | example | message |
 |---|---|---|
 | **uniform bare-variable index** | every ctor `: D(n)` | unchanged (2026-08-01): "a **parameter**, not an index" + `record D(n: Nat)` |
-| **child at a non-variable index** (F1) | `Node(l: T(0), r: T(n)) : T(Succ(n))` | "`l`'s index `0` is not a variable: fording recomputes a child's index from the child, so a constructor may only pin it by *naming* it. Constraining it needs the coherence predicate of `docs/acc-via-w.md` (§10.3 here), which is not generated." |
-| **two children at one index** (F2) | `Node(n, l: T(n), r: T(n)) : T(plus(n,n))` | "`l` and `r` share the index variable `n`; the skeleton cannot record that they agree — a label cannot mention its children (`docs/inductive-tier1-wf-lowering.md` §2) — so the constraint would need the coherence predicate (§10.3). Give the children separate indices, or state the family so it is route-1-eligible." |
-| **payload depends on a child index** (F3) | `Cons(n, x: Fin(n), xs: Vec(n))` | "`x`'s type mentions `n`, which fords away: `n` is recomputed from `xs`, and a child is not in scope in a payload field's type (`…tier1-wf-lowering.md` §2). This declaration *is* route-1-eligible if every result index is a pattern — see docs/inductive-indexed-lowering.md §3." |
+| **child at a non-variable index** (F1) | `Node(l: T(0), r: T(n)) : T(Succ(n))` | "`l`'s index `0` is not a variable: fording recomputes a child's index from the child, so a constructor may only pin it by *naming* it. Constraining it needs the coherence predicate of `docs/inductives/acc-via-w.md` (§10.3 here), which is not generated." |
+| **two children at one index** (F2) | `Node(n, l: T(n), r: T(n)) : T(plus(n,n))` | "`l` and `r` share the index variable `n`; the skeleton cannot record that they agree — a label cannot mention its children (`docs/inductives/inductive-tier1-wf-lowering.md` §2) — so the constraint would need the coherence predicate (§10.3). Give the children separate indices, or state the family so it is route-1-eligible." |
+| **payload depends on a child index** (F3) | `Cons(n, x: Fin(n), xs: Vec(n))` | "`x`'s type mentions `n`, which fords away: `n` is recomputed from `xs`, and a child is not in scope in a payload field's type (`…tier1-wf-lowering.md` §2). This declaration *is* route-1-eligible if every result index is a pattern — see docs/inductives/inductive-indexed-lowering.md §3." |
 | **field without a code** (F5) | — | tier 1's message, unchanged |
 | **mixed** | one ctor fails F1–F3, another fails route 1 | reject naming **both** constructors and both reasons — the declaration is in neither fragment, and saying only one is what sends a user in a circle |
 | **multi-index** | `: (n: Nat) -> (m: Nat) -> Type` | unchanged (§8.4 of route 1's doc) |
@@ -243,7 +243,7 @@ Erasure: a child's type `D<ā>(x)` becomes `D_s<ā>`, the result annotations
 are dropped, and the child-index fields are deleted (§4.2). What remains is
 an ordinary declaration, and it takes the ordinary shape test —
 `Inductive::recursive`: some constructor has a child ⇒ `Wf^l(x : S). n`
-(`wf.rs`, `docs/inductive-tier1-wf-lowering.md`); no constructor has one ⇒
+(`wf.rs`, `docs/inductives/inductive-tier1-wf-lowering.md`); no constructor has one ⇒
 tier 0's sum-of-Σs.
 
 This is the single most consequential sentence in the document, and it
@@ -336,7 +336,7 @@ lemma is `refl`, and mismatched indices genuinely reject.
 ### 6.2 Levels and codes
 
 The Σ is at `l ⊔ li` and both components have codes (`TmSigma`, `TmSEq` —
-`docs/sprop-design.md` §6), so **a forded family may be a field of another
+`docs/kernel/sprop-design.md` §6), so **a forded family may be a field of another
 declaration**, which route 1's families can also do and tier-2 encodings
 could not. `li` is `0` at `Nat` and the index declaration's level otherwise;
 uniformly-level-0 suites cannot see a dropped join, so §13's checklist
@@ -356,7 +356,7 @@ This fingerprint is **cheaper and more robust than route 1's** (§14.1): the
 declaration's identity is read by `tag_of` out of the skeleton, where it
 already lives and where a `Wf` is already seen through (tier 1 §4). A user
 cannot forge the shape, because `sEq` is generator-internal by policy
-(`docs/sprop-design.md` §1) and unwritable at the surface.
+(`docs/kernel/sprop-design.md` §1) and unwritable at the surface.
 
 ## 7. Constructors
 
@@ -385,7 +385,7 @@ one.
 
 **`π_c` is invisible.** It inhabits `sEq`, so the irrelevance arm accepts it
 against any other proof without inspecting either
-(`docs/sprop-design.md` §5.2). Two consequences worth stating, because both
+(`docs/kernel/sprop-design.md` §5.2). Two consequences worth stating, because both
 save work: the generator may emit the simplest well-typed proof it can (the
 chain above) with no concern for its shape; and §9's cast rule does **not**
 bind here — a `transp` whose *type* is irrelevant is erased before any strip
@@ -525,7 +525,7 @@ file, the second and third in the *same* test so the contrast cannot drift.
   definitional (`form_a_beta_is_definitional_on_open_recursive_data`, over a
   branching `Wf` skeleton and at an open payload type).
 - **Form B, a stored proof that whnfs to `srefl`**: the arm's `transp` fires
-  by β (`docs/sprop-design.md` §5.1) and the reduct is the arm body.
+  by β (`docs/kernel/sprop-design.md` §5.1) and the reduct is the arm body.
   Definitional — and this is **not** the same as "closed data": the measured
   positive holds with the element, the tail *and* the index all open, the
   value's proof being `srefl` at its own measure.
@@ -534,7 +534,7 @@ file, the second and third in the *same* test so the contrast cannot drift.
   a variable: the arm's `transp` does not β, and the residue is a stuck
   `App(transp(…), e')`. The head-only strip does **not** rescue it: the head
   of the compared term is the `App`, not the `transp`
-  (`docs/metatheory-ch07-extensions.md` §22.1's measured `elim(cast)` shape,
+  (`docs/kernel/metatheory-ch07-extensions.md` §22.1's measured `elim(cast)` shape,
   in a new position). β is **propositional** there, not strip-guarded.
 
 So the honest key is the *proof*, not the data: form B computes exactly
@@ -594,10 +594,10 @@ declaration compute and which do not.
 
 Sources: the 2026-07-29 finding (a redundant cast is opaque to elimination,
 pinned as a negative in `index_casts_are_invisible_through_the_strip`) and
-the 2026-08-03 scope note off `docs/metatheory-ch07-extensions.md` §22.4
+the 2026-08-03 scope note off `docs/kernel/metatheory-ch07-extensions.md` §22.4
 (the same gap has a type-former face — a `transp` inside a `Vec`/`Wf` length
 or an `El` argument makes a canonical type read as neutral, and
-`docs/sprop-design.md` §5.4's first derived fact overstates this).
+`docs/kernel/sprop-design.md` §5.4's first derived fact overstates this).
 
 Where the generator satisfies it, by construction:
 
@@ -661,7 +661,7 @@ the reason the prototype phase exists at all.
 ### 10.2 The coherence question, answered
 
 `issues/indexed-families.md` (2026-07-27) says fording over `Wf` inherits
-`docs/acc-via-w.md`'s coherence predicate — "a per-declaration skeleton,
+`docs/inductives/acc-via-w.md`'s coherence predicate — "a per-declaration skeleton,
 `idx` by `elim_Wf`, a code-valued `coh` by `elim_Wf`, and an `Id` at the
 top". Three of those four appear above; **`coh` does not**, and the reason
 is precise:
@@ -686,7 +686,7 @@ re-derived. That is a scheme round of its own (the `coh` recursion, its
 interaction with `μ`, whether `match` β survives it), and this round
 **rejects instead**, with §3.3's two diagnostics naming the predicate as the
 extension. Recording the restriction rather than half-implementing it is the
-`Wf`-round discipline (`docs/wf-former-design.md` §1.2's shed-weight rule).
+`Wf`-round discipline (`docs/kernel/wf-former-design.md` §1.2's shed-weight rule).
 
 ## 11. Value equality, no-confusion, and the setoid bar
 
@@ -901,7 +901,7 @@ own constructor names are now excluded from that test.
    a machine name and referenced everywhere; δ-unfolding at the computing
    layers recovers the term that used to be written out, so nothing changed
    meaning and only size moved. The number, from the frontend suite
-   (`docs/frontend-benchmarking.md`): `forded/computed-arms` 1.25 s → 195 ms
+   (`docs/infrastructure/frontend-benchmarking.md`): `forded/computed-arms` 1.25 s → 195 ms
    at six arms (slope 3.39 → 2.79), and `forded/occurrences` — what one
    *mention* of a forded family costs — **119 ms → 28 ms per use**.
 
@@ -1028,7 +1028,7 @@ own constructor names are now excluded from that test.
 
 11. **The emitted *types* were the residual multiplier — closed 2026-08-05,
    narrowed** (`issues/family-types-as-code-defs.md`,
-   `docs/family-type-code-defs-design.md`; the successor to items 2 and 9).
+   `docs/inductives/family-type-code-defs-design.md`; the successor to items 2 and 9).
    Routing the generated **terms** through Ψ definitions cut the constant by
    4–7× and moved the exponents by 0.60, 0.04 and 0.00; what survived was the
    emitted types: `⟦Skel⟧` and `I` are `Type::Wf`s of Θ(constructors) nodes,
@@ -1057,7 +1057,7 @@ own constructor names are now excluded from that test.
      `shape` annotation, and typing builds rather than matches `Wf`s from
      annotation slots (design §3.3, verified against source).
 
-   The numbers (2026-08-05, `docs/frontend-benchmarking.md` for the table):
+   The numbers (2026-08-05, `docs/infrastructure/frontend-benchmarking.md` for the table):
    `computed-arms` 2.79 → 2.54 at ~0.6× the constant, `occurrences` ~28 →
    ~19 ms per use, `declared-index-branching` ~0.75× at slope 1.57. And the
    honest half: `forded/declared-index-tags` did **not** move (2.61 → 2.62)
@@ -1075,7 +1075,7 @@ own constructor names are now excluded from that test.
    route 1 first, so it has no skeleton, no `μ` and no form-A inversion —
    there is no `zj` in it to carry a shape. Both forded rounds' levers
    missed it because it was never in their reach, and route 1's family
-   definition (`docs/family-type-code-defs-design.md` §6, phase 5) moved it
+   definition (`docs/inductives/family-type-code-defs-design.md` §6, phase 5) moved it
    at once: 2.79 → 2.22, 2.5× at 6 index constructors. The shape-slot
    defect is a real reading of the *code*, but the family that was said to
    demonstrate it does not; `issues/wf-shape-annotation-slots.md` now rests
@@ -1118,11 +1118,11 @@ Flagged rather than silently designed around, per the round's rules.
    a generator path, the `Wf` skeleton is not a corner but the only case the
    generator will ever emit for a recursive family (§4.1). The scheme is
    unaffected; the *risk ranking* is not.
-3. **`docs/sprop-design.md` §5.4** already carries the 2026-08-03 correction
+3. **`docs/kernel/sprop-design.md` §5.4** already carries the 2026-08-03 correction
    for `Vec`/`Fin`/`El`; §9 here consumes it as a rule and adds nothing, but
    the pinning tests it owes (`issues/seq-strip-type-former-negatives.md`)
    are a dependency of §13.2 item 14 rather than an unrelated errand.
-4. **`docs/inductive-indexed-lowering.md` §8.1** should, when this generator
+4. **`docs/inductives/inductive-indexed-lowering.md` §8.1** should, when this generator
    lands, stop saying "not yet generated" for the computed-index and
    deep-pattern rows and point here instead; the F1/F2/F3 rows are new text
    that document does not have.

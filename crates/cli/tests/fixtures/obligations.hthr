@@ -1,4 +1,4 @@
-// The obligations listing's fixture (docs/obligation-records-design.md §6):
+// The obligations listing's fixture (docs/language/classes/obligation-records-design.md §6):
 // one repr whose laws are all defaulted, and one `impl` whose `refines` is
 // written inline.
 inductive Tok { TPush(n: Nat), TAdd, TMul }

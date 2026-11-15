@@ -11,7 +11,7 @@ Item 3, part 2, of the fundamental-improvements memo of 2026-10-31 (Claude Doc, 
 one evaluator that keeps each term's as-written (folded) form beside its
 computed value, as smalltt does.
 
-The kernel already has glued neutrals (`docs/nbe-conversion-design.md` §5).
+The kernel already has glued neutrals (`docs/kernel/nbe-conversion-design.md` §5).
 The elaborator's own whnf is the recurring cost and respelling source
 ([[elab-whnf-copies-straight-continuations]], [[elaborator-canonical-type-spelling]],
 the "elaborator whnf is the cost" finding on computed types). Tactics compare
@@ -35,4 +35,4 @@ which open spelling issues it retires.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[elab-emits-normal-form-of-matched-type-argument]] (`docs/nbe-conversion-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[elab-emits-normal-form-of-matched-type-argument]] (`docs/kernel/nbe-conversion-design.md`).

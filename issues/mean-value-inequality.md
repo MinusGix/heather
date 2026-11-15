@@ -11,7 +11,7 @@ updated: 2026-11-01
 `DerivOn::local_lipschitz` (`lib/std/analysis/real_fn.hthr`) turns a
 derivative bounded by `M` into a Lipschitz bound `M + 1` at the scale `δ` of
 its modulus. The global statement is the constructive mean value
-inequality (docs/analysis-foundations-design.md §7.2): if `|g| <= M` on
+inequality (docs/library/analysis-foundations-design.md §7.2): if `|g| <= M` on
 `[a, b]` and `DerivOn([a, b], f, g)`, then `|f(b) - f(a)| <= M·(b - a)`.
 
 Route:

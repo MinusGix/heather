@@ -10,7 +10,7 @@ updated: 2026-11-10
 
 The machine model's instructions are 64-bit two-register forms, immediates
 for `ADD`, and shifts (`lib/std/arch/x86_64/x86_64.hthr`, `Instruction`).
-`docs/native-lexer-crypto-roadmap.md` §2 piece 6 orders what the two
+`docs/native/native-lexer-crypto-roadmap.md` §2 piece 6 orders what the two
 targets need next; this issue owns the first group. It is the "order the
 list by first consumer" that [[verified-lowering-instruction-coverage]]
 asked for, now that the consumers are known.

@@ -14,7 +14,7 @@ use heather_cli::showcase;
 
 /// One `write-elf` of cat through the library gate's image store, whose
 /// closure replays what the gate built (every module is keyed by its own
-/// closure, `docs/module-dag-design.md`); the suite runs the gate first and
+/// closure, `docs/infrastructure/module-dag-design.md`); the suite runs the gate first and
 /// starts this target once the images it replays are built
 /// (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
 /// build wrote, as the gate does: without that, every compiler edit made
@@ -206,7 +206,7 @@ fn wider_leaves_run() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Procedures compile and run (docs/native-procedures-design.md): a
+/// Procedures compile and run (docs/native/native-procedures-design.md): a
 /// non-tail recursive sum called from two sites, its body emitted once;
 /// the sum of 0..20 at depth 20, whose innermost call is one too deep and
 /// exits 139 (`call_depth_status`); a procedure of three parameters and
@@ -244,7 +244,7 @@ fn procedures_run() {
 }
 
 /// A function that calls over views links and runs
-/// (docs/native-library-exports-design.md §3.1, step V4d): the program's
+/// (docs/native/native-library-exports-design.md §3.1, step V4d): the program's
 /// statement calls a function that lends its second buffer whole as its
 /// callee's first, and exits with the byte the callee stored through the
 /// view and read back. With the view lent to read the program is refused:

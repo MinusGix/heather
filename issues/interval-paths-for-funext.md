@@ -8,7 +8,7 @@ updated: 2026-10-23
 ---
 
 Research record, not scheduled. From the Arend survey
-(`docs/arend-survey.md` §2), which has the full argument; this issue owns
+(`docs/surveys/arend-survey.md` §2), which has the full argument; this issue owns
 the decision and waits for a puller.
 
 **The idea.** Arend's core (HoTT-I, Isaev) adds a primitive interval `I`
@@ -23,7 +23,7 @@ computing inverse, and `J` is derived with definitional β.
 to `Same` or depth-indexed equivalence, `Acc` is not provably a
 proposition (`issues/kernel-v1-extensions.md`, log 2026-07-26), and
 setoids carry what quotients would. The interval is compatible with the
-no-UIP groupoid model (`docs/no-uip-model.md`): the groupoid `0 ≅ 1` is a
+no-UIP groupoid model (`docs/kernel/no-uip-model.md`): the groupoid `0 ≅ 1` is a
 contractible interval, `Path` over it is `Id`, regularity and funext hold
 strictly, and the strict propositions' construction is unaffected. It is
 one of the few routes to funext the no-UIP decision leaves open.
@@ -45,7 +45,7 @@ one of the few routes to funext the no-UIP decision leaves open.
 
 **A cheaper variant to weigh first**: an interval whose `coe` is admitted
 at strict motives only, the analogue of the UIP-free `transp` that
-`docs/sprop-design.md` keeps open. No funext, no canonicity cost. Its use
+`docs/kernel/sprop-design.md` keeps open. No funext, no canonicity cost. Its use
 would have to come from somewhere else.
 
 **What would pull this.** A milestone that is blocked on funext with no
@@ -55,11 +55,11 @@ cannot take a setoid, or bisimulation-to-equality for coinductive trees
 
 ## What it assumes from elsewhere
 
-- **`docs/no-uip-model.md`** owns the model. Assumed here: only that
+- **`docs/kernel/no-uip-model.md`** owns the model. Assumed here: only that
   contexts are groupoids and `Ty 0` is sets and bijections.
-- **`docs/export-fragment-design.md`** owns the export lens. Assumed here:
+- **`docs/library/export-fragment-design.md`** owns the export lens. Assumed here:
   only that each definitional rule needs a target realisation.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[constructor-conditions]] (`docs/no-uip-model.md`); [[indexed-families]] (`docs/sprop-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[constructor-conditions]] (`docs/kernel/no-uip-model.md`); [[indexed-families]] (`docs/kernel/sprop-design.md`).

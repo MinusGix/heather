@@ -11,7 +11,7 @@ updated: 2026-11-11
 Found by U3c step 2 of [[native-one-compiler]]
 (`lib/_tests/native/runtime/rt_span_loops_tests.hthr`). A declaration
 `fn f(x̄) → T decreases e { body }` elaborates to a recursor on the bound
-that takes **every** parameter (`docs/decreases-unfolding-design.md` §2):
+that takes **every** parameter (`docs/language/recursion/decreases-unfolding-design.md` §2):
 
 ```heather
 fn count_from(span: List<BitVec(8)>, length, i, acc: BitVec(64)) → BitVec(64) decreases length.sub(i).toNat() {
@@ -70,7 +70,7 @@ What moves with it: the companions' citations in the library that pass a
 fixed parameter to an ih (about fifty citations of `::ext`, `::irrel`,
 `::rec`, `::body` across sixteen modules; most functions vary everything),
 `runtime_measured_instance`, which spells one ih argument per word, and the
-designated spellings' documentation (`docs/decreases-unfolding-design.md`
+designated spellings' documentation (`docs/language/recursion/decreases-unfolding-design.md`
 §2, §11). It changes what a module image holds for such a function, so the
 round's final run is the exact-image lane.
 

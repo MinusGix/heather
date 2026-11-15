@@ -1,6 +1,6 @@
 // Every byte form a step of an emitted program can fetch, and one decoder
 // that reads each back from the front of any byte list
-// (docs/fetched-step-determinism-design.md). The decoder looks only at a
+// (docs/native/fetched-step-determinism-design.md). The decoder looks only at a
 // form's own bytes, never past them, so two forms fetched from one memory at
 // one address are the same form even when their lengths differ: the shorter
 // fetch is a prefix of the longer, and the decoder answers alike on both.

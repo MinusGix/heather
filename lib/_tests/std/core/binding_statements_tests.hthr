@@ -1,4 +1,4 @@
-// Probes of binding statements (docs/sequencing-surface-design.md §3,
+// Probes of binding statements (docs/language/sequencing-surface-design.md §3,
 // issues/binding-statements.md): `let x <- e;`, `e;`, `(<- e)` and
 // `match <- e`, lowered by the parser to the prelude's `Bind::seq(e, λ x =>
 // rest)` and elaborated as any call is. Each form at a literal and a neutral
@@ -22,7 +22,7 @@ theorem add_opt_unfolds(x, y: Option<Nat>):
     add_opt(x, y) = x.and_then(λ a => y.and_then(λ b => Some(a + b))) { refl }
 
 // Over `Result`, whose instances are at the λ carrier `λ A => Result<A, E>`
-// (docs/lambda-carrier-instances-design.md §7): the first `Err` stops the
+// (docs/language/classes/lambda-carrier-instances-design.md §7): the first `Err` stops the
 // chain. At a literal, at a neutral pair, and at an open error type.
 fn add_res(x, y: Result<Nat, Bool>) → Result<Nat, Bool> {
     let a <- x;

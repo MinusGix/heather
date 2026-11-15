@@ -11,7 +11,7 @@ updated: 2026-10-28
 is recomputed at every leaf and every node a leaf compiles
 (`lib/native/native_compile.hthr`). In the kernel this dominates emission's
 growth over the memory-resident compile
-(`docs/native-register-allocation-design.md` §7). It brings
+(`docs/native/native-register-allocation-design.md` §7). It brings
 `native_cat_compiled`'s single-`refl` compile close to the per-declaration
 fuel, which leaves little headroom for cat to grow. write-elf states emission
 a part at a time and is unaffected.

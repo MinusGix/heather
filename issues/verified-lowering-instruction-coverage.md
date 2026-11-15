@@ -47,7 +47,7 @@ request.
 
 - 2026-11-08: i64 round 3: shifts are selected now (chains of `SHL/SHR/SAR r64, 1` after `ShiftOp::legalize`); multiply and divide wait on [[x86-undefined-flags]].
 - 2026-11-08: 2026-11-08 round 4: shifts by a constant are one `SHL/SHR/SAR r64, imm8` (`ShiftImm`); IDIV is [[x86-idiv-signed-division]].
-- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §2 piece 6 orders the forms by
+- 2026-11-10: `docs/native/native-lexer-crypto-roadmap.md` §2 piece 6 orders the forms by
   customer. First group, for SHA-2 and the byte scanner: 32-bit operand forms
   (with their zeroing of the upper half), rotates and `BSWAP`, byte compares
   ([[x86-narrow-and-rotate-forms]]). Second group, for Poly1305 and field

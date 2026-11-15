@@ -14,7 +14,7 @@ the kernel. Spotted on PR #102 with an unused `let x = A(2, refl); 0` at a
 value-parameterised inductive, never filed then.
 
 **Cause.** A `let` is an alias, not a kernel binder
-(docs/let-and-blocks-design.md §2.2), so its value is in the kernel's input
+(docs/language/let-and-blocks-design.md §2.2), so its value is in the kernel's input
 only where a use splices it. The elaborator leaves conversions (a `refl`'s
 endpoints, a constructor's field types) to the gate, so an unused value was
 checked by nobody. The same shape had two more owners: `omega(e, …)` and
@@ -23,7 +23,7 @@ certificate does not cite.
 
 ## Resolution (2026-10-23)
 
-docs/let-and-blocks-design.md §11. A block wraps every value no use
+docs/language/let-and-blocks-design.md §11. A block wraps every value no use
 spliced around its result as `(λ _: T. body)(v)`; `omega` and `ring` do the
 same around their proofs. "Spliced" is recorded only by `resolve`
 (`Alias::splice`); type reads and search candidates use `resolve_reading`.

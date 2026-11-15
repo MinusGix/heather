@@ -214,7 +214,7 @@ inductive Instruction {
     AddRI8(destination: Gpr, immediate: BitVec(8)),
     AddRI32(destination: Gpr, immediate: BitVec(32)),
     // SHL, SHR or SAR by one: every flag but AF defined
-    // (docs/runtime-fn-setups-design.md §16.13, round 3).
+    // (docs/native/runtime-fn-setups-design.md §16.13, round 3).
     ShiftOne(op: ShiftOp, destination: Gpr),
     // SHL, SHR or SAR by an immediate the processor masks to six bits: OF
     // and AF undefined, every flag kept at a masked count of zero

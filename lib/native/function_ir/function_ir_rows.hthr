@@ -15,7 +15,7 @@
 // callee's row, and the one thing rows can have too much of is a callee's
 // row at a call over views, which asks that the views be lent to write
 // where the callee needs them so
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 
 import function_ir;
 import function_ir_writes;

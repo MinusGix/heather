@@ -1107,7 +1107,7 @@ pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, re
 /// [`simplify_goal_with`], and every call of a definition in `unfold` (by
 /// absolute position in Ψ) unfolded where it stands, its body applied to the
 /// call's arguments: what `simp_only` does with a definition named among
-/// its laws (docs/simp-design.md §14).
+/// its laws (docs/tactics/simp-design.md §14).
 ///
 /// A term in `frozen` stays as written: a law's own term (`zeroed(R, 0,
 /// 64).hash`'s `R`, a call whose body computes), which the law could no

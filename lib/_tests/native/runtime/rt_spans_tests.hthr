@@ -1,5 +1,5 @@
 // Probes of a function of `rt` that reads a span it is lent
-// (`Tm::Byte`, lib/native/runtime/rt.hthr; docs/native-one-compiler-design.md
+// (`Tm::Byte`, lib/native/runtime/rt.hthr; docs/native/native-one-compiler-design.md
 // §2.3, U3c): the span is the file the function is run over, and the
 // function takes it as two words, where it lies and how long it is. The
 // reflection is written by hand here (the reflector's round is later); it is

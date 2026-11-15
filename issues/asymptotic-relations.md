@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-11-08
 ---
 
-Layer C of `docs/analysis-foundations-design.md` (§6): countable nested
+Layer C of `docs/library/analysis-foundations-design.md` (§6): countable nested
 neighbourhood bases ("approaches") and Landau relations whose constants and
 moduli are data, instead of filters.
 
@@ -40,4 +40,4 @@ bridge theorems.
 
 ## Log
 
-- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §8): demand for the `Eventually` slice, counted 2026-11-08: `OrderedField::half`/`half_pos`/`half_add` 135 uses, `below_both`/`shrink` 34, and `le_max_*` threshold plumbing 75 in analysis and creal. Pulling `Eventually` with its `and`/`mono` lemmas ahead of the Landau relations would serve sequence.hthr and real_fn_limit.hthr now; [[omega-reads-min-max]] removes the threshold half by itself.
+- 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §8): demand for the `Eventually` slice, counted 2026-11-08: `OrderedField::half`/`half_pos`/`half_add` 135 uses, `below_both`/`shrink` 34, and `le_max_*` threshold plumbing 75 in analysis and creal. Pulling `Eventually` with its `and`/`mono` lemmas ahead of the Landau relations would serve sequence.hthr and real_fn_limit.hthr now; [[omega-reads-min-max]] removes the threshold half by itself.

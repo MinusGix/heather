@@ -13,7 +13,7 @@ literal beside it, cost the kernel a comparison of the literal's reductions,
 and the cost grows as a high power of a numeral inside the literal. Found
 while restating the `Compile` class at every file
 ([[native-one-compiler]], U3c step 3a,
-`docs/native-one-compiler-design.md` §2.3).
+`docs/native/native-one-compiler-design.md` §2.3).
 
 ## The shape
 

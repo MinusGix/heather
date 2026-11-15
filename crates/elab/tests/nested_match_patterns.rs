@@ -1,4 +1,4 @@
-//! Deep patterns and the `_` arm (`docs/nested-match-patterns-design.md`).
+//! Deep patterns and the `_` arm (`docs/language/matching/nested-match-patterns-design.md`).
 //!
 //! Two sugarings, one preprocessing pass. A deep pattern compiles by the
 //! classic pattern matrix into the nested single-level `match`es a user writes
@@ -184,7 +184,7 @@ fn a_deep_match_agrees_with_the_hand_written_tower_at_a_neutral_scrutinee() {
         panic!("expected two bodied bindings")
     };
     // `deep` was minted one binding earlier, and since
-    // docs/per-instantiation-type-codes-design.md its annotations *name*
+    // docs/inductives/per-instantiation-type-codes-design.md its annotations *name*
     // `Opt<Res3<A>>` — a Ψ-relative reference. Re-key it into `tower`'s world
     // before comparing, exactly as every other nominal read here does; with
     // both sides inline this used to be a no-op.
@@ -638,7 +638,7 @@ fn a_nullary_constructor_reads_as_a_pattern_not_a_binder() {
 
 // ---------------------------------------------------------------------------
 // A deep pattern on an indexed family (issues/indexed-deep-pattern-kernel-
-// rejects.md, docs/dependent-match-compiler-design.md §7.1). The inner match
+// rejects.md, docs/language/matching/dependent-match-compiler-design.md §7.1). The inner match
 // generalizes the field's index, and the rebuilt outer value must keep its
 // own index in its projections; the elaborator used to accept these arms and
 // the kernel refuse them.

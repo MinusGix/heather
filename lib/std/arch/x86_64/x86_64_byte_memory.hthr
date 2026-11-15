@@ -1,5 +1,5 @@
 // x86_64's memory as the byte model (issues/memory-model-machine-instances.md;
-// docs/byte-memory-design.md §6): the machine's access records instantiated
+// docs/native/byte-memory-design.md §6): the machine's access records instantiated
 // from `lib/std/machine/memory.hthr`, and a process stack built from a data region
 // by proof instead of assumed.
 //
@@ -320,7 +320,7 @@ fn DataRegion::stack(self r: DataRegion) → Stack<X86Memory(r.profile)>(r.profi
 }
 
 // ---------------------------------------------------------------------------
-// Spans lent inside the region (docs/native-one-compiler-design.md §2.6)
+// Spans lent inside the region (docs/native/native-one-compiler-design.md §2.6)
 
 // A store inside the region leaves a byte it does not cover. Both
 // addresses are spelled as a span's offset and a byte within it.

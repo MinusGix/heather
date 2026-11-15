@@ -128,7 +128,7 @@ theorem mapping_emitted(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>): (s:
 // ---------------------------------------------------------------------------
 // What a counting step's fold computes, from what one byte does to a count
 // (docs/archive/native-programs-read-like-programs-design.md §3, S1; moved here from
-// the burned filter_program, docs/native-program-logic-design.md §3.1). A
+// the burned filter_program, docs/native/native-program-logic-design.md §3.1). A
 // program proves the per-byte fact, usually by `split_all`; these carry it
 // over the input.
 

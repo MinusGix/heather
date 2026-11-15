@@ -1,4 +1,4 @@
-// Regular Cauchy reals as a setoid client (docs/regular-cauchy-reals-round.md).
+// Regular Cauchy reals as a setoid client (docs/library/creal.md).
 //
 // As with the rationals, the proofs below never look inside a sequence. They
 // use the laws `std/creal` states modulo `≈`: `calc` chains glued by the

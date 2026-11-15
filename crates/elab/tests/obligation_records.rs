@@ -1,5 +1,5 @@
 //! The obligation-record surface: inline clause expressions, the `?` reporting
-//! hole, and the two routes (`docs/obligation-records-design.md`).
+//! hole, and the two routes (`docs/language/classes/obligation-records-design.md`).
 //!
 //! Everything here is a *generated term* in the sense of
 //! `docs/testing-generated-terms.md` — the record type, the obligation

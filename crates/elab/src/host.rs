@@ -1,4 +1,4 @@
-//! The host side of Heather tactics (docs/host-elaboration-interface-design.md).
+//! The host side of Heather tactics (docs/metaprogramming/host-elaboration-interface-design.md).
 //!
 //! `by t` runs a tactic: an ordinary Heather value of `lib/std/tactic/tactic.hthr`'s
 //! `Tac<Expr>`, a tree whose nodes are requests to this elaborator and whose
@@ -47,7 +47,7 @@
 //! hand. Each question it asks is an application of one of the library's
 //! `host_*` functions to the current tree, evaluated to a numeral, an `Expr`
 //! or a `String` in the kernel's value domain ([`Reader`], the
-//! analyzer path of docs/analyzer-evaluation-design.md), and an answer is
+//! analyzer path of docs/metaprogramming/analyzer-evaluation-design.md), and an answer is
 //! built from the library's builders the same way. Each step is a pending
 //! application over the previous tree's closure, so nothing is read back into
 //! syntax and re-evaluated, and the force cache shares the tree's spine
@@ -84,12 +84,12 @@ use crate::traits::ClassesMut;
 /// default, deliberately not a bespoke larger one. Each force runs on the
 /// **shared** graph, where the bounded cache avoids recent repeated work, so
 /// running out is a decline like any other
-/// (docs/analyzer-evaluation-design.md §2).
+/// (docs/metaprogramming/analyzer-evaluation-design.md §2).
 const READ_FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
 
 /// Reads library answers in the kernel's **value domain**: every
 /// sub-structure it holds is a [`TmClo`], forced on demand and shared through
-/// the arena's cache (docs/analyzer-evaluation-design.md).
+/// the arena's cache (docs/metaprogramming/analyzer-evaluation-design.md).
 pub(crate) struct Reader<'a, 'v> {
     psi: &'a GlobalCtx,
     arena: &'v ValueArena<'v>,
@@ -432,9 +432,9 @@ pub enum Request {
     /// A type handle with a local of the goal's context bound in front.
     Revert(u64, RExpr),
     /// The goal handle closed by simplifying with the laws
-    /// (docs/simp-design.md §7).
+    /// (docs/tactics/simp-design.md §7).
     Simp(Vec<RExpr>, u64),
-    /// The laws checked as a rewrite system (docs/simp-design.md §4).
+    /// The laws checked as a rewrite system (docs/tactics/simp-design.md §4).
     SimpCheck(Vec<RExpr>),
     /// The numeral a closed term of type `Nat` computes to.
     Numeral(RExpr),
@@ -1036,7 +1036,7 @@ impl Speaker for Interpreted<'_, '_, '_> {
 impl<'v> Interpreted<'_, '_, 'v> {
     /// The tree as a value whose two components are values too.
     ///
-    /// `Tac` is tier 2, `Σ(t : W). canon t` (docs/inductive-tier2-w-lowering.md
+    /// `Tac` is tier 2, `Σ(t : W). canon t` (docs/inductives/inductive-tier2-w-lowering.md
     /// §5), and `host_resume`'s `match` rebuilds the continuation as
     /// `k := λy. ⟨f' y, c y⟩` with `c` the scrutinee's *proof*, `snd t`
     /// (§7). So the resumed tree's proof is the previous tree's proof
@@ -1163,7 +1163,7 @@ struct Run {
     /// Handles issued for subterms, by scope and the subterm's address, so
     /// a subterm a term shares (a block's `let` is an alias, not a binder)
     /// is one handle wherever a view meets it in that scope
-    /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
+    /// (docs/native/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
     /// address from being reused while the run lasts.
     shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
     /// What the run said (`Say`), reported at its span once it succeeds.
@@ -2470,7 +2470,7 @@ impl Host<'_> {
     /// withheld definition: an `interface fn`'s body is not this world's to
     /// read) and when the walk's budget runs out first. What a reader that
     /// follows a term through its definitions, one call at a time, reads
-    /// (docs/grind-design.md §15).
+    /// (docs/tactics/grind-design.md §15).
     fn spell_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
         let at = run.scope_of(e)?;
         let mark = run.trail.len();
@@ -2482,7 +2482,7 @@ impl Host<'_> {
         let gamma = run.cx(at)?.gamma;
         // Through the interface boundary as conversion sees it: another
         // module's `interface fn` stays folded at open arguments
-        // (docs/interface-definitions-design.md §3), so no spelling it
+        // (docs/language/interface-definitions-design.md §3), so no spelling it
         // returns is one the gate would refuse to convert.
         let world = match InterfaceDefs(self).withheld_policy() {
             Some(w) => self.goal_psi().withholding(Some(w)),
@@ -2647,7 +2647,7 @@ impl Host<'_> {
     }
 
     /// `Repr(ty)`: the representation registered for the type `ty` stands
-    /// for (`datarepr`, docs/datarepr-design.md §1.4), as a handle to the
+    /// for (`datarepr`, docs/native/datarepr-design.md §1.4), as a handle to the
     /// repr's assembled value. A type is keyed as the declaration keys it: a
     /// declaration with no parameters by its tag, one with value parameters
     /// by its tag and its arguments, which must be numerals (`SInt(64)`);
@@ -2722,7 +2722,7 @@ impl Host<'_> {
         }
         spine.reverse();
         // A `match` on a `Nat` that recurses (a fuel recursion's top match,
-        // docs/runtime-fn-setups-design.md §16.11) is the kernel's `Nat`
+        // docs/native/runtime-fn-setups-design.md §16.11) is the kernel's `Nat`
         // eliminator, applied to the words its motive generalizes (`View`
         // shows that application as `HOther`): `Zero`'s arm is its base as it
         // is (it takes no payload), `Succ`'s a λ over the predecessor and
@@ -2773,7 +2773,7 @@ impl Host<'_> {
     /// type argument's does). A term that is no application is its own head
     /// with no arguments. A subterm the term shares is one handle wherever
     /// it occurs (as for `Arms`), but equal subterms built apart are not:
-    /// identity beyond sharing is `Defeq`'s (docs/grind-design.md §3).
+    /// identity beyond sharing is `Defeq`'s (docs/tactics/grind-design.md §3).
     fn spine_request(&self, run: &mut Run, h: u64) -> Result<SpineView, Fault> {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
@@ -2781,7 +2781,7 @@ impl Host<'_> {
         // A β-redex at the head is read as its contractum, as `View` shows
         // it: an instantiated λ (`(λ s => f(w, s))(x)`, which a `cong_fn` or
         // a lemma's function argument leaves in a type) is the call `f(w, x)`
-        // (docs/grind-design.md §14.3).
+        // (docs/tactics/grind-design.md §14.3).
         let t = Rc::new(crate::spelling::beta_head(&t).unwrap_or(t));
         let mut spine = Vec::new();
         let mut head = &t;
@@ -2834,7 +2834,7 @@ impl Host<'_> {
     /// Refused for a type of more constructors or none, codata, an indexed
     /// family, and a type with a field a later field's type mentions (`∃`'s
     /// `witness`): there a field's type is about the value, not a fact of
-    /// its own (docs/grind-design.md §12).
+    /// its own (docs/tactics/grind-design.md §12).
     fn fields_request(&self, run: &mut Run, e: &RExpr) -> Result<(u64, Vec<(String, u64)>), Fault> {
         let at = run.scope_of(e)?;
         let mark = run.trail.len();
@@ -2892,7 +2892,7 @@ impl Host<'_> {
     /// constructor (as the sides compute). Refused where the surface `inj`
     /// is: different constructors, a field whose type depends on an earlier
     /// one, a container or a codata child field
-    /// (docs/host-elaboration-interface-design.md §25).
+    /// (docs/metaprogramming/host-elaboration-interface-design.md §25).
     fn inj_request(&self, run: &mut Run, e: &RExpr, k: u64, span: Span) -> Result<u64, Fault> {
         let at = run.scope_of(e)?;
         let mark = run.trail.len();
@@ -2912,7 +2912,7 @@ impl Host<'_> {
     /// proof of an equation between values of two different constructors
     /// (as the sides compute). Refused where the surface `absurd` is: one
     /// constructor on both sides, or sides that are no constructors'
-    /// (docs/host-elaboration-interface-design.md §25).
+    /// (docs/metaprogramming/host-elaboration-interface-design.md §25).
     fn absurd_request(&self, run: &mut Run, e: &RExpr, goal: u64, span: Span) -> Result<u64, Fault> {
         let gs = run.held(goal)?.0;
         let at = run.join(run.scope_of(e)?, gs)?;
@@ -2943,7 +2943,7 @@ impl Host<'_> {
     /// (`rewrite::Simps::simp_terms`). The laws are terms the tactic chose
     /// (a set's lemmas resolved, hypotheses), so which laws apply to which
     /// goal is the tactic's policy and the walk is the host's
-    /// (docs/simp-design.md §7). A refusal is `simp_only`'s report, route
+    /// (docs/tactics/simp-design.md §7). A refusal is `simp_only`'s report, route
     /// included.
     fn simp_request(&self, run: &mut Run, laws: &[RExpr], goal: u64, span: Span) -> Result<u64, Fault> {
         let gs = run.held(goal)?.0;
@@ -2981,7 +2981,7 @@ impl Host<'_> {
     }
 
     /// `SimpCheck(laws)`: the laws pass the checks a set is held to
-    /// (`rewrite::Simps::check_terms`, docs/simp-design.md §4): none loops
+    /// (`rewrite::Simps::check_terms`, docs/tactics/simp-design.md §4): none loops
     /// on its own statement, and none is rewritten by another to a result
     /// that does not join. Answered with `trivial`, a proof of `True`, so a
     /// check is a theorem beside the set; refused with the law and the
@@ -3054,7 +3054,7 @@ impl Host<'_> {
         }
         // A qualified key, as `name_of` spells one, denotes its declaration
         // wherever its module is in the import closure: a registered table
-        // (docs/registered-values-design.md) reaches a `by` through the
+        // (docs/metaprogramming/registered-values-design.md) reaches a `by` through the
         // modules its client imports, which need not include the lemma's.
         if let Some((module, base)) = crate::names::split_qual(name)
             && self.names.reaches(module)
@@ -3150,7 +3150,7 @@ impl Host<'_> {
     }
 
     /// `Synth(goal)`: the search a `:= infer` parameter runs, at the type
-    /// `goal` stands for, in its scope (docs/facts-on-demand-design.md §4).
+    /// `goal` stands for, in its scope (docs/native/facts-on-demand-design.md §4).
     /// This is how a generator asks for a fact and learns that there is
     /// none: the search's failure is a refusal carrying its trace, and a
     /// refused search leaves nothing behind ([`crate::resolve::SearchMark`]).
@@ -3599,7 +3599,7 @@ impl Host<'_> {
     }
 
     /// Fill a match's class parameters as a call fills its constraint
-    /// arguments (`docs/operation-indexed-classes-design.md` §5). With a
+    /// arguments (`docs/language/classes/operation-indexed-classes-design.md` §5). With a
     /// `choice`, each class parameter is matched against the dictionaries in
     /// scope — the class's own binder or a descendant's, at its carrier, as
     /// the value-slot ladder reads them — which solves the class's carrier
@@ -4348,7 +4348,7 @@ impl HostMut<'_> {
     }
 
     /// A declaration under a prefix generator, `P(args) fn f …` or
-    /// `P(args) def x = e;` (docs/value-definitions-design.md §3). The
+    /// `P(args) def x = e;` (docs/metaprogramming/value-definitions-design.md §3). The
     /// generator is called with what the declaration hands it in front of
     /// the written arguments, `P(name, args)` for a `fn` or `theorem` and
     /// `P(name, value, args)` for a `def`, and run as `generate` runs its
@@ -4365,7 +4365,7 @@ impl HostMut<'_> {
         let d = &p.decl;
         let prefix = prefix_name(&p.generator);
         // `register def x: T = e;`: the built-in prefix, unless a generator of
-        // that name is in scope (docs/registered-values-design.md).
+        // that name is in scope (docs/metaprogramming/registered-values-design.md).
         if prefix == "register"
             && matches!(p.generator.kind, ExprKind::Var(_))
             && !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_))
@@ -4379,7 +4379,7 @@ impl HostMut<'_> {
                 format!(
                     "`{prefix}` is not a generator in scope: a name before `{form}` is a \
                      generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
-                     (docs/value-definitions-design.md §3)"
+                     (docs/metaprogramming/value-definitions-design.md §3)"
                 ),
                 p.generator.span,
             );
@@ -4475,7 +4475,7 @@ impl HostMut<'_> {
     }
 
     /// `P record T { … }` or `P(args) record T { … }`
-    /// (docs/value-definitions-design.md §3.5). The record is **consumed**:
+    /// (docs/metaprogramming/value-definitions-design.md §3.5). The record is **consumed**:
     /// declared as written, and then the generator is called with its name
     /// in front of the written arguments, `P("T", args)`, and run as
     /// `generate` runs its generator. A generator reaches the type from the
@@ -4490,7 +4490,7 @@ impl HostMut<'_> {
                 format!(
                     "`{prefix}` is not a generator in scope: a name before `record` is a \
                      generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
-                     (docs/value-definitions-design.md §3)"
+                     (docs/metaprogramming/value-definitions-design.md §3)"
                 ),
                 p.generator.span,
             );

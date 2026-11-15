@@ -7,7 +7,7 @@ created: 2026-10-23
 updated: 2026-10-23
 ---
 
-From the Arend survey (`docs/arend-survey.md` §6). Arend ships a skills
+From the Arend survey (`docs/surveys/arend-survey.md` §6). Arend ships a skills
 collection for coding agents (`github.com/sxhya/arend-skills`, paper §5):
 
 - `arend-formalize`: a procedure from an informal statement to a file that

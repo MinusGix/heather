@@ -1,4 +1,4 @@
-//! Declaration-slice replay (`docs/declaration-slice-replay-design.md`): after
+//! Declaration-slice replay (`docs/infrastructure/declaration-slice-replay-design.md`): after
 //! an edit, `check_module_delta_from` reproduces the unchanged items of a
 //! module from its previous delta and elaborates the rest, and what comes out
 //! is what fresh elaboration produces — the same Ψ, the same events, the same
@@ -405,7 +405,7 @@ fn a_broken_edit_reports_the_fresh_errors() {
     e.check_module_delta("again", "fn z() -> Nat { 0 }\n", ModuleDependencyIdentity::default()).expect("checks");
 }
 
-/// `--only` (`docs/check-only-design.md`): a forced item is elaborated from
+/// `--only` (`docs/infrastructure/check-only-design.md`): a forced item is elaborated from
 /// source over an exact prefix, every other item replays, and the result is
 /// the fresh elaboration's — for an unchanged source, where nothing would
 /// have been elaborated otherwise, and for a name in a mutual group.
@@ -476,7 +476,7 @@ fn a_refused_proof_before_a_replayed_slice_still_refuses_the_module() {
 }
 
 /// Copy-on-write stays O(1) per module, not per declaration
-/// (`heather_elab::stats::make_mut`, docs/instrumentation-design.md). A
+/// (`heather_elab::stats::make_mut`, docs/infrastructure/instrumentation-design.md). A
 /// registry layer is copied when something still holds it at the next
 /// write; a per-declaration holder — a checkpoint around each replayed
 /// slice, as there once was (issues/check-module-delta-certificate-cost.md)

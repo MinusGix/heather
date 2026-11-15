@@ -9,7 +9,7 @@ updated: 2026-07-26
 
 `inj(k, p)` is derived at tier 0 by a case tree at a **constant** motive —
 "that field's type" — using the left-hand side's own field value as the
-default at every other constructor (`docs/inductive-tier0-lowering.md` §6.2).
+default at every other constructor (`docs/inductives/inductive-tier0-lowering.md` §6.2).
 Constant is exactly what a *dependent* field type is not, so:
 
 ```heather
@@ -25,7 +25,7 @@ reports the limitation rather than emitting an ill-typed term.
 ## The second instance, which is why this is now its own issue
 
 A **container field** hits the identical wall
-(`docs/container-fields.md` §6, §9.2). Its type is `[D; len]`, which depends
+(`docs/language/container-fields.md` §6, §9.2). Its type is `[D; len]`, which depends
 on the length field before it, so `inj` at it would need both sides' lengths
 definitionally equal:
 
@@ -44,7 +44,7 @@ by construction.
 
 ## What lifting it takes
 
-`docs/inductive-tier0-lowering.md` §6.2 names two routes, neither yet needed:
+`docs/inductives/inductive-tier0-lowering.md` §6.2 names two routes, neither yet needed:
 
 - **A code-valued family.** The motive becomes a `Ty l`-valued function of the
   scrutinee, decoded with `El`. Recovers the general case, at the price of the
@@ -78,4 +78,4 @@ diagnosing is the right behaviour.
   before this; the issue exists so that the *shared* fix has somewhere to
   live, and so the claim "these should be lifted together" is tracked rather
   than asserted in a doc comment.
-- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/inductive-tier0-lowering.md`).
+- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/inductives/inductive-tier0-lowering.md`).

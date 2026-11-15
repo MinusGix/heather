@@ -9,7 +9,7 @@ updated: 2026-10-30
 
 The library gate's children followed one linear world order, because a
 module's image was keyed by every module loaded before it
-([[library-gate-warmup-runs-alone]]). `docs/module-dag-design.md` replaces
+([[library-gate-warmup-runs-alone]]). `docs/infrastructure/module-dag-design.md` replaces
 the world with closure worlds: a module elaborates over its own import
 closure in a canonical order, its image is keyed by that closure's
 identities (a Merkle DAG over the import graph), and images built apart

@@ -37,4 +37,4 @@ Not worth a round by itself today.
 ## Log
 
 - 2026-09-23: 2026-09-23: the fast lane's critical path is the same shape in the guarded-read test — [[fast-lane-heaviest-declarations]].
-- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

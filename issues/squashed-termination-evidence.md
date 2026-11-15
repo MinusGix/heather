@@ -16,7 +16,7 @@ smallest instance is constructive epsilon:
 
 Rocq proves this (`ConstructiveEpsilon`) only through `Acc`'s subsingleton
 elimination out of `Prop` into `Type`. Heather has neither half: its `Acc` is
-relevant (`docs/acc-via-w.md`), and `squash_ind` eliminates only into a
+relevant (`docs/inductives/acc-via-w.md`), and `squash_ind` eliminates only into a
 squash-headed family ([[sprop-squash]]), so nothing turns `∥…∥` into a
 relevant `Acc`. Baillon, Forster, Kirst, Mahboubi and Pédrot
 (`docs/papers/LIPIcs.FSCD.2026.5.pdf`, §9–10) show that this principle (their
@@ -40,7 +40,7 @@ non-derivability in DeLaM with Squash is proposed for heather-coq
 - **Evaluators from normalization proofs.** A normalization proof that only
   produces squashed `Acc` (or any squashed `Converges`) gives no evaluator.
   Today termination evidence that someone needs to run has to stay relevant.
-  `Converges := Σ(n : Nat). …` (`docs/surface-existential-investigation.md`)
+  `Converges := Σ(n : Nat). …` (`docs/language/surface-existential-investigation.md`)
   is relevant, which is the right call under the current rules.
 
 No customer forces the round yet. This issue records the design and its
@@ -95,7 +95,7 @@ The propositional β is where the design meets Heather's equality.
   (MinusGix/heather-coq#51), and its conservativity theorem is the metatheory
   such a scope needs. The kernel itself would stay `T=`; only a proof checked
   under the scope would carry the extra trust, which
-  `docs/axiom-provenance-design.md` can report as its own provenance kind.
+  `docs/kernel/axiom-provenance-design.md` can report as its own provenance kind.
 
 ## Acceptance
 
@@ -123,4 +123,4 @@ The propositional β is where the design meets Heather's equality.
 - 2026-10-26: Filed from reading the FSCD 2026 and LICS 2026 papers (both
   PDFs added to `docs/`). Records the gap, the literature's design and where
   it meets Heather's relevant `Id`. No round scheduled.
-- 2026-11-05: gardener: cites a file it shares with [[implicit-logical-assumptions]] (`docs/papers/LIPIcs.LICS.2026.41.pdf`); [[lean-translation-fragment]] (`docs/axiom-provenance-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[implicit-logical-assumptions]] (`docs/papers/LIPIcs.LICS.2026.41.pdf`); [[lean-translation-fragment]] (`docs/kernel/axiom-provenance-design.md`).

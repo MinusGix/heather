@@ -10,7 +10,7 @@ updated: 2026-11-02
 A checking note whose expected type holds `π₀(⟨a, b⟩)` reports that type
 as having "no surface spelling". Seen at an indexed codata constructor whose
 index is a tuple: the payload types read the index binders as projections
-of the index (`docs/codata-indexed-design.md` §3), so at the index `⟨s, t⟩`
+of the index (`docs/inductives/codata-indexed-design.md` §3), so at the index `⟨s, t⟩`
 the field `heads: hd(s) = hd(t)` is `hd(π₀⟨s, t⟩) = hd(π₁⟨s, t⟩)`:
 
 ```

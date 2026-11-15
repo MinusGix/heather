@@ -8,7 +8,7 @@ updated: 2026-10-28
 ---
 
 `Homes.loops` is indexed by the word a `Repeat` tests
-(`docs/native-register-allocation-design.md` §3), so two loops testing one
+(`docs/native/native-register-allocation-design.md` §3), so two loops testing one
 word share a set. The allocator grows all the sets together until each is
 closed (`Homes::closed`), so a shared entry is closed for both loops and the
 check passes. `yes STR` has two such loops. A first version joined

@@ -1,5 +1,5 @@
 //! The equation binding and the `split` statement
-//! (`docs/match-equation-split-design.md`).
+//! (`docs/language/matching/match-equation-split-design.md`).
 //!
 //! Two features, one node. `match h : e { … }` makes the elaborator write the
 //! convoy — motive `λ z => (e = z) -> M z`, one `λ h` per arm, the whole thing
@@ -184,7 +184,7 @@ fn a_split_coexists_with_a_goal_discharge() {
 
 /// §5.1: a split-terminated block *expression*. The `on Ctor` heads are arms,
 /// consumed by the parser, so `Block::ons` is empty and
-/// `docs/let-and-blocks-design.md` §4.3's refusal never fires.
+/// `docs/language/let-and-blocks-design.md` §4.3's refusal never fires.
 #[test]
 fn a_block_expression_may_split() {
     ok(r#"
@@ -322,7 +322,7 @@ fn a_split_takes_the_equation_binder() {
 
 // -- §4: the indexed family, by the packed equation -------------------------
 
-/// §4.1's refusal is retired (docs/dependent-match-compiler-design.md §9): on
+/// §4.1's refusal is retired (docs/language/matching/dependent-match-compiler-design.md §9): on
 /// an indexed family `h` is the index packed with the value,
 /// `⟨n, xs⟩ = ⟨idx(C, x̄), C(x̄)⟩` at `Σ(j: I). F(j)`, which is one type, and
 /// `cong(h)` reads the index equation off it. Both lowerings of a family
@@ -541,7 +541,7 @@ fn a_matchs_diagnostics_still_name_match() {
     // from a non-binding arm
     // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and since
     // 2026-10-31 from any arm whose type lives outside its binders
-    // (docs/dependent-match-compiler-design.md §6.1), so the probes this test
+    // (docs/language/matching/dependent-match-compiler-design.md §6.1), so the probes this test
     // used to run — `match r { Stuck => d, … }`, then `L(v) => v` — now
     // elaborate. An unannotated `λ` infers nothing. The message is what is
     // under test, not the refusal.

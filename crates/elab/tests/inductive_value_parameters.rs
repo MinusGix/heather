@@ -1,4 +1,4 @@
-//! Value parameters on `inductive` (docs/surface-value-parameters.md §6):
+//! Value parameters on `inductive` (docs/language/surface-value-parameters.md §6):
 //! `inductive Res(m: Nat) { Good(n: Nat, h: dbl(n) = m), Bad(why: Nat), Gone }`,
 //! at tier 0, tier 1 (`Tree(m)`, lowered onto `Wf`) and tier 2
 //! (`ITree<R>(E)`, lowered onto `W`; issues/tier2-value-parameters.md).

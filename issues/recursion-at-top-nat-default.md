@@ -7,7 +7,7 @@ created: 2026-11-04
 updated: 2026-11-04
 ---
 
-Slice 2 of docs/recursion-at-the-top-design.md §4 option A (Minus chose A,
+Slice 2 of docs/language/recursion/recursion-at-the-top-design.md §4 option A (Minus chose A,
 2026-11-04). Today recursion at the top runs only where the plain lowering
 refuses or would not mean its source ([[recursion-below-nat-fallback]],
 §5). Make it the lowering for **every** structural recursion on an explicit

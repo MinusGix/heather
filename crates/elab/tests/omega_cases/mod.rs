@@ -62,7 +62,7 @@ fn load_image() -> SemanticImage {
         for &(name, source) in OMEGA_MODULES {
             // One module scope per module, so the dump's module rows say what
             // each of the prefix's modules cost
-            // (`docs/instrumentation-design.md` §3).
+            // (`docs/infrastructure/instrumentation-design.md` §3).
             let _module = stats::scope(stats::ScopeKind::Module, name, "");
             elab.elab_module_source(name, source)
                 .unwrap_or_else(|error| panic!("{name} did not check: {error}"));
@@ -121,7 +121,7 @@ theorem eliminated_affine(x, y: Int,
 "#
     );
     // The same probe doubles as the instrumentation layer's omega case
-    // (`docs/instrumentation-design.md` §5): reconstruction, search, render
+    // (`docs/infrastructure/instrumentation-design.md` §5): reconstruction, search, render
     // and the certificate's own check are named columns attributed to the
     // declaration that asked for them, which is what the four environment
     // switches this replaced could never say.

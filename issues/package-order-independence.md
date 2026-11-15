@@ -14,7 +14,7 @@ cannot state `instance Cmp<Nat>` beside the kit that fills it or use `List`,
 because `algebra` and `list` import `nat`. Import order is a known Lean pain
 point; the kernel-visible order should be discovered, not written.
 
-Design proposal: `docs/package-order-independence-design.md` (status:
+Design proposal: `docs/language/package-order-independence-design.md` (status:
 proposal). It owns the mechanism (demand-driven signature/body queries, cycle
 classification, canonical Ψ order, instance heads first, staged parallelism,
 declaration-keyed caching) and lists the open questions a design pass must

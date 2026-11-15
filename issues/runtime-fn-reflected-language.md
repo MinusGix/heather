@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-11-14
 ---
 
-Slice R5a of `docs/runtime-fn-setups-design.md` (§4, §12): the reflected
+Slice R5a of `docs/native/runtime-fn-setups-design.md` (§4, §12): the reflected
 language every setup reads, its meaning, and the per-function pin.
 
 ## Scope

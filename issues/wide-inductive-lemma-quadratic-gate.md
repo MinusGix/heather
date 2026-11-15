@@ -39,7 +39,7 @@ constructors. `open_at`, a definition with the same arms, is linear. The
 declaration itself is flat. About half the lemma's wall time is outside the
 gate, so elaboration has a share of its own.
 
-`docs/mutual-inductive-design.md` §6 (Cost) describes a Θ(m²) term for a
+`docs/inductives/mutual-inductive-design.md` §6 (Cost) describes a Θ(m²) term for a
 group's step (each case node carries a convoy motive that spells the arity
 tree) and the typing memo that keeps the gate from paying it per node. This
 family is a single unindexed inductive, and the residue shows in a
@@ -66,7 +66,7 @@ Related, from the same probe: [[mutual-family-member-declarations]] and
 
 ## Log
 
-- 2026-11-10: Fixed, two layers, both "keep the ih as what it came from" (docs/inductive-tier1-wf-lowering.md §6.4).
+- 2026-11-10: Fixed, two layers, both "keep the ih as what it came from" (docs/inductives/inductive-tier1-wf-lowering.md §6.4).
 
   Attribution. Each arm of `open_lc` got two copies of `open_at`'s whole step (the case tree over all n formers): (1) the unifier solved the congruence's implicits with the unfolded call's hypothesis read back as `λ i. elim_Wf(…; step; nth(cs; i))`, so the arm's elaborated term and every type read back from it carried the step; (2) the kernel applied the lemma's own ih at a neutral child through a λ built around a *shifted* copy of the step (`wf_ih_lam`), so the call through the ih and the call through `open_at`'s definition had different closures and conversion compared the two case trees structurally. The dependent motive mentioning a second recursion over the scrutinee is what makes both sides appear.
 

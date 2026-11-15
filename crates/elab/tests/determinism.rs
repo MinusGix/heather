@@ -78,7 +78,7 @@ fn same_source_elaborates_identically() {
 /// Set 2026-08-06, over the prelude's 4 theorems + the suite's `fn add` and
 /// 4 theorems; re-taken 2026-09-10 over the 10 Ψ bindings that are those plus
 /// the prelude's `CollectionLiteral#tycode_fn`
-/// (docs/per-instantiation-type-codes-design.md §2).
+/// (docs/inductives/per-instantiation-type-codes-design.md §2).
 ///
 /// Unmoved by the same day's fix to the kernel's `Debug` for `Branches`,
 /// which went from printing 37 of the 52 recursor branches to all 52 and
@@ -87,22 +87,22 @@ fn same_source_elaborates_identically() {
 /// that it did not is the measurement that this suite — and today's
 /// elaborator at all, which constructs no `ElimCodeTy`/`ElimCodeTm` — emits
 /// no code recursor. The golden's blind spot was real but unexercised.
-/// Moved 2026-09-15 by `docs/telescoped-record-projections-design.md`'s
+/// Moved 2026-09-15 by `docs/elaborator/telescoped-record-projections-design.md`'s
 /// device: `CollectionLiteral<C>(n)` is telescoped and its spine is dependent
 /// (`fromLiteral` mentions `element`), so its projections are now named and Ψ
 /// carries `3·nfields + 1 = 7` more bindings. The hash is over Ψ's printed
 /// form, so it moves whenever Ψ does.
-/// Moved 2026-09-22 by `docs/app-by-head-type-design.md`: every emitted
+/// Moved 2026-09-22 by `docs/elaborator/app-by-head-type-design.md`: every emitted
 /// application is `app@(f; a)` now, with no annotations.
 /// Moved 2026-09-26 by the nominal tag becoming `sEq⁰(Nat; k; k)`
-/// (`docs/inductive-tier0-lowering.md` §3.3): every lowered type and
+/// (`docs/inductives/inductive-tier0-lowering.md` §3.3): every lowered type and
 /// constructor value carries it.
 /// Moved 2026-10-16 by sealed theorem proofs
 /// (`issues/theorem-witness-unfolding.md`): Ψ's printed form gained the
 /// `sealed` list of theorems whose proofs it keeps.
 /// Moved 2026-11-01 by the prelude's binding-statement classes and calls
 /// (`Bind`, `Pointed`, `Bind::seq`, `Pointed::ret`;
-/// `docs/sequencing-surface-design.md` §13).
+/// `docs/language/sequencing-surface-design.md` §13).
 /// Moved 2026-11-02 by canonical levels (`issues/kernel-compact-level.md`):
 /// every level prints as its normal form, so a `⊔` tree the elaborator built
 /// raw (`(0 ⊔ 0)`, a statement's quadratic join) now prints collapsed.

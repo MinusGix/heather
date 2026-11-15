@@ -56,10 +56,10 @@ questions; this issue does not require them to ship with reexports.
 
 ## References
 
-- `docs/modules-design.md`: existing visibility and ambiguity rules.
+- `docs/language/modules-design.md`: existing visibility and ambiguity rules.
 - `lib/std/parser/README.md`: current component layout and import instructions.
 - [[axiom-provenance]] owns dependency auditing; reexports must preserve it.
 
 ## Log
 
-- 2026-09-15: Landed: `export m::{…};` as a selected, identity-preserving reexport (aliases in the visibility index only; origin resolution, by-origin ambiguity, constructor inclusion, generated-name refusal, loader edge, image field + replay validation). `lib/std/parser/parser.hthr` is now a facade over `parser_core` and the six components. Design in docs/modules-design.md §3.4; tests in crates/elab/tests/modules.rs and crates/cli/tests/semantic.rs. Whole-module reexport, renaming and hierarchical paths stay unbuilt by decision.
+- 2026-09-15: Landed: `export m::{…};` as a selected, identity-preserving reexport (aliases in the visibility index only; origin resolution, by-origin ambiguity, constructor inclusion, generated-name refusal, loader edge, image field + replay validation). `lib/std/parser/parser.hthr` is now a facade over `parser_core` and the six components. Design in docs/language/modules-design.md §3.4; tests in crates/elab/tests/modules.rs and crates/cli/tests/semantic.rs. Whole-module reexport, renaming and hierarchical paths stay unbuilt by decision.

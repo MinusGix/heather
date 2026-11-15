@@ -1,4 +1,4 @@
-//! Branching-inductives prototype, route C (`docs/branching-inductives-choice.md`
+//! Branching-inductives prototype, route C (`docs/inductives/branching-inductives-choice.md`
 //! §6, de-risk plan §13 steps 1–2): the *interface* a `Wf`-style former would
 //! give `Tree { Leaf, Node(Tree, Tree) }`, postulated in Ψ, with the same
 //! theorem as `branching_route_a.rs` proved against it.

@@ -15,7 +15,7 @@ Make the elaborator's local context `Cx` a persistent binder spine with shared n
 
 The kernel had the same shape and fixed it ([[context-representation-clones]], closed); the elaborator's half never followed.
 
-Measured with the gdb sampler (`docs/data-oriented-survey.md` §2): a `Cx` clone or drop is in 12–14% of cold samples on calc_parser and lib/std/num + tactic, and `String::clone` is in 9–12%. Much of that comes through [[elab-probe-clone-copies-attempt]], but not all of it.
+Measured with the gdb sampler (`docs/surveys/data-oriented-survey.md` §2): a `Cx` clone or drop is in 12–14% of cold samples on calc_parser and lib/std/num + tactic, and `String::clone` is in 9–12%. Much of that comes through [[elab-probe-clone-copies-attempt]], but not all of it.
 
 ## Proposal
 

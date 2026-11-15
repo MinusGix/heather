@@ -28,7 +28,7 @@ which unfolds to the function type. So `decide` proves a goal written
 - A structural key for a binder-headed carrier (`#Pi@Class`), beside `#Fn`.
 - Resolution against it: the goal `(a: A) → Q` matches the head by
   abstracting `a` from `Q`, a pattern-unification step
-  (`docs/unifier-completeness-design.md`), with `A`'s `Fintype` as the
+  (`docs/elaborator/unifier-completeness-design.md`), with `A`'s `Fintype` as the
   premise.
 - The second half is the general predicate: an instance whose premise is
   a family of instances, `(a: A) → Decide<P(a)>`, so that `P` need not be

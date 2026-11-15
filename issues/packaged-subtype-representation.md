@@ -7,7 +7,7 @@ updated: 2026-09-05
 ---
 
 Follow [[explicit-subtype-code-template]] with a reusable representation
-interface. Details: `docs/packaged-subtype-round.md`.
+interface. Details: `docs/showcase/packaged-subtype-round.md`.
 
 ## Acceptance
 

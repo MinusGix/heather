@@ -7,7 +7,7 @@
 //! Same axes as in_language_fold.rs (docs/testing-generated-terms.md), read for
 //! the one construct whose use site is not a method the user writes: a
 //! self-call over a container field, `kids.map(size)`
-//! (docs/container-fields.md §4.2). Two consequences for the axis list:
+//! (docs/language/container-fields.md §4.2). Two consequences for the axis list:
 //!
 //! * **The neutral scrutinee is the default here, not the hard case.** The
 //!   length a container IH tabulates at is the arm's own field length, always a
@@ -230,7 +230,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 
 /// The rigidity control, and the round's finding.
 ///
-/// docs/surface-fin-indexing-design.md §9 predicted `tabulate_code` would be
+/// docs/language/surface-fin-indexing-design.md §9 predicted `tabulate_code` would be
 /// rigid in `map`'s sense, because its result `[B; k]` is length-indexed. The
 /// index really does pin the *shape* — no arm can return a vector of the wrong
 /// length — but rigidity needs the elements pinned too, and the elements come
@@ -238,7 +238,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 /// `FS(i)`. The index shift is a choice, so the constant-head tabulate below —
 /// every component `f(FZ)` — checks at the declared signature and registers for
 /// `vec.tabulate` exactly as the real one does (registration checks the type,
-/// never the body: docs/meta-def-registration-design.md §2.2).
+/// never the body: docs/metaprogramming/meta-def-registration-design.md §2.2).
 ///
 /// The heuristic's boundary is therefore not "is the result indexed": an
 /// indexed container of unconstrained elements constrains nothing about them.
@@ -310,7 +310,7 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
 
 /// The whole family coexists: one expression whose container IH tabulates,
 /// whose `.fold` folds, and whose `xs[i]` projects, each routed to its own slot
-/// (docs/meta-def-registration-design.md §8 item 5's positive half). This is
+/// (docs/metaprogramming/meta-def-registration-design.md §8 item 5's positive half). This is
 /// the fixture that would notice a hook dispatching on the wrong slot now that
 /// every slot in the vocabulary has a claimant.
 #[test]

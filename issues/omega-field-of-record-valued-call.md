@@ -27,7 +27,7 @@ footprint lemma over a computed `SpanSet` meets the same wall one level up.
 
 Shape of a fix: when a projection's receiver is a call that δ-unfolds (one
 reduct at a time, as §17 unfolds a Bool guard head,
-docs/omega-measure-reduction-design.md) to a constructor, read the
+docs/tactics/omega-measure-reduction-design.md) to a constructor, read the
 component; keep the atom when it does not.
 
 ## Done when
@@ -45,7 +45,7 @@ keeps a field put as a field read, or as an application of one, as the
 atom. The splits' searches (`nat_subtractions`, `int_to_nats`,
 `max_min_reads`) read a field of a call as put too, so `s.take(k).len` is
 `s.len.min(k)` and is split. Design §21 of
-docs/omega-measure-reduction-design.md. `call_field` closes, and
+docs/tactics/omega-measure-reduction-design.md. `call_field` closes, and
 `Span::split_has`/`meet_has` are stated over `has` of the built span.
 Probes and the refused `call_field_false` are in
 `lib/_tests/std/tactic/omega_tests.hthr`.

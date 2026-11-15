@@ -34,5 +34,5 @@ ordinary records; `⟨p |⟩` / `⟨| q⟩` select the first / second
 constructor of an exactly binary sum, covering `Or` and other two-constructor
 types. The same forms work as match patterns. They lower through the existing
 constructor and pattern machinery and add no kernel form. The complete syntax
-and shape restrictions are recorded in `docs/logic-connectives-design.md`
+and shape restrictions are recorded in `docs/library/logic-connectives-design.md`
 §4.1.

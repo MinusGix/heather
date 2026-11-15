@@ -35,7 +35,7 @@ closed_interval, supremum) and the same mathematics at `Rat`/`CReal`.
 - **`-` both ways is a library change**: `designation prefix - at
   OrderedAddGroup := …` and `designation - at OrderedAddGroup := …` beside
   the two in field_division.hthr (rung 2b of
-  docs/operators-onto-classes-design.md §4). Check the precedence the
+  docs/language/classes/operators-onto-classes-design.md §4). Check the precedence the
   designation at a class gets against a carrier's own (`Rat`'s designation
   must still win at `Rat`).
 - **Numerals need the language**: a numeral checked at a carrier with no
@@ -63,7 +63,7 @@ closed_interval, supremum) and the same mathematics at `Rat`/`CReal`.
 ## Related
 
 [[infix-subtraction-notation]] (the carrier half), [[class-default-operators]],
-[[casting-standard]]; docs/stdlib-math-awkwardness-survey.md §2.
+[[casting-standard]]; docs/surveys/stdlib-math-awkwardness-survey.md §2.
 
 ## Log
 

@@ -19,7 +19,7 @@ Build the first explicit customer of [[subtype-transfer-and-evidence]]: an ordin
 - `docs/showcase/positive_subtype.hthr`: explicit record, closure lemma,
   computation rules, transferred associativity, semigroup instance, concrete
   notation, and an ordinary `twice` client.
-- `docs/positive-subtype-round.md`: user explanation and proof-goal workflow.
+- `docs/showcase/positive-subtype-round.md`: user explanation and proof-goal workflow.
 - `lib/std/algebra/algebra_rel.hthr`: relation-indexed Semigroup composition, also
   reused as Mergeable's parent.
 - The projection diagnostic fix recognizes registered, single-receiver

@@ -33,4 +33,4 @@ source; this would add that the source's numbers are the right digits.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). No milestone; still not scheduled.
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/native/compiler-milestones-proposal.md §8). No milestone; still not scheduled.

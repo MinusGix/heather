@@ -1,5 +1,5 @@
 //! `heather check --timings` — the attribution the primary command never had
-//! (`docs/instrumentation-design.md`).
+//! (`docs/infrastructure/instrumentation-design.md`).
 
 use std::process::{Command, Output};
 

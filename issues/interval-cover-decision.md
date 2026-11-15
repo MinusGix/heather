@@ -25,4 +25,4 @@ be fed back in.
   [[closed-interval-compact-sublocale]], where "this finite family covers
   `[a, b]`" is the usual side condition.
 
-Design: docs/localic-reals-design.md §7.
+Design: docs/library/localic-reals-design.md §7.

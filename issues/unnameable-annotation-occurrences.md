@@ -6,7 +6,7 @@ created: 2026-08-13
 updated: 2026-09-11
 ---
 
-The emitted-mass residual of [[wf-shape-annotation-slots]]'s round (docs/wf-shape-code-design.md §7), promoted out of that closing issue's log so it keeps a live home. Two families of emitted `Type::Wf` occurrences survive both spelling rounds because no registered definition names them:
+The emitted-mass residual of [[wf-shape-annotation-slots]]'s round (docs/inductives/wf-shape-code-design.md §7), promoted out of that closing issue's log so it keeps a live home. Two families of emitted `Type::Wf` occurrences survive both spelling rounds because no registered definition names them:
 
 1. **An `App`'s `dom`/`cod` at a function-typed parameter** (`ev: Val -> Ir -> Res`): the annotation is copied from the binder's type during elaboration, not from a callee's Psi statement, so the statement-respell cascade cannot reach it. A handful of occurrences per declaration — small, but named and measured.
 2. **`Type::Wf` occurrences that are not any declaration's registered lowering**: monomorphized instantiations (the `Box<T>`-style per-instantiation copies — registration is closed-only by design, [[wf-field-conversion-cost]]) and copies quoted inside a code literal (`⌜⟦D⟧⌝`), where a reference cannot stand because the quote is syntax. This includes open instantiations of a parameterized or value-indexed record: there is a declaration to name, but today's `TyCode` registration cannot abstract over the instance telescope.

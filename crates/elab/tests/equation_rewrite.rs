@@ -1,6 +1,6 @@
 //! `rewrite(h₁, …, hₙ, e)`: rewriting a goal along equations without
 //! writing `j`'s motive (`issues/equation-rewrite-in-goal.md`,
-//! `docs/equation-rewrite-design.md`).
+//! `docs/tactics/equation-rewrite-design.md`).
 //!
 //! The tactic writes a term — a `J` along `sym(h)` whose motive is the goal
 //! with the left side abstracted — so the axes of

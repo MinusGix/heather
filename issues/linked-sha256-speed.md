@@ -71,7 +71,7 @@ and the number is tracked.
 
 ## Tracked
 
-`scripts/bench-native` (`docs/native-benchmarking.md`) prints the table and
+`scripts/bench-native` (`docs/native/native-benchmarking.md`) prints the table and
 records it in `crates/linked/benches/baseline.tsv`: ns per block and MB/s of
 the linked code; the same for a Rust mirror of the Heather source
 (`crates/linked/benches/native/mirror.rs`, held to the linked code byte for

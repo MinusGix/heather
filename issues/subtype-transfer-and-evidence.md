@@ -34,7 +34,7 @@ between ambient values and subtype contents as the transfer interface.
 
 ## Signature-directed inheritance
 
-`docs/smart-subtype-inheritance.md` distinguishes adapting input positions,
+`docs/showcase/smart-subtype-inheritance.md` distinguishes adapting input positions,
 strengthening a selected result, and suggesting a new conditional API. Use an
 explicit target signature for lifting; an ambient return carrier alone is not
 enough to choose a subtype result. Preserve source hypotheses and expose
@@ -61,7 +61,7 @@ are later work, not requirements for that first slice.
 
 ## Expected-result construction probe
 
-The `twice` experience in `docs/three-small-transfer-experiences.md` uses an
+The `twice` experience in `docs/showcase/three-small-transfer-experiences.md` uses an
 explicit `.value` projection and an expected subtype return type. Generate the
 wrapper/evidence at that boundary, with a registered positivity lemma as the
 first solver; no global arithmetic coercion mechanism is needed.
@@ -99,4 +99,4 @@ This probe does not settle all subtype evidence policies.
 - 2026-09-04: Added the tiny positive-natural experience and its proposed expected-result adaptation, with an explicit squash-preserving expansion.
 - 2026-09-05: Started [[positive-subtype-manual-round]]: an explicit positive-natural record, closure proof, and inherited semigroup laws provide the first checked customer. This manual round uses relevant evidence and value-based comparison; wrapper generation and the broader evidence-policy comparison remain here.
 - 2026-09-05: The first explicit customer is complete in [[positive-subtype-manual-round]]: positive addition and semigroup laws check, with resumable closure goals and value-based comparison. Automatic result construction, heterogeneous/general transfer, evidence-policy comparisons, and cost measurements remain open here.
-- 2026-09-05: Added docs/showcase/witness_subtype.hthr and docs/witness-subtype-round.md: a relevant upper-bound witness computes through binary lifting; addition respects value equality, while a checked counterexample rules out a bound-reading observer under that relation. Evidence-policy comparisons and general dependent transport remain open.
+- 2026-09-05: Added docs/showcase/witness_subtype.hthr and docs/showcase/witness-subtype-round.md: a relevant upper-bound witness computes through binary lifting; addition respects value equality, while a checked counterexample rules out a bound-reading observer under that relation. Evidence-policy comparisons and general dependent transport remain open.

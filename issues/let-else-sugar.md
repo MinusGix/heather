@@ -124,4 +124,4 @@ questions. This issue owns the expression-valued two-branch form above.
   constant inference, equation direction/scope, diagnostics, and the indexed
   homogeneous-equality boundary are pinned in `positional_if_let.rs`; `unwrap_or`
   is the representative stdlib use. See
-  `docs/positional-if-let-design.md`.
+  `docs/language/matching/positional-if-let-design.md`.

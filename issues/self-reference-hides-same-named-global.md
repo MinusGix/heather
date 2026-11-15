@@ -19,7 +19,7 @@ fn Prog::Sim(self p: Prog) → Nat { Sim() }
 ```
 
 `<module>::Sim()` works (`prelude::cong` is the idiom for prelude names,
-docs/sections-design.md). Probe on master 4f0ac27
+docs/language/sections-design.md). Probe on master 4f0ac27
 ([[proof-patterns-audit-2026-10]]). Rounds have hit this as `Program::Sim`
 vs `Sim` (Linux spec, PR #110, renamed to `SimProgram`), `Eutt::trans` vs
 `trans` (PR #143) and `Nat::same` inside `T::same`.

@@ -1,6 +1,6 @@
 //! Linux's calls as a container of events, trees over it, and `Sim`
 //! (`issues/native-linux-spec.md`, round S1 of
-//! `docs/native-program-logic-design.md`; submilestone `hih-pl-spec`).
+//! `docs/native/native-program-logic-design.md`; submilestone `hih-pl-spec`).
 //!
 //!  1. the closure checks: `linux_calls` under the re-founded
 //!     `linux_x86_64_io` and determinism, `linux_trees`, `linux_x86_64_sim`,

@@ -13,7 +13,7 @@ Stop speculative elaborator probes from deep-copying the declaration attempt. Ab
 
 `op_carrier_head` (`crates/elab/src/dispatch/operator.rs` ~282, ~305) probes each operator leaf on `self.clone()`, so that a failed candidate cannot leak goals or diagnostics. About a dozen other probes do the same (`lib.rs` ~1959, ~5191, ~5211, ~5259; `binding.rs` ~64; `host.rs` ~1569, ~2993, ~3183; `traits.rs` ~2788). The derived `Clone` deep-copies `DeclAttempt`'s `RefCell<Vec<…>>` logs (`crates/elab/src/attempt.rs`). One of them, `check_notes`, holds a `CheckNote` per checking site met so far, and each note carries a full `Cx` clone (`names: Vec<String>`, skeletons, aliases, type variables). So one probe costs O(sites so far × context depth) allocations, its drop costs the same again, and an operator chain probes once per leaf.
 
-Measured with a gdb stack sampler on cold checks (`docs/data-oriented-survey.md` §0, §1):
+Measured with a gdb stack sampler on cold checks (`docs/surveys/data-oriented-survey.md` §0, §1):
 
 - calc_parser: 15.8% of samples are in the probe's clone and 6.4% in its drop.
 - lib/std/num + lib/std/tactic: 12.8% clone, 7.4% drop.

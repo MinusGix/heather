@@ -11,7 +11,7 @@ updated: 2026-11-01
 `Unique(p, k)`: the buffer the `k`th update of `p` consumes is not read
 again, neither by that name nor by any name sharing its storage. Consumer:
 compile that update in place instead of copying. Producers, cheapest first
-(`docs/facts-on-demand-design.md` §7):
+(`docs/native/facts-on-demand-design.md` §7):
 
 - the ownership setup's judgment, as a plain evidence rule
   `Unique::of_owned({p}, {k}, o: Owned(p) := infer)`, `Owned(p)` a linearity

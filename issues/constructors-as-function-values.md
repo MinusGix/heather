@@ -62,7 +62,7 @@ The care is in the second: the field types (and, for a parameterized
 declaration, the type arguments) come from the expected type today, so the
 peeling has to line the Π domains up with the constructor's fields and
 diagnose a mismatch rather than mis-lower it — the standing hazard of
-`docs/inductive-tier0-lowering.md`. Tier-1 constructors go through the `Wf`
+`docs/inductives/inductive-tier0-lowering.md`. Tier-1 constructors go through the `Wf`
 lowering, so the same arm has to work for a `sup_f` payload.
 
 Partial application of a constructor (`Cons(1)` at `Nat -> List`) is the same
@@ -82,7 +82,7 @@ feature and should land with it.
   the same position does. Filed rather than folded into that round, which was
   already closed.
 - 2026-07-26: Done, in one round and roughly at the estimate. Scheme:
-`docs/constructor-function-values.md`; acceptance
+`docs/language/constructor-function-values.md`; acceptance
 `crates/elab/tests/constructor_values.rs` (9 tests, 388 total).
 
 The two causes wanted the two separate fixes named above. `Succ` is now a

@@ -23,7 +23,7 @@ library-gate probe asks it, and `scripts/sentinel` publishes from it.
 
 Sharing is sound because every store is content-addressed and every replay is
 rechecked or vouched for under the reader's own kernel
-(`docs/cache-v1-design.md`): a shared store can cost a miss, never a wrong
+(`docs/infrastructure/cache-v1-design.md`): a shared store can cost a miss, never a wrong
 answer. What sharing *costs* between checkouts whose compilers differ is owned
 by [[verdict-store-one-kernel]] and [[image-store-identity-overwrite]].
 

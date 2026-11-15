@@ -1,5 +1,5 @@
 // Probes of facts on demand's two language pieces
-// (docs/facts-on-demand-design.md §3–§4): a search rule — an evidence rule
+// (docs/native/facts-on-demand-design.md §3–§4): a search rule — an evidence rule
 // whose premise runs a tactic — and the `Synth` request through `request`,
 // which answers `None` where a plain `:= infer` would be an error.
 // The axes of docs/testing-generated-terms.md: a literal and a neutral

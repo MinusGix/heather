@@ -10,7 +10,7 @@ A parameter default may not mention another parameter today:
 `fn f(n: Nat, k: Nat := n)` is refused at the declaration ("a default
 cannot mention a parameter yet"). Defaults that mention only globals, and
 tactic defaults whose *goal* mentions earlier parameters
-(`h: 0 < n := omega`), work (docs/named-arguments-design.md §9.6).
+(`h: 0 < n := omega`), work (docs/language/named-arguments-design.md §9.6).
 
 ## Why it is refused rather than half-supported
 

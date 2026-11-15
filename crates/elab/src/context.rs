@@ -33,7 +33,7 @@ pub(crate) struct Cx {
     pub(crate) dot_receiver: Option<Rc<DotReceivers>>,
     /// Parallel to `gamma.entries`: each binder's written name and the
     /// implicitness skeleton of its *written* type, where it had one
-    /// (docs/implicit-binders-design.md §3.1; [`Binders::skel`]). Maintained
+    /// (docs/language/implicit-binders-design.md §3.1; [`Binders::skel`]). Maintained
     /// by [`Cx::push`] (defaulting the skeleton to `None`) and
     /// [`Cx::push_skel`] — one push path, so the two cannot desync. Nothing
     /// in a skeleton is subject to substitution or shifting (§3.2), so
@@ -58,7 +58,7 @@ pub(crate) struct Cx {
     /// monomorphized, so they never survive into a kernel term.
     pub(crate) tyvars: Spine<TyVar>,
     /// Class dictionaries in scope, outermost first, **as written**
-    /// (docs/operation-indexed-classes-design.md §5, ladder step 2). A value
+    /// (docs/language/classes/operation-indexed-classes-design.md §5, ladder step 2). A value
     /// index is never searched for; where it is not already ground it comes
     /// from a binder of the goal's class — or of a descendant — whose own index
     /// pins it, and that index is a surface expression valid in this very
@@ -66,13 +66,13 @@ pub(crate) struct Cx {
     /// keeps the whole mechanism off code that has nothing to do with classes.
     pub(crate) dicts: Spine<Rc<DictBinder>>,
     /// Index names that a *repeated* constraint left bound to nothing
-    /// (`docs/operation-indexed-classes-design.md` §5.2), with the refusal
+    /// (`docs/language/classes/operation-indexed-classes-design.md` §5.2), with the refusal
     /// each one owes. Consulted only where the answer would otherwise have
     /// been "unbound name".
     pub(crate) index_ambiguity: Spine<(String, String)>,
     /// Operator symbols a constraint binder **installed**, as (symbol, the
     /// index binder's generated name) — the first rung of a symbol's
-    /// resolution (docs/operators-onto-classes-design.md §4, §5).
+    /// resolution (docs/language/classes/operators-onto-classes-design.md §4, §5).
     ///
     /// `<A: Monoid(+)>` puts `("+", "#op+@0_0")` here for the whole
     /// declaration, signature and body alike, which is what makes
@@ -83,22 +83,22 @@ pub(crate) struct Cx {
     pub(crate) op_locals: Spine<(String, String)>,
     /// The meta-layer binder environment, present exactly while a `meta fn`'s
     /// body — or a quote payload inside it — elaborates
-    /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
+    /// (docs/metaprogramming/in-language-map-design.md §5). `None` everywhere else, which is
     /// what keeps the entire quotation machinery inert for ordinary code.
     pub(crate) meta: Option<Rc<quote::MetaEnv>>,
-    /// Set while a **corecursive** body elaborates (docs/codata-elaborator-design.md
+    /// Set while a **corecursive** body elaborates (docs/inductives/codata-elaborator-design.md
     /// §5): the definition's step and child types, which a checking position
     /// at either of them is elaborated against by `Elaborator::corec_check`.
     /// `None` everywhere else, which keeps the hook inert.
     pub(crate) corec: Option<Rc<crate::codata::CorecSite>>,
     /// Set while a **friend**'s body is re-elaborated over a corecursive
-    /// definition's free carrier (docs/codata-elaborator-design.md §5.5):
+    /// definition's free carrier (docs/inductives/codata-elaborator-design.md §5.5):
     /// its codata arguments are nodes of that carrier, read by
     /// `Elaborator::friend_check`. `None` everywhere else.
     pub(crate) friend: Option<Rc<crate::codata::FriendMode>>,
     /// The codata type of the innermost `match` on codata, while its arms
     /// elaborate — only so an unguarded self-call there can say that codata
-    /// has no structural order (docs/codata-elaborator-design.md §4).
+    /// has no structural order (docs/inductives/codata-elaborator-design.md §4).
     pub(crate) codata_match: Option<Arc<str>>,
     /// The `match`es on a parameter, inside the recursion, that were passed
     /// over as case splits (`recursion::guard_param`), each with the guard
@@ -107,12 +107,12 @@ pub(crate) struct Cx {
     pub(crate) case_splits: Rc<Vec<(usize, Rc<crate::recursion::Guard>)>>,
     /// The enclosing matches whose arm equation is pending: in scope for the
     /// readers of hypotheses, not yet in Γ
-    /// (docs/dependent-match-compiler-design.md §4.3). A reader records the
+    /// (docs/language/matching/dependent-match-compiler-design.md §4.3). A reader records the
     /// identities here as wanted, and a match whose arms then fail is
     /// elaborated again as its convoy. Empty outside every match.
     pub(crate) pending_eqs: Rc<Vec<u32>>,
     /// Set while a motive-less `match` probes its arms for a constant motive
-    /// (`matching::probe_arm_type`, docs/dependent-match-compiler-design.md
+    /// (`matching::probe_arm_type`, docs/language/matching/dependent-match-compiler-design.md
     /// §6): an arm body checked against the probe's marker type is inferred
     /// instead, and its type recorded if it lives outside the arm.
     pub(crate) arm_type_probe: Option<Rc<crate::matching::ArmTypeProbe>>,
@@ -173,7 +173,7 @@ impl DotReceivers {
 }
 
 /// One type parameter, bound to the type it is instantiated at
-/// (`docs/inductive-tier0-lowering.md` §3.1).
+/// (`docs/inductives/inductive-tier0-lowering.md` §3.1).
 ///
 /// `depth` is `names.len()` at the binding — the same device [`Alias`] uses,
 /// and needed for the same reason. The instantiation is lowered in the
@@ -209,7 +209,7 @@ pub(crate) struct Alias {
     pub(crate) level: Level,
     /// The alias's implicitness skeleton, when its `let` annotation, its
     /// RHS lambda's written marks, or the record field it projects carried
-    /// one (docs/implicit-binders-design.md §3.1). `None` everywhere else.
+    /// one (docs/language/implicit-binders-design.md §3.1). `None` everywhere else.
     pub(crate) skel: Option<Rc<Skel>>,
     /// Set by [`Alias::splice`] for a written `let` (shared by every field
     /// of a record `let`); `None` for the elaborator's own aliases, whose
@@ -294,7 +294,7 @@ impl Cx {
     /// reserved spelling `omega`'s own renaming uses
     /// (`omega_cert::source_context`).
     ///
-    /// Where a default runs (docs/named-arguments-design.md §9.4): its goal
+    /// Where a default runs (docs/language/named-arguments-design.md §9.4): its goal
     /// is the caller's, open in the caller's locals, so it is checked here;
     /// its *names* must resolve where it was declared, so none of the
     /// caller's may capture one. A tactic still sees every hypothesis — by
@@ -427,7 +427,7 @@ impl Cx {
 
     /// [`Cx::push`] for the sites that carry an implicitness skeleton: the
     /// declaration telescope loop, `elab_ty`'s `Fn` arm, and the lambda
-    /// binder pushes (docs/implicit-binders-design.md §3.1).
+    /// binder pushes (docs/language/implicit-binders-design.md §3.1).
     pub(crate) fn push_skel(
         &mut self,
         name: String,
@@ -445,7 +445,7 @@ impl Cx {
 }
 
 /// A class dictionary in scope, as the declaration wrote it
-/// (`docs/operation-indexed-classes-design.md` §5). The carrier and the index
+/// (`docs/language/classes/operation-indexed-classes-design.md` §5). The carrier and the index
 /// are **surface** and are re-elaborated in the context that consults them,
 /// which is what keeps the index an ordinary expression of the use site rather
 /// than a kernel term that would have to be re-scoped.

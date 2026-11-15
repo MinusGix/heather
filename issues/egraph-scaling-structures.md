@@ -8,7 +8,7 @@ updated: 2026-11-08
 ---
 
 The e-graph library's costs are shapes chosen for goal-sized graphs
-(`docs/grind-design.md` §5, §8): hash-consing scans the nodes, `find` is a
+(`docs/tactics/grind-design.md` §5, §8): hash-consing scans the nodes, `find` is a
 list lookup, `union` relabels the classes list, and a congruence pass
 compares signatures pairwise. A client with hundreds of nodes (a compiler's
 value numbering over a large body, e-matching instances) will want a
@@ -26,7 +26,7 @@ Not scheduled: wait for a client whose timings show the graph dominating
 - **[[egraph-library]]** owns the graph.
 
 ## Log
-- 2026-11-08: Partly addressed for grind's native probe (docs/grind-design.md
+- 2026-11-08: Partly addressed for grind's native probe (docs/tactics/grind-design.md
   §15.2): nodes and representatives are `Array`s over a `NatMap` trie
   (logarithmic lookup), hash-consing looks in a bucket keyed by the first
   two children, and closure is incremental over a signature index with a

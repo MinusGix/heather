@@ -1,5 +1,5 @@
 // A leaf compiled a node at a time (issues/native-compile-wider-leaves.md;
-// round 4 of docs/native-real-programs-plan.md): a leaf S4 does not take
+// round 4 of docs/native/native-real-programs-plan.md): a leaf S4 does not take
 // whole runs as its nodes run one after another, each settled into the
 // environment before the next reads it (`Env::steps`), and each node's code
 // moves the environment on by that node's own leaf.

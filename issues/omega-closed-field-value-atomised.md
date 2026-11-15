@@ -8,7 +8,7 @@ updated: 2026-10-30
 ---
 
 `omega` reads a field of a call as what the constructor put there
-(docs/omega-measure-reduction-design.md §10–§12), but only while that value
+(docs/tactics/omega-measure-reduction-design.md §10–§12), but only while that value
 stays stuck. When the call's arguments are closed, the bounded whnf in
 `field_as_put_within` (crates/elab/src/omega_cert.rs) runs on into the
 field's own computation, runs out of its 64-step budget, and the whole
@@ -56,7 +56,7 @@ whole read's bounded weak head, which at closed arguments evaluates the
 field on into `lay(3)`, and a spent budget returned from the function before
 the read-as-put route ran. A spent budget now only skips that shortcut; the
 receiver is unfolded as far as its pair and the field projected without δ,
-as at a variable. Design: `docs/omega-measure-reduction-design.md` §14.
+as at a variable. Design: `docs/tactics/omega-measure-reduction-design.md` §14.
 Probes `at_lit`, `at_lit_goal` and the control `closed_match_opaque` (a field
 put as a `match` on the computation stays an atom) are in
 `lib/_tests/std/tactic/omega_tests.hthr`.

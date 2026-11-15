@@ -106,4 +106,4 @@ affected, and `↔` is the only one.
   `crates/syntax/src/parser.rs` and
   `a_binder_headed_function_type_can_be_the_iff_operand` (meaning, with the
   three negative controls above) in `crates/elab/tests/logic.rs`.
-  `docs/logic-connectives-design.md` §4.2 records the rule.
+  `docs/library/logic-connectives-design.md` §4.2 records the rule.

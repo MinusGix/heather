@@ -9,7 +9,7 @@ updated: 2026-10-28
 
 `Greedy::colouring` (`lib/native/native_alloc.hthr`) costs more than one
 declaration's kernel fuel on cat, so write-elf evaluates it on its fork and
-spells the homes as a literal (`docs/native-register-allocation-design.md`
+spells the homes as a literal (`docs/native/native-register-allocation-design.md`
 §6). It makes a few linear liveness passes and one graph pass over flag
 rows, settled as they are built so the lazy tables stay shallow. The
 heuristic is untrusted, so it could run in Rust over the read-back source at

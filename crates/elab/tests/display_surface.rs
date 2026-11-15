@@ -1,5 +1,5 @@
 //! Diagnostics print a kernel type back as **surface** syntax
-//! (`docs/surface-type-display-design.md`,
+//! (`docs/elaborator/surface-type-display-design.md`,
 //! `issues/le-diagnostics-print-raw-el.md`).
 //!
 //! Every test here pins *rendered message text*, because the defect was never
@@ -45,7 +45,7 @@ fn goals(src: &str) -> Vec<(String, Vec<(String, String)>)> {
     }
 }
 
-/// A propositional relation is a `fn … -> Type` (`docs/nat-order-design.md`
+/// A propositional relation is a `fn … -> Type` (`docs/library/nat-order-design.md`
 /// §1), so at **open** arguments its type is `El(Le(n)(m))` — stuck as an `El`
 /// irreducibly, which is why [[goal-display-decodes]]' reader cannot help. The
 /// filed symptom, verbatim: `trivial` at a comparison used to print

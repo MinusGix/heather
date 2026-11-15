@@ -1,5 +1,5 @@
 //! The meaning check for structural recursion
-//! (issues/recursion-meaning-check.md, docs/elaborator-principles-survey.md §6).
+//! (issues/recursion-meaning-check.md, docs/elaborator/elaborator-principles-survey.md §6).
 //!
 //! Structural recursion is compiled at a surface `match` (`recursion.rs`):
 //! the recursor sits at the `match` the planner chose, and everything outside
@@ -180,7 +180,7 @@ impl Meaning<'_> {
     /// recursive fields, `refl` at every leaf. One level is the ordinary
     /// structural recursion; a course-of-values recursion that reads the
     /// predecessor's predecessor (`half`,
-    /// docs/course-of-values-recursion-design.md) needs its source's nested
+    /// docs/language/recursion/course-of-values-recursion-design.md) needs its source's nested
     /// `match` to reduce too, so the caller deepens on a refusal. A type this
     /// does not know the constructors of is split once, by a default arm.
     pub(crate) fn meaning_split(&self, scrut: &str, ty: &Ty, depth: usize, fresh: &mut usize, span: Span) -> Expr {

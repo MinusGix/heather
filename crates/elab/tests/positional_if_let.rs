@@ -131,7 +131,7 @@ fn indexed_family_keeps_the_existing_homogeneous_equation_boundary() {
     );
 
     // The equation binding on an indexed family is the index packed with
-    // the value (docs/dependent-match-compiler-design.md §9), so `h` is
+    // the value (docs/language/matching/dependent-match-compiler-design.md §9), so `h` is
     // available and `cong(h)` gives the index.
     ok(
         &mut with_option(),

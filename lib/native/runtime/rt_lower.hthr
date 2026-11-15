@@ -1,5 +1,5 @@
 // The default setup's lowering of `rt` into FunctionIR, and its soundness
-// proved once (docs/runtime-fn-setups-design.md §6.3, §16.5–§16.7;
+// proved once (docs/native/runtime-fn-setups-design.md §6.3, §16.5–§16.7;
 // issues/runtime-default-setup-soundness.md).
 //
 // A term lowers in a context of ports, one per variable, and from a fresh
@@ -1994,7 +1994,7 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
 // else: not the meanings that answer its calls, not the file. So a function
 // has one code at every file, which is what lets an instance carry one
 // `Function` and state its agreement over any buffers
-// (docs/native-one-compiler-design.md §2.3, U3c step 3). `World::over` is a
+// (docs/native/native-one-compiler-design.md §2.3, U3c step 3). `World::over` is a
 // world's table and file replaced; each lowering at it is the lowering at
 // the world, by the same walk as the definition.
 

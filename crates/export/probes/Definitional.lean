@@ -1,5 +1,5 @@
 /- Which of Heather's definitional rules Lean's kernel has, over prelude/Hx.lean
-   (docs/export-fragment-design.md §3). Every `example` here checks; the
+   (docs/library/export-fragment-design.md §3). Every `example` here checks; the
    `#guard_msgs (drop error)` ones are the rules Lean lacks, kept so a change
    in either system shows up. Run: scripts/export-recheck builds Hx.olean,
    then `LEAN_PATH=<that dir> lean Definitional.lean`. -/

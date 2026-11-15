@@ -1,5 +1,5 @@
 /- The per-declaration realisation of a tier-1 `Wf` instance as a native Lean
-   inductive (docs/export-fragment-design.md §5.2), for `List<A>`. (1) and (2)
+   inductive (docs/library/export-fragment-design.md §5.2), for `List<A>`. (1) and (2)
    check: the property `Wf` exists for, and β at a canonical tag. (3) does
    not: β at an *open* tag, which Heather has and this realisation lacks. -/
 import Hx

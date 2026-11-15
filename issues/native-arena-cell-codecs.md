@@ -10,8 +10,8 @@ updated: 2026-11-02
 
 `lib/native/native_arena.hthr` represents `List<List<BitVec(8)>>` (a file's
 lines): a cell is the next cell's name, the payload's length and the payload
-(docs/native-heap-arena-design.md §4). Two generalisations wait on a customer
-that holds something else (docs/native-heap-arena-design.md §4.2):
+(docs/native/native-heap-arena-design.md §4). Two generalisations wait on a customer
+that holds something else (docs/native/native-heap-arena-design.md §4.2):
 
 - **Encoded elements.** A list of any `A` with an encoding into bytes whose
   round trip holds (`decode(encode(x) ++ rest) = x`, the shape of

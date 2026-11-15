@@ -1,7 +1,7 @@
 # Straight label code, computed: `Straight` and `straight_runs`
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Issue: `issues/native-symbolic-execution-step.md`. Library:
@@ -122,7 +122,7 @@ allow is the caller's case analysis: the branch the issue leaves as a goal.
 `code` once, from `CommandPlaced`, for any label.
 
 Why not generated terms: a generator in the meta layer has no `match` or
-recursion over code (`docs/meta-def-registration-design.md` §2), and
+recursion over code (`docs/metaprogramming/meta-def-registration-design.md` §2), and
 elaborator sugar would be a second, Rust-side reading of the items'
 semantics. Here the items' semantics are read once, in `straight_item`, and
 `straight_item_goes` proves that reading against the machine. Nothing is
@@ -333,7 +333,7 @@ for the prologue and the spill's setup and fell for the total row.
 Two things decided the shape:
 
 - **`omega` stays out of a phase's term.** It reads every hypothesis in
-  scope (`docs/creal-multiplication-round.md` met the same with `Rat`
+  scope (`docs/library/creal.md` met the same with `Rat`
   facts), and inside a stretch's leaf that scope holds the stretch's spelled
   state. In `keep_runs` two `omega`s for the count's bounds were three
   quarters of its kernel steps; as small lemmas (`two_or_more`,

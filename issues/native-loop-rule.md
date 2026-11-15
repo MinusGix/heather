@@ -9,7 +9,7 @@ created: 2026-10-20
 updated: 2026-10-21
 ---
 
-Round S2 of `docs/native-program-logic-design.md` (§6.2): `loop_at`, one loop
+Round S2 of `docs/native/native-program-logic-design.md` (§6.2): `loop_at`, one loop
 rule for native code, which the compiler's `iter` lemma uses.
 
 ## Scope

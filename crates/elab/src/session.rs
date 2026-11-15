@@ -28,7 +28,7 @@ struct SessionCheckpoint {
 /// captured prefix in this process. Forking it creates fresh attempt,
 /// diagnostic, report, policy, metric, memo, and gate state around the same
 /// committed facts. Persistent, untrusted module images are a later stage of
-/// `docs/semantic-module-images-design.md` and must recheck their decoded
+/// `docs/infrastructure/semantic-module-images-design.md` and must recheck their decoded
 /// kernel bindings before installing metadata.
 #[derive(Clone)]
 pub struct SemanticImage {
@@ -83,7 +83,7 @@ impl SessionCheckpoint {
 /// [`SessionCheckpoint`] is the committed-state half and is deliberately
 /// narrow (see its own note). A module pass, though, is the unit the deferred
 /// kernel gate discards when a queued proof fails
-/// (`docs/parallel-kernel-gate-design.md` §5.1), and *nothing* a discarded
+/// (`docs/kernel/parallel-kernel-gate-design.md` §5.1), and *nothing* a discarded
 /// pass did may be observable: not the bindings it registered, not the
 /// warnings it raised, not the Omega certificates it reported, not the delta
 /// events it journalled, not the `--timings` rows it pushed. So this is the
@@ -152,7 +152,7 @@ impl Elaborator {
     /// An elaborator configured as this one (its gate, kernel width, lints,
     /// collectors) over `image`'s world instead of its own: where a driver
     /// elaborates a module over exactly its import closure
-    /// (`docs/module-dag-design.md` §6). The memos keyed by Ψ position are
+    /// (`docs/infrastructure/module-dag-design.md` §6). The memos keyed by Ψ position are
     /// dropped, as a rollback drops them, and nothing this elaborator has
     /// pending (warnings, reports, a journal) comes along.
     pub fn fork_over(&self, image: &SemanticImage) -> Elaborator {

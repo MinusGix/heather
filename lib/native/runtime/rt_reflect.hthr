@@ -1,5 +1,5 @@
 // The reflector: an elaborated body, read through the host interface, as
-// `rt` (docs/runtime-fn-setups-design.md §3,
+// `rt` (docs/native/runtime-fn-setups-design.md §3,
 // issues/runtime-fn-reflected-language.md).
 //
 // Untrusted like every producer: a wrong reflection fails the pin
@@ -59,7 +59,7 @@ record PrimEntry { g: Nat, p: Prim }
 
 record RecEntry { g: Nat }
 
-// A type the program holds by its `datarepr` (docs/runtime-fn-setups-design.md
+// A type the program holds by its `datarepr` (docs/native/runtime-fn-setups-design.md
 // §16.13): the repr's global (what `Repr` answers for the type) and name, the spec
 // type's name (whose own operations the walk reads through), the repr's
 // `abs` and `emb`, and the type itself. Its code is `Named(recs.len() + i)`,
@@ -67,7 +67,7 @@ record RecEntry { g: Nat }
 record ReprEntry { repr: Nat, name: String, spec: String, abs: Nat, emb: Nat, ty: Handle }
 
 // A call on Linux an effectful body has made (`rt_io_reflect`,
-// docs/effects-capabilities-design.md §8.3), as the reflector reads its
+// docs/language/effects-capabilities-design.md §8.3), as the reflector reads its
 // answer back: its place on the world chain (the first call is 0), the
 // method, the call as the body has it, and the variables its `Invoke` bound
 // the answer to: `.value` when the answer is one word, `.value.<field>` when
@@ -80,7 +80,7 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
 
 // What the body of a function over a span it writes knows of that span
-// (`rt_file_reflect`, docs/native-one-compiler-design.md §2.6): the span
+// (`rt_file_reflect`, docs/native/native-one-compiler-design.md §2.6): the span
 // parameter's local, the span as it is now (`None` while nothing has
 // written it: the parameter itself; after a store or a call that writes,
 // that link of the chain), and the calls that wrote it so far, in order,
@@ -933,7 +933,7 @@ fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
 }
 
 // ---------------------------------------------------------------------------
-// The world of an effectful body (docs/effects-capabilities-design.md §8.3).
+// The world of an effectful body (docs/language/effects-capabilities-design.md §8.3).
 //
 // Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, shared
 // wherever the body reads it: `.after` is the world the next call takes, and

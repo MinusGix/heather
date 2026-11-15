@@ -1,5 +1,5 @@
 //! Traits, layer 2: the instance resolver and `:= infer`
-//! (`docs/traits-layer2-design.md`, `issues/traits.md`).
+//! (`docs/language/classes/traits-layer2-design.md`, `issues/traits.md`).
 //!
 //! Everything resolution produces is a *generated term*
 //! (`docs/testing-generated-terms.md`), so the four axes are varied
@@ -314,7 +314,7 @@ fn oops(p: Pair<Z, Y>, q: Pair<Z, Y>) -> Pair<Z, Y> {{ combine(p, q) }}
 "
     ));
     // The candidate is named as the **registry** holds it — module-qualified
-    // (`docs/instance-resolved-key-design.md` §4). A trace line is data about
+    // (`docs/elaborator/instance-resolved-key-design.md` §4). A trace line is data about
     // the registry and not a quotation of what the writer typed, and in a
     // program with two `Pair::Mag`s a bare line would name neither.
     assert!(e.contains("candidate: main::Pair::Mag"), "{e}");
@@ -357,7 +357,7 @@ fn infer_is_refused_on_an_implicit_parameter() {
 }
 
 /// `infer` is the only solver; any other expression after `:=` is a
-/// parameter default (docs/named-arguments-design.md §9.6), which runs at the
+/// parameter default (docs/language/named-arguments-design.md §9.6), which runs at the
 /// call. Here the call runs `omega` with its certificate library absent, and
 /// the refusal names both the default and the missing import.
 #[test]
@@ -368,7 +368,7 @@ fn a_non_solver_after_colon_eq_is_a_default() {
 }
 
 /// Candidates keyed at the goal carrier's own head are tried before the
-/// rest (docs/reflection-through-decide-instances-design.md §3). Both
+/// rest (docs/tactics/reflection-through-decide-instances-design.md §3). Both
 /// instances below *fit* `Tag<Wrap(3)>` — `Wrap(3)` unfolds to `Nat`, so the
 /// `Nat` instance verifies too — and canonical order (`Nat::Tag` before
 /// `Wrap::Tag`) would pick the general one. The head-keyed instance is the

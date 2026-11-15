@@ -24,7 +24,7 @@ should be reported there.
 
 This was the second gap logged on [[field-defaults-under-locals]], which
 closed when defaults began running under locals; parameter defaults
-(docs/named-arguments-design.md §9.6) share it.
+(docs/language/named-arguments-design.md §9.6) share it.
 
 ## Direction
 
@@ -36,7 +36,7 @@ marker's span with the same message the elaboration failure gets.
 ## Log
 
 - 2026-10-23: [[parameter-default-unchecked-at-declaration]] now checks a
-  *value* default at its declaration (docs/named-arguments-design.md §9.7),
+  *value* default at its declaration (docs/language/named-arguments-design.md §9.7),
   so a value's kernel failure that holds at every call is the declaration's
   own error and belongs where it is reported. This issue keeps the
   discharges (`refl`, `decide`) and the values whose fit only a call decides

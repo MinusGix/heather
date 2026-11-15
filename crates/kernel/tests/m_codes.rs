@@ -1,4 +1,4 @@
-//! Codes and recursor branches for `M`: `docs/kernel-m-codes-design.md`
+//! Codes and recursor branches for `M`: `docs/kernel/kernel-m-codes-design.md`
 //! (`issues/codata-codes.md`), the round that lets codata land at layer c.
 //!
 //! `TmM` is the code of `M`, with the index inside the code, and `El`

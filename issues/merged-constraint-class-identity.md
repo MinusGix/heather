@@ -8,7 +8,7 @@ updated: 2026-10-31
 ---
 
 Constraints that share a symbol at one carrier merge into one dictionary of
-a synthesized class (docs/operators-onto-classes-design.md §17,
+a synthesized class (docs/language/classes/operators-onto-classes-design.md §17,
 [[constraints-sharing-indices]]). The class is made in the module that first
 asks for it and found by name after that, which covers the library today:
 `linarith` makes `CommRingOfInt+OrderedField` and its clients import it.

@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-22
 ---
 
-The first optimisation theorems (`docs/wick-survey.md` §2.2): L-smoothness
+The first optimisation theorems (`docs/surveys/wick-survey.md` §2.2): L-smoothness
 and the descent lemma, strong convexity and the PL inequality, and linear
 convergence of gradient descent with step `1/L`, over `Fin n → R` at an
 ordered field where the proof allows it. Wick has these classically

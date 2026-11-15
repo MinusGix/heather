@@ -15,7 +15,7 @@ of milliseconds while its merkle walk took seconds, and the run's image
 publish and relocation took most of the rest; at 32 lets the run passed five
 minutes. Without `--cache` the same file checks in milliseconds.
 
-`docs/mengine-survey.md` §3.3 predicted this ("`put_term` writes a tree") and
+`docs/surveys/mengine-survey.md` §3.3 predicted this ("`put_term` writes a tree") and
 left it as a note until an image was measured tree-blown. This is that
 measurement, on a generated file rather than the library, so it is not urgent
 for the library as it is, but it is the next wall for let-heavy proofs now
@@ -31,5 +31,5 @@ and read `merkle_walk_ns`, `image_publish_ns`, `image_relocate_ns`.
 
 - 2026-10-27: Images half done 2026-10-27 ([[library-gate-native-cold-rail]]): `put_term`/`put_type` write each structurally distinct node once and back-reference repeats, and the reader returns the shared `Arc`; relocation goes through the same codec. The merkle walk is still a tree walk.
 - 2026-10-29: Seen in the native tools' fixed cost ([[native-process-fixed-cost]]): in a fully warm `write-elf yes_tool` the merkle walk was about half the run, several seconds of it on a one-line `fn` that opens write-elf's probe module. Probe cases `native/elf-floor-yes` and `native/world-replay` (`scripts/bench-probes`).
-- 2026-11-05: gardener: cites a file it shares with [[open-payload-shift-copies]] (`docs/mengine-survey.md`).
-- 2026-11-06: Done ([[grind-closure-cost]]): relocation's `reindex_global` memoizes shared nodes like `shift_global`, and the merkle walk writes a node whose encoding reaches 512 bytes as its digest, memoized by address, so it walks a declaration's shared size (`docs/cache-v1-design.md` §12.5). Domains bumped. On the cold bundled-library check with grind's conversions, relocation went from about 13 s to 5 s and the merkle walk from about 18 s to 7 s.
+- 2026-11-05: gardener: cites a file it shares with [[open-payload-shift-copies]] (`docs/surveys/mengine-survey.md`).
+- 2026-11-06: Done ([[grind-closure-cost]]): relocation's `reindex_global` memoizes shared nodes like `shift_global`, and the merkle walk writes a node whose encoding reaches 512 bytes as its digest, memoized by address, so it walks a declaration's shared size (`docs/infrastructure/cache-v1-design.md` §12.5). Domains bumped. On the cold bundled-library check with grind's conversions, relocation went from about 13 s to 5 s and the merkle walk from about 18 s to 7 s.

@@ -1,5 +1,5 @@
 // Probes of the verified lowering's shifts (function_ir_lower,
-// docs/runtime-fn-setups-design.md §16.13 round 3): legalization of the
+// docs/native/runtime-fn-setups-design.md §16.13 round 3): legalization of the
 // count, apart from selection, and the code each count selects.
 import function_ir;
 import function_ir_lower;

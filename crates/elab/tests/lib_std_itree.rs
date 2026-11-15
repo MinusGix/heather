@@ -1,4 +1,4 @@
-//! `lib/std/itree/itree.hthr` (`docs/itree-core-round.md`): definitional
+//! `lib/std/itree/itree.hthr` (`docs/itrees/itree-core-round.md`): definitional
 //! facts that do not hold, which the language cannot state as `¬` theorems
 //! because they fail only up to conversion. What it can state is
 //! `lib/_tests/std/itree/itree_tests.hthr`, which the whole-library gate

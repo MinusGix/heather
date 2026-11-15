@@ -9,7 +9,7 @@ updated: 2026-10-31
 ---
 
 What [[float-reals-sqrt-and-error]] left of `float-reals`
-(docs/floating-point-design.md §6, §17), in rough order of use:
+(docs/library/floating-point-design.md §6, §17), in rough order of use:
 
 - **The error model at a real of either sign.** `Format::real_error_nonneg`
   and `real_relative_nonneg` take `0 ≤ x`. Whether `x ≥ 0` cannot be

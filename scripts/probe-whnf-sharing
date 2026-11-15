@@ -2,7 +2,7 @@
 """The acceptance instrument for issues/whnf-sharing-term-growth.md.
 
 Stage 0 of the shared-value whnf round (issues/nbe-conversion-round.md,
-docs/nbe-conversion-design.md §13). This is NOT part of `scripts/test` and
+docs/kernel/nbe-conversion-design.md §13). This is NOT part of `scripts/test` and
 NOT part of `scripts/bench`, on purpose:
 
   * it is not a kernel bench, because the bench suite is zero-dependency and

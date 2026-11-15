@@ -2,7 +2,7 @@
 // record over `List<Char>` and not an alias, so it owns its own instance keys
 // — the literal class, decidable equality, a designated `++` — while every
 // law about it is the corresponding list law lifted through one projection
-// (docs/string-char-design.md §2).
+// (docs/library/string-char-design.md §2).
 //
 // UTF-8 is a *representation* of this type and not its definition; encoding,
 // decoding and the byte-level `Utf8` spec type are a later round's work.

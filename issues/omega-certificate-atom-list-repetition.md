@@ -68,7 +68,7 @@ fraction of the size.
   instantiation's annotation allocations within a declaration, so repeated
   nodes hit the memo or `Rc` pointer equality. That would help omega's
   certificates and every list-heavy term. It belongs to the emission-cost line
-  (`docs/wf-shape-code-design.md`, `docs/annotation-component-respell-design.md`)
+  (`docs/inductives/wf-shape-code-design.md`, `docs/elaborator/annotation-component-respell-design.md`)
   rather than to omega.
 - 2026-09-26: Annotation-interning round (uncommitted). A constructor value's children
   annotation and its `sup_f` shape and arity slots are built once per
@@ -118,7 +118,7 @@ fraction of the size.
   and a reference to one definition removes it.
 
   Built as a *transparent slot* of the declaration's goal arena
-  (docs/bv-omega-design.md §6.1):
+  (docs/tactics/bv-omega-design.md §6.1):
   - The certificate names its atoms `__omega_atoms`.
   - The `omega` arm elaborates the literal once, stores it in a slot that is a
     definition both while the declaration elaborates and once lifted, and

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""How much of lib/'s declaration heads repeat (docs/sections-design.md).
+"""How much of lib/'s declaration heads repeat (docs/language/sections-design.md).
 
     scripts/signature-census            # totals and the files that repeat most
     scripts/signature-census --top 40   # more rows

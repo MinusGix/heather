@@ -84,7 +84,7 @@ source theorem rather than occupy an equal-ranked slot.
   design: implicitly expand profiles through the real resolver, rank by the
   additional obligations at the cursor, expose axiom impact, and down-rank
   rather than hide candidates with unmet requirements.
-- 2026-10-23: Evidence from Arend (`docs/arend-survey.md` §6). Arend's CLI,
+- 2026-10-23: Evidence from Arend (`docs/surveys/arend-survey.md` §6). Arend's CLI,
   built for coding agents, ships symbol search (`-ss`), proof search by a
   statement pattern with `_` wildcards and infix (`-ps "_ + _ = _ + _"`,
   matching subexpressions of parameter and result types rather than unifying
@@ -94,6 +94,6 @@ source theorem rather than occupy an equal-ranked slot.
   library to be worth it") is met: at about 2,500 declarations agents
   already grep for lemmas. Suggested first slice: name search and pattern
   search over module images, `--json`, no ranking yet.
-- 2026-11-02: Piece 3's used-subset report exists for grind: `grind_report(names, hints)` says which hints and named lemmas the proof cites and which it does not, as a `tactic-report` warning (the `Say` host request, docs/host-elaboration-interface-design.md §23; [[grind-e-matching]]).
-- 2026-11-06: The used subset must be closed under what the search stood on, not only what the proof cites: a hint can be needed without being cited (a *lurking* hint, Axolocl, CAV 2025). `grind_report` now says so ("not cited, but needed to find it", [[grind-report-lurking-hints]], docs/grind-design.md §9.6); a minimizer should keep those, or re-run the narrowed call before committing it. Over-supply has a cost of its own: one more lemma can lengthen a call's run (it once exhausted the evaluator's depth past about 2,000 requests, fixed in [[grind-unrelated-lemma-fuel]]).
+- 2026-11-02: Piece 3's used-subset report exists for grind: `grind_report(names, hints)` says which hints and named lemmas the proof cites and which it does not, as a `tactic-report` warning (the `Say` host request, docs/metaprogramming/host-elaboration-interface-design.md §23; [[grind-e-matching]]).
+- 2026-11-06: The used subset must be closed under what the search stood on, not only what the proof cites: a hint can be needed without being cited (a *lurking* hint, Axolocl, CAV 2025). `grind_report` now says so ("not cited, but needed to find it", [[grind-report-lurking-hints]], docs/tactics/grind-design.md §9.6); a minimizer should keep those, or re-run the narrowed call before committing it. Over-supply has a cost of its own: one more lemma can lengthen a call's run (it once exhausted the evaluator's depth past about 2,000 requests, fixed in [[grind-unrelated-lemma-fuel]]).
 - 2026-11-08: 2026-11-08: Papercut found by the tactics survey: grind_using's lemma names are String literals, so a client module must import char and string just to name a hint. Selecting by identifier would remove that scope leak.

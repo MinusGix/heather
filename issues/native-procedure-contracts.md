@@ -9,13 +9,13 @@ milestone: [nh-procedures]
 ---
 
 When the effectful source gains procedures that make calls (a later `Stmt`
-constructor denoting by `mrec`, `docs/native-effect-source-design.md` §9;
-deferred in `docs/native-real-programs-plan.md` §7), each compiled
+constructor denoting by `mrec`, `docs/native/native-effect-source-design.md` §9;
+deferred in `docs/native/native-real-programs-plan.md` §7), each compiled
 procedure needs a target contract that other compiled code can rely on.
 Today nothing needs one: tools are closed programs with procedures inlined
 at build, and `native_compile_correct`'s `SimProgram` plus refinement says
 everything a client can observe. Abate et al.'s WP-preservation paper
-(`docs/wp-preserving-compilation-survey.md` §4) shows the shape the
+(`docs/surveys/wp-preserving-compilation-survey.md` §4) shows the shape the
 contract should take, proved once in Rocq/Iris for an IMP→ASM compiler.
 This issue records that shape so the procedures round starts from it.
 
@@ -62,12 +62,12 @@ This issue records that shape so the procedures round starts from it.
 
 ## Log
 
-- 2026-10-31: docs/native-procedures-design.md §5 takes the derived-contract part: a procedure's claim is Stmt::emit_runs at the callee's Target (its frames on the caller's, one less depth), proved for every procedure at once by induction on the call depth (the linking theorem, depth for Löb). No per-slot footprint is needed for it: the callee's words are its own by the meaning (restored), buffers shared. The footprint, the relational frame for Proved contracts and the two controls stay here.
+- 2026-10-31: docs/native/native-procedures-design.md §5 takes the derived-contract part: a procedure's claim is Stmt::emit_runs at the callee's Target (its frames on the caller's, one less depth), proved for every procedure at once by induction on the call depth (the linking theorem, depth for Löb). No per-slot footprint is needed for it: the callee's words are its own by the meaning (restored), buffers shared. The footprint, the relational frame for Proved contracts and the two controls stay here.
 - 2026-11-01: The meaning now makes the callee's words its own outright (it starts from zero, only its results and buffers come back) and the caller saves its live words, so the derived contract still needs no footprint.
-- 2026-11-05: gardener: cites a file it shares with [[native-register-moves-and-convention]] (`docs/native-procedures-design.md`).
-- 2026-11-11: docs/native-procedures-are-functions-design.md §2.5 states the contract this issue asks for as `Target::Performs`, tree-valued, with the frame as the per-slot footprint and a function's `Site::CallsOver` as its value case; it is step 5c of [[native-one-compiler]]. The negative control moves to the machine level (a hand-made callee that stores above its entry), since `Source` cannot express a callee writing a caller's word.
+- 2026-11-05: gardener: cites a file it shares with [[native-register-moves-and-convention]] (`docs/native/native-procedures-design.md`).
+- 2026-11-11: docs/native/native-procedures-are-functions-design.md §2.5 states the contract this issue asks for as `Target::Performs`, tree-valued, with the frame as the per-slot footprint and a function's `Site::CallsOver` as its value case; it is step 5c of [[native-one-compiler]]. The negative control moves to the machine level (a hand-made callee that stores above its entry), since `Source` cannot express a callee writing a caller's word.
 - 2026-11-11: U5's step 5c has its call sequence ([[native-one-compiler]]); the contract is the half still to build. What the sequence leaves for it: past its count a callee is claimed by `Target::Bare` at the return address, with one call less of room and the registers as the CALL left them but RAX, R11 and RSP; at its RET by `Bare` past that address with the room back, the registers it keeps as they were and the results in theirs (`Target::goes_callee_entry`, `goes_callee_return`, `native_compile_perform.hthr`). `Target::Performs` is that pair stated over a callee, and `Target::goes_called` (`native_compile_correct.hthr`) is the call site's half, proved once already for procedures.
-- 2026-11-11: The contract is built, as `Target::Callable` (`native_compile_perform.hthr`; docs/native-procedures-are-functions-design.md §2.5 "As built"; step 5c of [[native-one-compiler]]). Against the scope:
+- 2026-11-11: The contract is built, as `Target::Callable` (`native_compile_perform.hthr`; docs/native/native-procedures-are-functions-design.md §2.5 "As built"; step 5c of [[native-one-compiler]]). Against the scope:
 
     - Derived, never proved per procedure: `Target::Procedures` (`native_compile_correct.hthr`) gives every procedure of a target the contract at its label, from `Stmt::emit_runs` for its body, by induction on the room.
     - Footprint and scoped locals: the frame. The contract's two ends carry the same list of words above the callee's entry, so a caller's frame is as it was with no conjunct per slot; its registers come back by `Homes::kept`.

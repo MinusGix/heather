@@ -21,7 +21,7 @@ The kernel has had bodied globals with layer-indexed transparency since [[simula
 - `forded/occurrences` ~119 ms per use of a forded family.
 - `lib/certgen/ir_v1.hthr` is 98.8% kernel gate — the frontend hands the kernel a term whose size is a product where it should be a sum.
 
-Expected outcome: the three forded fits fall *below* their bands, `--check` goes red on exactly them, `--save` re-records, and the before/after table in `docs/frontend-benchmarking.md` is the round's number. The §14.9 fuel-cliff negative in `crates/elab/tests/indexed_route_2b_declared.rs` flips positive, and `forded/declared-index-tags` gains its branching row.
+Expected outcome: the three forded fits fall *below* their bands, `--check` goes red on exactly them, `--save` re-records, and the before/after table in `docs/infrastructure/frontend-benchmarking.md` is the round's number. The §14.9 fuel-cliff negative in `crates/elab/tests/indexed_route_2b_declared.rs` flips positive, and `forded/declared-index-tags` gains its branching row.
 
 ## Couplings
 

@@ -15,7 +15,7 @@ On a run where nothing fails, every one of those conversions produces a note
 that is never read.
 
 Named for the first time by the `diag_note` column added on 2026-09-11
-(`docs/instrumentation-design.md` §5). It is essentially the whole of what used
+(`docs/infrastructure/instrumentation-design.md` §5). It is essentially the whole of what used
 to be the elaborator's unattributed `other` bucket, and it is the largest
 serial cost left on the certificate workload now that the kernel gate is
 parallel: on `reused_callee` `build-x86` at one worker, 20.3 s of the 109.6 s

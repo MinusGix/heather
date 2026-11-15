@@ -44,7 +44,7 @@ not make the general spelling gap disappear from the tracker.
 
 This issue owns the expression/type parsing seam for the built-in vector
 former. It should follow the single-reading discipline of
-`docs/types-as-expressions.md`: expected-universe checking may select a type
+`docs/language/types-as-expressions.md`: expected-universe checking may select a type
 expression, but parsing must still produce an unambiguous AST without relying
 on elaboration retries. It does not own bitvector representation or arithmetic.
 

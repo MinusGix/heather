@@ -10,7 +10,7 @@
 //! and a value parameter of a `fn`/`theorem`.
 //!
 //! Nothing new resolves. `as` installs into the very table the constraint
-//! symbol slot installs into (`docs/operators-onto-classes-design.md` §5(b),
+//! symbol slot installs into (`docs/language/classes/operators-onto-classes-design.md` §5(b),
 //! rung 1 of §4's ladder), so a symbol away from a binder still falls through
 //! rungs 2 and 3 exactly as before — which for `∙`, the reserved generic
 //! operator, means *nothing*: no designation anywhere and no fallback name.

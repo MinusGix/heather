@@ -10,7 +10,7 @@ updated: 2026-11-11
 
 `rewrite(h, e)` with an unapplied law instantiates it once, at the first node
 that matches, and rewrites every occurrence of *that* instance
-(`docs/equation-rewrite-design.md` §6.1, Lean's `rw`). Rewriting `g(f(f(…f(a))))`
+(`docs/tactics/equation-rewrite-design.md` §6.1, Lean's `rw`). Rewriting `g(f(f(…f(a))))`
 to `g(a)` by `h: (x) → f(x) = x` is therefore n rewrites, each a walk of the
 goal, and the bench families with linear lower bounds read n² for that reason
 alone: `rewrite/fa`, `rewrite/repeat-mod`, and `rewrite/let-addr0` since its

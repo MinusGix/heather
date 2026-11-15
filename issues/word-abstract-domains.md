@@ -10,7 +10,7 @@ updated: 2026-11-09
 
 The `fits` premises of no-overflow word lemmas and `InBounds` facts are
 discharged per site by hand or `omega`; `Ix::hi` bounds only from above
-over naturals. `docs/native-mathematics-survey.md` §6; survey rank 6.
+over naturals. `docs/surveys/native-mathematics-survey.md` §6; survey rank 6.
 
 ## Scope
 

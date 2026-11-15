@@ -51,7 +51,7 @@ impl Elaborator {
 
 impl Constructors<'_> {
     /// A constructor's arguments with its defaulted fields filled
-    /// (docs/named-arguments-design.md §9.2): the positional arguments fill
+    /// (docs/language/named-arguments-design.md §9.2): the positional arguments fill
     /// the fields without a default, in order, or every field when they are
     /// all written; a named argument fills its field; a defaulted field left
     /// out gets [`FIELD_DEFAULT`]'s marker. `None` when the constructor has no
@@ -116,7 +116,7 @@ impl Constructors<'_> {
     /// this construction instantiates it. The default sees that goal and the
     /// construction's hypotheses by type, but none of its locals by name, and
     /// its names resolve where the record was declared — so a caller's names
-    /// cannot change what it means (docs/named-arguments-design.md §9.4).
+    /// cannot change what it means (docs/language/named-arguments-design.md §9.4).
     pub(crate) fn elab_field_default(&self, cx: &Cx, args: &[Expr], expected: &Type, lvl: &Level, span: Span) -> R<Term> {
         let number = |k: usize| match args.get(k).map(|arg| &arg.kind) {
             Some(ExprKind::Num(n)) => n.as_u64(),
@@ -137,7 +137,7 @@ impl Constructors<'_> {
         // The goal is open in the construction's locals, so the default is
         // checked under them — renamed out of reach, so that a tactic sees each
         // hypothesis and no local can capture one of the default's names
-        // (`Cx::hygienic`; docs/named-arguments-design.md §9.6).
+        // (`Cx::hygienic`; docs/language/named-arguments-design.md §9.6).
         self.elab_check(&cx.hygienic(), default, expected, lvl).map_err(|error| crate::ElabError::Elab {
             msg: format!("`{field}` was left to its default, which did not prove `{goal}` here: {}; \
                 give it by name (`{field} := …`)", match error {
@@ -384,7 +384,7 @@ impl Constructors<'_> {
     /// The declaration an expected type names, for the checking-position
     /// constructor route. A `Π` is peeled first: an **unsaturated**
     /// constructor is checked against the function type it η-expands into
-    /// (docs/constructor-function-values.md §2), so the declaration is in the
+    /// (docs/language/constructor-function-values.md §2), so the declaration is in the
     /// codomain, not the head.
     pub(super) fn expected_ind(&self, expected: &Type) -> Option<Rc<Inductive>> {
         let mut ty = expected;
@@ -439,7 +439,7 @@ impl Constructors<'_> {
     }
 
     /// [`Self::ctor_here`], plus the **expected type** as evidence
-    /// (docs/modules-design.md §4's follow-up, §8's one resolution judgment).
+    /// (docs/language/modules-design.md §4's follow-up, §8's one resolution judgment).
     ///
     /// In checking position the expected type already names the declaration,
     /// so a bare `None` at an expected `Option<A>` is that `Option`'s `None`
@@ -538,7 +538,7 @@ impl Constructors<'_> {
     /// name and the route stands down: that reading does not live in any
     /// declaration's constructor namespace and may well have the expected
     /// type, so picking the constructor over it would be a reinterpretation
-    /// and not a shrink (docs/modules-design.md §8).
+    /// and not a shrink (docs/language/modules-design.md §8).
     ///
     /// **Amended 2026-08-16**: an `inductive`/`record` of the same name no
     /// longer stands the route down. See the body for the licence.
@@ -565,12 +565,12 @@ impl Constructors<'_> {
     /// parenthesized them: `Cons(1, xs)` and `Cons(1)(xs)` flatten to the same
     /// `(declaration, index, arguments)`. Re-associating is sound because a
     /// constructor's function value *is* its η-expansion
-    /// (docs/constructor-function-values.md §2), so the curried spelling is
+    /// (docs/language/constructor-function-values.md §2), so the curried spelling is
     /// definitionally the saturated one — and flattening is what lets the
     /// curried spelling work in inference position, where the head alone
     /// (`Cons(1)`) has no type to infer.
     /// The named arguments of every level travel with the spine
-    /// (docs/named-arguments-design.md §6); the caller permutes the whole lot
+    /// (docs/language/named-arguments-design.md §6); the caller permutes the whole lot
     /// into field order at once, so a name written at an inner level of a
     /// curried spelling lands where it says rather than being dropped.
     pub(super) fn ctor_spine<'a>(
@@ -676,7 +676,7 @@ impl Constructors<'_> {
     }
 
     /// A construction that may leave a defaulted field out
-    /// (docs/named-arguments-design.md §9.5), where nothing is checking it.
+    /// (docs/language/named-arguments-design.md §9.5), where nothing is checking it.
     /// A default is filled against the type the construction is built at, so
     /// a declaration without parameters is checked at its one instance; one
     /// with parameters has nothing here to fix them, and says so unless every
@@ -806,7 +806,7 @@ impl Constructors<'_> {
             IwfFamily(self).lower_iwf_instance(cx, ind, &targs, &[], idx, span)?
         } else if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
             // The result index comes from the pattern and the written index
-            // argument (docs/inductive-indexed-lowering.md §5); the wrong-
+            // argument (docs/inductives/inductive-indexed-lowering.md §5); the wrong-
             // arity case falls through to `build_ctor`'s arity message.
             let (idx, _, _) = IndexedFamilies(self).indexed_ctor_index(cx, ind, i, args, span)?;
             IndexedFamilies(self).lower_indexed_instance(cx, ind, &targs, idx, span)?
@@ -831,7 +831,7 @@ impl Constructors<'_> {
     /// route, which checks every argument against its field again. A wrong
     /// solution is therefore a type error there, never a mis-lowering.
     ///
-    /// This replaces the old refusal (docs/surface-value-parameters.md §4),
+    /// This replaces the old refusal (docs/language/surface-value-parameters.md §4),
     /// which read the problem as higher-order unification; it is the same
     /// first-order problem a call's domain `Float(?F)` poses, because the
     /// parameter's occurrences in the field types are rigid spines. A
@@ -1105,7 +1105,7 @@ impl Constructors<'_> {
             }
             // `R<Nat>(a, b)`: the type arguments are written, and the value
             // arguments are read off the fields as they are with none written
-            // (docs/surface-value-parameters.md §4.1) — `<…>` cannot supply
+            // (docs/language/surface-value-parameters.md §4.1) — `<…>` cannot supply
             // them, and the refusal when nothing fixes one says what does.
             if !ind.valparams.is_empty() {
                 return self.infer_ctor_values(cx, &ind, i, args, &lowered, span);

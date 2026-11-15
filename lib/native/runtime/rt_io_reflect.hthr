@@ -1,5 +1,5 @@
 // The effectful reflector: a `mut self` method over `Io`, read from its
-// elaborated body as an `ETm` (docs/effects-capabilities-design.md §8.3,
+// elaborated body as an `ETm` (docs/language/effects-capabilities-design.md §8.3,
 // issues/effects-uniqueness-surface.md, slice 3).
 //
 // Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, a
@@ -17,7 +17,7 @@
 //    read as a value, the world after a call read as a value, or an answer
 //    of a call the chain does not go through (a copy of `io`, a call whose
 //    world after is dropped). That is the linearity check of the default
-//    setup (docs/runtime-fn-setups-design.md §5.1): with no `ETm` able to
+//    setup (docs/native/runtime-fn-setups-design.md §5.1): with no `ETm` able to
 //    name the world, a body that reflects at all threads it straight
 //    through.
 //

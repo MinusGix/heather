@@ -1,5 +1,5 @@
-// Probes of `decreases` unfolding equations (docs/decreases-unfolding-design.md)
-// over body shapes the `while` lowering produces (docs/sequencing-surface-design.md
+// Probes of `decreases` unfolding equations (docs/language/recursion/decreases-unfolding-design.md)
+// over body shapes the `while` lowering produces (docs/language/sequencing-surface-design.md
 // §5.3, §16). Tests, not library: nothing outside lib/_tests imports this
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import omega; import int;

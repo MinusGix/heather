@@ -1,9 +1,9 @@
 //! A constructor `corec` read as a node: its children as the terms they were
 //! written as, and the same constructor rebuilt with one child replaced
-//! (`docs/equation-rewrite-design.md` §11.5).
+//! (`docs/tactics/equation-rewrite-design.md` §11.5).
 //!
 //! A constructor is the apomorphism's `in` (§3, and
-//! docs/codata-indexed-design.md §4): its children sit at the leaves of a
+//! docs/inductives/codata-indexed-design.md §4): its children sit at the leaves of a
 //! case tree over the step's positions,
 //!
 //! ```text

@@ -31,7 +31,7 @@ a verdict is still only ever accepted under the kernel that recorded it.
 ## Log
 
 - 2026-11-04: landed as sections of one file (format 4,
-  `crates/cache/src/store.rs`, `docs/cache-v1-design.md` §8). Sections over a
+  `crates/cache/src/store.rs`, `docs/infrastructure/cache-v1-design.md` §8). Sections over a
   file per kernel: the one path keeps the loud format-bump route (`FILE` is
   never renamed), `cat` still shows everything the store knows, and a reader
   verifies only its own section's checksum, so the others cost a structural

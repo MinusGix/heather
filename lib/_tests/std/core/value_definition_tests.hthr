@@ -1,4 +1,4 @@
-// Probes of `def`, the value definition (docs/value-definitions-design.md
+// Probes of `def`, the value definition (docs/metaprogramming/value-definitions-design.md
 // §2): a named value used without `()`, with its type written or inferred,
 // unfolding like the nullary `fn` it is kernel-side. Tests, not library:
 // nothing imports this module.

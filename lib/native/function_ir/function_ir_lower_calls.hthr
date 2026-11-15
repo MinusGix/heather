@@ -20,11 +20,11 @@
 // address on the stack, it returns there with its result in RAX, the
 // callee-saved registers kept, and memory as it was but for stores into its
 // own room below that address (`Stack::Wrote`,
-// docs/native-one-compiler-design.md §2.1). That clause is what a caller
+// docs/native/native-one-compiler-design.md §2.1). That clause is what a caller
 // keeps: its stack words, and for a program its data.
 //
 // The file a program's functions read and write is threaded
-// (docs/native-one-compiler-design.md §2.6): the meaning is
+// (docs/native/native-one-compiler-design.md §2.6): the meaning is
 // `function_ir_writes`' relation from the file before to the file after,
 // the buffers are spans under the laws of a lending (`Loan`,
 // x86_64_lending), and the contract (`Site::CallsOver`) says the file the
@@ -42,7 +42,7 @@
 // (`lower_program_correct`, `Site::Calls`) is the one over the file at no
 // spans, which every stack lends (`Stack::loan_nothing`).
 //
-// A call over views (`Lend`, docs/native-library-exports-design.md §3.1)
+// A call over views (`Lend`, docs/native/native-library-exports-design.md §3.1)
 // is its views' nodes and then the call on the views' homes
 // (`File::emit_lend`). Its callee runs under the views' lending
 // (`Lending::lend`), which the contract at every lending supplies
@@ -527,7 +527,7 @@ fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), ca
         site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalleePre(callees, f, arguments, result), stack.CalleePost(result))
 }
 
-// What a program's functions are lent (docs/native-one-compiler-design.md
+// What a program's functions are lent (docs/native/native-one-compiler-design.md
 // §2.3, §2.6): how many buffers each function takes, by function, where
 // each buffer lies, the file as it was when the program was called, and
 // which buffers the program may write. The buffers are the program's, by
@@ -557,7 +557,7 @@ fn Lending::over(self lending: Lending, now: Buffers()) → Lending {
 }
 
 // What a call over `views` lends its callee
-// (docs/native-library-exports-design.md §3.1): the views as its buffers,
+// (docs/native/native-library-exports-design.md §3.1): the views as its buffers,
 // each at its base and as long as its window of the scope's buffer, to be
 // written where the view is. The lengths are the windows' of the lending's
 // own buffers, which no store changes, so this lending is known before the
@@ -720,7 +720,7 @@ fn Stack::LentOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 }
 
 // What function `f` is called under, over the file `before`
-// (docs/native-one-compiler-design.md §2.6): its arguments in their
+// (docs/native/native-one-compiler-design.md §2.6): its arguments in their
 // registers, what the program's functions say it may return and leave
 // (`effects`), room for its frames, and the file lent.
 fn Stack::CalledOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), effects: Effects(),
@@ -753,7 +753,7 @@ fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)
 // function `f` meets its contract under any lending that lets it write
 // what `needs` says it needs (`ProgramNeeds`, function_ir_writes). This is
 // what a call over views asks of its callee, whose lending is the views'
-// and not its caller's (docs/native-library-exports-design.md §3.1). The
+// and not its caller's (docs/native/native-library-exports-design.md §3.1). The
 // code does not depend on the lending but for its counts, so the program's
 // induction gives this as it gave the contract at one.
 fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), bound: Nat, counts: List<Nat>,
@@ -1214,7 +1214,7 @@ fn emit_leaf(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placement: L
     }
 }
 
-// A call over views (docs/native-library-exports-design.md §3.1): the
+// A call over views (docs/native/native-library-exports-design.md §3.1): the
 // nodes that bind each view's base and length, then the call with those
 // homes before its arguments. The homes the callee's buffers are checked
 // against are the views' (`views_lents`), and the views are checked to lie
@@ -2005,7 +2005,7 @@ theorem may_emit_in_weaken<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fe
 }
 
 // ---------------------------------------------------------------------------
-// A load of a lent buffer (docs/native-one-compiler-design.md §2.3)
+// A load of a lent buffer (docs/native/native-one-compiler-design.md §2.3)
 
 // The address formed, then the byte loaded over it: the home says where the
 // buffer lies and how long it is, the path that the index is inside, and
@@ -2629,7 +2629,7 @@ theorem emit_quiet_leaf_emits<M>(saves: Nat, site: Site<M>, laid: site.program.l
 }
 
 // ---------------------------------------------------------------------------
-// The file threaded (docs/native-one-compiler-design.md §2.6)
+// The file threaded (docs/native/native-one-compiler-design.md §2.6)
 
 // What emitting proves of code that may change the file: from the file
 // `before` in memory to the file `after` in memory, the trail kept.
@@ -2813,7 +2813,7 @@ theorem may_emit_over_some<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fe
 }
 
 // ---------------------------------------------------------------------------
-// A store into a lent buffer (docs/native-one-compiler-design.md §2.6)
+// A store into a lent buffer (docs/native/native-one-compiler-design.md §2.6)
 
 // The address formed, the value's low byte stored over it, and the byte
 // loaded back: the home says where the buffer lies and how long it is, the
@@ -4228,7 +4228,7 @@ theorem File::emit_call_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
 }
 
 // ---------------------------------------------------------------------------
-// Calls over views (docs/native-library-exports-design.md §3.1)
+// Calls over views (docs/native/native-library-exports-design.md §3.1)
 
 // The CALL of a call over views. The callee is entered under the views'
 // lending over the windows of the file as it is, which the scope's loan
@@ -6065,7 +6065,7 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
 // function `k` calls only the ones before it in the code. `start` is
 // `Start` for a program of functions alone, and the code of a program of
 // statements that calls them, which keeps its own code first and its entry
-// at offset zero (docs/native-one-compiler-design.md §2.2). Function `f` is
+// at offset zero (docs/native/native-one-compiler-design.md §2.2). Function `f` is
 // at the label `Succ(f)` either way, so `start` names its own labels past
 // the functions'.
 fn emit_functions_after_lent(start: Prog, functions: List<Function>, placement: List<Place>, names: Nat, counts: List<Nat>) →

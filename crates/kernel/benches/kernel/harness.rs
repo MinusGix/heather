@@ -269,7 +269,7 @@ impl Baseline {
     ) -> String {
         let mut out = String::new();
         out.push_str(
-            "# Heather kernel benchmark baseline — see docs/benchmarking.md\n\
+            "# Heather kernel benchmark baseline — see docs/infrastructure/benchmarking.md\n\
              # Regenerate with: scripts/bench --save\n",
         );
         for (k, v) in env {

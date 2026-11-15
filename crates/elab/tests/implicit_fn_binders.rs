@@ -1,6 +1,6 @@
 //! Acceptance for implicit binders in function types and lambdas —
 //! `{x: A} -> B` and `λ {x: A} => e` — against
-//! `docs/implicit-binders-design.md` §10. Tracking issue:
+//! `docs/language/implicit-binders-design.md` §10. Tracking issue:
 //! `issues/implicit-binders-in-function-types.md`.
 //!
 //! Nothing here touches the kernel: implicitness is a property of the
@@ -230,7 +230,7 @@ fn an_implicit_binder_against_a_plain_type_is_refused() {
 // alias below gets its type from an application's result, not from written
 // syntax: bare `f(n)` fails with an ordinary error (not a junk
 // instantiation), and the explicit spelling succeeds. This is the design's
-// contract (docs/implicit-binders-design.md §9), not an accident, and this
+// contract (docs/language/implicit-binders-design.md §9), not an accident, and this
 // test is where it is written down.
 #[test]
 fn a_computed_function_type_offers_no_insertion() {

@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-26
 ---
 
-Round 1 of `docs/native-real-programs-plan.md` (§3.1, §6). No native
+Round 1 of `docs/native/native-real-programs-plan.md` (§3.1, §6). No native
 program can look at a byte. A `Compute` leaf sees only the environment's
 words (`Env::valuation`, `lib/native/native_source.hthr`), FunctionIR's
 `Node` has no memory operation, and `Source::start` zeroes every buffer, so
@@ -18,7 +18,7 @@ output. This blocks 11 of the plan's 14 tools.
 ## Scope
 
 - Buffers as FunctionIR state edges, the decided shape
-  (`docs/native-effect-source-design.md` §6): `Load(out, buf, index)` and
+  (`docs/native/native-effect-source-design.md` §6): `Load(out, buf, index)` and
   `Store(buf, index, value)` nodes, `eval` threading the buffers beside the
   valuation, `Env::compute` passing `env.buffers` in and out. An index past
   the buffer's length loads zero and stores nothing, as the calls clamp.

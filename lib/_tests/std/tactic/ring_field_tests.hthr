@@ -1,5 +1,5 @@
 // Probes of `ring` at a field (`lib/std/tactic/ring.hthr`,
-// docs/ring-normalization-design.md §9): reciprocals and casts read with
+// docs/tactics/ring-normalization-design.md §9): reciprocals and casts read with
 // the facts that clear them. Tests, not library: nothing outside lib/_tests
 // imports this module (docs/test-value-audit.md §4.5).
 //
@@ -21,7 +21,7 @@ theorem rat_cancel(x: Rat, h: 0 < x): x * x⁻¹ ≈ 1 { ring }
 theorem rat_cancel_apart(x, y: Rat, h: x.Apart(0)): x * y * x⁻¹ ≈ y { ring }
 theorem rat_sum_of_inverses(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹ { ring }
 theorem rat_inv_of_product(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): (x * y)⁻¹ ≈ x⁻¹ * y⁻¹ { ring }
-// `a / b` is read as `a * b⁻¹` at the same apartness (docs/division-design.md):
+// `a / b` is read as `a * b⁻¹` at the same apartness (docs/library/division-design.md):
 // a neutral and a numeral divisor, at `Rat` and `CReal`.
 theorem rat_div_sum(a, b, c: Rat, h: 0 < c): a / c + b / c ≈ (a + b) / c { ring }
 theorem rat_div_cancel(a, b: Rat, h: b.Apart(0)): (a / b) * b ≈ a { ring }

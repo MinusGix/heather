@@ -40,7 +40,7 @@ is in (2026-10-22, [[linux-wp-cold-rail]]); the elaborator cost is not.
   constructor layer back. Not node-for-node with the reducer today: a
   `PairAt`/`InlAt` value drops its `ty` annotation (`Val::Pair { ann: None }`),
   so the readback cannot always respell what the reducer would, and the
-  elaborator anchors on spellings (`docs/nbe-conversion-design.md` §7).
+  elaborator anchors on spellings (`docs/kernel/nbe-conversion-design.md` §7).
 
 Acceptance: `drain_pass` written with the bare `absurd(no)` elaborates in
 about its gate's time.

@@ -1,5 +1,5 @@
 //! The warning channel and its first customer
-//! (`docs/diagnostic-warnings-design.md`).
+//! (`docs/elaborator/diagnostic-warnings-design.md`).
 //!
 //! Two things are under test and they are independent. The **channel**: a
 //! diagnostic that is not a failure, said about a file that checks, without

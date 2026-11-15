@@ -1,5 +1,5 @@
 //! `simp_only(r₁, …, rₙ)`: the goal normalised by a list of laws
-//! (`docs/simp-design.md`, `issues/simp-tactic.md`).
+//! (`docs/tactics/simp-design.md`, `issues/simp-tactic.md`).
 //!
 //! Each law is an equation `a = b`, a relation step `R(a, b)` or a law
 //! between statements `P ↔ Q` (`statement.rs`), applied or not, used left to
@@ -169,7 +169,7 @@ impl Simps<'_> {
         self.run_simp(cx, form, show, &rules, discharge, then, using, goal, lvl, span)
     }
 
-    /// The host's entry (`Req::Simp`, docs/simp-design.md §7): the goal
+    /// The host's entry (`Req::Simp`, docs/tactics/simp-design.md §7): the goal
     /// closed by laws that are already terms, each with the name a report
     /// calls it by. What `simp_only(l₁, …, lₙ)` does, under the name `simp`.
     pub(crate) fn simp_terms(&self, cx: &Cx, laws: Vec<(String, Term, Type)>, goal: &Type, lvl: &Level, span: Span) -> R<Term> {
@@ -186,7 +186,7 @@ impl Simps<'_> {
     }
 
     /// A list of laws checked as a rewrite system, as far as running it
-    /// shows (docs/simp-design.md §4): each law's own statement, at its
+    /// shows (docs/tactics/simp-design.md §4): each law's own statement, at its
     /// binders as fresh variables, is normalised by the whole list. A run
     /// that loops means the list has no normal form at that law's instances
     /// (a commuting law, two laws that undo each other); a run whose two

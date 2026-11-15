@@ -168,7 +168,7 @@ impl OwedChecks {
         &self.postponed
     }
 
-    /// The **guess pass** (docs/elaborator-principles-survey.md P2,
+    /// The **guess pass** (docs/elaborator/elaborator-principles-survey.md P2,
     /// issues/unifier-guesses-postponed.md): every forced solution is in —
     /// each inferred argument's type and the expected type have been read
     /// with their guesses postponed — and a slot is still open. Read them
@@ -336,7 +336,7 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     ) -> R<()>;
 
     /// The **emission spelling** of a solved type metavariable's code, at the
-    /// discharge (`docs/per-instantiation-type-codes-design.md` §5, amended
+    /// discharge (`docs/inductives/per-instantiation-type-codes-design.md` §5, amended
     /// 2026-09-10): the solution is quoted from the type the emission sites
     /// would write, so `M := List<BitVec(8)>` enters the spine's annotations
     /// as `El (app(List#tycode_fn^δ; …))` and the kernel's own instantiation
@@ -700,7 +700,7 @@ fn slots_bare(cx: &Cx, result: &Type, n: u32, sols: &[Sol]) -> bool {
 /// The earlier arguments `param`'s default mentions, out of the scratch
 /// world: `None` while one of them, or its type, still waits on this call's
 /// metas — an implicit not yet learned, or an earlier default not yet
-/// filled — so the default waits with it (docs/named-arguments-design.md
+/// filled — so the default waits with it (docs/language/named-arguments-design.md
 /// §9.6). A default that mentions no parameter is ready at once and
 /// allocates nothing.
 fn earlier_for_default(
@@ -778,7 +778,7 @@ fn written_implicits(name: &str, pending: &[&ParamMeta]) -> String {
 }
 
 /// The implicitness skeleton of a surface-written function type
-/// (`docs/implicit-binders-design.md` §2).
+/// (`docs/language/implicit-binders-design.md` §2).
 ///
 /// Positional entry `i` speaks for the `i`-th Π along the written spine and
 /// for no Π past `params.len()`. A reduced codomain can expose further Πs,
@@ -895,13 +895,13 @@ pub(crate) struct ParamMeta {
     /// A `requires`/`:= infer` parameter filled by trait resolution.
     pub(crate) solver: Option<Rc<Ty>>,
     /// A `p: T := e` parameter filled from its default when a call leaves
-    /// it out (docs/named-arguments-design.md §9).
+    /// it out (docs/language/named-arguments-design.md §9).
     pub(crate) default: Option<Rc<ParamDefault>>,
 }
 
 /// A parameter's default as the declaration wrote it: the expression and
 /// the name-resolution scope it was written in, which is where its names
-/// resolve at every call (docs/named-arguments-design.md §9.4).
+/// resolve at every call (docs/language/named-arguments-design.md §9.4).
 pub(crate) struct ParamDefault {
     pub(crate) expr: Expr,
     pub(crate) scope: Rc<crate::names::Scope>,
@@ -982,7 +982,7 @@ pub(crate) trait ExplicitArgElab {
     /// An omitted default's marker ([`PARAM_DEFAULT`]), checked at the
     /// parameter's instantiated domain with the call's `earlier` arguments,
     /// which a default that mentions an earlier parameter reads by that
-    /// parameter's name (docs/named-arguments-design.md §9.6). The fakes have
+    /// parameter's name (docs/language/named-arguments-design.md §9.6). The fakes have
     /// no defaults and check it as any other argument.
     fn check_param_default(
         &self,
@@ -996,7 +996,7 @@ pub(crate) trait ExplicitArgElab {
     }
 
     /// Whether an application is written `app@(f; a)` here
-    /// (`docs/app-by-head-type-design.md` §6.1): outside a quotation. The
+    /// (`docs/elaborator/app-by-head-type-design.md` §6.1): outside a quotation. The
     /// fakes answer `false` and keep the annotated form their tests read.
     fn emits_checked_applications(&self, _cx: &Cx) -> bool {
         false
@@ -1004,7 +1004,7 @@ pub(crate) trait ExplicitArgElab {
 }
 
 /// One node of an application spine as it is written
-/// (`docs/app-by-head-type-design.md` §6.1): `app@(f; a)`, whose Π is the one
+/// (`docs/elaborator/app-by-head-type-design.md` §6.1): `app@(f; a)`, whose Π is the one
 /// `f` infers, wherever the checked spellings are admitted and the head is
 /// not a λ (a λ infers only if its body does); otherwise the annotated `app`
 /// with its annotations respelled. `scratch` is the width of the

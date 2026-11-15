@@ -1,6 +1,6 @@
 //! Content addressing: the hash of an elaborated declaration with every
 //! global reference replaced by the hash of its referent's interface
-//! (`docs/cache-v1-design.md` §3 and §5, `issues/parallel-checking-and-caching.md`).
+//! (`docs/infrastructure/cache-v1-design.md` §3 and §5, `issues/parallel-checking-and-caching.md`).
 //!
 //! # A structural walker, not a rendering
 //!
@@ -115,7 +115,7 @@ pub type Hash = [u8; 32];
 /// be a v1 entry believed about a v2 declaration. Bumping makes that
 /// impossible by construction rather than merely unlikely. (`store::FORMAT` is
 /// bumped alongside, which is what makes the invalidation *loud* — see
-/// `docs/cache-v1-design.md` §12.)
+/// `docs/infrastructure/cache-v1-design.md` §12.)
 ///
 /// **Bumped again with canonical levels** (`issues/kernel-compact-level.md`):
 /// a level is now hashed as its normal form, not as a `1+`/`⊔` tree.
@@ -272,7 +272,7 @@ mod tag {
     pub const E_SQUASH: u8 = 0x73;
     pub const E_ELIMSQUASH: u8 = 0x74;
     pub const E_NATLIT: u8 = 0x75;
-    // The checked spellings (docs/intro-by-type-design.md). Distinct tags,
+    // The checked spellings (docs/elaborator/intro-by-type-design.md). Distinct tags,
     // because `pair@(T;a;b)` and `pair(x:S.U;a;b)` are distinct syntax and a
     // Merkle hash names syntax: two spellings that convert are still two
     // terms, and collapsing them here would make a declaration's hash depend
@@ -283,7 +283,7 @@ mod tag {
     pub const E_FST_AT: u8 = 0x79;
     pub const E_SND_AT: u8 = 0x7a;
     pub const E_APP_AT: u8 = 0x7b;
-    /// A literal past `u64` (docs/wide-numerals-design.md): its own tag, so a
+    /// A literal past `u64` (docs/language/wide-numerals-design.md): its own tag, so a
     /// literal that fits keeps the hash it always had.
     pub const E_NATLIT_WIDE: u8 = 0x7c;
     pub const E_SUPI: u8 = 0x7d;
@@ -1446,7 +1446,7 @@ impl<'a> Walk<'a> {
     /// One binding as its **interface** — which is simply the binding as Ψ
     /// stores it, because Ψ already implements the interface split: a
     /// `theorem` is pushed with `body: None`, a `fn` with its body
-    /// (`docs/cache-v1-design.md` §4).
+    /// (`docs/infrastructure/cache-v1-design.md` §4).
     fn binding(&mut self, b: &GlobalBinding) {
         match b {
             GlobalBinding::Ctx => self.tag(tag::B_CTX),
@@ -1483,7 +1483,7 @@ impl<'a> Walk<'a> {
 /// and every caller treats that as "do not cache", never as an error.
 pub fn interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<Hash> {
     // The walk itself, separate from the identity computation that drives it
-    // (`docs/instrumentation-design.md` §5).
+    // (`docs/infrastructure/instrumentation-design.md` §5).
     let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::MerkleWalk);
     let mut w = Walk::new(DOMAIN_IFACE, prefix, prefix.len() as u32);
     w.binding(b);
@@ -1503,7 +1503,7 @@ pub fn assumption_interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<H
 /// *this* interface, in a context whose interfaces hash thus".
 ///
 /// The proof term is here and not in a theorem's interface hash, which is the
-/// whole of the red-green rule (`docs/cache-v1-design.md` §5): editing a proof
+/// whole of the red-green rule (`docs/infrastructure/cache-v1-design.md` §5): editing a proof
 /// moves this and nothing else; editing a statement moves this *and* the
 /// interface, hence every dependent's key.
 ///
@@ -1553,7 +1553,7 @@ pub fn statement_key(prefix: &Prefix, iface: &Hash) -> Option<Hash> {
 ///
 /// Uses the interface domain; it is not a key of anything. Since 2026-10-24
 /// also the content identity of a scoped registry payload in a module's
-/// registry projection (`docs/module-interface-cutoff-design.md` §4).
+/// registry projection (`docs/infrastructure/module-interface-cutoff-design.md` §4).
 pub fn term_hash(prefix: &Prefix, len: u32, t: &Term) -> Option<Hash> {
     let mut w = Walk::new(DOMAIN_IFACE, prefix, len);
     w.term(t);
@@ -1562,7 +1562,7 @@ pub fn term_hash(prefix: &Prefix, len: u32, t: &Term) -> Option<Hash> {
 
 /// [`term_hash`] for a type: the content identity of a registry payload
 /// scoped at Ψ length `len`, for a module's position-independent registry
-/// projection (`docs/module-interface-cutoff-design.md` §4).
+/// projection (`docs/infrastructure/module-interface-cutoff-design.md` §4).
 pub fn type_hash(prefix: &Prefix, len: u32, t: &Type) -> Option<Hash> {
     let mut w = Walk::new(DOMAIN_IFACE, prefix, len);
     w.ty(t);

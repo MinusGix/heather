@@ -8,12 +8,12 @@ created: 2026-10-31
 updated: 2026-11-06
 ---
 
-Round R5 of `docs/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
+Round R5 of `docs/native/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
 setup's pure fragment.
 
 ## Scope
 
-Narrowed by `docs/runtime-fn-setups-design.md` (§13) to slice R5d, the
+Narrowed by `docs/native/runtime-fn-setups-design.md` (§13) to slice R5d, the
 integration round. The other slices have their own issues:
 [[runtime-body-reflection-requests]] and [[runtime-fn-reflected-language]]
 (R5a), [[runtime-default-setup-soundness]] (R5b),
@@ -38,7 +38,7 @@ integration round. The other slices have their own issues:
 
 ## Log
 
-- 2026-11-01: The prefix mechanism R5d uses is built ([[declaration-prefix-generators]]): `runtime` is called as `runtime("f", setup…)` after `f` is published, and `lookup("f")` gives its `GlobalRef` (docs/value-definitions-design.md §3.2).
+- 2026-11-01: The prefix mechanism R5d uses is built ([[declaration-prefix-generators]]): `runtime` is called as `runtime("f", setup…)` after `f` is published, and `lookup("f")` gives its `GlobalRef` (docs/metaprogramming/value-definitions-design.md §3.2).
 - 2026-11-04 (round 1): the generator, the setup record and the `Compile` class
   (`lib/native/runtime/runtime.hthr`, design §16.8). `runtime fn f` publishes
   `f::rt`, `f::world`, `f::judged`, `f::reflects`, `f::code`, `f::agrees` and

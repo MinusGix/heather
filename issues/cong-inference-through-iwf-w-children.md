@@ -8,7 +8,7 @@ created: 2026-10-25
 updated: 2026-10-25
 ---
 
-On the `IWf`-on-`W` route (`docs/iwf-infinitary-design.md`), a value is a
+On the `IWf`-on-`W` route (`docs/kernel/iwf-infinitary-design.md`), a value is a
 pair `⟨tree, proof⟩`, and a `match` arm's child alias is rebuilt from the
 pieces of its scrutinee (`⟨f'(⟨⟩), cs⟩`, `λy.⟨k y, cs y⟩`). When a function
 is applied to a constructor built from another function's result, the

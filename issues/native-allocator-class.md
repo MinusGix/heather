@@ -12,7 +12,7 @@ respects some properties, so it can be swapped or tuned; consider different
 allocators per function. Today it is `record Allocator { assign: Source →
 Homes }` (`lib/native/native_alloc.hthr`). Soundness needs no proof from an
 allocator, since the compile checks its homes
-(`docs/native-register-allocation-design.md` §4, §6). What an instance can
+(`docs/native/native-register-allocation-design.md` §4, §6). What an instance can
 still prove is completeness: `∀ src, src.allocation_ok(assign(src))`, so
 reason 12 is unreachable by proof.
 

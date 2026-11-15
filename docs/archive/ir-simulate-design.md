@@ -246,7 +246,7 @@ The staging ladder, recorded so v1's choices read as staging, not belief:
 
 1. **v1 (this sketch): extrinsic.** `Ref = Nat`, `Stuck` explicit,
    well-scopedness an ordinary predicate when a pass wants it. Route 1 of
-   `docs/inductive-indexed-lowering.md` — extrinsic judgments over declared
+   `docs/inductives/inductive-indexed-lowering.md` — extrinsic judgments over declared
    syntax — is measured and green (§8.2 prototype).
 2. **Target: intrinsically scoped, then typed.** Scope-indexed nodes
    (`Fin`-refs) delete the scoping junk; type-and-context-indexed IR
@@ -328,7 +328,7 @@ option 2, one normal form, is the removal rather than the paper-over).
    a depth-of-nesting family when the exponent was diagnosed;* **retired
    2026-07-31** — see note 6's second amendment. The nesting axis was never
    reproducible as a kernel bench (four hand-built families tried,
-   `docs/nbe-conversion-design.md` §12), its instrument is
+   `docs/kernel/nbe-conversion-design.md` §12), its instrument is
    `scripts/probe-whnf-sharing` at the CLI, and its subject no longer
    exists.
 6. Negative controls: a junk reference simulates to `Stuck`; an
@@ -497,7 +497,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
      `Empty` and no large elimination. The `+ k` shape (`eval_mono_plus`) is
      proved first and is what the `<=` shape reduces to, via `le_add`.
      (**Amended 2026-08-16**: `Le`'s body is now a recursion into `Type` and
-     the reflection equation is gone — `docs/nat-order-design.md`. The
+     the reflection equation is gone — `docs/library/nat-order-design.md`. The
      paragraph is kept as the record of why the reflection was chosen then.
      Nothing in this file changed with it: `fuel_monotone` and every other use
      here goes through the lemma kit, so all of `lib/certgen/ir_v1.hthr` checked
@@ -524,7 +524,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
 
    **Amendment, 2026-08-01: the ∃-closure is now statable, and `converges` is
    written as §6 states it.** The first of the two reasons above is retired:
-   `record` takes **value parameters** (`docs/surface-value-parameters.md`,
+   `record` takes **value parameters** (`docs/language/surface-value-parameters.md`,
    `issues/surface-existential.md` route 1, no kernel change), so a record *is*
    indexable by `(p, env, ir, vs)` and
 
@@ -555,7 +555,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
 
    **Amendment, 2026-08-01 (same day, later round): the second reason is
    retired too, and note 7 is now fully spent.** `->` and dependent binder
-   groups are expressions (`docs/types-as-expressions.md`,
+   groups are expressions (`docs/language/types-as-expressions.md`,
    `issues/type-definitions.md` route 2 — no kernel change, no new declaration
    form), so a type-valued `fn` is an ordinary `fn` and
 
@@ -608,7 +608,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
    family binders re-supply where a relation needs it. The clean general form,
    `RefinesOn(dom: Val -> Type, …)`, is what the library now states — a record
    type applied to its value parameters IS a `Val -> Type` value as of
-   `docs/record-type-values.md` — with `RefinesNat2` defined as
+   `docs/language/record-type-values.md` — with `RefinesNat2` defined as
    `RefinesOn(λ (e: Val) => NatEnv(e), …)` over a `NatEnv` record packing `a`,
    `b`, the tail and the shape proof. The family binders did not go away; they
    moved into a *domain predicate*, which is where they belong, and the two

@@ -12,7 +12,7 @@ not. He wants either dramatic efficiency changes to the code (some held
 back until Heather-in-Heather can vouch for them), or smarter testing:
 quick, about the relevant area, with an alert when merged PRs interact
 badly. The design and the options are in
-`docs/testing-architecture-design.md`. This issue owns the measurements and
+`docs/infrastructure/testing-architecture-design.md`. This issue owns the measurements and
 the decisions as they are taken.
 
 ## Measurements (2026-10-23, 4-CPU cloud container, master 1ae5dd6)
@@ -90,7 +90,7 @@ ratio and not the seconds. 3699 passed (one new test).
 
 ## Minus's decisions (2026-10-23): sentinel, `--pr` lane, seeding
 
-Built as `docs/testing-architecture-design.md` §5 describes. Same container,
+Built as `docs/infrastructure/testing-architecture-design.md` §5 describes. Same container,
 full suite, 3699 passed in each:
 
 | run | before | after |

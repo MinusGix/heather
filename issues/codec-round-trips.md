@@ -11,7 +11,7 @@ updated: 2026-11-09
 `lib/std/arch/x86_64/x86_64.hthr` proves a decoder round-trip per
 instruction form (`decode_instruction_of_rr_encoding`, `_mov_ri_`,
 `_setcc_`, `immediate_bytes_roundtrip`, `gpr_fields_roundtrip`); utf8, ELF
-and the decimal reader repeat the pattern. `docs/native-mathematics-survey.md`
+and the decimal reader repeat the pattern. `docs/surveys/native-mathematics-survey.md`
 §8; survey rank 9.
 
 ## Scope

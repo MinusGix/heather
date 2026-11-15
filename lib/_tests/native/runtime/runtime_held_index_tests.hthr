@@ -1,6 +1,6 @@
 // Probes for an array field's element at an index that is a word, in a
 // function of a laid record (`lib/native/runtime/rt_held_reflect.hthr`,
-// docs/layout-design.md §9.5): `t.f.at(i)` reads it and
+// docs/native/layout-design.md §9.5): `t.f.at(i)` reads it and
 // `t.f := t.f.put(i, x)` stores it, methods of the vector type, each taking a proof that `i`
 // is inside the array, found where it is called from the tests around the
 // call (`inside: i.toNat() < n := bv_omega`). There is no value for past

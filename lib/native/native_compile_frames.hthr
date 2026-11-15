@@ -1,5 +1,5 @@
 // Calls between compiled procedures, as claims of trees
-// (docs/native-procedures-design.md §5; issues/native-compiled-procedures.md,
+// (docs/native/native-procedures-design.md §5; issues/native-compiled-procedures.md,
 // slice 2): a CALL is one machine step to its callee's label, the return
 // address pushed onto the process stack, and RET one step back to the
 // address on top of it. Each rule here is `Site::Goes`'s: what goes from

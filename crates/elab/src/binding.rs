@@ -1,5 +1,5 @@
 //! Refusals of binding statements that name their reason
-//! (docs/sequencing-surface-design.md §10, layer-1 rows).
+//! (docs/language/sequencing-surface-design.md §10, layer-1 rows).
 //!
 //! The parser lowers `let x <- e;` and `e;` to the prelude call
 //! `Bind::seq(e, λ #bindN => …)` (`heather_syntax::try_lower`), and ordinary
@@ -39,7 +39,7 @@ pub(crate) fn generated(e: &Expr) -> Option<(&Expr, bool)> {
 
 /// A `while` with no measure, lowered with the rest of its block to
 /// `Iterate::then(init, step, λ #bindN => rest)`
-/// (docs/sequencing-surface-design.md §18).
+/// (docs/language/sequencing-surface-design.md §18).
 pub(crate) fn generated_loop(e: &Expr) -> bool {
     let ExprKind::App { head, args, named, .. } = &e.kind else { return false };
     named.is_empty()

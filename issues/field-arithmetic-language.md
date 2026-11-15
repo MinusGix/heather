@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-10
 ---
 
-Stage C5 of `docs/native-lexer-crypto-roadmap.md` §4. Poly1305 (mod
+Stage C5 of `docs/native/native-lexer-crypto-roadmap.md` §4. Poly1305 (mod
 2¹³⁰ − 5) and X25519 (mod 2²⁵⁵ − 19) need limb arithmetic: unsaturated
 limbs, delayed carries, a reduction that uses the prime's shape. Nobody
 should write or prove that code per prime. Fiat Cryptography's answer is a
@@ -28,7 +28,7 @@ which is part of the design.
 - `field def Fe25519 = 2^255 - 19 limbs 5 x 51;` as the frontend, in the
   shape of `regex def`.
 - Whether `datarepr` covers a quotient specification type
-  (`docs/datarepr-design.md` speaks of inductives).
+  (`docs/native/datarepr-design.md` speaks of inductives).
 - Constant time by construction: the generated code is straight-line, so
   the `ct fn` judgment ([[native-constant-time]]) accepts it.
 

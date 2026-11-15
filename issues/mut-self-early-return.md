@@ -12,7 +12,7 @@ A `mut self` method cannot `return` early. The parser refuses it with "`return` 
 
 ## Scope
 
-- `return e` in a `mut self` method returns `Mutated(<receiver as it stands>, e)`. That holds inside a `for` body (as a `ForStep::Return` carrying the receiver in the state, `docs/sequencing-surface-design.md` §15), inside statement `if`/`match` arms, and in tail position.
+- `return e` in a `mut self` method returns `Mutated(<receiver as it stands>, e)`. That holds inside a `for` body (as a `ForStep::Return` carrying the receiver in the state, `docs/language/sequencing-surface-design.md` §15), inside statement `if`/`match` arms, and in tail position.
 - The receiver at the `return` is the one the block has threaded so far. The lowering already threads it as loop state, so the `Return` leaf reads it from the state.
 - A `return` from a nested or conditional loop is refused today for pure code too (`imperative-statements-built`). This issue does not lift that; it makes `mut self` match pure code.
 

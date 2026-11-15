@@ -1,4 +1,4 @@
-//! The quotation slice (docs/in-language-map-design.md): `meta fn`
+//! The quotation slice (docs/metaprogramming/in-language-map-design.md): `meta fn`
 //! declarations elaborate through the modal signature, quote payloads with
 //! letbox-hoisted splices, and the `Layer::Meta` kernel gate. The evaluation
 //! hook and the `map_code` artifact have their own suite; this one is the
@@ -136,7 +136,7 @@ fn one_splice_used_twice_is_one_letbox() {
 #[test]
 fn genericity_is_bound_inside_the_code() {
     // The calculus's answer to a polymorphic template (the round's central
-    // finding, docs/in-language-map-design.md §3): a `TyPi`-bound type is
+    // finding, docs/metaprogramming/in-language-map-design.md §3): a `TyPi`-bound type is
     // layer p and cannot appear inside layer-c code, so a generic template
     // binds its types *inside* the quote — code-level Π over the universe,
     // ordinary MLTT. This is the shape `map_code` takes.
@@ -224,7 +224,7 @@ fn an_ordinary_global_is_in_scope_inside_a_meta_fn() {
 #[test]
 fn a_tycode_parameter_is_an_ordinary_code_of_a_type_local() {
     // Flipped from a refusal by the signature-reflection round
-    // (docs/fn-signature-reflection-design.md §3): `TyCode(g)` as a
+    // (docs/metaprogramming/fn-signature-reflection-design.md §3): `TyCode(g)` as a
     // *parameter* is an ordinary local of kernel type `CodeTy` — an
     // analyzer's reflected input — and extends nothing. What stays out is the
     // Ψ-extending `TyCode` *binder* role (a `$a` type splice for building
@@ -298,7 +298,7 @@ fn a_match_code_analyses_a_code_argument() {
 
 #[test]
 fn a_match_code_analyses_a_type_code_argument() {
-    // The `ty_*` side (docs/fn-signature-reflection-design.md §3): a
+    // The `ty_*` side (docs/metaprogramming/fn-signature-reflection-design.md §3): a
     // `TyCode(g)` scrutinee assembles an `ElimCodeTy` — same motives, same 65
     // branches — so this passing means the type-code recursor typed at the
     // meta gate. `ty_pi` binds two recursive results (rec.rs `ty_pi`; ch. 04

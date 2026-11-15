@@ -17,7 +17,7 @@ Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), …` in float rounding.
 Build `section<…>(…) { fn … theorem … }`: the section's `<…>` and `(…)` lists
 are prepended to every member's own, in the parser, and nothing after the
 parser sees a block. Design, the alternatives it was weighed against, and why
-it splices rather than using Lean's mention rule: docs/sections-design.md §4–§5.
+it splices rather than using Lean's mention rule: docs/language/sections-design.md §4–§5.
 
 ## Acceptance
 

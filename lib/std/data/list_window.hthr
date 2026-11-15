@@ -1,6 +1,6 @@
 // A window of a list and the list with a window replaced: the two halves
 // of reading and writing part of a buffer through a view of it
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 //
 // `xs.window(start, end)` is the elements from `start` up to `end`, and
 // `xs.put_window(start, ys)` is `xs` with `ys` written over it from

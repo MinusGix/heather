@@ -1,4 +1,4 @@
-// Procedures in the source mean what docs/native-procedures-design.md §2
+// Procedures in the source mean what docs/native/native-procedures-design.md §2
 // says: each probe is a source whose exit status is what its calls
 // computed, evaluated by `Source::tree` and its silent steps stripped. A
 // recursion that uses its own word after the call (not a tail loop), the

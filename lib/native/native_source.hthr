@@ -1,6 +1,6 @@
 // The effectful source: a control layer over total FunctionIR, whose
 // programs denote trees over Linux's calls
-// (docs/native-effect-source-design.md §7; issues/native-effect-source-compiler.md,
+// (docs/native/native-effect-source-design.md §7; issues/native-effect-source-compiler.md,
 // round S3.1).
 //
 // A statement computes a FunctionIR region over the environment's words,
@@ -32,7 +32,7 @@
 // that family grows (`Stmt::grows`).
 //
 // A statement may also call one of the source's procedures (`Perform`,
-// docs/native-procedures-design.md §2). `denote` takes what a call does as
+// docs/native/native-procedures-design.md §2). `denote` takes what a call does as
 // a parameter (`Performs()`), and the source gives it by depth
 // (`Source::performs`): the arguments' numbers copied into the parameters,
 // the body run one call deeper, then the procedure's locals given back as
@@ -258,7 +258,7 @@ inductive Stmt {
     // Procedure `procedure` of the source (`Source::procedures`), its
     // parameters given the words `args`, its results put in `results`
     // (`Procedure::enter`, `Procedure::leave`;
-    // docs/native-procedures-design.md §2).
+    // docs/native/native-procedures-design.md §2).
     Perform(procedure: Nat, args: List<Nat>, results: List<Nat>),
 }
 
@@ -337,7 +337,7 @@ theorem Stmt::grows(self s: Stmt, call: Writers(), perform, perform2: Performs()
 }
 
 // ---------------------------------------------------------------------------
-// Procedures (docs/native-procedures-design.md)
+// Procedures (docs/native/native-procedures-design.md)
 
 // Its parameters and results, words of its own, and its body.
 record Procedure { params: List<Nat>, results: List<Nat>, body: Stmt }

@@ -24,7 +24,7 @@ fn Halt() → Nat { 2 }
 // expect-error: which hides the declaration `self_reference_tests::Halt`; write `self_reference_tests::Halt` to reach it
 fn Prog::Halt(self p: Prog) → Nat → Nat { Halt }
 
-// A prelude name: the hint is the `prelude::` idiom (docs/sections-design.md).
+// A prelude name: the hint is the `prelude::` idiom (docs/language/sections-design.md).
 inductive Box { mk(n: Nat) }
 // expect-error: which hides the declaration `prelude::cong`; write `prelude::cong` to reach it
 theorem Box::cong(a: Box, b: Box, h: a = b): Box::mk(0) = Box::mk(0) { cong(Box::mk, refl) }

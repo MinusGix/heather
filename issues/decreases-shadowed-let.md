@@ -29,7 +29,7 @@ pins case 1.
 
 **Workaround in use.** The `while` lowering puts its body in SSA form
 (`crates/elab/src/alpha.rs`, `ssa`) before handing it to `decreases`, so
-none of its `let`s shadow (docs/sequencing-surface-design.md §16).
+none of its `let`s shadow (docs/language/sequencing-surface-design.md §16).
 
 **Fix direction.** Alpha-rename shadowing block binders before the walk,
 with the same uniform renamer, so the measure and every lifted telescope
@@ -55,4 +55,4 @@ shadowed binders.
   `lib/_tests/std/core/decreases_unfolding_tests.hthr`. The `while`
   lowering's SSA pass stays: its condition is placed after the hoisted
   `let`s and must read the parameters.
-- 2026-11-02: [[recursion-on-elaborated-terms]] proposes running the structural recursion planner over the same `alpha::deshadow` (docs/elaborator-principles-survey.md §6).
+- 2026-11-02: [[recursion-on-elaborated-terms]] proposes running the structural recursion planner over the same `alpha::deshadow` (docs/elaborator/elaborator-principles-survey.md §6).

@@ -7,7 +7,7 @@ created: 2026-11-11
 updated: 2026-11-11
 ---
 
-`simp_only` computes a call at a constructor first (`docs/simp-design.md`).
+`simp_only` computes a call at a constructor first (`docs/tactics/simp-design.md`).
 For some functions the result holds the recursive call in a form no law
 written over the call matches, and the report spells both sides as "(a term
 with no surface spelling)". Found writing `List::foldl_ext`

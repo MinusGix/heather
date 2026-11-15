@@ -92,4 +92,4 @@ parallel representation.
 
 ## Log
 
-- 2026-11-06: From the Axolocl (CAV 2025) evaluation: for searched facts, also worth persisting is which producer answered each request (the request's *essence*), tried first on the next build. A budgeted search that an unrelated library addition pushes past its budget then still finds the same fact, so generated code does not change silently with library growth. A stale record costs one failed check. Only worth building once searched facts (docs/facts-on-demand-design.md §3–4) are common.
+- 2026-11-06: From the Axolocl (CAV 2025) evaluation: for searched facts, also worth persisting is which producer answered each request (the request's *essence*), tried first on the next build. A budgeted search that an unrelated library addition pushes past its budget then still finds the same fact, so generated code does not change silently with library growth. A stale record costs one failed check. Only worth building once searched facts (docs/native/facts-on-demand-design.md §3–4) are common.

@@ -9,12 +9,12 @@ updated: 2026-10-22
 ---
 
 FunctionIR has loops (`lib/native/function_ir/function_ir_loop.hthr`,
-`docs/function-ir-readonly-loops.md`), and the per-function certificate
+`docs/native/function-ir-readonly-loops.md`), and the per-function certificate
 path compiles them (`function_ir_loop_x86`, `function_ir_loop_trace`,
 `crates/elab/src/function_ir_source/loop_native.rs` and `readonly_loop.rs`).
 None of [[function-ir-verified-lowering]]'s four rounds lowers a loop:
 they cover straight-line regions, conditionals, calls and the stack, and
-the CLI. Burn B2 (`docs/native-program-logic-design.md` §3.2) deletes the
+the CLI. Burn B2 (`docs/native/native-program-logic-design.md` §3.2) deletes the
 old loop path, so as planned it would leave no way to compile a loop until
 the effectful source exists.
 
@@ -55,6 +55,6 @@ Where loops live is a sub-question of the effectful source's shape
 
 ## Log
 
-- 2026-10-21: `docs/native-effect-source-design.md` §5 adds a third option and recommends it, pending Minus's decision: **split loops by totality**. FunctionIR gains a *bounded* loop (at most `bound` passes, with an early-exit bit; `bounded_readonly`'s shape), which keeps FunctionIR total and is lowered by a fifth S4 round proved by induction on the bound; the effectful layer keeps the one *general* loop, proved by `loop_at` with the tree's remaining fuel as the ghost variant. Option 1 would give total pure functions a partial meaning; option 2 would make FunctionIR's evaluator need fuel.
+- 2026-10-21: `docs/native/native-effect-source-design.md` §5 adds a third option and recommends it, pending Minus's decision: **split loops by totality**. FunctionIR gains a *bounded* loop (at most `bound` passes, with an early-exit bit; `bounded_readonly`'s shape), which keeps FunctionIR total and is lowered by a fifth S4 round proved by induction on the bound; the effectful layer keeps the one *general* loop, proved by `loop_at` with the tree's remaining fuel as the ghost variant. Option 1 would give total pure functions a partial meaning; option 2 would make FunctionIR's evaluator need fuel.
 - 2026-10-22: DECIDED (Minus): the totality split. FunctionIR gains a bounded loop with an explicit `Exhausted` outcome (a `Wf`-defined function takes its measure as bound), lowered by S4 round 5, which B2 waits for; general loops are the effectful layer's.
 - 2026-10-22: Done as S4 round 5 ([[function-ir-verified-lowering]], "Round 5 as built"): `StructuredRegion::Loop` with `LoopRuns`, lowered in `emit_calls` and proved in `lower_program_correct`. `loop_runs_unexhausted` is the Wf route; its bound is the measure plus one, or the measure where it stays positive. B2 can now move the old loop path's examples onto it.

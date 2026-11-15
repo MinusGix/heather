@@ -7,7 +7,7 @@ created: 2026-10-30
 updated: 2026-10-30
 ---
 
-The cast tactics' second half (docs/casting-design.md §6.4, §9): one
+The cast tactics' second half (docs/language/casting-design.md §6.4, §9): one
 reader that builds an expression tree whose nodes record the carrier they
 are computed at, with the cast edges (`OrderedRingHom` values,
 `lib/std/algebra/morphism.hthr`) between carriers, shared by `ring`,
@@ -39,8 +39,8 @@ laws), `interval.hthr`'s `widen_has`, and the `rat_add`/`rat_mul` calls in
 
 ## Log
 
-- 2026-10-30: Slice 2 (docs/casting-design.md §10): cast_push normal form over a carrier table (Rat, CReal), cast_from(h) (pushed/pulled/lifted one or two edges/≈), cast_to(S, prove), and mono closes a goal from a fact that agrees through casts. Left here: ring/linarith/omega on the same normal form, a located diagnostic for a disagreement, 0/1/sub moves, Nat→Int, and the slice-1 customers listed above.
-- 2026-10-30: Slice 3 (docs/casting-design.md §11): ring reads edge images through definition facts (edge fields, no morphism import), linarith substitutes definitions into its forms, omega unchanged by design. Left: cast_from's located diagnostic, 0/1/sub, Nat→Int edge, remaining hand-named image laws in the float library.
-- 2026-10-30: Slice 4 (docs/casting-design.md §12): sub/0/1 in ring and cast_push; Nat→Int as an OrderedSemiringHom edge (Int::ofNat_hom), Int as a cast carrier, ring reads Nat images by the edge law as atoms; cast_from/cast_to name the first differing subterm; float arith/round/series image laws by ring/cast_from/linarith. Left: wrappers read as images (Finite::val, Format::grid, CReal::at), Dyadic as a carrier, mono pushing before matching heads, morphism-import degradation, and `↑`/`cast<B>` (casting-standard).
-- 2026-10-30: Slice 5 (docs/casting-design.md §13): missing morphism import named; cast_from lowers order goals along an edge out of their carrier (Dyadic goals from Rat facts), Dyadic a cast carrier; ring reads definitions that unfold to edge images (Finite::val, Format::grid); mono reads x - y as x + -y against an unshared side. Left: field-read spellings (CReal::at), ofInt across two edges, constructor-computed negation; the `↑` surface is casting-standard's.
+- 2026-10-30: Slice 2 (docs/language/casting-design.md §10): cast_push normal form over a carrier table (Rat, CReal), cast_from(h) (pushed/pulled/lifted one or two edges/≈), cast_to(S, prove), and mono closes a goal from a fact that agrees through casts. Left here: ring/linarith/omega on the same normal form, a located diagnostic for a disagreement, 0/1/sub moves, Nat→Int, and the slice-1 customers listed above.
+- 2026-10-30: Slice 3 (docs/language/casting-design.md §11): ring reads edge images through definition facts (edge fields, no morphism import), linarith substitutes definitions into its forms, omega unchanged by design. Left: cast_from's located diagnostic, 0/1/sub, Nat→Int edge, remaining hand-named image laws in the float library.
+- 2026-10-30: Slice 4 (docs/language/casting-design.md §12): sub/0/1 in ring and cast_push; Nat→Int as an OrderedSemiringHom edge (Int::ofNat_hom), Int as a cast carrier, ring reads Nat images by the edge law as atoms; cast_from/cast_to name the first differing subterm; float arith/round/series image laws by ring/cast_from/linarith. Left: wrappers read as images (Finite::val, Format::grid, CReal::at), Dyadic as a carrier, mono pushing before matching heads, morphism-import degradation, and `↑`/`cast<B>` (casting-standard).
+- 2026-10-30: Slice 5 (docs/language/casting-design.md §13): missing morphism import named; cast_from lowers order goals along an edge out of their carrier (Dyadic goals from Rat facts), Dyadic a cast carrier; ring reads definitions that unfold to edge images (Finite::val, Format::grid); mono reads x - y as x + -y against an unshared side. Left: field-read spellings (CReal::at), ofInt across two edges, constructor-computed negation; the `↑` surface is casting-standard's.
 - 2026-11-05: gardener: cites a file it shares with [[cast-from-at-class-carrier]] (`lib/std/tactic/cast.hthr`); [[floating-point-formalization]] (`lib/std/num/float/arith.hthr`).

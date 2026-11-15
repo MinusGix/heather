@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-11-06
 ---
 
-Layer E of `docs/analysis-foundations-design.md` (§8): series as range sums
+Layer E of `docs/library/analysis-foundations-design.md` (§8): series as range sums
 with a tail modulus, power series with a Cauchy majorant evaluated at `CReal`,
 and evaluation as a ring homomorphism on the disc of convergence.
 
@@ -35,4 +35,4 @@ The first divergent-expansion customer after this is
 
 ## Log
 
-- 2026-11-06: 2026-11-06: `Converges`/`CauchySeq` with moduli, the limit algebra, and `CauchyComplete` with its CReal instance are in lib/std/analysis/sequence.hthr and real_complete.hthr (docs/sequences-and-completeness.md). Series (partial sums, Summable, geometric, comparison) are the missing layer before evaluation.
+- 2026-11-06: 2026-11-06: `Converges`/`CauchySeq` with moduli, the limit algebra, and `CauchyComplete` with its CReal instance are in lib/std/analysis/sequence.hthr and real_complete.hthr (docs/library/sequences-and-completeness.md). Series (partial sums, Summable, geometric, comparison) are the missing layer before evaluation.

@@ -1,5 +1,5 @@
 //! The deferred kernel gate: a pool of kernel worker threads
-//! (`docs/parallel-kernel-gate-design.md`, `issues/parallel-kernel-gate.md`).
+//! (`docs/kernel/parallel-kernel-gate-design.md`, `issues/parallel-kernel-gate.md`).
 //!
 //! The elaborator checks a declaration's *statement* synchronously — dependents
 //! need it — commits the binding to Ψ, and queues the proof/body's
@@ -18,12 +18,12 @@
 //! wherever its own inputs are structurally the ones a worker was handed, so
 //! the dev loop's commonest module — a probe of one or two declarations, one
 //! of them meant to be refused — pays for one kernel pass and not two
-//! (`docs/parallel-kernel-gate-design.md` §5.2).
+//! (`docs/kernel/parallel-kernel-gate-design.md` §5.2).
 //!
 //! `workers == 1` spawns nothing: the gate sites run the code they always ran,
 //! in the order they always ran it, and the pool exists in that configuration
 //! only to answer `is_inline()`. It is what a clone gets, and what the serial
-//! fallback (`docs/parallel-kernel-gate-design.md` §5.1) re-runs a failed
+//! fallback (`docs/kernel/parallel-kernel-gate-design.md` §5.1) re-runs a failed
 //! module at — a module's answer never depends on the width.
 
 use std::collections::VecDeque;
@@ -75,7 +75,7 @@ pub(crate) struct Deferred {
     /// verdict depends on them as much as on the body's own.
     pub(crate) unsealed: Vec<usize>,
     /// The declaration scope open when this was queued — the row its timings
-    /// fold back into (`docs/parallel-kernel-gate-design.md` §7). `None` when
+    /// fold back into (`docs/kernel/parallel-kernel-gate-design.md` §7). `None` when
     /// nothing is collecting.
     pub(crate) row: Option<(String, String)>,
 }
@@ -135,7 +135,7 @@ fn run(index: usize, item: Rc<Deferred>) -> Outcome {
 }
 
 // ---------------------------------------------------------------------------
-// Verdict reuse across the discard (`docs/parallel-kernel-gate-design.md` §5.2)
+// Verdict reuse across the discard (`docs/kernel/parallel-kernel-gate-design.md` §5.2)
 // ---------------------------------------------------------------------------
 
 /// One verdict a discarded parallel pass already earned, and exactly the
@@ -389,7 +389,7 @@ struct Shared {
     /// That poll is the early abort: once a queued proof has failed the pass
     /// is going to be discarded and re-run serially, so elaborating the rest
     /// of the module is work nobody will look at
-    /// (`docs/parallel-kernel-gate-design.md` §5.1).
+    /// (`docs/kernel/parallel-kernel-gate-design.md` §5.1).
     failed: AtomicBool,
 }
 
@@ -434,7 +434,7 @@ impl Default for KernelPool {
     /// A fresh elaborator runs as wide as `HEATHER_KERNEL_WORKERS` says, or
     /// [`crate::DEFAULT_KERNEL_WORKERS`] wide: the deferral pipelines the
     /// elaborator against the workers and total CPU is flat with width
-    /// (`docs/parallel-kernel-gate-design.md`), so there is no serial mode
+    /// (`docs/kernel/parallel-kernel-gate-design.md`), so there is no serial mode
     /// to protect by default. `HEATHER_KERNEL_WORKERS=1` is the serial
     /// build, for timing an item in isolation.
     fn default() -> Self {
@@ -466,7 +466,7 @@ impl KernelPool {
 
     /// Set the worker count. 1 is exactly the serial behaviour: no thread, no
     /// queue, the gate sites inline — which is also what the serial fallback
-    /// (`docs/parallel-kernel-gate-design.md` §5.1) sets it to for the replay.
+    /// (`docs/kernel/parallel-kernel-gate-design.md` §5.1) sets it to for the replay.
     /// Changing it with checks outstanding is a caller error; the elaborator
     /// sets it up front or between passes, both of which are quiescent.
     pub(crate) fn set_workers(&mut self, workers: usize) {

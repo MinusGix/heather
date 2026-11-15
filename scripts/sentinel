@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The master sentinel: the full exact-policy suite on a fresh box, nightly.
 
-docs/testing-architecture-design.md §2.1. A scheduled cloud session checks
+docs/infrastructure/testing-architecture-design.md §2.1. A scheduled cloud session checks
 out `master` on a fresh container and runs `scripts/sentinel run`. It is the
 one place the exact image policy runs (round verification is
 `scripts/test --pr`), and the one configuration nobody tests by hand: a cold
@@ -44,7 +44,7 @@ builds the archive and reports its size without pushing.
 
 Either way, the library is checked once at the last green run's commit and
 once here, by this commit's compiler and into one image store, with the
-relocation audit on (docs/module-interface-cutoff-design.md §5): every
+relocation audit on (docs/infrastructure/module-interface-cutoff-design.md §5): every
 module the stale lanes would have moved onto the new world rather than
 elaborated is moved and compared with its elaboration. A `diverged` module is
 one the early cutoff let through wrongly; the report names it.

@@ -24,7 +24,7 @@ while proving S3.2 ([[native-effect-source-compiler]], 2026-10-25).
 
 ## Log
 
-- 2026-10-26: Round 7 of `docs/native-real-programs-plan.md` (milestone `hih-tools`): `open` and `close` first, the path copied with a NUL into scratch; stat can wait (no target tool needs it). Done when `cat FILE…` matches GNU, diagnostics and exit status included. Probe 2026-10-26: a lone `Opens` is refused by `write-elf` with no reason ([[native-elf-every-program]]).
+- 2026-10-26: Round 7 of `docs/native/native-real-programs-plan.md` (milestone `hih-tools`): `open` and `close` first, the path copied with a NUL into scratch; stat can wait (no target tool needs it). Done when `cat FILE…` matches GNU, diagnostics and exit status included. Probe 2026-10-26: a lone `Opens` is refused by `write-elf` with no reason ([[native-elf-every-program]]).
 - 2026-10-28: Round 7 landed: `Opens` and `Closes` compile and are proved inside
   `native_compile_correct` (`lib/native/native_compile_opens.hthr`:
   `Target::goes_closes`, the path copy loop `goes_path_loop` and

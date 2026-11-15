@@ -14,7 +14,7 @@ namespace round) and, on the failure path, for uninferable ones (after it).
 Library chains are at most three calls deep, so this is recorded rather than
 urgent. The lever, if a client grows long chains: hand the inferred receiver
 term to the desugared call instead of the surface expression. Found by the
-namespace round (docs/receiver-member-resolution-design.md).
+namespace round (docs/language/classes/receiver-member-resolution-design.md).
 
 ## Log
 

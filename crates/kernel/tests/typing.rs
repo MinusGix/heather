@@ -983,7 +983,7 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g5)),
             })))
         },
-        // -- finitary branching branches (docs/wf-former-design.md §6) --
+        // -- finitary branching branches (docs/kernel/wf-former-design.md §6) --
         // box Vec^ℓ(U_T^id; u_k^id) — telescope g = 2, U_T = 1, u_k = 0.
         ty_vec: rt(Term::BoxTy(rty(Type::Vec {
             level: lv(0),
@@ -1202,7 +1202,7 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g)),
             })))
         },
-        // -- indexed well-founded trees (docs/iwf-former-design.md §13) --
+        // -- indexed well-founded trees (docs/kernel/iwf-former-design.md §13) --
         // box DVec^ℓ(u_n; i. U_F) — g = 2, u_n = 1, U_F = 0.
         ty_dvec: {
             let len = rt(gtm(1, &g2));
@@ -1329,7 +1329,7 @@ fn m_sig_at(g_at: u32, coded: bool, l: Level, lp: Level, li: Level) -> (Rc<MSig>
     (sig, g)
 }
 
-/// **Phase-2 acceptance** (`docs/unit-empty-level-indexing.md` §4): the
+/// **Phase-2 acceptance** (`docs/kernel/unit-empty-level-indexing.md` §4): the
 /// identity recursor round-trips level-indexed `Unit`/`Empty` code **at a
 /// non-zero level**, in a single β-step.
 ///
@@ -1424,7 +1424,7 @@ fn identity_recursor_round_trips_unit_and_empty_at_a_level() {
 }
 
 /// **The `ℓ`-slot of the scrutinee's recursive call in `t_elimE`**
-/// (`docs/delam-extensions.md` §7.7 and §16.1;
+/// (`docs/kernel/delam-extensions.md` §7.7 and §16.1;
 /// `issues/recursor-elim-call-level-mismatch.md`).
 ///
 /// `elim_Empty^{ℓ,ℓ'}`'s scrutinee has type `Empty^{ℓ'} @ ℓ'`, so the branch's
@@ -1554,7 +1554,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// This is the complementary *use-site* observation for three representative
 /// slots — the branch body actually consumes the entry at a claimed type, so
 /// what is checked here is that a branch author reading the rule off
-/// `docs/delam-extensions.md` gets a bundle the kernel accepts, and gets one
+/// `docs/kernel/delam-extensions.md` gets a bundle the kernel accepts, and gets one
 /// rejected for every other reading of the slot.
 ///
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
@@ -2040,7 +2040,7 @@ fn pair_projections_and_dependency() {
     assert_eq!(infer_closed(Layer::Var, &mk_pair()).unwrap_err(), TypeError::LayerMismatch);
 }
 
-/// The **checked spellings** (`docs/intro-by-type-design.md`): the same
+/// The **checked spellings** (`docs/elaborator/intro-by-type-design.md`): the same
 /// dependent pair as `pair_projections_and_dependency` above, spelled with the
 /// un-reduced type it was checked at rather than that type's components.
 ///
@@ -2278,7 +2278,7 @@ fn an_injection_chain_checks_every_layer() {
     }
 }
 
-/// `app@(f; a)` (`docs/app-by-head-type-design.md` §3.1, §9's golden tests):
+/// `app@(f; a)` (`docs/elaborator/app-by-head-type-design.md` §3.1, §9's golden tests):
 ///
 /// 1. a head whose type is syntactically a Π — a local here, as a global's
 ///    statement is — returns **syntax**, the very type the annotated `app`
@@ -2444,7 +2444,7 @@ fn spelling_a_shared_node_viewed_at_two_formers() {
 // -------------------------------------------------------------------------
 
 /// `Unit^l`/`Empty^l`/`⟨⟩^l` are level-indexed at **every** layer, code
-/// included (`docs/unit-empty-level-indexing.md`). The phase-1 layer-`c` gate
+/// included (`docs/kernel/unit-empty-level-indexing.md`). The phase-1 layer-`c` gate
 /// is gone as of phase 2.
 #[test]
 fn unit_empty_are_level_indexed_at_every_layer() {

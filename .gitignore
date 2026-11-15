@@ -1,5 +1,5 @@
 /target
-# The declaration cache (docs/cache-v1-design.md): per-checkout build state,
+# The declaration cache (docs/infrastructure/cache-v1-design.md): per-checkout build state,
 # and content-addressed, so there is nothing in it to share.
 /.heather
 

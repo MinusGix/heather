@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-14
 ---
 
-Stage L5 of `docs/native-lexer-crypto-roadmap.md` §3. A new lexer symbol
+Stage L5 of `docs/native/native-lexer-crypto-roadmap.md` §3. A new lexer symbol
 changes three places today: `crates/syntax/src/lexer.rs`, the tree-sitter
 grammar (whose check is not in CI), and, once it exists, the Heather lexer.
 The token grammar should be one piece of data that all three read.

@@ -1,5 +1,5 @@
 //! `lib/std/itree/itree_trace.hthr` and `itree_state.hthr`
-//! (`docs/itree-refinement-round.md`): the refusals that need the checker.
+//! (`docs/itrees/itree-refinement-round.md`): the refusals that need the checker.
 //! What the language can state is
 //! `lib/_tests/std/itree/itree_trace_tests.hthr`, which the whole-library
 //! gate checks (`crates/cli/tests/library.rs`): traces in checking position,

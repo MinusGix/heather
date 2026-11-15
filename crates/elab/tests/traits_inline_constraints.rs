@@ -148,7 +148,7 @@ fn at_z(z: Z) -> Z {{ twiddle(z) }}
 #[test]
 fn stacking_order_is_binder_order() {
     // `@` is the only place the order of solver parameters is observable
-    // (docs/traits-layer2-design.md §1), so it is where the order is pinned:
+    // (docs/language/classes/traits-layer2-design.md §1), so it is where the order is pinned:
     // left-to-right across the whole bracket, `Mag` before `Pt`.
     ok(&format!(
         "{P}
@@ -355,7 +355,7 @@ fn section_variables_and_bundles_are_refused_by_name() {
         assert!(e.contains("requires"), "{w}: {e}");
     }
     // Round 2's `section` variable is now a section head
-    // (docs/sections-design.md): the old spelling is pointed at the head form.
+    // (docs/language/sections-design.md): the old spelling is pointed at the head form.
     let e = bad("section A: Mag;\n");
     assert!(e.contains("`section<A> { … }`"), "{e}");
 }
@@ -412,7 +412,7 @@ instance<A: Mag> Mag<A> {{ op := magop }}
 "
     ));
     // The owner rule's wording widened 2026-08-17 ("a type or a type former",
-    // `docs/decide-class-design.md` §2.3); a bare type parameter is neither, so
+    // `docs/language/classes/decide-class-design.md` §2.3); a bare type parameter is neither, so
     // this is refused on exactly the path it always was.
     assert!(
         e.contains("head type name") || e.contains("not a type"),

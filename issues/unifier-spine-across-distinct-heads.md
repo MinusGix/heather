@@ -30,7 +30,7 @@ answer, which the round should choose between:
   `n.leb(m) && !m.leb(n)`), so `pick(h)` elaborates.
 
 omega no longer depends on either: §17 of
-`docs/omega-measure-reduction-design.md` binds the unfolded guard as an
+`docs/tactics/omega-measure-reduction-design.md` binds the unfolded guard as an
 alias instead. Acceptance: the probe above is refused naming `g(n, m)`
 against `?a && ?b`, or accepted; never a solution of the wrong type.
 

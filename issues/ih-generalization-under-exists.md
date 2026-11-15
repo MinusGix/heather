@@ -9,7 +9,7 @@ updated: 2026-11-07
 
 A `Type`-valued `fn` whose self-call varies a parameter inside an `∃` is
 refused with "recursive call to `RecSum` must pass `a` unchanged", although
-`docs/ih-generalization-design.md` generalizes varied parameters:
+`docs/tactics/ih-generalization-design.md` generalizes varied parameters:
 
 ```heather
 fn List::RecSum({F: Format}, self xs: List<Finite(F)>, mode: Mode, a, s: Finite(F)) → Type {

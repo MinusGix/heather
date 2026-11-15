@@ -11,7 +11,7 @@ updated: 2026-10-26
 `lib/std/num/float/error.hthr` states the error of a correct rounding as
 `|r - x| <= u·|x| + η` (`Format::error_bound`), with the relative and
 subnormal halves as `relative_error` and `subnormal_error`. The Coq
-hardware-float survey (`docs/coq-hardware-floats-survey.md` §5.1–§5.2) found
+hardware-float survey (`docs/surveys/coq-hardware-floats-survey.md` §5.1–§5.2) found
 ValidSDP's specification sharper in three ways, each cheap given design
 §13's cell picture, plus two results the paper's interval libraries rely on.
 

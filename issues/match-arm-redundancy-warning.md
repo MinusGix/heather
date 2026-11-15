@@ -9,7 +9,7 @@ updated: 2026-08-16
 
 
 The pattern compiler ([[nested-match-patterns]],
-`docs/nested-match-patterns-design.md` §3.4) computes neither redundancy nor
+`docs/language/matching/nested-match-patterns-design.md` §3.4) computes neither redundancy nor
 reachability, and both silences are deliberate rather than forgotten:
 
 - a row shadowed by an earlier one never reaches a leaf, so its body is never
@@ -34,7 +34,7 @@ constructor arm into a build break at every `_` that used to cover it.
 
 ## Log
 
-- 2026-08-16: LANDED 2026-08-16, both halves, with the warning channel this issue was parked on (docs/diagnostic-warnings-design.md — new, §7 is this customer). Unreachable rows and redundant `_` arms are now REPORTED, as warnings, on a file that still checks.
+- 2026-08-16: LANDED 2026-08-16, both halves, with the warning channel this issue was parked on (docs/elaborator/diagnostic-warnings-design.md — new, §7 is this customer). Unreachable rows and redundant `_` arms are now REPORTED, as warnings, on a file that still checks.
 
 THE ANALYSIS WAS ALREADY THERE, which is why one round paid for both halves this issue lists. `Compile.uses[i]` — the leaf census §5 of the nested-match design computes to decide between SHARING an arm's body and copying it — is exactly "how many leaves arm i's body reached", so reachability is not a new pass: it is that number being zero, at a branch `settle` already had (`0 => {}`, where an unelaborated body gets dropped). One `self.warn` there covers both a shadowed deep row and a `_` that stands for nothing.
 

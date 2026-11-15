@@ -1,5 +1,5 @@
 // Probe of an effectful `rt` computation in a program with a function that
-// writes (`rt_io_lower`; docs/native-one-compiler-design.md §2.6, U4 step
+// writes (`rt_io_lower`; docs/native/native-one-compiler-design.md §2.6, U4 step
 // 4c-4). The computation reads into its buffer and answers `raise_word` of
 // the count, a call of function 0 of `tr`'s program
 // (`raise_span::program`, native_tool_spans), whose function 1 rewrites the

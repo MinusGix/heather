@@ -8,11 +8,11 @@ created: 2026-10-31
 updated: 2026-11-02
 ---
 
-Round R3 of `docs/compiler-milestones-proposal.md` (§3.1, §3.3, §7): local state and loops in pure functions.
+Round R3 of `docs/native/compiler-milestones-proposal.md` (§3.1, §3.3, §7): local state and loops in pure functions.
 
 ## Scope
 
-Against `docs/sequencing-surface-design.md` (§4–§9, §12), in two slices:
+Against `docs/language/sequencing-surface-design.md` (§4–§9, §12), in two slices:
 
 **R3a.**
 
@@ -39,8 +39,8 @@ R3a: `wc`'s step is written imperatively, and its facts are proved by the existi
 ## Log
 
 - 2026-10-31: R3b's unfolding dependency is now [[unfolding-through-convoyed-match]]; R2's annotated per-variable join loses its required annotation with [[match-infers-constant-motive]].
-- 2026-11-01: Layer 1 landed ([[binding-statements]], docs/sequencing-surface-design.md §13): the lowering is in the parser's continuation walk (try_lower.rs), scoped per block. Statement if/match here needs the join points of [[bind-in-non-tail-match-arms]].
-- 2026-11-02: First R3a slice built (docs/sequencing-surface-design.md §14): let mut, :=, statement if/match with optional else and else-if (parser, staged per-variable joins, residuals for enclosing scopes), and for over lists lifted in the elaborator to f::step/f::State over foldl, with captures, nested loops and f_unfold. Open here: break/continue/return, ranges, labels, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, and wc's step (its split_all; omega facts hit [[split-all-nested-if-omega-kernel-refusal]]).
-- 2026-11-02: Early exit built (docs/sequencing-surface-design.md §15): break/continue/return in a for body, lowered in tail position by the parser and lifted to ForStep leaves over List::for_in; a returning loop splits the body (`match #forN { Return(r) => r, _ => rest }`), and a stateless search is a loop with an empty state record. Refused at parse time: exits outside a loop, code after an exit, and return from a loop nested in another loop or statement form (needs §6.3). Still open: labels, nested return, ranges, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, wc's step.
-- 2026-11-02: `while c decreases m { … }` built (docs/sequencing-surface-design.md §16), reusing the for marker. It lifts to a decreases `f::run` with the state as separate parameters, the body hoisted in SSA form above `match h: decide_bit<c>()`, and `f::run_unfold`. Fixed on the way: select_scope keeps an arm's equation for an argument passed through a let. Filed [[decreases-shadowed-let]]. Open for R3b: exits in a while, the fuelled form, a while holding a for, and the decimal formatter as a while.
-- 2026-11-02: Ranges built (docs/sequencing-surface-design.md §17): `for i in a..b` is List::range_from(a, b - a), and `0..n` is List::range(n), both written only in a for header.
+- 2026-11-01: Layer 1 landed ([[binding-statements]], docs/language/sequencing-surface-design.md §13): the lowering is in the parser's continuation walk (try_lower.rs), scoped per block. Statement if/match here needs the join points of [[bind-in-non-tail-match-arms]].
+- 2026-11-02: First R3a slice built (docs/language/sequencing-surface-design.md §14): let mut, :=, statement if/match with optional else and else-if (parser, staged per-variable joins, residuals for enclosing scopes), and for over lists lifted in the elaborator to f::step/f::State over foldl, with captures, nested loops and f_unfold. Open here: break/continue/return, ranges, labels, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, and wc's step (its split_all; omega facts hit [[split-all-nested-if-omega-kernel-refusal]]).
+- 2026-11-02: Early exit built (docs/language/sequencing-surface-design.md §15): break/continue/return in a for body, lowered in tail position by the parser and lifted to ForStep leaves over List::for_in; a returning loop splits the body (`match #forN { Return(r) => r, _ => rest }`), and a stateless search is a loop with an empty state record. Refused at parse time: exits outside a loop, code after an exit, and return from a loop nested in another loop or statement form (needs §6.3). Still open: labels, nested return, ranges, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, wc's step.
+- 2026-11-02: `while c decreases m { … }` built (docs/language/sequencing-surface-design.md §16), reusing the for marker. It lifts to a decreases `f::run` with the state as separate parameters, the body hoisted in SSA form above `match h: decide_bit<c>()`, and `f::run_unfold`. Fixed on the way: select_scope keeps an arm's equation for an argument passed through a let. Filed [[decreases-shadowed-let]]. Open for R3b: exits in a while, the fuelled form, a while holding a for, and the decimal formatter as a while.
+- 2026-11-02: Ranges built (docs/language/sequencing-surface-design.md §17): `for i in a..b` is List::range_from(a, b - a), and `0..n` is List::range(n), both written only in a for header.

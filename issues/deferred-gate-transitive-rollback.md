@@ -17,7 +17,7 @@ Make the deferred kernel gate's failure path canonical instead of replaying the 
 2. the error set — dependents of a bad declaration succeed instead of failing with "unknown name", and side registrations differ (the traits fixture: a first instance with a false theorem is registered when the second arrives, so the second is refused as a duplicate);
 3. cache soundness — a declaration checked after the bad one was checked against a Ψ containing an ill-typed body, and if that body is a definition, dependents' conversions may have unfolded it; the kernel's guarantee is relative to a well-formed Ψ, so such a verdict cannot be vouched for as a standalone fact.
 
-The landed contract (`docs/parallel-kernel-gate-design.md` §5.1) makes width independence true by construction: a failed parallel pass is discarded to a module-entry checkpoint and the module re-run serially, with early abort on the first failed verdict, and a failing join vouches for nothing. Cost: a failing module pays the parallel prefix up to the abort plus the serial run — roughly what it cost before the pool existed. Accepted modules pay nothing.
+The landed contract (`docs/kernel/parallel-kernel-gate-design.md` §5.1) makes width independence true by construction: a failed parallel pass is discarded to a module-entry checkpoint and the module re-run serially, with early abort on the first failed verdict, and a failing join vouches for nothing. Cost: a failing module pays the parallel prefix up to the abort plus the serial run — roughly what it cost before the pool existed. Accepted modules pay nothing.
 
 ## What this issue would change
 
